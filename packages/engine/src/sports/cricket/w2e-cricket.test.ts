@@ -684,6 +684,31 @@ describe("CK-RR-1 net run rate under DLS or revised overs (ICC 16.10.7, RB2A-20,
     expect(c.credit[0].runs, "premise: Team 1 is credited more than it scored").toBeGreaterThan(c.played![0].runs);
     expect(checkCases([c])).toBe(1);
   });
+
+  it("CK-RR-1 limit: with R2 > R1 the par on abandonment is the final target pro-rated by the resources used (dlsPar's documented approximation), where the Standard Edition redistributes the G50 adjustment", () => {
+    // The deviation the row records. The same ODI numbers as above: S1 = 190, R1 = 78.4, R2 = 89.3, T = 217, so T − 1 = 216.
+    // The engine's par at `used` resources is ⌊(T − 1) × used / R2⌋ (what dls.ts documents), typed here with its arithmetic:
+    //   20 overs faced, 2 down: res(20 left, 2) = 52.4 remains, 89.3 − 52.4 = 36.9 used, ⌊216 × 36.9/89.3⌋ = ⌊89.25⌋ = 89;
+    //   22 overs faced, 3 down: 43.4 used (the abandonment case above), ⌊216 × 43.4/89.3⌋ = ⌊104.98⌋ = 104;
+    //   nothing left to use: 89.3 used, 216 × 89.3/89.3 = 216 = T − 1.
+    expect(dlsTarget(190, 78.4, 89.3), "premise: the target the pro-rate scales").toBe(217);
+    expect(dlsPar(190, 78.4, 89.3, 36.9)).toBe(89);
+    expect(dlsPar(190, 78.4, 89.3, 43.4)).toBe(104);
+    expect(dlsPar(190, 78.4, 89.3, 89.3)).toBe(216);
+    // The pair, R2 <= R1: exact, the Standard Edition's own ⌊S1 × used/R1⌋ (res 56.6 both sides, 25.8 used: ⌊160 × 25.8/56.6⌋ = 72).
+    expect(dlsPar(160, R20, R20, R20 - 30.8)).toBe(72);
+    // And the fold takes the pro-rate: abandoned at 20 overs with A 80/2 (par 89), H wins by 9 and is credited 89 off the 120 balls A faced.
+    const c: NrrCase = {
+      name: "R2 > R1 abandoned at 20 overs",
+      cfg: ODI_DLS,
+      events: [["core.start"], summary(120, 2, 180, true), ["cricket.revise", { oversPerSide: 40 }], summary(190, 6, 240), summary(80, 2, 120, true), ABANDON],
+      outcome: { kind: "win", winner: "H", method: "dls" },
+      margin: { kind: "runs", value: 89 - 80 },
+      credit: [{ runs: 89, balls: 120 }, { runs: 80, balls: 120 }],
+      played: [{ runs: 190, balls: 240 }, { runs: 80, balls: 120 }],
+    };
+    expect(checkCases([c])).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

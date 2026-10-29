@@ -5,7 +5,8 @@
 // Every fold is PAD-SHAPED (`strictFromSeq: 0`): the write path, where the cfg-derived refusals (the bowler quota) are live.
 //
 // CK-FH-1 is a deviation row: its test pins what the engine does (the refusal of hit-the-ball-twice on a free hit), not what the
-// rulebook would have. CK-DV-1 keeps its deviation status only for the Hundred's ten-ball bowling changes, which the engine does not
+// rulebook would have. So is CK-CR-1 (an ordinary substitute fielder is not modelled): its `limit:` test pins the refusal.
+// CK-DV-1 keeps its deviation status only for the Hundred's ten-ball bowling changes, which the engine does not
 // model (SC-C7); its net run rate follows the variant's over since D19 (CK-BO-2).
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
@@ -749,7 +750,7 @@ describe("CK-CR-1 concussion replacement: up to lineupChanges.concussionReplacem
     expect(codeOf(() => fold(t20, [["core.start"], ball(0, "H-1", "H-2", "A-12")]))).toBe("INVALID_EVENT");
   });
 
-  it("CK-CR-1 an ordinary substitute (a bench name, no replacement) may not bat or bowl, and a substitution is not offered", () => {
+  it("CK-CR-1 an ordinary substitute (a bench name, no replacement) may not bat or bowl", () => {
     expect(codeOf(() => fold(t20, [["core.start"], ball(0, "H-1", "H-2", "A-b1")], benched))).toBe("INVALID_EVENT");
     expect(
       codeOf(() =>
@@ -760,24 +761,37 @@ describe("CK-CR-1 concussion replacement: up to lineupChanges.concussionReplacem
         ),
       ),
     ).toBe("INVALID_EVENT");
+  });
+
+  const caught = (fielder: string): Spec =>
+    ball(0, "H-1", "H-2", "A-11", { wicket: { kind: "caught", out: "H-1", bowlerCredited: true, fielder } });
+  const credit = (specs: Spec[], pair: LineupPair = lineups) => fold(t20, specs, pair).innings[0]!.fine?.fielding;
+
+  it("CK-CR-1 a replacement is credited as a fielder, and so is a named starter on a sheet with a bench", () => {
+    // The replacement A-12 (for the concussed A-3) takes the catch...
+    expect(credit([["core.start"], replace("A", "A-3", "A-12", 3), caught("A-12")])).toEqual({ "A-12": { catches: 1, runOuts: 0, stumpings: 0 } });
+    // ...and a named starter on the same sheet is credited too.
+    expect(credit([["core.start"], caught("A-5")], benched)).toEqual({ "A-5": { catches: 1, runOuts: 0, stumpings: 0 } });
+  });
+
+  it("CK-CR-1 limit: an ordinary substitute fielder cannot be recorded - a substitution is refused and a bench name that is not a replacement is refused as a fielder, where ICC 24.1 lets a side field a substitute", () => {
+    // single-sport: substitute fielders are cricket's (ICC 24.1); the engine's refusal is the deviation the row records.
+    let refused = 0;
+    // A substitution is refused (maxSubs is 0, the default in every shipped preset)...
     expect(
       lineupRefusal(() =>
         fold(t20, [["core.start"], ["core.lineup.substitution", { side: "H", off: "H-3", on: { personId: "H-b1", slot: "bench", orderNo: 12 } }]], benched),
       ),
     ).toBe("sub-cap-reached");
-  });
-
-  it("CK-CR-1 a replacement is credited as a fielder and a bench name that is not a replacement is refused as one", () => {
-    const caught = (fielder: string): Spec =>
-      ball(0, "H-1", "H-2", "A-11", { wicket: { kind: "caught", out: "H-1", bowlerCredited: true, fielder } });
-    const credit = (specs: Spec[], pair: LineupPair = lineups) => fold(t20, specs, pair).innings[0]!.fine?.fielding;
-    // The replacement A-12 (for the concussed A-3) takes the catch...
-    expect(credit([["core.start"], replace("A", "A-3", "A-12", 3), caught("A-12")])).toEqual({ "A-12": { catches: 1, runOuts: 0, stumpings: 0 } });
-    // ...and without the replacement event the same name is not in the fielding side, nor is a bench name on a sheet that has one.
+    refused++;
+    // ...and so is a name that is not in the fielding side: the replacement's name without its replacement event, and a bench name.
     expect(codeOf(() => credit([["core.start"], caught("A-12")]))).toBe("INVALID_EVENT");
+    refused++;
     expect(codeOf(() => credit([["core.start"], caught("A-b1")], benched))).toBe("INVALID_EVENT");
-    // The pair: a named starter on the same sheet is credited.
+    refused++;
+    // The pair, on the same sheet: the starter is credited, so the refusals above are the substitute's alone.
     expect(credit([["core.start"], caught("A-5")], benched)).toEqual({ "A-5": { catches: 1, runOuts: 0, stumpings: 0 } });
+    expect(refused).toBe(3);
   });
 });
 
