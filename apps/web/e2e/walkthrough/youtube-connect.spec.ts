@@ -23,6 +23,9 @@
 // the tick (like the daily relay-sweep) is GLOBAL: it ticks every open session on the server. Two tests need it, so they take the
 // WHOLE stream-slot pool first (capture-phone.spec.ts W22's exclusion): while they hold it no other stream test has a session open.
 //
+// ONE SPORT (generic), by design: nothing under src/server/youtube/ or the connect panel reads a sport (`grep -i sport` finds none) - connect,
+// prepare, the end rule, the end step and Disconnect see a fixture, a connection and a broadcast, never a scoring module. Sport coverage belongs
+// to the Go live walkthroughs (streaming-destinations, stream-relay); a sport sweep here would repeat one path N times.
 // Every rig is a FRESH org on a Pro owner. The walkthrough project runs at one desktop viewport; the Streaming page's phone layout is
 // walked once (connect at 320). Layout evidence for the panel, the picker and the replay player lives in the *.shots.spec.ts files.
 import { test, expect, type Locator, type Page, type PlaywrightTestArgs, type PlaywrightTestOptions, type PlaywrightWorkerArgs, type PlaywrightWorkerOptions, type Route, type TestInfo, type APIRequestContext } from "@playwright/test";
