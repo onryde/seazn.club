@@ -3,13 +3,18 @@
 // OPT-IN: planned only by `--set w1-driving --scenario <key>` (w1-driving-set.ts), never by a committed plan.
 //
 //   W2E_ET  every match level at full time and won in extra time (G1, football)
-//   W2E_SO  every match level through regulation (and extra time, where the stage plays it) and won on the shoot-out,
-//           every kick in the order the engine names (G2, football)
+//   W2E_SO  every match level through regulation (and extra time or overtime, where the stage plays it) and won on the
+//           shoot-out, every kick in the order the engine names (G2 football and hockey; G3 ice hockey's GWS — the sport
+//           plays the one name its engine gives the shoot-out, 'shootout' or 'gws')
+//   W2E_OT  every match level through regulation and won by a goal in overtime (G3, ice hockey)
 //
 // The sport's own rule decides every match, so no organiser settle or tie-break is owed (life-bracket-decider-
 // exercised is left out, as W2a's BRACKET_EXTRA_BOARD leaves it). The shared bracket assertions apply, and the
 // scenario's own check holds each match to its path on the PRODUCT's outcome, read by the sport generator's
-// `pathWitness` — the engine's own `decidedInFor` for football — never on the stream the harness posted alone.
+// `pathWitness` — the engine's own `decidedInFor` — never on the stream the harness posted alone. What the outcome
+// cannot say is the shoot-out's NAME (hockey's SO and the IIHF's GWS both write method `shootout`): that half is read
+// from the label the engine gives the cfg's shoot-out panel, on the local strict fold of the stream posted (the product
+// serves the outcome, not its state).
 import type { MatchOutcome, StageKind } from "@seazn/engine/core";
 import { fieldSizeFor } from "../field-size.ts";
 import { foldStream } from "../fold.ts";
@@ -118,4 +123,5 @@ function scenario(key: W2eScenarioKey): Scenario {
 export const w2eScenarios: Readonly<Record<W2eScenarioKey, Scenario>> = Object.freeze({
   W2E_ET: scenario("W2E_ET"),
   W2E_SO: scenario("W2E_SO"),
+  W2E_OT: scenario("W2E_OT"),
 });

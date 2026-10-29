@@ -20,14 +20,18 @@ export const W2B_SCENARIO_KEYS = ["WO-PRE", "RT-PART", "DW-ALL", "AB-AWARD", "WD
 export type W2bScenarioKey = (typeof W2B_SCENARIO_KEYS)[number];
 
 /** W2e (Tasks 19–23, spec §10, D16): the opt-in deciding-path scenarios — every bracket match of the case forced down
- *  one sport-rule path (football's extra time, its shoot-out; Tasks 20–23 add theirs). Planned ONLY by
- *  `--set w1-driving --scenario <key>`, as W2a's and W2b's are; each key's paths are w2e-deciding-paths.ts's
- *  W2E_SCENARIO_PATHS. */
-export const W2E_SCENARIO_KEYS = ["W2E_ET", "W2E_SO"] as const;
+ *  one sport-rule path (football's extra time and shoot-out; the period kernel's overtime and shoot-out; Tasks 21–23
+ *  add theirs). Planned ONLY by `--set w1-driving --scenario <key>`, as W2a's and W2b's are; each key's paths are
+ *  w2e-deciding-paths.ts's W2E_SCENARIO_PATHS. */
+export const W2E_SCENARIO_KEYS = ["W2E_ET", "W2E_SO", "W2E_OT"] as const;
 export type W2eScenarioKey = (typeof W2E_SCENARIO_KEYS)[number];
 /** The deciding paths each W2e key forces, in the order a sport's generator is asked for them (the first it builds is
- *  the case's). One authority: the cells (w2e-cells.ts), the pick and the scenario's own check all read it. */
-export const W2E_SCENARIO_PATHS: Readonly<Record<W2eScenarioKey, readonly DecidingPath[]>> = Object.freeze({ W2E_ET: ["extraTime"], W2E_SO: ["shootout"] });
+ *  the case's). One authority: the cells (w2e-cells.ts), the pick and the scenario's own check all read it. The
+ *  shoot-out key lists both names of it: hockey's and football's shoot-out is 'shootout', the IIHF's is the 'gws' (a
+ *  sport builds the one its engine calls its own, so each sport plays exactly one). */
+export const W2E_SCENARIO_PATHS: Readonly<Record<W2eScenarioKey, readonly DecidingPath[]>> = Object.freeze({
+  W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"],
+});
 
 export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey;
 
