@@ -682,6 +682,7 @@ test("7: the empty state — the copy and its own Add, which opens the form; cap
     await expect(form).toBeVisible();
     await expect(page.getByTestId("stream-dest-empty-add"), "its Add hides while the form is open").toHaveCount(0);
     await expectAddFormOffers(form); // at every width: the addable platform named, no Twitch, no radio to tap
+    await shot(panel, `7-${width}-add-form.png`);
     await form.getByTestId("stream-dest-key").fill("TestYouTube");
     await expect(form.getByTestId("stream-dest-key-warning")).toBeVisible();
     await shot(panel, `7-${width}-add-warning.png`);
