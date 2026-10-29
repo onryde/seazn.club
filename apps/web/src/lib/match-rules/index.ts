@@ -151,7 +151,7 @@ export function buildRuleOverride(
         ? values[BEST_OF_ONE_PAIR.shown]
         : values[field.key];
     if (value !== undefined && value !== "") {
-      Object.assign(override, field.build(value, values));
+      Object.assign(override, field.build(value, values, inherited));
     } else if (field.buildOnBlank) {
       Object.assign(override, field.buildOnBlank(values));
     }
@@ -184,14 +184,33 @@ export function clearedSequenceKeys(sportKey: string, values: Record<string, str
  * field showed blank on reopen no matter what was saved — most visibly
  * Task I's shoot-out points pair, retired in W2d).
  */
-export function hydrateRuleValues(sportKey: string, config: unknown): Record<string, string> {
+export function hydrateRuleValues(
+  sportKey: string,
+  config: unknown,
+  inherited: Record<string, unknown> = {},
+): Record<string, string> {
   const cfg = (config ?? {}) as Record<string, unknown>;
   const values: Record<string, string> = {};
   for (const field of rulesFor(sportKey)) {
-    const value = field.read?.(cfg);
+    const value = field.read?.(cfg, inherited);
     if (value !== undefined) values[field.key] = value;
   }
   return values;
+}
+
+/**
+ * The part of a variant's preset the rule fields convert by (W2e Task 8c): for each field, the keys it declares in
+ * `context` (cricket's overs: `ballsPerOver`), and nothing else. The division builder knows a variant's preset but has
+ * no saved config; it hands THIS to `buildRuleOverride` and `MatchRuleFields` as `inherited`, so cricket's overs count in
+ * The Hundred's five-ball overs, while the builder's best-of-1 fold and its "Default" placeholders - which read other
+ * keys of `inherited` - see exactly what they saw before. A key the preset does not name is absent, never defaulted.
+ */
+export function ruleContextFor(sportKey: string, variantConfig: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (variantConfig === undefined) return out;
+  for (const field of rulesFor(sportKey))
+    for (const key of field.context ?? []) if (Object.hasOwn(variantConfig, key)) out[key] = variantConfig[key];
+  return out;
 }
 
 /** Every value a field can produce, so a build() that BRANCHES on its value

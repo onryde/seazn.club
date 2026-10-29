@@ -8,7 +8,8 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
-import { ARMAGEDDON_RESULTS, BoardgameMethod, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
+import { writeConfigIssues } from "@seazn/engine/sport";
+import { ARMAGEDDON_RESULTS, BoardgameMethod, DECISIVE_METHODS, DRAWN_METHODS, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
@@ -26,24 +27,26 @@ import { PAD_OWNER, PAD_SPORTS, PAD_UNOWNED, noPadReason } from "../lib/pad-spor
 import { foldStream } from "../lib/fold.ts";
 import { ARMAGEDDON, BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, BOARDGAME_TIEBREAK, BOARDGAME_TIEBREAK_TILE, BLACK_OPTION_PREFIX, RESULT_OPTION_PREFIX, TIEBREAK_SCORE_NONE, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
 import { CARROM_BOARD, CARROM_BOARD_TILE, CARROM_COIN_MAX, carromPad } from "../lib/pads/carrom.ts";
-import { CRICKET_OVER_TILE, CRICKET_SUMMARY, cricketPad, makeCricketPad, overSplit } from "../lib/pads/cricket.ts";
+import { CRICKET_INTERRUPTION, CRICKET_NO_CONTROL, CRICKET_OVER_TILE, CRICKET_REVISE, CRICKET_RUN_VALUES, CRICKET_SUMMARY, CRICKET_SUPER_OVER_BALL, cricketPad, makeCricketPad, overSplit } from "../lib/pads/cricket.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
-import { FOOTBALL_GOAL, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, footballGoalTile, footballPad } from "../lib/pads/football.ts";
+import { FOOTBALL_GOAL, FOOTBALL_KICK_MISSED, FOOTBALL_KICK_SCORED, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, FOOTBALL_SHOOTOUT_KICK, footballGoalTile, footballKickTile, footballPad } from "../lib/pads/football.ts";
 import { GENERIC_DRAW_TILE_ID, genericPad } from "../lib/pads/generic.ts";
 import { hockeyPad } from "../lib/pads/hockey.ts";
 import { icehockeyPad } from "../lib/pads/icehockey.ts";
 import { PAD_ADAPTERS, registerPads } from "../lib/pads/index.ts";
 import { TABLETENNIS_SET_SCORE_TILE, TABLETENNIS_SUMMARY, tabletennisPad } from "../lib/pads/tabletennis.ts";
-import { TENNIS_SET_SCORE_TILE, TENNIS_SUMMARY, tennisPad } from "../lib/pads/tennis.ts";
-import { PERIOD_ADVANCE_TILE, periodGoalTile } from "../lib/pads/period.ts";
+import { TENNIS_SET_SCORE_TILE, TENNIS_SUMMARY, makeTennisPad, tennisPad } from "../lib/pads/tennis.ts";
+import { PERIOD_ADVANCE_TILE, PERIOD_ATTEMPT_MISSED, PERIOD_ATTEMPT_SCORED, periodAttemptTile, periodGoalTile } from "../lib/pads/period.ts";
 import type { MatrixPadAdapter } from "../lib/pads/types.ts";
 import { VOLLEYBALL_SET_SCORE_TILE, VOLLEYBALL_SUMMARY, volleyballPad } from "../lib/pads/volleyball.ts";
 import { compareRow } from "../lib/pads/replay.ts";
 import { replayOnModel, type RowIn } from "./pad-model.ts";
+import { engineRefuses } from "./tennis-oracles.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
+import { setSportsOf } from "./set-oracles.ts";
 import { declaredAllOut } from "../lib/streams/cricket.ts";
-import { generateStream, matchesRequest } from "../lib/streams/index.ts";
-import { GeneratorUnsupported, OutcomeUnreachable, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
+import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/streams/index.ts";
+import { DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -61,15 +64,23 @@ function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
     { kind: "abandon" },
   ];
 }
+/** The noControl events after which the driver sends the rest of the stream over http and the pad is never asked for it: the
+ *  interruption and the revise (cricket's DLS), whose aftermath is judged against a target the pad cannot set. */
+const SKIPS_THE_REST: ReadonlySet<string> = new Set([CRICKET_INTERRUPTION, CRICKET_REVISE]);
 /** W2a: what only the ORGANISER does — a walkover (core.forfeit), an abandon (core.abandon) and a settle
  *  (core.settle, X-ST-2). The pad adapter refuses to emit their events; the console page objects do. Their requests
  *  are marked here once, by request kind, and their events by event type. */
-const ORGANISER_ONLY_OUTCOMES: ReadonlySet<string> = new Set(["forfeit", "abandon", "settle"]);
+// W2e G12 (Task 24): `sanctionEnd` is organiser-only as a whole - its stream ends in the core.forfeit that ends the match, and the
+// harness posts it through the forfeit's own http composition (the sanction rides in the play before the forfeit, the console's
+// FORFEIT_DIALOG_ROUTE), so no scorer pad is ever asked to author it.
+const ORGANISER_ONLY_OUTCOMES: ReadonlySet<string> = new Set(["forfeit", "abandon", "settle", "sanctionEnd"]);
 const ORGANISER_ONLY_EVENTS: ReadonlySet<string> = new Set(["core.forfeit", "core.abandon", "core.settle"]);
 /** The requests a scorer's pad can author. */
 const padOutcomes = (os: readonly RequestedOutcome[]): RequestedOutcome[] => os.filter((o) => !ORGANISER_ONLY_OUTCOMES.has(o.kind));
 const req = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "league", home: HOME, away: AWAY, outcome });
-const bracketReq = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome });
+/** A bracket request carries probe lineups (Task 21): cricket's super-over balls name persons, and the sweeps ask what the
+ *  generator emits, not whom - a generator that names none ignores them. */
+const bracketReq = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome, lineups: PROBE_LINEUPS });
 
 /** W2a (finding 16): what a BRACKET match can be asked — a win, a level result (where the sport reaches one), an
  *  abandon alone and at a score, every settle method after a level result and after an abandon, and every
@@ -84,11 +95,37 @@ function bracketOutcomesFor(): RequestedOutcome[] {
   ];
 }
 
+/** W2e (Tasks 19–23): a win down every deciding path, by both sides. A sport's generator builds the paths its sport
+ *  has (a request for any other is refused by name, so it routes nothing); the events a built one carries (football's
+ *  extra-time markers and shoot-out kicks) join the adapter's `emits` and its routes like any other. */
+const pathWins = (): RequestedOutcome[] => DECIDING_PATHS.flatMap((path) => (["home", "away"] as const).map((winner) => ({ kind: "win", winner, path }) as const));
+
 /** Every request over every system variant of `sport` in a LEAGUE, then (W2a) the bracket requests on the builder
- *  default under the knockout overlay. The builder default (offlineBuilderDefault, pinned to division-builder.tsx by
- *  catalogue.test.ts) comes first, and it is what PADPROOF plays. Since W1d item 16 cricket's two innings a side (the
- *  `test` preset) are inside the pad's route like any other. */
+ *  default under the knockout overlay, then (W2e) a win down every deciding path on each variant's knockout overlay —
+ *  the presets switch the deciders on there (X-SR-6). The builder default (offlineBuilderDefault, pinned to
+ *  division-builder.tsx by catalogue.test.ts) comes first, and it is what PADPROOF plays. Since W1d item 16 cricket's
+ *  two innings a side (the `test` preset) are inside the pad's route like any other. */
 function requestsFor(sport: string): StreamRequest[] {
+  return allRequestsFor(sport).filter((r) => declaredUnbuilt(r) === null);
+}
+/** Why the sport's generator DECLARES it does not build `r` (a refusal by name, GeneratorUnsupported), or null when it builds it.
+ *  The sweeps below never ask for these (a request the generator declares out of reach routes nothing), so a GeneratorUnsupported
+ *  they do meet is a hole and fails (`streamOf`); the differential test pins this list to the generator's actual refusals both ways.
+ *   - "no-deciding-path": a win down a deciding path from a generator with no `pathWitness` (index.ts F8: it would build a plain win
+ *     under the path's name). The declaration read is the generator's own.
+ *   - "draw-continues": football's draw under a cfg with extra time or a shoot-out (football.ts: supportsDraws reads the stage
+ *     only, so the engine declares the draw drawable while level FT continues; the generator refuses rather than emit a stream that
+ *     folds undecided). A `level` result and a settle after one are built FROM that draw (levelStream, index.ts), so they are refused
+ *     the same way. */
+function declaredUnbuilt(r: StreamRequest): "no-deciding-path" | "draw-continues" | null {
+  const o = r.outcome;
+  if (o.kind === "win" && o.path !== undefined && STREAM_GENERATORS[r.sportKey]?.pathWitness === undefined) return "no-deciding-path";
+  const cfg = r.cfg as { extraTime?: { enabled?: boolean }; shootout?: boolean };
+  const viaDraw = o.kind === "draw" || o.kind === "level" || (o.kind === "settle" && o.after === "level");
+  if (r.sportKey === "football" && viaDraw && (cfg.extraTime?.enabled === true || cfg.shootout === true)) return "draw-continues";
+  return null;
+}
+function allRequestsFor(sport: string): StreamRequest[] {
   const def = offlineBuilderDefault(sport);
   const variants = [def, ...variantKeys(sport).filter((v) => v !== def)];
   const league = variants.flatMap((v) => {
@@ -96,14 +133,20 @@ function requestsFor(sport: string): StreamRequest[] {
     return outcomesFor(sport, cfg).map((o) => req(sport, cfg, o));
   });
   const cfg = stageCfg(sport, resolveSportCfg(sport, def), "knockout", def);
-  return [...league, ...bracketOutcomesFor().map((o) => bracketReq(sport, cfg, o))];
+  const paths = variants.flatMap((v) => {
+    const ko = stageCfg(sport, resolveSportCfg(sport, v), "knockout", v);
+    return pathWins().map((o) => bracketReq(sport, ko, o));
+  });
+  return [...league, ...bracketOutcomesFor().map((o) => bracketReq(sport, cfg, o)), ...paths];
 }
-/** The events a request generates, or [] where the generator declares the case unsupported. */
+/** The events a request generates, or [] where the cfg declares the outcome unreachable (OutcomeUnreachable: no such path, a
+ *  draw where none is allowed). A GeneratorUnsupported is NOT out of reach - nothing is known-unsupported since ruling 44 - it
+ *  is a hole in the generator and fails the test that hit it (Task 20 M4). */
 function streamOf(r: StreamRequest): StreamEvent[] {
   try {
     return generateStream(r);
   } catch (e) {
-    if (e instanceof GeneratorUnsupported || e instanceof OutcomeUnreachable) return []; // declared out of reach: nothing to route
+    if (e instanceof OutcomeUnreachable) return []; // declared out of reach: nothing to route
     throw e;
   }
 }
@@ -167,7 +210,7 @@ describe("the pad adapter registry", () => {
       }
     }
     console.info(`pad-adapters: ${checked} registered fallback(s) declare writes and a judge`);
-    expect(checked).toBe(4); // football goal, cricket innings, icehockey and hockey advances
+    expect(checked).toBe(5); // football goal, cricket innings, icehockey and hockey advances, cricket super-over ball (Task 21)
   });
 
   it("I-1: registration refuses by name a fallback with no judge, or one that declares no row type it writes; its positive pair registers, frozen", () => {
@@ -181,6 +224,49 @@ describe("the pad adapter registry", () => {
     expect(Object.keys(t)).toEqual(["football", "carrom"]);
     expect(Object.isFrozen(t)).toBe(true);
     expect(Object.isFrozen(PAD_ADAPTERS)).toBe(true);
+  });
+});
+
+describe("the sweeps' requests (Task 20 M4: a GeneratorUnsupported is a failure, not a skip)", () => {
+  it("streamOf skips an OutcomeUnreachable only: a GeneratorUnsupported propagates, and a built request is returned whole", () => {
+    // A sport with no generator: the refusal is a hole, not an unreachable outcome.
+    const noGen = { sportKey: "no-such-sport", cfg: {}, stageKind: "league", home: HOME, away: AWAY, outcome: { kind: "win", winner: "home" } } satisfies StreamRequest;
+    expect(() => streamOf(noGen)).toThrow(GeneratorUnsupported);
+    // A path win from a generator that builds none (boardgame): GeneratorUnsupported by name, so it propagates too.
+    const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    const noPath = bracketReq("boardgame", cfg, { kind: "win", winner: "home", path: "extraTime" });
+    expect(() => generateStream(noPath)).toThrow(GeneratorUnsupported);
+    expect(() => streamOf(noPath)).toThrow(GeneratorUnsupported);
+    // A cfg that declares a path unreachable: OutcomeUnreachable, skipped (empty).
+    const football = resolveSportCfg("football", offlineBuilderDefault("football"));
+    const noKick = bracketReq("football", football, { kind: "win", winner: "home", path: "gws" });
+    expect(() => generateStream(noKick)).toThrow(OutcomeUnreachable);
+    expect(streamOf(noKick)).toEqual([]);
+    // A built request comes back whole.
+    expect(streamOf(req("football", football, { kind: "win", winner: "home" })).length).toBeGreaterThan(0);
+  });
+
+  it("the declared-unbuilt requests are EXACTLY the ones the generator refuses with GeneratorUnsupported, over every pad sport's whole request set (counted, both ways)", () => {
+    const by: Record<string, number> = { "no-deciding-path": 0, "draw-continues": 0 };
+    let judged = 0;
+    for (const [sport] of ADAPTERS) {
+      for (const r of allRequestsFor(sport)) {
+        let refused = false;
+        try { generateStream(r); } catch (e) {
+          if (e instanceof OutcomeUnreachable) { judged++; continue; } // declared out of reach: streamOf's skip, not an unbuilt shape
+          if (!(e instanceof GeneratorUnsupported)) throw e;
+          refused = true;
+        }
+        const why = declaredUnbuilt(r);
+        expect(refused, `${sport} ${JSON.stringify(r.outcome)}: the generator ${refused ? "refuses" : "builds"} it, declaredUnbuilt says ${why}`).toBe(why !== null);
+        if (why !== null) by[why]!++;
+        judged++;
+      }
+    }
+    console.info(`pad-adapters: ${judged} request(s) judged; declared unbuilt: ${JSON.stringify(by)}`);
+    expect(judged).toBeGreaterThan(0);
+    expect(by["no-deciding-path"], "some pad sport's generator builds no deciding path").toBeGreaterThan(0);
+    expect(by["draw-continues"], "football has a league draw under extra time or a shoot-out").toBeGreaterThan(0);
   });
 });
 
@@ -200,21 +286,63 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
   it("every generated scorer event is routed to ≥1 tap — or its type is declared noControl, and refused by name — and every fallback cites its file:line", () => {
     let routed = 0;
     let barred = 0;
+    let afterBarred = 0;
+    let routedAfterBarred = 0;
+    let anyBarred = false;
     const noControl = new Set(a.noControl?.eventTypes ?? []);
+    const routedTypes = new Set<string>();
+    const afterBarredTypes = new Set<string>();
     for (const r of requestsFor(sport)) {
+      // A stream holding an event the pad has no control for goes over http WHOLE (browser-driver.ts, W1d item 16): the pad
+      // is never asked for the events after the first such event, and what they need may depend on it. The skip is SCOPED to the
+      // two events whose aftermath depends on what the pad cannot set (Task 21 review M2: a chase after an interruption/revise is
+      // judged against the revised target) - after any other noControl event (a follow-on, a match close) every event is still
+      // routed and asserted. Skipped events' TYPES must be routed in some stream the driver does tap - checked below, never skipped.
+      let sawBarred = false;
+      anyBarred = false;
       for (const e of scorerEvents(streamOf(r))) {
         const at = `${JSON.stringify(r.outcome)} ${e.type}`;
         if (noControl.has(e.type)) {
           expect(() => a.stepsFor(e, ctxOf(r)), at).toThrow(/has no addressable pad control/);
           barred++;
+          anyBarred = true;
+          if (SKIPS_THE_REST.has(e.type)) sawBarred = true;
+          continue;
+        }
+        if (sawBarred) {
+          afterBarredTypes.add(e.type);
+          afterBarred++;
           continue;
         }
         expect(a.stepsFor(e, ctxOf(r)).length, at).toBeGreaterThan(0);
+        routedTypes.add(e.type);
         routed++;
+        if (anyBarred) routedAfterBarred++;
       }
     }
-    console.info(`pad-adapters: ${sport}: ${routed} generated event(s) routed, ${barred} declared noControl`);
+    console.info(`pad-adapters: ${sport}: ${routed} generated event(s) routed, ${barred} declared noControl, ${afterBarred} after one (their types routed elsewhere)`);
     expect(routed).toBeGreaterThan(0);
+    // The skip is reached exactly where it is owed (cricket's interruption/revise). It is recounted from the RAW streams (the events
+    // after the first skipping event that are not themselves noControl), not read back from the loop's own flag: the loop and the
+    // recount agree for every sport, so a skip leaking to another noControl event (a follow-on, a match close) moves one and not the other.
+    let inspected = 0;
+    let expectedAfterBarred = 0;
+    for (const r of requestsFor(sport)) {
+      const evs = scorerEvents(streamOf(r));
+      inspected += evs.length;
+      const first = evs.findIndex((e) => SKIPS_THE_REST.has(e.type));
+      if (first >= 0) expectedAfterBarred += evs.slice(first + 1).filter((e) => !noControl.has(e.type)).length;
+    }
+    expect(inspected, `${sport}: the recount read some events`).toBeGreaterThan(0);
+    expect(afterBarred, `${sport}: events skipped after a skipping event, recounted from the raw streams`).toBe(expectedAfterBarred);
+    if (sport === "cricket") expect(afterBarred, "cricket's DLS streams have events after the revise, which the pad is never asked for").toBeGreaterThan(0);
+    // SKIPS_THE_REST names cricket's two events only, so a sport that declares ANY noControl owes the driver a skip rule of its own:
+    // another adapter growing a noControl must extend this set (or say it skips nothing), not inherit "no skip" silently.
+    else expect(a.noControl, `${sport} declares noControl events; SKIPS_THE_REST (cricket's DLS pair) says nothing about them`).toBeUndefined();
+    console.info(`pad-adapters: ${sport}: ${routedAfterBarred} event(s) routed AFTER a noControl event that does not skip the rest`);
+    // ...and the scoping is witnessed: events after cricket's follow-on / match close ARE routed and asserted (not skipped with the DLS tail).
+    if (sport === "cricket") expect(routedAfterBarred, "cricket: some event follows a follow-on or match close and is routed").toBeGreaterThan(0);
+    for (const t of afterBarredTypes) expect(routedTypes.has(t), `${sport}: ${t} appears only after an event the pad has no control for, so no tappable stream routes it`).toBe(true);
     // Every type an adapter declares noControl is one its generator emits (a stale declaration is a failure), and the route is frozen.
     for (const t of noControl) expect(a.emits, t).toContain(t);
     if (a.noControl !== undefined) {
@@ -478,9 +606,102 @@ describe("volleyball", () => {
   });
 });
 
+// ── W2e Task 22: the set sports' deciding-set and cap streams, typed on the setScore sheet ──────────────────────────────
+// A cap or deciding-set stream is the same `<sport>.<game|set>.summary {home, away}` the adapters already route (no new event
+// type, so `emits` and the routing sweep are unchanged); what is new is the SCORES: a cap set ends at cap : cap-1 (30-29), the
+// number the sheet's field must accept. The sheet's bound is the engine's own padSpec summary-field max (kernel
+// summaryScoreBound), which the skin copies as `scoreBound`: pinned to that source below, so a skin that bounded the field
+// below the cap would red here and not at a scorer's thumb.
+describe("the set sports' deciding-set and cap streams on the setScore sheet (W2e Task 22)", () => {
+  const SKIN_OF: Readonly<Record<string, { file: string; pad: MatrixPadAdapter; summary: string; tile: string }>> = {
+    badminton: { file: "badminton.tsx", pad: badmintonPad, summary: BADMINTON_SUMMARY, tile: BADMINTON_SET_SCORE_TILE },
+    volleyball: { file: "volleyball.tsx", pad: volleyballPad, summary: VOLLEYBALL_SUMMARY, tile: VOLLEYBALL_SET_SCORE_TILE },
+    tabletennis: { file: "tabletennis.tsx", pad: tabletennisPad, summary: TABLETENNIS_SUMMARY, tile: TABLETENNIS_SET_SCORE_TILE },
+  };
+  // Task 22 M6: the sports this table must cover are the ENGINE's set sports (the module marks them with reachableSetScores), not
+  // a list typed here - a set sport added to the registry without a skin row fails this, instead of being skipped by the sweeps.
+  const SET_SPORTS = setSportsOf(SPORT_KEYS);
+  const skinRows = (): [string, (typeof SKIN_OF)[string]][] => SET_SPORTS.map((sport) => {
+    const row = SKIN_OF[sport];
+    if (row === undefined) throw new Error(`SKIN_OF has no row for the set sport ${sport}`);
+    return [sport, row];
+  });
+  /** The engine's own bound on the summary action's number fields under `cfg` (padSpec, not the skin's copy of it). */
+  const boundOf = (sport: string, cfg: unknown): number => {
+    const spec = sportModule(sport).padSpec?.(cfg as never);
+    const action = spec?.panels.flatMap((p) => p.actions).find((a) => a.type === SKIN_OF[sport]!.summary);
+    expect(action, `${sport}: padSpec declares the summary action`).toBeDefined();
+    const maxes = action!.fields.filter((f) => f.kind === "number").map((f) => (f as { max?: number }).max);
+    expect(maxes.length, `${sport}: two number fields`).toBe(2);
+    expect(maxes[0]).toBe(maxes[1]);
+    expect(typeof maxes[0]).toBe("number");
+    return maxes[0] as number;
+  };
+
+  it("every set variant's deciding-set and cap summary is typed as the sheet's two number steps, each within the engine's declared field bound, counted per path", () => {
+    const perPath = new Map<string, number>();
+    let capNeeds = 0;
+    expect(SET_SPORTS.length, "anti-vacuity: the engine marks set sports").toBeGreaterThan(0);
+    expect([...Object.keys(SKIN_OF)].sort(), "SKIN_OF covers exactly the engine's set sports").toEqual([...SET_SPORTS].sort());
+    for (const [sport, { pad, summary }] of skinRows()) {
+      for (const variant of variantKeys(sport)) {
+        const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as { cap: number | null };
+        const bound = boundOf(sport, cfg);
+        for (const path of ["decidingSet", "cap"] as const) {
+          const r: StreamRequest = { sportKey: sport, cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome: { kind: "win", winner: "home", path } };
+          let stream: StreamEvent[];
+          try { stream = generateStream(r); } catch (e) {
+            if (e instanceof OutcomeUnreachable) continue; // the cfg declares no such path (cap null): refused by name elsewhere
+            throw e;
+          }
+          const sums = stream.filter((e) => e.type === summary);
+          expect(sums.length, `${sport}/${variant} ${path}`).toBeGreaterThan(0);
+          for (const e of sums) {
+            const p = e.payload as { home: number; away: number };
+            expect(Math.max(p.home, p.away), `${sport}/${variant} ${path}: within the sheet's bound ${bound}`).toBeLessThanOrEqual(bound);
+            expect(pad.stepsFor(e, { ...ctxOf(r) }), `${sport}/${variant} ${path}`).toEqual(sheetSteps(SKIN_OF[sport]!.tile, p));
+            if (path === "cap") capNeeds = Math.max(capNeeds, p.home, p.away);
+          }
+          perPath.set(`${sport}/${path}`, (perPath.get(`${sport}/${path}`) ?? 0) + 1);
+        }
+      }
+    }
+    console.info(`pad-adapters: set-sport path summaries typed ${JSON.stringify(Object.fromEntries(perPath))}`);
+    // Every sport reached its deciding set; only badminton's variants reached a cap; 30 is the highest score a sheet must hold.
+    expect([...perPath.keys()].filter((k) => k.endsWith("/decidingSet")).sort()).toEqual(["badminton/decidingSet", "tabletennis/decidingSet", "volleyball/decidingSet"]);
+    expect([...perPath.keys()].filter((k) => k.endsWith("/cap"))).toEqual(["badminton/cap"]);
+    expect(perPath.get("badminton/cap")).toBe(variantKeys("badminton").length);
+    expect(capNeeds).toBe(Math.max(...variantKeys("badminton").map((v) => (resolveSportCfg("badminton", v) as { cap: number }).cap)));
+  });
+
+  it("the skins bound the sheet the way the engine does: the cap when the cfg has one, else the larger target plus 20 - so a cap score (cap, cap-1) is always typeable", () => {
+    let pinned = 0;
+    for (const [sport, { file }] of skinRows()) {
+      const skin = readFileSync(resolve(REPO, SKINS, file), "utf8");
+      expect(skin, `${file}: scoreBound`).toMatch(/function scoreBound\(cfg: \w+\): number \{\s*const cap = cfg\.cap;\s*if \(typeof cap === "number"\) return cap;\s*return Math\.max\(cfg\.setTo \?\? \d+, cfg\.finalSetTo \?\? \d+\) \+ 20;\s*\}/);
+      pinned++;
+      // ...and the engine's declaration is the same arithmetic, for each variant.
+      for (const variant of variantKeys(sport)) {
+        const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as { cap: number | null; setTo: number; finalSetTo: number };
+        expect(boundOf(sport, cfg), `${sport}/${variant}`).toBe(cfg.cap ?? Math.max(cfg.setTo, cfg.finalSetTo) + 20);
+      }
+    }
+    expect(pinned).toBe(SET_SPORTS.length);
+    expect(pinned).toBeGreaterThan(0);
+  });
+});
+
 describe("tennis", () => {
   let skin = "";
   beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "tennis.tsx"), "utf8"); });
+
+  /** The sheet's steps for a set (setScoreSheet): home, away, then - only for a tie-break-shaped set - the tie-break's two numbers. */
+  const tennisSteps = (p: { home: number; away: number; tb?: { home: number; away: number } }) => [
+    ...sheetSteps(TENNIS_SET_SCORE_TILE, p),
+    ...(p.tb === undefined ? [] : [{ kind: "number", value: p.tb.home }, { kind: "confirm" }, { kind: "number", value: p.tb.away }, { kind: "confirm" }]),
+  ];
+  const tennisCtx = (cfg: unknown): TapAdapterContext => ({ cfg, entrants: { home: HOME, away: AWAY } });
+  const TN_SET = (home: number, away: number, tb?: { home: number; away: number }): StreamEvent => ({ type: TENNIS_SUMMARY, payload: tb === undefined ? { home, away } : { home, away, tb } });
 
   it("tennis: a 6-3 set's steps carry no tie-break numbers — exactly 5 steps, home first, for every generated set", () => {
     let checked = 0;
@@ -488,11 +709,13 @@ describe("tennis", () => {
       const { cfg, r, sums } = summariesOf("tennis", TENNIS_SUMMARY, winner);
       const at = (cfg as { set: { tiebreakAt: number } }).set.tiebreakAt;
       expect(sums.length).toBe(Math.ceil((cfg as { bestOf: number }).bestOf / 2));
+      const pad = makeTennisPad();
+      pad.stepsFor(START, ctxOf(r));
       for (const s of sums) {
         const p = s.payload as { home: number; away: number };
         // Not the tie-break shape (at+1 : at), which is the only one whose sheet asks more (tennis.tsx:851-855).
         expect(Math.min(p.home, p.away)).toBeLessThan(at);
-        const steps = tennisPad.stepsFor(s, ctxOf(r));
+        const steps = pad.stepsFor(s, ctxOf(r));
         expect(steps).toHaveLength(5);
         expect(steps).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, p));
         checked++;
@@ -501,20 +724,158 @@ describe("tennis", () => {
     expect(checked).toBe(4);
   });
 
-  it("a tie-break-shaped set (tiebreakAt+1 : tiebreakAt, from the cfg) is refused by name, never typed as two numbers; its positive pair is typed", () => {
+  it("a tie-break-shaped set (tiebreakAt+1 : tiebreakAt, from the cfg) is typed with its tie-break numbers (tbHome, tbAway: 9 steps) and refused by name when its payload omits tb; a plain set beside it is 5 steps", () => {
     const { cfg, r } = summariesOf("tennis", TENNIS_SUMMARY, "home");
     const at = (cfg as { set: { tiebreakAt: number } }).set.tiebreakAt;
+    const to = (cfg as { set: { tiebreakTo: number } }).set.tiebreakTo;
     let checked = 0;
-    for (const payload of [{ home: at + 1, away: at }, { home: at, away: at + 1 }]) {
-      expect(() => tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is a tie-break set/);
+    for (const [home, away] of [[at + 1, at], [at, at + 1]] as const) {
+      const tb = home > away ? { home: to, away: to - 2 } : { home: to - 2, away: to };
+      const pad = makeTennisPad();
+      pad.stepsFor(START, ctxOf(r));
+      expect(() => pad.stepsFor(TN_SET(home, away), ctxOf(r)), `${home}-${away} without tb`).toThrow(/is a tie-break set — the payload omits tb/);
+      const steps = pad.stepsFor(TN_SET(home, away, tb), ctxOf(r));
+      expect(steps, `${home}-${away} with tb`).toHaveLength(9);
+      expect(steps).toEqual(tennisSteps({ home, away, tb }));
       checked++;
     }
     expect(checked).toBe(2);
-    // One game fewer on the loser is a plain set: typed.
-    expect(tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload: { home: at + 1, away: at - 1 } }, ctxOf(r))).toHaveLength(5);
-    for (const payload of [null, { home: 6 }, { home: 6, away: 3, tb: { home: 7, away: 5 } }] as unknown[]) {
-      expect(() => tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the sheet's \{home, away\} of whole numbers/);
+    // One game fewer on the loser is a plain set: typed as two numbers, and a tb block on it is refused by name.
+    const pad = makeTennisPad();
+    pad.stepsFor(START, ctxOf(r));
+    expect(pad.stepsFor(TN_SET(at + 1, at - 1), ctxOf(r))).toHaveLength(5);
+    expect(() => pad.stepsFor(TN_SET(at + 1, at - 1, { home: to, away: to - 2 }), ctxOf(r))).toThrow(/carries tb on a score that is not a tie-break set/);
+    for (const payload of [null, { home: 6 }, { home: 6, away: 3, extra: 1 }, { home: 7, away: 6, tb: { home: 7 } }, { home: 7, away: 6, tb: { home: 7, away: 5, x: 1 } }, { home: 7, away: 6, tb: 7 }] as unknown[]) {
+      expect(() => pad.stepsFor({ type: TENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the sheet's \{home, away\} of whole numbers/);
     }
+  });
+
+  it("CL7-3 the adapter accepts an MTB-decided summary (7-6 in the deciding set) and refuses the same 7-6 without tb in an ordinary set; with tiebreakAt ABSENT the skin's default trigger (6) still refuses a bare 7-6 as a tie-break set that omits its tb, while a match tie-break in the deciding set still accepts it", () => {
+    // The match tie-break to 7 by 1 (the ENGINE's cfg: finalSet.matchTiebreakTo, tiebreak.winBy): 7-6 is a finished MATCH TIE-BREAK in the
+    // deciding set and a tie-break-shaped ORDINARY set (tiebreakAt+1 : tiebreakAt) anywhere else. The engine says which, then the pad follows.
+    const mtb = resolveSportCfg("tennis", "tour", { finalSet: { matchTiebreakTo: 7 }, tiebreak: { winBy: 1 } }) as { set: { tiebreakAt: number }; bestOf: number };
+    expect(writeConfigIssues(sportModule("tennis"), mtb), "a cfg a write door accepts").toEqual([]);
+    const level = [START, TN_SET(6, 3), TN_SET(3, 6)];
+    expect(engineRefuses(mtb, [...level, TN_SET(7, 6)]), "the engine accepts 7-6 as the match tie-break of the deciding set").toBe(false);
+    expect(engineRefuses(mtb, [START, TN_SET(7, 6)]), "...and refuses 7-6 without tb in an ordinary set").toBe(true);
+    expect(engineRefuses(mtb, [...level, TN_SET(7, 6, { home: 7, away: 5 })]), "...and refuses a tb block in the match tie-break's place").toBe(true);
+    expect(mtb.set.tiebreakAt, "tiebreakAt+1 : tiebreakAt is 7-6, the deciding set's score").toBe(6);
+    // The pad, driven the way the replay drives it: sets 1-1, then 7-6 is typed as the sheet's two numbers.
+    const pad = makeTennisPad();
+    const ctx = tennisCtx(mtb);
+    const sent = [...level, TN_SET(7, 6)].map((e) => pad.stepsFor(e, ctx));
+    expect(sent.at(-1), "an MTB-decided summary is two numbers").toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, { home: 7, away: 6 }));
+    // ...and an MTB summary with a tb block is refused (the kernel refuses it; the sheet asks no tb in the MTB position).
+    const again = makeTennisPad();
+    for (const e of level) again.stepsFor(e, ctx);
+    expect(() => again.stepsFor(TN_SET(7, 6, { home: 7, away: 5 }), ctx)).toThrow(/match tie-break/);
+    // The same payload in an ordinary set, from the same cfg, is refused without tb.
+    const first = makeTennisPad();
+    first.stepsFor(START, ctx);
+    expect(() => first.stepsFor(TN_SET(7, 6), ctx)).toThrow(/is a tie-break set — the payload omits tb/);
+    // tiebreakAt ABSENT: the skin defaults it to 6 (rulesFor: `set.tiebreakAt === undefined ? 6 : ...`, pinned below), so a 7-6 without tb
+    // is a tie-break set that omits its tb - refused, not silently typed (the guard used to return null for a cfg with no tiebreakAt).
+    const { tiebreakAt: _dropped, ...setNoAt } = mtb.set as Record<string, unknown>;
+    expect(_dropped).toBe(6);
+    const noAt = { ...mtb, set: setNoAt, finalSet: "same" };
+    const bare = makeTennisPad();
+    bare.stepsFor(START, tennisCtx(noAt));
+    expect(() => bare.stepsFor(TN_SET(7, 6), tennisCtx(noAt)), "7-6 without tb, tiebreakAt absent").toThrow(/is a tie-break set — the payload omits tb/);
+    expect(bare.stepsFor(TN_SET(7, 6, { home: 7, away: 5 }), tennisCtx(noAt)), "with tb: typed, the default trigger").toEqual(tennisSteps({ home: 7, away: 6, tb: { home: 7, away: 5 } }));
+    // ...and with the match tie-break standing in for the deciding set, the absent trigger is no obstacle: the MTB summary is accepted.
+    const noAtMtb = { ...mtb, set: setNoAt };
+    const decider = makeTennisPad();
+    for (const e of level) decider.stepsFor(e, tennisCtx(noAtMtb));
+    expect(decider.stepsFor(TN_SET(7, 6), tennisCtx(noAtMtb))).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, { home: 7, away: 6 }));
+  });
+
+  it("the guard follows the product's rulesFor from per-replay state: sets won since core.start decide which set is the deciding one; a second start resets; two adapters share nothing; a summary before core.start is refused by name", () => {
+    const mtb = resolveSportCfg("tennis", "doubles-noad-mtb10") as { bestOf: number; set: { tiebreakAt: number }; finalSet: { matchTiebreakTo: number } };
+    const ctx = tennisCtx(mtb);
+    const to = mtb.finalSet.matchTiebreakTo;
+    const win = (n: number) => TN_SET(n, n - 4 < 0 ? 0 : n - 4);
+    expect(() => makeTennisPad().stepsFor(win(6), ctx), "no core.start").toThrow(/before core\.start/);
+    const pad = makeTennisPad();
+    pad.stepsFor(START, ctx);
+    // 1-0 up: set two is not the deciding one - a match-tie-break-shaped score there is just games.
+    pad.stepsFor(TN_SET(6, 2), ctx);
+    expect(() => pad.stepsFor(TN_SET(mtb.set.tiebreakAt + 1, mtb.set.tiebreakAt), ctx), "7-6 at 1-0: an ordinary set").toThrow(/is a tie-break set/);
+    // 1-1: now the deciding set. A second start is a NEW fixture: the count restarts, so the same 7-6 is an ordinary set again
+    // (a pad that kept the 1-1 would type it as the match tie-break).
+    pad.stepsFor(TN_SET(2, 6), ctx);
+    pad.stepsFor(START, ctx);
+    expect(() => pad.stepsFor(TN_SET(7, 6), ctx), "after a second start").toThrow(/is a tie-break set/);
+    // ...and without the restart the deciding set is the match tie-break: its points are typed, 10-8 included.
+    const level = makeTennisPad();
+    level.stepsFor(START, ctx); level.stepsFor(TN_SET(6, 2), ctx); level.stepsFor(TN_SET(2, 6), ctx);
+    expect(level.stepsFor(TN_SET(to, to - 2), ctx)).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, { home: to, away: to - 2 }));
+    // Two adapters share nothing: the first's 1-1 does not make the second's set a deciding one.
+    const a = makeTennisPad();
+    const b = makeTennisPad();
+    a.stepsFor(START, ctx); b.stepsFor(START, ctx);
+    a.stepsFor(TN_SET(6, 2), ctx); a.stepsFor(TN_SET(2, 6), ctx);
+    expect(a.stepsFor(TN_SET(7, 6), ctx)).toHaveLength(5);
+    expect(() => b.stepsFor(TN_SET(7, 6), ctx)).toThrow(/is a tie-break set/);
+    // Two fixtures (distinct entrant pairs) on one adapter are kept apart too.
+    const shared = makeTennisPad();
+    const other: TapAdapterContext = { cfg: mtb, entrants: { home: "x-home", away: "x-away" } };
+    shared.stepsFor(START, ctx); shared.stepsFor(START, other);
+    shared.stepsFor(TN_SET(6, 2), ctx); shared.stepsFor(TN_SET(2, 6), ctx);
+    expect(shared.stepsFor(TN_SET(7, 6), ctx)).toHaveLength(5);
+    expect(() => shared.stepsFor(TN_SET(7, 6), other)).toThrow(/is a tie-break set/);
+    // The module-level adapter is one instance of the same factory (the registry's).
+    expect(PAD_ADAPTERS.tennis).toBe(tennisPad);
+  });
+
+  it("G8 every generated tie-break-set and short-set tie-break stream is typed as the sheet's steps - tb numbers exactly where the summary has a tb block, every number within the engine's declared field bound - counted per variant and path", () => {
+    const perKey = new Map<string, number>();
+    let tbSteps = 0;
+    let mtbSets = 0;
+    for (const variant of variantKeys("tennis")) {
+      const cfg = stageCfg("tennis", resolveSportCfg("tennis", variant), "knockout", variant);
+      const actions = sportModule("tennis").padSpec!(cfg as never).panels.flatMap((pn) => pn.actions).filter((a) => a.type === TENNIS_SUMMARY);
+      const plainAction = actions.find((a) => a.fields.length === 2)!;
+      const tbAction = actions.find((a) => a.fields.length === 4)!;
+      expect(plainAction, `${variant}: padSpec declares the plain set-score action`).toBeDefined();
+      expect(tbAction, `${variant}: padSpec declares the tie-break set-score action`).toBeDefined();
+      const maxOf = (a: typeof plainAction, path: string) => (a.fields.find((f) => f.path === path) as { max: number }).max;
+      for (const path of ["tiebreakSet", "shortSetTb"] as const) for (const winner of ["home", "away"] as const) {
+        const r: StreamRequest = { sportKey: "tennis", cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome: { kind: "win", winner, path } };
+        let stream: StreamEvent[];
+        try { stream = generateStream(r); } catch (e) {
+          if (e instanceof OutcomeUnreachable) continue; // the variant declares no such path
+          throw e;
+        }
+        const pad = makeTennisPad();
+        for (const e of stream) {
+          const steps = pad.stepsFor(e, ctxOf(r));
+          if (e.type !== TENNIS_SUMMARY) { expect(steps).toEqual([{ kind: "testid", testid: START_MATCH_TESTID }]); continue; }
+          const p = e.payload as { home: number; away: number; tb?: { home: number; away: number } };
+          expect(steps, `${variant} ${path} ${winner}: ${JSON.stringify(p)}`).toEqual(tennisSteps(p));
+          expect(Math.max(p.home, p.away), `${variant} ${path}: games/points within the sheet's bound`).toBeLessThanOrEqual(maxOf(p.tb === undefined ? plainAction : tbAction, "home"));
+          if (p.tb !== undefined) {
+            expect(Math.max(p.tb.home, p.tb.away), `${variant} ${path}: tie-break points within the sheet's bound`).toBeLessThanOrEqual(maxOf(tbAction, "tb.home"));
+            tbSteps++;
+          } else if (Math.max(p.home, p.away) > (cfg as { set: { gamesTo: number } }).set.gamesTo + 2) mtbSets++;
+        }
+        perKey.set(`${variant}/${path}`, (perKey.get(`${variant}/${path}`) ?? 0) + 1);
+      }
+    }
+    console.info(`pad-adapters: tennis tie-break streams typed ${JSON.stringify(Object.fromEntries(perKey))}; ${tbSteps} set(s) with tb numbers, ${mtbSets} match tie-break(s)`);
+    expect([...perKey.keys()].sort()).toEqual(["doubles-noad-mtb10/tiebreakSet", "fast4/shortSetTb", "grand-slam/tiebreakSet", "short-sets/shortSetTb", "tour/tiebreakSet"]);
+    for (const [k, n] of perKey) expect(n, k).toBe(2);
+    expect(tbSteps, "tb numbers were typed").toBeGreaterThan(0);
+    expect(mtbSets, "a match tie-break was typed").toBeGreaterThan(0);
+  });
+
+  it("the skin's sheet is what the adapter models: tbHome and tbAway are asked only `when: tbShape`, tbShape is false for a match tie-break or an advantage set, tiebreakAt defaults to 6 and bestOf to 3, and the payload's tb block rides only a tb-shaped answer", () => {
+    expect(skin).toMatch(/id: "tbHome",[\s\S]*?when: tbShape,/);
+    expect(skin).toMatch(/id: "tbAway",[\s\S]*?when: tbShape,/);
+    expect(skin).toMatch(/if \(rules\.mtbTo !== null \|\| rules\.tiebreakAt === null\) return false;/);
+    expect(skin).toMatch(/const tiebreakAt = set\.tiebreakAt === undefined \? 6 : set\.tiebreakAt;/);
+    expect(skin).toMatch(/const bestOf = cfg\.bestOf \?\? 3;/);
+    expect(skin).toMatch(/\.\.\.\(tbShape\(answers\) \? \{ tb: \{ home: Number\(answers\.tbHome\), away: Number\(answers\.tbAway\) \} \} : \{\}\),/);
+    expect(skin).toMatch(/if \("matchTiebreakTo" in finalSet\) return \{ \.\.\.base, mtbTo: finalSet\.matchTiebreakTo \};/);
   });
 
   it("Step 0: the 6-3 row Step 0 saw (no tb key) is equal to the generated summary; no fallback, no tolerated key", () => {
@@ -548,12 +909,17 @@ const CHOICE_ID = /^\[data-choice-option-id="([^"]+)"\]$/;
 
 /** football as Step 0 saw it (2026-09-30, 320, 11-a-side): Start writes
  *  core.start; a goal tile writes `{by}` alone; the period tile then a marker
- *  choice writes `{phase: <the choice's id>}`. Anything else writes nothing. */
+ *  choice writes `{phase: <the choice's id>}`. W2e (Task 19, read off the skin's
+ *  source — no browser saw it yet): a side's kick tile then the Scored / Missed
+ *  choice writes `{by, scored}` (football.tsx kickSheet's buildPayload). Anything
+ *  else writes nothing. */
 function footballModel(ctx: TapAdapterContext, goal: (side: "home" | "away") => unknown = (side) => ({ by: ctx.entrants[side] })) {
   return (taps: readonly string[]): RowIn[] => {
     if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
     for (const side of ["home", "away"] as const) {
       if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [{ type: "football.goal", payload: goal(side) }];
+      const kick = taps.length === 2 && taps[0] === TILE(`kick-${side}`) ? CHOICE_ID.exec(taps[1]!) : null;
+      if (kick !== null && (kick[1] === "scored" || kick[1] === "missed")) return [{ type: "football.shootout.kick", payload: { by: ctx.entrants[side], scored: kick[1] === "scored" } }];
     }
     const m = taps.length === 2 && taps[0] === TILE("period") ? CHOICE_ID.exec(taps[1]!) : null;
     return m === null ? [] : [{ type: "football.period", payload: { phase: m[1] } }];
@@ -586,6 +952,17 @@ function periodModel(
       }
       if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [{ type: `${sport}.goal`, payload: { by: ctx.entrants[side] } }];
     }
+    // W2e (Task 20; read off period-shared.ts's SOURCE, no browser has seen it): a side's attempt tile `attempt-<side>`, then
+    // the sheet's Scored / Missed choice, writes `{by, scored}` (attemptSheet's buildPayload). The tile is offered in the
+    // SHOOTOUT phase only, and DISABLED on the side whose turn it is not (the engine's `shootoutNext`), so a tap on it writes nothing.
+    for (const side of ["home", "away"] as const) {
+      const pick = taps.length === 2 && taps[0] === TILE(periodAttemptTile(side)) ? CHOICE_ID.exec(taps[1]!) : null;
+      if (pick === null || (pick[1] !== PERIOD_ATTEMPT_SCORED && pick[1] !== PERIOD_ATTEMPT_MISSED)) continue;
+      const at = foldStream(m, ctx.cfg, ctx.entrants.home, ctx.entrants.away, ledger.map((r) => ({ type: r.type, payload: r.payload })));
+      const sd = (m.summary(at.state as never).detail ?? {}) as { phase?: string; shootoutNext?: string | null };
+      if (sd.phase !== "SHOOTOUT" || ((sd.shootoutNext === "home" || sd.shootoutNext === "away") && sd.shootoutNext !== side)) return [];
+      return [{ type: `${sport}.shootout.attempt`, payload: { by: ctx.entrants[side], scored: pick[1] === PERIOD_ATTEMPT_SCORED } }];
+    }
     if (taps.length !== 1 || taps[0] !== TILE("advance")) return [];
     const { state } = foldStream(m, ctx.cfg, ctx.entrants.home, ctx.entrants.away, ledger.map((r) => ({ type: r.type, payload: r.payload })));
     const d = (m.summary(state as never).detail ?? {}) as { nextAdvance?: string | null; phase?: string };
@@ -596,12 +973,12 @@ function periodModel(
   };
 }
 
-/** The engine's own advance order for `cfg` after a home goal: fold, read
- *  nextAdvance, advance to it, until the engine names none. */
+/** The engine's own advance order for `cfg` through LEVEL play (W2e Task 20: no goal, so the first FT opens any overtime
+ *  and the second ends it, and the whistles stop where the engine names none — the shoot-out, or a draw): fold, read
+ *  nextAdvance, advance to it, until the engine names none. This is the longest order a match can walk. */
 function engineAdvances(sport: "hockey" | "icehockey", cfg: unknown): string[] {
   const m = sport === "hockey" ? hockey : icehockey;
-  // W2d T18: a hockey goal carries its type (the write path refuses one without; this fold is strict).
-  const evs: StreamEvent[] = [START, { type: `${sport}.goal`, payload: sport === "hockey" ? { by: HOME, kind: "fg" } : { by: HOME } }];
+  const evs: StreamEvent[] = [START];
   const out: string[] = [];
   for (;;) {
     const { state } = foldStream(m, cfg, HOME, AWAY, evs);
@@ -743,6 +1120,63 @@ describe("football", () => {
     expect(sportModule("football")).toBe(football);
     expect(Object.keys(football.eventSchemas ?? {})).toEqual(expect.arrayContaining([FOOTBALL_GOAL, FOOTBALL_PERIOD]));
   });
+
+  it("W2e G1 G2: a win down extra time and down the shoot-out, every variant's knockout, both winners, replays on the fake ledger — the ET markers through the period sheet, each kick its side's kick tile then Scored / Missed, no finding — and the stored rows fold to the requested path", async () => {
+    let cases = 0;
+    let kicks = 0;
+    let etMarkers = 0;
+    for (const v of variantKeys("football")) {
+      const cfg = stageCfg("football", resolveSportCfg("football", v), "knockout", v);
+      for (const path of ["extraTime", "shootout"] as const) for (const winner of ["home", "away"] as const) {
+        const at = `${v} ${path} ${winner}`;
+        const r = bracketReq("football", cfg, { kind: "win", winner, path });
+        const evs = generateStream(r);
+        const { res, ledger } = await replayOnModel(footballPad, evs, ctxOf(r), footballModel(ctxOf(r)));
+        expect(res.findings, at).toEqual([]);
+        expect(res.rows.map((x) => x.expected.type), at).toEqual(evs.map((e) => e.type));
+        for (const row of res.rows) expect(row.verdict, `${at} ${row.expected.type}`).toBe(row.expected.type === FOOTBALL_GOAL ? "fallback" : "equal");
+        kicks += res.rows.filter((x) => x.expected.type === FOOTBALL_SHOOTOUT_KICK).length;
+        etMarkers += res.rows.filter((x) => x.expected.type === FOOTBALL_PERIOD && String((x.expected.payload as { phase: string }).phase).startsWith("ET_")).length;
+        const folded = foldStream(football, cfg, HOME, AWAY, asEvents(ledger));
+        expect(matchesRequest(r, folded.outcome, folded.state), at).toBe("match");
+        cases++;
+      }
+    }
+    console.info(`pad-adapters: football W2e: ${cases} path win(s) replayed, ${kicks} kick(s) and ${etMarkers} extra-time marker(s) routed`);
+    expect(cases).toBe(variantKeys("football").length * 4);
+    expect(kicks).toBeGreaterThan(0);
+    expect(etMarkers).toBeGreaterThan(0);
+  });
+
+  it("W2e G2 routes: a kick is its side's kick tile then the Scored or Missed choice; a kick off the sheet's {by, scored} shape, or by no entrant of the fixture, is refused by name", () => {
+    const { r } = summariesOf("football", FOOTBALL_GOAL, "home");
+    const ctx = ctxOf(r);
+    let checked = 0;
+    for (const side of ["home", "away"] as const) for (const scored of [true, false]) {
+      expect(footballPad.stepsFor({ type: FOOTBALL_SHOOTOUT_KICK, payload: { by: ctx.entrants[side], scored } }, ctx), `${side} ${scored}`)
+        .toEqual([{ kind: "tile", tileId: footballKickTile(side) }, { kind: "choice", optionId: scored ? FOOTBALL_KICK_SCORED : FOOTBALL_KICK_MISSED }]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    for (const payload of [null, {}, { by: "stranger", scored: true }, { by: HOME }, { by: HOME, scored: "yes" }, { by: HOME, scored: true, person: "p1" }] as unknown[]) {
+      expect(() => footballPad.stepsFor({ type: FOOTBALL_SHOOTOUT_KICK, payload }, ctx), JSON.stringify(payload)).toThrow(/football\.shootout\.kick payload .* is not the kick sheet's \{by: one of the fixture's entrants, scored: true or false\}/);
+    }
+  });
+
+  it("W2e G2 pins: each side's kick tile is `kick-<side>` under the shoot-out offer, gated by the engine's own next kicker, and opens a one-step Scored / Missed sheet that writes {by, scored}", () => {
+    expect(footballKickTile("home")).toBe("kick-home");
+    expect(footballKickTile("away")).toBe("kick-away");
+    expect(skin).toMatch(/export function kickSheetKey\(side: Side\): string \{\s*return `kick-\$\{side\}`;/);
+    expect(skin).toMatch(/if \(offerable\("football\.shootout\.kick"\)\) \{\s*const next = state\.shootout \? footballNextKicker\(state\.shootout\.kicks\) : null;\s*for \(const side of SIDES\) \{\s*tiles\.push\(\{\s*id: kickSheetKey\(side\),/);
+    expect(skin).toContain("action: { sheet: kickSheetKey(side) },");
+    expect(skin).toContain("for (const side of SIDES) sheets[kickSheetKey(side)] = kickSheet(view, side);");
+    const sheet = skin.slice(skin.indexOf("function kickSheet(view: PadHostView, side: Side): GuidedSheetSpec {"));
+    expect(sheet.length, "football.tsx no longer declares kickSheet").toBeLessThan(skin.length);
+    expect(sheet).toMatch(/^[\s\S]*?event: "football\.shootout\.kick",[\s\S]*?\{ id: "scored", [\s\S]*?\{ id: "missed", [\s\S]*?buildPayload: \(answers\) => \(\{ by, scored: answers\.outcome === "scored" \}\),/);
+    expect([FOOTBALL_KICK_SCORED, FOOTBALL_KICK_MISSED]).toEqual(["scored", "missed"]);
+    expect(Object.keys(football.eventSchemas ?? {})).toContain(FOOTBALL_SHOOTOUT_KICK);
+    expect(footballPad.emits).toContain(FOOTBALL_SHOOTOUT_KICK);
+  });
 });
 
 describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s (period kernel)", (sport, pad) => {
@@ -839,12 +1273,22 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
     expect(judge(first, [row({ to: toOf(first), at: { period: "P", elapsed: 30 } })]).ok).toBe(true); // its positive pair: a whole number of seconds is stamped
   });
 
-  it("the cursor walks the ENGINE's advance order in every variant, per fixture, and refuses a wrong-order, early or extra advance naming both labels", () => {
+  it("the cursor walks the ENGINE's advance order in every variant — the second FT and the fixed overtime periods included — per fixture, and refuses a wrong-order, early or extra advance naming both labels", () => {
     let checked = 0;
-    for (const v of variantKeys(sport)) {
-      const cfg = resolveSportCfg(sport, v);
+    let withOvertime = 0;
+    // W2e Task 20: every variant's cfg, then the overtime shapes the schema allows (one sudden-death period; 1, 2 and 3 fixed periods).
+    const cfgs: [string, unknown][] = [
+      ...variantKeys(sport).map((v): [string, unknown] => [v, resolveSportCfg(sport, v)]),
+      ...([{ kind: "sudden_death", minutes: 5 }, { kind: "periods", count: 1, minutes: 5 }, { kind: "periods", count: 2, minutes: 5 }, { kind: "periods", count: 3, minutes: 5 }] as const)
+        .map((overtime): [string, unknown] => [`${overtime.kind}${"count" in overtime ? ` x${overtime.count}` : ""}`, resolveSportCfg(sport, offlineBuilderDefault(sport), { overtime })]),
+    ];
+    for (const [v, cfg] of cfgs) {
       const order = engineAdvances(sport, cfg);
       expect(order.at(-1), v).toBe("FT");
+      // Level play: the first FT ends regulation, and an overtime cfg has a second one at the end of the overtime.
+      const overtime = (cfg as { overtime: unknown }).overtime;
+      expect(order.filter((x) => x === "FT").length, v).toBe(overtime === null ? 1 : 2);
+      if (overtime !== null) withOvertime++;
       const ctx: TapAdapterContext = { cfg, entrants: { home: `${v}-h`, away: `${v}-a` } };
       const other: TapAdapterContext = { cfg, entrants: { home: `${v}-h2`, away: `${v}-a2` } };
       expect(() => pad.stepsFor(adv(sport, order[0]!), ctx), v).toThrow(/before core\.start/);
@@ -862,8 +1306,9 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
       pad.stepsFor(START, ctx);
       expect(pad.stepsFor(adv(sport, order[0]!), ctx), v).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]);
     }
-    console.info(`pad-adapters: ${sport}: ${checked} advance(s) walked over ${variantKeys(sport).length} variant(s)`);
+    console.info(`pad-adapters: ${sport}: ${checked} advance(s) walked over ${cfgs.length} cfg(s), ${withOvertime} with overtime`);
     expect(checked).toBeGreaterThan(0);
+    expect(withOvertime, "the doubled FT and the OT labels were walked").toBeGreaterThanOrEqual(4);
   });
 
   it("goal routes to its side's tile; a goal by no entrant, or an advance off {to}, is refused by name", () => {
@@ -902,6 +1347,77 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
     expect(pad.fallbacks.map((f) => f.eventType)).toEqual([`${sport}.period.advance`]);
     expect(pad.tolerableExtraKeys?.(a.type) ?? []).toEqual([]);
   });
+
+  it("W2e G2 G3: a win down overtime, the shoot-out or the GWS, every variant's knockout, both winners, replays on the fake ledger — the whistles through the advance tile (the second FT included), the OT goal through its tile, each attempt its side's attempt tile then Scored / Missed, no finding — and the stored rows fold to the requested path", async () => {
+    const m = sport === "hockey" ? hockey : icehockey;
+    let cases = 0;
+    let attempts = 0;
+    let secondFt = 0;
+    const paths = new Set<string>();
+    for (const v of variantKeys(sport)) {
+      const cfg = stageCfg(sport, resolveSportCfg(sport, v), "knockout", v);
+      for (const path of ["overtime", "shootout", "gws"] as const) for (const winner of ["home", "away"] as const) {
+        const r = bracketReq(sport, cfg, { kind: "win", winner, path });
+        const evs = streamOf(r);
+        if (evs.length === 0) continue; // the sport has no such path under this cfg: declared out of reach, nothing to route
+        const at = `${sport} ${v} ${path} ${winner}`;
+        const { res, ledger } = await replayOnModel(pad, evs, ctxOf(r), periodModel(sport, ctxOf(r)));
+        expect(res.findings, at).toEqual([]);
+        expect(res.rows.map((x) => x.expected.type), at).toEqual(evs.map((e) => e.type));
+        for (const row of res.rows) expect(row.verdict, `${at} ${row.expected.type}`).toBe(row.expected.type === `${sport}.period.advance` ? "fallback" : "equal");
+        attempts += res.rows.filter((x) => x.expected.type === `${sport}.shootout.attempt`).length;
+        secondFt += res.rows.filter((x, i, all) => (x.expected.payload as { to?: string }).to === "FT" && all.slice(0, i).some((y) => (y.expected.payload as { to?: string }).to === "FT")).length;
+        const folded = foldStream(m, cfg, HOME, AWAY, asEvents(ledger));
+        expect(matchesRequest(r, folded.outcome, folded.state), at).toBe("match");
+        paths.add(path);
+        cases++;
+      }
+    }
+    console.info(`pad-adapters: ${sport} W2e: ${cases} path win(s) replayed (${[...paths].join(", ")}), ${attempts} attempt(s) and ${secondFt} second FT(s) routed`);
+    expect(cases).toBeGreaterThan(0);
+    expect(attempts).toBeGreaterThan(0);
+    // hockey has the shoot-out alone; ice hockey the overtime (with its second FT) and the GWS.
+    expect([...paths].sort()).toEqual(sport === "hockey" ? ["shootout"] : ["gws", "overtime"]);
+    expect(secondFt > 0, "the overtime's own FT whistle was routed").toBe(sport === "icehockey");
+  });
+
+  it("W2e G2 G3 routes: an attempt is its side's attempt tile then the Scored or Missed choice; an attempt off the sheet's {by, scored} shape, or by no entrant of the fixture, is refused by name", () => {
+    const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
+    const ctx: TapAdapterContext = { cfg, entrants: { home: HOME, away: AWAY } };
+    let checked = 0;
+    for (const side of ["home", "away"] as const) for (const scored of [true, false]) {
+      expect(pad.stepsFor({ type: `${sport}.shootout.attempt`, payload: { by: ctx.entrants[side], scored } }, ctx), `${side} ${scored}`)
+        .toEqual([{ kind: "tile", tileId: periodAttemptTile(side) }, { kind: "choice", optionId: scored ? PERIOD_ATTEMPT_SCORED : PERIOD_ATTEMPT_MISSED }]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    for (const payload of [null, {}, { by: "stranger", scored: true }, { by: HOME }, { by: HOME, scored: "yes" }, { by: HOME, scored: true, person: "p1" }, { by: HOME, scored: true, void: true }] as unknown[]) {
+      expect(() => pad.stepsFor({ type: `${sport}.shootout.attempt`, payload }, ctx), JSON.stringify(payload)).toThrow(/shootout\.attempt payload .* is not the attempt sheet's \{by: one of the fixture's entrants, scored: true or false\}/);
+    }
+    expect(pad.emits).toContain(`${sport}.shootout.attempt`);
+    // An attempt moves no whistle: the advance cursor is the whistles' alone.
+    pad.stepsFor(START, ctx);
+    pad.stepsFor({ type: `${sport}.shootout.attempt`, payload: { by: HOME, scored: true } }, ctx);
+    expect(pad.stepsFor(adv(sport, engineAdvances(sport, cfg)[0]!), ctx)).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]);
+  });
+
+  it("W2e: a cfg whose overtime is neither null, a sudden-death period nor whole fixed periods is refused by name at the first advance", () => {
+    const def = resolveSportCfg(sport, offlineBuilderDefault(sport)) as Record<string, unknown>;
+    const first = (overtime: unknown) => {
+      const ctx: TapAdapterContext = { cfg: { ...def, overtime }, entrants: { home: HOME, away: AWAY } };
+      pad.stepsFor(START, ctx);
+      return pad.stepsFor(adv(sport, engineAdvances(sport, def)[0]!), ctx);
+    };
+    expect(first(null)).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]); // the positive pair
+    expect(first({ kind: "sudden_death", minutes: 5 })).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]);
+    expect(first({ kind: "periods", count: 2, minutes: 5 })).toEqual([{ kind: "tile", tileId: PERIOD_ADVANCE_TILE }]);
+    let refused = 0;
+    for (const bad of [{ kind: "periods", count: 1.5, minutes: 5 }, { kind: "periods", count: 0, minutes: 5 }, { kind: "periods", minutes: 5 }, { kind: "golden", minutes: 5 }, {}, "OT", 5]) {
+      expect(() => first(bad), JSON.stringify(bad)).toThrow(/the cfg's overtime is .*, not null, a sudden-death period or a whole number ≥ 1 of fixed periods/);
+      refused++;
+    }
+    expect(refused).toBe(7);
+  });
 });
 
 describe("the period kernel pins (hockey + icehockey share period-shared.ts)", () => {
@@ -927,6 +1443,25 @@ describe("the period kernel pins (hockey + icehockey share period-shared.ts)", (
     for (const [key, m] of [["hockey", hockey], ["icehockey", icehockey]] as const) {
       expect(sportModule(key)).toBe(m);
       expect(Object.keys(m.eventSchemas ?? {})).toEqual(expect.arrayContaining([`${key}.goal`, `${key}.period.advance`]));
+    }
+  });
+
+  it("W2e G2 G3 pins: each side's attempt tile is `attempt-<side>` under the attempt offer in the SHOOTOUT phase, gated by the engine's own shootoutNext, and opens a one-step Scored / Missed sheet that writes {by, scored}", () => {
+    expect(periodAttemptTile("home")).toBe("attempt-home");
+    expect(periodAttemptTile("away")).toBe("attempt-away");
+    expect(shared).toMatch(/export function attemptSheetKey\(side: Side\): string \{\s*return `attempt-\$\{side\}`;/);
+    expect(shared).toMatch(/if \(offerable\(e\.attempt\)\) \{\s*const next = asSummary\(view\.summary\)\.detail\?\.shootoutNext;\s*for \(const side of SIDES\) \{\s*tiles\.push\(\{\s*id: attemptSheetKey\(side\),/);
+    expect(shared).toContain("...(next === \"home\" || next === \"away\" ? (next === side ? {} : { disabled: true }) : {}),");
+    expect(shared).toContain("action: { sheet: attemptSheetKey(side) },");
+    expect(shared).toContain("sheets[attemptSheetKey(side)] = attemptSheet(spec, view, side);");
+    expect(shared).toContain("if (eventType === e.attempt) return phase === SHOOTOUT_PHASE;");
+    const sheet = shared.slice(shared.indexOf("function attemptSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side): GuidedSheetSpec {"));
+    expect(sheet.length, "period-shared.ts no longer declares attemptSheet").toBeLessThan(shared.length);
+    expect(sheet).toMatch(/^[\s\S]*?event: e\.attempt,[\s\S]*?\{ id: "scored", [\s\S]*?\{ id: "missed", [\s\S]*?buildPayload: \(answers\) => \(\{ by, scored: answers\.outcome === "scored" \}\),/);
+    expect([PERIOD_ATTEMPT_SCORED, PERIOD_ATTEMPT_MISSED]).toEqual(["scored", "missed"]);
+    for (const [key, m, pad] of [["hockey", hockey, hockeyPad], ["icehockey", icehockey, icehockeyPad]] as const) {
+      expect(Object.keys(m.eventSchemas ?? {})).toContain(`${key}.shootout.attempt`);
+      expect(pad.emits).toContain(`${key}.shootout.attempt`);
     }
   });
 });
@@ -1146,7 +1681,7 @@ describe("cricket", () => {
     const last = { id: "r21", seq: 21, type: CRICKET_SUMMARY, payload: { runs: 150, partial: true, wickets: 5, legalBalls: 120 } };
     expect(sums[0]!.payload).toEqual({ runs: 150, wickets: 5, legalBalls: 120 });
     expect(compareRow(sums[0]!, last, cricketPad).verdict).toBe("mismatch");
-    expect(cricketPad.fallbacks.map((f) => f.eventType)).toEqual([CRICKET_SUMMARY]);
+    expect(cricketPad.fallbacks.map((f) => f.eventType)).toEqual([CRICKET_SUMMARY, CRICKET_SUPER_OVER_BALL]); // Task 21 added the super-over ball
     expect(cricketPad.tolerableExtraKeys?.(CRICKET_SUMMARY) ?? []).toEqual([]);
   });
 
@@ -1164,6 +1699,139 @@ describe("cricket", () => {
     expect(skin.split("\n")[Number(cite![1]) - 1]!.trim()).toBe("partial: true,");
     expect(sportModule("cricket")).toBe(cricket);
     expect(Object.keys(cricket.eventSchemas ?? {})).toContain(CRICKET_SUMMARY);
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 21 (G4, G5): the super over's balls, the interruption and the revise.
+
+  /** The cfgs that play a super over, one per variant x still-tied policy, folded as a knockout does (the stage preset). */
+  const soCfgs = () => variantKeys("cricket").flatMap((v) => ["repeat", "boundary_count", "shared"].map((policy) => ({ v, policy, cfg: stageCfg("cricket", resolveSportCfg("cricket", v, { superOverStillTied: policy }), "knockout", v) })))
+    .filter(({ cfg }) => (cfg as { superOver: boolean }).superOver);
+  /** The run values the skin offers as tiles (`RUN_VALUES`), read from its source text. */
+  const runValuesOf = (src: string): number[] => {
+    const m = /const RUN_VALUES = \[([0-9, ]+)\] as const;/.exec(src);
+    expect(m, "cricket.tsx no longer declares RUN_VALUES as a literal").not.toBeNull();
+    return m![1]!.split(",").map((x) => Number(x.trim()));
+  };
+
+  it("Task 21: a super-over ball is the skin's run tile of its bat runs (one row, id `run<r>`, RUN_VALUES from the source), the event type switching on the super-over phase, the boundary flag the tile's own — for every variant x policy x winner the generator builds", () => {
+    const runValues = runValuesOf(skin);
+    expect(runValues.length).toBeGreaterThan(0);
+    expect([...CRICKET_RUN_VALUES], "the adapter's tile values are the skin's RUN_VALUES").toEqual(runValues);
+    // The premise, from the product's text: the tile ids, the phase switch and the boundary rule.
+    expect(skin).toMatch(/for \(const r of RUN_VALUES\) \{\s*tiles\.push\(ballTile\(\{\s*id: `run\$\{r\}`,/);
+    expect(skin).toMatch(/return state\.phase === "super_over" \? "cricket\.superover\.ball" : "cricket\.ball";/);
+    expect(skin).toMatch(/const boundary = runs === 4 \? 4 : runs === 6 \? 6 : undefined;/);
+    const fb = cricketPad.fallbacks.find((f) => f.eventType === CRICKET_SUPER_OVER_BALL);
+    expect(fb, "the super-over ball is declared a fallback").toBeDefined();
+    expect(fb!.why).toMatch(/\.tsx?:\d+/);
+    expect(fb!.writes).toEqual([CRICKET_SUPER_OVER_BALL]);
+    let balls = 0;
+    const perVariant = new Set<string>();
+    for (const { v, policy, cfg } of soCfgs()) for (const winner of ["home", "away"] as const) {
+      const r = bracketReq("cricket", cfg, { kind: "win", winner, path: "superOver" });
+      const evs = generateStream(r);
+      const pad = makeCricketPad();
+      for (const e of evs) {
+        const at = `${v}/${policy}/${winner} ${e.type}`;
+        if (e.type !== CRICKET_SUPER_OVER_BALL) { pad.stepsFor(e, ctxOf(r)); continue; }
+        const p = e.payload as { runs: { bat: number }; boundary?: number };
+        expect(runValues, `${at}: the generator scores only what a run tile writes`).toContain(p.runs.bat);
+        expect(pad.stepsFor(e, ctxOf(r)), at).toEqual([{ kind: "tile", tileId: `run${p.runs.bat}` }]);
+        // The tile writes a boundary for a 4 and a 6 and none otherwise: the generator's flag is the tile's.
+        expect(p.boundary, at).toBe(p.runs.bat === 4 ? 4 : p.runs.bat === 6 ? 6 : undefined);
+        expect(fb!.rowsFor(e, ctxOf(r)), at).toBe(1);
+        balls++;
+      }
+      perVariant.add(v);
+    }
+    console.info(`pad-adapters: cricket: ${balls} super-over ball(s) routed to run tiles`);
+    expect(balls).toBeGreaterThan(0);
+    expect([...perVariant].sort()).toEqual(["hundred", "odi", "t20"]);
+  });
+
+  it("Task 21: the super-over ball's fallback is JUDGED - the row holds over, ballInOver, runs and boundary to the event, the persons only to the shape of an id (the pad names them from the lineup it holds); a wrong run, an extra key, a dropped boundary, two rows each red", () => {
+    // boundary_count decides on the ball-by-ball boundaries, so its stream holds boundary balls (the other policies' need none).
+    const cfg = stageCfg("cricket", resolveSportCfg("cricket", "t20", { superOverStillTied: "boundary_count" }), "knockout", "t20");
+    const r = bracketReq("cricket", cfg, { kind: "win", winner: "home", path: "superOver" });
+    const ball = generateStream(r).find((e) => e.type === CRICKET_SUPER_OVER_BALL && (e.payload as { boundary?: number }).boundary !== undefined)!;
+    expect(ball, "the generated super over holds a boundary ball, or the boundary half of the judge is unwitnessed").toBeDefined();
+    const judge = cricketPad.fallbacks.find((f) => f.eventType === CRICKET_SUPER_OVER_BALL)!.judge!;
+    const p = ball.payload as Record<string, unknown>;
+    const row = (payload: unknown, seq = 5): LedgerRow => ({ id: `r${seq}`, seq, type: CRICKET_SUPER_OVER_BALL, payload });
+    // The pad's own persons are not the generated ones, and that is fine.
+    expect(judge(ball, [row({ ...p, striker: "pad-1", nonStriker: "pad-2", bowler: "pad-3" })])).toEqual({ ok: true, note: null });
+    expect(judge(ball, [row(p)])).toEqual({ ok: true, note: null });
+    const red = (payload: unknown, rows = [row(payload)]) => judge(ball, rows).ok;
+    expect(red({ ...p, runs: { bat: ((p.runs as { bat: number }).bat + 1) } }), "another run").toBe(false);
+    expect(red({ ...p, ballInOver: (p.ballInOver as number) + 1 }), "another ball").toBe(false);
+    const { boundary: _b, ...noBoundary } = p;
+    expect(red(noBoundary), "the boundary dropped").toBe(false);
+    expect(red({ ...p, extra: 1 }), "an untolerated key").toBe(false);
+    expect(red({ ...p, striker: "" }), "a person that is no id").toBe(false);
+    expect(red(p, [row(p), row(p, 6)]), "two rows").toBe(false);
+    expect(red(p, []), "no row").toBe(false);
+  });
+
+  it("Task 21: a super-over ball the pad cannot write as one run tile is refused by name - before the match is tied, off the tile values, with extras or a wicket - and the persons are not the adapter's to check", () => {
+    const cfg = stageCfg("cricket", resolveSportCfg("cricket", "t20"), "knockout", "t20");
+    const r = bracketReq("cricket", cfg, { kind: "win", winner: "home", path: "superOver" });
+    const evs = generateStream(r);
+    const ball = evs.find((e) => e.type === CRICKET_SUPER_OVER_BALL)!;
+    const p = ball.payload as Record<string, unknown>;
+    const started = () => { const pad = makeCricketPad(); pad.stepsFor(START, ctxOf(r)); return pad; };
+    // Before the main innings are done the match is not tied: there is no super over to tap.
+    expect(() => started().stepsFor(ball, ctxOf(r))).toThrow(/super-over ball before the match is tied/);
+    expect(() => makeCricketPad().stepsFor(ball, ctxOf(r))).toThrow(/before core\.start/);
+    const ready = () => { const pad = started(); for (const e of evs) { if (e.type === CRICKET_SUPER_OVER_BALL) break; pad.stepsFor(e, ctxOf(r)); } return pad; };
+    expect(() => ready().stepsFor({ type: CRICKET_SUPER_OVER_BALL, payload: { ...p, runs: { bat: 5 } } }, ctxOf(r))).toThrow(/no run tile for 5 bat runs/);
+    expect(() => ready().stepsFor({ type: CRICKET_SUPER_OVER_BALL, payload: { ...p, runs: { bat: 1, extras: { kind: "wide", runs: 1 } } } }, ctxOf(r))).toThrow(/extras or a wicket/);
+    expect(() => ready().stepsFor({ type: CRICKET_SUPER_OVER_BALL, payload: { ...p, wicket: { kind: "bowled", out: "x", bowlerCredited: true } } }, ctxOf(r))).toThrow(/extras or a wicket/);
+    expect(() => ready().stepsFor({ type: CRICKET_SUPER_OVER_BALL, payload: { ...p, boundary: 6, runs: { bat: 4 } } }, ctxOf(r))).toThrow(/boundary/);
+    expect(ready().stepsFor(ball, ctxOf(r))).toEqual([{ kind: "tile", tileId: `run${(p.runs as { bat: number }).bat}` }]);
+  });
+
+  it("Task 21: the interruption and the revise have NO route - both are rows of the generic More sheet (no testid) - declared noControl with the follow-on and the draw, refused by name, and the premise is pinned (the engine declares both as pad actions, the skin builds neither a tile nor a sheet)", () => {
+    expect([...cricketPad.noControl!.eventTypes].sort()).toEqual([CRICKET_INTERRUPTION, CRICKET_REVISE, "cricket.followon", "cricket.match.close"].sort());
+    expect(cricketPad.noControl!.route).toBe(CRICKET_NO_CONTROL);
+    const limited = resolveSportCfg("cricket", "t20", { dls: { enabled: true, edition: "standard" } });
+    const actionsOf = (cfg: unknown) => cricket.padSpec?.(cfg as never)?.panels.flatMap((p) => p.actions.map((a) => a.type)) ?? [];
+    const actions = actionsOf(limited);
+    // The engine's own fact (cricket.ts DLS panel): the revise is a pad action only where DLS is ON; the interruption always is.
+    expect(actionsOf(resolveSportCfg("cricket", "t20", { dls: { enabled: false, edition: "standard" } })), "DLS off: no revise action at all").not.toContain(CRICKET_REVISE);
+    expect(actionsOf(resolveSportCfg("cricket", "t20", { dls: { enabled: false, edition: "standard" } }))).toContain(CRICKET_INTERRUPTION);
+    for (const t of [CRICKET_INTERRUPTION, CRICKET_REVISE]) {
+      expect(actions, `the engine declares ${t} as a pad action (DLS on)`).toContain(t);
+      expect(Object.keys(cricket.eventSchemas ?? {}), t).toContain(t);
+      expect(skin, `cricket.tsx names ${t} as code: a tile or a sheet may now carry it`).not.toMatch(new RegExp(`(?:type|event): "${t.replace(/\./g, "\\.")}"`));
+      expect(() => makeCricketPad().stepsFor({ type: t, payload: {} }, ctxOf(req("cricket", limited, { kind: "win", winner: "home" }))), t).toThrow(new RegExp(`${t.replace(/\./g, "\\.")} has no addressable pad control`));
+    }
+    expect(skin).toMatch(/interruption,\s*\/\/ revise\) ride the chassis's generic "More" sheet/);
+  });
+
+  it("Task 21: a DLS stream is a barred stream - the first innings routes, the interruption and the revise are refused by name, and the driver scores the whole of it over http (so the pad is never asked for a chase against a target it cannot set)", () => {
+    let streams = 0;
+    for (const variant of variantKeys("cricket")) {
+      const base = resolveSportCfg("cricket", variant) as { inningsPerSide: number; ballsPerInnings: number | null };
+      if (base.inningsPerSide !== 1 || base.ballsPerInnings === null) continue;
+      for (const dlsOn of [false, true]) {
+        const cfg = stageCfg("cricket", resolveSportCfg("cricket", variant, { dls: { enabled: dlsOn, edition: "standard" } }), "knockout", variant);
+        const r = bracketReq("cricket", cfg, { kind: "win", winner: "away", path: "dls" });
+        const evs = generateStream(r);
+        const at = `${variant}/dls ${dlsOn ? "on" : "off"}`;
+        const barred = new Set(cricketPad.noControl!.eventTypes);
+        // The driver's rule (browser-driver.ts): any barred event in the stream sends the whole stream over http.
+        expect(evs.some((e) => barred.has(e.type)), `${at}: the stream is barred`).toBe(true);
+        const pad = makeCricketPad();
+        const types = evs.map((e) => e.type);
+        expect(types, at).toEqual(["core.start", CRICKET_SUMMARY, CRICKET_INTERRUPTION, CRICKET_REVISE, CRICKET_SUMMARY]);
+        pad.stepsFor(evs[0]!, ctxOf(r));
+        expect(pad.stepsFor(evs[1]!, ctxOf(r)).length, at).toBeGreaterThan(0);
+        for (const e of evs.slice(2, 4)) expect(() => pad.stepsFor(e, ctxOf(r)), `${at} ${e.type}`).toThrow(/has no addressable pad control/);
+        streams++;
+      }
+    }
+    expect(streams).toBe(6); // t20, odi and the hundred, each with DLS off and on
   });
 });
 
@@ -1217,10 +1885,13 @@ function boardgameModel(ctx: TapAdapterContext) {
 describe("boardgame", () => {
   let skin = "";
   beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "boardgame.tsx"), "utf8"); });
-  const listOf = (name: string): string[] => {
-    const m = new RegExp(`export const ${name}: readonly string\\[\\] = \\[([^\\]]*)\\];`).exec(skin);
-    expect(m, `boardgame.tsx no longer exports ${name} as a literal list`).not.toBeNull();
-    return [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+  // W2e T10 (BG-RS-1): the skin no longer restates the two lists, it re-exports the ENGINE's (the write path refuses a result
+  // whose method is in only one list against the winner it was given). So the list is the engine's own, and the skin is
+  // pinned to take it from there rather than to carry a literal of its own.
+  const listOf = (name: "DECISIVE_METHODS" | "DRAWN_METHODS"): string[] => {
+    const wired = new RegExp(`export const ${name}: readonly string\\[\\] = ENGINE_${name};`);
+    expect(skin, `boardgame.tsx no longer takes ${name} from the engine`).toMatch(wired);
+    return [...(name === "DECISIVE_METHODS" ? DECISIVE_METHODS : DRAWN_METHODS)];
   };
 
   it("boardgame: a draw's steps never tap a half — the draw tile then its method chip; a win is the winner's half then its method chip", () => {
@@ -1652,5 +2323,37 @@ describe("carrom", () => {
     expect(skin).toMatch(/function boardSheet\(state: CarromStateShape\): GuidedSheetSpec \{\s*return \{\s*event: "carrom\.board\.summary",[\s\S]{0,400}?buildPayload: \(answers\) => \(\{\s*winner: entrantOf\(state, sideAnswer\(answers\.winner\)\),\s*opponentCoinsLeft: Number\(answers\.coins \?\? 0\),\s*\}\),/);
     expect(skin).toContain("`queenTo` is simply never");
     expect(Object.keys(carrom.eventSchemas ?? {})).toContain(CARROM_BOARD);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Task 24 (G12): a sanction ending is the organiser's, whole. The pad adapters emit no sanction event and refuse each by name -
+// the sanction's pad control (the T30 ending prompt) is the browser specs' ground, and this pin makes adding a harness route a
+// decision, not a drift.
+describe("G12: a sanction ending is posted through the forfeit's composition, so no pad adapter authors the sanction", () => {
+  it("every sanction sport's sanctionEnd stream ends in core.forfeit (organiser-only), carries the module's own sanction event before it, and that event is in no adapter's emits and is refused by name by every adapter that has one", () => {
+    const sports = SPORT_KEYS.filter((s) => sportModule(s).sanctionEnding !== undefined);
+    expect(sports.length).toBeGreaterThan(0);
+    expect(ORGANISER_ONLY_OUTCOMES.has("sanctionEnd")).toBe(true);
+    let streams = 0;
+    for (const sport of sports) {
+      const decl = sportModule(sport).sanctionEnding!;
+      const variant = offlineBuilderDefault(sport);
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant);
+      for (const level of [...decl.endLevels, ...decl.promptLevels]) {
+        const r = bracketReq(sport, cfg, { kind: "sanctionEnd", by: "home", level });
+        const evs = generateStream(r);
+        expect(evs.at(-1)!.type, `${sport} ${level}`).toBe("core.forfeit");
+        expect(ORGANISER_ONLY_EVENTS.has(evs.at(-1)!.type)).toBe(true);
+        expect(evs.at(-2)!.type, `${sport} ${level}`).toBe(decl.eventType);
+        const adapter = PAD_ADAPTERS[sport];
+        expect(adapter, `${sport} has a pad adapter`).toBeDefined();
+        expect(adapter!.emits, `${sport}: the sanction is not a pad event`).not.toContain(decl.eventType);
+        expect(() => adapter!.stepsFor(evs.at(-2)!, ctxOf(r)), `${sport} ${level}`).toThrow(/no tap route/);
+        streams++;
+      }
+    }
+    expect(streams).toBeGreaterThan(0);
   });
 });

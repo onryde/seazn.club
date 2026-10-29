@@ -1,7 +1,7 @@
 {
   "subpaths": ["./core", "./sport", "./sports", "./sports/*"],
   "closure": {
-    "measured": "2026-10-15",
+    "measured": "2026-10-28",
     "why": "the sorted value-import closure of the phone subpaths, as a set: a module added to or dropped from it is a reviewed change. Re-pin it deliberately (the failing check prints what changed) when the engine grows",
     "modules": [
       "src/core/clock.ts",
@@ -11,6 +11,7 @@
       "src/core/lineup.ts",
       "src/core/position.ts",
       "src/core/rng.ts",
+      "src/core/sanction-ending.ts",
       "src/core/time.ts",
       "src/core/types.ts",
       "src/sport/abandon-share.ts",

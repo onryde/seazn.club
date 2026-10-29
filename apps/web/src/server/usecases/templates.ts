@@ -54,6 +54,7 @@ import { countsTowardPublicQuota } from "./entitlement-freeze";
 import { expireCompetitionShell } from "@/server/public-site/revalidate";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { validatedStageConfig } from "./stage-defaults";
+import { refuseConfigWriteIssues } from "./stage-rules-merge";
 import { refuseCascadeForSport, refuseNewStageTable, refuseStrayPointsMapKeys } from "./table-rule-guards";
 import { validateStageProgression } from "./stage-seeding";
 import { getTemplate } from "@/server/templates/catalog";
@@ -253,6 +254,8 @@ export async function instantiateTemplate(
         if (!parsedConfig.success) {
           throw new Error(`invalid ${templateDivision.sportKey} config: ${parsedConfig.error.message}`);
         }
+        // W2e (spec §5.5, E15; VB-CF-1, TT-CF-1, TN-CF-1): createDivision's next question, the engine's write-door refusals.
+        refuseConfigWriteIssues(sportModule, templateDivision.sportKey, parsedConfig.data);
         // W2d Task 10 (spec §5.5) — createDivision's questions: a points table keyed by a set score, and the division's
         // order against the sport (a key outside the vocabulary, or one the sport does not record, is a catalog bug,
         // located below like every other). Each stage is asked its own kind's below.

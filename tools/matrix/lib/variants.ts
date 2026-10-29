@@ -89,7 +89,8 @@ export function factorsFor(sport: string): Factor[] {
   ];
 }
 
-export type Built = { readonly ok: true; readonly overrides: Record<string, unknown>; readonly cfg: unknown } | { readonly ok: false; readonly reason: string };
+/** `doorRow`: set on a refusal when the schema ACCEPTED the cfg and the write door (sport-cfg.ts) refused it - the rule row. */
+export type Built = { readonly ok: true; readonly overrides: Record<string, unknown>; readonly cfg: unknown } | { readonly ok: false; readonly reason: string; readonly doorRow?: string };
 
 /** As the editor would send it: only visible fields may carry a value, and the
  *  override crosses the wire as JSON (an `undefined` delete-marker from a
@@ -104,7 +105,8 @@ export function buildVariant(sport: string, preset: string, values: Record<strin
   try {
     return { ok: true, overrides, cfg: resolveSportCfg(sport, preset, overrides) };
   } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    const reason = e instanceof Error ? e.message : String(e);
+    return e instanceof CfgInvalid && e.doorRow !== null ? { ok: false, reason, doorRow: e.doorRow } : { ok: false, reason };
   }
 }
 
@@ -153,8 +155,11 @@ export class VariantRescueBudgetExceeded extends Error {
   }
 }
 
-export function buildSportVariants(sport: string, deps: { validate?: typeof buildVariant } = {}): SportVariants {
+export function buildSportVariants(sport: string, deps: { validate?: typeof buildVariant; score?: typeof scorable } = {}): SportVariants {
   const validate = deps.validate ?? buildVariant;
+  // `deps.score` exists only so a test can put a reason on a case: no shipped case carries one since the write door joined
+  // resolveSportCfg (sport-cfg.ts), and the seam that records it must be proven wired, not left null.
+  const score = deps.score ?? scorable;
   const fs = factorsFor(sport);
   const F = fs.length;
   const defaultPreset = offlineBuilderDefault(sport);
@@ -187,10 +192,17 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
   const isDefault = (k: number, v: number): boolean => (k === 1 ? v === presetIx : lvl(k, v).raw === "");
   let rescueSpent = 0;
   let rescuing = "";
+  // The write-door row that refused a completion the SCHEMA accepted, during the current pair's rescue search (null: none did).
+  // A holder read through `doorRow()`: the closure below assigns it, which flow analysis does not see at a direct read.
+  const door: { row: string | null } = { row: null };
+  const doorRow = (): string | null => door.row;
   const completeWith = (asg: number[], free: readonly number[], from: number, left: number): number[] | null => {
     if (left === 0) {
       if (++rescueSpent > RESCUE_BUDGET) throw new VariantRescueBudgetExceeded(sport, rescuing, RESCUE_BUDGET);
-      return check(asg).ok ? [...asg] : null;
+      const built = check(asg);
+      if (built.ok) return [...asg];
+      if (built.doorRow !== undefined) door.row = built.doorRow;
+      return null;
     }
     for (let x = from; x < free.length; x++) {
       const k = free[x];
@@ -215,6 +227,7 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
     const free: number[] = [];
     for (let k = 1; k < F; k++) if (k !== i && k !== j) free.push(k);
     rescuing = `${label(i, a)} × ${label(j, b)}`;
+    door.row = null;
     let found: number[] | null = null;
     for (let depth = 1; depth <= free.length && found === null; depth++) found = completeWith(asg, free, 0, depth);
     if (found !== null) {
@@ -222,7 +235,11 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
       continue;
     }
     uncovered.delete(pk);
-    uncoverable.push({ sport, a: label(i, a), b: label(j, b), reason: `${r.reason} — and no combination of the other factors' levels makes the pair valid` });
+    // The search is exhaustive, so when the schema accepted some completion the write door refused, the DOOR is why the pair has
+    // none: name its row (a pair refused by the door itself already carries it in r.reason).
+    const row = doorRow();
+    const byDoor = row !== null && !r.reason.includes(row) ? ` (the schema accepts some, the write door ${row} refuses every one)` : "";
+    uncoverable.push({ sport, a: label(i, a), b: label(j, b), reason: `${r.reason} — and no combination of the other factors' levels makes the pair valid${byDoor}` });
   }
 
   const cases: VariantCase[] = [];
@@ -255,7 +272,7 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
     const classes: Record<string, string> = {};
     for (let k = 2; k < F; k++) classes[fs[k].name] = lvl(k, asg[k]).cls;
     const partial = { id: `${sport}#${String(cases.length + 1).padStart(3, "0")}`, sport, row: lvl(0, asg[0]).raw as RowKey, preset: presetOf(asg), classes, values: valuesOf(asg), overrides: built.overrides };
-    cases.push({ ...partial, scorable: scorable({ ...partial, scorable: null }) });
+    cases.push({ ...partial, scorable: score({ ...partial, scorable: null }) });
   }
   return { sport, defaultPreset, factors: F, pairs, covered: pairs - uncoverable.length, cases, uncoverable };
 }

@@ -39,6 +39,9 @@ export interface TieWhatIfOpts {
   /** W2d (P25, spec §6 E3): the sport's primary table measure, `module.primaryTableKey` — what a wins-first order (D11)
    *  starts with. */
   primary: AnySportModule["primaryTableKey"];
+  /** W2e Task 8c (CK-BO-2): the over length a net run rate in the rule's "yours / theirs" values is printed per - the same
+   *  `ballsPerOver` the table's layout carries (`TableLayout.ballsPerOver`). Absent: the display's default. */
+  ballsPerOver?: number;
 }
 
 // The integer won/lost pair each ratio key compares: the engine's one
@@ -72,7 +75,7 @@ export function tieDecidingKey(cascade: readonly TiebreakerKey[], opts: TieWhatI
 
 /** A row's current value on a tie key, as the table would print it; null when
  *  the key has no per-row value (head-to-head, direct, lots, seed). */
-export function tieKeyValue(row: StandingsRow, key: TiebreakerKey): string | null {
+export function tieKeyValue(row: StandingsRow, key: TiebreakerKey, ballsPerOver?: number): string | null {
   switch (key) {
     case "diff": {
       const v = metricOf(row, DIFF_KEYS);
@@ -88,7 +91,7 @@ export function tieKeyValue(row: StandingsRow, key: TiebreakerKey): string | nul
     case "points":
       return `${row.points}`;
     default:
-      return derivedMetricText(row, key);
+      return derivedMetricText(row, key, ballsPerOver);
   }
 }
 
@@ -140,7 +143,7 @@ export function tieWhatIf(
 ): TieWhatIf | null {
   const key = tieDecidingKey(cascade, opts);
   if (key === null) return null;
-  const rule: TieWhatIf = { kind: "rule", key, mine: tieKeyValue(row, key), theirs: tieKeyValue(rival, key) };
+  const rule: TieWhatIf = { kind: "rule", key, mine: tieKeyValue(row, key, opts.ballsPerOver), theirs: tieKeyValue(rival, key, opts.ballsPerOver) };
   if (!isWhatIfKey(key)) return rule;
   const m = marginFor(key, row, rival);
   if (m === null || m.size <= 0) return rule;

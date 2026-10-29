@@ -12,11 +12,14 @@ export {
   type FootballState,
 } from "./football.ts";
 // R3.5 — the pad needs football's own alternation and tally rules
-// (`expectedKicker`/`shootoutTally`, plus the kick shape both take). Re-
+// (`footballNextKicker`/`shootoutTally`, plus the kick shape both take; W2e:
+// the shared `expectedKicker` takes an order and the attempts, which the pad,
+// reading state alone, does not hold, so football binds its own). Re-
 // exported from football rather than imported by the pad out of
 // `sports/period`: a skin must not reach into another sport family's
 // folder, and football is where the pad's contract with these rules
 // belongs (the same reason `sports/cricket` re-exports `eligibleBowlers`/
 // `nextBattingSide`/`reviewsRemaining` instead of the pad importing
 // `sports/core` directly).
-export { expectedKicker, shootoutTally, type ShootoutKick } from "../period/shootout.ts";
+export { shootoutTally, type ShootoutKick } from "../period/shootout.ts";
+export { footballNextKicker } from "./football.ts";

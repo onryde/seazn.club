@@ -27,11 +27,11 @@
     "lifecycle": 229,
     "atomicApplicable": 15200,
     "bound": 178,
-    "variantCasesScorable": 1021,
-    "variantCasesUnscorable": 40,
+    "variantCasesScorable": 1090,
+    "variantCasesUnscorable": 0,
     "denied": 7,
     "regressions": 9,
-    "value": 16466
+    "value": 16535
   },
   "drops": {
     "total": 4899,
@@ -135,62 +135,21 @@
       "boardgame": 82,
       "carrom": 97,
       "generic": 66,
-      "volleyball": 127,
-      "badminton": 97,
-      "tabletennis": 109,
-      "tennis": 108,
+      "volleyball": 144,
+      "badminton": 112,
+      "tabletennis": 105,
+      "tennis": 109,
       "icehockey": 90,
       "hockey": 86
     },
-    "cases": 1061,
-    "scorable": 1021,
-    "unscorable": 40,
+    "cases": 1090,
+    "scorable": 1090,
+    "unscorable": 0,
     "engineUnscorable": {
-      "count": 40,
+      "count": 0,
       "routedTo": "W2",
       "why": "the engine refuses the cfg or its stream (EngineError): a rulebook question for W2",
-      "ids": [
-        "volleyball#002",
-        "volleyball#009",
-        "volleyball#013",
-        "volleyball#015",
-        "volleyball#017",
-        "volleyball#022",
-        "volleyball#024",
-        "volleyball#026",
-        "volleyball#028",
-        "volleyball#030",
-        "volleyball#032",
-        "volleyball#034",
-        "volleyball#036",
-        "volleyball#038",
-        "volleyball#040",
-        "volleyball#042",
-        "volleyball#053",
-        "volleyball#054",
-        "volleyball#058",
-        "volleyball#061",
-        "tabletennis#002",
-        "tabletennis#006",
-        "tabletennis#013",
-        "tabletennis#016",
-        "tabletennis#018",
-        "tabletennis#020",
-        "tabletennis#023",
-        "tabletennis#026",
-        "tabletennis#029",
-        "tabletennis#032",
-        "tabletennis#035",
-        "tabletennis#038",
-        "tabletennis#041",
-        "tabletennis#044",
-        "tabletennis#047",
-        "tabletennis#050",
-        "tabletennis#053",
-        "tabletennis#056",
-        "tabletennis#059",
-        "tabletennis#062"
-      ]
+      "ids": []
     },
     "generatorUnsupported": {
       "count": 0,
@@ -220,6 +179,6 @@
         "boardgame#076"
       ]
     },
-    "uncoverablePairs": 41
+    "uncoverablePairs": 222
   }
 }

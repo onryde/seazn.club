@@ -74,7 +74,7 @@ describe("walkover-credit: the empty case first", () => {
         checked++;
       }
     }
-    expect(checked).toBe(44); // 5+5+4+3+2+4+4+4+5+3+5 cfg entries in walkover-credit-cfgs.ts
+    expect(checked).toBe(45); // 5+5+4+3+2+4+4+4+6+3+5 cfg entries in walkover-credit-cfgs.ts (tennis short-sets since W2e)
     expect(chess).toBe(4); // chess's 4 cfg entries
   });
 
@@ -108,14 +108,15 @@ describe("walkover-credit: the empty case first", () => {
     expect(refusalOf({ sport: "football", cfg: cfgOf("football", DEFAULT), reason: "walkover", played: { home: [], away: [] } })).toBe("offender-unknown");
   });
 
-  it("the enumeration is never empty: 11 × 5 = 55 base cases first, chess's retirement included (ruling 118), then every other cfg and played scenario — 212 in all", () => {
+  it("the enumeration is never empty: 11 × 5 = 55 base cases first, chess's retirement included (ruling 118), then every other cfg and played scenario — 215 in all", () => {
     const all = enumerateCreditCases();
-    // 55 base + 158 variants, counted by hand from walkover-credit-cfgs.ts (see the report), less the one retirement
+    // 55 base + 161 variants, counted by hand from walkover-credit-cfgs.ts (see the report), less the one retirement
     // ruling 113 refuses — generic's untouched win/loss tally, the one played scenario whose empty sheet is nothing
     // played. (R112 fix round 2, m3: generic's win/loss tally scenario adds its retirement, disqualification and
     // withdrawal — 158 variants, was 155. Ruling 118: chess's empty sheet is its Start, which is play, so its
-    // retirement is back — 212, was 211.)
-    expect(all.length).toBe(212);
+    // retirement is back — 212, was 211. W2e Task 5: tennis's declared short-sets adds its walkover, withdrawal and double
+    // walkover — 215, was 212.)
+    expect(all.length).toBe(215);
     const base = all.slice(0, 55);
     expect(base.length).toBe(55);
     // the base holds each sport × each reason exactly once — chess's retirement included (ruling 118)
@@ -176,7 +177,7 @@ describe("walkover-credit: the Appendix A examples (brief Step 1)", () => {
       }
     });
     expect(sports).toBe(11);
-    expect(checked).toBe(44);
+    expect(checked).toBe(45);
   });
   it("X-PS-2: retired and an in-match disqualification credit statsMatch true; X-PS-1 + rulings 115 and 127: a walkover never counts as a match played, nor do a disqualification or a withdrawal with nothing played — after play they do", () => {
     let checked = 0;
@@ -192,7 +193,7 @@ describe("walkover-credit: the Appendix A examples (brief Step 1)", () => {
       expect(walkoverCredit(c).statsMatch, c.label).toBe(want);
       checked++;
     }
-    expect(checked).toBe(212);
+    expect(checked).toBe(215);
     // Both readings of the disqualification are reached: one per played scenario, less the one sheet that holds no
     // play — generic's untouched win/loss tally (ruling 113), which ruling 115 reads as a walkover. Chess's empty sheet
     // is its Start, which is play (ruling 118).
@@ -262,7 +263,7 @@ describe("walkover-credit: the rally-point set sports (VB, TT, BD)", () => {
     expect(ret("tabletennis", "bo7", [11, 9, 5], [9, 11, 11])).toEqual(single(w, mirrorSets(w), true));
   });
   it("BD-WO-1: 2-0 games, each 21-0 — and the stage's own target (X-WO-1): short 11, BWF 3x15 15", () => {
-    for (const [name, w] of [[DEFAULT, sets(2, 0, 42, 0)], ["bwf", sets(2, 0, 42, 0)], ["short", sets(2, 0, 22, 0)], ["bwf 3x15 (from 2027-01-04, stage match rules)", sets(2, 0, 30, 0)]] as const) {
+    for (const [name, w] of [[DEFAULT, sets(2, 0, 42, 0)], ["bwf", sets(2, 0, 42, 0)], ["short", sets(2, 0, 22, 0)], ["bwf-3x15", sets(2, 0, 30, 0)]] as const) {
       expect(wo("badminton", name), name).toEqual(single(w, mirrorSets(w), false));
     }
   });
@@ -279,7 +280,7 @@ describe("walkover-credit: the rally-point set sports (VB, TT, BD)", () => {
 describe("walkover-credit: tennis, cricket, chess, carrom, generic", () => {
   it("TN-WO-1: straight sets for set %, the match's games credited 0 and excluded from game %", () => {
     const tn = (n: number): CreditAnswer => single({ sets_won: n, sets_lost: 0, games_won: 0, games_lost: 0 }, { sets_won: 0, sets_lost: n, games_won: 0, games_lost: 0 }, false, ["games_won", "games_lost"]);
-    for (const name of [DEFAULT, "tour", "fast4", "doubles-noad-mtb10"]) expect(wo("tennis", name), name).toEqual(tn(2));
+    for (const name of [DEFAULT, "tour", "fast4", "doubles-noad-mtb10", "short-sets"]) expect(wo("tennis", name), name).toEqual(tn(2));
     expect(wo("tennis", "grand-slam")).toEqual(tn(3));
   });
   it("TN-RT-1: a retirement is the same credit as TN-WO-1 — even for the side at fault leading", () => {
@@ -397,7 +398,7 @@ describe("walkover-credit: the cross-sport rows (X-RT-1, X-WD-1 / PF-7, X-RS-1)"
         before++;
       }
     }
-    expect(before).toBe(44);
+    expect(before).toBe(45);
     // the witness that the two credits differ: a football withdrawal at 0-5 down keeps 5-0, not 3-0
     expect(ret("football", DEFAULT, [5], [0], "away", "withdrew").winner).toEqual(goals(5, 0));
     expect(walkoverCredit({ sport: "football", cfg: cfgOf("football", DEFAULT), reason: "withdrew" }).winner).toEqual(goals(3, 0));
@@ -449,7 +450,7 @@ describe("walkover-credit transitions (TEST-STRATEGY rule 1: a second call, the 
       expect(JSON.stringify(c), c.label).toBe(before);
       checked++;
     }
-    expect(checked).toBe(212);
+    expect(checked).toBe(215);
   });
 
   it("the side at fault decides who is credited: home at fault mirrors away at fault (every played scenario, scoresheet mirrored)", () => {
@@ -468,7 +469,7 @@ describe("walkover-credit transitions (TEST-STRATEGY rule 1: a second call, the 
     expect(enumerateCreditCases()).toEqual(enumerateCreditCases());
     let answered = 0;
     for (const c of enumerateCreditCases()) { expect(refusalOf(c), c.label).toBe("answered"); answered++; }
-    expect(answered).toBe(212);
+    expect(answered).toBe(215);
   });
 });
 
@@ -611,7 +612,7 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
       }
     });
     expect(sports).toBe(11);
-    expect(checked).toBe(41); // 44 entries less 3 named extras (hockey frozen at 3, volleyball best of 3, badminton 3x15)
+    expect(checked).toBe(43); // 45 entries less 2 named extras (hockey frozen at 3, volleyball best of 3); badminton's 3x15 and tennis's short-sets are declared since W2e
   });
 
   it("each cfg key the data writes exists in the sport's configSchema (and the schema accepts the value written)", () => {
@@ -634,7 +635,7 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
       }
     });
     expect(sports).toBe(11);
-    expect(entries).toBe(44);
+    expect(entries).toBe(45);
     expect(keys).toBeGreaterThan(entries); // chess entries write no key; the rest write at least one
   });
 
@@ -656,7 +657,7 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
       }
     });
     expect(sports).toBe(11);
-    expect(names).toBe(41); // zero compared would be a vacuous green
+    expect(names).toBe(43); // zero compared would be a vacuous green
     expect(keys).toBeGreaterThan(names - 2); // every declared entry but chess's two writes a key
     // A listed difference that is no longer a difference fails too: the list is cleared, never left stale.
     expect([...diffs].sort(), `the data and the engine's declaration differ at: ${diffs.join("; ")}`).toEqual(Object.keys(EXPECTED_DIFFERENCES).sort());
@@ -674,7 +675,7 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
         else { expect(fromEngine, `${key} ${name}`).toEqual(fromData); same++; }
       }
     });
-    expect(same + differ).toBe(41);
+    expect(same + differ).toBe(43);
     expect(differ).toBe(Object.keys(EXPECTED_DIFFERENCES).length);
   });
 
@@ -762,6 +763,6 @@ describe("walkover-credit: every column of every sport has one stated rule (Loop
       }
     }
     expect(columns, "columns over the 11 sports").toBeGreaterThan(40);
-    expect(judged, "column judgements over the 212 cases").toBeGreaterThan(212 * 3);
+    expect(judged, "column judgements over the 215 cases").toBeGreaterThan(215 * 3);
   });
 });

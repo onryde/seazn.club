@@ -9,6 +9,7 @@ import { judgeDrive } from "../reference-bracket.ts";
 import { resolveSportCfg } from "../sport-cfg.ts";
 import type { BuiltReadback, DivisionSetup, Recorder } from "./common.ts";
 import { lineupItems } from "./lineup-plan.ts";
+import { canon } from "../streams/types.ts";
 
 export interface Item { ok: boolean; note: string }
 
@@ -33,12 +34,9 @@ export function assertion(id: string, items: readonly Item[], abstainReason: str
   return { id, kind: "assertion", verdict: bad.length > 0 ? "fail" : "pass", checked: items.length, reason: bad[0] ?? `${items.length} ok`, evidence: bad.slice(0, 12) };
 }
 
-/** Key-sorted JSON: a config value read back with its keys reordered is the same value. */
-function canonical(v: unknown): string {
-  return JSON.stringify(v, (_k, x: unknown) => (x !== null && typeof x === "object" && !Array.isArray(x)
-    ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-    : x)) ?? "undefined";
-}
+/** `canon` (key-sorted JSON: a config value read back with its keys reordered is the same value), except that an ABSENT value is
+ *  spelled so and not as null: a built config missing a key is not one holding null, and the evidence says which. */
+const canonical = (v: unknown): string => (v === undefined ? "undefined" : canon(v));
 
 /** W1-driving Task 8: whether a stage's fixtures seat an entrant — directly,
  *  or, on an americano stage (which seats the pair entrants it mints, never

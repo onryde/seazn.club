@@ -181,6 +181,9 @@ const REST = [
   // every split row. Begins with "s", so it belongs here rather than in C_GLOBBED.
   "src/server/public-site/__tests__/standings-view-w2d.test.ts",
   "src/server/public-site/__tests__/public-fixture-replay-parts.test.ts",
+  // W2e T8c (format matrix): the public standings' net run rate at the division's own over length (CK-RR-1).
+  // Begins with "s", so it belongs here rather than in C_GLOBBED; this gate reddened on it in the whole-branch review.
+  "src/server/public-site/__tests__/standings-nrr-scale.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

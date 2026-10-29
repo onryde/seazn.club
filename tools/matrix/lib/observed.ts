@@ -36,7 +36,8 @@ export interface ObservedFixture {
   isFinal?: boolean;
 }
 
-export interface StandingsRowObs { entrantId: string; rank: number; points: number | null }
+/** `rank`: null on a level table's rows, as the wire serves it (W2e Task 27, D11 b). */
+export interface StandingsRowObs { entrantId: string; rank: number | null; points: number | null }
 /** `message` (W1-driving Task 8, T8-R1): a refused generate's message, as the
  *  RefusedCall carries it (redacted) — the evidence a 5xx's cause is read
  *  from. Absent on an answered generate (and on the model's). */

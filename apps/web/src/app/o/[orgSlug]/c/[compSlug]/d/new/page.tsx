@@ -8,7 +8,8 @@ import { withTenant } from "@/lib/db";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { archivedSlotsExplainRefusal } from "@/server/usecases/division-slots";
-import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
+import { DivisionBuilder } from "@/components/v2/division-builder";
+import { sportOptionsFrom, type VariantRow } from "@/lib/sport-options";
 // P9 scope item 5: org venues+courts feed the Scheduling step's court
 // multi-picker.
 import { listVenues } from "@/server/usecases/venues";
@@ -48,18 +49,11 @@ export default async function NewDivisionPage({
   const sports = await withTenant(auth.orgId, async (tx) => {
     const sportRows = await tx<{ key: string; name: string }[]>`
       select key, name from sports order by name`;
-    const variantRows = await tx<
-      { sport_key: string; key: string; name: string; is_system: boolean }[]
-    >`
-      select sport_key, key, name, is_system from sport_variants
+    // `config` is the variant's preset: the builder counts cricket's overs in the variant's own over length with it.
+    const variantRows = await tx<VariantRow[]>`
+      select sport_key, key, name, is_system, config from sport_variants
       order by is_system desc, name`;
-    return sportRows.map((s): SportOption => ({
-      key: s.key,
-      name: s.name,
-      variants: variantRows
-        .filter((v) => v.sport_key === s.key)
-        .map((v) => ({ key: v.key, name: v.name, system: v.is_system })),
-    }));
+    return sportOptionsFrom(sportRows, variantRows);
   });
 
   return (

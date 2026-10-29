@@ -232,9 +232,10 @@ describe("badminton / table tennis padSpec — no cfg-mutual-exclusivity (assert
 // gate it: every sport's pad offered `SetBasedSanctionLevel.options` whole.
 // Fixed here, through the SAME preset-data mechanism `coarseEventType` /
 // `unitLabel` / `defaults.records` already use — not a second gating layer.
-// `arbitraryEvent` and `discipline.colors` deliberately keep the full ladder:
-// narrowing the generator would move frozen goldens, and `extractCards` must
-// still project a referee removal that WAS recorded.
+// `discipline.colors` deliberately keeps the full ladder: `extractCards` must
+// still project a referee removal that WAS recorded. `arbitraryEvent` draws
+// from this per-sport list since W2e Task 3 (controller ruling), which moved
+// table tennis's floor streams that held a referee's `expulsion`.
 // ---------------------------------------------------------------------------
 
 describe("setbased padSpec — the sanction ladder is subset per sport (S7/#427)", () => {

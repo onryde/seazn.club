@@ -48,9 +48,6 @@ export const GenericCfg = z.object({
       l: z.number().int().nonnegative(),
     })
     .default({ w: 3, d: 1, l: 0 }),
-  // v1 stepladder progress-score carry; stored for the PROMPT-15 cutover,
-  // no scoring effect inside the module.
-  progressScore: z.boolean().default(false),
   // W2c Q10 (GN-AB-2): what an abandoned match counts as, per stage. Absent = a replay (GN-AB-1) - optional with NO
   // default, so no recorded config or frozen state gains a key.
   abandonPolicy: z.enum(["replay", "share"]).optional(),
@@ -608,13 +605,11 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
       resultMode: "win_loss",
       allowDraws: false,
       points: { w: 3, d: 1, l: 0 },
-      progressScore: false,
     },
     score: {
       resultMode: "score",
       allowDraws: true,
       points: { w: 3, d: 1, l: 0 },
-      progressScore: false,
     },
   },
   // W2c (spec §4.1 Q5) — no per-match format: how a result is recorded and whether a draw stands are set per stage.

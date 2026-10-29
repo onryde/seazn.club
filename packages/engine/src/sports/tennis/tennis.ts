@@ -4,6 +4,7 @@
 // the league conventions. Singles vs doubles is the entrant kind (like
 // badminton) — the module never inspects it.
 import type { PositionCatalog } from "../../sport/catalog.ts";
+import { BO1_MATCH_TIEBREAK } from "../../sport/module.ts";
 import { makeNestedModule } from "../nested/kernel.ts";
 
 // No positions; one nominated unit (player or pair) per side.
@@ -30,9 +31,12 @@ const nestedTennis = makeNestedModule({
     // to 10 at 6–6 (finalSet.tiebreakTo — the games-level form, matching the
     // real rule rather than an App VI match tie-break replacing the set).
     "grand-slam": { bestOf: 5, finalSet: { tiebreakTo: 10 } },
-    // ITF App VI short sets: to 4 games, TB at 3–3 to 5, no-ad games.
+    // ITF App VI short sets: to 4 games, TB at 3–3 (§1's alternative) to 5
+    // with a deciding point at 4–4 (§2's short-set tie-break, margin 1; W2e
+    // RB2A-12, TN-SS-2), no-ad games. A Fast4 config stored before W2e carries
+    // no `tiebreakWinBy`; the W2e migration (D18) writes its `tiebreak.winBy`.
     fast4: {
-      set: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5 },
+      set: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5, tiebreakWinBy: 1 },
       game: { noAd: true },
     },
     // The ITF doubles norm: no-ad games + a 10-point match tie-break as the
@@ -40,6 +44,13 @@ const nestedTennis = makeNestedModule({
     "doubles-noad-mtb10": {
       game: { noAd: true },
       finalSet: { matchTiebreakTo: 10 },
+    },
+    // W2e RB2A-12 (TN-SS-2): ITF App VI §1 short sets in their main form —
+    // first to 4 games by 2, a tie-break at 4–4 — with §2's short-set
+    // tie-break, first to 5 with a deciding point at 4–4 (margin 1). Ad games:
+    // No-Ad is App VI's separate "score in a game" alternative (A0.2).
+    "short-sets": {
+      set: { gamesTo: 4, winBy: 2, tiebreakAt: 4, tiebreakTo: 5, tiebreakWinBy: 1 },
     },
   },
   positions,
@@ -53,6 +64,11 @@ const nestedTennis = makeNestedModule({
     allowSquadGrowth: false,
   }),
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
+  // W2e (spec 2026-10-28 §5.2; D3 (1), D13; TN-SE-1): a `default` (the last step of the ITF Code of Conduct's point
+  // penalty schedule) ends the match against the defaulted player; it is followed by its ending, core.forfeit
+  // {reason: "disqualified"}, with X-RT-1's credit (TN-RT-1). The other three levels are records. No tennis level only
+  // prompts (D12 is volleyball's).
+  sanctionEnding: { eventType: "tennis.sanction", endLevels: ["default"], promptLevels: [] },
   // W2d (SPEC §5.10, TN-TB-1): 4.01 C.3 — matches won, then matches played, then for each of set and game ratio the
   // two-way head-to-head first; then the seed, then lots (the product's own final step).
   defaultTiebreakers: ["wins", "matches_played", "h2h_two", "set_ratio", "h2h_two", "game_ratio", "h2h_two", "seed", "lots"],
@@ -128,4 +144,9 @@ export const tennis: typeof nestedTennis = {
     "tiebreak.winBy": { scope: "match" },
     points: { scope: "points" },
   },
+  // W2e RB2A-13 (row TN-CF-1; spec 2026-10-28 §5.5, E15): ITF App VI's match tie-break REPLACES the deciding set, and a
+  // best of 1 is its own deciding set, so a write door refuses the pair (`BO1_MATCH_TIEBREAK`). A best of 1 with a final
+  // set tie-break (`finalSet.tiebreakTo`, still a set) is not refused, and a stored config that breaks it still loads.
+  configWriteIssues: (cfg) =>
+    cfg.bestOf === 1 && cfg.finalSet !== "same" && "matchTiebreakTo" in cfg.finalSet ? [BO1_MATCH_TIEBREAK] : [],
 };

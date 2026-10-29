@@ -39,7 +39,7 @@ const suspensionsAlternatives = [
     },
   },
 ];
-const shootoutAlternatives = [null, { attempts: 5, suddenDeath: true }, { attempts: 3, suddenDeath: true, clockSeconds: 8 }];
+const shootoutAlternatives = [null, { attempts: 5 }, { attempts: 3, clockSeconds: 8 }];
 const overtimeAlternatives = [
   null,
   { kind: "sudden_death" as const, minutes: 5 },

@@ -18,7 +18,8 @@ const generic = byKey.get("generic")!;
 // this function only once the flag is already ON, and a resolution failure
 // there must fall back to the (always-safe) v1 path, never 500 the page.
 describe("resolveScorePadBootstrap", () => {
-  const GENERIC_CFG = { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+  // The resolved generic cfg. W2e D6 deleted the inert `progressScore` key, so a resolved cfg no longer carries it.
+  const GENERIC_CFG = { resultMode: "score" as const, allowDraws: false, points: { w: 3, d: 1, l: 0 } };
   const IDENTITY = { recordedBy: "user-1", deviceLinkId: null };
 
   it("builds a full bootstrap when resolution succeeds", async () => {
@@ -37,6 +38,22 @@ describe("resolveScorePadBootstrap", () => {
     expect(result!.moduleVersion).toBe(generic.version);
     expect(result!.resolvedConfig).toEqual(GENERIC_CFG);
     expect(result!.identity).toBe(IDENTITY);
+  });
+
+  it("W2e D6: a config saved before progressScore was deleted still resolves, and the key is dropped, not carried to the pad", async () => {
+    // The key's last value in the wild was `false` (the shipped variants wrote it); an older client can still write it.
+    const result = await resolveScorePadBootstrap({
+      sportModule: generic,
+      rawConfig: { ...GENERIC_CFG, progressScore: false },
+      hasFeatureFn: async () => true,
+      initialEvents: [],
+      identity: IDENTITY,
+      stageKind: null,
+      rulesVersion: 0,
+    });
+    expect(result, "an old config reads without error").not.toBeNull();
+    expect(result!.resolvedConfig).toEqual(GENERIC_CFG);
+    expect(Object.hasOwn(result!.resolvedConfig as object, "progressScore")).toBe(false);
   });
 
   it("W2a Task 12: carries the fixture's stage kind to the pad unchanged (addendum 4 — never read and dropped)", async () => {

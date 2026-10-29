@@ -15,7 +15,7 @@ import "server-only";
 //     can say every split: spec §5.3, Task 10.)
 import { DRAW_KINDS, EngineError, type StageKind } from "@seazn/engine/core";
 import { pointsRuleAwardReachesTable, validatePointsRule, type PointsRule } from "@seazn/engine/competition";
-import { sportTopKeys, stageTopKeysFor, type AnySportModule } from "@seazn/engine/sport";
+import { sportTopKeys, stageTopKeysFor, writeConfigIssues, type AnySportModule } from "@seazn/engine/sport";
 import type { Tx } from "@/lib/db";
 import { stageScopedCfg } from "@/server/engine-db/stage-cfg";
 import { withoutNulls } from "@/lib/stage-decider-off";
@@ -111,7 +111,30 @@ export function stageRulesProblem(
   // the schema as sent and is refused there by name, as any value the sport does not take.
   const parsed = module.configSchema.safeParse(stageScopedCfg(isObj(divisionConfig) ? divisionConfig : {}, { rules }, module));
   if (!parsed.success) return { kind: "invalid", issues: parsed.error.issues };
-  return null;
+  // W2e (VB-CF-1, TT-CF-1, TN-CF-1): then the engine's write-door refusals of the merged cfg the stage would play.
+  const written = configWriteIssueList(module, parsed.data);
+  return written.length > 0 ? { kind: "invalid", issues: written } : null;
+}
+
+/**
+ * W2e (spec 2026-10-28 §5.5, E15; VB-CF-1, TT-CF-1, TN-CF-1) — the engine's write-door refusals of a config its schema has
+ * accepted (`writeConfigIssues`: ruling 31's set-target floor, tennis's best of 1 with a match tie-break), as CONFIG_INVALID
+ * issues: the engine's sentence, on no single path (a refusal may be about two keys at once). Asked right after the schema's
+ * own parse by every door that persists a config: division create and save (the save's re-parse after its lock included),
+ * a template's division, a stage's rules (`stageRulesProblem`: PUT, create, and the division save's re-ask) and a match's
+ * own format (`fixture-rules.ts`). Never a `configSchema` refine (E15), so a stored config that breaks one still loads.
+ * [] = none.
+ */
+export function configWriteIssueList(module: AnySportModule, cfg: unknown): { path: PropertyKey[]; message: string }[] {
+  return writeConfigIssues(module, cfg).map((message) => ({ path: [], message }));
+}
+
+/** The division doors' refusal of `configWriteIssueList`: CONFIG_INVALID (422) with the issues, its message naming the
+ *  sentences (a template, which wraps any refusal as its own 422, reports the message as the cause). Returns when none. */
+export function refuseConfigWriteIssues(module: AnySportModule, sportKey: string, cfg: unknown): void {
+  const issues = configWriteIssueList(module, cfg);
+  if (issues.length === 0) return;
+  throw new EngineError("CONFIG_INVALID", `invalid ${sportKey} config: ${issues.map((i) => i.message).join(" ")}`, { issues });
 }
 
 /** The stage PUT's refusal for a problem: the engine's CONFIG_INVALID (422, `issues`). */

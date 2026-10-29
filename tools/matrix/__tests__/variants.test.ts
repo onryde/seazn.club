@@ -9,7 +9,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  SPORT_RULES, buildRuleOverride, showsOnePointsField, visibleRuleFields, type RuleField,
+  SPORT_RULES, buildRuleOverride, ruleContextFor, showsOnePointsField, visibleRuleFields, type RuleField,
 } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { REFUSED_CELLS, offeredRows } from "./refused-cells.ts";
@@ -214,25 +214,35 @@ describe("the pair-wise cover", () => {
     }
     expect(n).toBeGreaterThan(0);
   });
-  it("the builder passes NO inherited config (division-builder), the harness passes the preset — they agree on every preset and every case", () => {
-    // match-rules.ts showsOnePointsField: "nothing for the builder". The two differ only when a preset makes a
-    // blank best-of play as best of 1; a future `bestOf: 1` preset would split them, and this sweep reds.
+  it("the builder passes only the preset's declared context (division-builder, ruleContextFor), the harness passes the whole preset — they agree on every preset and every case", () => {
+    // match-rules.ts showsOnePointsField: "nothing for the builder" except the keys a field converts by (W2e Task 8c: cricket's
+    // overs count in the preset's `ballsPerOver`). The two differ in best-of-1 only when a preset makes a blank best-of play as
+    // best of 1; a future `bestOf: 1` preset would split them, and this sweep reds.
     let presets = 0;
     for (const s of SPORT_KEYS) for (const p of variantKeys(s)) {
-      expect(showsOnePointsField(s, {}, presetCfg(s, p)), `${s}/${p}`).toBe(showsOnePointsField(s, {}, {}));
+      expect(showsOnePointsField(s, {}, presetCfg(s, p)), `${s}/${p}`).toBe(showsOnePointsField(s, {}, ruleContextFor(s, presetCfg(s, p))));
       presets++;
     }
     expect(presets).toBeGreaterThan(0);
     // Positive pair: the comparison has teeth — an inherited best of 1 does change the answer.
     expect(showsOnePointsField("badminton", {}, { bestOf: 1 })).not.toBe(showsOnePointsField("badminton", {}, {}));
     let n = 0;
+    let scaled = 0;
     for (const v of ALL) for (const c of v.cases) {
-      const shownBuilder = visibleRuleFields(c.sport, c.values, {}).map((f) => f.key);
+      const context = ruleContextFor(c.sport, presetCfg(c.sport, c.preset));
+      const shownBuilder = visibleRuleFields(c.sport, c.values, context).map((f) => f.key);
       expect(shownBuilder, c.id).toEqual(visibleRuleFields(c.sport, c.values, presetCfg(c.sport, c.preset)).map((f) => f.key));
-      expect(c.overrides, c.id).toStrictEqual(JSON.parse(JSON.stringify(buildRuleOverride(c.sport, c.values, {}))));
+      expect(c.overrides, c.id).toStrictEqual(JSON.parse(JSON.stringify(buildRuleOverride(c.sport, c.values, context))));
+      // Teeth for the context: the cases it MOVES are cricket's on a preset with its own over length, and there is one.
+      const withNone = JSON.stringify(buildRuleOverride(c.sport, c.values, {}));
+      if (JSON.stringify(c.overrides) !== withNone) {
+        expect([c.sport, c.preset], c.id).toEqual(["cricket", "hundred"]);
+        scaled++;
+      }
       n++;
     }
     expect(n).toBeGreaterThan(0);
+    expect(scaled, "cases whose override the preset's over length moves").toBeGreaterThan(0);
   });
   it("every case's values are what its classes declare in SPORT_RULES, and only for fields the editor shows", () => {
     let n = 0;
@@ -533,15 +543,26 @@ describe("scorability (the generatability sweep)", () => {
   });
   it("the generator records scorable(case) on every case — the seam is wired, not left null", () => {
     let n = 0;
-    let reasons = 0;
     for (const v of ALL) for (const c of v.cases) {
-      const again = scorable({ ...c, scorable: null });
-      expect(c.scorable, c.id).toBe(again);
-      if (again !== null) reasons++;
+      expect(c.scorable, c.id).toBe(scorable({ ...c, scorable: null }));
       n++;
     }
     expect(n).toBeGreaterThan(0);
-    expect(reasons, "at least one case must carry a reason, or the wiring check cannot tell null from wired").toBeGreaterThan(0);
+    // Since the write door joined resolveSportCfg no shipped case is refused, so every recorded value above is null and cannot tell
+    // wired from left null (a mutant that records null survives). A case that DOES carry a reason proves the seam: the generator
+    // records what its scorer answers, for each case, whichever it is.
+    const seen: string[] = [];
+    const stub = (vc: { id: string }): string | null => { seen.push(vc.id); return `win-home: stubbed ${vc.id}`; };
+    const built = buildSportVariants("football", { score: stub as unknown as typeof scorable });
+    expect(built.cases.length).toBeGreaterThan(0);
+    expect(seen, "the scorer is asked once per case, in order").toEqual(built.cases.map((c) => c.id));
+    expect(built.cases.map((c) => c.scorable)).toEqual(built.cases.map((c) => `win-home: stubbed ${c.id}`));
+  });
+  it("no shipped case is unscorable once the write door is in resolveSportCfg: the cfg-refused class is empty by construction (counted over every case)", () => {
+    let n = 0;
+    for (const v of ALL) for (const c of v.cases) { expect(c.scorable, c.id).toBeNull(); n++; }
+    expect(n).toBe(ALL.reduce((m, v) => m + v.cases.length, 0));
+    expect(n).toBeGreaterThan(0);
   });
   it("every generated cricket `test`-preset case is scorable: the two-innings generator exists (ruling 44), so no case carries a generator gap", () => {
     let judged = 0;

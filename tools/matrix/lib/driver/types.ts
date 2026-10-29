@@ -103,11 +103,16 @@ export interface ChallengeOut { readonly fixture_id: string; readonly ladder_ord
  *  the fields the harness reads are typed. */
 export interface AmericanoViewOut { readonly mode: "americano" | "mexicano"; readonly rounds: readonly { round_no: number; matches: readonly { fixture_id: string; status: string; team1: { entrant_id: string }; team2: { entrant_id: string } }[] }[]; readonly leaderboard: readonly { person_id: string; points: number; games: number }[] }
 /** `won`/`drawn`/`lost`/`metrics` (W2b, X-WO-1): the row as the product's standings answer carries it (engine
- *  StandingsRow) — what the forfeit-credit scenarios isolate a match's credit from. Optional: a fake may omit them. */
-export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number>; /** W2d T13/T17: true on every row of a table with no counted result. */ level?: boolean }
+ *  StandingsRow) — what the forfeit-credit scenarios isolate a match's credit from. Optional: a fake may omit them.
+ *  `rank` (W2e Task 27, D11 b): null on every row of a LEVEL table (`level: true`, no counted result) — the API serves
+ *  no position nobody has earned; the product still orders the rows by seed, then id. */
+export interface StandingsRowWire { entrantId: string; rank: number | null; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number>; /** W2d T13/T17: true on every row of a table with no counted result. */ level?: boolean }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
-export interface FixtureStateOut { status: string; last_seq: number; outcome: unknown }
+/** GET /fixtures/:id/state (usecases/fixtures.ts getFixtureState): the status, the ledger head, the engine's outcome, and — W2e
+ *  Task 21 — the stored `summary` (the engine's `summary(state)` the scoreboards print) and `state` (the fold itself), both
+ *  null for a fixture the match_states table holds no row for. Optional: a fake that serves only the first three omits them. */
+export interface FixtureStateOut { status: string; last_seq: number; outcome: unknown; summary?: unknown; state?: unknown }
 export interface PostedEvent {
   seq: number; status: string; outcome: unknown; event_id: string;
   /** Parked Task 6 (b): set (true) only when this event landed on the one

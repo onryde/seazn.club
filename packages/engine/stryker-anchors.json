@@ -9,7 +9,7 @@
   },
   "src/sports/period/kernel.ts": {
     "makePeriodModule.arbitraryEvent.if#2": {
-      "starts": "if (state.phase === \"SHOOTOUT\" && state.shootout) {"
+      "starts": "if (state.phase === \"SHOOTOUT\" && state.shootout && state.cfg.shootout) {"
     },
     "makePeriodModule.arbitraryEvent.if#7": {
       "starts": "if (roll < 0.22 && cfgKinds.length > 0) {"

@@ -84,6 +84,16 @@ describe("EngineError", () => {
       "TIEBREAK_COLOUR_REQUIRED",
       // W2d T18 (HK-TB-2, PS-7d) — appended last, existing order frozen. A hockey goal written without its type.
       "GOAL_KIND_REQUIRED",
+      // W2e X-SE-1 — appended last, existing order frozen. Scoring after a match-ending sanction before its ending.
+      "ENDING_SANCTION_PENDING",
+      // W2e SC-S1 (TN-SS-1) — appended last, existing order frozen. A tennis set summary no set can reach.
+      "SET_SCORE_UNREACHABLE",
+      // W2e T6 (CK-CH-1, RB2A-22) — appended last, existing order frozen. A coarse cricket chase total past the winning run.
+      "CHASE_OVERSHOOT",
+      // W2e T10 (BG-RS-1, RB2B-20) — appended last, existing order frozen. A board-game result whose method contradicts its winner.
+      "RESULT_METHOD_CONTRADICTS_WINNER",
+      // W2e T11 (CA-AD-1, SC-O9) — appended last, existing order frozen. A carrom adjustment past the game target.
+      "ADJUST_OUT_OF_RANGE",
     ]);
   });
 });

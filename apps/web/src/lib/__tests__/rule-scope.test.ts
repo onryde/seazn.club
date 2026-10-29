@@ -24,7 +24,7 @@ const mod = (key: string): AnySportModule => {
   return m;
 };
 const ice = (): RuleContext => ({ module: mod("icehockey"), stageKind: "knockout", variant: null });
-const stage = { periods: { count: 3, minutes: 20 }, overtime: { kind: "sudden_death", minutes: 10, skaters: 3 }, shootout: { attempts: 5, suddenDeath: true } };
+const stage = { periods: { count: 3, minutes: 20 }, overtime: { kind: "sudden_death", minutes: 10, skaters: 3 }, shootout: { attempts: 5 } };
 const keysOf = (fs: readonly RuleField[]): string[] => fs.map((f) => f.key);
 /** `want` appear in `got`, in that order (other fields may sit between them): a later task that adds a stage field to a sport
  *  moves nothing here. */
@@ -204,14 +204,14 @@ describe("rule-scope — buildMatchFragment (X-SR-2: a match overrides only matc
     expect(buildMatchFragment(ice(), { overtimeMinutes: "5" }, { ...stage, overtime: null })).toEqual({});
     expect(buildMatchFragment(ice(), { shootoutAttempts: "3" }, { ...stage, shootout: null })).toEqual({});
     // The negative's pair: the same call against a stage that carries the decider writes it.
-    expect(buildMatchFragment(ice(), { shootoutAttempts: "3" }, stage)).toEqual({ shootout: { attempts: 3, suddenDeath: true } });
+    expect(buildMatchFragment(ice(), { shootoutAttempts: "3" }, stage)).toEqual({ shootout: { attempts: 3 } });
   });
 
   it("X-SR-2 two fields under one object compose, not overwrite each other", () => {
     expect(buildMatchFragment(ice(), { overtimeMinutes: "5", periodMinutes: "12", shootoutAttempts: "4" }, stage)).toEqual({
       overtime: { kind: "sudden_death", minutes: 5, skaters: 3 },
       periods: { count: 3, minutes: 12 },
-      shootout: { attempts: 4, suddenDeath: true },
+      shootout: { attempts: 4 },
     });
   });
 
@@ -303,6 +303,8 @@ describe("rule-scope — buildMatchFragment (X-SR-2: a match overrides only matc
     "volleyball/indoor/cap/15": "cap must be ≥ the set target",
     "volleyball/beach/cap/15": "cap must be ≥ the set target",
     "badminton/bwf/cap/15": "cap must be ≥ the set target",
+    "badminton/bwf-3x15/setTo/30": "cap must be ≥ the set target",
+    "badminton/bwf-3x15/finalSetTo/30": "cap must be ≥ the set target",
     "badminton/short/setTo/30": "cap must be ≥ the set target",
     "badminton/short/finalSetTo/30": "cap must be ≥ the set target",
   };

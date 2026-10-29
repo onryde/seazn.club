@@ -299,3 +299,49 @@ describe("divisionQualification — the walkover's ledger is the pinned sport's"
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
   });
 });
+
+// W2e Task 8c (owner D19; rule row CK-BO-2) - the what-if's "Now: you X, they Y" prints a net run rate on the table's own
+// scale. B and C are level on points (one win each in two), so the order's next step - net run rate - decides, and the
+// sentence states both today's values (net run rate is no `WhatIfKey`, so there is no target to compute). The loaded rules
+// carry the division's over length (`table_rules.ballsPerOver`, the one loader's) and the assembly must hand it on.
+//
+// Hand-worked (ECB The Hundred Playing Conditions 2026, 16.9.4(a): runs per over, an over is 5 balls): B scored 100 off 100
+// balls and conceded 80 off 100: 5.000 - 4.000 = +1.000 per five-ball over, +1.200 per six-ball. C scored 90 and conceded
+// 100: 4.500 - 5.000 = -0.500 per five-ball over, -0.600 per six-ball.
+describe("divisionQualification - the what-if's net run rate is on the stage's over length (CK-BO-2)", () => {
+  const ledger = (rf: number, ra: number) => ({ runs_for: rf, balls_faced_eff: 100, runs_against: ra, balls_bowled_eff: 100 });
+  const withLedger = (r: StandingsRow, rf: number, ra: number): StandingsRow => ({ ...r, metrics: { ...r.metrics, ...ledger(rf, ra) } });
+  const fixtures = [
+    won(null, 1, "A", "D"),
+    won(null, 1, "C", "B"),
+    won(null, 2, "A", "C"),
+    won(null, 2, "B", "D"),
+    toPlay(null, 3, "A", "B"),
+    toPlay(null, 3, "C", "D"),
+  ];
+  const snap: QualSnapshot = {
+    pool_id: null,
+    rows: [
+      withLedger(row("A", 1, 2, 2, [2, 0]), 150, 100),
+      withLedger(row("B", 2, 1, 2, [1, 1]), 100, 80),
+      withLedger(row("C", 3, 1, 2, [1, 1]), 90, 100),
+      withLedger(row("D", 4, 0, 2, [0, 2]), 80, 140),
+    ],
+  };
+  const nrrStage = (extra: { ballsPerOver?: number }): QualStage => {
+    const doc = rulesDoc();
+    return stage({ table_rules: { ...doc, tiebreakers: ["points", "nrr"], ...extra } });
+  };
+  const sentence = (extra: { ballsPerOver?: number }) =>
+    assemble({ fixtures, ids: ["A", "B", "C", "D"] })(nrrStage(extra), snap)!.rows.B!.whatIf;
+
+  it("a five-ball stage prints runs per five-ball over", () => {
+    expect(sentence({ ballsPerOver: 5 })).toBe("If you finish level on points with Cy, net run rate decides. Now: you +1.000, Cy -0.500.");
+  });
+
+  it("…its pair: the same table in six-ball overs prints per six, and a stage naming none keeps the default six", () => {
+    const six = "If you finish level on points with Cy, net run rate decides. Now: you +1.200, Cy -0.600.";
+    expect(sentence({ ballsPerOver: 6 })).toBe(six);
+    expect(sentence({})).toBe(six);
+  });
+});

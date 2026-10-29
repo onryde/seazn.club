@@ -93,14 +93,16 @@ describe("the moved save builder keeps its behaviour (pins for the code that mov
   });
 
   it("a variant change drops the identity keys so the new preset wins them; the same variant keeps them", () => {
-    const config = { resultMode: "score", allowDraws: true, progressScore: false, points: { win: 3, draw: 1, loss: 0 } };
+    // `abandonPolicy` is a key generic still declares that no variant preset carries (W2e D6 deleted `progressScore`, the
+    // key this case used to ride on): like it, it lives only in the division's own config, so a variant change must keep it.
+    const config = { resultMode: "score", allowDraws: true, abandonPolicy: "share", points: { win: 3, draw: 1, loss: 0 } };
     const same = divisionFormatPatch(opened("generic", config, { ruleValues: {} }));
     expect(same.resultMode).toBe("score");
     expect(same.allowDraws).toBe(true);
     const changed = divisionFormatPatch(opened("generic", config, { ruleValues: {}, variantKey: "win_loss" }));
     expect(Object.hasOwn(changed, "resultMode")).toBe(false);
     expect(Object.hasOwn(changed, "allowDraws")).toBe(false);
-    expect(changed.progressScore, "schema-required keys stay").toBe(false);
+    expect(changed.abandonPolicy, "the division's own keys stay").toBe("share");
   });
 
   it("football: a saved soBonus rides through an untouched save and a rule-field save — no field owns it (W2d PS-1)", () => {
@@ -113,17 +115,17 @@ describe("the moved save builder keeps its behaviour (pins for the code that mov
   });
 
   it("the standings-points boxes write the keys the sport declares, a blank box falls back to the saved value, and the advanced JSON is laid on last", () => {
-    const config = { resultMode: "score", allowDraws: true, progressScore: false, points: { win: 3, draw: 1, loss: 0 } };
+    const config = { resultMode: "score", allowDraws: true, abandonPolicy: "replay", points: { win: 3, draw: 1, loss: 0 } };
     const patch = divisionFormatPatch(
       opened("generic", config, {
         ruleValues: {},
         pointsFieldKeys: ["win", "draw", "loss"],
         pointsValues: { win: "4", draw: "", loss: "0" },
         savedPoints: { win: 3, draw: 1, loss: 0 },
-        advanced: { progressScore: true },
+        advanced: { abandonPolicy: "share" },
       }),
     );
     expect(patch.points).toEqual({ win: 4, draw: 1, loss: 0 });
-    expect(patch.progressScore, "advanced wins over the form").toBe(true);
+    expect(patch.abandonPolicy, "advanced wins over the saved config").toBe("share");
   });
 });

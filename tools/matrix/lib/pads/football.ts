@@ -14,6 +14,14 @@
 //    the minute has no tap; replay.ts judgeFallback, since e3ebd230c).
 //  - period → HT, then period → FT, each write one `football.period {phase}`
 //    row at once; FT decided the fixture. No lineup was demanded.
+// W2e Task 19 (G1, G2) — read off the skin's SOURCE, text-pinned in
+// pad-adapters.test.ts, and not yet seen by a browser (the truth run's W2E_SO
+// drives it): the extra-time markers ET_HT / ET_FT are the same period sheet's
+// options (periodMarkersOf lists them when the cfg plays extra time); a shoot-out
+// kick is its side's kick tile `kick-${side}` (kickSheetKey, :733; offered under
+// the shoot-out with the out-of-turn side disabled by footballNextKicker, :800-813),
+// which opens kickSheet (:1115): one choice step whose options are `scored` /
+// `missed`, building `{by, scored}`.
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import { judgeKeys, judgeOneRow } from "./judge.ts";
 import type { MatrixPadAdapter } from "./types.ts";
@@ -25,6 +33,13 @@ export const FOOTBALL_PERIOD = "football.period";
 export const FOOTBALL_PERIOD_TILE = "period";
 /** football.tsx:763 (text-pinned). */
 export const footballGoalTile = (side: "home" | "away"): string => `goal-${side}`;
+/** W2e: the engine's shoot-out kick (football.eventSchemas; pinned). */
+export const FOOTBALL_SHOOTOUT_KICK = "football.shootout.kick";
+/** football.tsx:733 kickSheetKey (text-pinned). */
+export const footballKickTile = (side: "home" | "away"): string => `kick-${side}`;
+/** football.tsx:1115 kickSheet's option ids (text-pinned). */
+export const FOOTBALL_KICK_SCORED = "scored";
+export const FOOTBALL_KICK_MISSED = "missed";
 
 /** The side whose entrant scored, or a throw naming the payload. The
  *  generated goal is `{by, minute}`; a key past those is a route this tile
@@ -40,6 +55,18 @@ function goalSide(payload: unknown, ctx: TapAdapterContext): "home" | "away" {
   return side;
 }
 
+/** A kick is the kicking side's tile, then the sheet's Scored / Missed. The generated kick is `{by, scored}`: exactly
+ *  what the sheet builds, so any other key (a kicker `person`, an `at`) is a route this sheet cannot write. */
+function kickSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[] {
+  const p = (payload ?? {}) as Record<string, unknown>;
+  const extra = Object.keys(p).filter((k) => k !== "by" && k !== "scored");
+  const side = p.by === ctx.entrants.home ? "home" : p.by === ctx.entrants.away ? "away" : null;
+  if (payload === null || typeof payload !== "object" || extra.length > 0 || typeof p.scored !== "boolean" || side === null) {
+    throw new Error(`footballPad: ${FOOTBALL_SHOOTOUT_KICK} payload ${JSON.stringify(payload)} is not the kick sheet's {by: one of the fixture's entrants, scored: true or false}`);
+  }
+  return [{ kind: "tile", tileId: footballKickTile(side) }, { kind: "choice", optionId: p.scored ? FOOTBALL_KICK_SCORED : FOOTBALL_KICK_MISSED }];
+}
+
 function periodSteps(payload: unknown): readonly TapStep[] {
   const p = (payload ?? {}) as Record<string, unknown>;
   const keys = Object.keys(p);
@@ -51,7 +78,7 @@ function periodSteps(payload: unknown): readonly TapStep[] {
 
 export const footballPad: MatrixPadAdapter = {
   sport: "football",
-  emits: ["core.start", FOOTBALL_GOAL, FOOTBALL_PERIOD],
+  emits: ["core.start", FOOTBALL_GOAL, FOOTBALL_PERIOD, FOOTBALL_SHOOTOUT_KICK],
   fallbacks: [
     {
       eventType: FOOTBALL_GOAL,
@@ -69,8 +96,10 @@ export const footballPad: MatrixPadAdapter = {
     // The tile HOLDS; the replay's closing releaseHold sends it now.
     if (event.type === FOOTBALL_GOAL) return [{ kind: "tile", tileId: footballGoalTile(goalSide(event.payload, ctx)) }];
     if (event.type === FOOTBALL_PERIOD) return periodSteps(event.payload);
+    if (event.type === FOOTBALL_SHOOTOUT_KICK) return kickSteps(event.payload, ctx);
     throw new Error(`footballPad: no tap route for ${event.type} (a generator emitting it owes a route here)`);
   },
-  // Step 0: the marker rows' keys were exactly [phase]; the goal is a fallback.
+  // Step 0: the marker rows' keys were exactly [phase]; the goal is a fallback. W2e: the kick sheet builds exactly
+  // {by, scored}, so its row carries no key the generated kick lacks.
   tolerableExtraKeys: () => [],
 };

@@ -211,7 +211,7 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
   const tennis = mod("tennis");
   type TennisCfg = {
     bestOf: number;
-    set: { gamesTo: number; tiebreakAt: number | null };
+    set: { gamesTo: number; tiebreakAt: number | null; tiebreakWinBy?: number };
     finalSet: "same" | { matchTiebreakTo?: number; tiebreakTo?: number };
   };
   const cfg = (variant: string) => variantCfg("tennis", variant) as unknown as TennisCfg;
@@ -224,14 +224,62 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
     ]);
   });
 
-  it("Fast4: sets to 4 and no-ad — the two things that make it Fast4, and never the word 'Tour'", () => {
+  it("Fast4: sets to 4, no-ad and its deciding-point tie-break — what makes it Fast4, and never the word 'Tour'", () => {
     const fast4 = cfg("fast4");
     expect(fast4.set.gamesTo).not.toBe(cfg("tour").set.gamesTo);
+    // W2e TN-SS-2 (D18): the preset's set tie-break is App VI §2's, decided by one point at 4-all.
+    expect(fast4.set.tiebreakWinBy, "premise: the fast4 preset declares a set tie-break margin of one").toBe(1);
     expect(describeMatchRules("tennis", tennis, fast4)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: fast4.bestOf } },
       { key: "format.rules.tennis.setsTo", params: { games: fast4.set.gamesTo } },
       { key: "format.rules.tennis.noAd" },
+      { key: "format.rules.tennis.suddenDeathTiebreaks" },
     ]);
+  });
+
+  it("TN-SS-2 short sets: games to 4 with the tie-break at 4-all, decided by one point — advantage games, so no no-ad", () => {
+    const short = cfg("short-sets");
+    expect(short.set.tiebreakWinBy, "premise: short sets declare a set tie-break margin of one").toBe(1);
+    expect(describeMatchRules("tennis", tennis, short)).toEqual([
+      { key: "format.rules.tennis.bestOfSets", params: { n: short.bestOf } },
+      { key: "format.rules.tennis.gameSetsTiebreak", params: { games: short.set.gamesTo, at: short.set.tiebreakAt } },
+      { key: "format.rules.tennis.suddenDeathTiebreaks" },
+    ]);
+    expect(rulesLineText(enPublic, describeMatchRules("tennis", tennis, short)!)).toBe(
+      "Best of 3 sets, 4-game sets, tie-break at 4-4, sudden-death tie-breaks",
+    );
+  });
+
+  it("TN-SS-2 sudden death is said only when EVERY tie-break played is decided by one point — a set's own margin outranks the match's", () => {
+    const short = cfg("short-sets");
+    const sd = { key: "format.rules.tennis.suddenDeathTiebreaks" };
+    const says = (raw: unknown) => describeMatchRules("tennis", tennis, tennis.configSchema.parse(raw))!.some((c) => c.key === sd.key);
+    const cases: [string, unknown, boolean][] = [
+      // A set at two under a match margin of one: the set tie-break plays to two, so it is NOT sudden death.
+      ["set margin 2, match margin 1", { set: { ...tiebreakSet, tiebreakWinBy: 2 }, tiebreak: { winBy: 1 } }, false],
+      // The positive pair: the set's own one, under a match margin of two.
+      ["set margin 1, match margin 2", { set: { ...tiebreakSet, tiebreakWinBy: 1 } }, true],
+      // Short sets decided by a match tie-break to two: one tie-break kind is not sudden death.
+      ["short sets + a match tie-break at margin 2", { ...short, finalSet: { matchTiebreakTo: 10 } }, false],
+      // … and at margin one, both are.
+      ["short sets + a match tie-break at margin 1", { ...short, finalSet: { matchTiebreakTo: 10 }, tiebreak: { winBy: 1 } }, true],
+      // Advantage sets play no set tie-break: their own margin says nothing.
+      ["advantage sets with a set margin of 1", { set: { ...advantageSet, tiebreakWinBy: 1 } }, false],
+      ["advantage sets with a set margin of 1 + an MTB at 2", { set: { ...advantageSet, tiebreakWinBy: 1 }, finalSet: { matchTiebreakTo: 10 } }, false],
+      // A final-set tie-break (App VI §5) plays to the MATCH's margin, never the short set's own one (RBS:349) …
+      ["short sets + a final-set tie-break at the match's margin 2", { ...short, finalSet: { tiebreakTo: 10 } }, false],
+      // … and at a match margin of one, every tie-break is sudden death.
+      ["short sets + a final-set tie-break at margin 1", { ...short, finalSet: { tiebreakTo: 10 }, tiebreak: { winBy: 1 } }, true],
+      // Advantage sets keep the decider an advantage set (engine `rulesFor`: its `tiebreakAt` stays null), so a final-set
+      // tie-break target is never played and its margin of one says nothing.
+      ["advantage sets + a final-set tie-break at margin 1", { set: advantageSet, finalSet: { tiebreakTo: 10 }, tiebreak: { winBy: 1 } }, false],
+    ];
+    let checked = 0;
+    for (const [name, raw, expected] of cases) {
+      expect(says(raw), name).toBe(expected);
+      checked++;
+    }
+    expect(checked).toBe(9);
   });
 
   it("Doubles: a deciding MATCH tie-break, with its points, and no-ad", () => {
@@ -281,11 +329,12 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
     expect(tour.set.tiebreakAt).toBe(tour.set.gamesTo);
     const line = (set: unknown, bestOf: number) =>
       rulesLineText(enPublic, describeMatchRules("tennis", tennis, tennis.configSchema.parse({ bestOf, set }))!);
-    expect(line(fast4.set, 3)).toBe(`Best of 3 sets, first to ${fast4.set.gamesTo} games`);
+    // Fast4's set carries its own one-point tie-break margin (W2e TN-SS-2), which the line names after the shape.
+    expect(line(fast4.set, 3)).toBe(`Best of 3 sets, first to ${fast4.set.gamesTo} games, sudden-death tie-breaks`);
     expect(line(tour.set, 3)).toBe(
       `Best of 3 sets, ${tour.set.gamesTo}-game sets, tie-break at ${tour.set.tiebreakAt}-${tour.set.tiebreakAt}`,
     );
-    expect(line(fast4.set, 1)).toBe(`1 set, first to ${fast4.set.gamesTo} games`);
+    expect(line(fast4.set, 1)).toBe(`1 set, first to ${fast4.set.gamesTo} games, sudden-death tie-breaks`);
     expect(line(tour.set, 1)).toBe(
       `1 set of ${tour.set.gamesTo} games, tie-break at ${tour.set.tiebreakAt}-${tour.set.tiebreakAt}`,
     );
@@ -510,17 +559,22 @@ describe("effectiveRulesLine — the preset name ONLY when the rule keys are equ
     const tour = variantCfg("tennis", "tour");
     const fast4 = variantCfg("tennis", "fast4") as { bestOf: number; set: { gamesTo: number } };
     const l = line("tennis", fast4, tour);
+    // W2e TN-SS-2 (D18): Fast4's set tie-break is decided by one point at 4-all, so the line says so.
     expect(l).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: fast4.bestOf } },
       { key: "format.rules.tennis.setsTo", params: { games: fast4.set.gamesTo } },
       { key: "format.rules.tennis.noAd" },
+      { key: "format.rules.tennis.suddenDeathTiebreaks" },
     ]);
-    expect(text(l)).toBe(`Best of ${fast4.bestOf} sets, first to ${fast4.set.gamesTo} games, no-ad scoring`);
+    expect(text(l)).toBe(
+      `Best of ${fast4.bestOf} sets, first to ${fast4.set.gamesTo} games, no-ad scoring, sudden-death tie-breaks`,
+    );
     expect(text(l)).not.toMatch(/tour/i);
-    // The set shape ALONE (games stay advantage) is named too.
+    // The set shape ALONE (games stay advantage) is named too — its own tie-break margin with it.
     expect(line("tennis", { ...tour, set: fast4.set }, tour)).toEqual([
       { key: "format.rules.tennis.bestOfSets", params: { n: fast4.bestOf } },
       { key: "format.rules.tennis.setsTo", params: { games: fast4.set.gamesTo } },
+      { key: "format.rules.tennis.suddenDeathTiebreaks" },
     ]);
   });
 
@@ -528,7 +582,9 @@ describe("effectiveRulesLine — the preset name ONLY when the rule keys are equ
     // The owner's approved sentence, typed as the owner wrote it: "Best of 3,
     // sets to 4, no-ad" was accurate but unclear to a spectator.
     const fast4Stage = line("tennis", variantCfg("tennis", "fast4"), variantCfg("tennis", "tour"));
-    expect(text(fast4Stage)).toBe("Best of 3 sets, first to 4 games, no-ad scoring");
+    // W2e TN-SS-2 (D18) appends Fast4's deciding-point tie-break to the owner's sentence, in the describer's existing
+    // clause; the owner's own words are unchanged.
+    expect(text(fast4Stage)).toBe("Best of 3 sets, first to 4 games, no-ad scoring, sudden-death tie-breaks");
     // The tennis head is tennis's OWN key: the shared `format.sets.bestOf`
     // ("Best of {n}") also heads the set kernel and the hub division's
     // `formatLine`, where "sets" would be wrong (badminton plays games).

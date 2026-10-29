@@ -14,6 +14,7 @@ import { cricketGenerator } from "./cricket.ts";
 import { footballGenerator } from "./football.ts";
 import { genericGenerator } from "./generic.ts";
 import { periodGenerator } from "./period.ts";
+import { endingReasonOf, sanctionDeclOf, sanctionEndWitness, sanctionToken } from "./sanction.ts";
 import { setbasedGenerator } from "./setbased.ts";
 import { tennisGenerator } from "./tennis.ts";
 import {
@@ -21,9 +22,11 @@ import {
   OutcomeUnreachable,
   START,
   idOf,
+  localEvidence,
   outcomeLabel,
   type DecidedRequest,
   type ForfeitReason,
+  type RequestedOutcome,
   type SportStreamGenerator,
   type StreamEvent,
   type StreamRequest,
@@ -60,7 +63,7 @@ export function partialPlay(req: StreamRequest): StreamEvent[] {
   const gen = STREAM_GENERATORS[req.sportKey];
   if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, outcomeLabel(req.outcome), "no generator registered");
   const play = [START, ...gen.partial(req)];
-  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, play).outcome;
+  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, play, req.lineups).outcome;
   if (folded !== null) throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), `the sport's partial play folds to '${folded.kind}' — it must leave the match undecided`);
   return play;
 }
@@ -120,7 +123,7 @@ export function forfeitPosting(status: string, forfeit: { readonly by: string; r
 function decidingIndex(req: StreamRequest, win: readonly StreamEvent[]): number {
   const module = sportModule(req.sportKey);
   for (let i = 1; i <= win.length; i++) {
-    if (foldStream(module, req.cfg, req.home, req.away, win.slice(0, i)).outcome !== null) return i - 1;
+    if (foldStream(module, req.cfg, req.home, req.away, win.slice(0, i), req.lineups).outcome !== null) return i - 1;
   }
   throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), "the sport's own win stream never decides under this cfg, so there is no prefix to abandon");
 }
@@ -153,10 +156,38 @@ function levelStream(req: StreamRequest, gen: SportStreamGenerator): StreamEvent
   if (drawsAllowed(req.sportKey, req.cfg, "league")) events = gen.decided({ ...req, outcome: { kind: "draw" } });
   else if (gen.tied !== undefined) events = gen.tied(req);
   else throw new OutcomeUnreachable(req.sportKey, label, "the sport's generator declares no level result");
-  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, events).outcome;
+  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, events, req.lineups).outcome;
   if (folded === null || !isLevelOutcome(folded)) {
     throw new OutcomeUnreachable(req.sportKey, label, `the sport's level stream folds to ${folded === null ? "no outcome yet (a decider is pending)" : `'${folded.kind}'`} under this cfg`);
   }
+  return events;
+}
+
+/** W2e G12 (Task 24; X-SE-1, D3 (1), D12, D13): a sanction that ENDS the match - START, the sport's partial play, the module's own
+ *  sanction event against `by` at `level`, then the `core.forfeit` that ends it, against the same side, with the reason the
+ *  engine's ending rule gives the level (`disqualified` after an end level, `retired` after a prompt level: sanction.ts). It is
+ *  the sport's forfeit-after-start stream (the ONE composition, forfeitPosting, and its refusals: ruling 113's retirement from
+ *  a match never played) with the sanction put in before the forfeit, so the strict fold sees exactly the ledger the product's
+ *  own write path accepts: the sanction while the match is live, the ending as the only thing that may follow an end-level one
+ *  (ENDING_SANCTION_PENDING). Verified by folding it, as `levelStream` is. Refused BY NAME (OutcomeUnreachable) for a sport
+ *  that declares no ending, and for a level that ends nothing: a non-ending sanction never ends a stream. */
+function sanctionEndStream(req: StreamRequest, o: Extract<RequestedOutcome, { kind: "sanctionEnd" }>): StreamEvent[] {
+  const label = outcomeLabel(o);
+  const decl = sanctionDeclOf(req.sportKey);
+  if (decl === null) throw new OutcomeUnreachable(req.sportKey, label, "the sport's module declares no sanction that ends a match (SportModule.sanctionEnding)");
+  const reason = endingReasonOf(req.sportKey, o.level);
+  if (reason === null) {
+    throw new OutcomeUnreachable(req.sportKey, label, `a '${o.level}' sanction ends nothing here: the module's ending levels are [${decl.endLevels.join(", ")}] and its prompt levels [${decl.promptLevels.join(", ")}], so the match plays on`);
+  }
+  const ended = generateStream({ ...req, outcome: { kind: "forfeit", by: o.by, reason, at: "after_start" } });
+  const forfeit = ended.at(-1)!;
+  const play = ended.slice(0, -1);
+  const events = [...play, sanctionToken(req.sportKey, idOf(req, o.by), o.level), forfeit];
+  const module = sportModule(req.sportKey);
+  const undecided = foldStream(module, req.cfg, req.home, req.away, events.slice(0, -1), req.lineups).outcome;
+  if (undecided !== null) throw new OutcomeUnreachable(req.sportKey, label, `the sanction alone folds to '${undecided.kind}': the ending must be what decides the match`);
+  const outcome = foldStream(module, req.cfg, req.home, req.away, events, req.lineups).outcome;
+  if (outcome?.kind !== "award") throw new OutcomeUnreachable(req.sportKey, label, `the stream folds to ${outcome === null ? "no outcome" : `'${outcome.kind}'`}, not the award its ending records`);
   return events;
 }
 
@@ -165,6 +196,11 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   const gen = STREAM_GENERATORS[req.sportKey];
   if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, label, "no generator registered");
   const o = req.outcome;
+  if (o.kind === "sanctionEnd") return sanctionEndStream(req, o);
+  // W2e (F8): a path is built only by a generator that can witness it; any other would build a plain win under its name.
+  if (o.kind === "win" && o.path !== undefined && gen.pathWitness === undefined) {
+    throw new GeneratorUnsupported(req.sportKey, label, `its generator builds no deciding path (each sport's is added with its witness), so '${o.path}' is not built as a plain win`);
+  }
   if (o.kind === "forfeit") {
     const play = o.at === "before_start" ? [] : partialPlay(req);
     // Ruling 113: a sport whose partial play holds nothing played cannot retire — named here, so a sweep reads it as the
@@ -179,7 +215,7 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   if (o.kind === "level") return levelStream(req, gen);
   if (o.kind === "settle") {
     const base = o.after === "level" ? levelStream({ ...req, outcome: { kind: "level" } }, gen) : abandonedAtScore({ ...req, outcome: { kind: "abandon", atScore: true } }, gen);
-    const after = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, base).outcome;
+    const after = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, base, req.lineups).outcome;
     if (!settleableOutcome(after)) {
       throw new OutcomeUnreachable(req.sportKey, label, `the stream folds to '${after?.kind}', not a level outcome: core.settle does not apply (X-ST-1)`);
     }
@@ -217,21 +253,47 @@ export function levelReachable(sportKey: string, cfg: unknown, stageKind: Stream
 export type RequestMatch = "match" | "mismatch" | "unasserted";
 
 /** Did the folded outcome equal the requested one? Abandon is RECORDED, not
- *  asserted (its per-sport meaning is W2's rulebook, design §8). */
-export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null): RequestMatch {
+ *  asserted (its per-sport meaning is W2's rulebook, design §8). W2e: a win that
+ *  names a deciding `path`, and a sanction ending, are judged on the fold's STATE
+ *  too (`state`, the foldStream state of the same stream): a path by the sport
+ *  generator's own `pathWitness`, a sanction ending by `sanctionEndWitness`; a
+ *  request of either kind handed no state is refused by name. */
+export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null, state?: unknown): RequestMatch {
   const o = req.outcome;
   if (o.kind === "abandon") return "unasserted";
   if (outcome === null) return "mismatch";
-  // W2a: a level request must fold level; a settle must fold to ITS winner by ITS method (X-ST-1: the method is
-  // recorded as settled_<method>); a tie-break must fold to ITS winner on ITS rung (BG-KO-1).
-  if (o.kind === "level") return isLevelOutcome(outcome) ? "match" : "mismatch";
-  if (o.kind === "settle") return outcome.kind === "win" && outcome.winner === idOf(req, o.then) && outcome.method === `settled_${o.method}` ? "match" : "mismatch";
-  if (o.kind === "tiebreak") return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) && outcome.method === `tiebreak_${o.rung}` ? "match" : "mismatch";
-  if (o.kind === "draw") return outcome.kind === "draw" ? "match" : "mismatch";
-  if (o.kind === "tie") return outcome.kind === "tie" ? "match" : "mismatch";
-  if (o.kind === "win") return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) ? "match" : "mismatch";
-  if (o.kind === "double_walkover") return outcome.kind === "double_walkover" ? "match" : "mismatch";
-  // W2b (D2): a forfeit folds to an AWARD to the other side, carrying the reason asked (X-RS-1).
-  const beneficiary = idOf(req, o.by === "home" ? "away" : "home");
-  return outcome.kind === "award" && outcome.winner === beneficiary && (outcome as { reason?: unknown }).reason === o.reason ? "match" : "mismatch";
+  switch (o.kind) {
+    // W2a: a level request must fold level; a settle must fold to ITS winner by ITS method (X-ST-1: the method is
+    // recorded as settled_<method>); a tie-break must fold to ITS winner on ITS rung (BG-KO-1).
+    case "level": return isLevelOutcome(outcome) ? "match" : "mismatch";
+    case "settle": return outcome.kind === "win" && outcome.winner === idOf(req, o.then) && outcome.method === `settled_${o.method}` ? "match" : "mismatch";
+    case "tiebreak": return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) && outcome.method === `tiebreak_${o.rung}` ? "match" : "mismatch";
+    case "draw": return outcome.kind === "draw" ? "match" : "mismatch";
+    case "tie": return outcome.kind === "tie" ? "match" : "mismatch";
+    case "win": {
+      if (outcome.kind !== "win" || outcome.winner !== idOf(req, o.winner)) return "mismatch";
+      if (o.path === undefined) return "match";
+      // W2e (F8): the path is the ENGINE's fact about the fold, read by the generator that built it.
+      if (state === undefined) throw new Error(`streams: ${req.sportKey} path '${o.path}' is witnessed on the folded state, and matchesRequest was handed none (pass foldStream(...).state)`);
+      const gen = STREAM_GENERATORS[req.sportKey];
+      if (gen?.pathWitness === undefined) throw new GeneratorUnsupported(req.sportKey, outcomeLabel(o), "its generator builds no deciding path, so none can be witnessed");
+      return gen.pathWitness(o.path, { sportKey: req.sportKey, outcome, cfg: req.cfg, evidence: localEvidence(state) }) ? "match" : "mismatch";
+    }
+    case "double_walkover": return outcome.kind === "double_walkover" ? "match" : "mismatch";
+    // W2e G12 (Task 24): an award to the OTHER side, for the reason the level's ending calls for, with the sanction on the
+    // state's record. The state is the local strict fold's here; the scenario asks the same witness of the PRODUCT's.
+    case "sanctionEnd": {
+      if (state === undefined) throw new Error(`streams: ${req.sportKey} sanction ending '${outcomeLabel(o)}' is witnessed on the folded state, and matchesRequest was handed none (pass foldStream(...).state)`);
+      return sanctionEndWitness({ sportKey: req.sportKey, outcome, evidence: localEvidence(state) }, { by: o.by, level: o.level, home: req.home, away: req.away }) ? "match" : "mismatch";
+    }
+    case "forfeit": {
+      // W2b (D2): a forfeit folds to an AWARD to the other side, carrying the reason asked (X-RS-1).
+      const beneficiary = idOf(req, o.by === "home" ? "away" : "home");
+      return outcome.kind === "award" && outcome.winner === beneficiary && (outcome as { reason?: unknown }).reason === o.reason ? "match" : "mismatch";
+    }
+    default: {
+      const unhandled: never = o;
+      throw new Error(`streams: matchesRequest has no arm for ${JSON.stringify(unhandled)}`);
+    }
+  }
 }

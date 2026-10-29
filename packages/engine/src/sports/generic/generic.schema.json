@@ -42,10 +42,6 @@
         ],
         "type": "object"
       },
-      "progressScore": {
-        "default": false,
-        "type": "boolean"
-      },
       "resultMode": {
         "enum": [
           "score",

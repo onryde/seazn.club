@@ -65,7 +65,14 @@ import type {
   SportModule,
   TiebreakerKey,
 } from "../../sport/module.ts";
-import { expectedKicker, shootoutDecision, shootoutTally } from "../period/shootout.ts";
+import {
+  expectedKicker,
+  shootoutDecision,
+  shootoutTally,
+  type ShootoutKick,
+  type ShootoutOrder,
+  type ShootoutSide,
+} from "../period/shootout.ts";
 import { playedInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../../stats/stats.ts";
 
 // ---------------------------------------------------------------------------
@@ -1641,7 +1648,7 @@ function applyShootoutKick(
     wrongPhase(`shootout kick in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
-  const expected = expectedKicker(state.shootout.kicks);
+  const expected = expectedKicker(state.shootout.kicks, FOOTBALL_SHOOTOUT_ORDER, state.cfg.shootoutAttempts ?? SHOOTOUT_ATTEMPTS_DEFAULT);
   if (expected !== null && side !== expected) {
     invalid(`kicks must alternate: expected "${state.entrants[expected]}"`, {
       expected: state.entrants[expected],
@@ -2542,6 +2549,14 @@ export function padSpec(cfg: FootballCfg): PadSpec {
  *  the base of the knockout preset. ONE constant for what the fold reads, what the preset writes and what an absent key
  *  means to the match-override bound (`ruleKeys.shootoutAttempts.whenAbsent`). */
 export const SHOOTOUT_ATTEMPTS_DEFAULT = 5;
+/** W2e (RB2B-10) — football keeps the order its first five set for every pair (IFAB); unchanged by W2e. */
+const FOOTBALL_SHOOTOUT_ORDER: ShootoutOrder = "ifab";
+/** W2e T9 — the pad's "whose kick is next" (the R3.5 kicker cue and the kick tiles' gate) in football's own order, the one
+ *  the fold refuses against. The pad reads the folded state alone, with no cfg; IFAB's order does not depend on the number
+ *  of attempts, so the default is passed only because `expectedKicker` takes one for the orders that do. */
+export function footballNextKicker(kicks: readonly ShootoutKick[]): ShootoutSide | null {
+  return expectedKicker(kicks, FOOTBALL_SHOOTOUT_ORDER, SHOOTOUT_ATTEMPTS_DEFAULT);
+}
 /** FB-SO-1 ("youth variants 3") - what a variant changes in the knockout preset, over the base. The youth formats take 3
  *  kicks each: `youth` and `mini-soccer` (FA mini-soccer, U7-U10 - fix round 1 ruling). `small-sided` is not a youth
  *  format and keeps 5. A Map, so a variant name that is no key (or "constructor") falls back to the base instead of
@@ -3060,7 +3075,9 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
     }
 
     if (state.phase === "SHOOTOUT" && state.shootout) {
-      const expected = expectedKicker(state.shootout.kicks) ?? randomSide();
+      const expected =
+        expectedKicker(state.shootout.kicks, FOOTBALL_SHOOTOUT_ORDER, state.cfg.shootoutAttempts ?? SHOOTOUT_ATTEMPTS_DEFAULT) ??
+        randomSide();
       return {
         type: "football.shootout.kick",
         payload: { by: sideId(expected), scored: rng() < 0.75, at: stamp("SHOOTOUT") },

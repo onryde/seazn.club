@@ -29,8 +29,8 @@ export const rulesOfConfig = (config: Readonly<Record<string, unknown>> | undefi
   return r !== null && typeof r === "object" && !Array.isArray(r) ? (r as Record<string, unknown>) : undefined;
 };
 import { DEPARTED_STATUSES } from "../lib/observed.ts";
-import { forfeitPosting } from "../lib/streams/index.ts";
-import type { ForfeitReason, StreamEvent } from "../lib/streams/types.ts";
+import { STREAM_GENERATORS, forfeitPosting } from "../lib/streams/index.ts";
+import { canon, type ForfeitReason, type StreamEvent, type StreamLineups } from "../lib/streams/types.ts";
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, VOID_EVENT, idempotencyKey, inSquadOrder, voidTargetOf,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
@@ -62,13 +62,6 @@ function templateStageConfig(st: RawCatalogTemplate["divisions"][number]["stages
   return cfg;
 }
 
-/** Key-sorted JSON, the product's canonicalJson comparison (divisions.ts:852-855). */
-function canonical(v: unknown): string {
-  return JSON.stringify(v, (_k, x: unknown) =>
-    x !== null && typeof x === "object" && !Array.isArray(x)
-      ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : x);
-}
 function withoutEntrants(c: Record<string, unknown>): Record<string, unknown> {
   const { entrants: _e, ...rest } = c;
   return rest;
@@ -378,7 +371,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
     const kind = this.stageKindOf(f);
     try {
       // W2a: the product folds a bracket fixture under the stage's overlay (resolveFixtureCfg), and the status follows D3.
-      folded = foldStream(sportModule(this.sport), this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, next);
+      folded = foldStream(sportModule(this.sport), this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, next, this.foldLineupsOf(f));
     } catch (e) {
       // The product turns ONLY an EngineError into a status (http.ts:157-158);
       // anything else is a 500 INTERNAL there (http.ts:244-247). Here that is a
@@ -394,6 +387,19 @@ export class FakeLeagueDriver implements OrganiserDriver {
     f.events = next;
     f.outcome = folded.outcome;
     f.status = fixtureStatusFromFold(folded.outcome, liveEvents(next), kind);
+  }
+  /** W2e Task 21: the persons a fixture's two PUT lineups hold, when its sport's streams under the fold cfg name persons
+   *  (`namesPersons`: cricket's super over) - the starting slots in order_no order, as the product's `init(cfg, lineups)`
+   *  reads them. Undefined otherwise, and where a side was not PUT: every other sport folds as it always did, under none. */
+  protected foldLineupsOf(f: FakeFixture): StreamLineups | undefined {
+    if (STREAM_GENERATORS[this.sport]?.namesPersons?.(this.foldCfgOf(f)) !== true) return undefined;
+    const side = (entrant: string | null): string[] | undefined => {
+      const slots = entrant === null ? undefined : this.lineups.get(`${f.id}|${entrant}`);
+      return slots?.map((s, i) => ({ id: s.person_id, no: s.order_no ?? i + 1, slot: s.slot })).filter((s) => s.slot === "starting").sort((a, b) => a.no - b.no).map((s) => s.id);
+    };
+    const home = side(f.home_entrant_id);
+    const away = side(f.away_entrant_id);
+    return home === undefined || away === undefined ? undefined : { home, away };
   }
   /** The kind of the stage a fixture belongs to: this fake plays one stage (a subclass with several overrides it). */
   protected stageKindOf(_f: FakeFixture): string | null { return this.stage?.kind ?? null; }
@@ -615,10 +621,11 @@ export class FakeLeagueDriver implements OrganiserDriver {
           continue;
         }
         const events = this.tableEvents(f);
-        const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, events)!;
+        const lineups = this.foldLineupsOf(f);
+        const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, events, lineups)!;
         pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
         pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
-        const folded = foldStream(m, cfg, f.home_entrant_id, f.away_entrant_id, events);
+        const folded = foldStream(m, cfg, f.home_entrant_id, f.away_entrant_id, events, lineups);
         if (folded.outcome !== null) for (const x of m.standingsDelta(folded.outcome, cfg, ctx, folded.state)) add(x);
       }
       const rows = [...pts].sort((a, b) => b[1] - a[1]).map(([entrantId, points], i) => ({ entrantId, rank: i + 1, points, ...detail.get(entrantId)! }));
@@ -660,7 +667,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
       } catch {
         return { status: 422, code: "CONFIG_INVALID" };
       }
-      if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "DIVISION_FORMAT_LOCKED" };
+      if (locked && canon(withoutEntrants(parsed)) !== canon(withoutEntrants(this.divisionConfig))) return { status: 409, code: "DIVISION_FORMAT_LOCKED" };
       const entrants = config.entrants;
       const next = entrantKindsFor(this.sport, entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed);
       if (this.kindsInUse().some((k) => !next.includes(k))) return { status: 422, code: "ENTRANT_KIND_IN_USE" };
@@ -814,6 +821,18 @@ export interface FakeKnockoutOptions {
 const WITHDRAWAL_REASON = withdrawalReason();
 type Slot = "home_entrant_id" | "away_entrant_id";
 export class FakeKnockoutDriver extends FakeLeagueDriver {
+  /** GET /fixtures/:id/state as the PRODUCT serves it (usecases/fixtures.ts getFixtureState; W2e Task 21): beside the status,
+   *  the ledger head and the outcome, the engine's `summary(state)` and the fold's `state` - both through JSON, as the
+   *  match_states jsonb columns hold them - and both null for a fixture nothing was posted to (no row). The fold is the fake's
+   *  own (#append folds the whole ledger the same way), so a witness reading this reads what the posted stream folds to. */
+  override async fixtureState(id: string): Promise<FixtureStateOut> {
+    const base = await super.fixtureState(id);
+    const f = this.fixtures.find((x) => x.id === id);
+    if (f === undefined || f.events.length === 0) return { ...base, summary: null, state: null };
+    const module = sportModule(this.sport);
+    const { state } = foldStream(module, this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, f.events, this.foldLineupsOf(f));
+    return { ...base, ...(JSON.parse(JSON.stringify({ summary: module.summary(state), state })) as { summary: unknown; state: unknown }) };
+  }
   /** fixture id → the next round's fixture and slot its winner fills. */
   readonly feeds = new Map<string, { to: string; slot: Slot }>();
   /** fixture id → the fixture and slot its LOSER fills (a page playoff's pp-q1 → pp-q2). */

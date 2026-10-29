@@ -75,6 +75,7 @@ import {
   shootoutDecision,
   shootoutTally,
   type ShootoutKick,
+  type ShootoutOrder,
 } from "./shootout.ts";
 import { makeSquadAdopter } from "../squad-state.ts";
 import {
@@ -97,7 +98,9 @@ export interface PeriodParams {
     | null
     | { kind: "sudden_death"; minutes: number; skaters?: number }
     | { kind: "periods"; count: number; minutes: number };
-  shootout: null | { attempts: number; suddenDeath: boolean; clockSeconds?: number };
+  // W2e (D4, SC-P7): `suddenDeath` is deleted; it was declared and never read. After the first `attempts` the shoot-out
+  // always goes on in pairs until one is decisive, in the order the preset's `shootoutOrder` names.
+  shootout: null | { attempts: number; clockSeconds?: number };
   points: {
     win: number;
     draw: number;
@@ -152,6 +155,16 @@ const SuspensionClassSchema: z.ZodType<SuspensionClass> = z.object({
   // W4a (#425) §3.4 — an opposition goal ends it early (IIHF minors).
   releaseOnGoal: z.boolean().optional(),
 });
+
+/** W2e (D18, E23) — a copy of a plain object without `keys`; anything else passes through for the schema to judge. */
+function dropKeys(keys: readonly string[]): (value: unknown) => unknown {
+  return (value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+    const copy: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+    for (const key of keys) delete copy[key];
+    return copy;
+  };
+}
 
 /** The policies a period sport offers when its preset declares no list: today's two (W2c Task 7). */
 const DEFAULT_ABANDON_OPTIONS: readonly string[] = ["replay", "award"];
@@ -217,11 +230,16 @@ export function makePeriodConfigSchema(
     shootout: z
       .union([
         z.null(),
-        z.strictObject({
-          attempts: z.number().int().positive(),
-          suddenDeath: z.boolean(),
-          clockSeconds: z.number().int().positive().optional(),
-        }),
+        // W2e (D4, D18, E23): `suddenDeath` is deleted. The drop exists ONLY for a write from an older client during the
+        // deploy, which still sends the key the strict object would refuse; stored configs lose it in the W2e migration
+        // (Task 13b), so this is the one compatibility path. Every other unknown key is still refused.
+        z.preprocess(
+          dropKeys(["suddenDeath"]),
+          z.strictObject({
+            attempts: z.number().int().positive(),
+            clockSeconds: z.number().int().positive().optional(),
+          }),
+        ),
       ])
       .default(defaults.shootout),
     points: z
@@ -1372,13 +1390,18 @@ function applySuspensionEnd(
 function applyShootoutAttempt(
   state: PeriodState,
   payload: z.infer<typeof PeriodShootoutAttempt>,
+  order: ShootoutOrder,
+  strict: boolean,
 ): PeriodState {
   if (state.phase !== "SHOOTOUT" || state.shootout === null || state.cfg.shootout === null) {
     wrongPhase(`shootout attempt in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
-  const expected = expectedKicker(state.shootout.kicks);
-  if (expected !== null && side !== expected) {
+  const expected = expectedKicker(state.shootout.kicks, order, state.cfg.shootout.attempts);
+  // STRICT ONLY (§3.3 seam), W2e (RB2B-10): the order after the first `attempts` pairs is now the federation's (FIH
+  // alternates the opener per series, the IIHF's tie-break is opened by the side that shot second). A shoot-out stored
+  // before W2e holds the old order, the first side leading every pair, and must refold to the result it recorded.
+  if (strict && expected !== null && side !== expected) {
     invalid(`attempts must alternate: expected "${state.entrants[expected]}"`, {
       expected: state.entrants[expected],
     });
@@ -1908,6 +1931,10 @@ export interface PeriodPreset {
   shootoutLabel: string; // 'GWS' (ice) | 'SO' (FIH)
   // W2d (X-PT-4, B2) — how a table books a shoot-out: FIH as a draw plus a bonus point, ice hockey as a result.
   shootoutAs: "draw_plus_bonus" | "result";
+  // W2e (RB2B-10; HK-SO-1, IH-SO-1) — who opens each pair after the first `attempts`: FIH alternates the opener per
+  // series of five (`"fih-series"`), the IIHF's tie-break shots are opened by the side that shot second
+  // (`"iihf-tiebreak"`). See `ShootoutOrder`. Required, so a new sport states its federation's order.
+  shootoutOrder: ShootoutOrder;
   // W2d (HK-TB-1) — "regulation" when the tie-break's "wins" counts regulation wins only (FIH); omitted = every win.
   winsCount?: "regulation";
   // W2d (spec §5.6 "ST-G12", IH-TB-2) — the module's `partialScheduleOrder`; omitted = none (the block does not split).
@@ -2587,7 +2614,12 @@ export function makePeriodModule(
       case suspEndType:
         return applySuspensionEnd(state, parsePayload(PeriodSuspensionEnd, ev.payload, ev.type));
       case attemptType:
-        return applyShootoutAttempt(state, parsePayload(PeriodShootoutAttempt, ev.payload, ev.type));
+        return applyShootoutAttempt(
+          state,
+          parsePayload(PeriodShootoutAttempt, ev.payload, ev.type),
+          preset.shootoutOrder,
+          strict,
+        );
       case setPieceType:
         return applySetPiece(state, parsePayload(PeriodSetPiece, ev.payload, ev.type), strict);
       case shotType:
@@ -2769,8 +2801,8 @@ export function makePeriodModule(
           // logic client-side.
           nextAdvance: expectedAdvance(state),
           shootoutNext:
-            state.phase === "SHOOTOUT" && state.shootout !== null
-              ? expectedKicker(state.shootout.kicks)
+            state.phase === "SHOOTOUT" && state.shootout !== null && state.cfg.shootout !== null
+              ? expectedKicker(state.shootout.kicks, preset.shootoutOrder, state.cfg.shootout.attempts)
               : null,
           strength: chip,
           suspensions: state.suspensions,
@@ -2958,8 +2990,9 @@ export function makePeriodModule(
 
       if (state.phase === "pre") return { type: "core.start", payload: {} };
 
-      if (state.phase === "SHOOTOUT" && state.shootout) {
-        const expected = expectedKicker(state.shootout.kicks) ?? randomSide();
+      if (state.phase === "SHOOTOUT" && state.shootout && state.cfg.shootout) {
+        const expected =
+          expectedKicker(state.shootout.kicks, preset.shootoutOrder, state.cfg.shootout.attempts) ?? randomSide();
         const named = rng() < 0.5;
         // W4a T10 follow-up — the attempt's own `meta`, which this generator
         // built no object for at all, so neither it nor either of its two

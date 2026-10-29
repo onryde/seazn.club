@@ -16,7 +16,9 @@ import { fileURLToPath } from "node:url";
 
 export const RULES_DIR = fileURLToPath(new URL("../../rules", import.meta.url));
 export const RULE_ROW_HEADER = "| id | rule | citation | status | enforced at | proved by |";
-export const RULE_STATUS = /^(signed \d+ \d{4}-\d{2}-\d{2}|deviation \d+ \d{4}-\d{2}-\d{2}|⬜ open)$/;
+// The ruling token is a number, or `W2e-D<n>`: W2e (design 2026-10-28) signs its rows by its own D-number until the fold gives each a
+// ruling number, then the fold rewrites the status and drops this alternation. Anything else of that shape (`W2e-D`, `W2e-3`) is refused.
+export const RULE_STATUS = /^((?:signed|deviation) (?:\d+|W2e-D\d+) \d{4}-\d{2}-\d{2}|⬜ open)$/;
 export const RULE_ID = /^[A-Z]{1,3}-[A-Z]{2}-\d+$/;
 /** A line that looks like a rule row. The parser reads one table; a row-shaped line it did not read is a failure. */
 export const RULE_ROW_SHAPED = /^\| [A-Z]{1,3}-[A-Z]{2}-\d+ \|/;

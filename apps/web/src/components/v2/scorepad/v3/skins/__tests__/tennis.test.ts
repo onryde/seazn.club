@@ -1511,3 +1511,45 @@ describe("tennisSkinV3 — factory assembly", () => {
     expect(resolvePad("tennis", t).key).toBe("tennis");
   });
 });
+
+// ---------------------------------------------------------------------------
+// W2e Task 5 (TN-SS-2) — the set-score sheet's bounds restate the kernel's `gamesFieldBound` / `tbFieldBound` (module-
+// private there, so mirrored here). The engine's own padSpec declares the same numbers; every declared tennis cfg, the
+// short-set tie-break's own margin of one included, must agree field for field, or the sheet offers a score the engine's
+// declared pad refuses (or hides one it takes).
+// ---------------------------------------------------------------------------
+
+describe("set-score sheet bounds equal the engine padSpec's, for every declared tennis cfg (W2e TN-SS-2)", () => {
+  it("home/away and the tie-break fields carry the engine's declared maximum (counted)", () => {
+    const variants = tennis.variants as Record<string, Record<string, unknown>>;
+    expect(Object.keys(variants), "premise: the short-sets variant is declared").toContain("short-sets");
+    const declared: [string, Record<string, unknown>][] = [
+      ["(schema default)", {}],
+      ...Object.entries(variants),
+      // W2e TN-SS-2 (RBS:349): a final-set tie-break plays to the MATCH's margin, never the short set's own one, so the
+      // decider's bound differs from the ordinary set's only when both tie-breaks are in one match.
+      ["short-sets + a final-set tie-break to 10", { ...variants["short-sets"], finalSet: { tiebreakTo: 10 } }],
+    ];
+    let checked = 0;
+    for (const [name, raw] of declared) {
+      const parsed = tennis.configSchema.parse(raw);
+      const engineFields = tennis.padSpec!(parsed).panels.flatMap((p) => p.actions).filter((a) => a.type === "tennis.set_summary").flatMap((a) => a.fields);
+      const engineMax = (path: string): number => {
+        const f = engineFields.find((x) => x.path === path);
+        if (f?.kind !== "number" || f.max === undefined) throw new Error(`premise: ${name} ${path} declares a maximum`);
+        return f.max;
+      };
+      const steps = buildSheets(view({ cfg: parsed as unknown as PadHostView["cfg"] })).setScore!.steps;
+      const sheetMax = (id: string): unknown => {
+        const step = steps.find((s) => s.id === id);
+        return step?.kind === "number" ? step.max : `no number step "${id}"`;
+      };
+      expect(sheetMax("home"), `${name} home`).toBe(engineMax("home"));
+      expect(sheetMax("away"), `${name} away`).toBe(engineMax("away"));
+      expect(sheetMax("tbHome"), `${name} tbHome`).toBe(engineMax("tb.home"));
+      expect(sheetMax("tbAway"), `${name} tbAway`).toBe(engineMax("tb.away"));
+      checked++;
+    }
+    expect(checked).toBe(Object.keys(variants).length + 2);
+  });
+});

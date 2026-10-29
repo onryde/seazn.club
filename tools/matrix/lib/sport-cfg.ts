@@ -21,7 +21,7 @@
 //    with rules (a hold-path cell's every-decider-off, `decidersOffRulesFor`)
 //    passes them, or the in-process fold diverges from the product's.
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
-import { effectiveEntrantModel, type AnySportModule } from "@seazn/engine/sport";
+import { effectiveEntrantModel, writeConfigIssues, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { decidersOffRules, postedStageCfg } from "../../../apps/web/src/lib/stage-decider-off.ts";
 
@@ -49,10 +49,13 @@ export class UnknownVariant extends Error {
 
 export class CfgInvalid extends Error {
   readonly detail: string;
-  constructor(sportKey: string, variantKey: string, detail: string) {
+  /** The rule row of the write door that refused the cfg (after the schema accepted it), or null for a schema refusal. */
+  readonly doorRow: string | null;
+  constructor(sportKey: string, variantKey: string, detail: string, doorRow: string | null = null) {
     super(`sport-cfg: ${sportKey}/${variantKey} config invalid — ${detail}`);
     this.name = "CfgInvalid";
     this.detail = detail;
+    this.doorRow = doorRow;
   }
 }
 
@@ -66,7 +69,42 @@ export function variantKeys(sportKey: string): string[] {
   return Object.keys(sportModule(sportKey).variants as Record<string, unknown>);
 }
 
+/** The rulebook's row for each sport that declares a WRITE door (`SportModule.configWriteIssues`, W2e ruling 31 / RB2A-13): VB-CF-1
+ *  and TT-CF-1 refuse a set target below the engine's floor, TN-CF-1 a tennis best of 1 whose final set is a match tie-break. The
+ *  table is the rulebook's (typed once); which sports NEED a row is the engine's (sport-cfg-write-door.test.ts sweeps the two equal). */
+export const WRITE_DOOR_ROW: Readonly<Record<string, string>> = { volleyball: "VB-CF-1", tabletennis: "TT-CF-1", tennis: "TN-CF-1" };
+
+/** A sport whose module declares a write door but whose rows this table does not name: a new door owes its row here, so it is
+ *  refused by name rather than planned or reported as an unnamed sentence. */
+export class WriteDoorRowUnnamed extends Error {
+  constructor(sportKey: string, issues: readonly string[]) {
+    super(`sport-cfg: ${sportKey} refuses a config at the write door (${issues.join("; ")}) but WRITE_DOOR_ROW names no rule row for it`);
+    this.name = "WriteDoorRowUnnamed";
+  }
+}
+
+/** The detail of a write-door refusal: the sport's rule row and the engine's own sentence(s). */
+export function writeDoorRefusal(sportKey: string, issues: readonly string[]): string {
+  const row = WRITE_DOOR_ROW[sportKey];
+  if (row === undefined) throw new WriteDoorRowUnnamed(sportKey, issues);
+  return `${row}: the write door refuses it - ${issues.join("; ")}`;
+}
+
+/** The cfg a division could be WRITTEN with: `resolveSchemaCfg`, then what the module's write door refuses (`writeConfigIssues`: the
+ *  set-target floors, a tennis best of 1 with a match tie-break). Throws CfgInvalid for either, so a combination the product refuses
+ *  at create is never built, never planned and never scored by the harness (variants.ts: such a pair is listed uncoverable, naming
+ *  its rule row). A caller that must build a REFUSED cfg on purpose (a test proving the door) asks `resolveSchemaCfg`. */
 export function resolveSportCfg(sportKey: string, variantKey: string, overrides: Record<string, unknown> = {}): unknown {
+  const cfg = resolveSchemaCfg(sportKey, variantKey, overrides);
+  const issues = writeConfigIssues(sportModule(sportKey), cfg);
+  if (issues.length > 0) throw new CfgInvalid(sportKey, variantKey, writeDoorRefusal(sportKey, issues), WRITE_DOOR_ROW[sportKey]);
+  return cfg;
+}
+
+/** The variant preset merged under the overrides and parsed by the module's own schema - the schema's verdict ALONE. A stored
+ *  config that breaks a write-door rule still loads, folds and scores (E15), so this is the cfg of a division written before the
+ *  rule; `resolveSportCfg` is the one that answers "may this be written". */
+export function resolveSchemaCfg(sportKey: string, variantKey: string, overrides: Record<string, unknown> = {}): unknown {
   const m = sportModule(sportKey);
   const variants = m.variants as Record<string, unknown>;
   if (!Object.prototype.hasOwnProperty.call(variants, variantKey)) {

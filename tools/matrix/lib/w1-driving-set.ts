@@ -17,11 +17,12 @@ import { z } from "zod";
 import { ROW_KEYS, SPORT_KEYS, type RowKey } from "./catalogue.ts";
 import { requireScorable } from "./probe-set.ts";
 import { HARNESS_SCENARIO, LIFECYCLE_ID } from "./scenario-catalogue.ts";
-import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, type CaseSpec, type ScenarioKey, type W2aScenarioKey, type W2bScenarioKey } from "./scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, type CaseSpec, type ScenarioKey, type W2aScenarioKey, type W2bScenarioKey, type W2eScenarioKey } from "./scenarios/types.ts";
 import { UnknownFilter, checkCellFilter } from "./slice.ts";
 import { scorable, type VariantCase } from "./variants.ts";
 import { w2aCells } from "./w2a-cells.ts";
 import { w2bCells } from "./w2b-cells.ts";
+import { w2eCells } from "./w2e-cells.ts";
 // Type-only: run.ts value-imports this module, and an erased import cannot cycle.
 import type { PlanCases } from "../run.ts";
 
@@ -126,23 +127,24 @@ export interface W1DrivingDeps {
   rescore?: (vc: VariantCase) => string | null;
 }
 
-type PlannedScenario = W1DrivingScenario | W2aScenarioKey | W2bScenarioKey;
+type PlannedScenario = W1DrivingScenario | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey;
 
 interface Selection {
-  readonly cells: readonly { readonly row: RowKey; readonly sport: string; readonly scenario: PlannedScenario; readonly overrides?: Readonly<Record<string, unknown>> }[];
+  readonly cells: readonly { readonly row: RowKey; readonly sport: string; readonly scenario: PlannedScenario; readonly overrides?: Readonly<Record<string, unknown>>; readonly asVariant?: string }[];
   readonly tests: readonly VariantCase[];
 }
 
-/** The four scripts, or (opt-in) one of the bracket-finish (W2a) or forfeit-credit (W2b) scenarios — which only an
- *  explicit `--scenario` plans. */
+/** The four scripts, or (opt-in) one of the bracket-finish (W2a), forfeit-credit (W2b) or deciding-path (W2e)
+ *  scenarios — which only an explicit `--scenario` plans. */
 const scenarioOf = (s: string): PlannedScenario => {
-  const known = [...W1_DRIVING_SCENARIOS, ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS];
+  const known = [...W1_DRIVING_SCENARIOS, ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS];
   const k = known.find((x) => x === s);
   if (k === undefined) throw new UnknownFilter("--scenario", s, known);
   return k;
 };
 const isW2a = (s: PlannedScenario): s is W2aScenarioKey => (W2A_SCENARIO_KEYS as readonly string[]).includes(s);
 const isW2b = (s: PlannedScenario): s is W2bScenarioKey => (W2B_SCENARIO_KEYS as readonly string[]).includes(s);
+const isW2e = (s: PlannedScenario): s is W2eScenarioKey => (W2E_SCENARIO_KEYS as readonly string[]).includes(s);
 
 /** Everything but the variant names: checked filters, the drops applied, the
  *  bound test cases re-scored — all before the DB, at planner construction. */
@@ -151,7 +153,7 @@ function select(filter: W1DrivingFilter, deps: W1DrivingDeps): Selection {
   const scenario = filter.scenario === undefined ? null : scenarioOf(filter.scenario);
   const atoms = atomsOf();
   const drops = (deps.drops ?? readDropIndex)();
-  const cells: { row: RowKey; sport: string; scenario: PlannedScenario; overrides?: Readonly<Record<string, unknown>> }[] = [];
+  const cells: { row: RowKey; sport: string; scenario: PlannedScenario; overrides?: Readonly<Record<string, unknown>>; asVariant?: string }[] = [];
   const reasons: string[] = [];
   // W2a (Task 14): a bracket-finish scenario is planned on ITS cells (w2a-cells.ts), less LIFECYCLE's drops — and only
   // when named. No scenario filter plans the four scripts, so every committed plan is unchanged.
@@ -166,6 +168,14 @@ function select(filter: W1DrivingFilter, deps: W1DrivingDeps): Selection {
   // award-policy override onto the case's cfg.
   if (scenario !== null && isW2b(scenario)) {
     for (const c of w2bCells(scenario, (row, sport) => drops.has(atoms.LIFECYCLE, row, sport))) {
+      if (cell === null || (cell.row === c.row && cell.sport === c.sport)) cells.push({ ...c, scenario });
+    }
+    if (cells.length === 0) throw new W1DrivingPlansNothing(filter, reasons);
+    return { cells, tests: [] };
+  }
+  // W2e (Task 19): a deciding-path scenario likewise, on w2e-cells.ts's cells.
+  if (scenario !== null && isW2e(scenario)) {
+    for (const c of w2eCells(scenario, (row, sport) => drops.has(atoms.LIFECYCLE, row, sport))) {
       if (cell === null || (cell.row === c.row && cell.sport === c.sport)) cells.push({ ...c, scenario });
     }
     if (cells.length === 0) throw new W1DrivingPlansNothing(filter, reasons);
@@ -196,7 +206,10 @@ function toCases(sel: Selection, variantFor: (sport: string) => string): CaseSpe
   const out: CaseSpec[] = [];
   for (const c of sel.cells) {
     const v = variantFor(c.sport);
-    out.push({ caseId: `${c.row}|${c.sport}|${v}|${c.scenario}`, row: c.row, sport: c.sport, variant: v, scenario: c.scenario, canary: false, ...(c.overrides === undefined ? {} : { overrides: c.overrides }) });
+    // A W2e cell that plays the builder default AS another variant (its overrides, w2e-cells.ts) says which in a trailing segment
+    // (`row|sport|variant|scenario[|…]`, the shape parity.ts reads), so the id of what is PLAYED is not the id of the default.
+    const as = c.asVariant === undefined ? "" : `|as-${c.asVariant}`;
+    out.push({ caseId: `${c.row}|${c.sport}|${v}|${c.scenario}${as}`, row: c.row, sport: c.sport, variant: v, scenario: c.scenario, canary: false, ...(c.overrides === undefined ? {} : { overrides: c.overrides }) });
   }
   // probe-set.ts's variant shape exactly.
   for (const vc of sel.tests) {

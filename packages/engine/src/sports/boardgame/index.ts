@@ -12,6 +12,8 @@ export {
   ARMAGEDDON_RESULTS,
   BoardgameTiebreak,
   effectiveRungs,
+  DECISIVE_METHODS,
+  DRAWN_METHODS,
   type BoardgameState,
   type TiebreakRung,
 } from "./boardgame.ts";

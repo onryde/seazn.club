@@ -1294,12 +1294,12 @@ describe("X-WO-1: an award pays the table points of its credited set score (VB-R
     for (const [key, n] of witnessed) expect(n, `${key}: cases whose credited pair is not the clean sweep`).toBeGreaterThan(0);
     // Pinned (reproduced independently in review). Per cfg: 2 seats × (2 pre-start cases + 3 reasons × ⌈bestOf/2⌉
     // credited scores − the retirement at 0 sets, ruling 113), so a best-of-3 cfg is 14, a best-of-5 20 and a best-of-7
-    // 26: two cases fewer per cfg than before the ruling (volleyball 4 cfgs, badminton 4 and table tennis 5 — 13, each
+    // 26: two cases fewer per cfg than before the ruling (volleyball 4 cfgs, badminton 5 and table tennis 5 — 14, each
     // with the configured table). A declared cfg added, dropped or re-shaped moves these, and that is a change to read,
-    // not to absorb.
-    expect(perSport, `cases checked per sport (${checked} in all)`).toEqual({ volleyball: 74, badminton: 56, tabletennis: 106 });
-    expect(checked).toBe(236);
-    expect(retiredRefused, "one refused retirement per seat per cfg").toBe(2 * 13);
+    // not to absorb. W2e Task 3 added badminton's bwf-3x15 (best of 3): badminton 56 → 70, 236 → 250, 13 cfgs → 14.
+    expect(perSport, `cases checked per sport (${checked} in all)`).toEqual({ volleyball: 74, badminton: 70, tabletennis: 106 });
+    expect(checked).toBe(250);
+    expect(retiredRefused, "one refused retirement per seat per cfg").toBe(2 * 14);
   });
 });
 

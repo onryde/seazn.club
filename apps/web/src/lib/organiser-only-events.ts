@@ -5,6 +5,13 @@
 // dock filter the predicate — so the two cannot drift on the core types or on a dock chip. The tile filter has no
 // payload clause while `ORGANISER_ONLY_SPORT_EVENTS` is empty (pinned in authority-only-tiles.test.ts). No
 // `server-only`: the pad imports it, and a client component importing server code breaks the build.
+//
+// ONE exception, which is NOT this predicate's (D13, spec 2026-10-28 §5.2, rule X-SE-3): a scorer — a device link or
+// an official scorer — may append the `core.forfeit` that ENDS the side's own match-ending sanction, right after it
+// (`forfeit{disqualified}` after a badminton black card or a tennis default, `forfeit{retired}` after a volleyball
+// expulsion or disqualification). The predicate still answers "organiser-only" for that forfeit: the exception needs the
+// ledger's last live event, which only the server reads (scoring.ts `isOwnSanctionEnding`, the engine's
+// `scorerMayForfeit`). The tile filter here never offers it; the pad's ending prompt is W2e Task 30's.
 
 /** The three core types, organiser-only whatever their payload. */
 export const ORGANISER_ONLY_EVENT_TYPES = ["core.settle", "core.forfeit", "core.abandon"] as const;

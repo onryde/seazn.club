@@ -95,6 +95,19 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   TIEBREAK_COLOUR_REQUIRED: 422,
   // W2d T18 (HK-TB-2, PS-7d) — a hockey goal without its type, beside INVALID_EVENT: the scorer re-sends it typed.
   GOAL_KIND_REQUIRED: 422,
+  // W2e X-SE-1 — scoring after a match-ending sanction (a badminton black card, a tennis default) before its ending is
+  // recorded: the client sends the ending (core.forfeit, disqualified) or voids the sanction; re-sending the same event
+  // never succeeds, so 422 and not 409.
+  ENDING_SANCTION_PENDING: 422,
+  // W2e SC-S1 (TN-SS-1) — a tennis set summary no set can reach under its tie-break (8–6 with the tie-break at 6-all,
+  // 5–3 in Fast4): the client sends the score that was played; re-sending the same one never succeeds, so 422.
+  SET_SCORE_UNREACHABLE: 422,
+  // W2e T6 (CK-CH-1, RB2A-22) — a coarse chase total past the winning run, beside INVALID_EVENT: the scorer re-sends the total.
+  CHASE_OVERSHOOT: 422,
+  // W2e T10 (BG-RS-1, RB2B-20) — a board-game result whose method contradicts its winner, beside INVALID_EVENT: the scorer re-sends the result.
+  RESULT_METHOD_CONTRADICTS_WINNER: 422,
+  // W2e T11 (CA-AD-1, SC-O9) — a carrom adjustment past the game target, beside INVALID_EVENT: the scorer re-sends the points.
+  ADJUST_OUT_OF_RANGE: 422,
 };
 
 // HTTP status → stable machine code for non-engine errors.

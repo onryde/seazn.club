@@ -97,7 +97,6 @@ export const SIM_CONFIGS: Record<string, unknown> = {
     resultMode: "score",
     allowDraws: true,
     points: { w: 3, d: 1, l: 0 },
-    progressScore: false,
   },
   cricket: { ballsPerInnings: 30 },
 };

@@ -22,6 +22,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { advancesNobody } from "@seazn/engine/core";
 import { buildPathObject, resolvePositions, type PadAction } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import { DECISIVE_METHODS, DRAWN_METHODS } from "@seazn/engine/sports/boardgame";
 import { buildWalk, declaredCfgs, defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
 import {
@@ -323,18 +324,16 @@ const UNREACHED_TYPES: Readonly<Record<string, string>> = {
  *  under its own method is gated only when that method is in `FORFEIT_VOCABULARY`. A forfeit-like value spelled
  *  outside it ("no_show", "concede") that folds to a win would be neither flagged nor gated. So every value the sweep
  *  saw decide a match as itself is listed here, each read as a played result; a new one reds the test below and must
- *  be read — a forfeit joins the lib's table (and the vocabulary), a played result joins this list. */
+ *  be read — a forfeit joins the lib's table (and the vocabulary), a played result joins this list.
+ *  A method only a DRAWN game ends by (agreement, stalemate, ...) is NOT listed: it used to decide as a win in the schema
+ *  shape that pairs it with a winner, but since W2e BG-RS-1 (RB2B-20, D8; FIDE Arts. 5.1, 5.2, 9.2 to 9.6) the strict write
+ *  refuses that pairing (RESULT_METHOD_CONTRADICTS_WINNER), so no payload decides a match as a win under it. The test below
+ *  pins that from the engine's own two method lists rather than from this table. */
 const VOCABULARY_GAP: Readonly<Record<string, string>> = {
   "boardgame.result.method=adjudication": "an arbiter's ruling on a played game (FIDE Art. 5.2): a played result",
-  "boardgame.result.method=agreement": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
   "boardgame.result.method=checkmate": "a played result: the game was decided over the board",
-  "boardgame.result.method=dead_position": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
-  "boardgame.result.method=fifty_move": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
   "boardgame.result.method=illegal_move": "a played result: the arbiter's penalty for an illegal move in play",
-  "boardgame.result.method=insufficient": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
-  "boardgame.result.method=repetition": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
   "boardgame.result.method=resign": "a played result: the game was decided over the board",
-  "boardgame.result.method=stalemate": "a DRAWN method; it decides as a win only in the schema shape that pairs it with a winner, which the engine accepts (W2b: tie winner to method)",
   "boardgame.result.method=time": "a played result: the flag fell in play",
 };
 
@@ -455,6 +454,26 @@ describe("X-ST-2 / D-O1: the organiser-only set, and the sport events derived fr
       .map(itemId);
     expect(decidesAsItself.length, "the sweep saw decisive methods (zero = it saw nothing)").toBeGreaterThan(0);
     expect(decidesAsItself.sort()).toEqual(Object.keys(VOCABULARY_GAP).sort());
+    // The boardgame half of that set, read from the engine's own lists (W2e BG-RS-1): a method decides a match as a win under
+    // itself exactly when a decisive game can end by it; a method only a drawn game ends by is refused with a winner, so none
+    // of them is here. The sweep must still have SEEN each of those (applied in the drawn shape): an absent symptom can be a
+    // sweep that never tried the value rather than an engine that refused it.
+    const idOf = (method: string) => `boardgame.result.method=${method}`;
+    const drawnOnly = DRAWN_METHODS.filter((m) => !(DECISIVE_METHODS as readonly string[]).includes(m));
+    expect(drawnOnly.length, "the engine declares drawn-only methods (zero = the filter saw nothing)").toBeGreaterThan(0);
+    expect(decidesAsItself.filter((id) => id.startsWith("boardgame.result.method=")), "decisive methods decide as a win under themselves, and only they").toEqual(
+      DECISIVE_METHODS.map(idOf).sort(),
+    );
+    const seen = new Map(sweep.items.map((i) => [itemId(i), i] as const));
+    let drawnChecked = 0;
+    for (const m of drawnOnly) {
+      const item = seen.get(idOf(m));
+      expect(item, `${m}: the sweep saw the drawn-only method`).toBeDefined();
+      expect(item!.applied, `${m}: and applied it (in the drawn shape)`).toBeGreaterThan(0);
+      expect(item!.namesMethod.size, `${m}: no payload decides a win under it (a winner with a drawn method is refused)`).toBe(0);
+      drawnChecked++;
+    }
+    expect(drawnChecked).toBe(drawnOnly.length);
     // The class the vocabulary finds: boardgame's single forfeit decides as itself, with no award or no_result.
     const forfeit = GATED_SPORT.find((i) => i.type === "boardgame.result" && i.value === "forfeit");
     expect(forfeit, "the single forfeit is found").toBeDefined();

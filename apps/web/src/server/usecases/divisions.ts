@@ -31,7 +31,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { divisionRefusals, lockedStageIdsAmong } from "./rule-locks";
 import { refuseInvalidatedOverrides } from "./fixture-override-guards";
-import { refuseInvalidatedStageRules } from "./stage-rules-merge";
+import { configWriteIssueList, refuseConfigWriteIssues, refuseInvalidatedStageRules } from "./stage-rules-merge";
 import { refuseCascadeForSport, refuseDivisionTableSave, refuseStrayPointsMapKeys, startedStagesToPin, type KeptPinned } from "./table-rule-guards";
 import { pinStageTableRules, tableRulesRowsOf } from "@/server/engine-db/table-rules";
 import { reseedStagePresets } from "./stage-preset-reseed";
@@ -317,6 +317,8 @@ export async function createDivision(
       });
     }
     const finalConfig = parsed.data as Record<string, unknown>;
+    // W2e (spec §5.5, E15; VB-CF-1, TT-CF-1, TN-CF-1): the engine's write-door refusals, after its schema.
+    refuseConfigWriteIssues(sportModule, input.sport_key, finalConfig);
     // W2d Task 10 (spec §5.5; Task 8 carry): a points table keyed by anything but a set score is refused at write, and
     // the division's own tie-break order is validated against the sport (`validateCascade`'s kind-independent rules:
     // every stage created under it is then asked its own kind's, `createStages`). `[]` is an order too: refused, empty.
@@ -1090,6 +1092,10 @@ export async function patchDivision(
         // so carry it through the parse explicitly. Absent from the incoming
         // config → the override is cleared back to the module default.
         nextConfig = parsed.data as Record<string, unknown>;
+        // W2e (spec §5.5, E15; VB-CF-1, TT-CF-1, TN-CF-1): the engine's write-door refusals, after its schema. Asked again
+        // below of what the lock leaves, which can pair a kept value with a saved one (a kept best of 1, a saved match
+        // tie-break).
+        refuseConfigWriteIssues(sportModule, current.sport_key, nextConfig);
         // W2d Task 10 (Task 8 carry): a points-table key that is not a set score, refused at write — a key this save adds
         // (one already stored is the read path's to tolerate, never a reason to refuse an unrelated edit).
         refuseStrayPointsMapKeys(nextConfig, currentConfig);
@@ -1166,6 +1172,15 @@ export async function patchDivision(
               "CONFIG_INVALID",
               `invalid ${current.sport_key} config once ${refused.map((r) => r.field).join(", ")} stay as stored`,
               { issues: reparsed.error.issues, refused },
+            );
+          }
+          // W2e (TN-CF-1, VB-CF-1, TT-CF-1): and the engine's write-door refusals of that mix, in the same shape.
+          const written = configWriteIssueList(sportModule, reparsed.data);
+          if (written.length > 0) {
+            throw new EngineError(
+              "CONFIG_INVALID",
+              `invalid ${current.sport_key} config once ${refused.map((r) => r.field).join(", ")} stay as stored`,
+              { issues: written, refused },
             );
           }
         }

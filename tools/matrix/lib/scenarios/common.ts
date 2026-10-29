@@ -7,7 +7,7 @@ import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import { templateBodies, templateField, templateRow } from "../templates.ts";
 import {
-  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, VOID_EVENT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type PostedEvent, type StageRef,
+  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, VOID_EVENT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type MemberInput, type PostedEvent, type StageRef,
 } from "../driver/types.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
 import { redact } from "../redact.ts";
@@ -18,14 +18,14 @@ import {
   type ObservedOutcome, type ObservedRun, type ObservedStage, type PairRoundObs, type WithdrawalObs,
 } from "../observed.ts";
 import { decidersOffRulesFor, drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
-import { forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
-import { outcomeLabel, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
+import { STREAM_GENERATORS, forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
+import { outcomeLabel, type ForfeitReason, type ProductFold, type RequestedOutcome, type Side, type StreamEvent, type StreamLineups } from "../streams/types.ts";
 import { forfeitPlayOf, levelKindOf, loserSeatOf, nextLineOf, type BracketDrive } from "../reference-bracket.ts";
 import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
 import { playLadder } from "./ladder-loop.ts";
 import { lineupWarningLine, postedTeamSides, putOwedLineups, type LineupSink } from "./lineup-plan.ts";
-import { entrantName, rosterMembers, rosterSize } from "./rosters.ts";
+import { entrantName, lineupFor, rosterMembers, rosterSize } from "./rosters.ts";
 import { STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "./terminal-finals.ts";
 import { HOLD_PATH_SCENARIOS, type CaseSpec, type ScenarioContext } from "./types.ts";
 
@@ -547,6 +547,32 @@ export function hardPath(sport: string, cfg: unknown, n: number, winner: Side): 
 const stageCtx = (kind: string, f: { pool_id: string | null; round_no: number | null }): StageCtx =>
   ({ kind: kind as StageKind, ...(f.pool_id ? { poolId: f.pool_id } : {}), ...(f.round_no ? { roundNo: f.round_no } : {}) });
 
+/** The product's summary and state from a /state answer; null when it holds no row for the fixture (both null) - a
+ *  half answer (one of the two) is kept as it is, for the witness to refuse by name. */
+function productFoldOf(st: FixtureStateOut): ProductFold | null {
+  const summary = st.summary ?? null;
+  const state = st.state ?? null;
+  return summary === null && state === null ? null : { summary, state };
+}
+
+/** W2e (Task 21): the persons the harness PUT for a fixture's two sides, when the sport's streams under this cfg name
+ *  persons (`SportStreamGenerator.namesPersons`: cricket's super over) - each side's starting slots in batting order, the
+ *  ones `lineupFor` built and `ensureLineups` PUT. Undefined for every stream that names none, and where a side was not
+ *  PUT (a rosterless or non-team setup): the generator then refuses a request that needs them, by name. */
+function lineupsOfFixture(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow, cfg: unknown): StreamLineups | undefined {
+  if (STREAM_GENERATORS[ctx.spec.sport]?.namesPersons?.(cfg) !== true) return undefined;
+  const home = f.home_entrant_id;
+  const away = f.away_entrant_id;
+  const put = rec.lineupSides.get(f.id);
+  if (home === null || away === null || put === undefined || !put.has(home) || !put.has(away)) return undefined;
+  const side = (entrant: string): string[] => {
+    const members = setup.rosters.get(entrant);
+    if (members === undefined) throw new Error(`scenario: fixture ${f.id} — division entrant ${entrant} was PUT a lineup but has no recorded roster`);
+    return lineupFor(ctx.spec.sport, ctx.cfg, members).filter((s) => s.slot === "starting").sort((a, b) => (a.order_no ?? 0) - (b.order_no ?? 0)).map((s) => s.person_id);
+  };
+  return { home: side(home), away: side(away) };
+}
+
 /** `stage` (W1-driving Task 6): the stage `f` belongs to — its kind shapes
  *  the stream, the request match and the declared points. */
 export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow, outcome: RequestedOutcome, stage: StageRef = setup.stage): Promise<void> {
@@ -573,7 +599,9 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // a chess tie-break, carrom's extra board) on top of the division's. Generation, the local fold, the request match
   // and the declared points all read it, so parity holds on every boardgame and carrom bracket.
   const cfg = caseStageCfg(ctx, stage.kind as StageKind);
-  const generated = generateStream({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked });
+  // W2e (Task 21): the lineups a person-naming stream (cricket's super over) is built against and folded under.
+  const lineups = lineupsOfFixture(ctx, rec, setup, f, cfg);
+  const generated = generateStream({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked, ...(lineups === undefined ? {} : { lineups }) });
   const prior = rec.streams.get(f.id) ?? [];
   if (resumed !== undefined) {
     const live = liveEvents(prior).map((e) => e.type);
@@ -587,7 +615,17 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
   // walkover or a double walkover; START and the sport's partial play for a retirement), the bare forfeit on one under
   // way. `now` is that same composition, so the local fold, the request match and the declared points are for exactly
   // the events posted.
-  const forfeit = asked.kind === "forfeit" ? { by: asked.by === "home" ? home : away, reason: asked.reason } : asked.kind === "double_walkover" ? { by: "both", reason: "walkover" as const } : null;
+  // W2e G12 (Task 24): a sanction ending is posted as the forfeit it ends in, with the sanction among the play before it. The
+  // forfeit's side and reason are the generated stream's own last event, which generateStream built from the engine's ending
+  // rule (the oracle and the scenario's check read the same rule again, never this event).
+  const sanctionEnd = asked.kind === "sanctionEnd";
+  if (sanctionEnd && state.status !== "scheduled") {
+    // forfeitPosting posts a forfeit BARE on a fixture already under way, and the play (the sanction among it) would be dropped:
+    // the match would end by a plain forfeit under a sanction's name. Refused by name instead.
+    throw new Error(`scenario: ${f.id} — a sanction ending is posted on a scheduled fixture (START, play, the sanction, the forfeit); this one is ${state.status}, where the sanction would be dropped`);
+  }
+  const endingForfeit = sanctionEnd ? (fresh.at(-1)?.payload as { by: string; reason: ForfeitReason }) : null;
+  const forfeit = asked.kind === "forfeit" ? { by: asked.by === "home" ? home : away, reason: asked.reason } : asked.kind === "double_walkover" ? { by: "both", reason: "walkover" as const } : endingForfeit;
   // The generated forfeit stream is its play, then the forfeit: anything else is a generator defect, refused by name
   // rather than split at the wrong event.
   if (forfeit !== null && fresh.at(-1)?.type !== "core.forfeit") throw new Error(`scenario: ${f.id} — the ${outcomeLabel(asked)} stream ends with ${fresh.at(-1)?.type ?? "nothing"}, not its core.forfeit`);
@@ -599,6 +637,10 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
     const row = rows.find((r) => r.id === f.id);
     const missing = { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } as const;
+    // W2e (Task 21): a win asked down a deciding path is judged on what the PRODUCT holds - its summary and state, read once
+    // after the post (Task 24: so is a sanction that ended the match - its sanction is on the product's state). Only these drives
+    // read it, so every other scenario's call log is unchanged.
+    const product = (asked.kind === "win" && asked.path !== undefined) || asked.kind === "sanctionEnd" ? productFoldOf(await ctx.driver.fixtureState(f.id)) : undefined;
     rec.bracketDrives.push({
       fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked,
       levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
@@ -608,6 +650,8 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
       next: row === undefined ? missing : nextLineOf(stage.kind, stage.config, row, rows),
       forfeitPlay: forfeit === null || o.live === null ? null : forfeitPlayOf(ctx.spec.sport, cfg, home, away, o.live),
       refusal: o.refusal,
+      ...(product === undefined ? {} : { product }),
+      ...(lineups === undefined ? {} : { lineups }),
     });
   };
   let posted: PostedEvent[];
@@ -653,10 +697,12 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     return;
   }
   const m = sportModule(ctx.spec.sport);
-  const folded = foldStream(m, cfg, home, away, whole).outcome;
-  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked }, folded);
-  rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(folded), product: productOutcome, foreign: 0, finishedBefore: null, request });
-  const dp = declaredPoints(m, cfg, stageCtx(stage.kind, f), home, away, whole);
+  // W2e: the fold's state goes with its outcome, so a win asked down a deciding path is judged by the sport's own
+  // witness (streams matchesRequest), not taken as any win.
+  const folded = foldStream(m, cfg, home, away, whole, lineups);
+  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked }, folded.outcome, folded.state);
+  rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(folded.outcome), product: productOutcome, foreign: 0, finishedBefore: null, request });
+  const dp = declaredPoints(m, cfg, stageCtx(stage.kind, f), home, away, whole, lineups);
   if (dp !== null) rec.declared.set(f.id, { home: dp.home, away: dp.away, forOutcome: toObservedOutcome(dp.forOutcome)! });
 }
 

@@ -1,10 +1,11 @@
 // Shared by the W2c Task 11 stage-door tests: a config FRAGMENT a stage can save for a declared key, from the editor's own
 // builders (`SPORT_RULES`) where one writes the key, else from the engine's own schema. Every value is one the sport's
 // OWN configSchema accepts on top of the variant's preset, so a refusal from the endpoint is the endpoint's, never a
-// probe the engine itself would refuse (cricket's 6-ball innings under a 4-over bowler cap).
+// probe the engine itself would refuse (cricket's 6-ball innings under a 4-over bowler cap) - nor one the engine's
+// write-door refusals answer (W2e Task 13: ruling 31's set-target floor turns volleyball's editor minimum of 1 away).
 import { SPORT_RULES } from "@/lib/match-rules";
 import type { AnySportModule } from "@seazn/engine/sport";
-import { stageTopKeysFor } from "@seazn/engine/sport";
+import { stageTopKeysFor, writeConfigIssues } from "@seazn/engine/sport";
 import { canonicalJson } from "@/lib/canonical-json";
 
 /** The values a field can be probed with, in the order tried: its smallest and largest number, every option, on and off,
@@ -15,6 +16,10 @@ const probes = (f: { kind: string; options?: { value: string }[]; min?: number; 
   : f.kind === "sequence" ? [""]
   : [String(f.min ?? 1), ...(f.max === undefined ? [] : [String(f.max)])];
 
+/** The sport's own answer to a config: its schema accepts it, and its write door refuses nothing in it. */
+const accepted = (m: AnySportModule, cfg: Record<string, unknown>): boolean =>
+  m.configSchema.safeParse(cfg).success && writeConfigIssues(m, cfg).length === 0;
+
 /** The built CONFIG fragment a field writes for the first of its probes that the sport's OWN schema accepts on top of
  *  the variant's preset - the API takes config keys, never form keys, and a probe the engine itself refuses (cricket's
  *  6-ball innings under a 4-over bowler cap) says nothing about the endpoint. `{}` = no field builds this key. */
@@ -24,7 +29,7 @@ export function builtFor(m: AnySportModule, variant: string, top: string): Recor
     if (!f.edits.some((k) => k.split(".")[0] === top)) continue;
     for (const p of probes(f)) {
       const frag = f.build(p, {});
-      if (Object.keys(frag).length > 0 && m.configSchema.safeParse({ ...base, ...frag }).success) return frag;
+      if (Object.keys(frag).length > 0 && accepted(m, { ...base, ...frag })) return frag;
     }
   }
   return {};
@@ -50,7 +55,7 @@ export function editorFragments(m: AnySportModule, variant: string, top: string)
     if (!f.edits.some((k) => k.split(".")[0] === top)) continue;
     for (const p of probes(f)) {
       const frag = f.build(p, {});
-      if (Object.keys(frag).length > 0 && m.configSchema.safeParse({ ...base, ...frag }).success) out.push(frag);
+      if (Object.keys(frag).length > 0 && accepted(m, { ...base, ...frag })) out.push(frag);
     }
   }
   return out;

@@ -77,7 +77,9 @@ export async function runSample(d: SampleDeps): Promise<number> {
   };
 
   if ((await pass(1, d.runId)) !== 0) return 2;
-  const first = ["regression", "--baseline", d.baseline, "--now", resultsOf(d.reportDir, d.runId), "--expect", d.expectFile];
+  // --sample (D16): the expect file is the sample's fixed 33-ish ids, a deliberate subset of the baseline; the judge counts the rest as skipped
+  // and does not refuse them (without it every baseline case outside the sample would be an unexpected skip and every PR would go red).
+  const first = ["regression", "--baseline", d.baseline, "--now", resultsOf(d.reportDir, d.runId), "--expect", d.expectFile, "--sample"];
   const one = d.judge(first);
   if (one !== 1) return judgeExit(one);
 

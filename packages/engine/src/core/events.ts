@@ -16,6 +16,7 @@ import {
   type LineupPolicy,
   type SquadState,
 } from "./lineup.ts";
+import { endingPending, latestEndingSanction, type PendingEndingSanction, type SanctionEndingDecl } from "./sanction-ending.ts";
 import { GameTime, compareGameTime, gameTimeOf } from "./time.ts";
 import {
   EntrantId,
@@ -738,6 +739,15 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
   // one working unchanged. An empty or duplicated list is neither: both are
   // refused as CONFIG_INVALID (validateDeclaredPhases).
   playPhases?(cfg: Cfg): readonly string[];
+  /**
+   * W2e (spec 2026-10-28 §5.2; D3 (1), D12; rule X-SE-1) — the sanction levels that END a match in this sport, and the
+   * ones after which the pad asks whether a team can still field six. The kernel reads `eventType` and `endLevels`: after
+   * a live sanction at an end level, the WRITE path takes no event but `core.forfeit` (its ending) or `core.abandon` while
+   * the match is neither decided nor abandoned (`ENDING_SANCTION_PENDING`); replay is untouched. The pad and the scoring
+   * route read the same declaration through `pendingEndingSanction` and `scorerMayForfeit` (core/sanction-ending.ts), so
+   * no sport's list is typed twice. Absent ⇒ no sanction ends a match, and nothing the kernel does moves.
+   */
+  readonly sanctionEnding?: SanctionEndingDecl;
 
   /**
    * S3/W4b (#426) — what this VARIANT permits a lineup to do: re-entry mode
@@ -824,6 +834,12 @@ const POST_DECISION_CORE: readonly string[] = ["core.note", "core.finalize", "co
 // core.void: it validates them, folds them, and NEVER forwards them to
 // module.apply. One implementation therefore serves all eleven sports (and
 // every future one), no module state moves, and no frozen golden shifts.
+
+// W2e X-SE-1 — the two events the write path still takes while a match-ending sanction waits for its ending: the ending
+// itself (`core.forfeit`, whose reason the phase guard and, for a scorer, D13 judge) and an abandon. Everything else is
+// ENDING_SANCTION_PENDING until the match is decided (its forfeit) or abandoned, or the sanction is voided (a void never
+// reaches the loop).
+const ADMITTED_WHILE_ENDING_PENDING: readonly string[] = ["core.forfeit", "core.abandon"];
 
 /** An open stoppage: play has been suspended and not yet resumed. */
 export interface MatchStoppage {
@@ -940,6 +956,10 @@ export function foldMatchWithStoppage<Cfg, State>(
   let started = false;
   let levelWithdrawal: LevelWithdrawal | null = null;
   const walkoverPhases = module.walkoverPhases ?? DEFAULT_WALKOVER_PHASES;
+  // W2e X-SE-1: the latest live end-level sanction (`latestEndingSanction`, the step `pendingEndingSanction` walks), over
+  // the ACTIVE ledger, so a void of the sanction moves it. Whether it is still pending is `endingPending`'s one answer.
+  const admittedWhileEndingPending = new Set(ADMITTED_WHILE_ENDING_PENDING);
+  let latestEnding: PendingEndingSanction | null = null;
 
   // S3/W4b (#426) — the squads start as the team sheets declared them, with
   // positions intact, and the module is offered the snapshot immediately so its
@@ -1004,6 +1024,21 @@ export function foldMatchWithStoppage<Cfg, State>(
         "LINEUP_NOT_SUPPORTED",
         `event "${event.type}" rejected: this sport does not record line-up changes`,
         { eventId: event.id, seq: event.seq, type: event.type },
+      );
+    }
+    // W2e X-SE-1 (D3 (1)) — a sanction at a level the sport declares as match-ending waits for its ending, recorded as
+    // its own event. Until then the write path takes only that ending or an abandon. `strict` only, in the shape of the
+    // refusal above: a ledger written before W2e with play after a black card was accepted then, and replays exactly as
+    // recorded (anti-goal 1). Pending is `endingPending`'s answer, the one the pad and the route read too (review I-1):
+    // not once the match is decided (guarantee 4 governs a finished match, so a note or a finalize after a pre-W2e result
+    // is admitted and a further rally answers ALREADY_DECIDED), and not while an abandon is active (an abandon decides
+    // nothing in a set-based or nested kernel, and the organiser's settle is what closes it — review I-2).
+    const pendingEnding = endingPending(latestEnding, { decided, abandonActive });
+    if (strict && pendingEnding !== null && !admittedWhileEndingPending.has(event.type)) {
+      throw new EngineError(
+        "ENDING_SANCTION_PENDING",
+        `event "${event.type}" rejected: a ${pendingEnding.level} sanction against ${pendingEnding.by} ends the match — record the ending (core.forfeit) or void the sanction first`,
+        { by: pendingEnding.by, level: pendingEnding.level },
       );
     }
     // GUARANTEE 4 is deliberately NOT gated on `strict`, and the reason is
@@ -1303,6 +1338,8 @@ export function foldMatchWithStoppage<Cfg, State>(
           "a type added to KERNEL_OWNED_CORE owes its branch in the fold's dispatch",
       );
     }
+    // Below every branch: the event was accepted, kernel-owned or the module's.
+    latestEnding = latestEndingSanction(module.sanctionEnding, latestEnding, event);
     // ONE call site, below every branch, so a kernel-owned event is observed
     // exactly like a module event — see `FoldOptions.onFolded`.
     onFolded?.(state, event, squads);

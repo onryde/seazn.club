@@ -169,17 +169,26 @@ function sampleFor(sportKey: string): Sample {
  * from the kernel's own `CORE_EVENT_SCHEMAS`. The stop test reads the module's outcome of its OWN state: the walk is not
  * a fold (no settle or withdrawal can be in it); the snapshot it feeds is folded through `foldFrom` and read through
  * `outcomeOf`.
+ *
+ * A sanction at a level the module declares as match-ending (W2e X-SE-1: a badminton black card, a tennis default) is
+ * redrawn too: the generator answers it with its ending, a forfeit, so taking it would leave the walk nothing but
+ * `core.forfeit` to draw, and the gallery's ended sample is a decision by play. `seed` is the gallery's own unless a test
+ * sweeps it.
  */
 export function walkToDecision(
   sportKey: string,
   sportModule: AnySportModule,
   cfg: unknown,
   lineups: LineupPair,
+  seed: number = SEED,
 ): EventEnvelope[] {
-  const rng = mulberry32(SEED);
+  const rng = mulberry32(seed);
   let state = sportModule.init(cfg, lineups);
   const played: EventEnvelope[] = [];
-  const isPlay = (e: { type: string }) => !e.type.startsWith("core.") || e.type === "core.start";
+  const ending = sportModule.sanctionEnding;
+  const endsTheMatch = (e: { type: string; payload: unknown }) =>
+    ending !== undefined && e.type === ending.eventType && ending.endLevels.includes((e.payload as { level?: string }).level ?? "");
+  const isPlay = (e: { type: string; payload: unknown }) => (!e.type.startsWith("core.") || e.type === "core.start") && !endsTheMatch(e);
   for (let n = 1; n <= MAX_EVENTS; n++) {
     let next = sportModule.arbitraryEvent?.(state, rng) ?? null;
     for (let k = 0; k < 64 && next !== null && !isPlay(next); k++) {
@@ -194,7 +203,7 @@ export function walkToDecision(
     played.push(ev);
     if (sportModule.outcome(state) !== null) return played;
   }
-  throw new Error(`overlay gallery: ${sportKey} did not decide by play within ${MAX_EVENTS} events (seed ${SEED})`);
+  throw new Error(`overlay gallery: ${sportKey} did not decide by play within ${MAX_EVENTS} events (seed ${seed})`);
 }
 
 /** Fold a stream and project it exactly as `load.ts` does: status from the write path's rule unless `status` is

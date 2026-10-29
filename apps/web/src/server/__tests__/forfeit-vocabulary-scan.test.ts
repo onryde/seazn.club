@@ -91,6 +91,7 @@ const UNREAD_WRITERS: Record<string, { writes: number; why: string }> = {
   "apps/web/src/components/public-site/match-room/room-snapshot.ts": { writes: 1, why: "chess T10: `{ by: a.by, reason: a.reason }`, a STORED core.forfeit's own payload (room.ts/arbiter.ts read it from the ledger), folded in memory for the game-over card and never posted" },
   "apps/web/src/components/public-site/match-room/__tests__/room-snapshot.test.ts": { writes: 1, why: "the room's per-reason fold sweep: `reason` drawn from FORFEIT_REASONS itself, folded in memory, never posted" },
   "apps/web/src/server/engine-db/__tests__/w2b-status.test.ts": { writes: 1, why: "`...both`, a spread `{ reason: \"walkover\" }`" },
+  "apps/web/src/server/engine-db/__tests__/w2e-ending-sanction.test.ts": { writes: 6, why: "Task 2's D13 table sweep: `reason` is a `Reason` (`disqualified` | `retired`, an `Extract` of the engine's ForfeitReason) from the D13 rulebook rows or a `WRITER_REASONS` member (`satisfies readonly ForfeitReason[]`), both tsc-checked against FORFEIT_REASONS — each is a scorer's forfeit POSTed through the real route and the point is that it is refused or admitted per reason, so a literal per call would drop the sweep" },
   "apps/web/src/server/engine-db/__tests__/walkover-rule-award-db.test.ts": { writes: 2, why: "Task 16b's two `reason` parameters, each a literal union of FORFEIT_REASONS members that tsc checks (`\"walkover\" | \"withdrew\"` folded in memory for the division's own reading, never posted; `\"walkover\" | \"retired\" | \"disqualified\"` posted through the console's own write)" },
   "apps/web/src/server/public-site/__tests__/match-centre-forfeit.test.ts": { writes: 1, why: "Task 13's per-reason sentences: `reason` drawn from FORFEIT_REASONS itself, folded in memory, never posted" },
   "apps/web/src/server/public-site/__tests__/timeline.test.ts": { writes: 3, why: "Task 12's forfeit-copy sweeps: `reason` drawn from FORFEIT_REASONS itself (two), and a reason-less legacy fixture — rendered as timeline lines, never posted" },
@@ -133,6 +134,7 @@ const RETIRED_EXCEPTIONS: Record<string, { lines: number; why: string }> = {
   // boardgame's `detail.method` after a `core.forfeit` is "forfeit" / "double_forfeit" (boardgame.ts applyForfeit) —
   // and words it ("Forfeit · 1–0"). Expected values read back from that fold, never a `boardgame.result` written.
   "apps/web/src/components/public-site/match-room/__tests__/room-snapshot.test.ts": { lines: 3, why: "forfeitResultFor's rulebook rows: the summary method the engine's fold of a core.forfeit reports, read back" },
+  "apps/web/src/components/v2/scorepad/v3/skins/__tests__/boardgame.test.ts": { lines: 1, why: "Task 10 (BG-RS-1): `const retired = [\"forfeit\", \"double_forfeit\"]`, the exclusion list of the DECISIVE/DRAWN methods comparison — the methods W2b D15 retired on write, left OUT of the methods put to the strict fold; written to no event" },
   "apps/web/src/components/public-site/match-room/__tests__/room-shell.test.tsx": { lines: 2, why: "a RoomResult snapshot fixture carrying that same read-back summary method, painted on the card" },
 };
 

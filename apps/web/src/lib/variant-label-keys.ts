@@ -7,7 +7,13 @@
 import type { MessageKey } from "@/lib/messages";
 
 export const VARIANT_LABEL_KEYS: Readonly<Record<string, Readonly<Record<string, MessageKey>>>> = {
-  badminton: { bwf: "variant.badminton.bwf", short: "variant.badminton.short" },
+  // `bwf-3x15` (W2e): the dictionary key drops the hyphen, as carrom's `club-29` and table tennis's `hardbat-21` do; so does
+  // tennis's `short-sets` (W2e TN-SS-2, `shortSets`).
+  badminton: {
+    bwf: "variant.badminton.bwf",
+    "bwf-3x15": "variant.badminton.bwf3x15",
+    short: "variant.badminton.short",
+  },
   boardgame: {
     classical: "variant.boardgame.classical",
     rapid: "variant.boardgame.rapid",
@@ -43,6 +49,7 @@ export const VARIANT_LABEL_KEYS: Readonly<Record<string, Readonly<Record<string,
     "grand-slam": "variant.tennis.grandSlam",
     fast4: "variant.tennis.fast4",
     "doubles-noad-mtb10": "variant.tennis.doublesNoAdMatchTiebreak",
+    "short-sets": "variant.tennis.shortSets",
   },
   volleyball: { indoor: "variant.volleyball.indoor", beach: "variant.volleyball.beach" },
 };

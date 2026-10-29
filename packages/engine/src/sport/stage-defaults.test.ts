@@ -220,7 +220,7 @@ describe("hockey, ice hockey and cricket knockout presets", () => {
       first.extra = "poisoned";
       expect(JSON.stringify(stageDefaultsFor(m, "knockout", null)), m.key).toBe(frozen);
     }
-    expect(hockey.variants["fih-shootout"]!.shootout).toEqual({ attempts: 5, suddenDeath: true, clockSeconds: 8 });
+    expect(hockey.variants["fih-shootout"]!.shootout).toEqual({ attempts: 5, clockSeconds: 8 });
   });
   it("another sport without a hook (the four sets sports): {} everywhere", () => {
     // Single-sport sweep by design: boardgame (Task 8), carrom and generic belong to other tasks, so only the sets sports,

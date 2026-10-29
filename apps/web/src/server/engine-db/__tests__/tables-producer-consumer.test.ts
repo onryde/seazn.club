@@ -450,7 +450,8 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
   const IH_CASES: { name: string; method: string; ledger: "ot" | "so"; events: Ev[] }[] = [
     { name: "an overtime goal", method: "extra_time", ledger: "ot", events: [...IH_REG, { type: "icehockey.goal", payload: { by: "H" } }] },
     {
-      // The golden corpus's recorded `default` seed 80 stream (payout-decided-in-db.test.ts): H wins on the 11th round.
+      // payout-decided-in-db.test.ts's stream: five rounds level, then H wins the first tie-break duel. W2e (IIHF 84.4 IX):
+      // A shot second in the five, so A shoots first in the tie-break; A misses, H scores.
       name: "a game-winning shot (GWS)",
       method: "shootout",
       ledger: "so",
@@ -458,8 +459,8 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
         ...IH_REG,
         { type: "icehockey.period.advance", payload: { to: "FT" } },
         ...Array.from({ length: 10 }, (_, i): Ev => ({ type: "icehockey.shootout.attempt", payload: { by: i % 2 === 0 ? "H" : "A", scored: true } })),
-        { type: "icehockey.shootout.attempt", payload: { by: "H", scored: true } },
         { type: "icehockey.shootout.attempt", payload: { by: "A", scored: false } },
+        { type: "icehockey.shootout.attempt", payload: { by: "H", scored: true } },
       ],
     },
   ];

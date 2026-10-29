@@ -71,6 +71,10 @@ export const volleyball = makeSetBasedModule({
     },
   },
   ruleKeys: { ...SET_RULE_KEYS }, // W2c (spec §4.1 Q5) — the set kernel's keys as they are
+  // W2e ruling 31 (row VB-CF-1; spec 2026-10-28 §5.5, E15): however short an organiser makes the format, a set is played
+  // to at least 5 points. A write door refuses a lower `setTo` or `finalSetTo` (`setTargetBelowFloor`); a stored config
+  // below it still loads and plays.
+  minSetTo: 5,
   positions,
   // S3/W4b (#426) ruling 2 — FIVB 15.6, the two conditions on a re-entry, and
   // 19.3, the libero replacement that is not a substitution.
@@ -117,6 +121,11 @@ export const volleyball = makeSetBasedModule({
   // S7/#427 — the FIVB ladder verbatim; the kernel enum IS volleyball's own
   // vocabulary (DOMAIN.volleyball.md:38), so all four steps are on the pad.
   sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
+  // W2e (spec 2026-10-28 §5.2; D12, D13; VB-SE-1) — an expulsion or a disqualification never ends a volleyball match by
+  // itself (FIVB: the team plays on while it can field six). Right after one, the pad asks whether the team can still
+  // field six; "no" is the incomplete-team ending (VB-RT-1, FIVB 6.4.3), core.forfeit{retired}, which a scorer may send
+  // there and nowhere else (D13). No end level, so the write path refuses nothing after one.
+  sanctionEnding: { eventType: "volleyball.sanction", endLevels: [], promptLevels: ["expulsion", "disqualification"] },
   // R5-1 — FIVB service.
   //  * 12.2.2: the team winning a rally serves the next one (side-out).
   //  * 7.1: sets 2-4 alternate the first service, and THE DECIDING SET IS

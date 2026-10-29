@@ -5,6 +5,9 @@ import { z } from "zod";
 import { EngineError } from "../core/errors.ts";
 import { SETTLE_METHODS, settledMethod, type CoreEv, type EventEnvelope, type FoldableModule, type FoldContext } from "../core/events.ts";
 import type { LineupPolicy, SquadState } from "../core/lineup.ts";
+import type { SanctionEndingDecl } from "../core/sanction-ending.ts";
+// W2e — a sport author declares `sanctionEnding` here; the type lives in core, which the fold reads it from.
+export type { SanctionEndingDecl } from "../core/sanction-ending.ts";
 import type { MatchPosition } from "../core/position.ts";
 import type { Rng } from "../core/rng.ts";
 import type {
@@ -754,12 +757,15 @@ export interface RuleKeyFact {
    *  `shorter` bound: the bound compares a match's value against it instead of reading the missing key as "off" (fix
    *  round 1, ruling). Pinned to the engine's own constant by the module's test. Absent = a missing key is off. */
   readonly whenAbsent?: number;
-  /** A bounded DETAIL of a decider, not a decider itself: the key of the decider it only means something under (the kicks
-   *  of a shoot-out under `shootout`, the minutes of an overtime under `overtime`). Declared, not inferred from the key's
+  /** A DETAIL of a decider, not a decider itself: the key of the decider it only means something under (the kicks of a
+   *  shoot-out under `shootout`, the minutes of an overtime under `overtime`: bounded lengths; or a policy, cricket's
+   *  `superOverStillTied` under `superOver`: what a tied super over does). Declared, not inferred from the key's
    *  spelling: football's `shootoutAttempts` is a flat key beside its decider, the period kernel's are dotted paths
    *  beneath theirs. The stage editor reads it to hold such a field while its decider is off, and to place it with the
-   *  deciders; the sweep in `rule-keys.test.ts` fails a bounded key that is neither a decider nor a detail of one, and a
-   *  `detailOf` that names a key which is not a declared decider. */
+   *  deciders; a detail must also be OFFERED exactly where its decider is (the same `appliesTo`), or the editor lists a
+   *  field that can never be enabled. The sweeps in `rule-keys.test.ts` fail a bounded key that is neither a decider nor a
+   *  detail of one, a `detailOf` that names a key which is not a declared decider, and a detail whose `appliesTo` differs
+   *  from its decider's. */
   readonly detailOf?: string;
   /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
    *  super over, chess tie-break games, carrom's tie board). The knockout preselection reads it through
@@ -880,6 +886,24 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // `lineupPolicy: () => DEFAULT_LINEUP_POLICY` rather than omitting it.
   lineupPolicy?(cfg: Cfg): LineupPolicy;
   onLineup?(state: State, squads: SquadState): State;
+  /**
+   * W2e (spec 2026-10-28 §5.2; D3 (1), D12, D13; rule X-SE-1) — restated from FoldableModule (src/core/events.ts) because
+   * this is the interface a sport author reads. Which levels of the sport's sanction event END the match (`endLevels`:
+   * badminton's black card, tennis's default), and after which the pad asks whether a team can still field six
+   * (`promptLevels`: volleyball, D12). The ending is the recorded `core.forfeit` that follows the sanction; until it is
+   * written, and while the match is neither decided nor abandoned, the write path refuses scoring
+   * (`ENDING_SANCTION_PENDING`). A declaration owes `sanctionEndingIssues(decl)` to be []. Absent ⇒ no sanction ends a
+   * match.
+   */
+  readonly sanctionEnding?: SanctionEndingDecl;
+  /**
+   * W2e (spec 2026-10-28 §5.5, E15; ruling 31, RB2A-13; VB-CF-1, TT-CF-1, TN-CF-1) — what a WRITE door refuses in a config
+   * `configSchema` accepts: one engine sentence per problem (`setTargetBelowFloor`, `BO1_MATCH_TIEBREAK`), [] when
+   * none. Asked through `writeConfigIssues` by every door that persists a config (division create and save, template,
+   * stage rules, a match's own format), which answer CONFIG_INVALID `{issues}`. Never a `configSchema` refine (E15): a
+   * stored config that breaks it still loads, folds and scores. Absent = the sport refuses nothing beyond its schema.
+   */
+  configWriteIssues?(cfg: Cfg): readonly string[];
   variants: Record<string, Partial<Cfg>>; // named presets: t20, odi, beach, blitz…
   /**
    * W2c (spec §4.1 as amended) — the game rule of who may set which cfg key, at which scope, for which stage kinds and
@@ -1115,6 +1139,31 @@ export type AnySportModule = SportModule<any, any, any>;
 export interface TablePresets {
   readonly points: readonly { readonly id: string; readonly rule: PointsRule }[];
   readonly tiebreakers: readonly { readonly id: string; readonly keys: readonly TiebreakerKey[] }[];
+}
+
+/** W2e ruling 31 (VB-CF-1, TT-CF-1) — the write-door refusal of a set target (`setTo`, `finalSetTo`) below the floor its
+ *  preset declares (`SetBasedPreset.minSetTo`: 5 for volleyball and table tennis). A TEMPLATE: `{min}` is the floor, filled
+ *  by `setTargetBelowFloor`. A client matches it slot and all and maps it to its own localized copy, passing the number on
+ *  (apps/web `LOCALIZED_CONFIG_ISSUES`). */
+export const SET_TARGET_BELOW_FLOOR = "A set must be played to at least {min} points.";
+/** `SET_TARGET_BELOW_FLOOR` for the floor `min`: the sentence a write door refuses with. */
+export function setTargetBelowFloor(min: number): string {
+  return SET_TARGET_BELOW_FLOOR.replace("{min}", String(min));
+}
+/** W2e RB2A-13 (TN-CF-1) — the write-door refusal of a tennis best of 1 whose final set is a match tie-break: ITF App VI's
+ *  match tie-break REPLACES a deciding set, and a best of 1 has no set to replace. */
+export const BO1_MATCH_TIEBREAK = "A match tie-break replaces a deciding set; best of 1 has none.";
+
+/**
+ * W2e (spec 2026-10-28 §5.5, E15) — the sentences a write door refuses `cfg` with (`SportModule.configWriteIssues`), over
+ * the cfg as the sport's schema parses it (so a stored partial reads its defaults). Empty when the module declares none,
+ * and when the schema itself refuses `cfg`: that refusal is the door's first answer (CONFIG_INVALID with the schema's own
+ * issues), asked before this one.
+ */
+export function writeConfigIssues(module: Pick<AnySportModule, "configSchema" | "configWriteIssues">, cfg: unknown): readonly string[] {
+  if (module.configWriteIssues === undefined) return [];
+  const parsed = module.configSchema.safeParse(cfg);
+  return parsed.success ? module.configWriteIssues(parsed.data) : [];
 }
 
 /**

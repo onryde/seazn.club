@@ -2497,7 +2497,9 @@ export type PutLineup = z.infer<typeof PutLineup>;
 
 /** THE scoring request (doc 08 §4). */
 export const AppendEventRequest = z.object({
-  expected_seq: z.number().int().min(0),
+  // Bounded to int4, the type of `score_events.seq` (V216): usecases/scoring.ts compares it with that column in SQL, where a
+  // larger value made Postgres raise "out of range" (a 500). Past the bound it is a 400 at the door (W2e M1).
+  expected_seq: z.number().int().min(0).max(2_147_483_647),
   type: z.string().min(1).max(100), // 'cricket.ball', 'core.void', …
   payload: z.unknown(),
   idempotency_key: z.string().min(1).max(200).optional(),

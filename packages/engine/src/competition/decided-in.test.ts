@@ -56,7 +56,7 @@ const NON_WINS: readonly MatchOutcome[] = [
 // 'draw' tie board, no period variant has an overtime without a shoot-out (or the reverse), no cricket variant a super
 // over, no chess variant the tie-break switch. Without them the sweeps below could not see either side of those terms.
 const OT = { kind: "sudden_death", minutes: 5 };
-const SO = { attempts: 5, suddenDeath: true };
+const SO = { attempts: 5 };
 const DECIDER_FLIPS: Readonly<Record<string, readonly C[]>> = {
   football: [{ shootout: true }, { extraTime: { enabled: true, halfMinutes: 15 } }],
   hockey: [{ overtime: OT, shootout: null }, { overtime: OT, shootout: SO }],

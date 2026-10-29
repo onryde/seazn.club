@@ -112,6 +112,7 @@ export function divisionQualification(
       bounds: null,
       reachable: new Set(rules.reachable),
       primary: rules.primary,
+      ...(rules.ballsPerOver === undefined ? {} : { ballsPerOver: rules.ballsPerOver }),
       awardAddsToLedger,
       cascade: rules.tiebreakers,
       entrantNames: i.entrantNames,

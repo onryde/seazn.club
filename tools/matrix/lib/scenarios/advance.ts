@@ -83,11 +83,14 @@ export function declaredTake(body: StagePostBody, sourcePools: number): number {
  *  rankRange reads the sole table (rankRangeSource); topNPerGroup ranks 1..n
  *  of every pool; roundLosers the losers of that round's two-sided lines
  *  (loserAt reads round_no by equality). bestNth is an UPPER bound: every
- *  rank-nth row, since crossGroupOrder is not replicated here. */
+ *  rank-nth row, since crossGroupOrder is not replicated here. A row the
+ *  wire ranks null (a LEVEL table, W2e Task 27 D11 b) counts inside EVERY
+ *  take — an upper bound too: progression still seats a level table by seed
+ *  then id, an order the wire does not carry. */
 export function withdrawnQualifiers(takes: readonly TakeRule[], source: Pick<ObservedStage, "standings" | "fixtures">, withdrawn: ReadonlySet<string>): string[] {
   const inside = new Set<string>();
   const rows = (tables: ObservedStage["standings"], keep: (rank: number) => boolean) => {
-    for (const t of tables) for (const r of t.rows) if (keep(r.rank)) inside.add(r.entrantId);
+    for (const t of tables) for (const r of t.rows) if (r.rank === null || keep(r.rank)) inside.add(r.entrantId);
   };
   for (const t of takes) {
     switch (t.kind) {

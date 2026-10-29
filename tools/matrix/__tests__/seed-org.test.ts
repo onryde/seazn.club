@@ -845,7 +845,7 @@ describe("mirror pin: the division builder's variant list (d/new/page.tsx)", () 
   it("the builder still selects sport_variants with NO where of its own (RLS scopes it), and seed-org orders it the same way", () => {
     // No where between FROM and ORDER BY: the only scoping is V227's policy,
     // which seed-org restates. A product filter added here must red.
-    const page = /select sport_key, key, name, is_system from sport_variants\s+order by ([^`]+)`/.exec(PAGE);
+    const page = /select sport_key, key, name, is_system, config from sport_variants\s+order by ([^`]+)`/.exec(PAGE);
     const ours = /from sport_variants where sport_key = \$\{sportKey\} and org_id is null\s+order by ([^`]+)`/.exec(SEED);
     expect(page, "builder query moved or gained a filter").not.toBeNull();
     expect(ours, "seed-org's variant query moved").not.toBeNull();

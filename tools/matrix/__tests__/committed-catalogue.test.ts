@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type * as TS from "typescript";
 import { EngineError, StageKind, forbidsLevelResult } from "@seazn/engine/core";
+import { writeConfigIssues } from "@seazn/engine/sport";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { REFUSED_CELLS, REFUSED_REASON } from "./refused-cells.ts";
@@ -36,7 +37,7 @@ import { foldStream } from "../lib/fold.ts";
 import { expectedGate } from "../lib/format-gates-copy.ts";
 import { L2_WIDTHS, planL2 } from "../lib/pairs.ts";
 import { LIFECYCLE_ID, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions } from "../lib/scenario-catalogue.ts";
-import { CfgInvalid, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
+import { CfgInvalid, resolveSchemaCfg, resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { GeneratorUnsupported } from "../lib/streams/types.ts";
 import { buildSportVariants, offlineBuilderDefault, type SportVariants, type VariantCase } from "../lib/variants.ts";
@@ -300,7 +301,9 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     const allCases = v.sports.flatMap((s) => s.cases);
     const scorable = allCases.filter((x) => x.scorable === null).length;
     expect(scorable).toBeGreaterThan(0);
-    expect(scorable).toBeLessThan(allCases.length); // today some are unscorable, so the two totals differ
+    // Since the write door joined resolveSportCfg (W2e Task 24) the generator builds no combination the product refuses, so none of
+    // the committed cases is unscorable: the two totals are EQUAL, and a case that is not scorable is a regression to be named.
+    expect(scorable).toBe(allCases.length);
     expect(c.l3.variantCasesScorable).toBe(scorable);
     expect(c.l3.variantCasesUnscorable).toBe(allCases.length - scorable);
     // Q-B / ruling 29: one denied case per gated row (the product's format gate, text-pinned copy).
@@ -367,6 +370,23 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(judged).toBeGreaterThan(0);
   });
 
+  it("the independent classifier's ENGINE arm has a positive witness: a hand-built case the write door refuses is 'engine', the same case at the floor is 'scorable' (the committed catalogue has none, since the door)", () => {
+    // The floor is FOUND by asking the engine's door, never typed (volleyball: a set target below the engine's minimum, VB-CF-1).
+    let floor = 0;
+    for (let n = 1; n <= 40 && floor === 0; n++) if (writeConfigIssues(sportModule("volleyball"), resolveSchemaCfg("volleyball", "indoor", { setTo: n, finalSetTo: n })).length === 0) floor = n;
+    expect(floor, "premise: the engine declares a set-target floor above 1").toBeGreaterThan(1);
+    const at = (n: number): VariantCase => ({
+      id: `witness#${n}`, sport: "volleyball", row: "league", preset: "indoor", classes: {}, values: {}, overrides: { setTo: n, finalSetTo: n }, scorable: null,
+    });
+    expect(independentClass(at(floor - 1)), "below the floor: the door refuses it").toBe("engine");
+    expect(independentClass(at(floor)), "at the floor: lawful and playable").toBe("scorable");
+    // The schema alone accepts the below-floor cfg - it is the DOOR that makes it 'engine' (the classifier goes through the door).
+    expect(() => resolveSchemaCfg("volleyball", "indoor", { setTo: floor - 1, finalSetTo: floor - 1 })).not.toThrow();
+    // Another sport that declares a door: tennis best-of-1 with a match tie-break (TN-CF-1).
+    const bo1: VariantCase = { ...at(floor), id: "witness#bo1", sport: "tennis", preset: "tour", overrides: { bestOf: 1, finalSet: { matchTiebreakTo: 10 } } };
+    expect(independentClass(bo1)).toBe("engine");
+  });
+
   it("variant cases split scorable / engine-unscorable (W2) / generator-unsupported (W2, generator breadth; none since ruling 44) — every case re-classified by an independent generate-and-fold, counted (I-1)", () => {
     const c = parsed<CountsFile>("counts.json");
     const v = parsed<VariantsFile>("variants.json");
@@ -386,11 +406,12 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(c.variants.scorable + c.variants.unscorable).toBe(total);
     // The committed per-case field agrees with the independent fold.
     expect(v.sports.flatMap((s) => s.cases.filter((x) => x.scorable === null).map((x) => x.id))).toEqual(got.scorable);
-    // Anti-vacuity: the engine class is live today (set-to-1 at win-by-2
-    // refused by the engine, ruling 31). The generator class is empty since
-    // ruling 44 built cricket's two-innings streams — the independent fold
-    // above still judges every case, so a new gap cannot hide in it.
-    expect(got.engine.length).toBeGreaterThan(0);
+    // Anti-vacuity: both unscorable classes are empty today, and the independent fold above still judges every case, so a new gap
+    // cannot hide in either. The engine class (a cfg the engine refuses: set-to-1 at win-by-2, a set target below the floor, a
+    // tennis best of 1 with a match tie-break) is empty because resolveSportCfg now applies the write door (W2e Task 24, ruling
+    // 31): such a combination is listed uncoverable by the generator, never built as a case. The generator class has been empty
+    // since ruling 44 built cricket's two-innings streams.
+    expect(got.engine).toEqual([]);
     expect(got.generator).toEqual([]);
     expect(got.scorable.length).toBeGreaterThan(0);
     console.info(`committed-catalogue: ${judged} variant cases folded — ${got.scorable.length} scorable, ${got.engine.length} engine-unscorable, ${got.generator.length} generator-unsupported`);

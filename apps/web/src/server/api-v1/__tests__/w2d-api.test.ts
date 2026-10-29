@@ -383,13 +383,14 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
       return fixtureRow(f.id);
     };
     const ot = await play(X, Y, [...toFt, { type: "icehockey.goal", payload: { by: "W" } }]);
-    // The shoot-out stream is payout-decided-in-db.test.ts's (the golden corpus's `default` seed 80: W wins the 11th round).
+    // The shoot-out stream is payout-decided-in-db.test.ts's: five rounds level, then W wins the first tie-break duel. W2e
+    // (IIHF 84.4 IX): the side that shot second in the five, L, shoots first in the tie-break, so L misses and W scores.
     const so = await play(Y, Z, [
       ...toFt,
       { type: "icehockey.period.advance", payload: { to: "FT" } },
       ...Array.from({ length: 10 }, (_, i) => ({ type: "icehockey.shootout.attempt", payload: { by: i % 2 === 0 ? "W" : "L", scored: true } })),
-      { type: "icehockey.shootout.attempt", payload: { by: "W", scored: true } },
       { type: "icehockey.shootout.attempt", payload: { by: "L", scored: false } },
+      { type: "icehockey.shootout.attempt", payload: { by: "W", scored: true } },
     ]);
     expect([ot.outcome?.method, so.outcome?.method], "rig: an overtime and a shoot-out decision").toEqual(["extra_time", "shootout"]);
     const hRows = (await standings(hStage)).rows;

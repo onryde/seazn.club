@@ -14,7 +14,7 @@ import {
 } from "@seazn/engine/core";
 import { decidedInFor, payout, resolveTableRules, setsToWinOf, type FixtureResult } from "@seazn/engine/competition";
 import type { AnySportModule, TableStageKind } from "@seazn/engine/sport";
-import type { StreamEvent } from "./streams/types.ts";
+import type { StreamEvent, StreamLineups } from "./streams/types.ts";
 
 export const FOLD_OPTIONS = { strictFromSeq: 1 } as const;
 export const OFFLINE_RECORDED_AT = "2030-01-01T00:00:00.000Z";
@@ -46,8 +46,14 @@ export function envelopes(fixtureId: string, events: readonly StreamEvent[]): Ev
   });
 }
 
-export function lineupsFor(home: string, away: string): LineupPair {
-  return { home: { entrantId: home, slots: [] }, away: { entrantId: away, slots: [] } };
+/** The lineups a fold is handed: the starting persons of `lineups` (Task 21: what the harness PUT), in order; with none, empty slots
+ *  (loadLineupPair returns slots:[] for a fixture with no lineup rows). */
+export function lineupsFor(home: string, away: string, lineups?: StreamLineups): LineupPair {
+  const side = (entrantId: string, persons: readonly string[] | undefined) => ({
+    entrantId,
+    slots: (persons ?? []).map((personId, i) => ({ personId, slot: "starting" as const, orderNo: i + 1 })),
+  });
+  return { home: side(home, lineups?.home), away: side(away, lineups?.away) };
 }
 
 export interface FoldedStream {
@@ -61,9 +67,10 @@ export function foldStream(
   home: string,
   away: string,
   events: readonly StreamEvent[],
+  lineups?: StreamLineups,
 ): FoldedStream {
   // W2a finding 1: a settle lives beside module state (outcomeOf).
-  const folded = foldMatchWithStoppage(module, cfg as never, lineupsFor(home, away), envelopes("matrix", events), FOLD_OPTIONS);
+  const folded = foldMatchWithStoppage(module, cfg as never, lineupsFor(home, away, lineups), envelopes("matrix", events), FOLD_OPTIONS);
   return { outcome: outcomeOf(module, folded), state: folded.state as unknown };
 }
 
@@ -95,8 +102,9 @@ export function tableContribution(
   home: string,
   away: string,
   events: readonly StreamEvent[],
+  lineups?: StreamLineups,
 ): TableContribution | null {
-  const folded = foldStream(module, cfg, home, away, events);
+  const folded = foldStream(module, cfg, home, away, events, lineups);
   if (folded.outcome === null) return null;
   const ledger = module.standingsDelta(folded.outcome, cfg, ctx, folded.state);
   const stageKind: TableStageKind = DRAW_KINDS.has(ctx.kind) ? (ctx.kind as TableStageKind) : "league";
@@ -129,8 +137,9 @@ export function declaredPoints(
   home: string,
   away: string,
   events: readonly StreamEvent[],
+  lineups?: StreamLineups,
 ): DeclaredPoints | null {
-  const c = tableContribution(module, cfg, ctx, home, away, events);
+  const c = tableContribution(module, cfg, ctx, home, away, events, lineups);
   if (c === null) return null;
   const [h, a] = c.pair;
   return { home: h.points, away: a.points, forOutcome: c.outcome };

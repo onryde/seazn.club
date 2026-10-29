@@ -124,7 +124,8 @@ export const WALKOVER_CREDIT_DATA: Readonly<Record<string, SportCreditData>> = {
       { name: SCHEMA_DEFAULT, cfg: { bestOf: 3, setTo: 21, finalSetTo: 21, winBy: 2, cap: 30 }, source: "BD-WO-1: BWF Laws 7.1-7.5, best of three to 21, cap 30" },
       { name: "bwf", cfg: { bestOf: 3, setTo: 21, finalSetTo: 21, winBy: 2, cap: 30 }, source: "BD-WO-1: BWF Laws 7.1-7.5, best of three to 21, cap 30" },
       { name: "short", cfg: { bestOf: 3, setTo: 11, finalSetTo: 11, winBy: 2, cap: 15 }, source: "X-WO-1: the product's short variant (11, cap 15; rulebook §3.2)" },
-      { name: "bwf 3x15 (from 2027-01-04, stage match rules)", cfg: { bestOf: 3, setTo: 15, finalSetTo: 15, winBy: 2, cap: 21 }, source: "X-WO-1 with BWF 3x15 (B3, RB2A-1): games to 15, cap 21" },
+      // Declared since W2e Task 3 (BD-VR-1): it was a named extra standing for stage match rules until the engine shipped the variant.
+      { name: "bwf-3x15", cfg: { bestOf: 3, setTo: 15, finalSetTo: 15, winBy: 2, cap: 21 }, source: "X-WO-1 with BWF 3x15 (B3, RB2A-1, BD-VR-1): best of three games to 15, cap 21" },
     ],
     played: [
       { name: "a game down, the side at fault retires leading 20-19 in game 2 (BD-RT-1 read with GCR 16.3.8: 22-20)", cfg: "bwf", home: [21, 19], away: [15, 20] },
@@ -151,6 +152,7 @@ export const WALKOVER_CREDIT_DATA: Readonly<Record<string, SportCreditData>> = {
       { name: "grand-slam", cfg: { bestOf: 5 }, source: "TN-WO-1: ITF Rule 7 best of five; ATP 4.01 C.4" },
       { name: "fast4", cfg: { bestOf: 3 }, source: "TN-WO-1: ITF App VI short sets, best of three" },
       { name: "doubles-noad-mtb10", cfg: { bestOf: 3 }, source: "TN-WO-1: ATP 4.02, a match tie-break counts as one set" },
+      { name: "short-sets", cfg: { bestOf: 3 }, source: "TN-WO-1: ITF App VI short sets (tie-break at four all), best of three" },
     ],
     played: [
       { name: "the side at fault leads 6-3 4-2 and retires (TN-RT-1: straight sets, games excluded)", cfg: "tour", home: [3, 2], away: [6, 4] },

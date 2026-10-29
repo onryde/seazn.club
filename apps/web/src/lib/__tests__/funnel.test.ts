@@ -41,7 +41,6 @@ async function seedGenericSport(): Promise<void> {
         resultMode: "score",
         allowDraws: true,
         points: { w: 3, d: 1, l: 0 },
-        progressScore: false,
       })}, true)
     on conflict do nothing`;
 }
@@ -126,7 +125,7 @@ describe.skipIf(!HAS_DB)("funnel drafts (v3/07 §6)", () => {
     expect(n).toBe(1);
   });
 
-  // Unknown-sport fallback: GenericCfg now defaults points/progressScore, so
+  // Unknown-sport fallback: GenericCfg now defaults points, so
   // a partial preset (engine variants or a stale synced sport_variants row)
   // parses instead of throwing CONFIG_INVALID at createDivision. Guards the
   // /start funnel's generic fallback end to end.

@@ -216,8 +216,10 @@ describe("W2d T18 — a hockey (FIH) goal records its type (HK-TB-2, B3, PS-7d)"
     expect(iihf.untyped, "ice hockey's goal type stays optional, and its walk still writes a typeless goal").toBeGreaterThan(0);
   });
 
-  it("fold-epoch: FOLD_EPOCH.hockey is 4 (Task 3's 3, plus this task's major; PS-9c — no git in vitest); ice hockey is untouched at 2", () => {
-    expect(FOLD_EPOCH.hockey).toBe(4);
-    expect(FOLD_EPOCH.icehockey).toBe(2);
+  // W2e T9 raised hockey to 5 and icehockey to 3 (the shoot-out order), so this pins the floor this task's major set, not the
+  // current value: the epoch only goes up, and `fold-epoch:check` in CI is what holds each later bump.
+  it("fold-epoch: FOLD_EPOCH.hockey carries this task's major, at least 4 (Task 3's 3, plus this one; PS-9c — no git in vitest); ice hockey at least its W2d 2", () => {
+    expect(FOLD_EPOCH.hockey).toBeGreaterThanOrEqual(4);
+    expect(FOLD_EPOCH.icehockey).toBeGreaterThanOrEqual(2);
   });
 });

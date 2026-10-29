@@ -43,12 +43,16 @@ const VARIANT_OVERRIDE: Record<string, number> = {
   "football:youth": 50,
   // Badminton / table tennis by rally length.
   "badminton:bwf": 40,
+  // W2e (author's call): 3×15 sits between `short` (11) and `bwf` (21).
+  "badminton:bwf-3x15": 30,
   "badminton:short": 25,
   "tabletennis:bo5": 20,
   "tabletennis:bo7": 30,
   "tabletennis:hardbat-21": 15,
   // Tennis by format: Fast4 is built for a short court slot; slams run long.
   "tennis:fast4": 45,
+  // W2e (author's call): short sets with the tie-break at 4–4 and ad games run longer than Fast4, far shorter than tour.
+  "tennis:short-sets": 60,
   "tennis:grand-slam": 180,
   // Hockeys: youth quarters are shorter.
   "hockey:youth": 50,

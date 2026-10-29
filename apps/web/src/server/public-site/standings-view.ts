@@ -409,18 +409,21 @@ export function ratioNote(
 export interface TableRulesLike {
   readonly points: PointsRule;
   readonly reachable: readonly OutcomeKey[];
+  /** W2e Task 8c (CK-BO-2): the over length net run rate is printed per (`StageTableRulesDoc.ballsPerOver`). Absent: the
+   *  display's default - a sport with no over, or a document cached before the field existed. */
+  readonly ballsPerOver?: number;
 }
 
 /** W2d T17 (spec §5.7) — the stage's result-column layout (IIHF's OTW/OTL, chess's half-points), from its rules; a
  *  stage the loader refused (no rules) prints W and L as folded, in whole points. */
 export function tableLayoutFor(rules: TableRulesLike | null | undefined): TableLayout {
-  return rules === null || rules === undefined ? PLAIN_LAYOUT : tableLayoutOf(rules.points, rules.reachable);
+  return rules === null || rules === undefined ? PLAIN_LAYOUT : tableLayoutOf(rules.points, rules.reachable, rules.ballsPerOver);
 }
 
 /** One cell's text — THE cell expression of both standings tables (the hub's view below and `standings-table.tsx`), so
  *  the two cannot print different numbers in the same cell. */
 export function cellText(row: StandingsRow, column: StandingsColumn, layout: TableLayout): string {
-  if (column.kind === "derived") return derivedMetricText(row, column.key as TiebreakerKey) ?? "—";
+  if (column.kind === "derived") return derivedMetricText(row, column.key as TiebreakerKey, layout.ballsPerOver) ?? "—";
   if (column.kind === "structural") return resultColumnText(row, column.key as ResultColumnKey, layout);
   return formatMetric(row.metrics[column.key], column.decimals);
 }

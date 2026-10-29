@@ -733,7 +733,8 @@ run again under the new engine, written back where the stream already sits. Two 
 fold recomputes) must change. Not `REBASELINE_GOLDEN=1`: that keeps every recorded event byte for byte, so it cannot change
 one, and a ledger the engine now refuses does not fold to be recomputed. Not `EXTEND_GOLDEN=1`: it never touches an existing
 stream, and a stream with the same `config#seed` is already there. Not `UPDATE_GOLDEN=1`: it rewrites everything. A stream below
-the stride (a generator walk) is never re-derived this way.
+the stride (a generator walk) is never re-derived by this batch reproduction: see "Re-recording a coverage-walk stream"
+below for the one case that needs it.
 
 **What it owes: a MAJOR for that sport**, in the same PR. The epoch guard keys a stream by `config#seed`, and a stream whose
 events, lineups or raw config differ is counted **removed and added** (`scripts/fold-epoch-guard.ts`), so an in-place
@@ -772,6 +773,28 @@ corpus.streams[batch.start + moved[0]!] = reproduced[moved[0]!]!;
 writeCorpus(corpus);
 ```
 
+## Re-recording a coverage-walk stream (W2e Task 6)
+
+A stream below the stride is an `extendCorpus` coverage walk (`buildStream` at a small seed), so `floorBatches` and
+`reproduceFloorBatch` do not reach it. One case still needs its recorded events changed: a NEW STRICT REFUSAL refuses an event
+such a stream recorded (W2e's cricket chase bound, `CHASE_OVERSHOOT`, refused `test#40` and `default#102`). `REBASELINE_GOLDEN=1`
+cannot repair it for the reason above, so it is a one-off scratch script with the floor-batch script's discipline:
+
+1. **Find the set by probe.** Fold every committed stream strictly; the streams whose fold throws the new code are the set.
+   Never choose it from a spec or a plan: three documents named one stream where two broke.
+2. **Refuse unless exactly that set differs.** The script names the expected identities and the expected refusal code and
+   writes nothing otherwise. Every other stream stays byte for byte, identity and position unchanged, and so does the
+   header.
+3. **Re-derive whole, or clamp in place.** Rebuild the walk with today's generator and compare it with the committed stream
+   as it stands BEFORE the engine change. If it reproduces byte for byte, re-derive the stream whole (the same `buildStream`
+   call `extendCorpus` made). If it does not (the generator moved after the stream was recorded), a whole re-derivation would
+   swap it for an unrelated stream and could lose the coverage it was added for: keep every event before the refused one and
+   replace the refused event alone with the value the corrected generator draws, which is the refusal's own bound when the
+   fix is a clamp that draws no rng. Then refold the state with the recorded config spliced back and slim it as
+   `extendCorpus` does.
+4. **Idempotent.** A second run reports nothing to re-record. Check the plain golden replay and `fold-epoch:check`; the
+   re-record owes the sport a MAJOR, as for a floor stream.
+
 ## Branch streams (W2c Task 16c)
 
 `src/testkit/golden-branches.ts` is the fourth append path, for the branches a
@@ -799,12 +822,28 @@ Branch streams carry `seed` in `[BRANCH_SEED_BASE, FLOOR_SEED_STRIDE)` (90001
 and up): above every generator seed, below the floor's stride, so the floor's
 reproduction and keep-rule never count them. They are appended streams, so they
 owe no version bump. They add configs, appended at the end of `configs`; no
-existing stream or config changes. The ten stories today: football
+existing stream or config changes. The fourteen stories today: football
 `shootoutAttempts` (and its sudden-death arm), hockey `q4_stands`, carrom and
 generic `share`, the `award` abandon with a withdrawal's expunge for football,
-hockey and ice hockey, football's level (draw) arm, and ice hockey's level
+hockey and ice hockey, football's level (draw) arm, ice hockey's level
 abandon under the IIHF default, which is flagged for a replay because no draw
-can stand there (R16-3). Five verdicts (the two award expunge arms, the
+can stand there (R16-3), and tennis's `set.tiebreakWinBy` (W2e TN-SS-2): short
+sets whose tie-break closes 5–4 on its deciding point (`short-sets#90011`,
+recorded under the config Task 5's `short-sets#1` already names). Its verdict
+needs no refold: a tie-break closed one point clear of the runner-up is a
+margin of one by itself, and the match's two refuses the same summary. A
+summary never reaches the point fold, though, so two more tennis stories PLAY
+their tie-breaks (W2e T13 fix round 1): `short-sets#90012` closes 5–4 on a
+`tennis.point`, and `short-sets-final-tiebreak-10#90013` (both margins in one
+config) plays the decider's tie-break through 10–9 to 11–9. A generator walk
+plays a tie-break point by point about never within `WALK_MAX`, so these two
+builders step the FOLD instead (`stepFold`): every event is folded strictly
+from the state the kernel holds, the winners kept level up to the score the
+rule is about and then one side's. No score line is typed: the fold decides
+when the set, the tie-break and the match end. The fourteenth story (W2e batch
+A1 M-4) records the Fast4 the product ships, `fast4#90014`: the set tie-break
+opens at THREE games all and closes 5–4 on a played point, under a `fast4`
+config equal to the variant (the pre-W2e shape, margin two, is `fast4-legacy`). Five verdicts (the two award expunge arms, the
 4th quarter, the flagged level award `reachesLevelAwardFlagged` and the football
 level draw `reachesAwardLevelDraw`) carry no replay differential: an abandon is
 applied only to a match still in play, so a ledger that ends on one and holds a

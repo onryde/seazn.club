@@ -26,6 +26,11 @@
 // is. A forfeit's method is its reason, verbatim: oracleMethod passes the reasons through, and an award's reason is
 // its method.
 //
+// W2e G12 (Task 24): a sanction that ends the match is the same `forfeit` action - the sanctioned side the offender, the
+// reason the engine's ending rule gives the level (endingReasonOf: `disqualified` after an end level, `retired` after a
+// prompt level) - on a match under way. The oracle names the credit and the advance; the sanction itself is judged by the
+// W2E_SANCTION_END scenario's own check, which reads the product's state.
+//
 // A drive the oracle does not cover is not judged, and says why: `OutOfScope` and `RuledOut` are the oracle's own
 // named exclusions, and a double walkover whose next-match line cannot be read is the harness's. Not judged is
 // COUNTED and named, never silent, and a run that judged nothing fails (zero is a failure, R25).
@@ -37,7 +42,8 @@ import type { ObservedOutcome } from "./observed.ts";
 import { BRACKET_OF } from "./scenarios/terminal-finals.ts";
 import { sportModule } from "./sport-cfg.ts";
 import type { FixtureRow } from "./driver/types.ts";
-import type { RequestedOutcome, StreamEvent } from "./streams/types.ts";
+import { endingReasonOf } from "./streams/sanction.ts";
+import type { ForfeitReason, ProductFold, RequestedOutcome, StreamEvent, StreamLineups } from "./streams/types.ts";
 
 /** Where the engine's bracket wires THIS match's loser, and who the product seated there. */
 export type LoserSeat =
@@ -84,6 +90,15 @@ export interface BracketDrive {
    *  nothing when refused) — judged against the oracle's `refused`, never dropped; null when the product accepted it.
    *  `status` and `outcome` are then the fixture as the refusal left it. */
   readonly refusal: { readonly status: number; readonly code: string | null } | null;
+  /** W2e (Task 21): the product's own /state for the fixture, read after the last event was posted — the engine's summary and
+   *  the fold's state as match_states holds them. Recorded ONLY for a drive that asked a win down a deciding path (the
+   *  W2e scenarios' witness reads it; every other drive's call log is unchanged); null when the product held no row, absent
+   *  on a drive that asked no path. */
+  readonly product?: ProductFold | null;
+  /** W2e (Task 21): the persons the harness PUT for each side, when the stream it generated names persons (cricket's super
+   *  over: `SportStreamGenerator.namesPersons`) - the lineups the generator built against and the fold must be given. Absent
+   *  for every stream that names none. */
+  readonly lineups?: StreamLineups;
 }
 
 export type Judgement =
@@ -95,6 +110,15 @@ export class LevelKindUnread extends Error {
   constructor(sport: string, asked: string, why: string) {
     super(`reference-bracket: ${sport} '${asked}' — ${why}`);
     this.name = "LevelKindUnread";
+  }
+}
+
+/** W2e G12 (Task 24): a sanction ending the bracket oracle has no row for - a level that ends nothing in the sport's
+ *  declaration, or a drive that recorded no play under way to end. Named, never judged as some other case. */
+export class SanctionEndUnjudged extends Error {
+  constructor(sport: string, why: string) {
+    super(`reference-bracket: ${sport} sanctionEnd — ${why}`);
+    this.name = "SanctionEndUnjudged";
   }
 }
 
@@ -123,6 +147,11 @@ export function levelKindOf(sport: string, cfg: unknown, home: string, away: str
     case "forfeit":
     case "double_walkover":
     case "abandon":
+      return null;
+    // W2e G12 (Task 24, decided): a sanction that ends the match ends it in an AWARD (the forfeit that follows it), never in a
+    // level result, so it plays none - the same null as the forfeit it ends in. Not silent: w2e-streams.test.ts folds
+    // every sanction ending through the engine and holds the outcome to an award.
+    case "sanctionEnd":
       return null;
     case "draw":
     case "tie":
@@ -189,11 +218,23 @@ export function bracketCaseOf(d: BracketDrive): BracketCase | { readonly notJudg
     case "abandon":
       return { ...base, play: { kind: "none" }, actions: [{ kind: "abandon" }] };
     case "forfeit":
+    case "sanctionEnd":
     case "double_walkover": {
       if (d.forfeitPlay === null) throw new ForfeitPlayUnread(d.sport, `${d.fixtureId}: the ${a.kind} drive recorded no play before its forfeit`);
+      // W2e G12 (Task 24): a sanction ending IS the forfeit it ends in - the offender is the sanctioned side, the reason the one
+      // the engine's ending rule gives the level (sanction.ts) - recorded on a match under way: a sanction is a sport event, so
+      // it is never the first thing on a ledger. The reason is never read off the stream the harness posted.
+      let sanctionReason: ForfeitReason | null = null;
+      if (a.kind === "sanctionEnd") {
+        sanctionReason = endingReasonOf(d.sport, a.level);
+        if (sanctionReason === null) throw new SanctionEndUnjudged(d.sport, `${d.fixtureId}: a '${a.level}' sanction ends nothing in the sport's declaration, so there is no forfeit to judge`);
+        if (d.forfeitPlay.kind !== "in_progress") throw new SanctionEndUnjudged(d.sport, `${d.fixtureId}: the sanction ending was recorded on a match that was not under way (${d.forfeitPlay.kind})`);
+      }
       const forfeit: Action = a.kind === "forfeit"
         ? { kind: "forfeit", offender: a.by, reason: a.reason, by: HARNESS_FORFEIT_WRITER }
-        : { kind: "forfeit", offender: "both", reason: "walkover", by: HARNESS_FORFEIT_WRITER }; // X-DW-1
+        : a.kind === "sanctionEnd"
+          ? { kind: "forfeit", offender: a.by, reason: sanctionReason!, by: HARNESS_FORFEIT_WRITER }
+          : { kind: "forfeit", offender: "both", reason: "walkover", by: HARNESS_FORFEIT_WRITER }; // X-DW-1
       // X-DW-3 asks whether the fixture feeds a next match of a double walkover alone: unread, it is not judged.
       if (a.kind === "double_walkover" && d.next.line === "unresolved") return { notJudged: `double_walkover: whether ${d.fixtureId} feeds a next match could not be read (${d.next.why})` };
       return { ...base, play: d.forfeitPlay, actions: [forfeit], ...(d.next.line === "unresolved" ? {} : { hasNextMatch: d.next.line === "next" }) };

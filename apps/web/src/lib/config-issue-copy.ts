@@ -3,7 +3,7 @@
 // The engine's sentences are English; a sentence this codebase owns (the share-on-abandon refusals) maps to a dictionary
 // key in all four locales, and anything else shows the engine's own message rather than the generic "invalid config".
 // No `server-only`: the settings forms read it.
-import { SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS } from "@seazn/engine/sport";
+import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR, SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ruleRefusalSentence } from "@/lib/rule-errors";
 
@@ -31,16 +31,33 @@ export function configIssuesOf(data: unknown): ConfigIssue[] | null {
   return out.length === 0 ? null : out;
 }
 
-/** The engine sentences this app localizes, keyed by the engine's own constants (never retyped here). */
+/** The engine sentences this app localizes, keyed by the engine's own constants (never retyped here). A sentence may be a
+ *  TEMPLATE with `{name}` slots (`SET_TARGET_BELOW_FLOOR`'s `{min}`): the issue then matches it with a number in each slot,
+ *  and the numbers fill the same slots of the localized copy. */
 export const LOCALIZED_CONFIG_ISSUES: ReadonlyMap<string, MessageKey> = new Map<string, MessageKey>([
   [SHARE_NEEDS_DRAWS, "rules.err.shareNeedsDraws"],
   [SHARE_NEEDS_DRAWN_GAME, "rules.err.shareNeedsDrawnGame"],
+  // W2e (spec §5.5; VB-CF-1, TT-CF-1, TN-CF-1): the write doors' refusals of ruling 31's floor and RB2A-13.
+  [SET_TARGET_BELOW_FLOOR, "rules.err.setTargetBelowFloor"],
+  [BO1_MATCH_TIEBREAK, "rules.err.bo1MatchTiebreak"],
 ]);
 
-/** One issue as the reader should see it: the localized sentence when this app owns it, else the engine's message. */
+/** A sentence as a whole-message matcher: literal text, each `{name}` slot a named run of digits. */
+function sentenceMatcher(sentence: string): RegExp {
+  const literal = sentence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${literal.replace(/\\\{(\w+)\\\}/g, "(?<$1>\\d+)")}$`);
+}
+
+const CONFIG_ISSUE_MATCHERS: readonly (readonly [RegExp, MessageKey])[] = [...LOCALIZED_CONFIG_ISSUES].map(([sentence, key]) => [sentenceMatcher(sentence), key] as const);
+
+/** One issue as the reader should see it: the localized sentence when this app owns it (its slots filled from the
+ *  engine's), else the engine's message. */
 export function configIssueText(issue: ConfigIssue, msg: Msg): string {
-  const key = LOCALIZED_CONFIG_ISSUES.get(issue.message);
-  return key === undefined ? issue.message : msg(key);
+  for (const [matcher, key] of CONFIG_ISSUE_MATCHERS) {
+    const found = matcher.exec(issue.message);
+    if (found !== null) return found.groups === undefined ? msg(key) : msg(key, { ...found.groups });
+  }
+  return issue.message;
 }
 
 /** What a failed settings save says. A rule-lock refusal says itself first (`ruleRefusalSentence`); a CONFIG_INVALID that names its problems says them (all of them, in order); any

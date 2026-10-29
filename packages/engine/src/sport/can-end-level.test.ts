@@ -69,7 +69,7 @@ function kindsOver(m: AnySportModule, cfg: Record<string, unknown>): { decided: 
 interface Row { readonly sport: string; readonly name: string; readonly cfg: Record<string, unknown>; readonly canEnd: boolean; readonly raw?: true }
 const OFF = { enabled: false, halfMinutes: 15 } as const;
 const ET = { enabled: true, halfMinutes: 15 } as const;
-const PENS = { attempts: 5, suddenDeath: true } as const;
+const PENS = { attempts: 5 } as const;
 const SD_OT = { kind: "sudden_death", minutes: 5, skaters: 3 } as const;
 const ROWS: readonly Row[] = [
   { sport: "football", name: "both deciders off", cfg: { shootout: false, extraTime: OFF }, canEnd: true },

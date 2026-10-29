@@ -37,7 +37,14 @@ export const badminton = makeSetBasedModule({
     records: { timeouts: false, sanctions: true, substitutions: false, expedite: false },
   },
   variants: {
-    bwf: {},
+    // W2e (spec 2026-10-28 §5.1, BD-VR-1) — BWF Laws 7.1 and 7.3–7.5 (3×21), written out rather than `{}`: the defaults
+    // above stay 3×21 (every stored division and frozen fixture keeps its scoring), and no later change to them can move
+    // the variant labelled 3×21.
+    bwf: { setTo: 21, finalSetTo: 21, cap: 30 },
+    // W2e (D1, D2; RB2A-1, BD-VR-1) — BWF 3×15, in force 2027-01-04: to 15, two clear from 14-all, the 21st point wins
+    // at 20-all, best of three, the deciding game to the same 15. The interval is the kernel's mid-game rule (8 at 15).
+    // New divisions are offered it first (the web's preferred variant); it is not the module default.
+    "bwf-3x15": { bestOf: 3, setTo: 15, finalSetTo: 15, winBy: 2, cap: 21 },
     // Junior/social short format: to 11, cap 15 (badminton.md §2).
     short: { setTo: 11, finalSetTo: 11, cap: 15 },
   },
@@ -67,6 +74,10 @@ export const badminton = makeSetBasedModule({
   // removing a player from the match, which a badminton umpire's sheet does
   // record, so all four stay reachable here.
   sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
+  // W2e (spec 2026-10-28 §5.2; D3 (1); BD-SE-1, X-SE-1) — the black card ENDS the match: the next event is its ending,
+  // core.forfeit{disqualified} against the carded side (X-RT-1's credit), and until it is recorded the write path takes
+  // no other event but an abandon. Badminton asks no "can the side play on?" question (no prompt level).
+  sanctionEnding: { eventType: "badminton.sanction", endLevels: ["disqualification"], promptLevels: [] },
   // R5-1 — BWF service, declared rather than keyed on the sport name.
   //  * Law 10.3 (singles; Law 11 in doubles): the side winning a rally serves
   //    the next one. So the LEDGER

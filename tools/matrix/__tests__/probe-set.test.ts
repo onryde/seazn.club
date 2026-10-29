@@ -141,10 +141,13 @@ describe("the run-time scorability re-check (T6/T8 carry)", () => {
     expect(() => make({ set: PROBE_SET })).toThrow(/generic#\d{3}.*win-home: EngineError: refused now/);
   });
   it("requireScorable refuses a case whose COMMITTED record is unscorable, even when a re-score would pass", () => {
-    const unscorable = committed.sports.flatMap((s) => s.cases).find((c) => c.scorable !== null);
-    expect(unscorable, "variants.json holds no unscorable case to witness with").toBeDefined();
-    expect(() => requireScorable(unscorable!, () => null)).toThrow(BoundVariantUnscorable);
-    expect(() => requireScorable(unscorable!, () => null)).toThrow(unscorable!.scorable!);
+    // No committed case is unscorable since the write door joined resolveSportCfg (W2e Task 24: a refused combination is never built
+    // as a case), so the unscorable record is a committed case with a reason put on it - a real case, a real record shape.
+    const scorableCase = committed.sports.flatMap((s) => s.cases).find((c) => c.scorable === null);
+    expect(scorableCase, "variants.json holds a case to put the reason on").toBeDefined();
+    const unscorable = { ...scorableCase!, scorable: "win-home: EngineError: refused when the case was committed" };
+    expect(() => requireScorable(unscorable, () => null)).toThrow(BoundVariantUnscorable);
+    expect(() => requireScorable(unscorable, () => null)).toThrow(unscorable.scorable);
   });
   it("requireScorable: a case recorded scorable that re-scores as refused is refused on the RE-SCORE alone", () => {
     const ok = casesOf("badminton").find((c) => c.scorable === null)!;

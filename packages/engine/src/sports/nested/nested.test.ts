@@ -245,7 +245,11 @@ describe("nested kernel — decision & undo", () => {
 });
 
 // Cross-sport invariants over generated streams (spec 04 §9) — default (tour)
-// and the two structurally different deciders.
+// and the two structurally different deciders; then W2e TN-SS-2's short sets
+// (tie-break at four all, won 5–4 on its deciding point: a set tie-break with
+// a margin of its own, which the tour and the doubles cfgs never play).
 conformanceSuite(tennis);
 conformanceSuite(tennis, { cfg: tennis.variants["doubles-noad-mtb10"], label: "mtb10" });
 conformanceSuite(tennis, { cfg: tennis.variants["fast4"], label: "fast4" });
+if (!Object.hasOwn(tennis.variants, "short-sets")) throw new Error('premise: tennis declares a "short-sets" variant');
+conformanceSuite(tennis, { cfg: tennis.variants["short-sets"], label: "short-sets" });

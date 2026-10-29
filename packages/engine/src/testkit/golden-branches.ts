@@ -205,6 +205,72 @@ function reachesShootoutSuddenDeath(r: Recorded): string | null {
   return null;
 }
 
+/** Whether a closed set in `state` was won on its tie-break's deciding point: the target to one below it (5–4 to five). */
+function closedOnDecidingPoint(state: Record<string, unknown>, to: number): boolean {
+  const sets = Array.isArray(state.sets) ? (state.sets as unknown[]) : [];
+  return sets.some((s) => {
+    const tb = obj(obj(s).tb);
+    const [h, a] = [Number(tb.home), Number(tb.away)];
+    return Math.max(h, a) === to && Math.min(h, a) === to - 1;
+  });
+}
+
+/** tennis `set.tiebreakWinBy` (W2e RB2A-12, TN-SS-2; ITF App VI §2, RBS:347): a short-set tie-break closed on its deciding
+ *  point at four all, 5–4. Only a margin of one closes a tie-break one point clear of its target's runner-up, so the close
+ *  is itself the differential: under the margin every set tie-break played before W2e (the match's two) the same ledger
+ *  plays on from 5–4 or is refused there. A stream that only names the key (short sets with no tie-break) does not reach it. */
+function reachesShortSetDecidingPoint(r: Recorded): string | null {
+  if (obj(obj(r.raw).set).tiebreakWinBy !== 1) return "its config's set tie-break is not won by one point";
+  const played = replay(r, r.raw);
+  if (typeof played === "string") return played;
+  const to = Number(obj(obj(played.cfg).set).tiebreakTo);
+  if (!closedOnDecidingPoint(played.state, to)) return `no set closes on its tie-break's deciding point (${to}–${to - 1})`;
+  return null;
+}
+
+/** `reachesShortSetDecidingPoint`, with the close PLAYED: the deciding point is a `tennis.point`, the ledger's last event. A
+ *  summary only states a final score, so it reaches the summary check and never the point fold (`applyTbPoint`), which is
+ *  where a margin of one ends a tie-break. */
+function reachesShortSetDecidingPointPlayed(r: Recorded): string | null {
+  const closed = reachesShortSetDecidingPoint(r);
+  if (closed !== null) return closed;
+  if (lastEvent(r)?.type !== "tennis.point") return "the deciding point is not closed by a played point";
+  return null;
+}
+
+/** tennis Fast4 (W2e TN-SS-2, batch A1 review M-4; ITF App VI §1-2): the shipped `fast4` variant opens its set tie-break at THREE
+ *  games all (4–3 in games), not at four like `short-sets`, and `reachesShortSetDecidingPointPlayed` is blind to the difference -
+ *  it would accept a stream recorded at four all under a config that opens at three. So this verdict first asks the config for the
+ *  three-all trigger, then the played close of the margin of one. (The closed set's games, 4–3, follow from the trigger: a set that
+ *  closes on a tie-break closes at `tiebreakAt + 1` to `tiebreakAt`, so asking them too would be a guard nothing could kill.) */
+function reachesFast4DecidingPointPlayed(r: Recorded): string | null {
+  if (obj(obj(r.raw).set).tiebreakAt !== 3) return "its config does not open its tie-break at three games all";
+  return reachesShortSetDecidingPointPlayed(r);
+}
+
+/** tennis `finalSet` beside a set's own margin (W2e TN-SS-2; RBS:349, App VI §5): short sets, whose tie-break is won by one,
+ *  with a final-set tie-break to ten, which keeps the match's margin of two. The deciding set's tie-break is PLAYED past its
+ *  target, ending two clear (11–9): it went through 10–9, which the set's margin of one would have closed. */
+function reachesFinalSetTiebreakAtMatchMargin(r: Recorded): string | null {
+  const raw = obj(r.raw);
+  if (obj(raw.finalSet).tiebreakTo === undefined) return "its config plays no final-set tie-break";
+  if (obj(raw.set).tiebreakWinBy !== 1) return "its config's set tie-break is not won by one point";
+  const played = replay(r, r.raw);
+  if (typeof played === "string") return played;
+  const cfg = obj(played.cfg);
+  const to = Number(obj(cfg.finalSet).tiebreakTo);
+  const margin = Number(obj(cfg.tiebreak).winBy);
+  const sets = Array.isArray(played.state.sets) ? (played.state.sets as unknown[]) : [];
+  const pastTarget = sets.some((s) => {
+    const tb = obj(obj(s).tb);
+    const [h, a] = [Number(tb.home), Number(tb.away)];
+    return Math.max(h, a) > to && Math.abs(h - a) === margin;
+  });
+  if (!pastTarget) return `no final-set tie-break closes past ${to} by the match's margin of ${margin}`;
+  if (lastEvent(r)?.type !== "tennis.point") return "the final-set tie-break is not closed by a played point";
+  return null;
+}
+
 // ----------------------------------------------------------------------------------------------------------- builders
 
 interface BuildCtx {
@@ -261,6 +327,43 @@ function playThen(c: BuildCtx, reached: (r: Recorded) => string | null, stop: Pa
     const played = playUntil(c, seed, stop);
     return played === null ? null : [...played, last];
   });
+}
+
+/** A ledger that steps the FOLD, not the generator: `next` names each event from the state the kernel holds (folded strictly,
+ *  whole, every step, like `playUntil`), until `done` holds - or null if the fold refuses one or the match ends first. For
+ *  a branch only a PLAYED tie-break reaches: a generator walk plays one point by point about never within `WALK_MAX`, so
+ *  these ledgers name the winners themselves - level until the score the rule is about, then one side. */
+function stepFold(c: BuildCtx, next: (state: Record<string, unknown>) => GoldenEvent, done: (state: Record<string, unknown>) => boolean): GoldenEvent[] | null {
+  const events: GoldenEvent[] = [ev("core.start")];
+  for (let i = 0; i < WALK_MAX; i++) {
+    const folded = replay({ module: c.module, raw: c.raw, lineups: c.lineups, events }, c.raw);
+    if (typeof folded === "string") return null;
+    if (done(folded.state)) return events;
+    if (held(folded.state) !== null) return null;
+    events.push(next(folded.state));
+  }
+  return null;
+}
+
+/** The next tennis event that keeps a set level up to the score `to - 1` all of its tie-break and then gives the home side
+ *  every point: games alternate (home first) until the tie-break opens, its points alternate until `to - 1` all, then home.
+ *  `setWinner` names who takes every game of a set before the deciding one (null: play every set level). */
+function levelToTiebreak(c: BuildCtx, to: (state: Record<string, unknown>) => number, setWinner: (setsPlayed: number) => "home" | "away" | null) {
+  const H = c.lineups.home.entrantId;
+  const A = c.lineups.away.entrantId;
+  return (state: Record<string, unknown>): GoldenEvent => {
+    const points = obj(state.points);
+    if (points.kind === "tiebreak") {
+      const [h, a] = [Number(points.home), Number(points.away)];
+      const by = Math.min(h, a) < to(state) - 1 && h > a ? A : H;
+      return ev("tennis.point", { by });
+    }
+    const won = obj(state.setsWon);
+    const owner = setWinner(Number(won.home) + Number(won.away));
+    const games = obj(state.games);
+    const winner = owner === "home" ? H : owner === "away" ? A : Number(games.home) > Number(games.away) ? A : H;
+    return ev("tennis.game.award", { winner });
+  };
 }
 
 const goals = (state: Record<string, unknown>): { home: number; away: number } => {
@@ -416,6 +519,73 @@ export const BRANCH_STORIES: readonly BranchStory[] = [
         return null;
       }
     }, SUDDEN_DEATH_SEED_BUDGET),
+  },
+  {
+    // W2e Task 13 (Task 5 review m2): the opt-in key Task 5 added. GOLDEN-POLICY.md: "A NEW opt-in key owes a story".
+    id: "tennis.short_set_deciding_point",
+    sport: "tennis",
+    key: "set",
+    seed: BRANCH_SEED_BASE + 11,
+    config: { name: "short-sets", raw: { set: { gamesTo: 4, winBy: 2, tiebreakAt: 4, tiebreakTo: 5, tiebreakWinBy: 1 } } },
+    what: "short sets (App VI §1-2) whose tie-break at four games all is won 5–4 on the deciding point (`set.tiebreakWinBy` 1)",
+    reached: reachesShortSetDecidingPoint,
+    build: (c) => {
+      const to = Number(obj(obj(c.cfg).set).tiebreakTo);
+      return shortest(c, reachesShortSetDecidingPoint, (seed) => playUntil(c, seed, (state) => closedOnDecidingPoint(state, to)));
+    },
+  },
+  {
+    // Fix round 1 (review I-1): the summary above never reaches the point fold, so a margin mutant in `applyTbPoint` was
+    // green across the golden suite. This one plays the tie-break.
+    id: "tennis.short_set_deciding_point_played",
+    sport: "tennis",
+    key: "set",
+    seed: BRANCH_SEED_BASE + 12,
+    config: { name: "short-sets", raw: { set: { gamesTo: 4, winBy: 2, tiebreakAt: 4, tiebreakTo: 5, tiebreakWinBy: 1 } } },
+    what: "short sets whose tie-break at four games all is PLAYED to four points all and won 5–4 on the deciding point",
+    reached: reachesShortSetDecidingPointPlayed,
+    build: (c) => {
+      const to = Number(obj(obj(c.cfg).set).tiebreakTo);
+      return stepFold(c, levelToTiebreak(c, () => to, () => null), (state) => closedOnDecidingPoint(state, to));
+    },
+  },
+  {
+    // Fix round 1 (review I-1): a config that sets both margins, so the decider's (`rulesFor`) is in the corpus.
+    id: "tennis.final_set_tiebreak_match_margin",
+    sport: "tennis",
+    key: "finalSet",
+    seed: BRANCH_SEED_BASE + 13,
+    config: {
+      name: "short-sets-final-tiebreak-10",
+      raw: { set: { gamesTo: 4, winBy: 2, tiebreakAt: 4, tiebreakTo: 5, tiebreakWinBy: 1 }, finalSet: { tiebreakTo: 10 } },
+    },
+    what: "short sets with a final-set tie-break to ten: one set each, then the decider's tie-break played through 10–9 to 11–9",
+    reached: reachesFinalSetTiebreakAtMatchMargin,
+    build: (c) => {
+      const to = Number(obj(obj(c.cfg).finalSet).tiebreakTo);
+      const setTo = Number(obj(obj(c.cfg).set).tiebreakTo);
+      const deciding = (state: Record<string, unknown>): boolean => Number(obj(state.setsWon).home) + Number(obj(state.setsWon).away) === 2;
+      return stepFold(
+        c,
+        levelToTiebreak(c, (state) => (deciding(state) ? to : setTo), (played) => (played === 0 ? "home" : played === 1 ? "away" : null)),
+        (state) => held(state) !== null,
+      );
+    },
+  },
+  {
+    // Batch A1 review M-4: the corpus held only the pre-W2e Fast4 (margin two, now `fast4-legacy`), and `short-sets` opens at four
+    // all, so no stream recorded the Fast4 the product ships. The config is the declared variant itself (the premise test pins it).
+    id: "tennis.fast4_deciding_point_played",
+    sport: "tennis",
+    key: "set",
+    seed: BRANCH_SEED_BASE + 14,
+    config: { name: "fast4", raw: { set: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5, tiebreakWinBy: 1 }, game: { noAd: true } } },
+    what: "Fast4 (App VI §1-2): the set tie-break at three games all PLAYED to four points all and won 5–4 on the deciding point (`set.tiebreakWinBy` 1)",
+    reached: reachesFast4DecidingPointPlayed,
+    build: (c) => {
+      const to = Number(obj(obj(c.cfg).set).tiebreakTo);
+      return stepFold(c, levelToTiebreak(c, () => to, () => null), (state) => closedOnDecidingPoint(state, to));
+    },
   },
 ];
 

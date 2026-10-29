@@ -113,7 +113,8 @@ function divisionMetrics(division: StandingsShapeInput): readonly MetricSpecLike
 }
 
 /** One stage's standings shape: the division's metrics and the stage's order (none for a stage whose rules the loader
- *  refused, or a hand-built input that carries none). */
+ *  refused, or a hand-built input that carries none). The layout takes no `ballsPerOver` (W2e T8c review M3): the slide
+ *  prints result columns, points and the points ratio, and the over length moves only net run rate, which it never shows. */
 const stageShape = (metricSpecs: readonly MetricSpecLike[], rules: StageRulesInput | null | undefined): StandingsShape => ({
   metricSpecs,
   cascade: rules?.tiebreakers ?? [],

@@ -72,7 +72,7 @@ describe("foldClient", () => {
   it("runs the module's own fold — matches foldMatch exactly and reflects a real state change", () => {
     const mod = resolveModuleClient("generic", "1.0.0");
     const lineups = defaultLineupPair(mod.positions);
-    const cfg: GenericCfg = { resultMode: "win_loss", allowDraws: false, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+    const cfg: GenericCfg = { resultMode: "win_loss", allowDraws: false, points: { w: 3, d: 1, l: 0 } };
     const events = [
       makeEnvelope(1, { type: "core.start", payload: {} }),
       makeEnvelope(2, { type: "generic.score", payload: { by: "H", points: 3 } }),
