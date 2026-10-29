@@ -45,7 +45,7 @@ import { engineRefuses } from "./tennis-oracles.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { setSportsOf } from "./set-oracles.ts";
 import { declaredAllOut } from "../lib/streams/cricket.ts";
-import { generateStream, matchesRequest } from "../lib/streams/index.ts";
+import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/streams/index.ts";
 import { DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
@@ -106,6 +106,26 @@ const pathWins = (): RequestedOutcome[] => DECIDING_PATHS.flatMap((path) => (["h
  *  division-builder.tsx by catalogue.test.ts) comes first, and it is what PADPROOF plays. Since W1d item 16 cricket's
  *  two innings a side (the `test` preset) are inside the pad's route like any other. */
 function requestsFor(sport: string): StreamRequest[] {
+  return allRequestsFor(sport).filter((r) => declaredUnbuilt(r) === null);
+}
+/** Why the sport's generator DECLARES it does not build `r` (a refusal by name, GeneratorUnsupported), or null when it builds it.
+ *  The sweeps below never ask for these (a request the generator declares out of reach routes nothing), so a GeneratorUnsupported
+ *  they do meet is a hole and fails (`streamOf`); the differential test pins this list to the generator's actual refusals both ways.
+ *   - "no-deciding-path": a win down a deciding path from a generator with no `pathWitness` (index.ts F8: it would build a plain win
+ *     under the path's name). The declaration read is the generator's own.
+ *   - "draw-continues": football's draw under a cfg with extra time or a shoot-out (football.ts: supportsDraws reads the stage
+ *     only, so the engine declares the draw drawable while level FT continues; the generator refuses rather than emit a stream that
+ *     folds undecided). A `level` result and a settle after one are built FROM that draw (levelStream, index.ts), so they are refused
+ *     the same way. */
+function declaredUnbuilt(r: StreamRequest): "no-deciding-path" | "draw-continues" | null {
+  const o = r.outcome;
+  if (o.kind === "win" && o.path !== undefined && STREAM_GENERATORS[r.sportKey]?.pathWitness === undefined) return "no-deciding-path";
+  const cfg = r.cfg as { extraTime?: { enabled?: boolean }; shootout?: boolean };
+  const viaDraw = o.kind === "draw" || o.kind === "level" || (o.kind === "settle" && o.after === "level");
+  if (r.sportKey === "football" && viaDraw && (cfg.extraTime?.enabled === true || cfg.shootout === true)) return "draw-continues";
+  return null;
+}
+function allRequestsFor(sport: string): StreamRequest[] {
   const def = offlineBuilderDefault(sport);
   const variants = [def, ...variantKeys(sport).filter((v) => v !== def)];
   const league = variants.flatMap((v) => {
@@ -119,12 +139,14 @@ function requestsFor(sport: string): StreamRequest[] {
   });
   return [...league, ...bracketOutcomesFor().map((o) => bracketReq(sport, cfg, o)), ...paths];
 }
-/** The events a request generates, or [] where the generator declares the case unsupported. */
+/** The events a request generates, or [] where the cfg declares the outcome unreachable (OutcomeUnreachable: no such path, a
+ *  draw where none is allowed). A GeneratorUnsupported is NOT out of reach - nothing is known-unsupported since ruling 44 - it
+ *  is a hole in the generator and fails the test that hit it (Task 20 M4). */
 function streamOf(r: StreamRequest): StreamEvent[] {
   try {
     return generateStream(r);
   } catch (e) {
-    if (e instanceof GeneratorUnsupported || e instanceof OutcomeUnreachable) return []; // declared out of reach: nothing to route
+    if (e instanceof OutcomeUnreachable) return []; // declared out of reach: nothing to route
     throw e;
   }
 }
@@ -205,6 +227,49 @@ describe("the pad adapter registry", () => {
   });
 });
 
+describe("the sweeps' requests (Task 20 M4: a GeneratorUnsupported is a failure, not a skip)", () => {
+  it("streamOf skips an OutcomeUnreachable only: a GeneratorUnsupported propagates, and a built request is returned whole", () => {
+    // A sport with no generator: the refusal is a hole, not an unreachable outcome.
+    const noGen = { sportKey: "no-such-sport", cfg: {}, stageKind: "league", home: HOME, away: AWAY, outcome: { kind: "win", winner: "home" } } satisfies StreamRequest;
+    expect(() => streamOf(noGen)).toThrow(GeneratorUnsupported);
+    // A path win from a generator that builds none (boardgame): GeneratorUnsupported by name, so it propagates too.
+    const cfg = resolveSportCfg("boardgame", offlineBuilderDefault("boardgame"));
+    const noPath = bracketReq("boardgame", cfg, { kind: "win", winner: "home", path: "extraTime" });
+    expect(() => generateStream(noPath)).toThrow(GeneratorUnsupported);
+    expect(() => streamOf(noPath)).toThrow(GeneratorUnsupported);
+    // A cfg that declares a path unreachable: OutcomeUnreachable, skipped (empty).
+    const football = resolveSportCfg("football", offlineBuilderDefault("football"));
+    const noKick = bracketReq("football", football, { kind: "win", winner: "home", path: "gws" });
+    expect(() => generateStream(noKick)).toThrow(OutcomeUnreachable);
+    expect(streamOf(noKick)).toEqual([]);
+    // A built request comes back whole.
+    expect(streamOf(req("football", football, { kind: "win", winner: "home" })).length).toBeGreaterThan(0);
+  });
+
+  it("the declared-unbuilt requests are EXACTLY the ones the generator refuses with GeneratorUnsupported, over every pad sport's whole request set (counted, both ways)", () => {
+    const by: Record<string, number> = { "no-deciding-path": 0, "draw-continues": 0 };
+    let judged = 0;
+    for (const [sport] of ADAPTERS) {
+      for (const r of allRequestsFor(sport)) {
+        let refused = false;
+        try { generateStream(r); } catch (e) {
+          if (e instanceof OutcomeUnreachable) { judged++; continue; } // declared out of reach: streamOf's skip, not an unbuilt shape
+          if (!(e instanceof GeneratorUnsupported)) throw e;
+          refused = true;
+        }
+        const why = declaredUnbuilt(r);
+        expect(refused, `${sport} ${JSON.stringify(r.outcome)}: the generator ${refused ? "refuses" : "builds"} it, declaredUnbuilt says ${why}`).toBe(why !== null);
+        if (why !== null) by[why]!++;
+        judged++;
+      }
+    }
+    console.info(`pad-adapters: ${judged} request(s) judged; declared unbuilt: ${JSON.stringify(by)}`);
+    expect(judged).toBeGreaterThan(0);
+    expect(by["no-deciding-path"], "some pad sport's generator builds no deciding path").toBeGreaterThan(0);
+    expect(by["draw-continues"], "football has a league draw under extra time or a shoot-out").toBeGreaterThan(0);
+  });
+});
+
 describe.each(ADAPTERS)("%s adapter", (sport, a) => {
   it("emits equals what its generator actually emits across every variant and outcome it accepts", () => {
     const seen = new Set<string>();
@@ -257,9 +322,23 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
     }
     console.info(`pad-adapters: ${sport}: ${routed} generated event(s) routed, ${barred} declared noControl, ${afterBarred} after one (their types routed elsewhere)`);
     expect(routed).toBeGreaterThan(0);
-    // The skip is reached exactly where it is owed (cricket's interruption/revise): a sport with none skips nothing, and cricket skips something.
+    // The skip is reached exactly where it is owed (cricket's interruption/revise). It is recounted from the RAW streams (the events
+    // after the first skipping event that are not themselves noControl), not read back from the loop's own flag: the loop and the
+    // recount agree for every sport, so a skip leaking to another noControl event (a follow-on, a match close) moves one and not the other.
+    let inspected = 0;
+    let expectedAfterBarred = 0;
+    for (const r of requestsFor(sport)) {
+      const evs = scorerEvents(streamOf(r));
+      inspected += evs.length;
+      const first = evs.findIndex((e) => SKIPS_THE_REST.has(e.type));
+      if (first >= 0) expectedAfterBarred += evs.slice(first + 1).filter((e) => !noControl.has(e.type)).length;
+    }
+    expect(inspected, `${sport}: the recount read some events`).toBeGreaterThan(0);
+    expect(afterBarred, `${sport}: events skipped after a skipping event, recounted from the raw streams`).toBe(expectedAfterBarred);
     if (sport === "cricket") expect(afterBarred, "cricket's DLS streams have events after the revise, which the pad is never asked for").toBeGreaterThan(0);
-    else expect(afterBarred, `${sport} skipped events after a noControl event`).toBe(0);
+    // SKIPS_THE_REST names cricket's two events only, so a sport that declares ANY noControl owes the driver a skip rule of its own:
+    // another adapter growing a noControl must extend this set (or say it skips nothing), not inherit "no skip" silently.
+    else expect(a.noControl, `${sport} declares noControl events; SKIPS_THE_REST (cricket's DLS pair) says nothing about them`).toBeUndefined();
     console.info(`pad-adapters: ${sport}: ${routedAfterBarred} event(s) routed AFTER a noControl event that does not skip the rest`);
     // ...and the scoping is witnessed: events after cricket's follow-on / match close ARE routed and asserted (not skipped with the DLS tail).
     if (sport === "cricket") expect(routedAfterBarred, "cricket: some event follows a follow-on or match close and is routed").toBeGreaterThan(0);
