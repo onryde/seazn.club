@@ -13,7 +13,9 @@
 // `e2e/walkthrough/streaming-destinations.spec.ts`.
 //
 // Sport-agnostic on purpose (TEST-STRATEGY rule 6): a destination reads no sport. The "another platform" axis is swept
-// instead — every create platform (STREAM_PLATFORMS) and every stored legacy kind (StreamTargetKind minus them).
+// instead — every create platform (STREAM_PLATFORMS) and every stored legacy kind (StreamTargetKind minus them). The add
+// form OFFERS ADDABLE_STREAM_PLATFORMS (owner 2026-10-29: Twitch is hidden from the UI), a subset of STREAM_PLATFORMS: a stored
+// Twitch row is still a platform row (it lists, renames, replaces its key), it is just no longer something the form adds.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
@@ -25,7 +27,8 @@ import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { messages, type MessageKey } from "@/lib/messages";
 import type { Dict } from "@/lib/i18n-constants";
 import {
-  DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, isStreamPlatform,
+  ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, isAddableStreamPlatform, isStreamPlatform,
+  type StreamPlatform,
 } from "@/lib/stream-destinations";
 import { v1, parseBody } from "@/server/api-v1/http";
 import { CreateStreamTarget, StreamTargetKind, StreamTargetSaveOutcome, type StreamTarget, type StreamTargetSaved } from "@/server/api-v1/schemas";
@@ -88,6 +91,25 @@ function panelHtml({ targets, canEdit = true, addOpen = false }: { targets: Stre
   return renderToStaticMarkup(
     <DictProvider dict={messages as unknown as Dict} locale="en">
       <StreamDestinationsPanel orgId="o" canEdit={canEdit} targets={targets} locale="en" initialAddOpen={addOpen} />
+    </DictProvider>,
+  );
+}
+
+/** The add form's own markup, cut out of a page — so a probe for a platform looks at the FORM, not at the list beside it. */
+const formMarkup = (html: string): string => {
+  const found = /<form data-testid="stream-dest-form"[\s\S]*?<\/form>/.exec(html);
+  if (!found) throw new Error("the page rendered no add form — every probe on it would pass vacuously");
+  return found[0];
+};
+/** Every platform the form NAMES: the marks drawn in it, in order (a radio and a fixed platform both draw one). */
+const platformsIn = (markup: string): string[] => [...markup.matchAll(/data-platform-mark="([a-z_]+)"/g)].map((x) => x[1]!);
+const radiosIn = (markup: string): string[] => [...markup.matchAll(/role="radio"[^>]*data-testid="stream-dest-platform-([a-z_]+)"/g)].map((x) => x[1]!);
+
+/** The add form alone, as markup, offering `platforms` — the test seam that drives the "one platform / several" decision by the list's length. */
+function addFormHtml(platforms?: readonly [StreamPlatform, ...StreamPlatform[]]): string {
+  return renderToStaticMarkup(
+    <DictProvider dict={messages as unknown as Dict} locale="en">
+      <AddForm onSave={async () => {}} onCancel={() => {}} {...(platforms ? { platforms } : {})} />
     </DictProvider>,
   );
 }
@@ -236,14 +258,15 @@ describe("the Streaming page (spec §4)", () => {
     expect(html).toMatch(new RegExp(`data-testid="stream-dest-menu"[^>]*aria-label="${esc(m("streamDest.more", { label: "Club YouTube" }))}"`));
   });
 
-  it("every stored LEGACY kind lists with its own name and mark, keeps Remove, and never says to add it again; the add form offers ONLY the create platforms", () => {
+  it("every stored LEGACY kind lists with its own name and mark, keeps Remove, and never says to add it again; the add form offers ONLY the addable platforms", () => {
     let checked = 0;
     for (const kind of LEGACY_KINDS) {
       const html = panelHtml({ canEdit: true, targets: [target({ kind, label: `Old ${kind}` })], addOpen: true });
       expect(html, kind).toContain(`${esc(platformName(m, kind))} · key ends …8hd`);
       expect(html, kind).toMatch(new RegExp(`data-platform-mark="${kind}"`));
       expect(html, kind).toMatch(/data-testid="stream-dest-remove"/);
-      expect(html.match(/data-testid="stream-dest-platform-[a-z_]+"/g), kind).toEqual(STREAM_PLATFORMS.map((p) => `data-testid="stream-dest-platform-${p}"`));
+      // Positive: the form names exactly the addable list. Negative: it names nothing else (a legacy kind's own mark is in the LIST, not the form).
+      expect(platformsIn(formMarkup(html)), kind).toEqual([...ADDABLE_STREAM_PLATFORMS]);
       expect(html, kind).not.toMatch(/again/i);
       checked++;
     }
@@ -279,10 +302,14 @@ describe("the Streaming page (spec §4)", () => {
     expect(html).toMatch(/data-testid="stream-dest-subline"[^>]*>Other · added /);
   });
 
-  it("the add form: a segmented platform choice opening at the first platform, name ≤ 80, a password key with Show, an optional watch link — and NO server field (spec §4, D6)", () => {
+  it("the add form: the addable platform named once (no choice to make), name ≤ 80, a password key with Show, an optional watch link — and NO server field (spec §4, D6)", () => {
     const html = panelHtml({ canEdit: true, targets: [], addOpen: true });
     expect(html).toMatch(/data-testid="stream-dest-form"/);
-    expect(html).toMatch(new RegExp(`data-testid="stream-dest-platform-${STREAM_PLATFORMS[0]}"[^>]*aria-checked="true"|aria-checked="true"[^>]*data-testid="stream-dest-platform-${STREAM_PLATFORMS[0]}"`));
+    // Owner 2026-10-29: one addable platform is no choice — no radio group, the platform is NAMED (mark + name) as a fixed line.
+    const fixed = /data-testid="stream-dest-platform-fixed"[^>]*data-platform="([a-z_]+)"/.exec(html);
+    expect(fixed, "the single addable platform is named in the form").not.toBeNull();
+    expect(fixed![1]).toBe(ADDABLE_STREAM_PLATFORMS[0]);
+    expect(html).not.toMatch(/role="radio"|role="radiogroup"/);
     expect(html).toMatch(/data-testid="stream-dest-name"[^>]*maxLength="80"|maxLength="80"[^>]*data-testid="stream-dest-name"/i);
     expect(html).toMatch(/data-testid="stream-dest-key"[^>]*type="password"|type="password"[^>]*data-testid="stream-dest-key"/);
     expect(html).toMatch(/data-testid="stream-dest-key-show"/);
@@ -290,6 +317,85 @@ describe("the Streaming page (spec §4)", () => {
     expect(html).not.toMatch(/rtmp|Server URL|stream-dest-server/i);
     // The empty state's own Add does not repeat while the form is open.
     expect(html).not.toMatch(/data-testid="stream-dest-empty-add"/);
+  });
+});
+
+describe("the add form offers the addable platforms only (owner 2026-10-29: Twitch hidden from the UI)", () => {
+  it("the offered set IS ADDABLE_STREAM_PLATFORMS and never contains Twitch — with an empty list, with a YouTube row, and with a Twitch row already saved", () => {
+    expect(ADDABLE_STREAM_PLATFORMS as readonly string[], "premise: the ruling").not.toContain("twitch");
+    const cases: [string, StreamTarget[]][] = [
+      ["no destinations", []],
+      ["one YouTube row", [target()]],
+      ["one Twitch row", [target({ id: "t2", kind: "twitch", label: "Club Twitch" })]],
+    ];
+    let checked = 0;
+    for (const [name, targets] of cases) {
+      const form = formMarkup(panelHtml({ targets, addOpen: true }));
+      expect(platformsIn(form), name).toEqual([...ADDABLE_STREAM_PLATFORMS]);
+      expect(form, `${name}: the form never names Twitch`).not.toMatch(/twitch/i);
+      expect(form, `${name}: …and offers YouTube`).toMatch(/data-platform-mark="youtube"/);
+      expect(radiosIn(form), `${name}: no radio for a single platform`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("H3: a Twitch destination already saved keeps listing (its mark, name and key hint) with Rename, Replace key and Remove — hiding the option strands nobody", () => {
+    const html = panelHtml({ targets: [target({ id: "t2", kind: "twitch", label: "Club Twitch" })], addOpen: true });
+    const list = html.replace(formMarkup(html), "");
+    expect(list).toMatch(/data-platform-mark="twitch"/);
+    expect(list).toContain("Twitch · key ends …8hd");
+    for (const testid of ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove"]) expect(list, testid).toContain(`data-testid="${testid}"`);
+  });
+
+  it("the choice is decided by the LIST's length: one platform names it (even one that is not the first platform), several draw the radio group, in the list's order", () => {
+    const stream = (platforms: StreamPlatform[]) => platforms as unknown as readonly [StreamPlatform, ...StreamPlatform[]];
+    // One entry — the first platform, then the OTHER one — is a fixed line either way (a length rule, not a "youtube" rule).
+    let checked = 0;
+    for (const only of STREAM_PLATFORMS) {
+      const form = addFormHtml(stream([only]));
+      expect(radiosIn(form), only).toEqual([]);
+      expect(platformsIn(form), only).toEqual([only]);
+      expect(form, only).toMatch(new RegExp(`data-testid="stream-dest-platform-fixed"[^>]*data-platform="${only}"`));
+      checked++;
+    }
+    // Several: the radio group returns, unchanged — one radio per entry, the first checked, in the list's order.
+    expect(STREAM_PLATFORMS.length, "premise: there is a second platform to offer").toBeGreaterThan(1);
+    const several = addFormHtml(stream([...STREAM_PLATFORMS]));
+    expect(radiosIn(several)).toEqual([...STREAM_PLATFORMS]);
+    expect(platformsIn(several)).toEqual([...STREAM_PLATFORMS]);
+    expect(several).toMatch(/role="radiogroup"/);
+    expect(several).not.toMatch(/data-testid="stream-dest-platform-fixed"/);
+    expect(several).toMatch(new RegExp(`aria-checked="true"[^>]*data-testid="stream-dest-platform-${STREAM_PLATFORMS[0]}"|data-testid="stream-dest-platform-${STREAM_PLATFORMS[0]}"[^>]*aria-checked="true"`));
+    const reversed = addFormHtml(stream([...STREAM_PLATFORMS].reverse()));
+    expect(radiosIn(reversed), "the list's order, not the registry's").toEqual([...STREAM_PLATFORMS].reverse());
+    expect(checked).toBe(STREAM_PLATFORMS.length);
+    // The default (no list passed) is the addable list — the wiring the page relies on.
+    expect(platformsIn(addFormHtml())).toEqual([...ADDABLE_STREAM_PLATFORMS]);
+  });
+
+  it("no copy on the page invites an organiser to add Twitch: across all four locales the keys that name Twitch are exactly the ones about an EXISTING row or a pasted watch link", async () => {
+    const { LOCALES } = await import("@/lib/i18n-constants");
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    // The Replace-key shape hint (an existing Twitch row), the repairable-kind sentence, the watch-link hosts, the public stream-link
+    // hosts and the fixture panel's unreadable-key remedy: each names Twitch as something that EXISTS or may be pasted, never as an option to add.
+    const MAY_NAME_TWITCH = [
+      "stream.error.link", "stream.error.target_unreadable", "streamDest.error.unreadableLegacy", "streamDest.error.watch", "streamDest.shape.twitch",
+    ];
+    let checked = 0;
+    for (const l of LOCALES) {
+      const dict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Record<string, string>;
+      const naming = Object.keys(dict).filter((k) => /twitch/i.test(dict[k]!)).sort();
+      expect(naming, `${l}: a new sentence naming Twitch must be classified here`).toEqual(MAY_NAME_TWITCH);
+      // The sentences an organiser meets on the add path say YouTube, and only YouTube.
+      for (const k of ["streamDest.empty", "streamDest.confirmRemove.bodyLegacy", "streamDest.error.notAllowed"]) {
+        expect(dict[k], `${l} ${k}`).toMatch(/YouTube/);
+        expect(dict[k], `${l} ${k}`).not.toMatch(/twitch/i);
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * 3);
   });
 });
 
@@ -437,14 +543,14 @@ describe("DestinationRow — driven", () => {
     expect(byTestId(row.tree(), "stream-dest-error")).toBeUndefined();
   });
 
-  it("the Remove dialog's body: a platform row says re-adding the key restores it (D2); a LEGACY row never says 'again' — it cannot be added (D6)", async () => {
+  it("the Remove dialog's body: an ADDABLE row says re-adding the key restores it (D2); any row the form cannot add — a legacy kind, and a Twitch row since the owner hid it (2026-10-29) — never says 'again' (D6)", async () => {
     let checked = 0;
     for (const kind of StreamTargetKind.options) {
       confirmMock.mockClear();
       const { row } = panelWith(target({ kind }));
       await click(byTestId(row.tree(), "stream-dest-remove"));
       const body = String((confirmMock.mock.calls[0]![0] as { body: unknown }).body);
-      if (isStreamPlatform(kind)) expect(body, kind).toBe(m("streamDest.confirmRemove.body"));
+      if (isAddableStreamPlatform(kind)) expect(body, kind).toBe(m("streamDest.confirmRemove.body"));
       else {
         expect(body, kind).toBe(m("streamDest.confirmRemove.bodyLegacy"));
         expect(body, kind).not.toMatch(/again/i);
@@ -452,6 +558,13 @@ describe("DestinationRow — driven", () => {
       checked++;
     }
     expect(checked).toBe(StreamTargetKind.options.length);
+    // The ruling, typed: the Twitch row's dialog is the can't-be-added one (the expected value is the owner's, not the list's).
+    confirmMock.mockClear();
+    const { row: twitchRow } = panelWith(target({ kind: "twitch" }));
+    await click(byTestId(twitchRow.tree(), "stream-dest-remove"));
+    expect(String((confirmMock.mock.calls[0]![0] as { body: unknown }).body)).toBe(m("streamDest.confirmRemove.bodyLegacy"));
+    // …while Replace key still repairs it (isStreamPlatform is unchanged): an unreadable Twitch key says "replace", not "remove".
+    expect(isStreamPlatform("twitch")).toBe(true);
   });
 
   it("Remove answered 'cancel' in the dialog sends nothing", async () => {
@@ -637,15 +750,20 @@ describe("DestinationRow — driven", () => {
 });
 
 describe("AddForm — driven", () => {
-  const form = (onSave = vi.fn<(b: unknown) => Promise<void>>(async () => {})) => ({ island: renderIsland(AddForm, { onSave, onCancel: () => {} }), onSave });
+  type Offered = readonly [StreamPlatform, ...StreamPlatform[]];
+  const form = (onSave = vi.fn<(b: unknown) => Promise<void>>(async () => {}), platforms?: Offered) => ({
+    island: renderIsland(AddForm, { onSave, onCancel: () => {}, ...(platforms ? { platforms } : {}) }),
+    onSave,
+  });
   const submit = async (island: ReturnType<typeof form>["island"]) => {
     await (propsOf(byTestId(island.tree(), "stream-dest-form")!).onSubmit as (e: { preventDefault: () => void }) => Promise<void>)({ preventDefault: () => {} });
     await settle();
   };
 
-  it("opens at the first platform; the staging key NAME warns with that platform's copy and Save stays ENABLED (warns, never blocks)", async () => {
+  it("opens at the first addable platform with no choice to make; the staging key NAME warns with that platform's copy and Save stays ENABLED (warns, never blocks)", async () => {
     const { island, onSave } = form();
-    expect(attr(byTestId(island.tree(), `stream-dest-platform-${STREAM_PLATFORMS[0]}`)!, "aria-checked")).toBe(true);
+    expect(byTestId(island.tree(), `stream-dest-platform-${ADDABLE_STREAM_PLATFORMS[0]}`), "one platform: no radio to tap").toBeUndefined();
+    expect(attr(byTestId(island.tree(), "stream-dest-platform-fixed")!, "data-platform")).toBe(ADDABLE_STREAM_PLATFORMS[0]);
     type(island.tree(), "stream-dest-name", "Main court");
     type(island.tree(), "stream-dest-key", "TestYouTube");
     expect(textAt(island.tree(), "stream-dest-key-warning")).toBe(m("streamDest.shape.youtube"));
@@ -654,10 +772,10 @@ describe("AddForm — driven", () => {
     expect(onSave).toHaveBeenCalledWith({ kind: "youtube", label: "Main court", streamKey: "TestYouTube" });
   });
 
-  it("each platform sends ITS kind and judges the key by ITS shape — swept over STREAM_PLATFORMS", async () => {
+  it("each platform sends ITS kind and judges the key by ITS shape — swept over STREAM_PLATFORMS offered together (the several-platform path, kept for when one is shown again)", async () => {
     let checked = 0;
     for (const p of STREAM_PLATFORMS) {
-      const { island, onSave } = form();
+      const { island, onSave } = form(undefined, STREAM_PLATFORMS as unknown as Offered);
       await click(byTestId(island.tree(), `stream-dest-platform-${p}`));
       expect(attr(byTestId(island.tree(), `stream-dest-platform-${p}`)!, "aria-checked"), p).toBe(true);
       type(island.tree(), "stream-dest-name", `N ${p}`);
@@ -666,6 +784,22 @@ describe("AddForm — driven", () => {
       type(island.tree(), "stream-dest-watch", " https://www.twitch.tv/club ");
       await submit(island);
       expect(onSave, p).toHaveBeenCalledWith({ kind: p, label: `N ${p}`, streamKey: "TestKeyName", watchUrl: "https://www.twitch.tv/club" });
+      checked++;
+    }
+    expect(checked).toBe(STREAM_PLATFORMS.length);
+  });
+
+  it("a single offered platform sends ITS kind and judges the key by ITS shape — whichever platform that is (the length rule, not a 'youtube' rule)", async () => {
+    let checked = 0;
+    for (const p of STREAM_PLATFORMS) {
+      const { island, onSave } = form(undefined, [p]);
+      expect(byTestId(island.tree(), `stream-dest-platform-${p}`), `${p}: no radio`).toBeUndefined();
+      expect(attr(byTestId(island.tree(), "stream-dest-platform-fixed")!, "data-platform"), p).toBe(p);
+      type(island.tree(), "stream-dest-name", `N ${p}`);
+      type(island.tree(), "stream-dest-key", "TestKeyName");
+      expect(textAt(island.tree(), "stream-dest-key-warning"), p).toBe(m(`streamDest.shape.${p}`));
+      await submit(island);
+      expect(onSave, p).toHaveBeenCalledWith({ kind: p, label: `N ${p}`, streamKey: "TestKeyName" });
       checked++;
     }
     expect(checked).toBe(STREAM_PLATFORMS.length);
@@ -722,9 +856,9 @@ describe("StreamDestinationsPanel — the add path, driven", () => {
   it("Save POSTs the body to the org's collection, closes the form and refreshes; a refusal keeps the form open with the page's copy", async () => {
     const panel = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [], locale: "en", initialAddOpen: true });
     const addEl = panel.tree().find((el) => el.type === AddForm)!;
-    await (propsOf(addEl).onSave as (b: unknown) => Promise<void>)({ kind: "twitch", label: "T", streamKey: "k" });
+    await (propsOf(addEl).onSave as (b: unknown) => Promise<void>)({ kind: "youtube", label: "T", streamKey: "k" });
     await settle();
-    expect(apiCalls).toEqual([{ url: "/api/v1/orgs/o/stream-targets", method: "POST", json: { kind: "twitch", label: "T", streamKey: "k" } }]);
+    expect(apiCalls).toEqual([{ url: "/api/v1/orgs/o/stream-targets", method: "POST", json: { kind: "youtube", label: "T", streamKey: "k" } }]);
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(panel.tree().find((el) => el.type === AddForm), "closed on success").toBeUndefined();
 
