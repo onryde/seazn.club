@@ -324,10 +324,10 @@ export function gated(port: YouTubePort, room: () => boolean): YouTubePort {
       const member: unknown = Reflect.get(target, prop, target);
       if (typeof member !== "function") return member;
       const call = member as (...a: unknown[]) => unknown;
-      if (prop === "revoke") return (...a: unknown[]) => call.apply(target, a);
+      if (prop === "revoke") return (...a: unknown[]) => call.call(target, ...a);
       return (...a: unknown[]) => {
         if (!room()) throw new BudgetSpent();
-        return call.apply(target, a);
+        return call.call(target, ...a);
       };
     },
   });
