@@ -4421,6 +4421,86 @@ test("badminton v3 pad: both scoring halves and the Set-score tile hold the 44px
   await expectPhoneComposition(page, "S");
 });
 
+// ---------------------------------------------------------------------------
+// W2e Task 30 (D3, D13; rule X-SE-1) — the ending prompt, at every phone width
+// ---------------------------------------------------------------------------
+//
+// A sanction that ends the match and has no ending recorded opens the pad on a blocking prompt ("A sanction against <side> ends
+// the match" / Record the ending / Void the sanction). `w2e-ending-sanction.test.ts` proves the prompt is in the pad's markup
+// and who is offered what; only a browser settles that it is REACHABLE on a phone: above the fold, both answers hit-testable
+// at 44px, no horizontal scroll, and nothing in it clipped.
+//
+// The pending state is seeded the way a real one arises on a reload: the sanction is appended to the ledger through the API
+// (an organiser may append it; the write path accepts the sanction itself and refuses what comes AFTER it), and the console is
+// then opened on that ledger. Both sports are swept from the engine's own `sanctionEnding` declaration, with the count
+// asserted. The prompt is not inside a folded disclosure (AGENTS.md failure class 22), so no fold has to be opened; it is
+// waited on with `toBeVisible`, which is the claim being made.
+const ENDING_SEEDS: Record<string, { variantKey: string }> = {
+  badminton: { variantKey: "bwf" },
+  tennis: { variantKey: "tour" },
+};
+const ENDING_SPORTS = builtinModules
+  .filter((m) => (m.sanctionEnding?.endLevels.length ?? 0) > 0)
+  .map((m) => ({ key: m.key, eventType: m.sanctionEnding!.eventType, level: m.sanctionEnding!.endLevels[0]! }));
+
+test("ending prompt (W2e T30) covers every sport that declares an ending level", () => {
+  expect(ENDING_SPORTS.map((s) => s.key).sort(), "the engine's declaring sports must all be seeded below").toEqual(
+    Object.keys(ENDING_SEEDS).sort(),
+  );
+});
+
+for (const sport of ENDING_SPORTS) {
+  test(`${sport.key} v3 pad: a pending ending sanction opens the pad on the ending prompt — both answers reachable at 44px, no horizontal scroll`, async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90_000);
+    const fx = await seedRosteredFixture(request, {
+      label: `Mobile Ending ${sport.key} ${TAG}-${projectTag()}`,
+      sportKey: sport.key,
+      variantKey: ENDING_SEEDS[sport.key]!.variantKey,
+      entrantKind: "individual",
+      // Names carry `projectTag()`: two width projects share one process and `seedRosteredFixture` get-or-creates a person by name.
+      home: [{ fullName: `Mobile End ${sport.key} Home ${TAG}-${projectTag()}` }],
+      away: [{ fullName: `Mobile End ${sport.key} Away ${TAG}-${projectTag()}` }],
+      emitCoreStart: true,
+    });
+    const before = await apiJson<{ seq: number }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
+    const tip = Math.max(0, ...(before.data ?? []).map((e) => e.seq));
+    const sanction = await apiJson(request, `/api/v1/fixtures/${fx.fixtureId}/events`, "POST", {
+      expected_seq: tip,
+      type: sport.eventType,
+      payload: { by: fx.homeEntrantId, level: sport.level },
+    });
+    expect(sanction.status, `seeding the pending sanction: ${JSON.stringify(sanction.error)}`).toBeLessThan(300);
+
+    await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+    const pad = page.getByTestId("score-pad");
+    await expect(pad).toBeVisible({ timeout: 20_000 });
+    const prompt = pad.getByTestId("pad-ending-pending");
+    await expect(prompt, "the pad must open on the ending prompt for a ledger that is pending").toBeVisible({ timeout: 20_000 });
+
+    // Both answers, hit-tested at their top and bottom edges and 44px tall (the organiser console is offered both).
+    await assertTapFloor(prompt.getByTestId("pad-ending-record"), "Record the ending");
+    await assertTapFloor(prompt.getByTestId("pad-ending-void"), "Void the sanction");
+
+    // Phone composition: the prompt is in the host's unordered band, so it sits ABOVE the ordered rows (ribbon, recording
+    // chip, activity) on a phone and in source order at md+. The pad's one open question is the first thing under the score.
+    const promptBox = await prompt.boundingBox();
+    expect(promptBox, "the prompt has no box").not.toBeNull();
+    const ribbonBox = await pad.locator('[data-role="v3-ribbon"]').boundingBox();
+    expect(ribbonBox, "the ribbon (the sanction just recorded) has no box").not.toBeNull();
+    expect(promptBox!.y, "the prompt must come before the ribbon and the rest of the ordered rows").toBeLessThan(ribbonBox!.y);
+
+    // The board is not offered under the prompt (every tap on it would be refused by the write path).
+    await expect(pad.locator('[data-role="v3-tiles"]')).toHaveCount(0);
+
+    await expectNoHorizontalScroll(page);
+    const { clipped } = await overflowingIn(page, '[data-role="v3-ending"]', "*", "the ending prompt was not in the DOM");
+    expect(clipped, "the ending prompt must not clip its own content at this width").toEqual([]);
+  });
+}
+
 test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px floor, no horizontal scroll", async ({
   page,
   request,

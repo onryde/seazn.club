@@ -94,7 +94,10 @@ function ledger(rows: readonly (readonly [string, unknown, number?])[]): EventEn
 const START = ["core.start", {}] as const;
 const sanctionRow = (m: AnySportModule, side: Side, level: string) =>
   [decl(m).eventType, { by: ENTRANT[side], level }] as const;
-const forfeitRow = (side: Side, reason = "disqualified") => ["core.forfeit", { by: ENTRANT[side], reason }] as const;
+// Two literal helpers, not one with a `reason` parameter: forfeit-vocabulary-scan reads every `core.forfeit` write's reason as a
+// literal against FORFEIT_REASONS, and a variable would be a named exception to add there.
+const forfeitRow = (side: Side) => ["core.forfeit", { by: ENTRANT[side], reason: "disqualified" }] as const;
+const retiredForfeitRow = (side: Side) => ["core.forfeit", { by: ENTRANT[side], reason: "retired" }] as const;
 const endLevelOf = (m: AnySportModule) => decl(m).endLevels[0]!;
 
 const rowsOf = (events: readonly EventEnvelope[]): ActivityEvent[] =>
@@ -396,7 +399,7 @@ describe("W2e T30 — the ending prompt model", () => {
     return [
       { name: "sanction alone", rows: [START, S], pending: true, soleSanctionSeq: 2 },
       { name: "sanction then its ending", rows: [START, S, forfeitRow(side)], pending: false },
-      { name: "sanction then the OTHER side's forfeit (match decided either way)", rows: [START, S, forfeitRow(OTHER[side], "retired")], pending: false },
+      { name: "sanction then the OTHER side's forfeit (match decided either way)", rows: [START, S, retiredForfeitRow(OTHER[side])], pending: false },
       { name: "sanction voided", rows: [START, S, ["core.void", { event_id: "e-2" }, 2] as const], pending: false },
       { name: "ending voided: pending again", rows: [START, S, forfeitRow(side), ["core.void", { event_id: "e-3" }, 3] as const], pending: true, soleSanctionSeq: 2 },
       { name: "sanction voided while the ending stands: match stays ended", rows: [START, S, forfeitRow(side), ["core.void", { event_id: "e-2" }, 2] as const], pending: false },
