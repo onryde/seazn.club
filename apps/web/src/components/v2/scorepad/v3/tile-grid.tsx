@@ -158,18 +158,28 @@ const KIND_MIN_HEIGHT: Record<TileKind, number> = {
   minor: 44,
 };
 
+/** The tile grid's own class list. Desktop runs four tracks; a phone runs SIX (W2e PR B fix, owner's 320 tennis screenshot).
+ *  Six, not three, because the span-2 tiles are half-row PAIRS (Home | Away): on a three-track phone grid a span-2 tile took
+ *  two of the three tracks, so its partner could not sit beside it and wrapped alone - the owner's "why not aligned in the
+ *  center?", with the right third of every pair row empty. Six tracks let a one-column tile keep its third of the row
+ *  (`max-md:col-span-2`, exactly as before) while a pair gets halves (`max-md:col-span-3`). Exported so the test that pins the
+ *  relation reads the track count from here, not from a literal. */
+export const TILE_GRID_CLASS = "grid grid-cols-4 max-md:grid-cols-6 gap-2";
+
 /** Column span -> literal Tailwind class. A template-interpolated
  *  `col-span-${n}` would never be picked up by Tailwind's static class
  *  scanner (it scans source for literal strings) — this lookup keeps
- *  every class Tailwind needs to see written out in full. */
-const SPAN_CLASS: Record<NonNullable<TileSpec["span"]>, string> = {
-  1: "col-span-1",
-  2: "col-span-2",
-  3: "col-span-3",
-  // Phones run THREE columns (see the grid below), so a full-row tile must say
-  // so in both grids: `col-span-4` inside a 3-column grid does not clamp, it
-  // creates an implicit fourth column and the row overflows the card.
-  4: "col-span-4 max-md:col-span-3",
+ *  every class Tailwind needs to see written out in full.
+ *
+ *  Each entry names BOTH grids: the desktop span of four tracks, then the phone span of six. The phone spans are one third
+ *  of the row for a span-1 tile (three across, unchanged), one half for span 2 (a pair side by side, as on desktop), and the
+ *  whole row for spans 3 and 4. A span that exceeds the phone grid does not clamp, it creates implicit tracks and the row
+ *  overflows the card, so every entry must say its phone span. Exported for the same reason as `TILE_GRID_CLASS`. */
+export const SPAN_CLASS: Record<NonNullable<TileSpec["span"]>, string> = {
+  1: "col-span-1 max-md:col-span-2",
+  2: "col-span-2 max-md:col-span-3",
+  3: "col-span-3 max-md:col-span-6",
+  4: "col-span-4 max-md:col-span-6",
 };
 
 /** One hue per signal (see file header): violet fill = primary (this
@@ -236,13 +246,16 @@ export function TileGrid({ tiles, phase, t, onAction, onOpenSheet }: TileGridPro
   // Four columns at 320 gives each tile 60px, which fits a numeral and almost
   // no word: measured in a browser, cricket's keypad broke "No-ball" mid-word
   // and stacked "Clore la manche" and "Pénalité" — in English as well as
-  // fr/es/nl, since the cricket terms are not translated. Three columns at the
-  // same width give ~82px, which is a word rather than a fragment. Desktop is
-  // untouched at four, so §3.6 of the phone-composition design ("cricket's
-  // keypad keeps four columns") still describes every width it was measured at;
-  // this is the phone half that shipped before the labels were read at 320.
+  // fr/es/nl, since the cricket terms are not translated. Three tiles across at
+  // the same width give ~82px, which is a word rather than a fragment: the phone
+  // grid is six tracks (`TILE_GRID_CLASS`) so a one-column tile still takes two
+  // of them (a third of the row), and a span-2 pair takes three each (half the
+  // row, side by side). Desktop is untouched at four, so §3.6 of the
+  // phone-composition design ("cricket's keypad keeps four columns") still
+  // describes every width it was measured at; this is the phone half that
+  // shipped before the labels were read at 320.
   return (
-    <div className="grid grid-cols-4 max-md:grid-cols-3 gap-2">
+    <div className={TILE_GRID_CLASS}>
       {visible.map((tile) => (
         <Tile
           key={tile.id}
