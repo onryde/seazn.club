@@ -542,6 +542,21 @@ describe("the two checks this task adds, on their own", () => {
     const two: StagePlay = { ...short, field: ["a", "b"], advance: adv({ seeded: ["a", "b"], filled: 2 }) };
     expect(advanceSeededAsDeclared([root, two], observed, new Set(["d", "f"]))).toMatchObject({ verdict: "fail", evidence: ["stage 2: seeded 2, declared 4 less at most 1 withdrawn qualifier(s)"] });
   });
+  it("advance-seeded-as-declared (T33a): the slack never exceeds the take's own seats, even when bestNth's upper bound names more withdrawn rows", () => {
+    // Two pools, the best 3rd-placed team goes through (one seat), and BOTH 3rd-placed teams withdrew: the engine's bound names 2
+    // qualifiers but the take has one seat to leave empty.
+    const pools = { stages: [{ id: "s1", standings: [{ poolId: "p1", rows: [r("a", 1), r("b", 2), r("c", 3)] }, { poolId: "p2", rows: [r("d", 1), r("e", 2), r("f", 3)] }], fixtures: [] }] } as unknown as Pick<ObservedRun, "stages">;
+    const takes = [{ kind: "bestNth", nth: 3, count: 1 }];
+    expect(withdrawnQualifiers(takes as never, pools.stages[0] as never, new Set(["c", "f"])).length, "premise: the bound names both").toBe(2);
+    const overSeeded: StagePlay = { stage: stageRef(2), field: ["a", "d"], advance: adv({ takes, declared: 1, seeded: ["a", "d"], filled: 2 }), complete: null };
+    expect(advanceSeededAsDeclared([root, overSeeded], pools, new Set(["c", "f"]))).toMatchObject({
+      verdict: "fail",
+      evidence: ["stage 2: seeded 2, declared 1 less at most 1 withdrawn qualifier(s)"],
+    });
+    // The positive pair: one seat, the one withdrawn qualifier it can lose - seeded 0 is allowed.
+    const none: StagePlay = { stage: stageRef(2), field: [], advance: adv({ takes, declared: 1, seeded: [], filled: 0 }), complete: null };
+    expect(advanceSeededAsDeclared([root, none], pools, new Set(["c", "f"]))).toMatchObject({ verdict: "pass", checked: 3 });
+  });
   it("advance-seeded-as-declared: a source stage the snapshot did not observe is a named failing item, never a silent zero", () => {
     const ok: StagePlay = { stage: stageRef(2), field: ["a", "b", "c", "d"], advance: adv({}), complete: null };
     expect(advanceSeededAsDeclared([root, ok], { stages: [] }, new Set())).toMatchObject({ verdict: "fail", evidence: ["stage 2: stage 1 was not observed — its tables bound FP-2's empty seats"] });

@@ -199,7 +199,9 @@ export function advanceSeededAsDeclared(plays: readonly StagePlay[], observed: P
     const tables = observed.stages.find((s) => s.id === prev.stage.id);
     // snapshot observes every play, so a missing source stage is a harness bug: named, never a silent zero.
     if (tables === undefined) return [{ ok: false, note: `stage ${p.stage.seq}: stage ${prev.stage.seq} was not observed — its tables bound FP-2's empty seats` }];
-    const gone = withdrawnQualifiers(a.takes, tables, withdrawn).length;
+    // At most the take's own seats can be left empty: bestNth's bound counts every rank-nth row of every pool, so with more
+    // withdrawn rows than the take has seats the note would claim a slack larger than the take itself (T33a).
+    const gone = Math.min(withdrawnQualifiers(a.takes, tables, withdrawn).length, a.declared);
     const n = a.seeded.length;
     return [
       gone === 0
