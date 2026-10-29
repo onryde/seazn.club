@@ -368,6 +368,64 @@ describe("R157 the five fields are drawn by the real stage row, from the diction
     expect(judged).toBe(8);
   });
 
+  // The same rule for EVERY held detail of EVERY sport (round-2 item 9): the cricket pair above was the first two found, the
+  // period sports' shoot-out kicks and overtime minutes and football's shoot-out kicks are the rest. Which fields are held, and by
+  // which switch, is the ENGINE's declaration (`ruleKeys[key].detailOf`, read by `deciderOfDetail`); the sweep also proves every
+  // declared detail key is edited by a curated field, so a field the engine holds cannot hide from it. What counts as a
+  // dependency sentence is a per-language vocabulary the reason template and the old copy shared ("Only applies when ... above is
+  // On"): it is the rulebook of this guard, not read from the copy under test.
+  it("R157 every held detail of every sport says WHY once: the reason names the switch, the help never restates the dependency - four locales plus the English fallback", () => {
+    const DEPENDENCY_OPENERS: Record<string, readonly string[]> = {
+      en: ["only applies", "only used", "only while", "only when"],
+      es: ["solo se aplica", "solo se usa", "solo mientras", "solo cuando"],
+      fr: ["s'applique seulement", "utilisé seulement", "seulement lorsque", "seulement tant que"],
+      nl: ["geldt alleen", "alleen in gebruik", "alleen als", "alleen zolang"],
+    };
+    const dicts = [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as const;
+    const declared: string[] = [];
+    const held: string[] = [];
+    let judged = 0;
+    for (const m of builtinModules) {
+      const fields = SPORT_RULES[m.key] ?? [];
+      for (const [key, fact] of Object.entries(m.ruleKeys ?? {})) {
+        if (fact.detailOf === undefined) continue;
+        declared.push(`${m.key}.${key}`);
+        expect(
+          fields.some((f) => f.edits.includes(key)),
+          `${m.key}: the engine declares ${key} a detail of ${fact.detailOf}, so a curated field must edit it (or this sweep is blind to it)`,
+        ).toBe(true);
+      }
+      for (const field of fields) {
+        const decider = deciderOfDetail(m, field);
+        if (decider === null) continue;
+        // By the engine key(s) the field edits, the same space `declared` is in (a field key such as `shootoutAttempts` is the table's name).
+        held.push(`${m.key}.${field.edits.join("+")}`);
+        const switchField = fields.find((f) => f.edits[0] === decider);
+        expect(switchField, `${m.key}.${field.key}: held by ${decider}, which a curated field must switch`).toBeDefined();
+        expect(field.helpKey, `${m.key}.${field.key}: carries a help key`).toBeDefined();
+        const judge = (where: string, help: string, switchLabel: string, template: string, openers: readonly string[]): void => {
+          const opening = template.slice(0, template.indexOf("{decider}")).replace(/[\s«‘“"']+$/u, "").split(/\s+/).slice(0, -1).join(" ").toLowerCase();
+          const lower = help.toLowerCase();
+          expect(opening.split(" ").length, `${where}: the template's opening is more than one word`).toBeGreaterThanOrEqual(2);
+          expect(lower, `${where}: the help does not open the reason's sentence ("${opening}")`).not.toContain(opening);
+          for (const opener of openers) expect(lower, `${where}: the help is not a dependency sentence ("${opener}")`).not.toContain(opener);
+          expect(lower, `${where}: the help does not name the switch the reason names`).not.toContain(switchLabel.toLowerCase());
+          expect(help.length, `${where}: the help still says what the field does`).toBeGreaterThan(40);
+          judged++;
+        };
+        for (const [locale, dict] of dicts) {
+          const d = dict as unknown as Record<string, string>;
+          judge(`${locale} ${m.key}.${field.key}`, d[field.helpKey!]!, d[switchField!.labelKey]!, d["stageRules.detail.off"]!, DEPENDENCY_OPENERS[locale]!);
+        }
+        // The English fallback the table carries (what renders when a key is missing) is held to the same rule.
+        judge(`fallback ${m.key}.${field.key}`, field.help!, switchField!.label, (enUi as unknown as Record<string, string>)["stageRules.detail.off"]!, DEPENDENCY_OPENERS.en!);
+      }
+    }
+    expect(declared.length, "the engine declares held details").toBeGreaterThan(0);
+    expect([...held].sort(), "every engine-declared detail key is a held field, one to one").toEqual([...declared].sort());
+    expect(judged, "five judgements (four dictionaries and the fallback) per held field").toBe(held.length * 5);
+  });
+
   it("R157 the still-tied select offers exactly the engine's three policies, behind Default, and shows the one the stage holds", () => {
     const markup = cricketAt({ superOver: true }, enUi as Dict, "en", { superOverStillTied: "shared" });
     const block = blockOf(markup, "superOverStillTied");

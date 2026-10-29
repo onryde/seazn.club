@@ -43,7 +43,7 @@ export const HOCKEY_RULES: RuleField[] = [
     edits: ["shootout.attempts"],
     label: "Shootout attempts",
     labelKey: "rules.field.shootoutAttempts.label",
-    help: "Only applies when shoot-out above is On.",
+    help: "Attempts each side takes in the shoot-out. FIH default: 5.",
     helpKey: "rules.field.hockey.shootoutAttempts.help",
     kind: "number",
     min: 3,
