@@ -2897,6 +2897,59 @@ describe("R8/#675 — a reload inside the amendment's hold window", () => {
     ).toHaveLength(1);
     expect(appendCalls, "and nothing further was ever sent").toHaveLength(1);
   });
+
+  it("a REFUSED replacement takes its bound void with it, so the void cannot drain alone and delete the scored event (W2e T30 fix round 1, M-1)", async () => {
+    // The mirror of the take-back case above, for the other way a held replacement dies: the server refuses it. Before the
+    // reject-cascade in `runDrain` the bound void stayed in the durable queue, drained next, and retired an original that
+    // nothing had replaced — the same silent loss as the amendment's "round 1", reached through a refusal instead of a
+    // take-back.
+    const { transport, appendCalls } = fakeTransport({
+      appendResults: [success(1), { kind: "rejected", code: "INVALID_EVENT", message: "refused" }],
+    });
+    const pad = mountPipeline(baseParams({ transport, queueDbName: "amend-refused-replacement" }));
+    await vi.advanceTimersByTimeAsync(0);
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    const originalId = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS + 50);
+
+    const heldId = await runAmend(
+      { voidId: originalId, type: "generic.score", payload: { by: "H", points: 1 } },
+      {
+        // The release closure is the host's own (`handleAmend`): once the hold is up, drain.
+        submitHeld: (type, payload) =>
+          pad.current.submitHeld(type, payload, HOLD_MS, () => {
+            void pad.current.retryDrain();
+          }),
+        submit: (type, payload, opts) => pad.current.submit(type, payload, opts),
+      },
+    );
+    expect(heldId).not.toBeNull();
+    // Before the refusal: the replacement and the void are both in the queue and the optimistic ledger.
+    expect(await pad.current.queueStore.list(), "the pair is queued behind the hold").toHaveLength(2);
+    expect(pad.current.events.filter((e) => e.type === "core.void")).toHaveLength(1);
+
+    // The hold releases; the replacement is refused.
+    await vi.advanceTimersByTimeAsync(HOLD_MS + 100);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(
+      appendCalls.map((c) => c.body.type),
+      "the original and the refused replacement were sent; the bound void was NOT",
+    ).toEqual(["generic.score", "generic.score"]);
+    expect(await pad.current.queueStore.list(), "nothing is left queued to drain behind the refusal").toEqual([]);
+    expect(
+      pad.current.events.filter((e) => e.type === "core.void"),
+      "and the optimistic fold no longer retires the original",
+    ).toEqual([]);
+    expect(
+      pad.current.events.filter((e) => e.type === "generic.score"),
+      "the original stands, exactly once: the refused replacement is gone",
+    ).toHaveLength(1);
+    expect(pad.current.lastRejection, "the refusal is reported to the scorer").not.toBeNull();
+    // Nothing further drains later either.
+    await vi.advanceTimersByTimeAsync(HOLD_MS * 3);
+    expect(appendCalls, "no late send").toHaveLength(2);
+  });
 });
 
 // ---------------------------------------------------------------------------
