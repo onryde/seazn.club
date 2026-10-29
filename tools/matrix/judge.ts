@@ -286,7 +286,7 @@ function regressionMode(cli: Cli, over: JudgeOver): Verdict {
   const unexpected = cli.sample ? [] : r.skippedIds.filter((id) => !listed.has(id));
   const out: JudgeOut = {
     version: 1, mode: "regression", exit: regressed.length > 0 || unexpected.length > 0 ? 1 : 0, layer: now.schemaVersion === 3 ? now.layer : null, runs: [now.runId], plannedNotRun: null,
-    compared: r.compared, faults: [], differing: [], missing: [], regressed, absent: r.absent, skipped: r.skippedIds.length, skippedIds: r.skippedIds, unexpectedSkips: unexpected,
+    compared: r.compared, faults: [], differing: [], missing: [], regressed, absent: r.absent, skipped: r.skippedIds.length, skippedIds: r.skippedIds, unexpectedSkips: unexpected, sample: cli.sample,
   };
   const skippedLine = cli.sample
     ? `skipped ${r.skippedIds.length} cases (--sample: the baseline's other cases are not this sample's to judge)`

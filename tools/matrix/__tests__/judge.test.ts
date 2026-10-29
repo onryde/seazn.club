@@ -753,6 +753,25 @@ describe("judge regression: compared, skipped, and the skips it refuses (D16; E2
     expect(none.json).toMatchObject({ compared: 2, skipped: 0, skippedIds: [], unexpectedSkips: [] });
   });
 
+  it("T18 M1: the verdict file says which MODE judged it — sample: true under --sample, sample: false for the strict release judge (so committed evidence cannot read as the other)", () => {
+    // The strict judge (truth run): no --sample, the skips listed.
+    const strict = verdictOf(["--expected-skips", skips(["old1", "old2"])], BASE(), NOW(), ["a", "b"]);
+    expect(strict.code).toBe(0);
+    expect(strict.json.sample, "strict judge, skips listed").toBe(false);
+    // The same strict judge refusing an unlisted skip still says it was strict (exit 1 is a verdict, so a file is written).
+    const refused = verdictOf([], BASE(), NOW(), ["a", "b"]);
+    expect(refused.code).toBe(1);
+    expect(refused.json.sample, "strict judge, unlisted skips").toBe(false);
+    // The PR sample: the same cases, a deliberate subset.
+    const sampled = verdictOf(["--sample"], BASE(), NOW(), ["a", "b"]);
+    expect(sampled.code).toBe(0);
+    expect(sampled.json.sample, "--sample").toBe(true);
+    // The other two modes judge no baseline, so they carry no sample flag at all (absent, not false).
+    const p = join(dir, `t18m1-${++n}.json`);
+    expect(judgeCli(["faults", f(planRun([], { runId: "t18m1-f" })), "--json-out", p])).toBe(0);
+    expect(JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>).not.toHaveProperty("sample");
+  });
+
   it("a baseline case missing from --expect and not in --expected-skips fails the run, named unexpected_skip — with no flag, with an empty list, and with a list that covers only some", () => {
     let checked = 0;
     for (const [what, extra, want] of [
