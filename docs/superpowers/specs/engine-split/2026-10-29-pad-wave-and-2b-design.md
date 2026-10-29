@@ -1,6 +1,6 @@
 # Engine split: the pad wave (O-3) and the 2b re-baseline — design
 
-Date: 2026-10-29. Status: **DRAFT for owner review.** The owner chose option A on 2026-10-29 ("ok A, write the spec and
+Date: 2026-10-29. Status: **APPROVED by the owner 2026-10-29 ("Ok"), with the recommendations on Q1b and 2b deviations (a)–(d).** The owner chose option A on 2026-10-29 ("ok A, write the spec and
 plan"): the pad's rule data moves into the engine, in the monorepo, BEFORE the 2b cutover. This amends the parent spec
 `docs/superpowers/specs/2026-10-13-engine-split-design.md` (D10, §2 "Out", §15) and `2026-10-26-owed-work.md` (O-3 order);
 §7 of the parent spec stays the cutover recipe, with the deltas in §6 below.
@@ -173,4 +173,7 @@ temporary freeze CI check (the notice and AGENTS.md line are enough); (d) the ep
 |---|---|---|---|---|
 | D35 | 2026-10-29 | O-3 (pad rule data → `@seazn/engine/pad`) runs in the monorepo BEFORE 2b. Amends D10 and parent §2 "Out". | OWNER | "ok A, write the spec and plan" |
 | D36 | 2026-10-29 | Prod held; not on the 2b path. | OWNER | "don't want to go in prod for now" |
-| D37 | 2026-10-29 | §6 items 2–4 (no porting script, D21 after 2b, minimal guards) | RECOMMENDATION | owner ruling 2026-10-26 applied |
+| D37 | 2026-10-29 | §6 items 2–4 (no porting script, D21 after 2b, minimal guards) | OWNER | owner ruling 2026-10-26 applied; "Ok" 2026-10-29 |
+| D38 | 2026-10-29 | Q1: the skin gains `obstructed` as fielder-eligible (rulebook `DOMAIN.md:99`); no fold change. Q1b: if the fold accepts either batter for `obstructed`, the skin asks who is out; no fold change. | OWNER | "Ok" to the recommendations |
+| D39 | 2026-10-29 | 2b deviations (a) baseline and cold Stryker in parallel, (b) testkit ships golden corpora (D32f reversed for the testkit only), (c) no temporary freeze CI check, (d) epoch report moves to the engine release. | OWNER | "Ok" to the recommendations |
+| D40 | 2026-10-29 | Pad wave and 2b plans approved; execution per D30. | OWNER | "Ok" |
