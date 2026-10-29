@@ -1168,6 +1168,32 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect(reported).not.toContain(fresh);
   });
 
+  it("T17 carry g: 'not authorized to <live>' (insufficientLivePermissions) on complete is the channel's live permission, not a dead grant: the connection stays connected (status_since untouched), the row backs off with OUR code youtube_live_blocked and is counted failed; positive pair: a plain dead grant on the same call still flips", async () => {
+    const w = await world();
+    const m1 = await playAndStop(w, w.fixtures[0]!);
+    await sql`update org_youtube_connections set status_since = now() - interval '2 days' where id = ${w.connectionId}`;
+    const since = (await sql<{ status_since: Date }[]>`select status_since from org_youtube_connections where id = ${w.connectionId}`)[0]!.status_since;
+    const t0 = afterStop(m1, min(6));
+
+    w.fake.failNext("complete", "youtube_reconnect_needed", "insufficientLivePermissions");
+    expect(await w.step({ at: t0 }), "a real failure: counted, retried with backoff").toEqual({ ...ZERO, failed: 1 });
+    expect(await connectionStatus(w.connectionId)).toBe("connected");
+    const after = (await sql<{ status_since: Date }[]>`select status_since from org_youtube_connections where id = ${w.connectionId}`)[0]!;
+    expect(after.status_since.getTime(), "no purge clock started").toBe(since.getTime());
+    const row = await broadcastRow(m1.broadcastId);
+    expect(row).toMatchObject({ state: "ending", attempts: 1 });
+    expectOurCode(row, "youtube_live_blocked");
+    expect(row.next_attempt_at!.getTime(), "backed off 1 minute").toBe(t0 + 1 * MIN);
+
+    // The positive pair: the retry of the SAME row, refused as a plain dead grant (no reason), flips the connection (the R5 behaviour).
+    w.fake.failNext("complete", "youtube_reconnect_needed");
+    await w.step({ at: t0 + 1 * MIN });
+    expect(await connectionStatus(w.connectionId), "a dead grant flips").toBe("reconnect_needed");
+    const again = await broadcastRow(m1.broadcastId);
+    expect(again.attempts).toBe(2);
+    expectOurCode(again, "youtube_reconnect_needed");
+  });
+
   it("the candidate rule is RE-READ under the lock: a row another firing leased, or something else failed, after this firing listed it is not called and not resurrected (checked === 2)", async () => {
     const variants = [
       { name: "leased by another firing", poke: (id: string) => sql`update youtube_broadcasts set next_attempt_at = ${new Date(Date.now() + 3_600_000 * 24)} where id = ${id}`, state: "live" },

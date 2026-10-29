@@ -52,7 +52,7 @@ import { youtubeWatchUrl } from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { setFixtureStreamUrlIfEmpty } from "@/server/usecases/fixtures";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts } from "./end-rule";
-import { YouTubeError, type BroadcastLifeInfo, type YouTubePort } from "./port";
+import { YouTubeError, isLiveBlockedRefusal, type BroadcastLifeInfo, type YouTubePort } from "./port";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
 
 export type YoutubeEndResult = { ended: number; neverLive: number; orphans: number; failed: number; deferred: number };
@@ -350,6 +350,7 @@ async function finalize(row: Claimed, outcome: Outcome, now: Date): Promise<bool
 
 /** The code a failure is stored under: a port refusal's own code, or one of ours. Never Google's reason, never a message. */
 function codeOf(err: unknown): string {
+  if (isLiveBlockedRefusal(err)) return "youtube_live_blocked";   // "not authorized to <live>": the channel's, not a dead grant (T17 carry g)
   if (err instanceof YouTubeError) return err.code;
   if (err instanceof EndStepCodeError) return err.code;
   if (err instanceof EndRuleInvariantError) return CODE_INVARIANT;

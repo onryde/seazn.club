@@ -47,7 +47,7 @@ import type { StartCause } from "@/server/relay/domain/session";
 import { insertPooledKey } from "@/server/relay/secret-columns";
 import { freshLiveRefusal, recordLiveState } from "./connections";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
-import { YouTubeError, type YouTubePort } from "./port";
+import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePort } from "./port";
 import { broadcastDescription, broadcastTitle } from "./title";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
 
@@ -98,6 +98,7 @@ const activeSession = (): HttpError =>
 /** The refusal code a failure carries: a port error's code (a missing resource is `youtube_unavailable` — no refusal of its
  *  own), or one of this file's own refusals. Null for anything else (a database fault, a KEK fault). */
 function refusalCodeOf(err: unknown): YoutubeRefusalCode | null {
+  if (isLiveBlockedRefusal(err)) return "youtube_live_blocked";   // "not authorized to <live>" is the channel's, not a dead grant (T17 carry g)
   if (err instanceof YouTubeError) return err.code === "youtube_not_found" ? "youtube_unavailable" : err.code;
   if (err instanceof HttpError && isYoutubeRefusalCode(err.code)) return err.code;
   return null;
@@ -191,7 +192,7 @@ async function accessTokenFor(orgId: string, connectionId: string, port: YouTube
  *  it: a refresh token this server cannot decrypt is ours to fix, not the club's, so it refuses without moving the status.
  *  Best effort: the refusal stands either way. */
 async function markIfGrantDead(err: unknown, orgId: string, connectionId: string): Promise<void> {
-  if (!(err instanceof YouTubeError && err.code === "youtube_reconnect_needed")) return;
+  if (!isDeadGrantRefusal(err)) return;   // not the live-permission refusal: that one leaves the connection connected (T17 carry g)
   try {
     await markReconnectNeeded(sql, orgId, connectionId);
   } catch (e) {

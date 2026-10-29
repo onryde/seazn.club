@@ -24,8 +24,9 @@ import "server-only";
 //
 // DECISIONS the brief left open (also in the T17 report):
 //  - g (insufficientLivePermissions). YouTube's "the request is not authorized to <live>" is a fact about the CHANNEL's live permission,
-//    which a reconnect of the same account may not cure. The health check treats it like live_blocked: the connection STAYS `connected`,
-//    last_error_code = youtube_live_blocked, and no purge clock starts. Any other reconnect refusal on the same call flips as before.
+//    which a reconnect of the same account may not cure. It is live_blocked EVERYWHERE (controller ruling, fix round 1): the connection
+//    STAYS `connected`, last_error_code = youtube_live_blocked, and no purge clock starts - in this health check, in Go live's prepare
+//    and in the end step, which ask the one predicate in port.ts (`isLiveBlockedRefusal`). Any other reconnect refusal flips as before.
 //  - a/b (stuck rows). A row is STUCK when it has failed for a full day AT the backoff cap (31 failures, derived below from end-step's own
 //    constants), or sits `ending` longer than that schedule takes to run (a claim deferred on every firing never counts an attempt). It is
 //    reported (captureError, codes and ids only) and counted `failed` (the Worker's degraded line), and finalized `failed` / `end_stuck`
@@ -45,7 +46,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { recordLiveState } from "./connections";
 import { OPEN_STATES, YOUTUBE_END_BACKOFF_CAP_MINUTES, endBackoffMinutes } from "./end-step";
-import { YouTubeError, type YouTubePort } from "./port";
+import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePort } from "./port";
 import { markReconnectNeeded, openToken, revokeConnection } from "./token-store";
 
 /** `checked` connections health-checked; `reconnectNeeded` connections this pass found dead; `refreshed` / `removed` broadcast rows
@@ -64,8 +65,6 @@ export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = 30;
 const VIDEOS_PER_CALL = 50;
 /** Our code on a row the daily pass finalized because it could never settle. Matches V479's `[a-z_:]{1,64}`. */
 const CODE_STUCK = "end_stuck";
-/** Google's reason for "the request is not authorized to <live>" (liveBroadcasts / liveStreams pages); see decision g. */
-const LIVE_PERMISSIONS_REASON = "insufficientLivePermissions";
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -182,8 +181,6 @@ export async function purgeConnectionData(tx: Tx, connectionId: string): Promise
 interface Conn { id: string; org_id: string; channel_id: string; channel_title: string }
 interface Pass { port: YouTubePort; now: Date; orgIds: string[] | undefined; out: YoutubeDailyResult }
 
-const isReconnectRefusal = (e: unknown): e is YouTubeError => e instanceof YouTubeError && e.code === "youtube_reconnect_needed";
-
 /** A port call. Whatever it throws becomes a YouTubeError: a driver maps Google's answers already, and anything else is YouTube not
  *  answering. The original is dropped, never wrapped (it may hold what must not be kept) - and REPORTED, as a fresh error that names only
  *  its class, the connection and the step: a driver bug that fails every day must not be silent. */
@@ -246,14 +243,15 @@ async function checkHealth(p: Pass, at: string, c: Conn): Promise<boolean> {
       const live = await viaPort(() => p.port.liveEnabled(at), c, "live");
       code = live === "enabled" ? null : REFUSAL_OF_LIVE_STATE[live];
     } catch (err) {
-      // Decision g: "not authorized to <live>" is the channel's live permission, not a dead grant - blocked, no purge clock.
-      if (isReconnectRefusal(err) && err.reason === LIVE_PERMISSIONS_REASON) code = "youtube_live_blocked";
+      // Decision g (controller ruling): "not authorized to <live>" is the channel's live permission, not a dead grant - blocked, no
+      // purge clock. Go live's prepare and the end step ask the same predicate (port.ts), so the three cannot disagree.
+      if (isLiveBlockedRefusal(err)) code = "youtube_live_blocked";
       else throw err;
     }
     await recordLiveState(sql, c.org_id, c.id, code);   // last_health_at = the database's now(), the clock status_since is on (carry f)
     return true;
   } catch (err) {
-    if (isReconnectRefusal(err)) {
+    if (isDeadGrantRefusal(err)) {
       await flip(c, p.out);
       return false;
     }
@@ -293,7 +291,7 @@ async function refreshVideos(p: Pass, at: string, c: Conn): Promise<void> {
       p.out.removed += removed.deleted;
       expirePages(removed.divisions);
     } catch (err) {
-      if (isReconnectRefusal(err)) {
+      if (isDeadGrantRefusal(err)) {
         await flip(c, p.out);   // the token died between the health check and this call
         return;
       }
@@ -316,7 +314,7 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
   try {
     at = await viaPort(() => p.port.accessToken(refresh), c, "token");
   } catch (err) {
-    if (isReconnectRefusal(err)) await flip(c, p.out);   // invalid_grant: the grant is dead
+    if (isDeadGrantRefusal(err)) await flip(c, p.out);   // invalid_grant: the grant is dead
     else failedStep(err, c, p.out, "token");
     return;
   }
