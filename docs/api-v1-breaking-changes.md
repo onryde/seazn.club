@@ -52,6 +52,58 @@ are `packages/engine/src/sports/period/w2e-period.test.ts` and
 `apps/web/src/server/engine-db/__tests__/w2e-suddendeath-strip.test.ts`; the
 migration's is `apps/web/src/server/__tests__/w2e-migration.test.ts`.
 
+## 2026-10-28 — a hockey or ice hockey shoot-out attempt out of the federation's order is refused
+
+A shoot-out is shot in pairs, and within a pair the side behind shoots next, as
+before. What changes is who opens a pair after the first round. Before this
+release the side that took the first attempt opened every pair. Now each sport
+follows its federation:
+
+- **Hockey** (FIH, Appendix 12 §20c and §21b): the shoot-out is played in
+  series of five per side, and the side that opened a series defends the first
+  attempt of the next. The opener alternates every series.
+- **Ice hockey** (IIHF Rule 84.4 IX): the team that shot second in the first
+  five opens the tie-break shots, and every pair after them.
+
+Both scoring write paths refuse an attempt out of that order.
+
+**What changed.**
+
+| Write path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events`, the `hockey.shootout.attempt` that opens the second series (and every even-numbered one after it), by the side that opened the shoot-out | accepted | 422, `error.code` `"INVALID_EVENT"`, nothing written |
+| Same path, that attempt by the other side | 422 `"INVALID_EVENT"` | accepted |
+| Same path, the `icehockey.shootout.attempt` that opens a pair of tie-break shots (after five each), by the side that shot first | accepted | 422, `error.code` `"INVALID_EVENT"`, nothing written |
+| Same path, that shot by the side that shot second | 422 `"INVALID_EVENT"` | accepted |
+| `POST /api/v1/divisions/{id}/events/import`, a stream with such an attempt in the old order | imported | 200; that stream is rejected with `"import.fold_rejected"`, `engineCode` `"INVALID_EVENT"`, and nothing is written for its fixture |
+
+The first series of five, and the second attempt of every pair, are unchanged.
+Football's penalty shoot-out is unchanged.
+
+**What replaces it.** Record the attempts in the order they were taken under
+the federation's rule above. The scoring pad already offers the side that is
+due.
+
+**What a consumer sees.** On the scoring endpoint:
+
+```json
+{ "ok": false, "error": { "code": "INVALID_EVENT", "message": "attempts must alternate: expected \"<entrant id>\"" }, "requestId": "…" }
+```
+
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** Only a NEW write is judged. A shoot-out
+already in a match's ledger in the pre-W2e order still replays to the result it
+recorded, because the order is asked on the strict write paths only.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, review finding RB2B-10 (rules HK-SO-1 and IH-SO-1). The
+pinning tests are `packages/engine/src/sports/period/w2e-period.test.ts`,
+`packages/engine/src/sports/hockey/w2e-rows.test.ts` and
+`packages/engine/src/sports/icehockey/w2e-rows.test.ts`.
+
 ## 2026-10-28 — The Hundred's net run rate is printed per five-ball over
 
 A cricket table's net run rate (NRR) is the average runs per over a team scored

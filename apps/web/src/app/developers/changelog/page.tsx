@@ -17,6 +17,16 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   },
   {
     date: "2026-10-28",
+    title: "Breaking: a hockey or ice hockey shoot-out attempt out of the federation's order is refused",
+    lines: [
+      "A shoot-out pair used to be opened by the side that took the first attempt, every time. Now hockey follows FIH Appendix 12 (§20c, §21b): series of five, and the side that opened a series defends the first attempt of the next. Ice hockey follows IIHF Rule 84.4 IX: the team that shot second in the first five opens the tie-break shots and every pair after them. The first series and the second attempt of each pair are unchanged; football is unchanged.",
+      "POST /fixtures/{id}/events answers 422 INVALID_EVENT (message: attempts must alternate: expected \"<entrant id>\") for a hockey.shootout.attempt or icehockey.shootout.attempt out of that order, and nothing is written. POST /divisions/{id}/events/import still returns 200; that stream is rejected with error.code import.fold_rejected and error.engineCode INVALID_EVENT.",
+      "Record the attempts in the order they were taken. A shoot-out already recorded in the old order still replays to its result.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: The Hundred's net run rate is printed per five-ball over",
     lines: [
       "A cricket table's net run rate is runs per over (ECB The Hundred Playing Conditions 2026, 16.9.4(a)), and an over on The Hundred is five balls (17.1). The division table, the hub table and the qualification what-if now print NRR per over of the division's own length: five balls on The Hundred (config.ballsPerOver 5), six anywhere else.",
