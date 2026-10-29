@@ -1129,4 +1129,26 @@ describe("goalkeeper stats: clean sheets, goals conceded (S8/#417)", () => {
     const rows = aggregatePlayerStats(events, model, lineups);
     expect(rows.find((r) => r.personId === homeSub1)?.stats.goals_conceded).toBe(1);
   });
+
+  // W2e T33a (T32 fix round 2, M2): this fold is a REPLAY, so a lineup event the pitch refuses falls back to the kernel's own
+  // squads (`judgeLineupEvent(..., strict = false)`) - the ledger was accepted when it was written, before the pitch was
+  // consulted, and it must not lose a recorded change. The strict write path refuses the same event.
+  it("a replay never refuses a change the pitch would: the keeper football.sub took off is named off again by core.lineup.substitution, and the fold hands the position over", () => {
+    const events = [
+      start,
+      makeEnvelope(1, { type: "football.sub", payload: { by: H, off: homeKeeper, on: homeSub1 } }),
+      subKeeperEv(2, homeKeeper, "H-b2"),
+      goalEv(3, A),
+    ];
+    // Premise 1: as a WRITE the pitch refuses event 2 (he is already off), so only the replay fallback can accept it.
+    expect(() => foldMatchWithStoppage(football, cfgOf({}), lineups, events.slice(0, 3), { strictFromSeq: 0 })).toThrowError(
+      expect.objectContaining({ code: "LINEUP_INVALID" }),
+    );
+    // Premise 2: the same ledger folded as a replay (not strict) keeps the substitution the kernel's squads accepted.
+    const replay = foldMatchWithStoppage(football, cfgOf({}), lineups, events.slice(0, 3));
+    expect(personsAtPosition(replay.squads.home, "GK"), "the replay names the man the substitution put in goal").toEqual(["H-b2"]);
+    const rows = aggregatePlayerStats(events, model, lineups);
+    expect(rows.find((r) => r.personId === "H-b2")?.stats.goals_conceded, "the goal after it is the new keeper's").toBe(1);
+    expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded, "and not the man who left").toBeUndefined();
+  });
 });

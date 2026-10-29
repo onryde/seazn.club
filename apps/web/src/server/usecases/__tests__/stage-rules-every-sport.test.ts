@@ -210,11 +210,14 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
     expect(refused, `${refused} refusals`).toBe(engineRefused);
   }, 600_000);
 
-  it("a cricket TEST stage refuses superOver and dls (they belong to the limited-overs variants); the same keys save on t20 (I1: the variant is witnessed)", async () => {
+  it("a cricket TEST stage refuses superOver, superOverStillTied, dls and minOversForResult (they belong to the limited-overs variants); the same keys save on t20 (I1: the variant is witnessed)", async () => {
     const cricket = mod("cricket");
     const testOnly = [...stageTopKeysFor(cricket, "league", "t20")].filter((k) => !stageTopKeysFor(cricket, "league", "test").has(k));
-    // The premise, from the engine's declaration: the keys t20 settles and test does not include both of these.
-    expect(testOnly, "the premise: the engine narrows superOver and dls to the limited-overs variants").toEqual(expect.arrayContaining(["superOver", "dls"]));
+    // The premise, from the engine's declaration: the keys t20 settles and test does not include all four of these (W2e T28
+    // narrowed `minOversForResult` to the variants that can play DLS; `superOverStillTied` follows the super over).
+    expect(testOnly, "the premise: the engine narrows these four to the limited-overs variants").toEqual(
+      expect.arrayContaining(["superOver", "superOverStillTied", "dls", "minOversForResult"]),
+    );
     const auth = await seedOrg();
     const { divisionId: testDiv } = await seedDivision(auth, "cricket", "test", 0);
     const { divisionId: t20Div } = await seedDivision(auth, "cricket", "t20", 0);
@@ -231,7 +234,7 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
       expect(await rulesOf(onT20), `${top} on t20 is stored`).toMatchObject(value);
       checked++;
     }
-    expect(checked, `anti-vacuity: ${checked} test-only keys paired`).toBeGreaterThanOrEqual(2);
+    expect(checked, `anti-vacuity: ${checked} test-only keys paired`).toBeGreaterThanOrEqual(4);
   });
 
   it("UNKNOWN_RULE_KEY for an undeclared key; RULE_NOT_SETTABLE for a key this kind cannot set", async () => {

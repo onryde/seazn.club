@@ -173,7 +173,9 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
     expect(refused.results[0]).toMatchObject({
       status: "rejected",
       eventsAppended: 0,
-      error: { code: "import.fold_rejected", engineCode: "LINEUP_INVALID" },
+      // eventIndex 2 is the retirement itself (core.start 0, football.sub 1): the rejection names WHICH event the pitch refused,
+      // not just the code, so an importer can fix the one line.
+      error: { code: "import.fold_rejected", engineCode: "LINEUP_INVALID", eventIndex: 2 },
     });
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
     expect(n, "nothing written").toBe(0);
