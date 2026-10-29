@@ -4929,6 +4929,102 @@ for (const [sportKey, short] of WIDTH_MATRIX_CLOCK_SPORTS) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// W2e Task 32 (B2-3, M12b) -- THE "INJURED, NO SUB" CONTROL, AT EVERY WIDTH.
+//
+// Football, volleyball, hockey and ice hockey each gained a per-side tile (`retire-<side>`, `retirement-slot.ts`) that opens
+// the swap sheet's OFF picker and stops there. `scorepad-v3-retirement.spec.ts` drives the control end to end at one
+// width; THIS block is the width gate: the tile clears the 44px floor the way a finger meets it (`assertTapFloor`
+// hit-tests both edges), the picker's rows clear it, and the page does not scroll sideways, at all seven phone widths.
+//
+// THE FOLDS (AGENTS.md failure class 22). The tile lives on the board, not behind a disclosure -- but the console around it
+// folds the lineup and (on a phone) the device hand-over / Stream, so the claim "the control does not need a fold opened to
+// be reached" is itself worth proving, and "opening the folds does not push it off the board or break the floor" with it.
+// So: assert the tile with every fold as the console left it, then open EVERY fold instance (`openEveryPhoneFold` waits on
+// `toBeAttached`, never `toBeVisible` -- visibility is what a fold denies -- and gates each open on that toggle being
+// visible, never on a width literal) and assert it again. The picker is opened and NOT answered: answering commits an event
+// and starts the soft-commit hold, which a width gate has no reason to pay for.
+//
+// One test per sport, each with its own roster of STARTERS: the control is offered only to a side with someone on the field,
+// and a lineup-less or all-bench side legitimately has no tile. The rosters are positioned with each sport's own
+// position keys (`packages/engine/src/sports/*`), the names carry `projectTag()` (two width projects share one CI process).
+// ---------------------------------------------------------------------------
+
+/** Open every phone-disclosure instance whose toggle is visible at this width; returns how many instances exist. */
+async function openEveryPhoneFold(page: Page): Promise<number> {
+  const toggles = page.locator('[data-role="phone-disclosure-toggle"]');
+  // Attached, not visible: a fold's toggle may be `md:hidden` here, and a hidden control cannot be clicked.
+  await expect(toggles.first(), "the console renders its folds (the lineup disclosure at least)").toBeAttached({ timeout: 20_000 });
+  const n = await toggles.count();
+  for (let i = 0; i < n; i++) {
+    const toggle = toggles.nth(i);
+    if (!(await toggle.isVisible())) continue;
+    if ((await toggle.getAttribute("aria-expanded")) === "true") continue;
+    await toggle.click();
+    await expect(toggle, `fold ${i + 1} of ${n} opens`).toHaveAttribute("aria-expanded", "true");
+  }
+  return n;
+}
+
+const VB_COURT = ["S", "OH", "MB", "OPP", "OH", "MB"] as const;
+const RETIREMENT_SPORTS: readonly {
+  readonly sportKey: string;
+  readonly variantKey: string;
+  readonly short: string;
+  readonly home: readonly string[];
+  readonly away: readonly string[];
+}[] = [
+  { sportKey: "football", variantKey: "11-a-side", short: "RFB", home: ["FW", "GK", "DF"], away: ["GK"] },
+  { sportKey: "volleyball", variantKey: "indoor", short: "RVB", home: [...VB_COURT], away: [...VB_COURT] },
+  { sportKey: "hockey", variantKey: "fih-outdoor", short: "RHK", home: ["GK", "DF", "FW"], away: ["GK"] },
+  { sportKey: "icehockey", variantKey: "iihf", short: "RIH", home: ["G", "D", "F"], away: ["G"] },
+];
+
+for (const sport of RETIREMENT_SPORTS) {
+  test(`${sport.sportKey} v3 pad: the Injured (no sub) tile and its picker hold the 44px floor with the folds closed and open, no horizontal scroll`, async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const roster = (side: string, positions: readonly string[]) =>
+      positions.map((positionKey, i) => ({ fullName: `Mobile ${sport.short} ${side}${i + 1} ${TAG}-${projectTag()}`, positionKey }));
+    const home = roster("H", sport.home);
+    const fx = await seedRosteredFixture(request, {
+      label: `Mobile ${sport.short} Retire ${TAG}-${projectTag()}`,
+      sportKey: sport.sportKey,
+      variantKey: sport.variantKey,
+      entrantKind: "team",
+      home,
+      away: roster("A", sport.away),
+      emitCoreStart: true,
+    });
+
+    await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+    await dismissCookieBanner(page);
+    await assertV3PadHoldsAtThisWidth(page, `${sport.sportKey} pad at rest`, 4);
+
+    // 1. Folds as the console left them: the tile is on the board and tappable.
+    await assertTapFloor(padTile(page, "retire-home"), `${sport.sportKey}: home Injured tile, folds as left`);
+    await assertTapFloor(padTile(page, "retire-away"), `${sport.sportKey}: away Injured tile, folds as left`);
+
+    // 2. Every fold opened (EVERY instance): still on the board, still over the floor, page still not scrolling sideways.
+    const folds = await openEveryPhoneFold(page);
+    expect(folds, "at least one fold instance existed to open (a console with none would make this step vacuous)").toBeGreaterThan(0);
+    await assertTapFloor(padTile(page, "retire-home"), `${sport.sportKey}: home Injured tile, every fold open`);
+    await expectNoHorizontalScroll(page);
+
+    // 3. The picker: one row per starter, each over the floor, none for the bench / away side, and the sheet stays inside the page.
+    await padTile(page, "retire-home").click();
+    const swap = page.getByTestId("score-pad").locator('[data-role="v3-swap"][data-swap-slot-id="retire-home"]');
+    await expect(swap, `${sport.sportKey}: the retirement picker must open`).toBeVisible({ timeout: 20_000 });
+    await expect(swap.locator("[data-candidate-id]"), "one row per starter on the field").toHaveCount(home.length, { timeout: 20_000 });
+    for (const p of home) {
+      await assertTouchFloor(swap.locator(`[data-candidate-id="${fx.personIds[p.fullName]!}"]`), `${sport.sportKey}: picker row ${p.positionKey}`);
+    }
+    await expectNoHorizontalScroll(page);
+  });
+}
+
 test("carrom v3 pad: the two board tiles and the board sheet's winner/coins steps hold the 44px floor, no horizontal scroll", async ({
   page,
   request,
