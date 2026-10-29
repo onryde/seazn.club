@@ -304,6 +304,94 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     expect(poweredWitnessed).toBe(3);   // es, fr, nl
   });
 
+  it("S1 (owner 2026-10-29): a pooled liveStream is named by its POOL SLOT, never by the match — slot 1 → 1, a second concurrent match's new key → 2, existing names untouched, a retired slot 1 is named 1 again", async () => {
+    const w = await world(3);
+    const [f1, f2, f3] = w.fixtures as [string, string, string];
+    const nameOf = async (keyId: string) => w.fake.inspectStream((await keyOf(keyId)).live_stream_id)?.title;
+    // The match's own words: a pooled key is REUSED by later matches, so none of them may be in its name.
+    const [{ home, away }] = await sql<{ home: string; away: string }[]>`
+      select he.display_name as home, ae.display_name as away from fixtures f
+        join entrants he on he.id = f.home_entrant_id join entrants ae on ae.id = f.away_entrant_id where f.id = ${f1}`;
+    expect(home.length).toBeGreaterThan(0);
+    let named = 0;
+    const expectNamed = async (keyId: string, slot: number, why: string) => {
+      expect((await keyOf(keyId)).slot, `${why}: the slot`).toBe(slot);
+      const t = await nameOf(keyId);
+      expect(t, why).toBe(`Seazn Club · stream key ${slot}`);
+      expect(t, `${why}: not the match`).not.toContain(home);
+      expect(t, `${why}: not the match`).not.toContain(away);
+      expect(Array.from(t!).length, `${why}: YouTube's 1–128`).toBeLessThanOrEqual(LIVE_STREAM_TITLE_MAX);
+      named++;
+    };
+
+    // EMPTY: the first key on the channel is slot 1.
+    const A = await must(prep(w, f1));
+    await expectNamed(A.keyId, 1, "first key");
+    // A SECOND match while the first still holds key 1 → a NEW key, slot 2, named 2. (Sequential: two Go lives racing may share a
+    // pre-read and so a number — the accepted mislabel — so the concurrent case is not asserted here.)
+    const B = await must(prep(w, f2));
+    await expectNamed(B.keyId, 2, "second concurrent match's key");
+    await expectNamed(A.keyId, 1, "the first key is not renamed");   // existing pooled keys keep their names
+
+    // Slot 1 leaves the pool (the club deletes its stream key in Studio → bind's liveStreamNotFound retires it, as F2): the next
+    // key grown is slot 1 AGAIN, so it is named 1 again — the number is the slot, not a count of keys ever made.
+    await complete(A.broadcastId);
+    const at = await w.fake.accessToken(w.token);
+    await w.fake.deleteBroadcast(at, (await row(A.broadcastId)).yt_broadcast_id!);
+    const K = await keyOf(A.keyId);
+    await w.fake.deleteStream(at, K.live_stream_id);
+    await refusal(prep(w, f3));   // retires the dead key
+    const C = await must(prep(w, f3));
+    expect(C.keyId).not.toBe(A.keyId);
+    await expectNamed(C.keyId, 1, "a new key in the retired slot 1");
+    expect((await keyOf(C.keyId)).live_stream_id).not.toBe(K.live_stream_id);
+    await expectNamed(B.keyId, 2, "slot 2 still named 2");
+    expect(named).toBe(5);
+  });
+
+  it("S1 (locales): the stream key's name is in the org's default_locale — es, fr, nl, en take slots 1–4 (checked === 4); non-en names do not contain the English words; every name at slot 1–10 fits YouTube's 128", async () => {
+    const w = await world(4);
+    // The owner's strings (2026-10-29), typed here — not read back from the dictionary under test.
+    const WANT: Record<"es" | "fr" | "nl" | "en", string> = {
+      es: "Seazn Club · clave de emisión {n}", fr: "Seazn Club · clé de diffusión {n}",
+      nl: "Seazn Club · streamsleutel {n}", en: "Seazn Club · stream key {n}",
+    };
+    const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;
+    let checked = 0;
+    let witnessed = 0;
+    for (const [i, locale] of (["es", "fr", "nl", "en"] as const).entries()) {
+      const f = w.fixtures[i]!;
+      await sql`update organizations set default_locale = ${locale} where id = ${w.orgId}`;
+      const p = await must(prep(w, f));   // each broadcast stays open → each Go live grows the next slot
+      const k = await keyOf(p.keyId);
+      expect(k.slot, locale).toBe(i + 1);
+      const t = w.fake.inspectStream(k.live_stream_id)?.title;
+      expect(t, locale).toBe(WANT[locale].replace("{n}", String(i + 1)));
+      expect(dicts[locale]!["streaming.youtube.streamKeyTitle"], `${locale}: the dictionary carries the owner's string`).toBe(WANT[locale]);
+      if (locale !== "en") {
+        expect(t, `${locale}: no English words`).not.toContain("stream key");
+        witnessed++;
+      }
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(witnessed).toBe(3);
+    // The longest name any slot can get, per locale, from the shipped strings: "10 active streams per channel" is the top slot.
+    let fitted = 0;
+    for (const d of Object.values(dicts)) {
+      const template = d["streaming.youtube.streamKeyTitle"]!;
+      expect(template.split("{n}")).toHaveLength(2);   // exactly one placeholder
+      for (let n = 1; n <= CHANNEL_STREAM_CAP; n++) {
+        const t = template.replace("{n}", String(n));
+        expect(Array.from(t).length).toBeGreaterThanOrEqual(1);
+        expect(Array.from(t).length).toBeLessThanOrEqual(LIVE_STREAM_TITLE_MAX);
+        expect(t).not.toMatch(/[<>]/);
+        fitted++;
+      }
+    }
+    expect(fitted).toBe(4 * CHANNEL_STREAM_CAP);
+  });
+
   it("two fixtures prepared at once on one channel → two keys; when the first completes, a third fixture reuses its key (no insertStream)", async () => {
     const w = await world(3);
     const [f1, f2, f3] = w.fixtures as [string, string, string];

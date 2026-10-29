@@ -1464,6 +1464,7 @@
   "streaming.youtube.error.gone": "Cette chaîne n’est plus connectée. Rechargez la page.",
   "streaming.youtube.broadcast.descriptionLine": "Score en direct et résultats :",
   "streaming.youtube.broadcast.poweredBy": "Propulsé par Seazn Club",
+  "streaming.youtube.streamKeyTitle": "Seazn Club · clé de diffusión {n}",
   "streaming.youtube.part": "Partie {n}",
   "streaming.youtube.replay.region": "Replay du match",
   "streaming.youtube.replay.tabs": "Parties du replay",

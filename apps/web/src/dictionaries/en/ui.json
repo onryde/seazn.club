@@ -1464,6 +1464,7 @@
   "streaming.youtube.error.gone": "This channel is no longer connected. Reload the page.",
   "streaming.youtube.broadcast.descriptionLine": "Live score and results:",
   "streaming.youtube.broadcast.poweredBy": "Powered by Seazn Club",
+  "streaming.youtube.streamKeyTitle": "Seazn Club · stream key {n}",
   "streaming.youtube.part": "Part {n}",
   "streaming.youtube.replay.region": "Match replay",
   "streaming.youtube.replay.tabs": "Replay parts",

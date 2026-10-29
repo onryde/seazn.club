@@ -7924,6 +7924,7 @@ export type DictionaryKey =
   | "streaming.youtube.statusLine.reviewFirst"
   | "streaming.youtube.statusLine.reviewTerms"
   | "streaming.youtube.statusLine.unknown"
+  | "streaming.youtube.streamKeyTitle"
   | "suspension.match"
   | "suspension.matches"
   | "suspensionConfirmed.body"
