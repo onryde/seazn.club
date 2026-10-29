@@ -7,23 +7,99 @@
 // constant names that may no longer be DECLARED in it, and one source scan over
 // the whole skins tree fails when a banned name is declared again.
 //
-// It is a list of names, not a heuristic (spec §3.4). It does NOT see an inline
-// number or an inline array: that is the per-sport drift test's job, which
-// drives the skin's builder against the engine's declaration. The two guards
-// cover different gaps; neither is a substitute for the other.
+// It is a list of names, not a heuristic (spec §3.4), and it sees ONE thing: a
+// line that starts `const NAME` or `export const NAME`, for a banned NAME, in the
+// skin file that BANNED lists it under. It does NOT see:
+//   - a RENAMED copy (`WICKET_KIND_LIST` for `WICKET_KINDS`), or the same name
+//     declared in a SIBLING skin file that BANNED does not list for it;
+//   - a copy held as a property of another object (`const RULES = { WICKET_KINDS: [...] }`)
+//     or bound by a destructure (`const { WICKET_KINDS } = { WICKET_KINDS: [...] }`);
+//   - a multi-declarator (`const A = 1, WICKET_KINDS = [...]`), a declaration that
+//     follows another statement on the same line, or a function;
+//   - an inline number or an inline array.
+// (`let` and `var` are already errors under the repo's eslint: prefer-const, no-var.)
+// Every one of those is the per-sport DRIFT TEST's job: it drives the skin's
+// builder against the engine's declaration, so a copy that drifts goes red
+// whatever it is called. The two guards cover different gaps; neither is a
+// substitute for the other, and a reviewer must not read this scan as wider than
+// the list above.
 //
 // `BANNED` is EMPTY at P0 and each of P1..P4 appends its own entries as it
-// deletes the literals. An empty list must not make this file vacuous, so the
-// scanner is also proven against the REAL skin sources: it must see a
-// declaration in every skin file, using names read out of those files with
-// plain string operations (not the scanner's own pattern).
+// deletes the literals. An empty list must not make this file vacuous, so:
+//   - the scanner is proven against the REAL skin sources: it must see a
+//     declaration in every skin file, using names read out of those files with
+//     plain string operations (not the scanner's own pattern);
+//   - `RULE_CONSTANTS_AT_BASE` inventories the (file, name) pairs the plan will
+//     delete. Each must still be declared in its file or be listed in `BANNED`,
+//     so a misspelt entry, or a batch that deletes a constant and forgets to
+//     append it, goes red with the pair named.
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** skin file basename -> constant names that may no longer be declared in it. */
-export const BANNED: Readonly<Record<string, readonly string[]>> = {};
+/**
+ * skin file basename -> constant names that may no longer be declared in it.
+ * One region per batch: P1, P2 and P3 run in parallel, so each inserts its own
+ * entries under its own marker and the merges do not touch one another's lines.
+ * An entry's names must appear in `RULE_CONSTANTS_AT_BASE`.
+ */
+export const BANNED: Readonly<Record<string, readonly string[]>> = {
+  // P1: period sports (period-shared, hockey, icehockey, football)
+  // P2: cricket
+  // P3: set-based sports + tennis (badminton, tabletennis, volleyball, tennis)
+  // P4: carrom, boardgame, generic, and POST_PHASES in every file that declares it
+};
+
+/**
+ * Every (skin file, constant name) pair that plan 2026-10-29-engine-split-pad-wave
+ * has P1..P4 delete from the skins, taken from the plan's "Step 5" BANNED lists
+ * (P1.x period-shared/hockey/icehockey/football; P2 cricket; P3 badminton/
+ * tabletennis/volleyball/tennis; P4 carrom/boardgame/generic) plus `POST_PHASES`
+ * in the nine files that declare it (P4.2). Typed from the plan, not from the
+ * skins: all 46 are declared at 17948f93a8. Presentation constants the plan keeps
+ * (`CARD_TONES`, `HOCKEY_CLASSES`, ...) are deliberately absent. A name the plan
+ * later adds or drops is edited here and in `BANNED` together.
+ */
+export const RULE_CONSTANTS_AT_BASE: Readonly<Record<string, readonly string[]>> = {
+  "period-shared.ts": ["SWAP_BAND", "POST_PHASES"],
+  "hockey.tsx": ["HOCKEY_REASONS"],
+  "icehockey.tsx": ["ICEHOCKEY_REASONS"],
+  "football.tsx": [
+    "CARD_COLORS",
+    "CARD_REASONS",
+    "PENALTY_OUTCOMES",
+    "PENALTY_OFFENCES",
+    "EVENT_BAND",
+    "PLAY_PHASES",
+    "POST_PHASES",
+  ],
+  "cricket.tsx": [
+    "WICKET_KINDS",
+    "EXTRA_KINDS",
+    "FIELDER_ELIGIBLE_KINDS",
+    "VARIABLE_OUT_KINDS",
+    "FREE_HIT_WICKET_KINDS",
+    "BOWLER_CREDITED_KINDS",
+    "CLOSE_REASONS",
+  ],
+  "badminton.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "POST_PHASES"],
+  "tabletennis.tsx": [
+    "SANCTION_LEVELS",
+    "EVENT_BAND",
+    "EXPEDITE_RETURNS_THRESHOLD",
+    "EXPEDITE_SCORE_FLOOR",
+    "POST_PHASES",
+  ],
+  "volleyball.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "LIBERO_BAND", "POST_PHASES"],
+  "tennis.tsx": ["POINT_KINDS", "INTERRUPTION_KINDS", "SANCTION_LEVELS", "EVENT_BAND", "CALLS", "POST_PHASES"],
+  "carrom.tsx": ["ADJUST_REASONS", "EVENT_BAND", "POST_PHASES"],
+  "boardgame.tsx": ["EVENT_BAND", "BOARD_MAX", "POST_PHASES"],
+  "generic.tsx": ["EVENT_BAND", "MAX_PLAUSIBLE_SCORE", "MAX_TALLY_STEP", "POST_PHASES"],
+};
+
+/** Pairs in `RULE_CONSTANTS_AT_BASE`: the plan's Step 5 lists (P1 9 + P2 7 + P3 14 + P4 7 = 37) + POST_PHASES in 9 files. */
+const PLANNED_PAIRS = 46;
 
 /** Skin source files (`*.ts`/`*.tsx`, `__tests__` excluded) at 17948f93a8. Re-pin when a skin file is added. */
 const PINNED_SKIN_FILES = 13;
@@ -87,9 +163,16 @@ interface Scan {
   emptyEntries: string[];
 }
 
-function scanSkins(banned: Readonly<Record<string, readonly string[]>>): Scan {
+/** basename -> source text. Basenames are unique (asserted below), so this loses nothing. */
+function skinByBasename(): ReadonlyMap<string, string> {
+  return new Map([...skinSources()].map(([file, text]) => [base(file), text]));
+}
+
+type NameMap = Readonly<Record<string, readonly string[]>>;
+
+function scanSkins(banned: NameMap): Scan {
   const all = skinSources();
-  const byBase = new Map([...all].map(([file, text]) => [base(file), text]));
+  const byBase = skinByBasename();
   const scan: Scan = {
     scannedFiles: all.size,
     namesChecked: 0,
@@ -109,6 +192,42 @@ function scanSkins(banned: Readonly<Record<string, readonly string[]>>): Scan {
     if (found.length > 0) scan.violations.push({ file, names: found });
   }
   return scan;
+}
+
+interface InventoryGaps {
+  /** (file, name) pairs looked at. Zero is a failure. */
+  pairs: number;
+  /** `file:NAME` in the inventory that is neither declared in its file nor in BANNED: a typo, or a deletion with no BANNED append. */
+  undeclaredAndUnbanned: string[];
+  /** `file:NAME` in BANNED that the inventory does not list: a typo, or a name the plan never named. */
+  bannedNotInInventory: string[];
+  /** Inventory keys naming no skin file. */
+  missingFiles: string[];
+}
+
+function inventoryGaps(inventory: NameMap, banned: NameMap): InventoryGaps {
+  const byBase = skinByBasename();
+  const gaps: InventoryGaps = { pairs: 0, undeclaredAndUnbanned: [], bannedNotInInventory: [], missingFiles: [] };
+  for (const [file, names] of Object.entries(inventory)) {
+    const text = byBase.get(file);
+    if (text === undefined) {
+      gaps.missingFiles.push(file);
+      continue;
+    }
+    const declared = findDeclarations(text, names);
+    for (const name of new Set(names)) {
+      gaps.pairs++;
+      if (!declared.includes(name) && !(banned[file] ?? []).includes(name)) {
+        gaps.undeclaredAndUnbanned.push(`${file}:${name}`);
+      }
+    }
+  }
+  for (const [file, names] of Object.entries(banned)) {
+    for (const name of new Set(names)) {
+      if (!(inventory[file] ?? []).includes(name)) gaps.bannedNotInInventory.push(`${file}:${name}`);
+    }
+  }
+  return gaps;
 }
 
 /**
@@ -246,7 +365,61 @@ describe("the skins tree the guard reads", () => {
   });
 });
 
+describe("the inventory of planned deletions", () => {
+  it("holds the planned number of pairs, each file a skin and each name listed once", () => {
+    const entries = Object.entries(RULE_CONSTANTS_AT_BASE);
+    const pairs = entries.reduce((n, [, names]) => n + names.length, 0);
+    expect(pairs, "(file, name) pairs in RULE_CONSTANTS_AT_BASE").toBe(PLANNED_PAIRS);
+    const files = new Set(skinByBasename().keys());
+    for (const [file, names] of entries) {
+      expect(files.has(file), `${file} is not a skin file`).toBe(true);
+      expect(new Set(names).size, `${file} lists a name twice`).toBe(names.length);
+    }
+  });
+
+  it("gaps: a still-declared name passes, a misspelt one is named, a deleted-and-banned one passes", () => {
+    // Real declarations, read by the string-op reader, so this does not rot
+    // when P2 deletes WICKET_KINDS.
+    const real = firstConstName(skinSources().get("cricket.tsx")!)!;
+    const clean = inventoryGaps({ "cricket.tsx": [real] }, {});
+    expect(clean).toEqual({ pairs: 1, undeclaredAndUnbanned: [], bannedNotInInventory: [], missingFiles: [] });
+
+    const typo = inventoryGaps({ "cricket.tsx": [real, "WICKET_KIND_TYPO"] }, {});
+    expect(typo.pairs).toBe(2);
+    expect(typo.undeclaredAndUnbanned).toEqual(["cricket.tsx:WICKET_KIND_TYPO"]);
+
+    // A batch that deleted the constant and appended it: declared nowhere, banned.
+    const banned = inventoryGaps({ "cricket.tsx": [real, "WICKET_KIND_TYPO"] }, { "cricket.tsx": ["WICKET_KIND_TYPO"] });
+    expect(banned.undeclaredAndUnbanned).toEqual([]);
+    expect(banned.bannedNotInInventory).toEqual([]);
+  });
+
+  it("gaps: a BANNED name the inventory does not list, and a file that is no skin, are named", () => {
+    const real = firstConstName(skinSources().get("cricket.tsx")!)!;
+    const gaps = inventoryGaps(
+      { "cricket.tsx": [real], "no-such-skin.tsx": ["A"] },
+      { "cricket.tsx": ["WICKET_KINDS_MISSPELT"] },
+    );
+    expect(gaps.bannedNotInInventory).toEqual(["cricket.tsx:WICKET_KINDS_MISSPELT"]);
+    expect(gaps.missingFiles).toEqual(["no-such-skin.tsx"]);
+    expect(gaps.pairs).toBe(1);
+  });
+});
+
 describe("the literal guard", () => {
+  it("every planned rule constant is still declared in its skin or listed in BANNED", () => {
+    const gaps = inventoryGaps(RULE_CONSTANTS_AT_BASE, BANNED);
+    console.info(
+      `[no-rule-literals] inventory pairs checked: ${gaps.pairs}, banned: ${Object.values(BANNED).flat().length}`,
+    );
+    // A deletion with no BANNED append, or a misspelt name in either list, lands here with the pair named.
+    expect(gaps.missingFiles, "inventory files that are no skin").toEqual([]);
+    expect(gaps.undeclaredAndUnbanned, `of ${gaps.pairs} inventory pairs, not declared and not banned`).toEqual([]);
+    expect(gaps.bannedNotInInventory, `of ${gaps.pairs} inventory pairs, BANNED names the inventory lacks`).toEqual([]);
+    expect(gaps.pairs, "inventory pairs checked").toBe(PLANNED_PAIRS);
+  });
+
+
   it("skins declare no banned rule literal", () => {
     const scan = scanSkins(BANNED);
     console.info(

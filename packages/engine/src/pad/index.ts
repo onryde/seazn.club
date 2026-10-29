@@ -7,3 +7,14 @@
 export type * from "./types.ts";
 export { padFieldOf, padEnumValues, padNumberBound } from "./spec-lookup.ts";
 export type { PadFieldScope } from "./spec-lookup.ts";
+
+// One region per batch: P1, P2 and P3 run in parallel, so each appends its exports under its own marker (a blank line
+// apart) and the merges do not touch one another's lines.
+
+// P1: period + football
+
+// P2: cricket
+
+// P3: set-based + tennis
+
+// P4: carrom, boardgame, generic, POST_PHASES
