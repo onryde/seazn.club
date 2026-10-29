@@ -105,7 +105,10 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
       const disconnect = text(yt.match(/<p[^>]*><strong>Disconnecting and revoking access\.<\/strong>.*?<\/p>/)?.[0] ?? "");
       return disconnect === ""
         ? ["the Disconnecting paragraph"]
-        : ["Disconnecting deletes at once everything we stored from YouTube", "refresh token", "stream keys", "replay links", "channel id and title", "asks Google to revoke"]
+        : ["Disconnecting deletes at once everything we stored from YouTube", "refresh token", "stream keys", "replay links", "channel id and title", "asks Google to revoke",
+            // M1: the revoke is NOT unconditional - it is skipped on purpose for an account another connected channel uses (disconnect.ts
+            // `accountIsShared`) and cannot be made without a readable token - so the sentence says so.
+            "unless another connected channel uses the same Google account", "cannot be read"]
             .filter((n) => !disconnect.includes(n))
             // Disconnect has no waiting period (the dead-grant purge below has one, so the section may say "7 days" - not THIS paragraph).
             .concat(/\b(7|seven|\d+) (calendar )?days\b/i.test(disconnect) ? ["NO waiting period in the Disconnect paragraph: it deletes at once"] : []);
@@ -128,8 +131,16 @@ describe("privacy — what the YouTube section says about the other halves of th
   it("a grant that stops working (revoked at Google) is deleted after the DECLARED dead-grant window - not the ceiling's", () => {
     expect(ytText).toContain(`not reconnected within ${DEAD} days`);
     expect(ytText).toContain("removed Seazn Club at Google");
+    // M1: and the revoke at Google is stated with the same conditions as Disconnect's (purgeDeadGrant: not for a shared account, not
+    // without a token that opens).
+    expect(ytText).toContain("and, unless another connected channel uses the same Google account or the token cannot be read, ask Google to revoke the grant");
     // The negative pair: the window it replaced (the ceiling's) is not promised there.
     expect(ytText).not.toContain(`not reconnected within ${CEILING} days`);
+  });
+
+  it("M3: the second API Service is Google's authorisation (OAuth) service for the YouTube permission - Seazn does not use Google sign-in here", () => {
+    expect(ytText).toContain("Google's authorisation (OAuth) service for the YouTube permission");
+    expect(ytText, "the sign-in product is a different service (the login uses it; this feature does not)").not.toContain("Google sign-in");
   });
 
   it("a private broadcast is not shown on public match pages; a replay link is shown to anyone who can open the page", () => {
