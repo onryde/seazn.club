@@ -283,6 +283,11 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(yt).toContain('href="/legal/cookie-policy"');
   });
 
+  it("a made-for-kids replay is a link to YouTube, not a player (owner 2026-10-29, DP III.E.4.j) - the paragraph says so, and says nothing is fetched for it", () => {
+    expect(ytText).toContain("A replay of a video made for kids is a link to YouTube, not a player");
+    expect(ytText).toContain("nothing is fetched from YouTube for it until you follow the link");
+  });
+
   it("the sentence 'deletes at once' is held by the code: the purge runs inside the disconnect transaction, then the Google revoke is asked for", () => {
     // An assumption is a guard: if Disconnect ever defers its purge (a 7-day sweep, say), this fails beside the sentence it falsifies.
     const d = src("../../../server/youtube/disconnect.ts");
