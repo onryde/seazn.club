@@ -37,7 +37,7 @@ import type { ObservedOutcome } from "./observed.ts";
 import { BRACKET_OF } from "./scenarios/terminal-finals.ts";
 import { sportModule } from "./sport-cfg.ts";
 import type { FixtureRow } from "./driver/types.ts";
-import type { RequestedOutcome, StreamEvent } from "./streams/types.ts";
+import type { ProductFold, RequestedOutcome, StreamEvent } from "./streams/types.ts";
 
 /** Where the engine's bracket wires THIS match's loser, and who the product seated there. */
 export type LoserSeat =
@@ -84,6 +84,11 @@ export interface BracketDrive {
    *  nothing when refused) — judged against the oracle's `refused`, never dropped; null when the product accepted it.
    *  `status` and `outcome` are then the fixture as the refusal left it. */
   readonly refusal: { readonly status: number; readonly code: string | null } | null;
+  /** W2e (Task 21): the product's own /state for the fixture, read after the last event was posted — the engine's summary and
+   *  the fold's state as match_states holds them. Recorded ONLY for a drive that asked a win down a deciding path (the
+   *  W2e scenarios' witness reads it; every other drive's call log is unchanged); null when the product held no row, absent
+   *  on a drive that asked no path. */
+  readonly product?: ProductFold | null;
 }
 
 export type Judgement =

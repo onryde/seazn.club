@@ -7,6 +7,7 @@ import { decidedInFor, type DecidedIn } from "@seazn/engine/competition";
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { deciderKeysFor } from "@seazn/engine/sport";
 import { football } from "@seazn/engine/sports/football";
+import { hockey } from "@seazn/engine/sports/hockey";
 import { icehockey } from "@seazn/engine/sports/icehockey";
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
@@ -22,14 +23,22 @@ import { W2E_SCENARIO_PATHS, W2eMisplanned, everyMatchTookTheDecidingPath } from
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
-import type { StreamEvent } from "../lib/streams/types.ts";
+import type { ProductFold, StreamEvent } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
 import { bracketRootRows } from "../lib/w2a-cells.ts";
 import { w2eApplies, w2eBracketCfgOf, w2eCells } from "../lib/w2e-cells.ts";
+import type { FixtureStateOut } from "../lib/driver/types.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
 
 const variantFor = offlineBuilderDefault;
+/** What the product serves at /state for a fixture folded to `stream`: the engine's own summary of the fold and the fold's
+ *  state, through JSON as the match_states jsonb columns hold them (apps/web usecases/fixtures.ts getFixtureState). A
+ *  HAND-BUILT drive's product — the integrated runs below read it from the fake driver's /state instead. */
+function productOf(module: ReturnType<typeof sportModule>, cfg: unknown, home: string, away: string, stream: readonly StreamEvent[]): ProductFold {
+  const { state } = foldStream(module, cfg, home, away, stream);
+  return JSON.parse(JSON.stringify({ summary: module.summary(state as never), state })) as ProductFold;
+}
 /** What decides each key's matches, in the engine's own vocabulary (sport/module.ts DecidedIn): extra time and overtime are
  *  decided "in overtime", the shoot-out (and the GWS) "by a shoot-out". */
 const DECIDED_IN: Readonly<Record<W2eScenarioKey, "ot" | "so">> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot" };
@@ -208,7 +217,8 @@ describe("everyMatchTookTheDecidingPath, on hand-built drives (a wrong product i
     const method = (foldStream(football, cfg, "a", "b", stream).outcome as { method?: string }).method;
     const d: BracketDrive = {
       fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", asked: { kind: "win", winner: "home", path },
-      levelAs: null, status: "decided", outcome: { kind: "win", winner: "a", ...(method === undefined ? {} : { method }) }, loser: { line: "none" }, next: { line: "none" }, forfeitPlay: null, refusal: null, ...over,
+      levelAs: null, status: "decided", outcome: { kind: "win", winner: "a", ...(method === undefined ? {} : { method }) }, loser: { line: "none" }, next: { line: "none" }, forfeitPlay: null, refusal: null,
+      product: productOf(football, cfg, "a", "b", stream), ...over,
     };
     return { d, stream };
   };
@@ -234,6 +244,8 @@ describe("everyMatchTookTheDecidingPath, on hand-built drives (a wrong product i
       ["the product shows the shoot-out's method for an ET request", { ...et, d: { ...et.d, outcome: { kind: "win", winner: "a", method: "shootout" } } }, "W2E_ET"],
       ["the product shows a regulation win", { ...so, d: { ...so.d, outcome: { kind: "win", winner: "a", method: "regulation" } } }, "W2E_SO"],
       ["no stream was recorded", { d: et.d, stream: [] }, "W2E_ET"],
+      ["the product's own /state was not recorded (Task 21: product evidence is owed on every drive)", { ...et, d: { ...et.d, product: null } }, "W2E_ET"],
+      ["a drive recorded before Task 21 carried no product at all", { ...et, d: (({ product: _p, ...rest }) => rest)(et.d) }, "W2E_ET"],
     ];
     let reds = 0;
     for (const [label, x, key] of wrong) {
@@ -259,7 +271,8 @@ describe("everyMatchTookTheDecidingPath on ice hockey's drives (overtime, the GW
     const method = (foldStream(icehockey, cfg, "a", "b", stream).outcome as { method?: string }).method;
     const d: BracketDrive = {
       fixtureId: "f1", stageKind: "knockout", sport: "icehockey", home: "a", away: "b", asked: { kind: "win", winner: "home", path },
-      levelAs: null, status: "decided", outcome: { kind: "win", winner: "a", ...(method === undefined ? {} : { method }) }, loser: { line: "none" }, next: { line: "none" }, forfeitPlay: null, refusal: null, ...over,
+      levelAs: null, status: "decided", outcome: { kind: "win", winner: "a", ...(method === undefined ? {} : { method }) }, loser: { line: "none" }, next: { line: "none" }, forfeitPlay: null, refusal: null,
+      product: productOf(icehockey, cfg, "a", "b", stream), ...over,
     };
     return { d, stream };
   };
@@ -293,5 +306,112 @@ describe("everyMatchTookTheDecidingPath on ice hockey's drives (overtime, the GW
       reds++;
     }
     expect(reds).toBe(wrong.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 21 Part 1 — the witness reads the PRODUCT's /state, not only the local fold (Task 19 Important carry, Task 20 I-1).
+
+describe("Task 21: the period sports' shoot-out name is witnessed on the product's summary headline", () => {
+  /** The engine's own name for a cfg's shoot-out (kernel.ts: the `preset.shootoutLabel` the pad panel and the headline both
+   *  print) - read off the pad panel that carries the sport's attempt event, never typed. */
+  const labelOf = (sport: "hockey" | "icehockey", cfg: unknown): string =>
+    sportModule(sport).padSpec!(cfg as never).panels.find((p) => p.actions.some((a) => a.type === `${sport}.shootout.attempt`))!.labelKey.label;
+  const cases = [["hockey", hockey, "shootout"], ["icehockey", icehockey, "gws"]] as const;
+  const build = (sport: "hockey" | "icehockey", module: typeof hockey | typeof icehockey, path: "shootout" | "gws") => {
+    const variant = variantFor(sport);
+    const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant);
+    const stream = generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "a", away: "b", outcome: { kind: "win", winner: "home", path } });
+    const method = (foldStream(module, cfg, "a", "b", stream).outcome as { method?: string }).method;
+    const d: BracketDrive = {
+      fixtureId: "f1", stageKind: "knockout", sport, home: "a", away: "b", asked: { kind: "win", winner: "home", path },
+      levelAs: null, status: "decided", outcome: { kind: "win", winner: "a", ...(method === undefined ? {} : { method }) }, loser: { line: "none" }, next: { line: "none" }, forfeitPlay: null, refusal: null,
+      product: productOf(module, cfg, "a", "b", stream),
+    };
+    const rec = new Recorder();
+    rec.bracketDrives.push(d);
+    rec.streams.set("f1", stream);
+    return { cfg, d, rec };
+  };
+  /** The same drive, its product's headline naming `label` where the engine's own label stood. */
+  const relabelled = (x: ReturnType<typeof build>, from: string, to: string): Recorder => {
+    const product = JSON.parse(JSON.stringify(x.d.product)) as { summary: { headline: string } };
+    product.summary.headline = product.summary.headline.replace(`(${from} `, `(${to} `);
+    const rec = new Recorder();
+    rec.bracketDrives.push({ ...x.d, product: product as ProductFold });
+    rec.streams.set("f1", x.rec.streams.get("f1")!);
+    return rec;
+  };
+
+  it("the product's headline carries the engine's label, and that label differs between the two sports (right answer differs from the wrong one)", () => {
+    const labels = new Set<string>();
+    for (const [sport, module, path] of cases) {
+      const x = build(sport, module, path);
+      const label = labelOf(sport, x.cfg);
+      const headline = (x.d.product as { summary: { headline: string } }).summary.headline;
+      expect(headline, sport).toContain(`(${label} `);
+      labels.add(label);
+    }
+    expect([...labels].sort()).toEqual(["GWS", "SO"]);
+  });
+
+  it("passes on the product's own label; a headline that names the OTHER sport's label, or no shoot-out, or no summary at all, each reds the match alone — whatever the local fold says", () => {
+    let reds = 0;
+    for (const [sport, module, path] of cases) {
+      const x = build(sport, module, path);
+      const key: W2eScenarioKey = "W2E_SO";
+      const cfgOf = () => x.cfg;
+      expect(everyMatchTookTheDecidingPath(x.rec, key, cfgOf), `${sport} right`).toMatchObject({ verdict: "pass", checked: 1 });
+      const mine = labelOf(sport, x.cfg);
+      const other = mine === "SO" ? "GWS" : "SO";
+      expect(everyMatchTookTheDecidingPath(relabelled(x, mine, other), key, cfgOf), `${sport} other label`).toMatchObject({ verdict: "fail", checked: 1 });
+      const noTally = new Recorder();
+      noTally.bracketDrives.push({ ...x.d, product: { summary: { headline: "0 — 0" }, state: (x.d.product as ProductFold).state } });
+      noTally.streams.set("f1", x.rec.streams.get("f1")!);
+      expect(everyMatchTookTheDecidingPath(noTally, key, cfgOf), `${sport} no tally`).toMatchObject({ verdict: "fail", checked: 1 });
+      const noSummary = new Recorder();
+      noSummary.bracketDrives.push({ ...x.d, product: { summary: null, state: (x.d.product as ProductFold).state } });
+      noSummary.streams.set("f1", x.rec.streams.get("f1")!);
+      expect(everyMatchTookTheDecidingPath(noSummary, key, cfgOf), `${sport} no summary`).toMatchObject({ verdict: "fail", checked: 1 });
+      reds += 3;
+    }
+    expect(reds).toBe(6);
+  });
+});
+
+describe("Task 21: the fake knockout driver serves a product-shaped /state, and the scenarios record it", () => {
+  /** A fake that keeps every /state answer it gave, in order. */
+  class Spy extends FakeKnockoutDriver {
+    readonly reads: { id: string; st: FixtureStateOut }[] = [];
+    override async fixtureState(id: string): Promise<FixtureStateOut> { const st = await super.fixtureState(id); this.reads.push({ id, st }); return st; }
+  }
+
+  it("a fixture nothing was posted to serves null summary and state (the product has no match_states row); a decided one serves the engine's summary of its fold and that fold's state — the playing is the scenario's own, so this is the integrated path", async () => {
+    const sport = "icehockey";
+    const variant = variantFor(sport);
+    const driver = new Spy();
+    const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|W2E_SO`, row: "knockout", sport, variant, scenario: "W2E_SO", canary: false };
+    await SCENARIOS.W2E_SO.run({ driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    const first = new Map<string, FixtureStateOut>();
+    for (const r of driver.reads) if (!first.has(r.id)) first.set(r.id, r.st);
+    let untouched = 0;
+    for (const [id, st] of first) {
+      if (st.last_seq !== 0) continue;
+      expect(st.summary, `${id} before any event`).toBeNull();
+      expect(st.state, `${id} before any event`).toBeNull();
+      untouched++;
+    }
+    expect(untouched, "some fixture was read before it was played").toBeGreaterThan(1);
+    let played = 0;
+    for (const f of driver.rows()) {
+      const st = await driver.fixtureState(f.id);
+      if (f.status !== "decided") continue;
+      expect(st.state, f.id).not.toBeNull();
+      expect(st.summary, f.id).not.toBeNull();
+      expect((st.summary as { headline: string }).headline, f.id).toBe(sportModule(sport).summary(st.state as never).headline);
+      expect(st.outcome, f.id).toMatchObject({ kind: "win" });
+      played++;
+    }
+    expect(played, "more than one decided fixture was read").toBeGreaterThan(1);
   });
 });

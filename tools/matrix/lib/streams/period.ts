@@ -12,7 +12,8 @@
 // winner leads. Every whistle is the label the engine names next (`detail.nextAdvance`), so no overtime label is listed
 // here. A path is built only where the cfg switches it on and the sport's engine declares the decider (its rule keys:
 // ice hockey has overtime and the shoot-out, hockey the shoot-out alone); what decided the fold is read back through
-// the engine's own `decidedInFor`, and the shoot-out's name through the label the engine gives its pad panel.
+// the engine's own `decidedInFor`, and the shoot-out's name through the label the engine gives its pad panel (the cfg half)
+// and the label the PRODUCT's summary headline prints (Task 21: the product half).
 import { decidedInFor } from "@seazn/engine/competition";
 import { deciderKeysFor } from "@seazn/engine/sport";
 import { foldStream } from "../fold.ts";
@@ -53,11 +54,16 @@ const PERIOD_DECIDED_IN: Readonly<Partial<Record<DecidingPath, "ot" | "so">>> = 
  *  IIHF "GWS"). A label this file does not know is a defect, named. */
 const LABEL_PATH: Readonly<Record<string, DecidingPath>> = Object.freeze({ SO: "shootout", GWS: "gws" });
 
-/** The deciding path of the shoot-out this cfg plays, from the engine's own label for it (the pad panel that carries the
- *  sport's attempt event); null when the cfg plays none (no panel). */
-function shootoutPathOf(sportKey: string, cfg: unknown): DecidingPath | null {
+/** The engine's own name for the shoot-out this cfg plays (the label of the pad panel that carries the sport's attempt
+ *  event - `preset.shootoutLabel`, which the summary headline prints too); undefined when the cfg plays none (no panel). */
+function shootoutLabelOf(sportKey: string, cfg: unknown): string | undefined {
   const spec = sportModule(sportKey).padSpec?.(cfg);
-  const label = spec?.panels.find((p) => p.actions.some((a) => a.type === `${sportKey}.shootout.attempt`))?.labelKey.label;
+  return spec?.panels.find((p) => p.actions.some((a) => a.type === `${sportKey}.shootout.attempt`))?.labelKey.label;
+}
+
+/** The deciding path of the shoot-out this cfg plays, from the engine's own label for it; null when the cfg plays none. */
+function shootoutPathOf(sportKey: string, cfg: unknown): DecidingPath | null {
+  const label = shootoutLabelOf(sportKey, cfg);
   if (label === undefined) return null;
   const path = LABEL_PATH[label];
   if (path === undefined) throw new Error(`streams: ${sportKey} calls its shoot-out '${label}', which the period generator has no deciding path for`);
@@ -156,13 +162,19 @@ export const periodGenerator: SportStreamGenerator = {
     const goals: StreamEvent[] = req.outcome.kind === "draw" ? [] : [{ type: `${req.sportKey}.goal`, payload: goalPayload(req.sportKey, idOf(req, req.outcome.winner)) }];
     return [START, ...goals, ...advances];
   },
-  // W2e (Task 20, F8): the engine's own reading of the fold. The outcome carries overtime (method `extra_time`) and the
-  // shoot-out (method `shootout`) through `decidedInFor`; the shoot-out's NAME (hockey's SO, the IIHF's GWS) is the sport's
-  // — both write the same method — so it is read from the label the engine gives the cfg's shoot-out panel.
+  // W2e (Task 20, F8; Task 21): the engine's own reading of the fold. The outcome carries overtime (method `extra_time`) and
+  // the shoot-out (method `shootout`) through `decidedInFor`; the shoot-out's NAME (hockey's SO, the IIHF's GWS) is the
+  // sport's - both write the same method - so it is the label the engine gives the cfg's shoot-out (the request's path
+  // must be the one that label names), and, when the fold carries the PRODUCT's /state, that label must be the one the
+  // product's own summary headline prints: `(SO 3–2)` or `(GWS 3–2)` (kernel.ts summary).
   pathWitness(path, fold) {
     const want = PERIOD_DECIDED_IN[path];
     if (want === undefined || decidedInFor(sportModule(fold.sportKey), fold.outcome) !== want) return false;
-    return want === "ot" || shootoutPathOf(fold.sportKey, fold.cfg) === path;
+    if (want === "ot") return true;
+    if (shootoutPathOf(fold.sportKey, fold.cfg) !== path) return false;
+    if (fold.product === null) return true;
+    const headline = (fold.product.summary as { headline?: unknown } | null)?.headline;
+    return typeof headline === "string" && headline.includes(`(${shootoutLabelOf(fold.sportKey, fold.cfg)} `);
   },
   // W2b (HK-RT-1, IH-RT-1): a goal each, no period advanced — `${key}.goal {by}` (`{by, kind}` for hockey, W2d T18).
   partial(req) {

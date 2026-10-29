@@ -10,11 +10,13 @@
 //
 // The sport's own rule decides every match, so no organiser settle or tie-break is owed (life-bracket-decider-
 // exercised is left out, as W2a's BRACKET_EXTRA_BOARD leaves it). The shared bracket assertions apply, and the
-// scenario's own check holds each match to its path on the PRODUCT's outcome, read by the sport generator's
-// `pathWitness` — the engine's own `decidedInFor` — never on the stream the harness posted alone. What the outcome
-// cannot say is the shoot-out's NAME (hockey's SO and the IIHF's GWS both write method `shootout`): that half is read
-// from the label the engine gives the cfg's shoot-out panel, on the local strict fold of the stream posted (the product
-// serves the outcome, not its state).
+// scenario's own check holds each match to its path on what the PRODUCT holds - its outcome AND (Task 21) the summary and
+// state its /state serves - read by the sport generator's `pathWitness`, the engine's own `decidedInFor` where the outcome
+// can say it, never on the stream the harness posted alone. What the outcome cannot say is the shoot-out's NAME (hockey's
+// SO and the IIHF's GWS both write method `shootout`): that half is read from the product's summary headline, which prints
+// the label the engine gives the cfg's shoot-out (`preset.shootoutLabel`, read off the pad panel that carries it); and a
+// path that is state only (cricket's super over) is read from the product's state. The local strict fold is still the
+// parity gate (the stream posted must fold to the request), but it is no longer the witness's evidence.
 import type { MatchOutcome, StageKind } from "@seazn/engine/core";
 import { fieldSizeFor } from "../field-size.ts";
 import { foldStream } from "../fold.ts";
@@ -78,9 +80,12 @@ export function everyMatchTookTheDecidingPath(rec: Recorder, key: W2eScenarioKey
     if (matchesRequest(req, local.outcome, local.state) !== "match") return { ok: false, note: note(`the stream posted folds to ${JSON.stringify(local.outcome)}, not a win down '${path}'`) };
     const gen = STREAM_GENERATORS[d.sport];
     if (gen?.pathWitness === undefined) return { ok: false, note: note("the sport's generator witnesses no deciding path") };
+    // Task 21: the witness reads the product's own summary and state beside its outcome. A drive that recorded none is
+    // refused by name - the local fold alone would pass a product that served the wrong label or no super over.
+    if (d.product === undefined || d.product === null) return { ok: false, note: note("the product's own /state (summary and state) was not recorded for it") };
     const loser = winner === d.home ? d.away : d.home;
     const shown: MatchOutcome = product.method === undefined ? { kind: "win", winner, loser } : { kind: "win", winner, loser, method: product.method };
-    return { ok: gen.pathWitness(path, { sportKey: d.sport, outcome: shown, state: local.state, cfg: req.cfg }), note: note(`the product's outcome is not decided down '${path}'`) };
+    return { ok: gen.pathWitness(path, { sportKey: d.sport, outcome: shown, state: local.state, cfg: req.cfg, product: d.product }), note: note(`the product's outcome and state are not decided down '${path}'`) };
   });
   return assertion("w2e-every-match-took-the-path", items);
 }

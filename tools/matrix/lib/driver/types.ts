@@ -109,7 +109,10 @@ export interface AmericanoViewOut { readonly mode: "americano" | "mexicano"; rea
 export interface StandingsRowWire { entrantId: string; rank: number | null; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number>; /** W2d T13/T17: true on every row of a table with no counted result. */ level?: boolean }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
-export interface FixtureStateOut { status: string; last_seq: number; outcome: unknown }
+/** GET /fixtures/:id/state (usecases/fixtures.ts getFixtureState): the status, the ledger head, the engine's outcome, and — W2e
+ *  Task 21 — the stored `summary` (the engine's `summary(state)` the scoreboards print) and `state` (the fold itself), both
+ *  null for a fixture the match_states table holds no row for. Optional: a fake that serves only the first three omits them. */
+export interface FixtureStateOut { status: string; last_seq: number; outcome: unknown; summary?: unknown; state?: unknown }
 export interface PostedEvent {
   seq: number; status: string; outcome: unknown; event_id: string;
   /** Parked Task 6 (b): set (true) only when this event landed on the one

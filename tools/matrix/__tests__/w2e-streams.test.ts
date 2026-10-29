@@ -6,9 +6,10 @@
 // anti-vacuity). `ALL_OUTCOMES` stays frozen: the new shapes run here, in their own sweeps (spec §10).
 import { decidedInFor } from "@seazn/engine/competition";
 import { StageKind } from "@seazn/engine/core";
-import { deciderKeysFor } from "@seazn/engine/sport";
+import { checkFixtureOverride, deciderKeysFor } from "@seazn/engine/sport";
 import { football, footballNextKicker, type ShootoutKick } from "@seazn/engine/sports/football";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { mergeRulesOverride } from "../../../apps/web/src/server/engine-db/fixture-cfg.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { foldStream } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
@@ -19,6 +20,12 @@ import {
   type DecidingPath, type RequestedOutcome, type Side, type StreamRequest,
 } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
+
+// The product's own override merge lives in a `server-only` file that reaches its siblings by the app's `@/` alias, neither of
+// which the matrix's vitest (no config of its own) resolves: both are stubbed to the REAL thing, so `mergeRulesOverride` below
+// is the product's function, not a copy (Task 20 M1).
+vi.mock("server-only", () => ({}));
+vi.mock("@/lib/stage-decider-off", async () => await import("../../../apps/web/src/lib/stage-decider-off.ts"));
 
 const SIDES: readonly Side[] = ["home", "away"];
 const ID: Readonly<Record<Side, string>> = { home: "H", away: "A" };
@@ -385,7 +392,7 @@ describe("G2 G3 hockey and icehockey: a win by overtime, by the shoot-out, by th
     for (const path of ["overtime", "shootout", "gws"] as const) expect(perPath.get(path) ?? 0, `${path}: never built`).toBeGreaterThan(0);
   });
 
-  it("G2 G3: every attempt is taken by the side the engine names next (shootoutNext over the attempts before it), the first round is opened by the first taker, the opener of later pairs differs from the IFAB opener, the attempts run past the cfg's into sudden death — at attempts 3 and 5", () => {
+  it("G2 G3 shooter order: the oracle is the engine's shootoutNext (read off the fold of every prefix) plus the strict fold of the whole stream — every attempt is taken by the side shootoutNext names, the first round is opened by the first taker, the opener of later pairs differs from the IFAB opener, the attempts run past the cfg's into sudden death — at attempts 3 and 5", () => {
     let kicksChecked = 0;
     let streams = 0;
     const divergent = new Map<PeriodSport, number>();
@@ -393,10 +400,28 @@ describe("G2 G3 hockey and icehockey: a win by overtime, by the shoot-out, by th
     const cells: { at: string; sport: PeriodSport; cfg: unknown }[] = PERIOD_CELLS
       .filter((c) => periodPaths(c.sport, c.cfg, c.kind, c.variant).some((p) => p === "shootout" || p === "gws"))
       .map((c) => ({ at: `${c.sport}/${c.variant}/${c.kind}`, sport: c.sport, cfg: c.cfg }));
-    // Off the presets: the match key `shootout.attempts` may only LOWER the stage's (matchBound 'shorter'): 3, where the presets hold 5.
-    for (const [sport, variant, shootout] of [["hockey", "fih-shootout", { attempts: 3, clockSeconds: 8 }], ["icehockey", "iihf", { attempts: 3 }]] as const) {
-      cells.push({ at: `${sport}/${variant} attempts 3`, sport, cfg: resolveSportCfg(sport, variant, { shootout }) });
+    // Off the presets: the match key `shootout.attempts` may only LOWER the stage's (matchBound 'shorter'): 3, where the presets
+    // hold 5. The cfg is built the way the product builds a match's own format - the stage's resolved cfg with the match's
+    // override laid over it (fixture-cfg.ts mergeRulesOverride) - and the engine's own writer check (checkFixtureOverride)
+    // accepts 3 and refuses a longer count, so the 3 is a value a match can really hold.
+    let overridden = 0;
+    for (const [sport, variant] of [["hockey", "fih-shootout"], ["icehockey", "iihf"]] as const) {
+      const stage = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as { shootout: { attempts: number } };
+      const m = sportModule(sport);
+      // A match's override carries the WHOLE top-level value (changedLeaves compares every leaf under it), so the other
+      // `shootout` leaves ride along unchanged: hockey's clockSeconds would otherwise read as a change of its own.
+      const withAttempts = (attempts: number) => ({ shootout: { ...stage.shootout, attempts } });
+      expect(checkFixtureOverride(m, "knockout", variant, stage, withAttempts(3)), `${sport}: 3 is accepted`).toEqual({ ok: true, changed: ["shootout.attempts"] });
+      expect(checkFixtureOverride(m, "knockout", variant, stage, withAttempts(stage.shootout.attempts + 1)), `${sport}: more than the stage's is refused`).toMatchObject({ ok: false, code: "RULE_NOT_SETTABLE", path: "shootout.attempts" });
+      // The override is nested (whole top-level values), never a dotted key: a dotted one is no rule at all.
+      expect(checkFixtureOverride(m, "knockout", variant, stage, { "shootout.attempts": 3 }), `${sport}: a dotted key`).toMatchObject({ ok: false, code: "UNKNOWN_RULE_KEY" });
+      const merged = mergeRulesOverride(stage, withAttempts(3));
+      expect((merged.shootout as { attempts: number }).attempts, `${sport}: the override reached the cfg`).toBe(3);
+      expect(stage.shootout.attempts, `${sport}: the stage's own cfg is untouched`).toBe(5);
+      cells.push({ at: `${sport}/${variant} attempts 3`, sport, cfg: merged });
+      overridden++;
     }
+    expect(overridden).toBe(2);
     for (const { at: cell, sport, cfg } of cells) {
       const attempts = (cfg as { shootout: { attempts: number } }).shootout.attempts;
       attemptsSeen.add(attempts);

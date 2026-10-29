@@ -814,6 +814,18 @@ export interface FakeKnockoutOptions {
 const WITHDRAWAL_REASON = withdrawalReason();
 type Slot = "home_entrant_id" | "away_entrant_id";
 export class FakeKnockoutDriver extends FakeLeagueDriver {
+  /** GET /fixtures/:id/state as the PRODUCT serves it (usecases/fixtures.ts getFixtureState; W2e Task 21): beside the status,
+   *  the ledger head and the outcome, the engine's `summary(state)` and the fold's `state` - both through JSON, as the
+   *  match_states jsonb columns hold them - and both null for a fixture nothing was posted to (no row). The fold is the fake's
+   *  own (#append folds the whole ledger the same way), so a witness reading this reads what the posted stream folds to. */
+  override async fixtureState(id: string): Promise<FixtureStateOut> {
+    const base = await super.fixtureState(id);
+    const f = this.fixtures.find((x) => x.id === id);
+    if (f === undefined || f.events.length === 0) return { ...base, summary: null, state: null };
+    const module = sportModule(this.sport);
+    const { state } = foldStream(module, this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, f.events);
+    return { ...base, ...(JSON.parse(JSON.stringify({ summary: module.summary(state), state })) as { summary: unknown; state: unknown }) };
+  }
   /** fixture id → the next round's fixture and slot its winner fills. */
   readonly feeds = new Map<string, { to: string; slot: Slot }>();
   /** fixture id → the fixture and slot its LOSER fills (a page playoff's pp-q1 → pp-q2). */

@@ -7,7 +7,7 @@ import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
 import { templateBodies, templateField, templateRow } from "../templates.ts";
 import {
-  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, VOID_EVENT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type PostedEvent, type StageRef,
+  RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, VOID_EVENT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type MemberInput, type PostedEvent, type StageRef,
 } from "../driver/types.ts";
 import { declaredPoints, foldStream, lineupsFor } from "../fold.ts";
 import { redact } from "../redact.ts";
@@ -19,7 +19,7 @@ import {
 } from "../observed.ts";
 import { decidersOffRulesFor, drawsAllowed, entrantKindFor, sportModule, stageCfg } from "../sport-cfg.ts";
 import { forfeitPosting, generateStream, levelReachable, matchesRequest, type RequestMatch } from "../streams/index.ts";
-import { outcomeLabel, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
+import { outcomeLabel, type ProductFold, type RequestedOutcome, type Side, type StreamEvent } from "../streams/types.ts";
 import { forfeitPlayOf, levelKindOf, loserSeatOf, nextLineOf, type BracketDrive } from "../reference-bracket.ts";
 import { confirmAdvance, sourcePoolCount, type AdvanceObs } from "./advance.ts";
 import { playAmericano, playMexicano } from "./americano-loop.ts";
@@ -547,6 +547,14 @@ export function hardPath(sport: string, cfg: unknown, n: number, winner: Side): 
 const stageCtx = (kind: string, f: { pool_id: string | null; round_no: number | null }): StageCtx =>
   ({ kind: kind as StageKind, ...(f.pool_id ? { poolId: f.pool_id } : {}), ...(f.round_no ? { roundNo: f.round_no } : {}) });
 
+/** The product's summary and state from a /state answer; null when it holds no row for the fixture (both null) - a
+ *  half answer (one of the two) is kept as it is, for the witness to refuse by name. */
+function productFoldOf(st: FixtureStateOut): ProductFold | null {
+  const summary = st.summary ?? null;
+  const state = st.state ?? null;
+  return summary === null && state === null ? null : { summary, state };
+}
+
 /** `stage` (W1-driving Task 6): the stage `f` belongs to — its kind shapes
  *  the stream, the request match and the declared points. */
 export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup, f: FixtureRow, outcome: RequestedOutcome, stage: StageRef = setup.stage): Promise<void> {
@@ -599,6 +607,9 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((r) => r.stage_id === stage.id);
     const row = rows.find((r) => r.id === f.id);
     const missing = { line: "unresolved", why: `fixture ${f.id} is not in the stage's rows after the post` } as const;
+    // W2e (Task 21): a win asked down a deciding path is judged on what the PRODUCT holds - its summary and state, read once
+    // after the post. Only these drives read it, so every other scenario's call log is unchanged.
+    const product = asked.kind === "win" && asked.path !== undefined ? productFoldOf(await ctx.driver.fixtureState(f.id)) : undefined;
     rec.bracketDrives.push({
       fixtureId: f.id, stageKind: stage.kind, sport: ctx.spec.sport, home, away, asked,
       levelAs: levelKindOf(ctx.spec.sport, cfg, home, away, asked, generated),
@@ -608,6 +619,7 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
       next: row === undefined ? missing : nextLineOf(stage.kind, stage.config, row, rows),
       forfeitPlay: forfeit === null || o.live === null ? null : forfeitPlayOf(ctx.spec.sport, cfg, home, away, o.live),
       refusal: o.refusal,
+      ...(product === undefined ? {} : { product }),
     });
   };
   let posted: PostedEvent[];

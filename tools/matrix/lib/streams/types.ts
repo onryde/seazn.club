@@ -141,15 +141,23 @@ export interface SportStreamGenerator {
   pathWitness?(path: DecidingPath, fold: PathFold): boolean;
 }
 
+/** W2e (Task 21): what the PRODUCT holds for a fixture after the harness drove it — the `summary` and `state` its
+ *  /state answer carried (usecases/fixtures.ts FixtureStateOut), through JSON as the match_states columns hold them. */
+export interface ProductFold { readonly summary: unknown; readonly state: unknown }
+
 /** W2e (Task 19, preflight F8): what a path witness reads — the STRICT fold (lib/fold.ts `foldStream`) of the stream as
  *  posted, and the cfg it was folded under. `outcome` is the win matchesRequest already matched to the requested winner.
  *  `sportKey` (Task 20): a generator that serves several sports (the period kernel's hockey and ice hockey) reads the
- *  sport's own module with it — the outcome and state alone do not say which sport folded them. */
+ *  sport's own module with it — the outcome and state alone do not say which sport folded them.
+ *  `product` (Task 21): the product's own summary and state for the fixture, recorded after the post - what a path the
+ *  outcome cannot name (a shoot-out's label, a super over) is witnessed on. Null for a fold that has none (the stream
+ *  generators' own request match, which never saw a product); the scenario check refuses a drive that recorded none. */
 export interface PathFold {
   readonly sportKey: string;
   readonly outcome: MatchOutcome;
   readonly state: unknown;
   readonly cfg: unknown;
+  readonly product: ProductFold | null;
 }
 
 /** First in every stream that plays. A walkover and a double walkover are recorded BEFORE it (W2b D3: the phase guard
