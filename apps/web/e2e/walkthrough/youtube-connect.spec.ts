@@ -256,22 +256,17 @@ async function fake(page: Page, body: Record<string, unknown>): Promise<unknown>
 async function fakeState(page: Page, fixtureId: string): Promise<FakeState> {
   return (await fake(page, { op: "state", fixtureId })) as FakeState;
 }
-/** The grant's handle, asserted present: a fixture with no destination chosen and no broadcast has none, and an op scoped to `null` would be unscoped.
+/** The grant's handle, asserted present: a fixture whose destination is not a connected channel and that has no broadcast has none, and an op
+ *  scoped to `null` would be unscoped.
  *
- *  `state` finds a grant through the fixture's SAVED pre-pick (`fixture_stream_settings.target_id`) until the first broadcast exists. The panel
- *  saves that only on a PICK (fixture-stream-panel.tsx `onSelectTarget`, "opening the panel, or following the server's answer, saves nothing"):
- *  with ONE destination in the org the picker already shows it chosen, so tapping it again is not a pick and nothing is written. So the spec
- *  makes the same write the picker makes (`PUT stream-settings { targetId }`) - setup for the fake's control route, not a step of the walk;
- *  the walk's own pick (Go live carries `targetId` too) is on the screen. */
-async function handleOf(page: Page, fixtureId: string, targetId: string): Promise<string> {
-  const saved = await apiJson<{ targetId: string | null }>(page.request, `/api/v1/fixtures/${fixtureId}/stream-settings`, "PUT", { targetId });
-  expect(saved.status, `SETUP: PUT stream-settings {targetId}: ${JSON.stringify(saved.error)}`).toBe(200);
-  await expect
-    .poll(async () => (await fakeState(page, fixtureId)).tokenHandle, {
-      message: "PREMISE: the fixture's chosen destination is the connected channel, so the fake can name its grant", timeout: SAVE_MS,
-    })
-    .not.toBeNull();
-  return (await fakeState(page, fixtureId)).tokenHandle!;
+ *  `state` resolves the fixture's destination through the same resolver the panel's picker and the phone's start use (`fixtureStreamTarget`:
+ *  a saved choice, else the org's oldest live destination), so it names the grant Go live will use even when NOTHING is saved - which is
+ *  the case here: with ONE destination the picker shows it chosen and a tap on it is not a pick, so no write is made. This walk never
+ *  saves a destination; the unsaved default is the path under test. */
+async function handleOf(page: Page, fixtureId: string): Promise<string> {
+  const s = await fakeState(page, fixtureId);
+  expect(s.tokenHandle, "PREMISE: the fixture's destination is the connected channel, so the fake can name its grant").not.toBeNull();
+  return s.tokenHandle!;
 }
 /** Broadcasts go live the moment they are bound, so they can complete as replay parts. Scoped to the grant's channel. */
 async function autoVideoOn(page: Page, tokenHandle: string): Promise<void> {
@@ -360,7 +355,8 @@ async function openPhoneTab(page: Page, rig: Rig, no: number): Promise<Locator> 
   return scope.locator("[data-phone-body]");
 }
 
-/** Pick the connected channel as the match's destination (the choice is stored on the fixture, which is how the fake finds the grant). */
+/** Pick the connected channel as the match's destination in the panel's picker, and read the closed field back. With one destination this is the
+ *  default already showing, so the tap writes nothing (see `handleOf`); with several it is a real pick. */
 async function pickChannel(body: Locator, t: TargetRef): Promise<void> {
   await selectTarget(body, t.id);
   await expect(targetPicker(body).getByTestId("stream-target-name"), "the closed field names the picked channel").toHaveText(t.title);
@@ -439,7 +435,7 @@ async function readyToGoLive(page: Page, rig: Rig, c: Chan, opts: { slot?: boole
   const f = rig.fixtures[0]!;
   const body = await openPhoneTab(page, rig, f.no);
   await pickChannel(body, t);
-  const handle = await handleOf(page, f.id, t.id);
+  const handle = await handleOf(page, f.id);
   await autoVideoOn(page, handle);
   if (opts.slot !== false) await streamSlot();
   await pairedPhone(page); // W5: Go live needs a paired phone
@@ -664,7 +660,7 @@ spec("replay links: two parts (a Stop past the grace, then a second video) are P
   const t = await connectOne(page, channel(`Riverside FC ${randomBytes(2).toString("hex")}`), "youtube-connect-empty");
   const body = await openPhoneTab(page, rig, f.no);
   await pickChannel(body, t);
-  await autoVideoOn(page, await handleOf(page, f.id, t.id));
+  await autoVideoOn(page, await handleOf(page, f.id));
   const exclusive = await wholePool();
   const poolFrom = Date.now();
   await pairedPhone(page);
@@ -748,7 +744,7 @@ spec("reconnect needed badge: the grant is killed at Google, the daily sweep fin
   const t = await connectOne(page, channel(`Riverside FC ${randomBytes(2).toString("hex")}`), "youtube-connect-empty");
   const body = await openPhoneTab(page, rig, f.no);
   await pickChannel(body, t);
-  const handle = await handleOf(page, f.id, t.id);
+  const handle = await handleOf(page, f.id);
 
   // PREMISE: before the grant dies the row is healthy - no Reconnect, no purge warning.
   await openStreaming(page);
@@ -867,10 +863,11 @@ spec("disconnect outcomes: a Google account another channel still uses keeps its
   const b = await connectOne(page, chB, "youtube-connect", { sub });
   await expect(channelRows(page), "PREMISE: two channels on ONE Google account").toHaveCount(2);
 
-  // Channel A is chosen on the match only so the fake can name its grant (the handle).
+  // Channel A is the match's destination (the org's oldest, so the default; the pick below confirms the picker shows it).
   const body = await openPhoneTab(page, rig, f.no);
   await pickChannel(body, a);
-  const handleA = await handleOf(page, f.id, a.id);
+  const handleA = await handleOf(page, f.id);
+  expect((await fakeState(page, f.id)).connectionId, "PREMISE: the grant the fake names is channel A's, not B's").toBe(a.connectionId);
   await openStreaming(page);
 
   // B first: A still runs on the same account, so Seazn keeps the grant and says why.
@@ -923,8 +920,8 @@ spec("two matches on one channel: both go live together, each on its own broadca
   const body2 = await openPhoneTab(page2, rig, f2.no);
   await pickChannel(body1, t);
   await pickChannel(body2, t);
-  const handle = await handleOf(page, f1.id, t.id);
-  expect(await handleOf(page, f2.id, t.id), "both matches name the same grant").toBe(handle);
+  const handle = await handleOf(page, f1.id);
+  expect(await handleOf(page, f2.id), "both matches name the same grant").toBe(handle);
   await autoVideoOn(page, handle);
   await streamSlot();
   await pairedPhone(page);
