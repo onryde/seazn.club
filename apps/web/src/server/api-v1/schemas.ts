@@ -2190,12 +2190,10 @@ export type YoutubeConnectionSettings = z.infer<typeof YoutubeConnectionSettings
  *  the grant at Google: `revoked` (Google answered the revoke), `skipped_shared_account` (left alone ON PURPOSE: another connected
  *  channel runs on the same Google account, and revoking would drop it) or `not_confirmed` (the revoke was tried and Google or YouTube
  *  did not answer, or Seazn's saved token would not open so none could be sent - the person can remove Seazn under their Google account's
- *  third-party access). `revokedAtGoogle` is the same fact as a boolean (`revokeOutcome === "revoked"`), kept for existing callers. In every
- *  case Seazn's own copy was purged. `keysDeleted`: stream keys Seazn made on the channel that were deleted at YouTube.
+ *  third-party access). In every case Seazn's own copy was purged. `keysDeleted`: stream keys Seazn made on the channel that were deleted at YouTube.
  *  `purged`: the broadcast records removed, and the match stream links that pointed at their videos cleared. */
 export const YOUTUBE_REVOKE_OUTCOMES = ["revoked", "skipped_shared_account", "not_confirmed"] as const;
 export const YoutubeDisconnected = z.object({
-  revokedAtGoogle: z.boolean(),
   revokeOutcome: z.enum(YOUTUBE_REVOKE_OUTCOMES),
   keysDeleted: z.number().int(),
   purged: z.object({ broadcasts: z.number().int(), streamUrlsCleared: z.number().int() }),

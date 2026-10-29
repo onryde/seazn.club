@@ -182,7 +182,7 @@ export async function disconnectYoutube(
   for (const d of done.purged.divisions) fireDivisionRevalidate(d.divisionId, d.competitionId);
 
   const c: Ctx = { orgId, connectionId };
-  let revokedAtGoogle = false;
+  let revoked = false;
   let keysDeleted = 0;
   const token = done.token;
   if (token !== null) {
@@ -208,11 +208,11 @@ export async function disconnectYoutube(
     }
     // The revoke is the policy's step (DP III.E.4), so it is made past the budget and whether or not the clean-up could run (a dead
     // grant's revoke resolves, Google's `invalid_token` being the state asked for) - but never for a grant another club runs on.
-    if (!done.shared) revokedAtGoogle = (await attempt(() => port.revoke(token), c, "revoke")).ok;
+    if (!done.shared) revoked = (await attempt(() => port.revoke(token), c, "revoke")).ok;
   }
 
   // Three outcomes, never two: a grant left alone ON PURPOSE (another club runs on the account) is not a failure the organiser must fix
   // at Google, and one that was tried and failed, or never tried for want of a usable token, is.
-  const revokeOutcome: YoutubeDisconnected["revokeOutcome"] = done.shared ? "skipped_shared_account" : revokedAtGoogle ? "revoked" : "not_confirmed";
-  return { revokedAtGoogle, revokeOutcome, keysDeleted, purged: { broadcasts: done.purged.broadcasts, streamUrlsCleared: done.purged.streamUrlsCleared } };
+  const revokeOutcome: YoutubeDisconnected["revokeOutcome"] = done.shared ? "skipped_shared_account" : revoked ? "revoked" : "not_confirmed";
+  return { revokeOutcome, keysDeleted, purged: { broadcasts: done.purged.broadcasts, streamUrlsCleared: done.purged.streamUrlsCleared } };
 }

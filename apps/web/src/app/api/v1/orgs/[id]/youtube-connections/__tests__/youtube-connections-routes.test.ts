@@ -422,7 +422,7 @@ describe.skipIf(!HAS_DB)("DELETE — Disconnect a channel (T18)", () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.ok).toBe(true);
-    expect(body.data).toEqual({ revokedAtGoogle: true, revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
+    expect(body.data).toEqual({ revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
     expect(revokes() - before, "revoked at Google once").toBe(1);
     expect(await statusOf(c.connectionId)).toBe("revoked");
     expect(((await json(await list(o.orgId))).data as unknown as unknown[]).length, "no longer listed").toBe(0);
@@ -555,7 +555,7 @@ describe.skipIf(!HAS_DB)("DELETE — Disconnect a channel (T18)", () => {
     expect(op.summary.toLowerCase()).toContain("purge"); checked++;
     const ok = op.responses["200"]!.content!["application/json"]!.schema!;
     const dataProps = Object.keys(((ok.properties!.data as { properties: Record<string, unknown> }).properties));
-    expect(dataProps.sort()).toEqual(["keysDeleted", "purged", "revokeOutcome", "revokedAtGoogle"]);
+    expect(dataProps.sort()).toEqual(["keysDeleted", "purged", "revokeOutcome"]);
     expect(checked).toBe(7);
   });
 });

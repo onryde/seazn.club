@@ -1185,7 +1185,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(Object.keys(OUTCOME_COPY).sort(), "a declared outcome without copy would be told as another").toEqual([...YOUTUBE_REVOKE_OUTCOMES].sort());
     let checked = 0;
     for (const outcome of YOUTUBE_REVOKE_OUTCOMES) {
-      answerWith(async () => ({ revokedAtGoogle: outcome === "revoked", revokeOutcome: outcome, keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } }));
+      answerWith(async () => ({ revokeOutcome: outcome, keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } }));
       const onDisconnected = vi.fn();
       await click(disconnectBtn(mount({ channelTitle: "Riverside FC" }, { onDisconnected })));
       expect(onDisconnected, outcome).toHaveBeenCalledWith({ name: "Riverside FC", outcome });

@@ -272,7 +272,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect(await keysOf(w.connectionId), "premise: no key").toBe(0);
     expect((await broadcastsOf(w.connectionId)).length, "premise: no broadcast").toBe(0);
 
-    expect(await disconnect(w)).toEqual({ revokedAtGoogle: true, revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
+    expect(await disconnect(w)).toEqual({ revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
     expect(methods(w.fake), "an access token to act with, then the revoke: nothing to end, nothing to delete").toEqual(["accessToken", "revoke"]);
     expect(await connRow(w.connectionId)).toMatchObject({ status: "revoked", channel_id: null, channel_title: null, google_sub: null });
 
@@ -303,7 +303,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
 
     const from = w.fake.calls.length;
     const out = await disconnect(w);
-    expect(out).toEqual({ revokedAtGoogle: true, revokeOutcome: "revoked", keysDeleted: 1, purged: { broadcasts: 2, streamUrlsCleared: 1 } });
+    expect(out).toEqual({ revokeOutcome: "revoked", keysDeleted: 1, purged: { broadcasts: 2, streamUrlsCleared: 1 } });
 
     // At YouTube: the key's stream is deleted, the videos (complete broadcasts) are NOT touched, the grant is revoked once - last.
     expect(w.fake.streamsCount(w.channel.id)).toBe(0);
@@ -398,7 +398,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     w.fake.videoOff(w.fake.inspectBroadcast(b.yt_broadcast_id!)!.streamId!);
     const ended = (await sessionRow(sessionId)).ended_at!;
     w.setNow(ended.getTime() + min(6));
-    await expect(disconnect(w)).resolves.toMatchObject({ revokedAtGoogle: true });
+    await expect(disconnect(w)).resolves.toMatchObject({ revokeOutcome: "revoked" });
   });
 
   it("disconnect inside the grace (Stopped 2 minutes ago, the broadcast still live) -> 409; at 6 minutes it is due and disconnect succeeds, having COMPLETED the broadcast at YouTube before the revoke (R9)", async () => {
@@ -415,7 +415,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     w.setNow(afterStop(m, min(6)));
     const from = w.fake.calls.length;
     const out = await disconnect(w);
-    expect(out).toMatchObject({ revokedAtGoogle: true, keysDeleted: 1, purged: { broadcasts: 1 } });
+    expect(out).toMatchObject({ revokeOutcome: "revoked", keysDeleted: 1, purged: { broadcasts: 1 } });
     expect(w.fake.inspectBroadcast(m.ytId)!.life, "no video is left live with no picture").toBe("complete");
     const order = methods(w.fake, from);
     expect(order.indexOf("complete"), "completed at YouTube ...").toBeGreaterThan(-1);
@@ -515,7 +515,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
       const view = (await connectionViews(w.orgId)).get(w.connectionId)!;
       expect(view.status, "premise: the connection is still connected").toBe("connected");
       expect(view.liveState, "premise: the Streaming page reads the refusal").toBe(code === "youtube_live_blocked" ? "blocked" : "not_enabled");
-      await expect(disconnect(w)).resolves.toMatchObject({ revokedAtGoogle: true });
+      await expect(disconnect(w)).resolves.toMatchObject({ revokeOutcome: "revoked" });
       expect((await connRow(w.connectionId)).status).toBe("revoked");
       checked++;
     }
@@ -567,7 +567,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     // The new connection can go live: the pool starts from nothing.
     const m = await playAndStop(w, w.fixtures[0]!, again.targetId);
     expect((await broadcastRow(m.broadcastId)).connection_id).toBe(again.connectionId);
-    await expect(disconnect(w, { connectionId: again.connectionId, now: afterStop(m, min(6)) })).resolves.toMatchObject({ revokedAtGoogle: true });
+    await expect(disconnect(w, { connectionId: again.connectionId, now: afterStop(m, min(6)) })).resolves.toMatchObject({ revokeOutcome: "revoked" });
   });
 
   it("after a disconnect the SAME channel can be connected by ANOTHER org (the global one-live-channel index is freed)", async () => {
@@ -621,7 +621,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect((await connRow(b.connectionId)).google_sub).toBe(sub);
 
     const out = await disconnect(w);
-    expect(out).toMatchObject({ revokedAtGoogle: false, revokeOutcome: "skipped_shared_account", keysDeleted: 1, purged: { broadcasts: 1 } });
+    expect(out).toMatchObject({ revokeOutcome: "skipped_shared_account", keysDeleted: 1, purged: { broadcasts: 1 } });
     expect(count(w.fake, "revoke"), "the grant the other club runs on is left alone").toBe(0);
     expect(await connRow(w.connectionId)).toMatchObject({ status: "revoked", last_error_code: SKIPPED, google_sub: null });
     expect((await connRow(w.connectionId)).last_error_code, "recorded as a code V479 accepts").toMatch(CODE_SHAPE);
@@ -632,7 +632,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     // A different account: revoked.
     const w2 = await world({ sub: `sub-t18-${randomUUID()}` });
     const o2 = await w2.addChannel({ sub: `sub-t18-other-${randomUUID()}`, org: await seedYoutubeOrg() });
-    expect(await disconnect(w2)).toMatchObject({ revokedAtGoogle: true, revokeOutcome: "revoked" });
+    expect(await disconnect(w2)).toMatchObject({ revokeOutcome: "revoked" });
     expect(count(w2.fake, "revoke")).toBe(1);
     expect((await connRow(w2.connectionId)).last_error_code, "nothing recorded when the revoke was made").toBeNull();
     await expect(w2.fake.accessToken(o2.token), "the other account is unaffected").resolves.toEqual(expect.any(String));
@@ -642,7 +642,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     // null sub on both
     const a = await world({ sub: null });
     await a.addChannel({ sub: null, org: await seedYoutubeOrg() });
-    expect(await disconnect(a)).toMatchObject({ revokedAtGoogle: true });
+    expect(await disconnect(a)).toMatchObject({ revokeOutcome: "revoked" });
     expect(count(a.fake, "revoke"), "null never matches null").toBe(1);
 
     // a revoked row that kept the account id (revoked WITHOUT the purge that would clear it - SQL-shaped on purpose)
@@ -652,7 +652,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     const b = await w.addChannel({ sub, org: orgB });
     expect(await revokeConnection(sql, orgB.orgId, b.connectionId)).toBe(true);
     expect((await connRow(b.connectionId)).google_sub, "premise: the revoked row still holds the account id").toBe(sub);
-    expect(await disconnect(w)).toMatchObject({ revokedAtGoogle: true });
+    expect(await disconnect(w)).toMatchObject({ revokeOutcome: "revoked" });
     expect(count(w.fake, "revoke")).toBe(1);
   });
 
@@ -701,9 +701,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
 
   it("F1 - the revoke outcome is tri-state, and a Google answer, a damaged token and a shared account are told apart: revoked | skipped_shared_account | not_confirmed (anti-vacuity: 4 scenarios, all 3 values seen)", async () => {
     const seen = new Set<string>();
-    const check = (out: { revokedAtGoogle: boolean; revokeOutcome: string }, want: string, why: string) => {
+    const check = (out: { revokeOutcome: string }, want: string, why: string) => {
       expect(out.revokeOutcome, why).toBe(want);
-      expect(out.revokedAtGoogle, `${why}: the boolean stays what it was`).toBe(want === "revoked");
       seen.add(out.revokeOutcome);
     };
     // Google refused the revoke: attempted and failed
@@ -758,7 +757,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     // a missing id answers the same
     await expect(disconnect(w, { connectionId: randomUUID() })).rejects.toMatchObject({ status: 404 });
     // the positive pair: A's own call succeeds
-    await expect(disconnect(w)).resolves.toMatchObject({ revokedAtGoogle: true });
+    await expect(disconnect(w)).resolves.toMatchObject({ revokeOutcome: "revoked" });
   });
 
   // ═══ YouTube fails in the middle: the purge never stops; no secret escapes ═════════════════════════════════════════════
@@ -771,7 +770,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     w.fake.failNext("revoke", "youtube_unavailable", "backendError", { channelId: w.channel.id });
 
     const out = await disconnect(w, { now: afterStop(m, min(6)) });
-    expect(out).toEqual({ revokedAtGoogle: false, revokeOutcome: "not_confirmed", keysDeleted: 0, purged: { broadcasts: 1, streamUrlsCleared: 0 } });
+    expect(out).toEqual({ revokeOutcome: "not_confirmed", keysDeleted: 0, purged: { broadcasts: 1, streamUrlsCleared: 0 } });
     expect(await connRow(w.connectionId)).toMatchObject({ status: "revoked", channel_id: null, google_sub: null });
     expect(await openToken(sql, w.orgId, w.connectionId)).toBeNull();
     expect(await broadcastsOf(w.connectionId)).toEqual([]);
@@ -792,7 +791,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     broken.deleteStream = async () => { throw new TypeError("refresh_token=1//hunter2-leaked"); };
 
     const out = await disconnect(w, { port: broken });
-    expect(out).toMatchObject({ keysDeleted: 0, revokedAtGoogle: true, purged: { broadcasts: 1 } });
+    expect(out).toMatchObject({ keysDeleted: 0, revokeOutcome: "revoked", purged: { broadcasts: 1 } });
     expect((await connRow(w.connectionId)).status).toBe("revoked");
     const reports = disconnectReports();
     expect(reports.length).toBe(1);
@@ -800,14 +799,14 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect((reports[0]![0] as Error).message).toContain("TypeError");
   });
 
-  it("a saved token that will not open (a damaged envelope) does not make the channel undeletable: it is revoked and purged here, YouTube is asked nothing, revokedAtGoogle is false", async () => {
+  it("a saved token that will not open (a damaged envelope) does not make the channel undeletable: it is revoked and purged here, YouTube is asked nothing, the revoke is not_confirmed", async () => {
     const w = await world();
     await completedMatch(w, w.fixtures[0]!);
     await sql`update org_youtube_connections set refresh_token_enc = decode('deadbeef', 'hex') where id = ${w.connectionId}`;   // SQL: no producer damages an envelope
     const calls = w.fake.calls.length;
 
     const out = await disconnect(w);
-    expect(out).toMatchObject({ revokedAtGoogle: false, revokeOutcome: "not_confirmed", keysDeleted: 0, purged: { broadcasts: 1 } });
+    expect(out).toMatchObject({ revokeOutcome: "not_confirmed", keysDeleted: 0, purged: { broadcasts: 1 } });
     expect(w.fake.calls.length, "no token, no call").toBe(calls);
     expect(await connRow(w.connectionId)).toMatchObject({ status: "revoked", channel_id: null });
     expect(await broadcastsOf(w.connectionId)).toEqual([]);
@@ -824,7 +823,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     const from = w.fake.calls.length;
 
     const out = await disconnectYoutube(w.auth, w.orgId, w.connectionId, w.fake, { now: () => new Date(afterStop(m, min(6))), wallClock });
-    expect(out, "no broadcast ended, no key deleted - and the grant revoked").toEqual({ revokedAtGoogle: true, revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 1, streamUrlsCleared: 0 } });
+    expect(out, "no broadcast ended, no key deleted - and the grant revoked").toEqual({ revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 1, streamUrlsCleared: 0 } });
     expect(methods(w.fake, from), "an access token, then the revoke: the two steps the budget does not cover").toEqual(["accessToken", "revoke"]);
     expect(w.fake.inspectBroadcast(m.ytId)!.life, "left live at YouTube: that is what the report is for").toBe("live");
     const reports = disconnectReports();
@@ -851,7 +850,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     probed.deleteStream = async (at, id) => { await probe(); return f.deleteStream(at, id); };
     probed.revoke = async (rt) => { await probe(); return f.revoke(rt); };
 
-    await expect(disconnect(w, { port: probed, now: afterStop(m, min(6)) })).resolves.toMatchObject({ revokedAtGoogle: true, keysDeleted: 1 });
+    await expect(disconnect(w, { port: probed, now: afterStop(m, min(6)) })).resolves.toMatchObject({ revokeOutcome: "revoked", keysDeleted: 1 });
     expect(probes, "accessToken, broadcastLife, complete, deleteStream, revoke").toBeGreaterThanOrEqual(5);
     expect(disconnectReports(), "no probe failed inside the cleanup").toEqual([]);
   });
@@ -878,7 +877,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect((await connRow(w.connectionId)).status).toBe("connected");
 
     w.setNow(afterStop(m, min(5)));
-    await expect(disconnect(w), "exactly at the end of the grace").resolves.toMatchObject({ revokedAtGoogle: true, purged: { broadcasts: 1 } });
+    await expect(disconnect(w), "exactly at the end of the grace").resolves.toMatchObject({ revokeOutcome: "revoked", purged: { broadcasts: 1 } });
     // the same instant, through the real end step on a second channel: it claims and ends the broadcast (parity of the two clocks)
     const v = await world();
     const mv = await playAndStop(v, v.fixtures[0]!);
@@ -1011,7 +1010,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
       process.env.YOUTUBE_TOKEN_KEK = kek;
     }
     expect(await snapshot(w), "nothing changed").toEqual(before);
-    await expect(disconnect(w)).resolves.toMatchObject({ revokedAtGoogle: true });
+    await expect(disconnect(w)).resolves.toMatchObject({ revokeOutcome: "revoked" });
   });
 
   it("the connection lock is scoped to the caller's org: org B asking for org A's connection while A's row is locked is the 404 at once - it does not queue behind A", async () => {
