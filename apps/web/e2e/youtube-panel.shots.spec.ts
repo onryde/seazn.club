@@ -895,6 +895,9 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
     const notice = page.getByTestId("youtube-disconnected");
     await expect(notice).toContainText(en("streaming.youtube.disconnect.done", { name: ch.title }));
     await expect(page.getByTestId("youtube-channel-row"), "the channel left the list").toHaveCount(0);
+    // F5: connecting this channel raised "YouTube channel connected."; it must not sit above "X is disconnected", and a reload must not bring it back
+    await expect(page.getByTestId("youtube-landing"), `the stale connect banner is gone at ${w}`).toHaveCount(0);
+    await expect(page, `its query is cleared at ${w}`).toHaveURL(/\/streaming$/);
     expect(await connectionState(connectionId), `disconnected at ${w}: revoked, token gone, destination archived`).toEqual({ status: "revoked", tokenGone: true, archived: 1 });
     await expectTappable(page.getByTestId("youtube-disconnected-dismiss"), `Dismiss at ${w}`);
     await expectNoPageScroll(page, `the disconnected page at ${w}`);
