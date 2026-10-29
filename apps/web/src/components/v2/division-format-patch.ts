@@ -5,6 +5,7 @@
 // `{...division.config}` and OMITS a blank field, so the stored list went back out in the PATCH and the reset did nothing.
 // Moved here verbatim, plus the one new step (`clearedSequenceKeys`), so the door can be tested through its real inputs.
 import { buildRuleOverride, clearedSequenceKeys, hydrateRuleValues, rulesFor } from "@/lib/match-rules";
+import { moduleFor } from "@/lib/rule-scope";
 
 /** A variant's preset as `sport_variants.config` stores it: ONLY the keys the variant declares (scripts/sync-sports.ts writes
  *  the engine's `variants[key]` as is), never a whole parsed config. */
@@ -161,4 +162,21 @@ export function divisionFormatPatch(input: DivisionFormatPatchInput): Record<str
   }
   if (input.advanced !== null) Object.assign(override, input.advanced);
   return override;
+}
+
+/**
+ * W2e Task 33 (B3-2): the example the Settings "Advanced overrides (JSON)" box shows before anything is typed. It used to be a
+ * fixed `{ "progressScore": true }`, a key the engine deleted in W2e D6. It is now read from the division's OWN module: the
+ * first key the module declares in `ruleKeys` (declaration order) that the division's saved config holds, with the value it
+ * holds. Laid over that config it is a patch the module accepts that changes nothing, so pasting the example always works,
+ * whatever the sport. The patch is shallow (`Object.assign` in `divisionFormatPatch`), so a dotted key (`overtime.minutes`) is
+ * shown as its whole top-level object, never a half of it. `{}` where the config holds none of the declared keys (nothing to
+ * copy) or the sport is unknown.
+ */
+export function advancedPlaceholder(sportKey: string, divisionConfig: Readonly<Record<string, unknown>>): string {
+  for (const key of Object.keys(moduleFor(sportKey)?.ruleKeys ?? {})) {
+    const top = key.split(".")[0]!;
+    if (Object.hasOwn(divisionConfig, top) && divisionConfig[top] !== undefined) return JSON.stringify({ [top]: divisionConfig[top] });
+  }
+  return "{}";
 }

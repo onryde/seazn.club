@@ -25,7 +25,7 @@ import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, hydrateRuleValues, rulesFor } from "./match-rules";
 import { ruleFormState } from "./match-rules-state";
 import { visibleRuleFields } from "@/lib/match-rules";
-import { configUnderVariant, divisionFormatPatch, ruleValuesAfterVariantSwitch } from "./division-format-patch";
+import { advancedPlaceholder, configUnderVariant, divisionFormatPatch, ruleValuesAfterVariantSwitch } from "./division-format-patch";
 import {
   LICHESS_CLOCK_FIELD_KEYS,
   selectedTimeControlKey,
@@ -513,7 +513,6 @@ export function DivisionSettings({
   );
   const cfg = (division.config ?? {}) as {
     points?: Record<string, number>;
-    progressScore?: boolean;
     onlinePlay?: string;
   };
   // R3.5 review F7 — which boxes this editor shows/writes is derived from
@@ -1405,7 +1404,8 @@ export function DivisionSettings({
             onChange={(e) => setAdvancedText(e.target.value)}
             rows={4}
             spellCheck={false}
-            placeholder='e.g. { "progressScore": true }'
+            placeholder={advancedPlaceholder(division.sport_key, savedConfig)}
+            data-testid="division-settings-advanced"
             className="input mt-1 w-full font-mono text-xs"
           />
         </details>
