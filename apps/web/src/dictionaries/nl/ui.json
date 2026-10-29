@@ -1468,6 +1468,8 @@
   "streaming.youtube.replay.tabs": "Delen van de herhaling",
   "streaming.youtube.replay.play": "Afspelen op YouTube",
   "streaming.youtube.replay.open": "Openen op YouTube",
+  "streaming.youtube.replay.watch": "Bekijken op YouTube",
+  "streaming.youtube.replay.madeForKids": "Deze video is gemaakt voor kinderen en wordt daarom op YouTube afgespeeld.",
   "streaming.youtube.replay.playerTitle": "Herhaling van de wedstrijd",
   "streaming.youtube.replay.playerTitlePart": "Herhaling van de wedstrijd, deel {n}",
   "streaming.youtube.replay.unavailable": "Deze video kan hier niet worden afgespeeld. Open hem op YouTube.",

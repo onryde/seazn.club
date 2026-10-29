@@ -450,11 +450,11 @@ None of these is B7 code, and none is for the agent.
 4. **Testing-mode 7-day token expiry until the app is verified.** With no feature switch (D11), every organisation that
    connects before verification sees "Reconnect needed" weekly, and Seazn purges its stored data 7 days after the
    connection stops working (§5 item 4). Time the prod release against the verification result.
-5. **The public replay embed does not honour "Made for kids" (Google Developer Policies III.E.4.j).** Not a stg
-   blocker, but it must be fixed before prod and before Google verifies the app. The policy (read on the policy page,
+5. **The public replay embed did not honour "Made for kids" (Google Developer Policies III.E.4.j). DECIDED 2026-10-29 and built
+   (below).** Not a stg blocker, but it had to be fixed before prod and before Google verifies the app. The policy (read on the policy page,
    2026-10-29, section III.E.4.j under "Handling YouTube Data and Content") requires an app that embeds YouTube videos to
    look up the Made For Kids status of each embedded video and, for a video designated Made For Kids, to turn off
-   tracking and make sure all data collection for that player complies with the applicable law. Seazn does neither:
+   tracking and make sure all data collection for that player complies with the applicable law. As first found, Seazn did neither:
    - The public match page embeds the replay (`ReplayEmbed`, the shared fixture page, `app/(public)/shared/…/fixtures/[fixtureId]/page.tsx:464`;
      `components/public-site/match-centre/replay-embed.tsx`). There is
      no status lookup: `youtube_broadcasts` has no made-for-kids column (`V479__youtube_connect.sql:172-195`), only the
@@ -466,11 +466,24 @@ None of these is B7 code, and none is for the agent.
    - The obvious case is a youth club that connects with **Made for kids = Yes**. This run uses No, so it will not
      show the problem. (Line numbers in this item were pinned on `32b79e5aab`.)
 
-   Decide, then have it built (B5's surface): either (a) show only the "Open on YouTube" link, with no player, for a
-   broadcast made while the connection was Made For Kids (needs the flag kept per broadcast); or (b) look up
-   `status.madeForKids` with `videos.list` in the 25-day refresh, keep it per broadcast, and switch analytics off on a
-   page that embeds a Made For Kids video. The privacy and cookie pages say nothing about this yet; whichever you choose,
-   say it there too.
+   **Decision (owner, 2026-10-29): option (a), link out.** A replay part of a broadcast that is made for kids is shown on
+   the public match page as a "Watch on YouTube" link and never as a player: no embed, so the tracking rule has nothing
+   to apply to. Built on branch `feat/youtube-mfk-replay` (the follow-up PR raised from it; migration V482):
+   - the flag is kept per broadcast (`youtube_broadcasts.made_for_kids`), stamped when Go live creates the broadcast from
+     the same value it sends YouTube, so a later change of the connection's choice moves no existing replay;
+   - YouTube's own `status.madeForKids` is OR-ed into that flag (it only ever goes false to true), and it is read twice, with
+     no new API call: at the end step, from the `liveBroadcasts.list` it already makes, and at the 25-day re-confirm, from
+     the same `videos.list` call widened from `part=id` to `part=id,status` (same call count; the quota cost of the extra
+     part is not verified against Google's page). A video YouTube designates made for kids AFTER its end step is therefore
+     caught by the next re-confirm, so it can stay embedded for up to 25 days; the page it flips on is expired at once;
+   - a part whose flag is true, or unknown, links out; it is decided part by part, so a match with a made-for-kids part
+     and an ordinary one shows one link and one player;
+   - the privacy (section 7) and cookie ("YouTube replays") pages each say it in one sentence.
+
+   Before prod: V482 backfills every existing broadcast from its connection's current flag and prints the counts in the
+   migration log (`V482: youtube_broadcasts.made_for_kids backfilled ...`); read that line. Prod holds no complete part yet, so
+   expect 0 rows backfilled there (only stg rows exist). On stg, connect with
+   **Made for kids = Yes**, stream and end a match, and open its public page: a link card, no player, no thumbnail.
 
 ---
 

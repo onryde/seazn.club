@@ -77,11 +77,14 @@ async function seed(o: { divisionStatus?: "active" | "setup" } = {}): Promise<Se
   return { orgId, orgSlug, compSlug, divSlug, divisionId, fixtureIds: fixtureIds as [string, string], connectionId: c.connectionId };
 }
 
-async function completeBroadcast(s: Seeded, fixtureId: string, completedAt: Date, startedAt?: Date, privacy: "unlisted" | "public" | "private" = "unlisted"): Promise<string> {
+/** The part the loader carries for a broadcast: its place and address, and its made-for-kids stamp (false: every case here but the kids ones). */
+const part = (partNo: number, ytId: string, madeForKids = false) => ({ partNo, url: youtubeWatchUrl(ytId), madeForKids });
+
+async function completeBroadcast(s: Seeded, fixtureId: string, completedAt: Date, startedAt?: Date, privacy: "unlisted" | "public" | "private" = "unlisted", madeForKids = false): Promise<string> {
   const ytId = vid();
   await sql`
-    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
-    values (${s.orgId}, ${s.connectionId}, ${fixtureId}, ${ytId}, 'Match', ${privacy}, 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
+    insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
+    values (${madeForKids}, ${s.orgId}, ${s.connectionId}, ${fixtureId}, ${ytId}, 'Match', ${privacy}, 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
   return ytId;
 }
 
@@ -101,7 +104,7 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the fixture's replay parts (T
     expect(before!.parts).toEqual([]);
 
     const ytId = await completeBroadcast(s, f, at("10:00"));
-    expect((await load(s, f))!.parts).toEqual([{ partNo: 1, url: youtubeWatchUrl(ytId) }]);
+    expect((await load(s, f))!.parts).toEqual([part(1, ytId)]);
   });
 
   it("two parts come back in the order they STARTED (not finished), and the other fixture of the division carries none of them", async () => {
@@ -112,12 +115,12 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the fixture's replay parts (T
     const later = await completeBroadcast(s, f1, at("11:30"), at("11:00"));
     const earlier = await completeBroadcast(s, f1, at("12:00"), at("10:00"));
     expect((await load(s, f1))!.parts).toEqual([
-      { partNo: 1, url: youtubeWatchUrl(earlier) },
-      { partNo: 2, url: youtubeWatchUrl(later) },
+      part(1, earlier),
+      part(2, later),
     ]);
     expect((await load(s, f2))!.parts, "the neighbour fixture has none").toEqual([]);
     const own = await completeBroadcast(s, f2, at("09:00"));
-    expect((await load(s, f2))!.parts, "and numbers from 1 itself").toEqual([{ partNo: 1, url: youtubeWatchUrl(own) }]);
+    expect((await load(s, f2))!.parts, "and numbers from 1 itself").toEqual([part(1, own)]);
     expect((await load(s, f1))!.parts.map((p) => p.partNo), "f1 is unchanged by f2's part").toEqual([1, 2]);
   });
 
@@ -130,17 +133,17 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the fixture's replay parts (T
     expect(hidden, "premise: the loader still serves the fixture").not.toBeNull();
     expect(hidden!.parts).toEqual([]);
     await sql`update divisions set status = 'active' where id = ${s.divisionId}`;
-    expect((await load(s, f))!.parts).toEqual([{ partNo: 1, url: youtubeWatchUrl(ytId) }]);
+    expect((await load(s, f))!.parts).toEqual([part(1, ytId)]);
   });
 
   it("a failed or still-open broadcast is not a part", async () => {
     const s = await seed();
     seeded.push(s.orgId);
     const [f] = s.fixtureIds;
-    await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
-              values (${s.orgId}, ${s.connectionId}, ${f}, ${vid()}, 'Match', 'unlisted', 'failed')`;
-    await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
-              values (${s.orgId}, ${s.connectionId}, ${f}, ${vid()}, 'Match', 'unlisted', 'live')`;
+    await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
+              values (false, ${s.orgId}, ${s.connectionId}, ${f}, ${vid()}, 'Match', 'unlisted', 'failed')`;
+    await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
+              values (false, ${s.orgId}, ${s.connectionId}, ${f}, ${vid()}, 'Match', 'unlisted', 'live')`;
     expect((await load(s, f))!.parts).toEqual([]);
   });
 
@@ -154,11 +157,11 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the fixture's replay parts (T
 
     // Positive pair: the same shape with each of the other two privacies IS a part (so the silence above is the filter, not the seed).
     const unlisted = await completeBroadcast(s, f2, at("10:00"), at("09:00"), "unlisted");
-    expect((await load(s, f2))!.parts).toEqual([{ partNo: 1, url: youtubeWatchUrl(unlisted) }]);
+    expect((await load(s, f2))!.parts).toEqual([part(1, unlisted)]);
     const g = await seed();
     seeded.push(g.orgId);
     const open = await completeBroadcast(g, g.fixtureIds[0], at("10:00"), at("09:00"), "public");
-    expect((await load(g, g.fixtureIds[0]))!.parts).toEqual([{ partNo: 1, url: youtubeWatchUrl(open) }]);
+    expect((await load(g, g.fixtureIds[0]))!.parts).toEqual([part(1, open)]);
   });
 
   it("MIXED privacy: Part 1 unlisted + Part 2 private lists ONE part (number 1); Part 1 private + Part 2 unlisted lists the unlisted one as number 1 - the public numbers only what it shows", async () => {
@@ -167,14 +170,26 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the fixture's replay parts (T
     const [f1, f2] = s.fixtureIds;
     const visibleFirst = await completeBroadcast(s, f1, at("10:00"), at("09:00"), "unlisted");
     await completeBroadcast(s, f1, at("12:00"), at("11:00"), "private");
-    expect((await load(s, f1))!.parts, "the private Part 2 is not listed").toEqual([{ partNo: 1, url: youtubeWatchUrl(visibleFirst) }]);
+    expect((await load(s, f1))!.parts, "the private Part 2 is not listed").toEqual([part(1, visibleFirst)]);
 
     await completeBroadcast(s, f2, at("10:00"), at("09:00"), "private");
     const visibleSecond = await completeBroadcast(s, f2, at("12:00"), at("11:00"), "unlisted");
-    expect((await load(s, f2))!.parts, "the private Part 1 is skipped; the next one is the first the public sees").toEqual([{ partNo: 1, url: youtubeWatchUrl(visibleSecond) }]);
+    expect((await load(s, f2))!.parts, "the private Part 1 is skipped; the next one is the first the public sees").toEqual([part(1, visibleSecond)]);
     // Two visible around a private one: consecutive numbers (no gap where the private one was).
     const third = await completeBroadcast(s, f2, at("14:00"), at("13:00"), "public");
     expect((await load(s, f2))!.parts.map((p) => p.partNo), "no gap where the private part was").toEqual([1, 2]);
     expect((await load(s, f2))!.parts[1]!.url).toBe(youtubeWatchUrl(third));
+  });
+  it("MADE FOR KIDS (DP III.E.4.j): the loader carries each part's own stamp - true then false in one match, and a stamp that changes on the row shows on the NEXT read (the cache key moved with the shape)", async () => {
+    const s = await seed();
+    seeded.push(s.orgId);
+    const [f1] = s.fixtureIds;
+    expect((await load(s, f1))!.parts, "empty case: no part, no flag").toEqual([]);
+    const kids = await completeBroadcast(s, f1, at("10:00"), at("09:00"), "unlisted", true);
+    const plain = await completeBroadcast(s, f1, at("12:00"), at("11:00"), "unlisted", false);
+    expect((await load(s, f1))!.parts).toEqual([part(1, kids, true), part(2, plain, false)]);
+    // The flag follows the broadcast ROW: flip the connection's own flag and nothing about an existing part moves (R1).
+    await sql`update org_youtube_connections set made_for_kids = not made_for_kids where id = ${s.connectionId}`;
+    expect((await load(s, f1))!.parts, "the connection's later flag does not reach an existing part").toEqual([part(1, kids, true), part(2, plain, false)]);
   });
 });

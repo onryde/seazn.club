@@ -457,8 +457,8 @@ describe.skipIf(!HAS_DB)("DELETE — Disconnect a channel (T18)", () => {
     seed(c);
     const d = await divisionRig(o.auth, { entrants: 2 });
     // SQL: a `bound` broadcast on a fixture with no session yet (the shape of Go live mid-admission). The end rule says "not due".
-    await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
-              values (${o.orgId}, ${c.connectionId}, ${d.fixtureIds[0]!}, 't18 route', 'unlisted', 'bound')`;
+    await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state)
+              values (false, ${o.orgId}, ${c.connectionId}, ${d.fixtureIds[0]!}, 't18 route', 'unlisted', 'bound')`;
     const calls = fake.calls.length;
 
     const res = await disconnectCall(o.orgId, c.connectionId);

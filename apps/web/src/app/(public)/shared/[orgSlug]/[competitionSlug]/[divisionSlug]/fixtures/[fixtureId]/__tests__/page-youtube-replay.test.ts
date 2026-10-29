@@ -85,11 +85,11 @@ async function seed(o: { divisionStatus?: "active" | "setup"; locale?: string } 
   return { orgId, orgSlug, compSlug, divSlug, fixtureId, divisionId, connectionId: c.connectionId };
 }
 
-async function completeBroadcast(s: Seeded, completedAt: Date, startedAt?: Date, privacy: "unlisted" | "public" | "private" = "unlisted"): Promise<string> {
+async function completeBroadcast(s: Seeded, completedAt: Date, startedAt?: Date, privacy: "unlisted" | "public" | "private" = "unlisted", madeForKids = false): Promise<string> {
   const ytId = vid();
   await sql`
-    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
-    values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${ytId}, 'Match', ${privacy}, 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
+    insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
+    values (${madeForKids}, ${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${ytId}, 'Match', ${privacy}, 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
   return ytId;
 }
 const setFixture = (s: Seeded, status: string, streamUrl: string | null) =>
@@ -269,8 +269,8 @@ describe.skipIf(!HAS_DB)("the public match page shows the match's YouTube replay
   it("a part still in flight (live, not complete) is not a replay: the page is as it was", async () => {
     const s = await open();
     await setFixture(s, "in_play", null);
-    await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
-              values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${vid()}, 'Match', 'unlisted', 'live')`;
+    await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
+              values (false, ${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${vid()}, 'Match', 'unlisted', 'live')`;
     expect(await pageHtml(s)).not.toContain("replay-embed");
   });
 
@@ -312,5 +312,103 @@ describe.skipIf(!HAS_DB)("the public match page shows the match's YouTube replay
     expect(pill(onlyOwn)).toContain(`href="${TWITCH}"`);
     expect(onlyOwn).not.toContain("replay-embed");
     expect(onlyOwn).not.toContain(hiddenOnly);
+  });
+  // ─── made for kids (owner 2026-10-29; DP III.E.4.j): the replay is a link out, never a player ──────────────────────────────
+  /** The link-out card's own markup. */
+  const card = (html: string) => /<div [^>]*data-testid="replay-linkout"[\s\S]*?<\/a><\/div>/.exec(html)?.[0] ?? "";
+  const ytLinks = (html: string) => [...html.matchAll(/<a [^>]*href="https:\/\/www\.youtube\.com\/[^"]*"[^>]*>/g)].map((m) => m[0]);
+
+  it("a MADE-FOR-KIDS replay (a broadcast row stamped true) is the link-out card on the real page: no iframe, no facade, no thumbnail request, exactly one youtube.com link - and the same match with a not-for-kids broadcast is the player", async () => {
+    const s = await open();
+    await setFixture(s, "decided", null);
+    const kidsId = await completeBroadcast(s, at("10:00"), at("09:00"), "unlisted", true);
+    const html = await pageHtml(s);
+    expect(html).toContain('data-testid="replay-embed"');
+    expect(card(html), "premise: the card is found").not.toBe("");
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("replay-facade");
+    expect(html).not.toContain("i.ytimg.com");
+    expect(html).not.toContain("youtube-nocookie");
+    const links = ytLinks(html);
+    expect(links, "exactly one link to youtube.com on the whole page").toHaveLength(1);
+    expect(links[0]).toContain(`href="${youtubeWatchUrl(kidsId)}"`);
+    expect(links[0]).toContain('target="_blank"');
+    expect(links[0]).toContain('rel="noopener noreferrer"');
+    expect(html).toContain(uiEn["streaming.youtube.replay.madeForKids"]!);
+    expect(html).toContain(uiEn["streaming.youtube.replay.watch"]!);
+
+    // The positive pair, on a new fixture's page: only the stamp differs, and the player is what comes.
+    const t = await open();
+    await setFixture(t, "decided", null);
+    const plainId = await completeBroadcast(t, at("10:00"), at("09:00"), "unlisted", false);
+    const plain = await pageHtml(t);
+    expect(plain).toContain("replay-facade");
+    expect(plain).toContain(`src="https://i.ytimg.com/vi/${plainId}/hqdefault.jpg"`);
+    expect(plain).not.toContain("replay-linkout");
+  });
+
+  it("the flag is the BROADCAST's: the connection's flag flipped after the broadcast was made moves nothing on the page, in either direction", async () => {
+    const s = await open();
+    await setFixture(s, "decided", null);
+    await completeBroadcast(s, at("10:00"), at("09:00"), "unlisted", true);
+    await sql`update org_youtube_connections set made_for_kids = false where id = ${s.connectionId}`;
+    const kids = await pageHtml(s);
+    expect(card(kids), "a true stamp stays a link out when the connection says false").not.toBe("");
+    expect(kids).not.toContain("<iframe");
+    expect(kids).not.toContain("replay-facade");
+
+    const t = await open();
+    await setFixture(t, "decided", null);
+    await completeBroadcast(t, at("10:00"), at("09:00"), "unlisted", false);
+    await sql`update org_youtube_connections set made_for_kids = true where id = ${t.connectionId}`;
+    const plain = await pageHtml(t);
+    expect(plain, "a false stamp stays a player when the connection says true").toContain("replay-facade");
+    expect(plain).not.toContain("replay-linkout");
+  });
+
+  it("a MIXED match (R4): Part 1 made for kids, Part 2 not - the tabs are Part 1 and Part 2, Part 1 shows the card, and Part 2's video is not on the page; with the stamps the other way round Part 1 is the player", async () => {
+    const s = await open();
+    await setFixture(s, "decided", null);
+    const first = await completeBroadcast(s, at("10:00"), at("09:00"), "unlisted", true);
+    const second = await completeBroadcast(s, at("12:00"), at("11:00"), "unlisted", false);
+    const html = await pageHtml(s);
+    expect([...player(html).matchAll(/<button [^>]*role="tab"[^>]*>(.*?)<\/button>/g)].map((m) => m[1])).toEqual(["Part 1", "Part 2"]);
+    expect(card(html)).toContain(`href="${youtubeWatchUrl(first)}"`);
+    expect(html).not.toContain(second);
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("replay-facade");
+
+    const t = await open();
+    await setFixture(t, "decided", null);
+    const a = await completeBroadcast(t, at("10:00"), at("09:00"), "unlisted", false);
+    await completeBroadcast(t, at("12:00"), at("11:00"), "unlisted", true);
+    const flipped = await pageHtml(t);
+    expect(flipped, "Part 1 not for kids: the facade").toContain(`src="https://i.ytimg.com/vi/${a}/hqdefault.jpg"`);
+    expect(flipped).not.toContain("replay-linkout");
+  });
+
+  it("the stored link that IS the made-for-kids part is carried by the card and not shown a second time as the pill; a club's different link still is", async () => {
+    const s = await open();
+    const kidsId = await completeBroadcast(s, at("10:00"), at("09:00"), "unlisted", true);
+    await setFixture(s, "decided", youtubeWatchUrl(kidsId));
+    const html = await pageHtml(s);
+    expect(html).not.toContain("public-stream-link");
+    expect(ytLinks(html), "one youtube.com link: the card's").toHaveLength(1);
+    await setFixture(s, "decided", TWITCH);
+    expect(pill(await pageHtml(s)), "the club's own link is still there beside the card").toContain(`href="${TWITCH}"`);
+  });
+
+  it("the words follow the organisation's language (es): the card's reason and link are Spanish", async () => {
+    const s = await open({ locale: "es" });
+    await setFixture(s, "decided", null);
+    await completeBroadcast(s, at("10:00"), at("09:00"), "unlisted", true);
+    const html = await pageHtml(s);
+    const es = uiEs as Record<string, string>;
+    const en = uiEn as Record<string, string>;
+    for (const key of ["streaming.youtube.replay.madeForKids", "streaming.youtube.replay.watch"]) {
+      expect(es[key], `premise: ${key} is translated`).not.toBe(en[key]);
+      expect(html.replaceAll("&#x27;", "'")).toContain(es[key]!);
+      expect(html).not.toContain(en[key]!);
+    }
   });
 });

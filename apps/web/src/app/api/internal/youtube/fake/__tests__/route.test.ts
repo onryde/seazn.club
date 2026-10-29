@@ -459,8 +459,8 @@ describe.skipIf(!HAS_DB)("POST /api/internal/youtube/fake — state (real Postgr
     await fake.bind(at, broadcastId, stream.streamId);
     const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot, liveStreamId: stream.streamId, ingest: stream.ingest }));
     await sql`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state, created_at)
-      values (${r.orgId}, ${r.connectionId}, ${r.fixtureId}, ${keyId}, ${broadcastId}, 'Match', 'unlisted', ${state}, ${createdAt})`;
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state, created_at)
+      values (false, ${r.orgId}, ${r.connectionId}, ${r.fixtureId}, ${keyId}, ${broadcastId}, 'Match', 'unlisted', ${state}, ${createdAt})`;
     return { at, stream, broadcastId };
   }
 
@@ -596,8 +596,8 @@ describe.skipIf(!HAS_DB)("POST /api/internal/youtube/fake — state (real Postgr
     const fake = theFake();
     const r = await rig();
     await sql`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
-      values (${r.orgId}, ${r.connectionId}, ${r.fixtureId}, 'Match', 'unlisted', 'created')`;
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state)
+      values (false, ${r.orgId}, ${r.connectionId}, ${r.fixtureId}, 'Match', 'unlisted', 'created')`;
     const data = (await dataOf(await call({ op: "state", fixtureId: r.fixtureId }))) as { connectionId: string; tokenHandle: string; broadcasts: unknown[] };
     expect(data.broadcasts).toEqual([]);
     expect(data.connectionId, "the row still names its connection").toBe(r.connectionId);

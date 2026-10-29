@@ -113,7 +113,9 @@ interface Claimed {
 }
 
 type Outcome =
-  | { kind: "complete"; startedAt: Date | null; endedAt: Date | null }
+  // `madeForKids`: YouTube's own status.madeForKids from the reads this outcome came from (true only when it SAID true); `finalize` ORs it
+  // into the broadcast's stamp, so the stamp goes false -> true and never back (V482).
+  | { kind: "complete"; startedAt: Date | null; endedAt: Date | null; madeForKids: boolean }
   | { kind: "failed"; code: typeof CODE_NEVER_LIVE | typeof CODE_ORPHAN | typeof CODE_REVOKED };
 type Tag = "ended" | "neverLive" | "orphan" | "failed" | "reconnect" | "deferred" | "none";
 
@@ -265,7 +267,7 @@ async function settleNotLive(port: YouTubePort, at: string, row: Reportable, ytI
       await viaPort(() => port.deleteBroadcast(at, ytId), row);   // never went live: nothing to replay (a delete of an absent one resolves)
       return { kind: "failed", code: CODE_NEVER_LIVE };
     case "complete":
-      return { kind: "complete", startedAt: info.actualStartAt, endedAt: info.actualEndAt };
+      return { kind: "complete", startedAt: info.actualStartAt, endedAt: info.actualEndAt, madeForKids: info.madeForKids === true };
     case "live":
     case "testing":
       return null;
@@ -278,7 +280,11 @@ async function settleNotLive(port: YouTubePort, at: string, row: Reportable, ytI
 async function completedTimes(port: YouTubePort, at: string, row: Reportable, ytId: string, before: BroadcastLifeInfo): Promise<Outcome> {
   try {
     const after = await viaPort(() => port.broadcastLife(at, ytId), row);
-    return { kind: "complete", startedAt: after.actualStartAt ?? before.actualStartAt, endedAt: after.actualEndAt };
+    // Either read saying made-for-kids is enough (YouTube's status is read twice in one step; a `true` is never taken back).
+    return {
+      kind: "complete", startedAt: after.actualStartAt ?? before.actualStartAt, endedAt: after.actualEndAt,
+      madeForKids: before.madeForKids === true || after.madeForKids === true,
+    };
   } catch (err) {
     // No slice left for the read: the broadcast IS complete at YouTube, so the row waits for the next firing, which reads `complete`
     // and its times in one call. (A read that FAILED completes the row without them, below.)
@@ -286,7 +292,7 @@ async function completedTimes(port: YouTubePort, at: string, row: Reportable, yt
     // Reported, not swallowed: the row completes without its end time and nothing will fetch it later. `err` is a YouTubeError here
     // (viaPort makes it one): a code, never a body.
     captureError(err, { orgId: row.org_id, route: "youtube.end_step.actual_times", extra: { broadcastId: row.id } });
-    return { kind: "complete", startedAt: before.actualStartAt, endedAt: null };
+    return { kind: "complete", startedAt: before.actualStartAt, endedAt: null, madeForKids: before.madeForKids === true };
   }
 }
 
@@ -341,7 +347,8 @@ async function finalize(row: Claimed, outcome: Outcome, now: Date): Promise<bool
     update youtube_broadcasts
        set state = ${done ? "complete" : "failed"}, completed_at = ${now}, reserved_until = null, next_attempt_at = null,
            last_error_code = ${done ? null : outcome.code},
-           actual_start_at = ${done ? outcome.startedAt : null}, actual_end_at = ${done ? outcome.endedAt : null}
+           actual_start_at = ${done ? outcome.startedAt : null}, actual_end_at = ${done ? outcome.endedAt : null},
+           made_for_kids = made_for_kids or ${done ? outcome.madeForKids : false}
      where id = ${row.id} and org_id = ${row.org_id} and state = 'ending'
     returning id`;
   if (rows.length !== 1) return false;

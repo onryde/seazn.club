@@ -99,6 +99,23 @@ export interface ReplayPart {
   url: string;
 }
 
+/** The PUBLIC match page's part: the same plus whether the video was MADE FOR KIDS. Google's YouTube API Services Developer Policies
+ *  (III.E.4.j) bar tracking on a page that embeds such a video, and this site tracks (consent-gated analytics in the root layout), so a
+ *  made-for-kids replay is a link to YouTube and never an embedded player (owner ruling 2026-10-29). The flag is the BROADCAST's own,
+ *  stamped when Go live made it (V482 `youtube_broadcasts.made_for_kids`), never the connection's current one.
+ *
+ *  `null` is "not known": the database column is NOT NULL, so the reader never produces it; it exists for a document that did not carry
+ *  the flag (an older cached entry) and for any future shape that cannot say. It is treated as made-for-kids - see `mayEmbedReplay`. */
+export interface PublicReplayPart extends ReplayPart {
+  madeForKids: boolean | null;
+}
+
+/** May this part be shown as an embedded player? The ONE rule, and it FAILS CLOSED: only a part that is positively NOT made for kids
+ *  (`=== false`) may be embedded. `true` (made for kids), `null` (not known) and a value that is missing altogether (a cached document
+ *  from before the flag existed) all answer no, so the part is a link out. Typed to accept a missing value on purpose: the caller that
+ *  builds an iframe must not have to trust that its input carried the flag. */
+export const mayEmbedReplay = (part: { madeForKids?: boolean | null }): boolean => part.madeForKids === false;
+
 /** The ORGANISER's part: the same plus whether the broadcast is PRIVATE on YouTube. The public never sees a private broadcast (owner
  *  ruling 2026-10-28), so the public shape has no such flag; the organiser's panel lists it and says so. Its `partNo` numbers every
  *  complete broadcast, so it may differ from the number the public page gives the same video when privacies are mixed. */

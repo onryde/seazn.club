@@ -19,10 +19,11 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { ReplayStage } from "@/components/public-site/match-centre/replay-embed";
 import uiEn from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
-import type { ReplayPart } from "@/lib/youtube";
+import type { PublicReplayPart } from "@/lib/youtube";
 
 const POLICY_GOOGLE_PRIVACY = "http://www.google.com/policies/privacy"; // DP III.A.2.c, exactly as Google spells it (http)
-const PART: ReplayPart = { partNo: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" };
+// Not made for kids: the only kind of replay that is ever embedded (a made-for-kids one is a link out: see the made-for-kids cases).
+const PART: PublicReplayPart = { partNo: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", madeForKids: false };
 
 const stage = (mode: "facade" | "playing") =>
   renderToStaticMarkup(
@@ -36,6 +37,17 @@ const stage = (mode: "facade" | "playing") =>
 /** The hosts a piece of markup would make a browser fetch: every `src="https://host/..."`. */
 const sourceHosts = (markup: string): string[] => [...markup.matchAll(/\bsrc="(https:\/\/[^"/]+)/g)].map((m) => new URL(m[1]!).hostname);
 const bare = (host: string) => host.replace(/^www\./, "");
+
+/** A made-for-kids replay: the same stage, asked for a part YouTube says is made for kids (owner 2026-10-29, DP III.E.4.j). */
+const KIDS_PART: PublicReplayPart = { ...PART, madeForKids: true };
+const linkOut = renderToStaticMarkup(
+  <DictProvider dict={uiEn as Dict} locale="en">
+    <ReplayStage
+      part={KIDS_PART} mode="facade" multi={false} pageOrigin="https://seazn.club"
+      onPlay={() => {}} iframeRef={{ current: null }} onFrameLoad={() => {}} openRef={{ current: null }}
+    />
+  </DictProvider>,
+);
 
 const facade = stage("facade");
 const playing = stage("playing");
@@ -91,6 +103,15 @@ describe("cookie policy — the embedded YouTube player (T19, O2)", () => {
       expect(facade).not.toContain("<script");
       expect(playing, "and the tap is what mounts the player").toContain("<iframe");
     }],
+    ["a made-for-kids replay is a link to YouTube, not a player - and the real component's link-out is that: no frame, no script, no src host", () => {
+      expect(ytText).toContain("A replay of a video made for kids is a link to YouTube, not a player");
+      expect(ytText, "and says what that means on this page").toContain("the page fetches nothing from Google for it");
+      expect(linkOut, "the link-out is real markup").toContain('data-testid="replay-linkout"');
+      expect(linkOut).not.toContain("<iframe");
+      expect(linkOut).not.toContain("<script");
+      expect(sourceHosts(linkOut), "the link-out makes the browser fetch nothing").toEqual([]);
+      expect(linkOut, "the one thing it carries is the link to the video").toContain(`href="${PART.url}"`);
+    }],
     ["F3b: the claim 'the replay sets no cookie of ours' is held by the component - it reaches for no cookie or storage API (6 tokens checked)", () => {
       const source = readFileSync(join(__dirname, "../../../../components/public-site/match-centre/replay-embed.tsx"), "utf8");
       expect(source.length, "anti-vacuity: the component source was read").toBeGreaterThan(2000);
@@ -111,9 +132,9 @@ describe("cookie policy — the embedded YouTube player (T19, O2)", () => {
     run();
   });
 
-  it("checked === 6: every item was evaluated (zero checked is a failure)", () => {
-    expect(ITEMS.length).toBe(6);
-    expect(ran.size).toBe(6);
+  it("checked === 7: every item was evaluated (zero checked is a failure)", () => {
+    expect(ITEMS.length).toBe(7);
+    expect(ran.size).toBe(7);
   });
 
   it("is dated 29 October 2026", () => {

@@ -73,11 +73,25 @@ export type BroadcastLife = "created" | "ready" | "testing" | "live" | "complete
 /** What YouTube says about a broadcast: its place in the life cycle, and the instants it ACTUALLY started and ended (liveBroadcasts
  *  `snippet.actualStartTime` — "only available once the broadcast's state is live" — and `snippet.actualEndTime` — "only
  *  available once ... complete"; developers.google.com/youtube/v3/live/docs/liveBroadcasts). `null` while YouTube has not said, and
- *  for `absent`. The end step stores them as `actual_start_at` / `actual_end_at` (spec §0 D15). */
+ *  for `absent`. The end step stores them as `actual_start_at` / `actual_end_at` (spec §0 D15).
+ *
+ *  `madeForKids` is liveBroadcasts `status.madeForKids` - YouTube's CURRENT made-for-kids status of the broadcast, which may differ from
+ *  what Seazn declared when it made it (`selfDeclaredMadeForKids`): YouTube can designate a video itself. It rides the same
+ *  liveBroadcasts.list(part=status,snippet) read, so reading it costs no call. `null` when YouTube did not say (the field absent or not
+ *  a boolean) and for `absent`. The end step ORs a `true` into the broadcast's own stamp (V482): the stamp only ever goes false -> true. */
 export interface BroadcastLifeInfo {
   life: BroadcastLife;
   actualStartAt: Date | null;
   actualEndAt: Date | null;
+  madeForKids: boolean | null;
+}
+
+/** What videos.list(part=id,status) says of a video that still exists. `madeForKids` is its `status.madeForKids` - YouTube's CURRENT
+ *  made-for-kids status, which may differ from what Seazn declared (YouTube can designate a video after the end step read it). Only a real
+ *  boolean is an answer: the field absent, or anything else, is `null` ("did not say"). The daily re-confirm ORs a `true` into the
+ *  broadcast's stamp (V482) and never writes a `false`. */
+export interface VideoFacts {
+  madeForKids: boolean | null;
 }
 
 /** The longest ONE port call may take: a driver bounds every request by it (google.ts's request timeout). The end step budgets with it:
@@ -105,7 +119,8 @@ export interface YouTubePort {
   complete(at: string, broadcastId: string): Promise<void>;
   /** A broadcast that is already absent resolves. */
   deleteBroadcast(at: string, broadcastId: string): Promise<void>;
-  /** At most 50 ids per call (videos.list's page), otherwise it throws without calling. */
-  existingVideos(at: string, ids: readonly string[]): Promise<Set<string>>;
+  /** At most 50 ids per call (videos.list's page), otherwise it throws without calling. The keys are the ids YouTube still has (an id it
+   *  does not return is absent); each is answered with what the SAME call says of it (`VideoFacts`). */
+  existingVideos(at: string, ids: readonly string[]): Promise<Map<string, VideoFacts>>;
   revoke(refreshToken: string): Promise<void>;
 }

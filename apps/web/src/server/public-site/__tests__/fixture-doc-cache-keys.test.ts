@@ -33,6 +33,9 @@
 //     → `["pub-fixture-v9", id]` (YouTube Connect T16): the document gained
 //     `parts` (the fixture's replay parts); a `-v8` entry has none, so the page
 //     would read `parts.length` of undefined for a whole REVALIDATE_FAST window.
+//     → `["pub-fixture-v10", id]` (YouTube Connect made-for-kids follow-up, 2026-10-29): each
+//     part gained `madeForKids`; a `-v9` part has none, and the page treats a part with no flag as
+//     made-for-kids (fails closed, a link instead of a player) for a whole REVALIDATE_FAST window.
 //
 // The Redis READER's key is pinned here as a literal — the same literal the
 // invalidator suites (`hub-cache-invalidation`, `score-revalidate-in-request`,
@@ -90,10 +93,10 @@ describe("the public fixture document's cache names (v3/v4, W2b T13 M-1)", () =>
     for (const old of [`pub:v1:fixture:${FIXTURE_ID}`, `pub:v1:fixture:v2:${FIXTURE_ID}`]) expect(probe.gets).not.toContain(old);
   });
 
-  it("getPublicFixture caches the page's document under [pub-fixture-v9, id]", async () => {
+  it("getPublicFixture caches the page's document under [pub-fixture-v10, id]", async () => {
     const out = await getPublicFixture("org", "comp", "div", FIXTURE_ID);
     expect(out?.fixture).toEqual({ id: FIXTURE_ID });
     const fixtureEntries = probe.keyParts.filter((parts) => parts[0]?.startsWith("pub-fixture"));
-    expect(fixtureEntries).toEqual([["pub-fixture-v9", FIXTURE_ID]]);
+    expect(fixtureEntries).toEqual([["pub-fixture-v10", FIXTURE_ID]]);
   });
 });

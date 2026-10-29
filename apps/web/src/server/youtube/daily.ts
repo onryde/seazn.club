@@ -411,7 +411,13 @@ async function checkHealth(p: Pass, at: string, c: Conn): Promise<boolean> {
 
 /** Refresh (DP III.E.4): every `complete` row of this connection whose video was last confirmed over 25 days ago is asked about, 50 ids to a
  *  call UNDER THIS CONNECTION'S TOKEN (a video of another channel is "absent" to the wrong token). Present → refreshed_at = the pass's now;
- *  gone → the row is deleted and a link that pointed at it cleared. A batch YouTube cannot answer keeps its rows stale for tomorrow. */
+ *  gone → the row is deleted and a link that pointed at it cleared. A batch YouTube cannot answer keeps its rows stale for tomorrow.
+ *
+ *  The SAME call (videos.list part=id,status, no extra one) also carries YouTube's own `status.madeForKids` of each present video, which
+ *  can change after the end step read it (YouTube designates a video itself). A `true` is OR-ed into the row's stamp (V482) in the SAME
+ *  transaction as the refreshed_at update, so the stamp and the confirmation never part; the stamp only goes false -> true, so a `false`
+ *  or "did not say" (null) writes nothing. A row that flipped was already public, so its division's pages are expired once it commits.
+ *  The window is up to 25 days (the next re-confirm), not immediate: a flip is read when the row is next asked about. */
 async function refreshVideos(p: Pass, at: string, c: Conn): Promise<void> {
   let stale: (StoredBroadcast & { yt_broadcast_id: string })[];
   try {
@@ -430,7 +436,8 @@ async function refreshVideos(p: Pass, at: string, c: Conn): Promise<void> {
       const present = await viaPort(() => p.port.existingVideos(at, batch.map((r) => r.yt_broadcast_id)), c, "videos");
       const here = batch.filter((r) => present.has(r.yt_broadcast_id));
       const gone = batch.filter((r) => !present.has(r.yt_broadcast_id));
-      const removed = await sql.begin(async (tx) => {
+      const kids = here.filter((r) => present.get(r.yt_broadcast_id)?.madeForKids === true);
+      const outcome = await sql.begin(async (tx) => {
         // The connection first, `for share`: a disconnect locks it `for update` and then ALL the connection's rows in id order, while this
         // transaction updates the rows YouTube still has and only then deletes the ones it lost - two writers meeting in the middle of a
         // set of row locks. Holding the connection makes them queue instead.
@@ -438,12 +445,21 @@ async function refreshVideos(p: Pass, at: string, c: Conn): Promise<void> {
         if (here.length > 0) {
           await tx`update youtube_broadcasts set refreshed_at = ${p.now} where id = any(${here.map((r) => r.id)}::uuid[]) and org_id = ${c.org_id}`;
         }
-        return deleteBroadcasts(tx, c.org_id, gone, p.hooks);
+        // false -> true only (`and made_for_kids = false`): the rows that CHANGED are the ones whose pages must be expired.
+        let flipped: Division[] = [];
+        if (kids.length > 0) {
+          const changed = await tx<{ fixture_id: string }[]>`
+            update youtube_broadcasts set made_for_kids = true
+             where id = any(${kids.map((r) => r.id)}::uuid[]) and org_id = ${c.org_id} and made_for_kids = false
+         returning fixture_id`;
+          flipped = await divisionsOf(tx, c.org_id, changed.map((r) => r.fixture_id));
+        }
+        return { removed: await deleteBroadcasts(tx, c.org_id, gone, p.hooks), flipped };
       });
-      if (removed === null) return;   // disconnected meanwhile: its rows are purged, nothing is left to confirm
+      if (outcome === null) return;   // disconnected meanwhile: its rows are purged, nothing is left to confirm
       p.out.refreshed += here.length;
-      p.out.removed += removed.deleted;
-      expirePages(removed.divisions);
+      p.out.removed += outcome.removed.deleted;
+      expirePages([...new Map([...outcome.removed.divisions, ...outcome.flipped].map((d) => [d.divisionId, d])).values()]);   // one expiry a division
     } catch (err) {
       if (err instanceof BudgetSpent) throw err;   // the rest of the batches wait for tomorrow
       if (isDeadGrantRefusal(err)) {

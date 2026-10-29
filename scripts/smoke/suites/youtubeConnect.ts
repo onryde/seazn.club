@@ -12,15 +12,16 @@ import {
 
 /**
  * YouTube Connect (spec 2026-10-27, plan T21) over real HTTP, against a server on the FAKE YouTube (YOUTUBE_DRIVER=fake, ENV_NAME ci
- * or local) and the fake relay: TEN probes, each a surface a customer or the cron Worker reaches, so a PR that breaks one is red at
+ * or local) and the fake relay: ELEVEN probes, each a surface a customer or the cron Worker reaches, so a PR that breaks one is red at
  * PR time (e2e runs on a push to main only). The probes, in order, each under the name its owning task cites:
  *   1 stream-tick answers (T1, T13-T15)          6 fake control route answers in fake mode (T5)
  *   2 relay-sweep answers (T17)                  7 Streaming page renders Connect YouTube (T9)
  *   3 connect without consent is refused (T7)    8 public match page lists parts (T16)
  *   4 reconnect-needed refusal (T2, T10-T12)     9 disconnect unknown -> 404 (T18)
  *   5 list shape (T3, T8)                       10 /legal/privacy names YouTube API Services (T19)
+ *                                               11 a made-for-kids replay links out (owner 2026-10-29)
  *
- * ANTI-VACUITY. The suite reports `probes === 10` and fails on fewer; a probe that made no check fails; a probe that THREW is a red
+ * ANTI-VACUITY. The suite reports `probes === 11` and fails on fewer; a probe that made no check fails; a probe that THREW is a red
  * line naming only its class (or its own premise message), never a response body. Nothing here skips: a missing CRON_SECRET or
  * DATABASE_URL is a red check, because a skip would read as a pass. Every negative has its positive pair (a 400 beside the 303 the
  * same request earns with consent; a 404 beside the 200 a real disconnect earns) so a route that refuses everything cannot pass.
@@ -46,6 +47,7 @@ const PROBES = [
   "public match page lists parts",
   "disconnect unknown -> 404",
   "/legal/privacy names YouTube API Services",
+  "a made-for-kids replay links out",
 ] as const;
 type ProbeName = (typeof PROBES)[number];
 const EXPECTED_PROBES = PROBES.length;
@@ -495,8 +497,8 @@ export async function youtubeConnectSuite(): Promise<void> {
         [hidden, "private", at(3.5), at(0.2)],
       ] as const) {
         await sql`
-          insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, created_at, completed_at)
-          values (${a.orgId}, ${seed.connectionId}, ${fx.fixtureId}, ${video}, ${`Smoke part ${tag}`}, ${privacy}, 'complete', ${started}, ${finished})`;
+          insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, created_at, completed_at)
+          values (false, ${a.orgId}, ${seed.connectionId}, ${fx.fixtureId}, ${video}, ${`Smoke part ${tag}`}, ${privacy}, 'complete', ${started}, ${finished})`;
       }
     });
     const divSlug = v1data<{ slug: string }>(await v1(a.s, `/api/v1/divisions/${fx.divisionId}`)).slug;
@@ -553,6 +555,55 @@ export async function youtubeConnectSuite(): Promise<void> {
     step("it links the YouTube Terms of Service", section.includes(`href="${YOUTUBE_TOS_URL}"`));
     step("it links Google's privacy policy", section.includes(`href="${GOOGLE_PRIVACY_URL}"`));
     step("it links Google's third-party access settings, where a person revokes", section.includes(`href="${GOOGLE_THIRD_PARTY_ACCESS_URL}"`));
+  });
+
+  // --- 11. a made-for-kids replay links out (owner 2026-10-29; Google Developer Policies III.E.4.j) --------------------------
+  // A page that embeds a video made for kids may not track, and the root layout runs consent-gated analytics, so a made-for-kids replay
+  // is a link to YouTube and never a player. The flag is the BROADCAST's own (youtube_broadcasts.made_for_kids), so the two rows below
+  // differ only in it; the walkthrough (youtube-connect.spec.ts) is what makes the rows through the real Go live / end step.
+  await probe("a made-for-kids replay links out", async (step) => {
+    const seed = await seedChannel(a, `Kids Channel ${tag}`);
+    const id = () => `smk${randomBytes(4).toString("hex")}`;
+    const kidsVideo = id();
+    const plainVideo = id();
+    const [kidsFx, plainFx] = [await genericFixture(a, comp.id, "Kids replay"), await genericFixture(a, comp.id, "Plain replay")];
+    await withDb(async (sql) => {
+      for (const [fixtureId, video, kids] of [[kidsFx.fixtureId, kidsVideo, true], [plainFx.fixtureId, plainVideo, false]] as const) {
+        await sql`
+          insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, created_at, completed_at)
+          values (${kids}, ${a.orgId}, ${seed.connectionId}, ${fixtureId}, ${video}, ${`Smoke kids ${tag}`}, 'unlisted', 'complete', now() - interval '2 hours', now() - interval '1 hour')`;
+      }
+    });
+    const replayOf = async (fx: { fixtureId: string; divisionId: string }) => {
+      const divSlug = v1data<{ slug: string }>(await v1(a.s, `/api/v1/divisions/${fx.divisionId}`)).slug;
+      const page = await html(newSession(), `/shared/${a.orgSlug}/${comp.slug}/${divSlug}/fixtures/${fx.fixtureId}`);   // anonymous
+      return { status: page.status, replay: sectionFrom(page.body, 'data-testid="replay-embed"') };
+    };
+    const kids = await replayOf(kidsFx);
+    step(`the made-for-kids match's public page renders the replay region (got ${kids.status})`, kids.status === 200 && kids.replay !== "");
+    step("it is the link-out card", kids.replay.includes('data-testid="replay-linkout"'));
+    // The link's attributes are read one by one, never as one literal: React serialises props in source order, so a harmless reorder of
+    // the JSX must not red this check (it asserts what the link is, not how the tag is spelled). `rel` is compared as a token set.
+    const openTag = (kids.replay.match(/<a\b[^>]*\bdata-testid="replay-linkout-open"[^>]*>/) ?? [""])[0];
+    const attr = (name: string): string | null => (openTag.match(new RegExp(`\\s${name}="([^"]*)"`)) ?? [])[1] ?? null;
+    const relTokens = new Set((attr("rel") ?? "").split(/\s+/).filter(Boolean));
+    step(
+      "the one link is to the video on YouTube, in a new tab, without the opener",
+      openTag !== "" &&
+        attr("href") === youtubeWatchUrl(kidsVideo) &&
+        attr("target") === "_blank" &&
+        relTokens.has("noopener") && relTokens.has("noreferrer") &&
+        (kids.replay.match(/<a /g) ?? []).length === 1,
+    );
+    step(`the link reads the dictionary's "${en("streaming.youtube.replay.watch")}" and the page says why: "${en("streaming.youtube.replay.madeForKids")}"`,
+      kids.replay.includes(en("streaming.youtube.replay.watch")) && kids.replay.includes(en("streaming.youtube.replay.madeForKids")));
+    step("no player markup: no iframe, no facade play button", !kids.replay.includes("<iframe") && !kids.replay.includes('data-testid="replay-facade"'));
+    step("nothing is fetched from Google's hosts: no thumbnail, no embed host", !kids.replay.includes("ytimg.com") && !kids.replay.includes("youtube-nocookie.com") && !kids.replay.includes("<img"));
+    // The positive pair: the same page for a broadcast that was NOT made for kids is the player's facade - so the checks above are
+    // not true of every replay, they are true of this one.
+    const plain = await replayOf(plainFx);
+    step(`...whereas the not-made-for-kids match's replay is the click-to-play facade with its thumbnail (got ${plain.status})`,
+      plain.status === 200 && plain.replay.includes('data-testid="replay-facade"') && plain.replay.includes("ytimg.com") && !plain.replay.includes('data-testid="replay-linkout"'));
   });
 
   console.log(`youtube connect smoke: ${probes} probes, ${checks} checks`);

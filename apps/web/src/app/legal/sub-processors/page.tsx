@@ -15,7 +15,7 @@ const SUB_PROCESSORS = [
   },
   {
     name: "Fly.io",
-    purpose: "Application hosting (containers)",
+    purpose: "Application hosting (containers); a machine we start for a match streamed with the score overlay, which adds the overlay to the stream",
     location: "UK (London)",
     url: "https://fly.io/legal/privacy-policy",
   },
@@ -75,7 +75,7 @@ export default function SubProcessorsPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Sub-processors</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 14 October 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 29 October 2026</p>
         <p className="mb-8 text-sm text-slate-600">
           Seazn Club uses the following sub-processors to provide the
           service. All sub-processors are bound by data processing agreements

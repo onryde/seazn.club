@@ -243,7 +243,36 @@ describe("privacy — what the YouTube section says about the other halves of th
     // The key is handed to Cloudflare as a live-input output (addOutput) and the session effect reads it for no other port.
     const effect = src("../../../server/usecases/stream-sessions.ts");
     expect(effect).toContain("deps.drivers.ingest.addOutput(inputId, target");
-    expect(effect, "the composed destination key never reaches the Machine (spec 5.3)").toContain("a composed destination key reaches Cloudflare and never the Machine");
+    // R8 (B7 re-review m2): this used to pin a code COMMENT. The claim is "the destination key goes to Cloudflare and never to the Fly
+    // Machine", so it is held by the three pieces of code that decide it, each sliced and checked on its own.
+    //  (1) the destination (the stream key) is read by the add_output effect, and handed to Cloudflare's addOutput - nowhere in the job facts;
+    const addOutput = effect.slice(effect.indexOf('case "add_output": {'), effect.indexOf("deps.drivers.ingest.addOutput(inputId, target"));
+    expect(addOutput.length, "anti-vacuity: the add_output effect was found").toBeGreaterThan(200);
+    expect(addOutput, "the add_output effect reads the destination's key").toContain("readSessionDestination(tx, await destinationRowOf(tx, current.id))");
+    //  (2) the facts the Machine is given for a composed session carry the PROGRAMME input's credential, never a destination read;
+    const factsStart = effect.indexOf("export async function sessionFactsForJob(");
+    const facts = effect.slice(factsStart, effect.indexOf("export async function fillReplayUrl(", factsStart));
+    expect(facts.length, "anti-vacuity: sessionFactsForJob was found").toBeGreaterThan(1000);
+    const composed = facts.slice(facts.indexOf("const fixtureId = s.fixtureId;"));
+    expect(composed.length, "anti-vacuity: the composed branch was found").toBeGreaterThan(500);
+    expect(composed, "the composed branch reads no destination").not.toMatch(/readSessionDestination|destinationRowOf/);
+    expect(composed, "its target is the programme input's RTMPS credential").toContain("target: { url: programme.rtmps.url, streamKey: programme.rtmps.streamKey }");
+    //  (3) and what the runner puts on the Machine is four named values - no key, no target, no destination.
+    const fly = src("../../../server/relay/runner-fly.ts");
+    const env = fly.match(/\benv: \{([^}]*)\}/)?.[1] ?? "";
+    expect(env.length, "anti-vacuity: the Machine env literal was found").toBeGreaterThan(40);
+    expect([...env.matchAll(/(\w+):/g)].map((m) => m[1])).toEqual(["SESSION_ID", "JOB_TOKEN", "APP_URL", "RELAY_DEADLINE_AT"]);
+  });
+
+  it("R9 (B7 re-review m3): the sub-processors list says what Fly.io runs for us - the hosting AND the machine that adds the score overlay - in the privacy page's own words", () => {
+    const list = text(renderToStaticMarkup(<SubProcessorsPage />));
+    // Fly.io's row, from its name to the next row's (Upstash).
+    const row = list.slice(list.indexOf("Fly.io"), list.indexOf("Upstash"));
+    expect(row.length, "anti-vacuity: Fly.io's row was found").toBeGreaterThan(20);
+    expect(row).toContain("Application hosting (containers)");
+    expect(row).toContain("a machine we start for a match streamed with the score overlay");
+    // The privacy page names the same machine: the two pages describe one thing in one voice.
+    expect(yt).toContain("a machine we start for the match adds the overlay");
   });
 
   it("F3e: Disconnect's YouTube clean-up and the idle key's delete are held by the code; a finished broadcast is left alone", () => {
@@ -281,6 +310,11 @@ describe("privacy — what the YouTube section says about the other halves of th
     // M4: loading either one sends the visitor's address to Google.
     expect(ytText).toContain("each send your IP address and browser details to Google");
     expect(yt).toContain('href="/legal/cookie-policy"');
+  });
+
+  it("a made-for-kids replay is a link to YouTube, not a player (owner 2026-10-29, DP III.E.4.j) - the paragraph says so, and says nothing is fetched for it", () => {
+    expect(ytText).toContain("A replay of a video made for kids is a link to YouTube, not a player");
+    expect(ytText).toContain("nothing is fetched from YouTube for it until you follow the link");
   });
 
   it("the sentence 'deletes at once' is held by the code: the purge runs inside the disconnect transaction, then the Google revoke is asked for", () => {

@@ -29,6 +29,7 @@ import { divisionRig, seedOrg } from "@/server/usecases/__tests__/_rig";
 import { startDivision } from "@/server/usecases/schedule";
 import { grantCredits } from "@/server/usecases/stream-credits";
 import { createSession as organiserStart, currentSession, stopSession, type SessionDeps } from "@/server/usecases/stream-sessions";
+import { updateConnectionSettings } from "../connections";
 import { endDueBroadcasts } from "../end-step";
 import { FakeYouTube } from "../fake";
 import { fixtureReplayParts, replayParts } from "../parts";
@@ -60,6 +61,11 @@ const at = (hhmm: string) => new Date(`2030-06-01T${hhmm}:00Z`);
 const mine = (parts: readonly { partNo: number; url: string }[], priv: readonly boolean[] = []) =>
   parts.map((p, i) => ({ ...p, private: priv[i] ?? false }));
 
+/** The PUBLIC shape of a list of parts: each part plus its made-for-kids stamp (false unless `kids` says so, index by index). Every part
+ *  these older cases build is made not-for-kids (the helper's and the real producers' default), so their expectations carry `false`. */
+const pub = (parts: readonly { partNo: number; url: string }[], kids: readonly boolean[] = []) =>
+  parts.map((p, i) => ({ ...p, madeForKids: kids[i] ?? false }));
+
 interface Rig { auth: AuthCtx; orgId: string; connectionId: string; fixtures: string[]; divisionId: string; competitionId: string }
 
 /** An org with one connected channel (through the real save) and a division of `fixtures` fixtures. `start: false` leaves the
@@ -80,13 +86,13 @@ async function rig(o: { fixtures?: number; start?: boolean } = {}): Promise<Rig>
 async function broadcast(
   r: Pick<Rig, "orgId" | "connectionId">,
   fixtureId: string,
-  o: { state: string; ytId?: string | null; completedAt?: Date | null; id?: string; createdAt?: Date; privacy?: "unlisted" | "public" | "private" },
+  o: { state: string; ytId?: string | null; completedAt?: Date | null; id?: string; createdAt?: Date; privacy?: "unlisted" | "public" | "private"; madeForKids?: boolean },
 ): Promise<{ id: string; ytId: string | null }> {
   const ytId = o.ytId === undefined ? vid() : o.ytId;
   const completedAt = o.completedAt === undefined ? (o.state === "complete" ? new Date() : null) : o.completedAt;
   const [row] = await sql<{ id: string }[]>`
-    insert into youtube_broadcasts (id, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at, created_at)
-    values (${o.id ?? randomUUID()}, ${r.orgId}, ${r.connectionId}, ${fixtureId}, ${ytId}, 'Match', ${o.privacy ?? "unlisted"}, ${o.state},
+    insert into youtube_broadcasts (made_for_kids, id, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at, created_at)
+    values (${o.madeForKids ?? false}, ${o.id ?? randomUUID()}, ${r.orgId}, ${r.connectionId}, ${fixtureId}, ${ytId}, 'Match', ${o.privacy ?? "unlisted"}, ${o.state},
             ${o.state === "reserved" ? new Date(Date.now() + 5 * MIN) : null}, ${completedAt}, ${o.createdAt ?? sql`now()`})
     returning id`;
   return { id: row!.id, ytId };
@@ -94,7 +100,7 @@ async function broadcast(
 
 /** An org with a connected channel, one started fixture and what the REAL producers need (the session usecases, the end step), on a scripted
  *  clock. `playAndStop` is Go live -> live -> video arrives -> a minute of play -> Stop, and answers the broadcast the fake minted. */
-async function streamRig(o: { privacy?: "unlisted" | "public" | "private" } = {}) {
+async function streamRig(o: { privacy?: "unlisted" | "public" | "private"; madeForKids?: boolean } = {}) {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const d = await divisionRig(auth, { entrants: 2 });
@@ -107,7 +113,7 @@ async function streamRig(o: { privacy?: "unlisted" | "public" | "private" } = {}
   await pairPresentPhone(f);
   await grantCredits({ orgId: auth.orgId, delta: 2, createdBy: await rigUser(), note: "t16", idempotencyKey: randomUUID() });
   await spendMonthlyStreamGrant(auth.orgId);
-  const c = await connect({ auth, orgId: auth.orgId, userId: auth.userId }, o.privacy ? { privacy: o.privacy } : {});
+  const c = await connect({ auth, orgId: auth.orgId, userId: auth.userId }, { ...(o.privacy ? { privacy: o.privacy } : {}), ...(o.madeForKids !== undefined ? { madeForKids: o.madeForKids } : {}) });
 
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
@@ -135,6 +141,8 @@ async function streamRig(o: { privacy?: "unlisted" | "public" | "private" } = {}
     /** The channel's default for the NEXT Go live (a broadcast row keeps the privacy it was made with). */
     setChannelPrivacy: (privacy: "unlisted" | "public" | "private") =>
       sql`update org_youtube_connections set default_privacy = ${privacy} where id = ${c.connectionId}`,
+    /** The organiser's later correction of the channel's made-for-kids declaration, through the real PATCH. */
+    setChannelMadeForKids: (madeForKids: boolean) => updateConnectionSettings(auth, auth.orgId, c.connectionId, { madeForKids }),
     advance: (ms: number) => { now += ms; },
     endAll: () => endDueBroadcasts(fake, { now: () => new Date(now), budgetMs: 15_000, orgIds: [auth.orgId] }),
     /** The panel reads the same list off the session view it already polls (`replayParts` beside `replayUrl`). */
@@ -152,7 +160,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     expect(await fixtureReplayParts(r.orgId, f)).toEqual([]);
 
     const b = await broadcast(r, f, { state: "complete", completedAt: at("10:00") });
-    expect(await replayParts(f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
+    expect(await replayParts(f)).toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]));
     expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]));
   });
 
@@ -168,7 +176,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       { partNo: 1, url: youtubeWatchUrl(early.ytId!) },
       { partNo: 2, url: youtubeWatchUrl(late.ytId!) },
     ];
-    expect(await replayParts(f)).toEqual(expected);
+    expect(await replayParts(f)).toEqual(pub(expected));
     expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine(expected));
 
     // A tie: three rows, one start instant, inserted in DESCENDING id order and finishing in descending id order too - the id decides.
@@ -180,7 +188,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       made[id] = (await broadcast(g, tieFixture, { state: "complete", createdAt: at("12:00"), completedAt: at(`1${3 + i}:00`), id })).ytId!;
     }
     const tied = ids.map((id, i) => ({ partNo: i + 1, url: youtubeWatchUrl(made[id]!) }));
-    expect(await replayParts(tieFixture)).toEqual(tied);
+    expect(await replayParts(tieFixture)).toEqual(pub(tied));
     expect(await fixtureReplayParts(g.orgId, tieFixture)).toEqual(mine(tied));
   });
 
@@ -198,13 +206,13 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       { partNo: 1, url: youtubeWatchUrl(first.ytId!) },
       { partNo: 2, url: youtubeWatchUrl(second.ytId!) },
     ];
-    expect(await replayParts(f)).toEqual(expected);
+    expect(await replayParts(f)).toEqual(pub(expected));
     expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine(expected));
 
     // The open row becomes a part the moment it completes (a second call sees the change), numbered after the others.
     await sql`update youtube_broadcasts set state = 'complete', completed_at = ${at("11:30")} where id = ${open.id}`;
     const after = [...expected, { partNo: 3, url: youtubeWatchUrl(open.ytId!) }];
-    expect(await replayParts(f)).toEqual(after);
+    expect(await replayParts(f)).toEqual(pub(after));
     expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine(after));
   });
 
@@ -213,8 +221,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     const [f1, f2] = r.fixtures as [string, string];
     const a = await broadcast(r, f1, { state: "complete", completedAt: at("10:00") });
     const b = await broadcast(r, f2, { state: "complete", completedAt: at("09:00") });
-    expect(await replayParts(f1)).toEqual([{ partNo: 1, url: youtubeWatchUrl(a.ytId!) }]);
-    expect(await replayParts(f2)).toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
+    expect(await replayParts(f1)).toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(a.ytId!) }]));
+    expect(await replayParts(f2)).toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]));
     expect(await fixtureReplayParts(r.orgId, f1)).toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(a.ytId!) }]));
   });
 
@@ -230,7 +238,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
 
     await startDivision(r.auth, r.divisionId);
     expect((await sql<{ status: string }[]>`select status from divisions where id = ${r.divisionId}`)[0]!.status, "premise: the division left setup").not.toBe("setup");
-    expect(await replayParts(f), "public: after the division starts").toEqual(expected);
+    expect(await replayParts(f), "public: after the division starts").toEqual(pub(expected));
   });
 
   it("a PRIVATE competition has no public parts; public and unlisted do - and the organiser's read lists them under every visibility", async () => {
@@ -241,7 +249,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     let checked = 0;
     for (const [visibility, publicSees] of [["private", false], ["unlisted", true], ["public", true]] as const) {
       await sql`update competitions set visibility = ${visibility} where id = ${r.competitionId}`;
-      expect(await replayParts(f), `public read, ${visibility}`).toEqual(publicSees ? expected : []);
+      expect(await replayParts(f), `public read, ${visibility}`).toEqual(pub(publicSees ? expected : []));
       expect(await fixtureReplayParts(r.orgId, f), `organiser read, ${visibility}`).toEqual(mine(expected));
       checked++;
     }
@@ -271,7 +279,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       const g = await rig();
       const gf = g.fixtures[0]!;
       const b = await broadcast(g, gf, { state: "complete", completedAt: at("10:00"), createdAt: at("09:00"), privacy });
-      expect(await replayParts(gf), `public read, ${privacy}`).toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
+      expect(await replayParts(gf), `public read, ${privacy}`).toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]));
       expect(await fixtureReplayParts(g.orgId, gf), `organiser read, ${privacy}`).toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }], [false]));
       checked++;
     }
@@ -284,7 +292,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     // Part 1 public, Part 2 private: public sees ONE part (number 1); the organiser sees both.
     const p1 = await broadcast(r, f, { state: "complete", completedAt: at("10:00"), createdAt: at("09:00"), privacy: "unlisted" });
     const p2 = await broadcast(r, f, { state: "complete", completedAt: at("12:00"), createdAt: at("11:00"), privacy: "private" });
-    expect(await replayParts(f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(p1.ytId!) }]);
+    expect(await replayParts(f)).toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(p1.ytId!) }]));
     expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine([
       { partNo: 1, url: youtubeWatchUrl(p1.ytId!) },
       { partNo: 2, url: youtubeWatchUrl(p2.ytId!) },
@@ -295,7 +303,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     const gf = g.fixtures[0]!;
     const q1 = await broadcast(g, gf, { state: "complete", completedAt: at("10:00"), createdAt: at("09:00"), privacy: "private" });
     const q2 = await broadcast(g, gf, { state: "complete", completedAt: at("12:00"), createdAt: at("11:00"), privacy: "public" });
-    expect(await replayParts(gf), "public: the later one is the first it shows").toEqual([{ partNo: 1, url: youtubeWatchUrl(q2.ytId!) }]);
+    expect(await replayParts(gf), "public: the later one is the first it shows").toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(q2.ytId!) }]));
     expect(await fixtureReplayParts(g.orgId, gf), "organiser: still Part 1 private, Part 2 public").toEqual(mine([
       { partNo: 1, url: youtubeWatchUrl(q1.ytId!) },
       { partNo: 2, url: youtubeWatchUrl(q2.ytId!) },
@@ -312,20 +320,20 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     expect(await replayParts(f), "Part 1 is not a part until the end step completes it").toEqual([]);
     advance(6 * MIN);
     expect(await endAll()).toMatchObject({ ended: 1 });
-    expect(await replayParts(f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
+    expect(await replayParts(f)).toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(first) }]));
     expect(await panelParts(), "one part: the panel lists it").toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(first) }]));
     expect(await streamUrl(), "the end step wrote Part 1's address as the fixture's link").toBe(youtubeWatchUrl(first));
 
     const second = await playAndStop();
     expect(second, "premise: the second Go live is a NEW broadcast").not.toBe(first);
-    expect(await replayParts(f), "Part 2 is still open: only Part 1 is listed").toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
+    expect(await replayParts(f), "Part 2 is still open: only Part 1 is listed").toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(first) }]));
     advance(6 * MIN);
     expect(await endAll()).toMatchObject({ ended: 1 });
     const expected = [
       { partNo: 1, url: youtubeWatchUrl(first) },
       { partNo: 2, url: youtubeWatchUrl(second) },
     ];
-    expect(await replayParts(f)).toEqual(expected);
+    expect(await replayParts(f)).toEqual(pub(expected));
     expect(await fixtureReplayParts(auth.orgId, f)).toEqual(mine(expected));
     expect(await panelParts(), "two parts: the panel's session view lists both, in order").toEqual(mine(expected));
     // The contract the public page's dedupe (`linkIsOneOfParts`) and the panel's "Replay" row rely on: the link is Part 1's and Part 2
@@ -344,7 +352,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     fake.failNext("complete", "youtube_unavailable");   // Part 1's `complete` (oldest first) fails once and backs off a minute
     expect(await endAll(), "Part 1's end failed, the restart's went through").toMatchObject({ ended: 1, failed: 1 });
     // The restart's broadcast finished FIRST, so until Part 1 lands it is the only part and carries number 1.
-    expect(await replayParts(f), "only the broadcast that has finished is a part").toEqual([{ partNo: 1, url: youtubeWatchUrl(second) }]);
+    expect(await replayParts(f), "only the broadcast that has finished is a part").toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(second) }]));
     const linkAfterFirstPass = await streamUrl();
 
     advance(2 * MIN);   // past Part 1's backoff
@@ -359,7 +367,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       { partNo: 1, url: youtubeWatchUrl(first) },
       { partNo: 2, url: youtubeWatchUrl(second) },
     ];
-    expect(await replayParts(f), "public: numbered by start").toEqual(expected);
+    expect(await replayParts(f), "public: numbered by start").toEqual(pub(expected));
     expect(await fixtureReplayParts(auth.orgId, f), "organiser: the same numbers").toEqual(mine(expected));
     expect(await panelParts(), "panel: the same numbers").toEqual(mine(expected));
     // The end step writes the link only into an empty one, so the first FINALIZER holds it and Part 1's late completion leaves it alone.
@@ -397,7 +405,42 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     const mineBoth = mine([{ partNo: 1, url: youtubeWatchUrl(first) }, { partNo: 2, url: youtubeWatchUrl(second) }], [true, false]);
     expect(await fixtureReplayParts(auth.orgId, f)).toEqual(mineBoth);
     expect(await panelParts()).toEqual(mineBoth);
-    expect(await replayParts(f), "public: only the unlisted one, as its own Part 1").toEqual([{ partNo: 1, url: youtubeWatchUrl(second) }]);
+    expect(await replayParts(f), "public: only the unlisted one, as its own Part 1").toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(second) }]));
     expect(await streamUrl(), "the link is the public part's").toBe(youtubeWatchUrl(second));
+  });
+  // ---- made for kids (owner 2026-10-29; DP III.E.4.j): the public read carries each part's own stamp --------------------------
+  it("MADE FOR KIDS: the public read carries each part's OWN stamp (empty case first); a mixed match reads true then false in order, and the organiser's read gains no such field", async () => {
+    const r = await rig();
+    const f = r.fixtures[0]!;
+    expect(await replayParts(f), "empty case: no part, so no flag").toEqual([]);
+
+    const kids = await broadcast(r, f, { state: "complete", createdAt: at("09:00"), completedAt: at("10:00"), madeForKids: true });
+    const plain = await broadcast(r, f, { state: "complete", createdAt: at("11:00"), completedAt: at("12:00"), madeForKids: false });
+    const parts = [{ partNo: 1, url: youtubeWatchUrl(kids.ytId!) }, { partNo: 2, url: youtubeWatchUrl(plain.ytId!) }];
+    expect(await replayParts(f), "per part, in order").toEqual(pub(parts, [true, false]));
+    // The positive pair, the other way round: the same two rows with the stamps swapped read swapped (so the flag follows the ROW).
+    await sql`update youtube_broadcasts set made_for_kids = not made_for_kids where id in (${kids.id}, ${plain.id})`;
+    expect(await replayParts(f), "swapped stamps read swapped").toEqual(pub(parts, [false, true]));
+    // R6: the organiser's read is the organiser's shape, unchanged - the part and whether it is private, nothing about kids.
+    expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine(parts));
+    expect(Object.keys((await fixtureReplayParts(r.orgId, f))[0]!).sort(), "organiser parts keep exactly their three keys").toEqual(["partNo", "private", "url"]);
+  });
+
+  it("MADE FOR KIDS through the real producers (R1): a channel declared made-for-kids stamps Part 1; the organiser then PATCHES it to not-for-kids and Part 2 is stamped false - Part 1 stays true on the public read", async () => {
+    const { f, playAndStop, advance, endAll, setChannelMadeForKids } = await streamRig({ madeForKids: true });
+    expect(await replayParts(f), "premise: nothing yet").toEqual([]);
+    const first = await playAndStop();
+    advance(6 * MIN);
+    expect(await endAll()).toMatchObject({ ended: 1 });
+    expect(await replayParts(f)).toEqual(pub([{ partNo: 1, url: youtubeWatchUrl(first) }], [true]));
+
+    await setChannelMadeForKids(false);
+    const second = await playAndStop();
+    expect(second, "premise: a NEW broadcast").not.toBe(first);
+    advance(6 * MIN);
+    expect(await endAll()).toMatchObject({ ended: 1 });
+    expect(await replayParts(f), "Part 1 keeps what it was made with; Part 2 follows the corrected channel").toEqual(
+      pub([{ partNo: 1, url: youtubeWatchUrl(first) }, { partNo: 2, url: youtubeWatchUrl(second) }], [true, false]),
+    );
   });
 });

@@ -1468,6 +1468,8 @@
   "streaming.youtube.replay.tabs": "Partes de la repetición",
   "streaming.youtube.replay.play": "Reproducir en YouTube",
   "streaming.youtube.replay.open": "Abrir en YouTube",
+  "streaming.youtube.replay.watch": "Ver en YouTube",
+  "streaming.youtube.replay.madeForKids": "Este vídeo está hecho para niños, así que se reproduce en YouTube.",
   "streaming.youtube.replay.playerTitle": "Repetición del partido",
   "streaming.youtube.replay.playerTitlePart": "Repetición del partido, parte {n}",
   "streaming.youtube.replay.unavailable": "Este vídeo no se puede reproducir aquí. Ábrelo en YouTube.",

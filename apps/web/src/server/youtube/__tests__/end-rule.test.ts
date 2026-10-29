@@ -177,8 +177,8 @@ async function broadcast(
 ): Promise<string> {
   const state = o.state ?? "live";
   const [row] = await sql<{ id: string }[]>`
-    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at)
-    values (${w.orgId}, ${w.connectionId}, ${fixtureId}, ${`yt-${randomUUID().slice(0, 8)}`}, 'Match', 'unlisted', ${state},
+    insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at)
+    values (false, ${w.orgId}, ${w.connectionId}, ${fixtureId}, ${`yt-${randomUUID().slice(0, 8)}`}, 'Match', 'unlisted', ${state},
             ${o.reservedUntil ?? null}, ${o.completedAt ?? null})
     returning id`;
   return row!.id;

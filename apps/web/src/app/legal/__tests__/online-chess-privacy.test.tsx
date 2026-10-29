@@ -31,8 +31,8 @@ describe("sub-processors — Cloudflare carries the match-room camera video (I-4
     expect(row).toContain("https://www.cloudflare.com/privacypolicy/");
   });
 
-  it("is dated 14 October 2026", () => {
-    expect(subProcessors).toContain("Last updated: 14 October 2026");
+  it("is dated 29 October 2026", () => {
+    expect(subProcessors).toContain("Last updated: 29 October 2026");
   });
 });
 

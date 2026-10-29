@@ -14,6 +14,12 @@
 //     private, 100). The embedded player says so by postMessage; the page hears it and puts the "Open on YouTube" link in place of
 //     the player. The page has to ask first (the `listening` handshake on the iframe's load) - no script is loaded from YouTube.
 //   - A part whose address is not provably a video (a channel, a playlist) is the link from the start, never an iframe.
+//   - A part MADE FOR KIDS is a link out and never a player (owner ruling 2026-10-29; Google's YouTube API Services Developer Policies
+//     III.E.4.j bar tracking on a page that embeds such a video, and this site runs consent-gated analytics). Its card is the replay
+//     part's own frame (the same 16:9 box with the 200px floor) holding one line saying why and ONE "Watch on YouTube" link - no
+//     iframe, no thumbnail (the facade's thumbnail is a request to i.ytimg.com), no second link. The rule fails closed
+//     (`mayEmbedReplay` in lib/youtube.ts): only a part positively NOT made for kids may be embedded; true, unknown and a missing flag
+//     are the link. It is decided per PART, so a match can hold a player for one part and the card for another.
 //
 // The sizing rule (Google's embedded-player policy): the player is at least 200x200, so the 16:9 box has a 200px floor - at a 320
 // phone the card's inner width is 260, a pure 16:9 box would be 146px tall.
@@ -23,10 +29,12 @@
 import { useEffect, useId, useReducer, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import {
-  YOUTUBE_EMBED_ORIGIN, isYoutubeUrl, youtubeEmbedUrl, youtubeThumbnailUrl, youtubeVideoId, type ReplayPart,
+  YOUTUBE_EMBED_ORIGIN, isYoutubeUrl, mayEmbedReplay, youtubeEmbedUrl, youtubeThumbnailUrl, youtubeVideoId, type PublicReplayPart,
 } from "@/lib/youtube";
 
-export type ReplayMode = "facade" | "playing" | "unavailable";
+/** `linkout`: the part may not be embedded (made for kids, or not known to be otherwise) - the card with one link. It is never entered
+ *  from another mode: it is where a part STARTS, and no action leaves it. */
+export type ReplayMode = "facade" | "playing" | "unavailable" | "linkout";
 export interface ReplayState {
   /** Index (into the parts list) of the part showing. */
   active: number;
@@ -40,9 +48,14 @@ export type ReplayAction = { type: "play" } | { type: "unavailable" } | { type: 
  *  a reason to give up the player. */
 export const REPLAY_UNPLAYABLE_CODES: readonly number[] = [100, 101, 150, 153];
 
-/** Every part starts as a facade - nothing plays until a tap - except a part with no provable video id, which is the link. */
-export function initialReplayState(parts: readonly ReplayPart[]): ReplayState {
-  return { active: 0, modes: parts.map((p): ReplayMode => (youtubeVideoId(p.url) === null ? "unavailable" : "facade")) };
+/** Every part starts as a facade - nothing plays until a tap - except a part that may not be embedded (made for kids: the link-out
+ *  card) and a part with no provable video id (the link fallback). The made-for-kids rule comes first: a part that is both is the
+ *  card, not the note that says it "can't be played here". */
+export function initialReplayState(parts: readonly PublicReplayPart[]): ReplayState {
+  return {
+    active: 0,
+    modes: parts.map((p): ReplayMode => (!mayEmbedReplay(p) ? "linkout" : youtubeVideoId(p.url) === null ? "unavailable" : "facade")),
+  };
 }
 
 /** Where focus must go when the state changes, or null to leave it where the person put it. Two transitions of the ACTIVE part unmount
@@ -119,8 +132,40 @@ function OpenLink({ href, linkRef }: { href: string; linkRef?: RefObject<HTMLAnc
   );
 }
 
+/** The made-for-kids replay: a card in the replay part's own frame - the same 16:9 box with the 200px floor, so choosing between a
+ *  player part and a link part does not move the page - holding the reason in one line and ONE link to the video on YouTube. No iframe,
+ *  no thumbnail, no second link, no YouTube artwork (the logo is only ever drawn by the two homes `youtube-icon.tsx` names). The link
+ *  is the house pill (`public-stream-link`'s accent), 44px tall; its glyph says the link leaves the site and is decorative. */
+function LinkOutCard({ part }: { part: PublicReplayPart }) {
+  const t = useMsg();
+  const whyId = useId();
+  return (
+    <div
+      data-testid="replay-linkout"
+      className="flex aspect-video min-h-[200px] w-full flex-col items-center justify-center gap-3 rounded-xl border border-white/15 bg-white/5 p-4 text-center"
+    >
+      <p id={whyId} className="max-w-prose text-pretty text-sm text-court-ink">
+        {t("streaming.youtube.replay.madeForKids")}
+      </p>
+      <a
+        data-testid="replay-linkout-open"
+        href={part.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-describedby={whyId}
+        className="inline-flex min-h-11 items-center gap-2 rounded-full bg-accent px-5 text-sm font-semibold text-accent-ink shadow-sm transition hover:opacity-90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-court-ink"
+      >
+        {t("streaming.youtube.replay.watch")}
+        <svg aria-hidden viewBox="0 0 16 16" className="h-4 w-4 shrink-0 fill-none stroke-current" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M6 3.5H3.5v9h9V10M9.5 3.5h3v3M12.5 3.5L7 9" />
+        </svg>
+      </a>
+    </div>
+  );
+}
+
 export interface ReplayStageProps {
-  part: ReplayPart;
+  part: PublicReplayPart;
   mode: ReplayMode;
   /** Two or more parts: the player's title names the part. */
   multi: boolean;
@@ -136,6 +181,9 @@ export interface ReplayStageProps {
 /** Everything under the tab rail for one part: the 16:9 box (a facade, or the player) or the fallback note, then the link. */
 export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, onFrameLoad, openRef }: ReplayStageProps) {
   const t = useMsg();
+  // A part that may not be embedded is the link-out card, whatever mode it was told it is in: the stage is what builds an iframe and a
+  // thumbnail request, so it does not lean on the state having been right (the state's own rule is the same predicate).
+  if (!mayEmbedReplay(part)) return <LinkOutCard part={part} />;
   const videoId = youtubeVideoId(part.url);
   // A part with no provable video id is never an iframe, whatever mode it was told it is in.
   const shown: ReplayMode = videoId === null ? "unavailable" : mode;
@@ -197,7 +245,7 @@ export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, 
   );
 }
 
-function ReplayPlayer({ parts }: { parts: readonly ReplayPart[] }) {
+function ReplayPlayer({ parts }: { parts: readonly PublicReplayPart[] }) {
   const t = useMsg();
   const base = useId();
   const [state, dispatch] = useReducer(replayReducer, parts, initialReplayState);
@@ -308,7 +356,7 @@ function ReplayPlayer({ parts }: { parts: readonly ReplayPart[] }) {
 /** The replay inside the match card. Takes the parts the page decided to list (`replayPlan`) and re-checks each is a YouTube address:
  *  this component builds an iframe and a link from the address, so it does not lean on its caller having filtered. Nothing to show
  *  renders nothing. Keyed by the list, so a refreshed page with different parts starts clean rather than pointing at a stale index. */
-export function ReplayEmbed({ parts }: { parts: readonly ReplayPart[] }) {
+export function ReplayEmbed({ parts }: { parts: readonly PublicReplayPart[] }) {
   const shown = parts.filter((p) => isYoutubeUrl(p.url));
   if (shown.length === 0) return null;
   return <ReplayPlayer key={shown.map((p) => p.url).join(" ")} parts={shown} />;

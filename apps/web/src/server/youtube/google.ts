@@ -15,7 +15,7 @@ import "server-only";
 // No retry and no logging here: the callers own backoff and they log codes.
 import { GOOGLE_AUTH_URL, GOOGLE_TOKEN_URL, googleConfigured } from "@/lib/oauth";
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
-import { YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type YoutubeErrorCode, type YouTubePort } from "./port";
+import { YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort } from "./port";
 
 const API = "https://www.googleapis.com/youtube/v3";
 /** OAuth 2.0 token revocation (…/oauth2/web-server, "Token revocation"). Google's example puts `token` in the query string; we
@@ -327,16 +327,23 @@ export class GoogleYouTube implements YouTubePort {
   /** liveBroadcasts.list(part=status,snippet, id): the life cycle from `status.lifeCycleStatus`, and the instants YouTube says it
    *  ACTUALLY started and ended from `snippet.actualStartTime` / `actualEndTime` (ISO 8601; the resource page says they are only
    *  there once the broadcast is live / complete). A time that is absent, or not a date, is `null`: it is informational, and a
-   *  malformed one must never keep the end step from reading the life cycle. */
+   *  malformed one must never keep the end step from reading the life cycle. `status.madeForKids` (YouTube's own made-for-kids status,
+   *  from the same `part=status`) is read the same way: a boolean, or `null` when YouTube did not say. */
   async broadcastLife(at: string, broadcastId: string): Promise<BroadcastLifeInfo> {
     const items = parseBody(await api(at, "GET", "liveBroadcasts", { query: { part: "status,snippet", id: broadcastId } })).items;
     const row = (Array.isArray(items) ? items : []).map(asRecord).find((i) => i?.id === broadcastId);
-    if (!row) return { life: "absent", actualStartAt: null, actualEndAt: null };
-    const life = asRecord(row.status)?.lifeCycleStatus;
+    if (!row) return { life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
+    const status = asRecord(row.status);
+    const life = status?.lifeCycleStatus;
     // A value Google never documented is refused, not guessed at: the caller would act on it (delete, complete).
     if (typeof life !== "string" || !Object.hasOwn(LIFE, life)) throw new YouTubeError("youtube_unavailable", "unknownLifeCycleStatus");
     const snippet = asRecord(row.snippet);
-    return { life: LIFE[life]!, actualStartAt: isoDate(snippet?.actualStartTime), actualEndAt: isoDate(snippet?.actualEndTime) };
+    // `status.madeForKids`: YouTube's own current designation. Only a real boolean is an answer; anything else is "did not say".
+    const kids = status?.madeForKids;
+    return {
+      life: LIFE[life]!, actualStartAt: isoDate(snippet?.actualStartTime), actualEndAt: isoDate(snippet?.actualEndTime),
+      madeForKids: typeof kids === "boolean" ? kids : null,
+    };
   }
 
   /** liveBroadcasts.transition(complete). `redundantTransition` (403) is YouTube saying it is already there: that resolves. */
@@ -353,33 +360,38 @@ export class GoogleYouTube implements YouTubePort {
     await deleteResource(at, "liveBroadcasts", broadcastId);
   }
 
-  /** videos.list(part=id): Google leaves a deleted (or unreadable) video out of `items`, so presence is the answer. Only ids
-   *  that were asked about are returned. At most 50 per call; more is refused WITHOUT calling.
+  /** videos.list(part=id,status): Google leaves a deleted (or unreadable) video out of `items`, so presence is the answer, and the
+   *  `status` part rides the SAME call (one call per batch, as before) to carry YouTube's own `status.madeForKids` for each present
+   *  video: a boolean is an answer, anything else is `null`. Only ids that were asked about are returned. At most 50 per call; more
+   *  is refused WITHOUT calling.
    *
    *  The page also lists a 404 `videoNotFound`, and does not say whether a batch can answer it when only SOME ids are missing.
-   *  A 404 on ONE id is that id missing (an empty set). A 404 on a BATCH is never read as "all missing" (the caller deletes the
+   *  A 404 on ONE id is that id missing (an empty map). A 404 on a BATCH is never read as "all missing" (the caller deletes the
    *  links of videos it is told are gone, so a wrong "gone" purges links to live videos): the batch is re-asked one id per call,
    *  and only an id whose own call is a 404 is absent. Any other failure, in the batch or in a single call, is thrown. */
-  async existingVideos(at: string, ids: readonly string[]): Promise<Set<string>> {
+  async existingVideos(at: string, ids: readonly string[]): Promise<Map<string, VideoFacts>> {
     if (ids.length > MAX_VIDEO_IDS_PER_CALL) throw new RangeError(`existingVideos takes at most ${MAX_VIDEO_IDS_PER_CALL} ids per call`);
-    if (ids.length === 0) return new Set();   // Google answers an empty `id` with a 400
+    if (ids.length === 0) return new Map();   // Google answers an empty `id` with a 400
     const asked = new Set(ids);
     let items: unknown;
     try {
-      items = parseBody(await api(at, "GET", "videos", { query: { part: "id", id: [...asked].join(",") } })).items;
+      items = parseBody(await api(at, "GET", "videos", { query: { part: "id,status", id: [...asked].join(",") } })).items;
     } catch (e) {
       // ONLY Google's `videoNotFound` is "that video is missing": another not-found reason (liveBroadcastNotFound, …) is not about
       // these ids and is thrown, not read as an answer.
       if (!(e instanceof YouTubeError && e.reason === "videoNotFound")) throw e;
-      if (asked.size === 1) return new Set();
-      const found = new Set<string>();
-      for (const id of asked) for (const present of await this.existingVideos(at, [id])) found.add(present);
+      if (asked.size === 1) return new Map();
+      const found = new Map<string, VideoFacts>();
+      for (const id of asked) for (const [present, facts] of await this.existingVideos(at, [id])) found.set(present, facts);
       return found;
     }
-    const found = new Set<string>();
+    const found = new Map<string, VideoFacts>();
     for (const item of Array.isArray(items) ? items : []) {
-      const id = nonEmpty(asRecord(item)?.id);
-      if (id && asked.has(id)) found.add(id);
+      const rec = asRecord(item);
+      const id = nonEmpty(rec?.id);
+      if (!id || !asked.has(id)) continue;
+      const kids = asRecord(rec?.status)?.madeForKids;
+      found.set(id, { madeForKids: typeof kids === "boolean" ? kids : null });
     }
     return found;
   }

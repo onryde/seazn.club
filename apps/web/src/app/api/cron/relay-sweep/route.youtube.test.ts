@@ -146,8 +146,8 @@ async function completeRow(w: World, c: Chan, ageDays: number): Promise<{ id: st
   const at = await w.fake.accessToken(c.token);
   const { broadcastId } = await w.fake.insertBroadcast(at, { title: "t17 part", description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: false });
   const [row] = await sql<{ id: string }[]>`
-    insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id, completed_at, refreshed_at)
-    values (${w.org.orgId}, ${c.connectionId}, ${w.fixtureId}, 't17 part', 'unlisted', 'complete', ${broadcastId}, now(),
+    insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id, completed_at, refreshed_at)
+    values (false, ${w.org.orgId}, ${c.connectionId}, ${w.fixtureId}, 't17 part', 'unlisted', 'complete', ${broadcastId}, now(),
             now() - (${ageDays}::float8 * interval '1 day'))
     returning id`;
   return { id: row!.id, ytId: broadcastId };

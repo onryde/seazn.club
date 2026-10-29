@@ -345,14 +345,14 @@ const refuseComplete = (f: FakeYouTube) => {
 };
 
 /** Complete rows built by SQL (no producer makes 120 of them): real broadcasts at the fake, owned by the connection's channel. */
-async function seedCompleteRows(w: World, c: Chan, n: number, ageDays: number): Promise<{ id: string; ytId: string }[]> {
+async function seedCompleteRows(w: World, c: Chan, n: number, ageDays: number, kids = false): Promise<{ id: string; ytId: string }[]> {
   const at = await w.fake.accessToken(c.token);
   const out: { id: string; ytId: string }[] = [];
   for (let i = 0; i < n; i++) {
-    const { broadcastId } = await w.fake.insertBroadcast(at, { title: `t17 part ${i}`, description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: false });
+    const { broadcastId } = await w.fake.insertBroadcast(at, { title: `t17 part ${i}`, description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: kids });
     const [row] = await sql<{ id: string }[]>`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id, completed_at, refreshed_at)
-      values (${w.orgId}, ${c.connectionId}, ${w.fixtures[0]!}, ${`t17 part ${i}`}, 'unlisted', 'complete', ${broadcastId}, now(),
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id, completed_at, refreshed_at)
+      values (${kids}, ${w.orgId}, ${c.connectionId}, ${w.fixtures[0]!}, ${`t17 part ${i}`}, 'unlisted', 'complete', ${broadcastId}, now(),
               now() - (${ageDays}::float8 * interval '1 day'))
       returning id`;
     out.push({ id: row!.id, ytId: broadcastId });
@@ -1236,8 +1236,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
         },
         "a pending grant": async (c) => { await grant(w.org, { connectionId: c.connectionId, channels: [c.channel] }); },
         "a broadcast row": async (c) => {
-          await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
-                    values (${w.orgId}, ${c.connectionId}, ${w.fixtures[0]!}, 't17 stranded', 'unlisted', 'failed')`;
+          await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state)
+                    values (false, ${w.orgId}, ${c.connectionId}, ${w.fixtures[0]!}, 't17 stranded', 'unlisted', 'failed')`;
         },
       };
       let checked = 0;
@@ -1670,6 +1670,102 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     });
   });
 
+  // ═══ the 25-day refresh also reads YouTube's own made-for-kids status (the same videos.list call, part=id,status) ═════════
+  // YouTube can designate a video made for kids AFTER its end step ran, so the stored flag is OR-ed with what the refresh reads:
+  // false -> true when YouTube says true, and never back (this pass writes `true` or nothing, never `false`). A row it flips was
+  // already public, so the division's pages are expired. Rows are seeded by SQL (no producer makes a 26-day-old part); the flag
+  // YouTube holds is the fake's own designation, so the expected values are the rulings', not read from the code under test.
+  describe("the refresh reads YouTube's own made-for-kids status", () => {
+    const stampsOf = async (ids: string[]): Promise<Map<string, boolean>> =>
+      new Map((await sql<{ id: string; made_for_kids: boolean }[]>`select id, made_for_kids from youtube_broadcasts where id = any(${ids}::uuid[])`).map((r) => [r.id, r.made_for_kids]));
+    const chanOf = (w: World): Chan => ({ connectionId: w.connectionId, targetId: w.targetId, token: w.token, channel: w.channel });
+
+    it("EMPTY CASE FIRST: nothing stale -> YouTube's answer is not read, nothing is flipped, no page is expired; then the same row, once stale, flips (the positive pair)", async () => {
+      const w = await world();
+      const [fresh] = await seedCompleteRows(w, chanOf(w), 1, 24);
+      w.fake.designateMadeForKids(fresh!.ytId, true);
+      revalidateHook.calls = [];
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1 });
+      expect((await stampsOf([fresh!.id])).get(fresh!.id), "a 24-day row is not asked about, so YouTube's answer is not read").toBe(false);
+      expect(revalidateHook.calls, "nothing flipped, nothing expired").toEqual([]);
+      await shiftBroadcasts([fresh!.id], "refreshed_at", 26);
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, refreshed: 1 });
+      expect((await stampsOf([fresh!.id])).get(fresh!.id), "the same row, once it is stale, is read and flips").toBe(true);
+    });
+
+    it("stamp false + YouTube says true -> true; refreshed_at is the pass's now; the match page of the row is expired; a second pass reads nothing (the sequence)", async () => {
+      const w = await world();
+      const [row] = await seedCompleteRows(w, chanOf(w), 1, 26);
+      w.fake.designateMadeForKids(row!.ytId, true);
+      expect((await stampsOf([row!.id])).get(row!.id), "premise: it was made for a not-for-kids connection").toBe(false);
+      revalidateHook.calls = [];
+      const now = new Date();
+      expect(await daily(w, { now }), "the counters are unchanged by a flip: it is a refresh").toEqual({ ...ZERO, checked: 1, refreshed: 1 });
+      expect((await stampsOf([row!.id])).get(row!.id)).toBe(true);
+      expect((await broadcastRow(row!.id)).refreshed_at.getTime(), "stamped in the same pass").toBe(now.getTime());
+      expect(revalidateHook.calls.map((c) => c.divisionId), "an already-public page changes, so it is expired").toContain(w.divisionId);
+      revalidateHook.calls = [];
+      expect(await daily(w, { now }), "nothing is stale any more").toEqual({ ...ZERO, checked: 1 });
+      expect(revalidateHook.calls, "and nothing is expired again").toEqual([]);
+    });
+
+    it("stamp true + YouTube says false -> STAYS true (this pass never writes false); stamp true + YouTube says true -> true and NOTHING changed, so no page is expired for either", async () => {
+      const w = await world();
+      const [denied, agreed] = await seedCompleteRows(w, chanOf(w), 2, 26, true);
+      w.fake.designateMadeForKids(denied!.ytId, false);
+      w.fake.designateMadeForKids(agreed!.ytId, true);
+      revalidateHook.calls = [];
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, refreshed: 2 });
+      const stamps = await stampsOf([denied!.id, agreed!.id]);
+      expect([stamps.get(denied!.id), stamps.get(agreed!.id)], "true stays true, whichever YouTube says").toEqual([true, true]);
+      expect(revalidateHook.calls, "no row changed, so no page does (the write is a change only false -> true)").toEqual([]);
+    });
+
+    it("YouTube says nothing (null) -> the stamp is unchanged in BOTH directions", async () => {
+      const w = await world();
+      const [plain] = await seedCompleteRows(w, chanOf(w), 1, 26, false);
+      const [kids] = await seedCompleteRows(w, chanOf(w), 1, 26, true);
+      const ask = w.fake.existingVideos.bind(w.fake);
+      w.fake.existingVideos = async (at, ids) => new Map([...(await ask(at, ids))].map(([id]) => [id, { madeForKids: null }]));
+      revalidateHook.calls = [];
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, refreshed: 2 });
+      const stamps = await stampsOf([plain!.id, kids!.id]);
+      expect([stamps.get(plain!.id), stamps.get(kids!.id)], "false stays false, true stays true").toEqual([false, true]);
+      expect(revalidateHook.calls).toEqual([]);
+    });
+
+    it("one batch: a video gone is deleted, a designated sibling is flipped, an undesignated sibling is only refreshed - each effect is its own row's", async () => {
+      const w = await world();
+      const [gone, flipped, plain] = await seedCompleteRows(w, chanOf(w), 3, 26);
+      w.fake.deleteVideo(gone!.ytId);
+      w.fake.designateMadeForKids(flipped!.ytId, true);
+      revalidateHook.calls = [];
+      const now = new Date();
+      expect(await daily(w, { now })).toEqual({ ...ZERO, checked: 1, refreshed: 2, removed: 1 });
+      expect(await sql`select 1 from youtube_broadcasts where id = ${gone!.id}`, "the gone one is deleted").toHaveLength(0);
+      const stamps = await stampsOf([flipped!.id, plain!.id]);
+      expect([stamps.get(flipped!.id), stamps.get(plain!.id)], "only the designated one flipped").toEqual([true, false]);
+      expect((await broadcastRow(plain!.id)).refreshed_at.getTime(), "the undesignated one was refreshed").toBe(now.getTime());
+      expect(revalidateHook.calls.map((c) => c.divisionId)).toContain(w.divisionId);
+    });
+
+    it("the call count is unchanged (50 ids a call): 120 stale rows, 7 designated across the batches -> still three calls, exactly those 7 flipped", async () => {
+      const w = await world();
+      const rows = await seedCompleteRows(w, chanOf(w), 120, 26);
+      const picked = [0, 1, 49, 50, 51, 99, 119].map((i) => rows[i]!);
+      for (const r of picked) w.fake.designateMadeForKids(r.ytId, true);
+      const sizes: number[] = [];
+      const ask = w.fake.existingVideos.bind(w.fake);
+      w.fake.existingVideos = async (at, ids) => { sizes.push(ids.length); return ask(at, ids); };
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, refreshed: 120 });
+      expect(sizes).toEqual([VIDEOS_PER_CALL, VIDEOS_PER_CALL, 20]);
+      const stamps = await stampsOf(rows.map((r) => r.id));
+      const flippedIds = rows.filter((r) => stamps.get(r.id) === true).map((r) => r.id).sort();
+      expect(flippedIds, "exactly the designated ones").toEqual(picked.map((r) => r.id).sort());
+      expect(picked.length, "anti-vacuity: seven rows were designated").toBe(7);
+    });
+  });
+
   // ═══ pooled stream keys: a retired key (B6 batch review I1b) ═════════════════════════════════════════════════════════
   describe("retired pooled keys", () => {
     it("EMPTY CASE FIRST (no key, then only a live key: nothing removed); a key RETIRED by a real Go live is deleted on the next pass and the finished rows that named it forget it - the replay stays; an open broadcast keeps a retired key until it finishes; the pool then regrows", async () => {
@@ -1899,8 +1995,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
         hooks: {
           beforeIdleKeys: async () => {
             const hold = await holdConnection(w.connectionId, (t) => t`
-              insert into youtube_broadcasts (org_id, connection_id, fixture_id, key_id, title, privacy, state)
-              values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, ${k.id}, 't17 pick', 'unlisted', 'created')`);
+              insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, key_id, title, privacy, state)
+              values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, ${k.id}, 't17 pick', 'unlisted', 'created')`);
             setTimeout(() => { released++; void hold.release(); }, 500);
           },
         },
@@ -1940,8 +2036,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     it("B6 round 2 C6: the failed-row retention never WAITS for a row another transaction holds (a disconnect's purge locks the connection's rows in id order, so waiting for one can deadlock with it): the held row is skipped and goes on the next pass, the free one goes now", async () => {
       const w = await world({ fixtures: 1, credits: 1 });
       const mk = async () => (await sql<{ id: string }[]>`
-        insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
-        values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (31::float8 * interval '1 day'))
+        insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
+        values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (31::float8 * interval '1 day'))
         returning id`)[0]!.id;
       const [held, free] = [await mk(), await mk()];
       let pass!: Promise<YoutubeDailyResult>;
@@ -1962,8 +2058,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     it("a failed row with NO completed_at (a Go live that prepare refused fails without one) ages from created_at: 29 days kept, 31 days gone", async () => {
       const w = await world({ fixtures: 1, credits: 1 });
       const mk = async (ageDays: number) => (await sql<{ id: string }[]>`
-        insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
-        values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (${ageDays}::float8 * interval '1 day'))
+        insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
+        values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (${ageDays}::float8 * interval '1 day'))
         returning id`)[0]!.id;
       const young = await mk(29);
       const old = await mk(31);

@@ -121,16 +121,29 @@ describe("broadcastLife reports the actual start and end instants", () => {
     return { now: () => new Date(t), set: (ms: number) => { t = START.getTime() + ms; } };
   };
 
+  it("reports status.madeForKids as the broadcast was created: true and false each read back, and a broadcast the fake does not hold says nothing (null, not false)", async () => {
+    let checked = 0;
+    for (const declared of [true, false]) {
+      const f = new FakeYouTube({ now: clock().now });
+      const at = await f.accessToken(`1//rt-kids-${declared}`);
+      const { broadcastId } = await f.insertBroadcast(at, { ...bcast(), madeForKids: declared });
+      expect((await f.broadcastLife(at, broadcastId)).madeForKids, `created with ${declared}`).toBe(declared);
+      expect((await f.broadcastLife(at, "no-such-broadcast")).madeForKids, "absent: YouTube said nothing").toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("nothing before it happens: created, ready and absent report no start and no end", async () => {
     const c = clock();
     const f = new FakeYouTube({ now: c.now });
     const at = await f.accessToken("1//rt-actual-0");
     const { streamId } = await f.insertStream(at, { title: "k" });
     const { broadcastId } = await f.insertBroadcast(at, bcast());
-    expect(await f.broadcastLife(at, broadcastId), "created").toEqual({ life: "created", actualStartAt: null, actualEndAt: null });
+    expect(await f.broadcastLife(at, broadcastId), "created").toEqual({ life: "created", actualStartAt: null, actualEndAt: null, madeForKids: false });
     await f.bind(at, broadcastId, streamId);
-    expect(await f.broadcastLife(at, broadcastId), "ready").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null });
-    expect(await f.broadcastLife(at, "no-such-broadcast"), "absent").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null });
+    expect(await f.broadcastLife(at, broadcastId), "ready").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null, madeForKids: false });
+    expect(await f.broadcastLife(at, "no-such-broadcast"), "absent").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null });
   });
 
   it("video arriving stamps the start (the clock then, not later reads); complete stamps the end; neither moves afterwards", async () => {
@@ -141,14 +154,14 @@ describe("broadcastLife reports the actual start and end instants", () => {
     c.set(5 * 60_000);   // 12:05 — video arrives
     f.videoOn(streamId);
     c.set(9 * 60_000);   // 12:09 — a read, not an event
-    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "live", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: null });
+    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "live", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: null, madeForKids: false });
     f.videoOff(streamId); c.set(10 * 60_000); f.videoOn(streamId);   // video returns: not a second start
     expect((await f.broadcastLife(at, broadcastId)).actualStartAt, "the first start stands").toEqual(new Date("2026-10-27T12:05:00Z"));
     c.set(50 * 60_000);   // 12:50 — the end step (inside the access token's hour)
     await f.complete(at, broadcastId);
     c.set(55 * 60_000);
     await f.complete(at, broadcastId);   // a second complete resolves (Google: redundantTransition) and moves nothing
-    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "complete", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z") });
+    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "complete", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z"), madeForKids: false });
     expect(f.inspectBroadcast(broadcastId), "the control view shows the same instants").toMatchObject({ actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z") });
   });
 
@@ -176,7 +189,7 @@ describe("broadcastLife reports the actual start and end instants", () => {
     const err = await rejection(f.complete(at, broadcastId));
     expect(err, "complete needs a live broadcast").toBeInstanceOf(YouTubeError);
     expect((err as YouTubeError).reason).toBe("invalidTransition");
-    expect(await f.broadcastLife(at, broadcastId), "a refused complete stamps nothing").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null });
+    expect(await f.broadcastLife(at, broadcastId), "a refused complete stamps nothing").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null, madeForKids: false });
   });
 
   it("the instants are copies: mutating a returned Date does not move the fake's record", async () => {
@@ -789,28 +802,48 @@ describe("the rest of the port's behaviour", () => {
     const { f, at } = await rig();
     const a = (await f.insertBroadcast(at, bcast())).broadcastId;
     const b = (await f.insertBroadcast(at, bcast())).broadcastId;
-    expect(await f.existingVideos(at, [a, b, "ghost"])).toEqual(new Set([a, b]));
-    expect(await f.existingVideos(at, [])).toEqual(new Set());
+    expect(new Set((await f.existingVideos(at, [a, b, "ghost"])).keys())).toEqual(new Set([a, b]));
+    expect((await f.existingVideos(at, [])).size).toBe(0);
     f.deleteVideo(a);
-    expect(await f.existingVideos(at, [a, b]), "a video deleted on YouTube is gone").toEqual(new Set([b]));
+    expect([...(await f.existingVideos(at, [a, b])).keys()], "a video deleted on YouTube is gone").toEqual([b]);
     expect((await f.broadcastLife(at, a)).life).toBe("absent");
     const fifty = Array.from({ length: 50 }, (_, i) => `id${i}`);
-    await expect(f.existingVideos(at, fifty)).resolves.toEqual(new Set());
+    expect((await f.existingVideos(at, fifty)).size).toBe(0);
     const before = f.calls.length;
     await expect(f.existingVideos(at, [...fifty, "id50"])).rejects.toThrow();
     expect(f.calls.length, "refused before it counts as a call").toBe(before);
     expect(() => f.deleteVideo("never-existed")).toThrow(YouTubeError);
   });
 
+  it("existingVideos answers each present id with YouTube's CURRENT made-for-kids (what it was created with until YouTube designates otherwise); broadcastLife reads the same; inspectBroadcast keeps what was SENT", async () => {
+    const { f, at } = await rig();
+    const kids = (await f.insertBroadcast(at, { ...bcast(), madeForKids: true })).broadcastId;
+    const plain = (await f.insertBroadcast(at, bcast())).broadcastId;
+    const facts = async () => [...(await f.existingVideos(at, [kids, plain, "ghost"]))].map(([id, v]) => [id === kids ? "kids" : "plain", v.madeForKids]);
+    expect(await facts(), "created with: what was sent; the ghost is absent").toEqual([["kids", true], ["plain", false]]);
+    // YouTube decides a video the club said was ordinary is made for kids: both reads follow, the record of what was sent does not.
+    f.designateMadeForKids(plain, true);
+    expect(await facts()).toEqual([["kids", true], ["plain", true]]);
+    expect((await f.broadcastLife(at, plain)).madeForKids, "the end step's read follows the same designation").toBe(true);
+    expect(f.inspectBroadcast(plain)!.madeForKids, "what Go live SENT is still false").toBe(false);
+    // ...and the other way (YouTube may say not-for-kids of a video the club declared), then the designation is withdrawn.
+    f.designateMadeForKids(kids, false);
+    expect(await facts()).toEqual([["kids", false], ["plain", true]]);
+    f.designateMadeForKids(kids, null);
+    f.designateMadeForKids(plain, null);
+    expect(await facts(), "withdrawn: back to what each was created with").toEqual([["kids", true], ["plain", false]]);
+    expect(() => f.designateMadeForKids("never-existed", true)).toThrow(YouTubeError);
+  });
+
   it("existingVideos([]) follows the live driver: an empty set with NO token check, NO call logged and NO injected failure taken", async () => {
     const f = new FakeYouTube();
     const before = f.calls.length;
-    await expect(f.existingVideos("never-issued-access-token", []), "no token check").resolves.toEqual(new Set());
+    expect((await f.existingVideos("never-issued-access-token", [])).size, "no token check").toBe(0);
     expect(f.calls.length, "not a call").toBe(before);
     // an injected failure waits for a call that is one
     const { f: g, at } = await rig();
     g.failNext("existingVideos", "youtube_unavailable", "backendError");
-    await expect(g.existingVideos(at, [])).resolves.toEqual(new Set());
+    expect((await g.existingVideos(at, [])).size).toBe(0);
     expect(((await rejection(g.existingVideos(at, ["aaa"]))) as YouTubeError).reason, "the injection was still waiting").toBe("backendError");
     // the positive pair: a non-empty list does check the token
     expect(((await rejection(f.existingVideos("never-issued-access-token", ["aaa"]))) as YouTubeError).code).toBe("youtube_reconnect_needed");
@@ -880,8 +913,8 @@ describe("channels belong to grants: a token cannot reach another channel's reso
 
   it("existingVideos lists only the caller's channel's videos", async () => {
     const { f, atA, atB, a, b } = await twoChannels();
-    expect(await f.existingVideos(atA, [a.broadcastId, b.broadcastId])).toEqual(new Set([a.broadcastId]));
-    expect(await f.existingVideos(atB, [a.broadcastId, b.broadcastId])).toEqual(new Set([b.broadcastId]));
+    expect([...(await f.existingVideos(atA, [a.broadcastId, b.broadcastId])).keys()]).toEqual([a.broadcastId]);
+    expect([...(await f.existingVideos(atB, [a.broadcastId, b.broadcastId])).keys()]).toEqual([b.broadcastId]);
   });
 
   it("injections are scoped by channel where they are per-resource: failNext, setLive and autoVideo for A leave B alone", async () => {
