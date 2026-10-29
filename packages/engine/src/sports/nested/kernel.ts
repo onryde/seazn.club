@@ -85,7 +85,7 @@ export interface NestedSetCfg {
    * §2's short-set tie-break is first to five "with a deciding point if the score reaches four all", a margin of one.
    * OPTIONAL WITH NO DEFAULT, as `NestedParams.interruptions` (cfg is serialised into the frozen golden state strings).
    * Absent means `tiebreak.winBy`, the margin every set tie-break played before W2e; read it through
-   * `setTiebreakWinBy`. The match tie-break always plays to `tiebreak.winBy`.
+   * `setTiebreakWinBy`. The match tie-break and a final-set tie-break always play to `tiebreak.winBy`.
    */
   tiebreakWinBy?: number;
 }
@@ -923,7 +923,7 @@ function reachableLiveTbScore(h: number, a: number, to: number, winBy: number): 
 }
 
 /** W2e RB2A-12 (TN-SS-2) — the margin a SET's tie-break game is won by: the set's own `tiebreakWinBy`, else the match's
- *  `tiebreak.winBy` (`NestedSetCfg.tiebreakWinBy`). The match tie-break never reads this. */
+ *  `tiebreak.winBy`. The match tie-break and a final-set tie-break never read this: both keep `tiebreak.winBy`. */
 function setTiebreakWinBy(cfg: NestedCfg): number {
   return cfg.set.tiebreakWinBy ?? cfg.tiebreak.winBy;
 }
