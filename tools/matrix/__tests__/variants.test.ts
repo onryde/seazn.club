@@ -543,15 +543,26 @@ describe("scorability (the generatability sweep)", () => {
   });
   it("the generator records scorable(case) on every case — the seam is wired, not left null", () => {
     let n = 0;
-    let reasons = 0;
     for (const v of ALL) for (const c of v.cases) {
-      const again = scorable({ ...c, scorable: null });
-      expect(c.scorable, c.id).toBe(again);
-      if (again !== null) reasons++;
+      expect(c.scorable, c.id).toBe(scorable({ ...c, scorable: null }));
       n++;
     }
     expect(n).toBeGreaterThan(0);
-    expect(reasons, "at least one case must carry a reason, or the wiring check cannot tell null from wired").toBeGreaterThan(0);
+    // Since the write door joined resolveSportCfg no shipped case is refused, so every recorded value above is null and cannot tell
+    // wired from left null (a mutant that records null survives). A case that DOES carry a reason proves the seam: the generator
+    // records what its scorer answers, for each case, whichever it is.
+    const seen: string[] = [];
+    const stub = (vc: { id: string }): string | null => { seen.push(vc.id); return `win-home: stubbed ${vc.id}`; };
+    const built = buildSportVariants("football", { score: stub as unknown as typeof scorable });
+    expect(built.cases.length).toBeGreaterThan(0);
+    expect(seen, "the scorer is asked once per case, in order").toEqual(built.cases.map((c) => c.id));
+    expect(built.cases.map((c) => c.scorable)).toEqual(built.cases.map((c) => `win-home: stubbed ${c.id}`));
+  });
+  it("no shipped case is unscorable once the write door is in resolveSportCfg: the cfg-refused class is empty by construction (counted over every case)", () => {
+    let n = 0;
+    for (const v of ALL) for (const c of v.cases) { expect(c.scorable, c.id).toBeNull(); n++; }
+    expect(n).toBe(ALL.reduce((m, v) => m + v.cases.length, 0));
+    expect(n).toBeGreaterThan(0);
   });
   it("every generated cricket `test`-preset case is scorable: the two-innings generator exists (ruling 44), so no case carries a generator gap", () => {
     let judged = 0;

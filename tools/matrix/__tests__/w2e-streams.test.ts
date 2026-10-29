@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mergeRulesOverride } from "../../../apps/web/src/server/engine-db/fixture-cfg.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { foldStream } from "../lib/fold.ts";
-import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
+import { resolveSchemaCfg, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { STREAM_GENERATORS, generateStream, matchesRequest, partialPlay } from "../lib/streams/index.ts";
 import { endingReasonOf, sanctionDeclOf, sanctionEndWitness, sanctionToken, type SanctionAsk, type SanctionFold } from "../lib/streams/sanction.ts";
 import { levelKindOf } from "../lib/reference-bracket.ts";
@@ -913,7 +913,7 @@ function okCfg(sport: string, variant: string, over: Record<string, unknown> = {
 }
 /** The write door's set-target floor FOUND from the engine's own refusal: the smallest `setTo = finalSetTo` it accepts (1 = none). */
 function floorOf(sport: string, variant: string): number {
-  for (let n = 1; n <= 40; n++) if (writeConfigIssues(sportModule(sport), resolveSportCfg(sport, variant, { setTo: n, finalSetTo: n })).length === 0) return n;
+  for (let n = 1; n <= 40; n++) if (writeConfigIssues(sportModule(sport), resolveSchemaCfg(sport, variant, { setTo: n, finalSetTo: n })).length === 0) return n;
   throw new Error(`${sport}/${variant}: no set target up to 40 passes the write door`);
 }
 const productOfFold = (sport: string, cfg: unknown, events: readonly StreamEvent[]): ProductFold => {
@@ -1119,7 +1119,7 @@ describe("G6 G7 set sports: a win in the deciding set, a win by the score cap (T
     const ttFloor = floorOf("tabletennis", "bo5");
     expect(vbFloor).toBeGreaterThan(1);
     expect(ttFloor).toBeGreaterThan(1);
-    expect(writeConfigIssues(sportModule("volleyball"), resolveSportCfg("volleyball", "indoor", { setTo: vbFloor - 1 })), "one below the floor is refused").not.toEqual([]);
+    expect(writeConfigIssues(sportModule("volleyball"), resolveSchemaCfg("volleyball", "indoor", { setTo: vbFloor - 1 })), "one below the floor is refused").not.toEqual([]);
     let built = 0;
     // At the floor: the shortest legal sets still build both paths for both winners, and the strict fold takes them.
     for (const [sport, variant, floor] of [["volleyball", "indoor", vbFloor], ["volleyball", "beach", vbFloor], ["tabletennis", "bo5", ttFloor]] as const) {
@@ -1401,7 +1401,7 @@ describe("G8 tennis: a win down a tie-break set, a win down the short-set tie-br
     expect(viaMtb.state.sets.every((s) => s.tb === undefined), "no set ended in a games tie-break").toBe(true);
     expect(() => generateStream(tnWin(advantageMtb, "home", "shortSetTb"))).toThrow(OutcomeUnreachable);
     // TN-CF-1 (RB2A-13): a best of one with a match tie-break is refused when a config is written, so no stream is built from it.
-    const bo1Mtb = resolveSportCfg(TENNIS, "doubles-noad-mtb10", { bestOf: 1 });
+    const bo1Mtb = resolveSchemaCfg(TENNIS, "doubles-noad-mtb10", { bestOf: 1 }); // the schema alone: the write door refuses this one (TN-CF-1), a STORED one still loads
     expect(writeConfigIssues(sportModule(TENNIS), bo1Mtb), "the engine's write door refuses it").toEqual([BO1_MATCH_TIEBREAK]);
     for (const path of TN_PATHS) {
       expect(() => generateStream(tnWin(bo1Mtb, "home", path)), path).toThrow(OutcomeUnreachable);

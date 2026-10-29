@@ -11,7 +11,7 @@ import type { StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
 import { describe, expect, it } from "vitest";
-import { CfgInvalid, drawsAllowed, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
+import { CfgInvalid, drawsAllowed, resolveSchemaCfg, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { foldStream } from "../lib/fold.ts";
 import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
@@ -167,7 +167,9 @@ describe("stream sweep", () => {
 const WINS: readonly RequestedOutcome[] = ALL_OUTCOMES.filter((o) => o.kind === "win");
 
 function offCatalogue(sportKey: string, variant: string, overrides: Record<string, unknown>, stageKind: StageKind, outcome: RequestedOutcome): StreamRequest {
-  const cfg = resolveSportCfg(sportKey, variant, overrides) as Record<string, unknown>;
+  // The schema alone, not the write door: an off-catalogue cfg is a STORED one (a best of 1 with a match tie-break, TN-CF-1, is
+  // refused at create but still loads and folds, E15), and the generator must build for it.
+  const cfg = resolveSchemaCfg(sportKey, variant, overrides) as Record<string, unknown>;
   const base = resolveSportCfg(sportKey, variant) as Record<string, unknown>;
   // configSchema strips unknown keys: an ignored override would test the default twice.
   for (const k of Object.keys(overrides)) {
