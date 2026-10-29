@@ -59,10 +59,8 @@ export function broadcastTitle(a: {
 }
 
 /** Two paragraphs, every part without `<` or `>`: the line and the public match URL, a blank line, then "Powered by Seazn Club"
- *  and the site's own link (owner request 2026-10-29). `poweredBy: null` leaves the second paragraph out, and `siteUrl` with it: an
- *  org that holds `dashboard.branding` has the Seazn attribution removed everywhere else, and so here (PO ruling 2026-10-29). */
-export function broadcastDescription(a: { line: string; matchUrl: string; poweredBy: string | null; siteUrl: string }): string {
+ *  and the site's own link (owner request 2026-10-29). Every org gets both, `dashboard.branding` orgs included (owner, 2026-10-29). */
+export function broadcastDescription(a: { line: string; matchUrl: string; poweredBy: string; siteUrl: string }): string {
   const url = (u: string): string => u.replace(/[<>]/g, "");
-  const first = `${clean(a.line)} ${url(a.matchUrl)}`;
-  return a.poweredBy === null ? first : `${first}\n\n${clean(a.poweredBy)} · ${url(a.siteUrl)}`;
+  return `${clean(a.line)} ${url(a.matchUrl)}\n\n${clean(a.poweredBy)} · ${url(a.siteUrl)}`;
 }

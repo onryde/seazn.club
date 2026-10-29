@@ -306,48 +306,36 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     expect(poweredWitnessed).toBe(3);   // es, fr, nl
   });
 
-  it("S2 (PO 2026-10-29): the Powered-by paragraph follows the public footer's rule — an org with dashboard.branding gets the one-line description, an unbranded one still gets both; the same org flips with its plan (checked === 4)", async () => {
+  it("S2 (owner 2026-10-29): the Powered-by paragraph is shown for EVERY org — a dashboard.branding org (which removed the public footer's badge) gets it too, before and after a plan change; an unbranded org beside it still gets it (checked === 4)", async () => {
     const a = await world(3);   // the org whose plan changes
     const b = await world(1);   // an unbranded org beside it, in the same run
     const [f1, f2, f3] = a.fixtures as [string, string, string];
-    // The predicate the public tree reads (`loadOrg`'s `branded`), through SQL — and the resolver beside it.
+    // The predicate the public tree reads (`loadOrg`'s `branded`), through SQL: it is only the PREMISE here — the paragraph ignores it.
     const branded = async (orgId: string) =>
       (await sql<{ branded: boolean }[]>`select org_has_feature(${orgId}, 'dashboard.branding') as branded`)[0]!.branded;
     const origin = siteOrigin();
     const line = en["streaming.youtube.broadcast.descriptionLine"];
     const powered = `\n\n${en["streaming.youtube.broadcast.poweredBy"]} · ${origin}/`;
     let checked = 0;
-    const descriptionOf = async (w: World, f: string, wantBranded: boolean, why: string): Promise<string> => {
+    const expectBoth = async (w: World, f: string, wantBranded: boolean, why: string) => {
       expect(await branded(w.orgId), `${why}: the premise (dashboard.branding)`).toBe(wantBranded);
       const p = await must(prep(w, f));
-      return w.fake.inspectBroadcast((await row(p.broadcastId)).yt_broadcast_id!)!.description;
-    };
-    const expectBoth = (d: string, why: string) => {
+      const d = w.fake.inspectBroadcast((await row(p.broadcastId)).yt_broadcast_id!)!.description;
       expect(d.startsWith(`${line} ${origin}/shared/`), why).toBe(true);
       expect(d.endsWith(powered), why).toBe(true);
       expect(d.split("\n\n"), why).toHaveLength(2);
       checked++;
     };
-    const expectOneLine = (d: string, f: string, why: string) => {
-      // exactly the old shape: `${line} ${matchUrl}` — nothing after the match URL, no second paragraph, no site link.
-      expect(d.startsWith(`${line} ${origin}/shared/`), why).toBe(true);
-      expect(d.endsWith(`/fixtures/${f}`), why).toBe(true);
-      expect(d, why).not.toContain("\n");
-      expect(d, why).not.toContain(en["streaming.youtube.broadcast.poweredBy"]);
-      checked++;
-    };
 
-    expectBoth(await descriptionOf(a, f1, false, "community org"), "unbranded org");
-    // Enterprise buys the attribution's removal (V396). Through the real plan + the cache the resolver reads.
+    await expectBoth(a, f1, false, "community org");
+    // Enterprise buys the public attribution's removal (V396). Through the real plan + the cache the resolver reads.
     await setOrgPlan(a.orgId, "enterprise");
     await invalidateOrgEntitlements(a.orgId);
-    expectOneLine(await descriptionOf(a, f2, true, "enterprise org"), f2, "branded org");
-    // The other org, same run, never had it removed.
-    expectBoth(await descriptionOf(b, b.fixtures[0]!, false, "other community org"), "unbranded org beside the branded one");
-    // Downgrade: the next broadcast carries the paragraph again — the rule is read per broadcast, not remembered on the org.
+    await expectBoth(a, f2, true, "enterprise org (branded)");
+    await expectBoth(b, b.fixtures[0]!, false, "other community org, same run");
     await setOrgPlan(a.orgId, "community");
     await invalidateOrgEntitlements(a.orgId);
-    expectBoth(await descriptionOf(a, f3, false, "community again"), "unbranded again");
+    await expectBoth(a, f3, false, "community again");
     expect(checked).toBe(4);
   });
 

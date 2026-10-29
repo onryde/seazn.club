@@ -136,14 +136,6 @@ describe("broadcastDescription (spec §6.5)", () => {
     expect(d).toBe(`Score live & results: ${url}?x=y\n\nPowered by Seazn Club · https://seazn.club/`);
   });
 
-  it("poweredBy null (a branded org: dashboard.branding) → exactly the one-line shape, no second paragraph, siteUrl unused; '<' '>' still stripped", () => {
-    expect(broadcastDescription({ ...base, poweredBy: null })).toBe(`Live score and results: ${url}`);
-    const d = broadcastDescription({ line: "Score <live>:", matchUrl: `${url}?x=<y>`, poweredBy: null, siteUrl: "https://elsewhere.example/" });
-    expect(d).toBe(`Score live: ${url}?x=y`);
-    expect(d).not.toContain("\n");
-    expect(d).not.toContain("elsewhere.example");   // not even the site link
-  });
-
   it("the powered-by paragraph is present and last (exactly two paragraphs)", () => {
     const d = broadcastDescription(base);
     const paragraphs = d.split("\n\n");

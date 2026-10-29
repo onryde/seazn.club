@@ -131,8 +131,8 @@ For **each** of the two videos in Studio:
   (`server/youtube/title.ts:13-14`, `prepare.ts:279-285`).
 - **Description** is two paragraphs: "Live score and results:" followed by the public match page URL, then a blank line and
   "Powered by Seazn Club · <this environment's site origin>/" (stg links stg, prod links prod; the words are in the
-  organisation's default locale; owner request 2026-10-29). An organisation with `dashboard.branding` (enterprise; the
-  public footer's own gate) gets the first paragraph only.
+  organisation's default locale; owner request 2026-10-29). Shown for every organisation, including ones with
+  `dashboard.branding` (owner, 2026-10-29).
 - **Visibility.** This is the spec §10 unknown: whether YouTube forces an unverified project's videos to Private even
   when the API asks for Unlisted. Seazn asked for Unlisted; **record what Studio's Visibility column says**, and open
   each video's watch link in a window that is NOT signed in to Google (an Unlisted video plays by link; Private says the
@@ -376,7 +376,7 @@ select s.id, s.youtube_broadcast_id
 | 2 | Join (R-VRVN) | Studio shows **one** video for Run A; S2/S3: one broadcast, `sessions = 2`, one `youtube_broadcast_id` |
 | 3 | End timing | S2 `completed_after_stop` and `youtube_end_after_stop` both in [5, 10) minutes on stg, for both broadcasts |
 | 4 | Gap | Run B is a **different** broadcast id; Studio shows **two** videos |
-| 5 | Titles | Both videos (Studio and S2) titled `<Home> vs <Away> · <Division> · <Competition>`, description has the match URL and, below it, the "Powered by Seazn Club" line linking the site (not for an org with `dashboard.branding`) |
+| 5 | Titles | Both videos (Studio and S2) titled `<Home> vs <Away> · <Division> · <Competition>`, description has the match URL and, below it, the "Powered by Seazn Club" line linking the site (shown for every org, including ones with `dashboard.branding`) |
 | 6 | Replay | S4: Part 1 and Part 2, `stream_url` = Part 1; the match page shows both tabs and each opens its own video |
 | 7 | Visibility | **Recorded, not graded** (spec §10): Studio's value and the signed-out behaviour for each video |
 | 8 | Disconnect | S5 as above; Seazn's keys gone from Studio; videos remain; match page shows no player and no link; Google page recorded |
