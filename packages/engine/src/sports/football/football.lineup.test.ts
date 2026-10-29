@@ -562,6 +562,104 @@ describe("M12b a lineup event is judged against football's own pitch: a football
     expect(state.squads.home.onPitch).toHaveLength(starters.length);
   });
 
+  // PR B final review I-1: every case above uses side "H", so nothing killed the AWAY half of `squadsForLineup` (swapping in
+  // `away: squads.away` - exactly the behaviour before the fix, for half of all fixtures - passed all 693 related tests). The
+  // cases that go through the kernel's judgement (the retirement, the not-on-field refusal, Law 3.3) are run for BOTH sides
+  // here, each side's people read from that side's own team sheet, and a counter proves both sides were judged.
+  describe("M12b is judged on football's pitch for BOTH sides, not only the home side (review I-1)", () => {
+    const SIDES = [
+      { by: "H", key: "home", other: "away" },
+      { by: "A", key: "away", other: "home" },
+    ] as const;
+    const slotsOf = (key: "home" | "away") => lineups[key].slots;
+    /** The XI of `key`, from its own team sheet. */
+    const xi = (key: "home" | "away"): string[] => slotsOf(key).filter((s) => s.slot === "starting").map((s) => s.personId);
+    /** An outfield starter (not the keeper) to take off, and an outfield bench man to bring on - both read from the sheet. */
+    const starterOff = (key: "home" | "away"): string =>
+      slotsOf(key).find((s) => s.slot === "starting" && s.positionKey !== "GK")!.personId;
+    const benchOn = (key: "home" | "away"): string =>
+      slotsOf(key).find((s) => s.slot === "bench" && s.positionKey === undefined)!.personId;
+    const subBy = (by: string, off: string, on: string): [string, unknown] => ["football.sub", { by, off, on }];
+    const kernelSubBy = (side: string, off: string, on: string): [string, unknown] => [
+      "core.lineup.substitution",
+      { side, off, on: { personId: on, slot: "bench" as const, orderNo: 20 } },
+    ];
+    const retireBy = (side: string, personId: string): [string, unknown] => [
+      "core.lineup.retirement",
+      { side, personId, reason: "injured" },
+    ];
+
+    it("anti-vacuity: the two sides are two different team sheets, each with an XI, an outfield starter and an outfield bench man", () => {
+      expect(SIDES.map((s) => s.by)).toEqual(["H", "A"]);
+      for (const { by, key } of SIDES) {
+        expect(xi(key), `${by}: an XI`).toHaveLength(11);
+        expect(starterOff(key).startsWith(`${by}-`), `${by}: his starter is his own`).toBe(true);
+        expect(benchOn(key).startsWith(`${by}-`), `${by}: his bench man is his own`).toBe(true);
+      }
+      expect(starterOff("home")).not.toBe(starterOff("away"));
+    });
+
+    it("the substitute who came on by football.sub retires injured, on either side: he leaves that side's pitch and it plays ten", () => {
+      let judged = 0;
+      for (const { by, key, other } of SIDES) {
+        const off = starterOff(key);
+        const on = benchOn(key);
+        const run = foldMatchWithStoppage(
+          football,
+          cfgOf({}),
+          lineups,
+          ledger(["core.start"], subBy(by, off, on), retireBy(by, on)),
+          STRICT,
+        );
+        const pitch = run.state.squads[key].onPitch;
+        expect(pitch, `${by}: the substitute left the pitch`).not.toContain(on);
+        expect(pitch, `${by}: the starter he replaced stays off`).not.toContain(off);
+        expect([...pitch].sort(), `${by}: ten of the eleven`).toEqual(xi(key).filter((p) => p !== off).sort());
+        // The kernel's squads and football's pitch say the same thing, on this side.
+        expect(run.squads[key].members.filter((m) => m.onField).map((m) => m.personId).sort(), `${by}: kernel agrees`).toEqual([...pitch].sort());
+        // The other side is untouched.
+        expect(run.state.squads[other].onPitch, `${by}: the other side is untouched`).toEqual(xi(other));
+        judged++;
+      }
+      expect(judged).toBe(SIDES.length);
+    });
+
+    it("the starter football.sub took off is not on the field, on either side: retiring him is refused, and replay leaves the pitch as it was", () => {
+      let judged = 0;
+      for (const { by, key } of SIDES) {
+        const off = starterOff(key);
+        const on = benchOn(key);
+        const events = ledger(["core.start"], subBy(by, off, on), retireBy(by, off));
+        const error = refusalOf(() => foldMatch(football, cfgOf({}), lineups, events, STRICT));
+        expect(EngineError.is(error, "LINEUP_INVALID"), `${by}: refused`).toBe(true);
+        expect((error as EngineError).data, `${by}: as not on the field`).toMatchObject({ reason: "not-on-field" });
+        const replayed = foldMatch(football, cfgOf({}), lineups, events);
+        expect(replayed.squads[key].onPitch, `${by}: replay keeps the substitute`).toContain(on);
+        expect(replayed.squads[key].onPitch, `${by}: replay keeps the starter off`).not.toContain(off);
+        judged++;
+      }
+      expect(judged).toBe(SIDES.length);
+    });
+
+    it("Law 3.3 through the kernel, on either side: the starter football.sub took off may not come back by core.lineup.substitution", () => {
+      let judged = 0;
+      for (const { by, key } of SIDES) {
+        const off = starterOff(key);
+        const on = benchOn(key);
+        const events = ledger(["core.start"], subBy(by, off, on), kernelSubBy(by, on, off));
+        const error = refusalOf(() => foldMatch(football, cfgOf({}), lineups, events, STRICT));
+        expect(EngineError.is(error, "LINEUP_INVALID"), `${by}: refused`).toBe(true);
+        expect((error as EngineError).data, `${by}: as a forbidden re-entry`).toMatchObject({ reason: "reentry-forbidden" });
+        // Rolling substitutes permit the return: the variant, not the sport or the side, decides.
+        const rolling = foldMatch(football, cfgOf({ rollingSubs: true }), lineups, events, STRICT);
+        expect(rolling.squads[key].onPitch, `${by}: rolling lets him back`).toContain(off);
+        expect(rolling.squads[key].onPitch, `${by}: ...in place of the substitute`).not.toContain(on);
+        judged++;
+      }
+      expect(judged).toBe(SIDES.length);
+    });
+  });
+
   // Fix round 2 (PO decision: replay must never make an existing fixture unreadable). A ledger recorded BEFORE the pitch
   // rule: the substitution was judged against the kernel's squads, which never heard of the red card, and accepted; the
   // substitute then scored. The pitch rule refuses that substitution, but only a strict WRITE may refuse.
