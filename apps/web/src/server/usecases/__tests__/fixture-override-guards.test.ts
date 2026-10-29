@@ -467,4 +467,20 @@ describe.skipIf(!HAS_DB)("W2e TN-CF-1: a division or stage save never leaves an 
     await writeFixtureRulesOverride(b.auth, [id], null);
     await expect(patchDivision(b.auth, b.divisionId, { config: { ...division, bestOf: 1 } })).resolves.toBeDefined();
   });
+
+  // Task 13 carry M-d: the positive pair of the re-ask guard WITH the match's own format standing. A best-of-3 format
+  // save (here no-ad scoring, so the guard re-asks the match under a changed format) leaves the match tie-break legal,
+  // so both saves go through and the match keeps its own format.
+  it("positive pair: with the match tie-break standing, a best-of-3 division save and a best-of-3 stage save go through; the match keeps its own format", async () => {
+    const { b, id, division } = await seed(true);
+    const ownFormat = async () => (await sql<{ ov: unknown }[]>`select rules_override as ov from fixtures where id = ${id}`)[0]!.ov;
+    expect(await ownFormat(), "rig: the match's own format stands").toEqual({ finalSet: MTB });
+    expect(division.bestOf, "rig: best of 3").toBe(3);
+    const game = { ...(division.game as Record<string, unknown>), noAd: true };
+    expect(writeConfigIssues(tennis, { ...division, game, finalSet: MTB }), "the match under the new format").toEqual([]);
+    const saved = await patchDivision(b.auth, b.divisionId, { config: { ...division, game } });
+    expect(saved.config).toMatchObject({ bestOf: 3, game: { noAd: true } });
+    await expect(putStageRules(b.auth, b.stageId, { rules: { bestOf: 3 } })).resolves.toMatchObject({ rules: { bestOf: 3 } });
+    expect(await ownFormat(), "the match keeps its own format").toEqual({ finalSet: MTB });
+  });
 });
