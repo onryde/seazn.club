@@ -62,6 +62,10 @@ async function open(page: Page, url: string): Promise<void> {
 }
 async function shot(page: Page, name: string): Promise<void> {
   await declineCookies(page);
+  // A full-page capture of a page that is scrolled draws the STICKY nav at the scroll offset, so the first picture of a 320px page whose
+  // button Playwright had scrolled to showed a blank band above the nav (60-127px) and the back link above it. The page was never
+  // broken (`expectNavPinned` proves it each time); the capture was. Capture from the top, where the nav and the band coincide.
+  await page.evaluate(() => window.scrollTo(0, 0));
   const path = resolve(SHOTS, `${name}.png`);
   await page.screenshot({ path, fullPage: true });
   await test.info().attach(name, { path, contentType: "image/png" });
@@ -825,6 +829,20 @@ const connectionState = (connectionId: string) =>
            (select count(*)::int from org_stream_targets t where t.youtube_connection_id = c.id and t.archived_at is not null) as archived
       from org_youtube_connections c where c.id = ${connectionId}`).then((rows) => rows[0]!);
 
+/** The nav is pinned to the top of the VIEWPORT whatever the page's scroll (it is `sticky top-0`), and nothing but a modal sits over it.
+ *  At 320 these pages scroll (Playwright scrolls the Disconnect button into view), which is what once looked like a blank band above
+ *  the nav in a full-page capture: this is the evidence that the app does not have one. */
+async function expectNavPinned(page: Page, where: string): Promise<void> {
+  const s = await page.evaluate(() => {
+    const h = document.querySelector("header");
+    const at = document.elementFromPoint(160, 10);
+    return { headerTop: h ? h.getBoundingClientRect().top : null, overHeader: !!at?.closest("header"), modal: !!document.querySelector('[role="alertdialog"]') };
+  });
+  expect(s.headerTop, `${where}: the nav is at the top of the viewport`).not.toBeNull();
+  expect(Math.abs(s.headerTop!), `${where}: the nav is at the top of the viewport (was ${s.headerTop})`).toBeLessThanOrEqual(0.5);
+  if (!s.modal) expect(s.overHeader, `${where}: the nav, not blank page, is what is at the top of the screen`).toBe(true);
+}
+
 /** Sideways room for a dialog: its box sits inside the viewport on both sides. */
 async function expectInsideViewport(loc: Locator, page: Page, where: string): Promise<void> {
   const box = await loc.boundingBox();
@@ -859,6 +877,7 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
     await expect(disconnect, `the row's action at ${w}`).toHaveText(en("streaming.youtube.action.disconnect"));
     await expectTappable(disconnect, `Disconnect at ${w}`);
     await expectNoPageScroll(page, `the row with Disconnect at ${w}`);
+    await expectNavPinned(page, `the row at ${w}`);
     await shot(page, `disconnect-row-${w}`);
 
     // (1) The confirm: names the channel, says what goes and what stays; both buttons reachable; Cancel changes nothing.
@@ -873,6 +892,7 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
     await expectTappable(cancelBtn, `the cancel button at ${w}`);
     await expectInsideViewport(dialog, page, `the dialog at ${w}`);
     await expectNoPageScroll(page, `the dialog open at ${w}`);
+    await expectNavPinned(page, `the confirm at ${w}`);
     await shot(page, `disconnect-confirm-${w}`);
     await cancelBtn.click();
     await expect(dialog, "Cancel closes it").toHaveCount(0);
@@ -885,6 +905,7 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
     await expect(row.getByTestId("youtube-error")).toHaveText(en("streaming.youtube.error.inUse"));
     expect(await connectionState(connectionId), `refused at ${w}: still connected, token kept, destination not archived`).toEqual({ status: "connected", tokenGone: false, archived: 0 });
     await expectNoPageScroll(page, `the refusal at ${w}`);
+    await expectNavPinned(page, `the refusal at ${w}`);
     await shot(page, `disconnect-in-use-${w}`);
     refused++;
 
@@ -901,6 +922,7 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
     expect(await connectionState(connectionId), `disconnected at ${w}: revoked, token gone, destination archived`).toEqual({ status: "revoked", tokenGone: true, archived: 1 });
     await expectTappable(page.getByTestId("youtube-disconnected-dismiss"), `Dismiss at ${w}`);
     await expectNoPageScroll(page, `the disconnected page at ${w}`);
+    await expectNavPinned(page, `the disconnected page at ${w}`);
     await shot(page, `disconnect-done-${w}`);
     await page.getByTestId("youtube-disconnected-dismiss").click();
     await expect(notice, "Dismiss clears the news").toHaveCount(0);
