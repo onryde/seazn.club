@@ -957,11 +957,24 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
         expect(btn![0], "a danger button").toMatch(/\bbtn-danger\b/);
         expect(btn![0], "44px floor").toMatch(/\bmin-h-11\b/);
         expect(btn![0], "full width on a phone").toMatch(/\bmax-md:w-full\b/);
+        expect(btn![0], "never disabled by the channel's health").not.toMatch(/\bdisabled\b/);
         expect(rowHtml(channel({ status, liveState, termsOutdated }), false), `viewer ${status}/${liveState}/${termsOutdated}`).not.toContain('data-testid="youtube-disconnect"');
         seen++;
       }
     }
     expect(seen).toBe(STATES.length * 2);
+  });
+
+  it("and it WORKS on every one of those states: a dead grant, a blocked channel, a not-enabled one - one DELETE of THAT connection each (anti-vacuity: 6 states)", async () => {
+    let sent = 0;
+    for (const [status, liveState] of STATES) {
+      apiCalls.length = 0;
+      const row = mount({ status, liveState, termsOutdated: status === "reconnect_needed" });
+      await click(disconnectBtn(row));
+      expect(apiCalls, `${status}/${liveState}`).toEqual([{ url: DELETE_URL, method: "DELETE", json: undefined }]);
+      sent++;
+    }
+    expect(sent).toBe(STATES.length);
   });
 
   it("the confirm dialog names the channel and says what goes (revoke, stream keys, replay links) and what stays (the videos); it is the danger dialog with touch buttons, never window.confirm", async () => {
@@ -1195,6 +1208,10 @@ describe("the disconnect-only Streaming page (T18) - an org that can no longer g
     expect(attr(ofType(panel.tree(), YoutubeDisconnectedNotice)!, "name"), "the latest news").toBe("Riverside Juniors");
     expect(byTestId(panel.tree(), "stream-disconnect-only-note"), "the note stays").toBeDefined();
     expect(nav.refresh).not.toHaveBeenCalled();
+    // a list that holds only a pasted destination (the server never sends one) is an EMPTY list, not a list of one
+    const pastedOnly = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: [pasted()] });
+    expect(rowsOf(pastedOnly), "no row for a pasted destination").toHaveLength(0);
+    expect(byTestId(pastedOnly.tree(), "stream-disconnect-only-empty"), "so the page says there is nothing to disconnect").toBeDefined();
     // and an empty list handed in from the server says the same, with no news
     const empty = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: [] });
     expect(textAt(empty.tree(), "stream-disconnect-only-empty")).toBe(m("streaming.youtube.disconnectOnly.none"));
