@@ -26,13 +26,13 @@
       "reason": "With no branding the mutant writes `branding: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's `model.branding` truthiness checks) reads the value, undefined either way (JSON drops the key)."
     },
     {
-      "mutant": "src/exports/build.ts:348:11 ConditionalExpression → true",
+      "mutant": "src/exports/build.ts:376:11 ConditionalExpression → true",
       "original": "layout.thirdPlaceId !== undefined",
       "line": "...(layout.thirdPlaceId !== undefined ? { thirdPlaceId: layout.thirdPlaceId } : {}),",
       "reason": "With no bracket.thirdPlaceId the mutant writes `bracket.thirdPlaceId: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's drawBracket) reads the value, undefined either way (JSON drops the key)."
     },
     {
-      "mutant": "src/exports/build.ts:388:11 ConditionalExpression → true",
+      "mutant": "src/exports/build.ts:416:11 ConditionalExpression → true",
       "original": "layout.resetId !== undefined",
       "line": "...(layout.resetId !== undefined ? { resetId: layout.resetId } : {}),",
       "reason": "With no bracketDe.resetId the mutant writes `bracketDe.resetId: undefined` instead of leaving the key out; DocModel declares it optional, and every reader (doc-render's drawBracket) reads the value, undefined either way (JSON drops the key)."
@@ -44,13 +44,13 @@
       "reason": "buildTimetable's `mode` only picks keyOf's branch: \"\" equals neither \"per_pitch\" nor \"per_division\", so it takes the same last branch (one unnamed group) as \"auto\"; mode is read nowhere else."
     },
     {
-      "mutant": "src/exports/build.ts:170:39 StringLiteral → \"\"",
+      "mutant": "src/exports/build.ts:198:39 StringLiteral → \"\"",
       "original": "\"auto\"",
       "line": "const perTeam = (opts.pageBreaks ?? \"auto\") === \"per_team\";",
       "reason": "buildRoster's default only feeds `=== \"per_team\"`, and \"\" is as much not \"per_team\" as \"auto\" is; the value is read nowhere else."
     },
     {
-      "mutant": "src/exports/build.ts:230:43 StringLiteral → \"\"",
+      "mutant": "src/exports/build.ts:258:43 StringLiteral → \"\"",
       "original": "\"auto\"",
       "line": "const perOfficial = (opts.pageBreaks ?? \"auto\") === \"per_team\";",
       "reason": "buildOfficialsRota's default only feeds `=== \"per_team\"`, and \"\" is as much not \"per_team\" as \"auto\" is; the value is read nowhere else."
@@ -62,7 +62,7 @@
       "reason": "Page groups are sorted with localeCompare, so a \"\" group (auto, or fixtures with no division) always sorts first and its first section is pushed while sections.length is 0: the break's `group !== \"\"` conjunct never decides it, whatever it compares against."
     },
     {
-      "mutant": "src/exports/build.ts:325:47 EqualityOperator → n.side !== \"L\"",
+      "mutant": "src/exports/build.ts:353:47 EqualityOperator → n.side !== \"L\"",
       "original": "n.side === \"L\"",
       "line": "layout.nodes.filter((n) => n.col === 0 && n.side === \"L\").length,",
       "reason": "twoSidedBracket puts the first half of every pre-final round on L and the second half on R, so col 0 holds as many R nodes as L; a centre node sits at col 0 only in a one-round (2-entrant) field, where L counts 0, the mutant 1, and Math.max(1, ·) makes both 1."
