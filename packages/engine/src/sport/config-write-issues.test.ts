@@ -171,6 +171,14 @@ describe("tennis best of 1 with a match tie-break (TN-CF-1, RB2A-13)", () => {
     expect(writeConfigIssues(tennis, {})).toEqual([]);
     expect(writeConfigIssues(tennis, { bestOf: 1, finalSet: { matchTiebreakTo: 10 } })).toEqual([BO1_MATCH_TIEBREAK]);
   });
+
+  it("TN-CF-1 the refusal is the rulebook's sentence, which the public API documents as the 422 issue message", () => {
+    // RBS:560 (rulebook-W2-sets-cricket.md) gives the copy, and docs/api-v1-breaking-changes.md:263 publishes it as
+    // `error.issues[0].message`. API clients match on it, so it is typed here rather than read back from the constant.
+    expect(writeConfigIssues(tennis, { bestOf: 1, finalSet: { matchTiebreakTo: 10 } })).toEqual([
+      "A match tie-break replaces a deciding set; best of 1 has none.",
+    ]);
+  });
 });
 
 describe("E15: the refusals are the write door's, never the schema's or the fold's", () => {
