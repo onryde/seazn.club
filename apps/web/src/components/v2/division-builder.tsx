@@ -38,7 +38,7 @@ import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { sportLabel } from "@/lib/scoring-vocab";
-import { variantHintKey, variantOptionLabel } from "@/lib/variant-label-keys";
+import { variantHint, variantOptionLabel } from "@/lib/variant-label-keys";
 import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy";
 // RS007/V380: the wizard's Eligibility tab and the registration hub config
 // panel edit the SAME first-class `category` column now (the jsonb
@@ -507,7 +507,7 @@ export function DivisionBuilder({
     }
   }
 
-  const hintKey = variantHintKey(sportKey, variantKey);
+  const hint = variantHint(sportKey, variantKey, locale);
   // W2e Task 29: what the rule grid knows before Create - the write doors' refusals beside their fields, the fields this variant
   // has no use for, the detail a switch holds. The values are laid over the variant's own preset, as the server will lay them.
   const ruleState = ruleFormState({
@@ -678,7 +678,7 @@ export function DivisionBuilder({
                 setVariantKey(e.target.value);
                 if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(sportKey, e.target.value));
               }}
-              aria-describedby={hintKey === undefined ? undefined : "division-variant-hint"}
+              aria-describedby={hint === undefined ? undefined : "division-variant-hint"}
               data-testid="division-builder-variant"
               className="select"
             >
@@ -690,9 +690,9 @@ export function DivisionBuilder({
               ))}
             </select>
           </label>
-          {hintKey !== undefined && (
+          {hint !== undefined && (
             <p id="division-variant-hint" role="note" data-testid="division-variant-hint" className="min-w-0 rounded-md bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700 sm:col-span-2">
-              {msg(hintKey)}
+              {msg(hint.key, hint.vars)}
             </p>
           )}
         </div>

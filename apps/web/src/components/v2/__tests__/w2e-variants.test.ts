@@ -8,14 +8,14 @@
 //
 // Node env, no DOM (AGENTS.md class 2): the islands are driven through the hook harness (`renderIsland`): the handler the
 // harness found is invoked, with the transport stubbed at `apiV1`.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { builtinModules } from "@seazn/engine/sports";
 import { BO1_MATCH_TIEBREAK, type AnySportModule } from "@seazn/engine/sport";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { hydrateRuleValues, rulesFor } from "@/lib/match-rules";
 import { PREFERRED_VARIANT, pickVariant } from "@/lib/preferred-variant";
-import { variantWordKey } from "@/lib/variant-label-keys";
+import { BWF_3X15_FROM, VARIANT_HINT_KEYS, variantHint, variantWordKey } from "@/lib/variant-label-keys";
 import {
   configUnderVariant,
   divisionFormatPatch,
@@ -24,6 +24,8 @@ import {
 } from "../division-format-patch";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -31,15 +33,18 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
 
-const { activeDict, net } = vi.hoisted(() => ({
+const { activeDict, activeLocale, net } = vi.hoisted(() => ({
   activeDict: { current: {} as Record<string, string> },
+  // The locale the islands read, kept in step with `activeDict` by the tests that switch dictionaries (the hint prints a date).
+  activeLocale: { current: "en" as "en" | "es" },
   net: { calls: [] as { url: string; options?: { method?: string; json?: unknown } }[] },
 }));
 vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/i18n/dict-provider")>();
   return {
     ...actual,
-    useLocale: () => "en" as const,
+    useLocale: () => activeLocale.current,
+    useLocaleOrDefault: () => activeLocale.current,
     useMsg: () => (key: string, vars?: Record<string, string | number>) => {
       const raw = activeDict.current[key];
       if (typeof raw !== "string") return key;
@@ -593,46 +598,116 @@ describe("pickers print the localised variant label, with the raw name as fallba
     expect(optionsOf(sel)).toEqual([{ value: "newest", text: "Newest Format" }]);
   });
 
-  it("the BWF date hint shows for bwf and bwf-3x15 only, in the reader's language, linked to the select", () => {
-    const hintOf = (h: { tree: () => ReactElement[] }) => h.tree().find((e) => propsOf(e)["data-testid"] === "division-variant-hint");
-    for (const [dict, label] of [[enUi, "en"], [esUi, "es"]] as const) {
-      activeDict.current = dict as Record<string, string>;
-      const seen: Record<string, boolean> = {};
-      for (const key of Object.keys(presetsOf(BADMINTON))) {
-        const sports = sportWith([]);
-        sports[0] = { ...sports[0]!, variants: sports[0]!.variants.filter((v) => v.key === key) } as SportOption;
-        const h = renderIsland(DivisionBuilder, {
-          competitionId: "c1", orgSlug: "org", compSlug: "comp", sports,
-          constraintsAllowed: true, archivedSlotsExplainRefusal: false, viewerPlan: "community",
-        });
-        const hint = hintOf(h);
-        seen[key] = hint !== undefined;
-        const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-builder-variant")!;
-        if (hint !== undefined) {
-          expect(textOf(hint).trim(), `${label} ${key}`).toBe(dict["variant.badminton.hint3x15"]);
-          expect(propsOf(hint).role).toBe("note");
-          expect(propsOf(sel)["aria-describedby"], "the select is described by the hint").toBe(propsOf(hint).id);
-        } else {
-          expect(propsOf(sel)["aria-describedby"]).toBeUndefined();
+  // W2e T33a (PO decision): the note is shown only until BWF's day, and the day it prints is the same constant that ends it.
+  const DAY = Date.parse(BWF_3X15_FROM);
+  const BEFORE = DAY - 1; // the last millisecond the note is true
+  const hintOf = (h: { tree: () => ReactElement[] }) => h.tree().find((e) => propsOf(e)["data-testid"] === "division-variant-hint");
+  const builderFor = (key: string) => {
+    const sports = sportWith([]);
+    sports[0] = { ...sports[0]!, variants: sports[0]!.variants.filter((v) => v.key === key) } as SportOption;
+    return renderIsland(DivisionBuilder, {
+      competitionId: "c1", orgSlug: "org", compSlug: "comp", sports,
+      constraintsAllowed: true, archivedSlotsExplainRefusal: false, viewerPlan: "community",
+    });
+  };
+  /** The sentence as a reader of `locale` sees it on `BWF_3X15_FROM`: the day-month words, from the instant itself. */
+  const dateIn = (locale: string): string =>
+    new Intl.DateTimeFormat(locale === "en" ? "en-GB" : locale, { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(DAY);
+
+  describe("the BWF date hint", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      activeLocale.current = "en";
+    });
+
+    it("shows for bwf and bwf-3x15 only, in the reader's language and date, linked to the select", () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(BEFORE);
+      for (const [dict, locale] of [[enUi, "en"], [esUi, "es"]] as const) {
+        activeDict.current = dict as Record<string, string>;
+        activeLocale.current = locale;
+        const seen: Record<string, boolean> = {};
+        for (const key of Object.keys(presetsOf(BADMINTON))) {
+          const h = builderFor(key);
+          const hint = hintOf(h);
+          seen[key] = hint !== undefined;
+          const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-builder-variant")!;
+          if (hint !== undefined) {
+            expect(textOf(hint).trim(), `${locale} ${key}`).toBe(dict["variant.badminton.hint3x15"].replace("{date}", dateIn(locale)));
+            expect(propsOf(hint).role).toBe("note");
+            expect(propsOf(sel)["aria-describedby"], "the select is described by the hint").toBe(propsOf(hint).id);
+          } else {
+            expect(propsOf(sel)["aria-describedby"]).toBeUndefined();
+          }
+        }
+        expect(seen, locale).toEqual({ bwf: true, "bwf-3x15": true, short: false });
+      }
+      expect(esUi["variant.badminton.hint3x15"]).not.toBe(enUi["variant.badminton.hint3x15"]);
+    });
+
+    it("the date it prints is the owner's 4 January 2027, in each locale's own words, and it names both formats", () => {
+      expect(dateIn("en")).toBe("4 January 2027");
+      expect(dateIn("es")).toBe("4 de enero de 2027");
+      for (const dict of [enUi, esUi, frUi, nlUi] as Record<string, string>[]) {
+        const text = dict["variant.badminton.hint3x15"]!;
+        expect(text).toContain("{date}");
+        expect(text).toContain("3×15");
+        expect(text).toContain("3×21");
+      }
+    });
+
+    it("is gone from the day BWF adopts 3x15, in the builder and in Settings: the last millisecond before shows it, the day itself does not", () => {
+      activeDict.current = enUi as Record<string, string>;
+      activeLocale.current = "en";
+      const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
+      const settingsFor = () => {
+        const variants = [...sportWith([])[0]!.variants];
+        return renderIsland(DivisionSettings, {
+          division: { id: "d1", name: "Open", sport_key: "badminton", variant_key: "bwf-3x15", config: storedFor(BADMINTON, "bwf-3x15"), logo_url: null, logo_storage_path: null },
+          orgId: "org1", variants, structureLocked: false, lockedFields: [], stages: [], canEdit: true,
+          divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
+          entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
+        } as unknown as Parameters<typeof DivisionSettings>[0]);
+      };
+      let checked = 0;
+      for (const [when, shown] of [[BEFORE, true], [DAY, false], [DAY + 86_400_000 * 400, false]] as const) {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(when);
+        for (const [door, render] of [["builder", () => builderFor("bwf-3x15")], ["settings", settingsFor]] as const) {
+          const h = render();
+          expect(hintOf(h) !== undefined, `${door} at ${new Date(when).toISOString()}`).toBe(shown);
+          const sel = h.tree().find((e) => e.type === "select" && ["division-builder-variant", "division-settings-variant"].includes(String(propsOf(e)["data-testid"])))!;
+          expect(propsOf(sel)["aria-describedby"] !== undefined, `${door}: the select points at the note only while it is there`).toBe(shown);
+          checked++;
+        }
+        vi.useRealTimers();
+      }
+      expect(checked, "times x doors checked").toBe(6);
+    });
+
+    it("the lib answers the same on both sides of the day, for every variant the table names, and nothing for any other", () => {
+      let named = 0;
+      for (const [sport, byVariant] of Object.entries(VARIANT_HINT_KEYS)) {
+        for (const variant of Object.keys(byVariant)) {
+          expect(variantHint(sport, variant, "en", BEFORE)?.vars.date, `${sport}/${variant} before`).toBe(dateIn("en"));
+          expect(variantHint(sport, variant, "en", DAY), `${sport}/${variant} on the day`).toBeUndefined();
+          named++;
         }
       }
-      expect(seen, label).toEqual({ bwf: true, "bwf-3x15": true, short: false });
-    }
-    expect(esUi["variant.badminton.hint3x15"]).not.toBe(enUi["variant.badminton.hint3x15"]);
-  });
-
-  it("the hint carries the date the owner gave (4 January 2027) and names both formats", () => {
-    expect(enUi["variant.badminton.hint3x15"]).toMatch(/4 January 2027/);
-    expect(enUi["variant.badminton.hint3x15"]).toContain("3×15");
-    expect(enUi["variant.badminton.hint3x15"]).toContain("3×21");
-    expect(esUi["variant.badminton.hint3x15"]).toMatch(/4 de enero de 2027/);
+      expect(named, "variants carrying a note").toBe(2);
+      expect(variantHint("badminton", "short", "en", BEFORE)).toBeUndefined();
+      expect(variantHint("tennis", "bwf", "en", BEFORE)).toBeUndefined();
+    });
   });
 
   it("the Settings picker prints the same words and the hint, and leaves an org preset's name alone", () => {
     const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
     const variants = [...sportWith([ORG_PRESET])[0]!.variants];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(BEFORE);
     for (const [dict, label] of [[enUi, "en"], [esUi, "es"]] as const) {
       activeDict.current = dict as Record<string, string>;
+      activeLocale.current = label;
       const h = renderIsland(DivisionSettings, {
         division: { id: "d1", name: "Open", sport_key: "badminton", variant_key: "bwf-3x15", config: storedFor(BADMINTON, "bwf-3x15"), logo_url: null, logo_storage_path: null },
         orgId: "org1", variants, structureLocked: false, lockedFields: [], stages: [], canEdit: true,
@@ -645,7 +720,9 @@ describe("pickers print the localised variant label, with the raw name as fallba
       expect(text["bwf-3x15"], label).toBe(dict["variant.badminton.bwf3x15"]);
       expect(text["club-night"], label).toBe(ORG_PRESET.name);
       const hint = h.tree().find((e) => propsOf(e)["data-testid"] === "division-variant-hint");
-      expect(hint && textOf(hint).trim(), label).toBe(dict["variant.badminton.hint3x15"]);
+      expect(hint && textOf(hint).trim(), label).toBe(dict["variant.badminton.hint3x15"].replace("{date}", dateIn(label)));
     }
+    vi.useRealTimers();
+    activeLocale.current = "en";
   });
 });

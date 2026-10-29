@@ -5,6 +5,7 @@
 // do, from the one map, instead of printing the stored key. `variant-label.ts` re-exports the map unchanged;
 // `__tests__/variant-label.test.ts` enumerates every variant every shipped module declares against it.
 import type { MessageKey } from "@/lib/messages";
+import { formatPublicInstant } from "@/lib/public-date-locale";
 
 export const VARIANT_LABEL_KEYS: Readonly<Record<string, Readonly<Record<string, MessageKey>>>> = {
   // `bwf-3x15` (W2e): the dictionary key drops the hyphen, as carrom's `club-29` and table tennis's `hardbat-21` do; so does
@@ -87,16 +88,44 @@ export function variantOptionLabel(
  * 2027-01-04 while 3x21 is still the law until then, and new divisions default to 3x15 from the day W2e ships (the owner
  * accepted that gap), so the picker names both formats with the date. Closed per sport, like the label map; a variant
  * with no entry has no note. `Object.hasOwn` on both levels, as `variantWordKey`.
+ *
+ * W2e T33a (PO decision): a note that says "BWF adopts 3x15 from <date>" reads wrong once the date has come, so it is shown only
+ * until that day. The date is ONE constant (`BWF_3X15_FROM`): the note's lifetime and the date it prints both come from it, so
+ * they cannot drift apart. The sentence takes `{date}`, written in the reader's locale by the same day-month rule the public
+ * pages use.
  */
-export const VARIANT_HINT_KEYS: Readonly<Record<string, Readonly<Record<string, MessageKey>>>> = {
+export const BWF_3X15_FROM = "2027-01-04T00:00:00Z";
+
+interface VariantHintEntry {
+  readonly key: MessageKey;
+  /** The ISO instant the note stops being true from: it shows strictly before it, and never again after. */
+  readonly until: string;
+}
+
+const BWF_HINT: VariantHintEntry = { key: "variant.badminton.hint3x15", until: BWF_3X15_FROM };
+
+export const VARIANT_HINT_KEYS: Readonly<Record<string, Readonly<Record<string, VariantHintEntry>>>> = {
   badminton: {
-    bwf: "variant.badminton.hint3x15",
-    "bwf-3x15": "variant.badminton.hint3x15",
+    bwf: BWF_HINT,
+    "bwf-3x15": BWF_HINT,
   },
 };
 
-export function variantHintKey(sportKey: string, variantKey: string): MessageKey | undefined {
+export interface VariantHint {
+  readonly key: MessageKey;
+  /** The variables the sentence takes: the date, in the reader's locale. */
+  readonly vars: { readonly date: string };
+}
+
+/** The note for this variant at `now` (epoch ms; the clock by default), or undefined when it has none or has run out. */
+export function variantHint(sportKey: string, variantKey: string, locale: string, now: number = Date.now()): VariantHint | undefined {
   if (!Object.hasOwn(VARIANT_HINT_KEYS, sportKey)) return undefined;
   const bySport = VARIANT_HINT_KEYS[sportKey]!;
-  return Object.hasOwn(bySport, variantKey) ? bySport[variantKey] : undefined;
+  if (!Object.hasOwn(bySport, variantKey)) return undefined;
+  const entry = bySport[variantKey]!;
+  if (now >= Date.parse(entry.until)) return undefined;
+  const date = formatPublicInstant(locale, "UTC", entry.until, { day: "numeric", month: "long", year: "numeric" });
+  // The instant is a constant above; unparseable can only be a bad edit of it, which must fail loudly, not print a blank date.
+  if (date === null) throw new Error(`variant hint: ${entry.until} is not an instant`);
+  return { key: entry.key, vars: { date } };
 }

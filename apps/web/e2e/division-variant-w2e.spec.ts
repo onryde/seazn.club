@@ -12,11 +12,20 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
+import { BWF_3X15_FROM } from "../src/lib/variant-label-keys";
 import { TAG, apiJson, competitionPath, createCompetitionViaUi, divisionPath } from "./helpers";
 
 const L = JSON.parse(
   readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
 ) as Record<string, string>;
+
+/** The BWF note is a dated line (W2e T33a): shown until BWF's day, gone from it. What this run should see is read off the clock against
+ *  the one constant, and the date it prints is the same instant written day-month in English - never a typed "4 January 2027". */
+const HINT_LIVE = Date.now() < Date.parse(BWF_3X15_FROM);
+const HINT_TEXT = L["variant.badminton.hint3x15"]!.replace(
+  "{date}",
+  new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(Date.parse(BWF_3X15_FROM)),
+);
 
 const STEP_MS = 20_000;
 const POLL_MS = 20_000;
@@ -54,8 +63,12 @@ test("D2 a new badminton division is bwf-3x15: the builder opens on it, says why
   await expect(picker.locator("option:checked")).toHaveText(L["variant.badminton.bwf3x15"]!);
   await expect(picker.locator(`option[value="bwf"]`)).toHaveText(L["variant.badminton.bwf"]!);
   const hint = page.getByTestId("division-variant-hint");
-  await expect(hint).toBeVisible();
-  await expect(hint).toHaveText(L["variant.badminton.hint3x15"]!);
+  if (HINT_LIVE) {
+    await expect(hint).toBeVisible();
+    await expect(hint).toHaveText(HINT_TEXT);
+  } else {
+    await expect(hint, "from BWF's day the dated note is gone").toHaveCount(0);
+  }
   // The note is not on a sport that has none: it is the picker's state, not a fixed banner.
   await page.getByRole("combobox", { name: "Sport", exact: true }).selectOption("tennis");
   await expect(page.getByTestId("division-variant-hint")).toHaveCount(0);
@@ -88,7 +101,8 @@ test("D2 Settings switches the division to 3x21: the stored format is the target
   await open();
   const picker = page.getByTestId("division-settings-variant");
   await expect(picker).toHaveValue("bwf-3x15", { timeout: STEP_MS });
-  await expect(page.getByTestId("division-variant-hint")).toHaveText(L["variant.badminton.hint3x15"]!);
+  if (HINT_LIVE) await expect(page.getByTestId("division-variant-hint")).toHaveText(HINT_TEXT);
+  else await expect(page.getByTestId("division-variant-hint")).toHaveCount(0);
 
   await picker.selectOption("bwf");
   await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();

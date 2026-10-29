@@ -56,7 +56,7 @@ import {
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
-import { variantHintKey, variantOptionLabel, variantWord } from "@/lib/variant-label-keys";
+import { variantHint, variantOptionLabel, variantWord } from "@/lib/variant-label-keys";
 import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online-link-gaps";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
@@ -544,7 +544,7 @@ export function DivisionSettings({
     );
     setVariantKey(next);
   };
-  const variantHint = variantHintKey(division.sport_key, variantKey);
+  const hint = variantHint(division.sport_key, variantKey, locale);
   const [pointsValues, setPointsValues] = useState<Record<string, string>>(() =>
     hydratePointsValues(division.sport_key, cfg.points),
   );
@@ -1250,7 +1250,7 @@ export function DivisionSettings({
             disabled={!canEdit || variantLock !== undefined}
             value={variantKey}
             onChange={(e) => pickVariantKey(e.target.value)}
-            aria-describedby={variantHint === undefined ? undefined : "division-variant-hint"}
+            aria-describedby={hint === undefined ? undefined : "division-variant-hint"}
             data-testid="division-settings-variant"
             className="input mt-1 w-full"
           >
@@ -1261,9 +1261,9 @@ export function DivisionSettings({
             ))}
           </select>
         </label>
-        {variantHint !== undefined && (
+        {hint !== undefined && (
           <p id="division-variant-hint" role="note" data-testid="division-variant-hint" className="min-w-0 rounded-md bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700">
-            {msg(variantHint)}
+            {msg(hint.key, hint.vars)}
           </p>
         )}
         {variantLock !== undefined && lockLine(variantLock, "division-locked-variant_key")}
