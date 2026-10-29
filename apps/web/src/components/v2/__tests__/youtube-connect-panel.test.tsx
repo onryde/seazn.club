@@ -1145,6 +1145,36 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(ofType(panel.tree(), YoutubeDisconnectedNotice), "dismissed").toBeUndefined();
   });
 
+  it("F5: after a disconnect the connect round trip's landing banner ('YouTube channel connected.') does not sit above 'X is disconnected' - every non-picker landing goes, and its ?youtube= query with it; the picker, other landings' absence and a no-landing page are unaffected (anti-vacuity: every banner code)", () => {
+    const SPEC_BANNER_CODES = YOUTUBE_LANDING_CODES.filter((c) => c !== "pick");
+    expect(SPEC_BANNER_CODES.length, "premise: the banner codes the connect flow can land with").toBeGreaterThan(5);
+    let checked = 0;
+    for (const code of SPEC_BANNER_CODES) {
+      nav.replace.mockReset();
+      const panel = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [channel()], locale: "en", landing: { code, pendingId: null } });
+      expect(ofType(panel.tree(), YoutubeLandingNotice), `${code}: premise - the banner is there`).toBeDefined();
+      (attr(ofType(panel.tree(), YoutubeChannelRow)!, "onDisconnected") as (n: { name: string; outcome: string }) => void)({ name: "Riverside FC", outcome: "revoked" });
+      expect(ofType(panel.tree(), YoutubeLandingNotice), `${code}: the stale banner is gone`).toBeUndefined();
+      expect(ofType(panel.tree(), YoutubeDisconnectedNotice), `${code}: the disconnect's news is there`).toBeDefined();
+      expect(nav.replace, `${code}: and the query that raised it is cleared, so a reload does not bring it back`).toHaveBeenCalledWith("/streaming");
+      checked++;
+    }
+    expect(checked).toBe(SPEC_BANNER_CODES.length);
+
+    // the picker is a step of a flow in progress, not news: a disconnect leaves it open (and leaves the URL alone)
+    nav.replace.mockReset();
+    const picking = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [channel()], locale: "en", landing: { code: "pick", pendingId: "0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b" } });
+    (attr(ofType(picking.tree(), YoutubeChannelRow)!, "onDisconnected") as (n: { name: string; outcome: string }) => void)({ name: "Riverside FC", outcome: "revoked" });
+    expect(ofType(picking.tree(), YoutubeChannelPicker), "the picker stays").toBeDefined();
+    expect(nav.replace).not.toHaveBeenCalled();
+
+    // no landing (the plain page): nothing to clear and no navigation
+    const plain = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [channel()], locale: "en" });
+    (attr(ofType(plain.tree(), YoutubeChannelRow)!, "onDisconnected") as (n: { name: string; outcome: string }) => void)({ name: "Riverside FC", outcome: "revoked" });
+    expect(ofType(plain.tree(), YoutubeDisconnectedNotice)).toBeDefined();
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+
   const OUTCOME_COPY = {
     revoked: { key: "streaming.youtube.disconnect.done", link: false, role: "status" },
     skipped_shared_account: { key: "streaming.youtube.disconnect.doneShared", link: false, role: "status" },

@@ -23,7 +23,7 @@ import {
 } from "@/lib/stream-destinations";
 import { keyShapeWarning } from "@/lib/stream-key-shape";
 import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
-import type { YoutubeLanding } from "@/lib/youtube";
+import { STREAMING_PAGE_HREF, type YoutubeLanding } from "@/lib/youtube";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import {
   YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeDisconnectedNotice, YoutubeLandingNotice, wireOf, youtubeTargetLabel,
@@ -132,6 +132,16 @@ export function StreamDestinationsPanel({
   const [addError, setAddError] = useState<string | null>(null);
   // The channel that was just disconnected and what became of its grant: the row leaves the list on the refresh, so its news is kept here.
   const [disconnected, setDisconnected] = useState<DisconnectNews | null>(null);
+  // The connect round trip's banner ("YouTube channel connected.") is about a moment that a disconnect has just overtaken: it goes when a
+  // channel is disconnected, and so does the `?youtube=` that raised it, or a reload would bring it back beside the disconnect's news.
+  const [landingCleared, setLandingCleared] = useState(false);
+  const channelDisconnected = (news: DisconnectNews) => {
+    setDisconnected(news);
+    if (landing && landing.code !== "pick") {
+      setLandingCleared(true);
+      router.replace(STREAMING_PAGE_HREF);
+    }
+  };
 
   const run: Run = async (op, kind, call) => {
     try {
@@ -177,7 +187,7 @@ export function StreamDestinationsPanel({
 
   return (
     <div data-testid="stream-destinations" className="space-y-4">
-      {landing && landing.code !== "pick" && <YoutubeLandingNotice code={landing.code} />}
+      {landing && landing.code !== "pick" && !landingCleared && <YoutubeLandingNotice code={landing.code} />}
       {pickPending !== null && <YoutubeChannelPicker orgId={orgId} pendingId={pickPending} />}
       {disconnected !== null && <YoutubeDisconnectedNotice name={disconnected.name} outcome={disconnected.outcome} onDismiss={() => setDisconnected(null)} />}
       {canEdit && targets.length > 0 && (
@@ -249,7 +259,7 @@ export function StreamDestinationsPanel({
               <div className="card overflow-visible">
                 <ul data-testid="youtube-channel-list" className="divide-y divide-slate-100" aria-label={msg("streaming.youtube.channels")}>
                   {channels.map((t) => (
-                    <YoutubeChannelRow key={t.id} t={t} canEdit={canEdit} orgId={orgId} badge={badgeOf(t, msg)} onDisconnected={setDisconnected} />
+                    <YoutubeChannelRow key={t.id} t={t} canEdit={canEdit} orgId={orgId} badge={badgeOf(t, msg)} onDisconnected={channelDisconnected} />
                   ))}
                 </ul>
               </div>
