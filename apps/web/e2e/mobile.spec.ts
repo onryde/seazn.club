@@ -4596,7 +4596,7 @@ for (const sport of ENDING_SPORTS) {
 //
 // What it proves at this width: the card shows the voidOnly copy and exactly one button (the void, hit-testable at 44px), the
 // record button is absent, nothing in the card is clipped, the page does not scroll sideways, the card fits the viewport, and
-// below `md` the lone button spans the card (minus its gutters) rather than shrinking to its label.
+// below `md` the lone button spans its row (the row's content box, read live) rather than shrinking to its label.
 for (const sport of ENDING_SPORTS) {
   test(`${sport.key} v3 pad (handed device, voidOnly): the device's own sanction with a row behind it - the prompt's longest copy and its one button fit, reachable at 44px, nothing clipped, no horizontal scroll`, async ({
     browser,
@@ -4702,9 +4702,18 @@ for (const sport of ENDING_SPORTS) {
       expect(buttonBox, "the void button has no box").not.toBeNull();
       expect(cardBox!.width, "the card fits the viewport width").toBeLessThanOrEqual(width + 0.5);
       expect(buttonBox!.width, "the button stays inside the card").toBeLessThanOrEqual(cardBox!.width + 0.5);
-      // Below `md` (768) the buttons stack full width (`flex-col`); the card's gutters are `px-4` (16px a side).
+      // Below `md` (768) the buttons stack full width (`flex-col`, so they stretch): the lone button spans its row's CONTENT box.
+      // That box is read live (the row's clientWidth less its computed horizontal padding), never typed as a gutter: the card has
+      // its own 1px border and the row its own `px-4`, so a literal "card minus 32" is off by the border and moves with any class.
+      const row = await voidButton.evaluate((el) => {
+        const parent = el.parentElement!;
+        const cs = getComputedStyle(parent);
+        return { button: el.getBoundingClientRect().width, content: parent.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) };
+      });
+      expect(row.content, "the button row has a content box").toBeGreaterThan(0);
+      expect(row.button, "the button stays inside its row").toBeLessThanOrEqual(row.content + 0.5);
       if (width < 768) {
-        expect(buttonBox!.width, "below md the lone button spans the card, minus its gutters").toBeGreaterThanOrEqual(cardBox!.width - 32 - 1);
+        expect(row.button, "below md the lone button spans its row's content box").toBeGreaterThanOrEqual(row.content - 0.5);
       }
     } finally {
       releaseEnding();
