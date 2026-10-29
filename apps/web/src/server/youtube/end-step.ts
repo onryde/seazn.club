@@ -67,7 +67,7 @@ export type EndStepHooks = { afterClaim?: (broadcastId: string) => Promise<void>
 const ORPHAN_AFTER_MINUTES = 10;
 /** How long a claim holds its row against another firing. A call is bounded by google.ts's 10 s request timeout × five calls, so
  *  two minutes outlasts a healthy pass and a crashed one is retried on the next firing after it. */
-const CLAIM_LEASE_MINUTES = 2;
+export const CLAIM_LEASE_MINUTES = 2;
 /** The 5th failure of a row: a failed `complete` re-reads the life (see the header). */
 const COMPLETE_FAILURES_BEFORE_REREAD = 5;
 

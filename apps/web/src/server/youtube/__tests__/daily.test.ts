@@ -54,7 +54,7 @@ import {
   YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, deriveStuckBounds, purgeConnectionData, youtubeDaily,
   type PurgeResult, type YoutubeDailyResult,
 } from "../daily";
-import { endBackoffMinutes, endDueBroadcasts, type YoutubeEndResult } from "../end-step";
+import { CLAIM_LEASE_MINUTES, endBackoffMinutes, endDueBroadcasts, type EndStepHooks, type YoutubeEndResult } from "../end-step";
 import { FakeYouTube } from "../fake";
 import { YouTubeError, type YouTubePort } from "../port";
 import { markReconnectNeeded, openToken, replaceConnectionToken, revokeConnection } from "../token-store";
@@ -107,7 +107,7 @@ interface World {
   now(): number; setNow(ms: number): void; tick(ms: number): void;
   issued: { url: string; streamKey: string }[];
   /** One pass of the REAL end step on the injected clock, scoped to this org. */
-  step(over?: { at?: number; wallClock?: () => number }): Promise<YoutubeEndResult>;
+  step(over?: { at?: number; wallClock?: () => number; hooks?: EndStepHooks }): Promise<YoutubeEndResult>;
   /** Video arrives on the broadcast's stream: YouTube makes it `live` (auto-start). */
   video(ytId: string): void;
   /** A further channel connected through the real save, known to this world's fake. */
@@ -166,7 +166,7 @@ async function world(o: { fixtures?: number; credits?: number } = {}): Promise<W
     step: (over = {}) => {
       if (over.at !== undefined) now = over.at;
       return endDueBroadcasts(fake, {
-        now: () => new Date(now), budgetMs: BUDGET_MS, orgIds: [auth.orgId], ...(over.wallClock ? { wallClock: over.wallClock } : {}),
+        now: () => new Date(now), budgetMs: BUDGET_MS, orgIds: [auth.orgId], ...(over.wallClock ? { wallClock: over.wallClock } : {}), ...(over.hooks ? { hooks: over.hooks } : {}),
       });
     },
     video: (ytId) => {
@@ -883,6 +883,67 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(row.state, "a finished row is not failed after the fact").toBe("complete");
       expect(row.last_error_code).not.toBe("end_stuck");
     });
+
+    it("a stuck row the end step has CLAIMED right now (its lease in the future, a call in flight) is reported but not finalized under it; the pass after the step settles is free to (carry f, fix round 1)", async () => {
+      const w = await world();
+      refuseComplete(w.fake);
+      const m = await playAndStop(w, w.fixtures[0]!);
+      await failTo(w, m.broadcastId, STUCK_ATTEMPTS, afterStop(m, min(6)));
+      const dueAt = (await broadcastRow(m.broadcastId)).next_attempt_at!.getTime();
+
+      // The REAL step claims the row at its own backoff instant; the daily pass runs while that claim's call is in flight.
+      let during: YoutubeDailyResult | null = null;
+      let leaseSeen: Date | null = null;
+      await w.step({
+        at: dueAt,
+        hooks: {
+          afterClaim: async (id) => {
+            if (id !== m.broadcastId) return;
+            leaseSeen = (await broadcastRow(id)).next_attempt_at;
+            during = await daily(w, { now: new Date(w.now()) });
+          },
+        },
+      });
+      expect(leaseSeen, "premise: the step leased the row (next_attempt_at is the lease)").not.toBeNull();
+      expect((leaseSeen as unknown as Date).getTime() - dueAt, "premise: a lease is the engine's own CLAIM_LEASE_MINUTES").toBe(CLAIM_LEASE_MINUTES * MIN);
+      expect(during, "premise: the pass ran during the claim").not.toBeNull();
+      expect(during).toMatchObject({ failed: 1 });   // it was stuck, so it was reported ...
+      const row = await broadcastRow(m.broadcastId);
+      expect(row.state, "... but a claimed row is the end step's to settle: not finalized under its call").toBe("ending");
+      expect(row.last_error_code).not.toBe("end_stuck");
+      expect(row.attempts, "premise: the step's own failure landed after the pass").toBe(STUCK_ATTEMPTS + 1);
+
+      // The positive pair: once the step has settled (its lease replaced by the hourly backoff), the same row IS finalized.
+      expect(await daily(w, { now: new Date(w.now()) })).toMatchObject({ failed: 1 });
+      expect(await broadcastRow(m.broadcastId)).toMatchObject({ state: "failed", last_error_code: "end_stuck" });
+    });
+
+    // The window is [now, now + lease]: a row in the hourly backoff (the normal state of a row that fails for good) must NOT hide in it,
+    // or no row would ever be finalized. Each case is a fresh world: a finalized row cannot be un-finalized.
+    const LEASE_WINDOW: { name: string; next: (now: number) => number | null; finalized: boolean }[] = [
+      { name: "no lease (an admission claim, or a cleared backoff)", next: () => null, finalized: true },
+      { name: "a lease that ran out a minute ago (a crashed claim)", next: (now) => now - min(1), finalized: true },
+      { name: "a lease that runs out at this very instant", next: (now) => now, finalized: true },
+      { name: "a lease with half its life left", next: (now) => now + (CLAIM_LEASE_MINUTES * MIN) / 2, finalized: false },
+      { name: "a lease that has all its life left", next: (now) => now + CLAIM_LEASE_MINUTES * MIN, finalized: false },
+      { name: "a wait a minute longer than any lease (the hourly backoff of a row that fails for good)", next: (now) => now + (CLAIM_LEASE_MINUTES + 1) * MIN, finalized: true },
+      { name: "the hourly backoff itself", next: (now) => now + 60 * MIN, finalized: true },
+    ];
+    for (const c of LEASE_WINDOW) {
+      it(`the stuck finalize and the lease window - ${c.name}: ${c.finalized ? "finalized" : "left to the end step"}`, async () => {
+        const w = await world();
+        refuseComplete(w.fake);
+        const m = await playAndStop(w, w.fixtures[0]!);
+        await failTo(w, m.broadcastId, 1, afterStop(m, min(6)));
+        const at = w.now();
+        const next = c.next(at);
+        await sql`update youtube_broadcasts set attempts = ${STUCK_ATTEMPTS}, next_attempt_at = ${next === null ? null : new Date(next)} where id = ${m.broadcastId}`;
+        expect(await broadcastRow(m.broadcastId), "premise: an ending row at the bound").toMatchObject({ state: "ending", attempts: STUCK_ATTEMPTS });
+
+        expect(await daily(w, { now: new Date(at) }), "it is stuck either way: reported").toMatchObject({ failed: 1 });
+        expect((await broadcastRow(m.broadcastId)).state).toBe(c.finalized ? "failed" : "ending");
+      });
+    }
 
     it("a REAL reconnect (the save) gives the open broadcasts a fresh start - attempts 0, no backoff - so one failure after it is not a stuck row; it can still become one by failing 31 times AGAIN (controller ruling, fix round 1)", async () => {
       const w = await world();
