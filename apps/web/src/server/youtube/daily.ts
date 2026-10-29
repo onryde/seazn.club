@@ -71,12 +71,13 @@ import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePor
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken, revokeConnection } from "./token-store";
 
 /** `checked` connections health-checked; `reconnectNeeded` connections this pass found dead; `refreshed` / `removed` broadcast rows
- *  confirmed / deleted (removed: a video gone from YouTube, a complete row of a dead grant past the ceiling, or a failed row past its
- *  retention); `keysRemoved` pooled stream keys deleted (retired ones, and ones idle past the ceiling); `purged` connections whose data was
- *  purged; `failed` what did not work and is retried tomorrow, plus every stuck broadcast (the Worker alerts on this one); `deferred`
- *  connections a wall-clock budget cut short (not started, or left between two of their YouTube calls) and dead grants whose purge waits
- *  for the revoke allowance - not a failure: a later pass reaches them (a connection never started is the first one tomorrow; one cut
- *  after its health check queues behind the ones not yet checked). */
+ *  confirmed / deleted (removed: a video gone from YouTube, a complete row of ANY non-revoked connection past the ceiling - a dead
+ *  grant's, or a connected channel's that was never confirmed - or a failed row past its retention); `keysRemoved` pooled stream keys
+ *  deleted (retired ones, and ones idle past the ceiling); `purged` connections whose data was purged; `failed` what did not work and is
+ *  retried tomorrow, plus every stuck broadcast (the Worker alerts on this one); `deferred` connections a wall-clock budget cut
+ *  short (not started, or left between two of their YouTube calls) and dead grants whose purge waits for the revoke allowance - not a
+ *  failure: a later pass reaches them (a connection never started is the first one tomorrow; one cut after its health check queues
+ *  behind the ones not yet checked). */
 export type YoutubeDailyResult = {
   checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number; deferred: number;
 };
@@ -579,7 +580,9 @@ async function deleteStreamsAtYouTube(p: Pass, c: { id: string; org_id: string }
     if (refresh === null) return;
     at = await viaPort(() => p.port.accessToken(refresh), c, "idle_token");
   } catch (err) {
-    // A damaged token is the connection leg's to report, a dead grant is expected, a slice spent is silent; anything else is ours.
+    // A damaged token is the connection leg's to report, and that leg runs for a CONNECTED channel only: a flipped connection's damaged token
+    // is not reported from here (nothing could be asked with it either way). A dead grant is expected, a slice spent is silent; anything
+    // else is ours.
     if (!(err instanceof YoutubeTokenUnreadableError) && !(err instanceof YouTubeError) && !(err instanceof BudgetSpent)) {
       captureError(err, { orgId: c.org_id, route: "youtube.daily.idle_token", extra: { connectionId: c.id } });
     }

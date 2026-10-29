@@ -1838,13 +1838,13 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect((await keyRows(w.connectionId)).map((x) => x.id)).toEqual([young.id]);
       expect(w.fake.calls.slice(before).filter((c) => c.method === "deleteStream"), "no token, no stream delete").toEqual([]);
       expect(dailyReports(), "a dead grant's missing stream delete is expected, not a report").toEqual([]);
-      expect(k.id).toBeTruthy();
+      expect((await keyRows(w.connectionId)).some((x) => x.id === k.id), "the idle key's own row is gone").toBe(false);
       expect(await daily(w), "a second pass is idempotent").toEqual(ZERO);
     });
 
     it("the YouTube half is best effort WHERE A TOKEN OPENS: a flipped connection whose token Google still honours loses the idle key's liveStream too; a connected channel whose token will not open loses only the row, and the failure is still counted", async () => {
       const w = await world();
-      const k = await seedKey(w, 1, CEIL + 1);
+      await seedKey(w, 1, CEIL + 1);
       await markReconnectNeeded(sql, w.orgId, w.connectionId);   // flipped for a reason that left the token alive at Google
       expect(w.fake.streamsCount(w.channel.id), "premise: the liveStream exists").toBe(1);
       expect(await daily(w)).toEqual({ ...ZERO, keysRemoved: 1 });
@@ -1858,7 +1858,6 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(await keyRows(v.connectionId)).toEqual([]);
       expect(v.fake.calls.length - before, "and calls nobody").toBe(0);
       expect(dailyReports().filter((c) => (c[1] as { route?: string }).route === "youtube.daily.idle_token"), "the idle leg does not repeat the connection leg's report of a damaged token").toEqual([]);
-      expect(k.id).toBeTruthy();
     });
 
     it("a retired key that is also older than the ceiling is the retired leg's: removed once, with no YouTube call (its stream is already gone)", async () => {
