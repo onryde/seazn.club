@@ -1746,6 +1746,54 @@
       "original": "preset.sanctionEnding === undefined",
       "line": "...(preset.sanctionEnding === undefined ? {} : { sanctionEnding: preset.sanctionEnding }),",
       "reason": "W2e T25 (X-SE-1). An exactOptionalPropertyTypes spread: the mutant gives table tennis an own sanctionEnding key holding undefined instead of no key. Every reader reads module.sanctionEnding (core/sanction-ending.ts, both kernels), which is undefined either way; nothing tests the key's presence."
+    },
+    {
+      "mutant": "src/core/sanction-ending.ts:104:57 ConditionalExpression → true",
+      "original": "typeof e.voids === \"string\"",
+      "line": "for (const e of events) if (e.type === \"core.void\" && typeof e.voids === \"string\") voided.add(e.voids);",
+      "reason": "W2e T25 (liveRows, review M-2). Past the core.void check, dropping the string check only lets a void's missing voids (undefined, or null on a stored row) into the set, and ledger ids are strings, so voided.has(id) never matches it. An accepted core.void always names a target anyway: resolveVoids refuses one without."
+    },
+    {
+      "mutant": "src/sports/boardgame/boardgame.ts:329:7 ConditionalExpression → false",
+      "original": "method === undefined",
+      "line": "if (method === undefined) return;",
+      "reason": "W2e T25 (BG-RS-1; T10 review M4). Without the early return an absent method reaches the list reads: undefined is in neither DECISIVE_METHODS nor DRAWN_METHODS, so decisive and drawn are both false, contradicts is false for either winner, and the function returns without a throw, as the early return does."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:162:9 ConditionalExpression → false",
+      "original": "value === null || typeof value !== \"object\" || Array.isArray(value)",
+      "line": "if (value === null || typeof value !== \"object\" || Array.isArray(value)) return value;",
+      "reason": "W2e T25 (dropKeys, D18/E23). The key covers three mutants (the whole guard, its first two operands, and value === null), all survivors and all equivalent. The guard only passes through values the strict object refuses anyway: null never reaches the preprocess (z.null() takes it first), and a number, string, boolean or array copied to an object still fails strictObject, so the union reports invalid_union 'Invalid input' at ['shootout'] either way. Proof: a differential over the shoot-out union of kernel.ts:230-243 rebuilt with each guard mutant (18 shoot-out values of every JSON shape, 108 comparisons of success, data and issues) found 0 differences; its positive control, no drop at all, differs on {attempts, suddenDeath}."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:162:9 LogicalOperator → (value === null || typeof value !== \"object\") && Array.isArray(value)",
+      "original": "value === null || typeof value !== \"object\" || Array.isArray(value)",
+      "line": "if (value === null || typeof value !== \"object\" || Array.isArray(value)) return value;",
+      "reason": "W2e T25 (dropKeys, D18/E23). Weakens the pass-through to arrays only. Every other non-object (a number, string or boolean) is then spread to {} and fails strictObject, as it failed it before, and null never reaches the preprocess (z.null() takes it first). The union answers invalid_union 'Invalid input' at ['shootout'] either way. Proof: a differential over the shoot-out union of kernel.ts:230-243 rebuilt with each guard mutant (18 shoot-out values of every JSON shape, 108 comparisons of success, data and issues) found 0 differences; its positive control, no drop at all, differs on {attempts, suddenDeath}."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:162:9 LogicalOperator → value === null && typeof value !== \"object\"",
+      "original": "value === null || typeof value !== \"object\"",
+      "line": "if (value === null || typeof value !== \"object\" || Array.isArray(value)) return value;",
+      "reason": "W2e T25 (dropKeys, D18/E23). Drops the non-object pass-through: a number, string or boolean is spread to {} and fails strictObject, as it failed it before. null never reaches the preprocess (z.null() takes it first), and arrays still pass through. Proof: a differential over the shoot-out union of kernel.ts:230-243 rebuilt with each guard mutant (18 shoot-out values of every JSON shape, 108 comparisons of success, data and issues) found 0 differences; its positive control, no drop at all, differs on {attempts, suddenDeath}."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:162:27 ConditionalExpression → false",
+      "original": "typeof value !== \"object\"",
+      "line": "if (value === null || typeof value !== \"object\" || Array.isArray(value)) return value;",
+      "reason": "W2e T25 (dropKeys, D18/E23). Drops the typeof check: a number, string or boolean is spread to {} and fails strictObject, as it failed it before, so the union's answer (invalid_union 'Invalid input' at ['shootout']) does not move. Proof: a differential over the shoot-out union of kernel.ts:230-243 rebuilt with each guard mutant (18 shoot-out values of every JSON shape, 108 comparisons of success, data and issues) found 0 differences; its positive control, no drop at all, differs on {attempts, suddenDeath}."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:2804:43 ConditionalExpression → true",
+      "original": "state.shootout !== null",
+      "line": "state.phase === \"SHOOTOUT\" && state.shootout !== null && state.cfg.shootout !== null",
+      "reason": "W2e T25 (summary.shootoutNext, HK-SO-1). A TypeScript narrowing conjunct past phase === 'SHOOTOUT'. The one transition into that phase (resolveEnd, kernel.ts:1104) sets shootout to { kicks: [] }, and the only later writes (kernel.ts:1421-1422) keep it an object, so state.shootout is never null in that phase."
+    },
+    {
+      "mutant": "src/sports/period/kernel.ts:2804:70 ConditionalExpression → true",
+      "original": "state.cfg.shootout !== null",
+      "line": "state.phase === \"SHOOTOUT\" && state.shootout !== null && state.cfg.shootout !== null",
+      "reason": "W2e T25 (summary.shootoutNext, HK-SO-1). A TypeScript narrowing conjunct past phase === 'SHOOTOUT'. The one transition into that phase (resolveEnd, kernel.ts:1104) happens only when state.cfg.shootout !== null, and a match's cfg is fixed by its fold, so cfg.shootout is never null in that phase."
     }
   ]
 }
