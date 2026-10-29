@@ -257,13 +257,16 @@ async function reuseOrClaim(ctx: Ctx): Promise<Prepared | null> {
 interface FixtureWords {
   home: string | null; away: string | null; division: string; competition: string; default_locale: string;
   org_slug: string; comp_slug: string; div_slug: string;
+  /** `dashboard.branding` — the public site's own `branded` (public-site/data.ts `loadOrg`): the org may remove Seazn's attribution. */
+  branded: boolean;
 }
 
 /** The title and description, in the org's default locale (spec §6.5, R4). */
 async function textsFor(ctx: Ctx): Promise<{ title: string; description: string; locale: Locale }> {
   const [f] = await sql<FixtureWords[]>`
     select he.display_name as home, ae.display_name as away, d.name as division, c.name as competition, o.default_locale,
-           o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug
+           o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug,
+           org_has_feature(o.id, 'dashboard.branding') as branded
       from fixtures f
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
@@ -282,7 +285,8 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string;
     description: broadcastDescription({
       line: msgFor(locale, "streaming.youtube.broadcast.descriptionLine"),
       matchUrl: `${siteOrigin()}${routes.sharedFixture(f.org_slug, f.comp_slug, f.div_slug, ctx.fixtureId)}`,
-      poweredBy: msgFor(locale, "streaming.youtube.broadcast.poweredBy"),
+      // The public footer's and OG badge's rule: an org that removed the Seazn attribution there has it removed here too.
+      poweredBy: f.branded ? null : msgFor(locale, "streaming.youtube.broadcast.poweredBy"),
       siteUrl: `${siteOrigin()}/`,
     }),
   };
