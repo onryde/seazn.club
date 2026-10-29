@@ -37,7 +37,7 @@ import type { ObservedOutcome } from "./observed.ts";
 import { BRACKET_OF } from "./scenarios/terminal-finals.ts";
 import { sportModule } from "./sport-cfg.ts";
 import type { FixtureRow } from "./driver/types.ts";
-import type { ProductFold, RequestedOutcome, StreamEvent } from "./streams/types.ts";
+import type { ProductFold, RequestedOutcome, StreamEvent, StreamLineups } from "./streams/types.ts";
 
 /** Where the engine's bracket wires THIS match's loser, and who the product seated there. */
 export type LoserSeat =
@@ -89,6 +89,10 @@ export interface BracketDrive {
    *  W2e scenarios' witness reads it; every other drive's call log is unchanged); null when the product held no row, absent
    *  on a drive that asked no path. */
   readonly product?: ProductFold | null;
+  /** W2e (Task 21): the persons the harness PUT for each side, when the stream it generated names persons (cricket's super
+   *  over: `SportStreamGenerator.namesPersons`) - the lineups the generator built against and the fold must be given. Absent
+   *  for every stream that names none. */
+  readonly lineups?: StreamLineups;
 }
 
 export type Judgement =

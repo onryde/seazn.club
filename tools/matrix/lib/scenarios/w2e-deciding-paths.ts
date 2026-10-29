@@ -76,9 +76,13 @@ export function everyMatchTookTheDecidingPath(rec: Recorder, key: W2eScenarioKey
     if (d.status !== "decided" || product?.kind !== "win" || product.winner !== winner) return { ok: false, note: note(`the product did not decide it for ${winner}`) };
     const stream = rec.streams.get(d.fixtureId);
     if (stream === undefined || stream.length === 0) return { ok: false, note: note("no stream was recorded for it") };
-    const local = foldStream(sportModule(d.sport), req.cfg, d.home, d.away, stream);
-    if (matchesRequest(req, local.outcome, local.state) !== "match") return { ok: false, note: note(`the stream posted folds to ${JSON.stringify(local.outcome)}, not a win down '${path}'`) };
     const gen = STREAM_GENERATORS[d.sport];
+    // Task 21: a stream that names persons (a super over) folds only against the lineups it was built for. A drive that
+    // built one without recording them cannot be refolded - refused by name, not folded under empty lineups (the engine
+    // would refuse the first ball for a person outside the lineup, or worse, a partial refold would pass).
+    if (gen?.namesPersons?.(req.cfg) === true && d.lineups === undefined) return { ok: false, note: note("the stream names persons, and the lineups it was built against were not recorded for it") };
+    const local = foldStream(sportModule(d.sport), req.cfg, d.home, d.away, stream, d.lineups);
+    if (matchesRequest(req, local.outcome, local.state) !== "match") return { ok: false, note: note(`the stream posted folds to ${JSON.stringify(local.outcome)}, not a win down '${path}'`) };
     if (gen?.pathWitness === undefined) return { ok: false, note: note("the sport's generator witnesses no deciding path") };
     // Task 21: the witness reads the product's own summary and state beside its outcome. A drive that recorded none is
     // refused by name - the local fold alone would pass a product that served the wrong label or no super over.
@@ -129,4 +133,6 @@ export const w2eScenarios: Readonly<Record<W2eScenarioKey, Scenario>> = Object.f
   W2E_ET: scenario("W2E_ET"),
   W2E_SO: scenario("W2E_SO"),
   W2E_OT: scenario("W2E_OT"),
+  W2E_SUPER_OVER: scenario("W2E_SUPER_OVER"),
+  W2E_DLS: scenario("W2E_DLS"),
 });

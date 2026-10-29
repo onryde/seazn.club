@@ -1,12 +1,13 @@
 // W2e Tasks 19–24 (spec §10, D16): the opt-in deciding-path scenarios the local truth run plays with `--scenario`, one key
-// per stream (W2E_ET and W2E_SO from Task 19, W2E_OT from Task 20). Each forces EVERY bracket match of a bracket-root row down its key's path,
+// per stream (W2E_ET and W2E_SO from Task 19, W2E_OT from Task 20, W2E_SUPER_OVER and W2E_DLS from Task 21). Each forces EVERY bracket match of a bracket-root row down its key's path,
 // so a green run cannot have got there by the policy's rotation. Expected values come from the engine's own declarations
 // (`decidedInFor` over the module's win-method table; the decider presets a bracket stage is created with), never from
 // the scenario's text.
 import { decidedInFor, type DecidedIn } from "@seazn/engine/competition";
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
-import { deciderKeysFor } from "@seazn/engine/sport";
+import { deciderKeysFor, stageKeysFor } from "@seazn/engine/sport";
 import { football } from "@seazn/engine/sports/football";
+import { cricket } from "@seazn/engine/sports/cricket";
 import { hockey } from "@seazn/engine/sports/hockey";
 import { icehockey } from "@seazn/engine/sports/icehockey";
 import { describe, expect, it } from "vitest";
@@ -23,7 +24,7 @@ import { W2E_SCENARIO_PATHS, W2eMisplanned, everyMatchTookTheDecidingPath } from
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
-import type { ProductFold, StreamEvent } from "../lib/streams/types.ts";
+import { PROBE_LINEUPS, type ProductFold, type StreamEvent, type StreamLineups } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
 import { bracketRootRows } from "../lib/w2a-cells.ts";
@@ -35,26 +36,32 @@ const variantFor = offlineBuilderDefault;
 /** What the product serves at /state for a fixture folded to `stream`: the engine's own summary of the fold and the fold's
  *  state, through JSON as the match_states jsonb columns hold them (apps/web usecases/fixtures.ts getFixtureState). A
  *  HAND-BUILT drive's product — the integrated runs below read it from the fake driver's /state instead. */
-function productOf(module: ReturnType<typeof sportModule>, cfg: unknown, home: string, away: string, stream: readonly StreamEvent[]): ProductFold {
-  const { state } = foldStream(module, cfg, home, away, stream);
+function productOf(module: ReturnType<typeof sportModule>, cfg: unknown, home: string, away: string, stream: readonly StreamEvent[], lineups?: StreamLineups): ProductFold {
+  const { state } = foldStream(module, cfg, home, away, stream, lineups);
   return JSON.parse(JSON.stringify({ summary: module.summary(state as never), state })) as ProductFold;
 }
 /** What decides each key's matches, in the engine's own vocabulary (sport/module.ts DecidedIn): extra time and overtime are
  *  decided "in overtime", the shoot-out (and the GWS) "by a shoot-out". */
-const DECIDED_IN: Readonly<Record<W2eScenarioKey, "ot" | "so">> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot" };
+const DECIDED_IN: Readonly<Record<W2eScenarioKey, DecidedIn>> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot", W2E_SUPER_OVER: "so", W2E_DLS: "regulation" };
+/** The method a product result carries when the key's path decided it, where the engine's win-method table cannot say so on
+ *  its own: a DLS win is decidedIn 'regulation' (a revised target is no extra play), so only its method names it. */
+const METHOD_OF: Readonly<Partial<Record<W2eScenarioKey, string>>> = { W2E_DLS: "dls" };
 /** Which of the engine's decider rule keys each scenario plays (`deciderKeysFor`: football's extraTime and shootout, the
  *  period kernel's overtime and shootout — the IIHF's is its GWS). With DECIDED_IN it names the sports the key is FOR. */
-const ENGINE_DECIDER: Readonly<Record<W2eScenarioKey, string>> = { W2E_ET: "extraTime", W2E_SO: "shootout", W2E_OT: "overtime" };
+const ENGINE_DECIDER: Readonly<Record<W2eScenarioKey, string>> = { W2E_ET: "extraTime", W2E_SO: "shootout", W2E_OT: "overtime", W2E_SUPER_OVER: "superOver", W2E_DLS: "dls" };
+/** The rule keys the engine lets a knockout stage set: the deciders (`decider: true`) for the first four keys; cricket's `dls`
+ *  is a stage rule but no decider (a revised target is no extra play), so it is read off the stage's settable keys. */
+const keysOf = (k: W2eScenarioKey, s: string): readonly string[] => (k === "W2E_DLS" ? stageKeysFor : deciderKeysFor)(sportModule(s), "knockout", variantFor(s));
 /** The sports the ENGINE declares the key's decider for on a knockout, and whose bracket preset reaches the decidedIn it
  *  produces — derived from the modules, not from any generator or scenario. */
 const engineSports = (k: W2eScenarioKey): string[] => SPORT_KEYS.filter((s) =>
-  deciderKeysFor(sportModule(s), "knockout", variantFor(s)).includes(ENGINE_DECIDER[k])
-  && sportModule(s).reachableDecidedIn(w2eBracketCfgOf(s) as never, "knockout").has(DECIDED_IN[k] as DecidedIn));
+  keysOf(k, s).includes(ENGINE_DECIDER[k])
+  && sportModule(s).reachableDecidedIn(w2eBracketCfgOf(s) as never, "knockout").has(DECIDED_IN[k]));
 
 describe("the W2e keys: frozen names, registered, opt-in", () => {
-  it("the keys are W2E_ET and W2E_SO (Task 19) and W2E_OT (Task 20), each naming its deciding paths — the shoot-out key lists the IIHF's GWS after hockey's shoot-out; each is registered under its own key with no canary, outside the slice and the w1-driving scripts", () => {
-    expect([...W2E_SCENARIO_KEYS]).toEqual(["W2E_ET", "W2E_SO", "W2E_OT"]);
-    expect(W2E_SCENARIO_PATHS).toEqual({ W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"] });
+  it("the keys are W2E_ET and W2E_SO (Task 19), W2E_OT (Task 20) and W2E_SUPER_OVER and W2E_DLS (Task 21), each naming its deciding paths — the shoot-out key lists the IIHF's GWS after hockey's shoot-out; each is registered under its own key with no canary, outside the slice and the w1-driving scripts", () => {
+    expect([...W2E_SCENARIO_KEYS]).toEqual(["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS"]);
+    expect(W2E_SCENARIO_PATHS).toEqual({ W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"], W2E_SUPER_OVER: ["superOver"], W2E_DLS: ["dls"] });
     let checked = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       expect(SCENARIOS[k].key, k).toBe(k);
@@ -63,7 +70,7 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       expect((W1_DRIVING_SCENARIOS as readonly string[]).includes(k), `${k} is one of the w1-driving scripts`).toBe(false);
       checked++;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(5);
   });
 
   it("no filter plans none of them; a named key plans only its own cells, with the w1-driving case-id shape", () => {
@@ -90,6 +97,12 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
     expect(() => planW1Driving(variantFor, { scenario: "W2E_OT", only: "knockout|icehockey" })).not.toThrow();
     for (const only of ["knockout|hockey", "knockout|football"]) expect(() => planW1Driving(variantFor, { scenario: "W2E_OT", only }), only).toThrow(/plans no case/);
     expect(() => planW1Driving(variantFor, { scenario: "W2E_ET", only: "knockout|icehockey" })).toThrow(/plans no case/);
+    // Task 21: the super over and DLS keys plan cricket alone (a limited-overs bracket); no other sport has either.
+    for (const scenario of ["W2E_SUPER_OVER", "W2E_DLS"] as const) {
+      expect(() => planW1Driving(variantFor, { scenario, only: "knockout|cricket" }), scenario).not.toThrow();
+      for (const only of ["knockout|football", "knockout|hockey", "knockout|icehockey", "knockout|generic"]) expect(() => planW1Driving(variantFor, { scenario, only }), `${scenario} ${only}`).toThrow(/plans no case/);
+      expect(() => planW1Driving(variantFor, { scenario, only: "league|cricket" }), scenario).toThrow(/plans no case/);
+    }
     expect(() => planW1Driving(variantFor, { scenario: "W2E_NOPE" })).toThrow(/--scenario.*W2E_NOPE/);
   });
 
@@ -115,6 +128,9 @@ describe("the cells: bracket-root rows × the sports whose generator builds the 
     console.info(`w2e-scenarios: engine-derived sports ${JSON.stringify(Object.fromEntries(W2E_SCENARIO_KEYS.map((k) => [k, engineSports(k)])))}`);
     expect(derived).toBeGreaterThan(W2E_SCENARIO_KEYS.length);
     expect(engineSports("W2E_SO"), "the period sports are in the shoot-out key (Task 20)").toEqual(expect.arrayContaining(["football", "hockey", "icehockey"]));
+    // Task 21: cricket alone plays a super over (a decider of its limited-overs knockouts) and a DLS-revised target.
+    expect(engineSports("W2E_SUPER_OVER")).toEqual(["cricket"]);
+    expect(engineSports("W2E_DLS")).toEqual(["cricket"]);
     let total = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       const cells = w2eCells(k);
@@ -162,6 +178,8 @@ describe("each key, run on the knockout fake for every sport it is for", () => {
       for (const f of wins) {
         const o = f.outcome as { kind: "win"; winner: string; method?: string };
         expect(decidedInFor(sportModule(sport), { kind: "win", winner: o.winner, loser: "x", ...(o.method === undefined ? {} : { method: o.method }) }), `${at} ${f.id}`).toBe(DECIDED_IN[key]);
+        // Where decidedIn cannot name the path (a DLS win is decided in regulation), the method does.
+        if (METHOD_OF[key] !== undefined) expect(o.method, `${at} ${f.id}`).toBe(METHOD_OF[key]);
       }
       for (const id of ["life-reference-bracket-finish", "life-fold-parity"]) {
         const c = checks.find((x) => x.id === id)!;
@@ -413,5 +431,54 @@ describe("Task 21: the fake knockout driver serves a product-shaped /state, and 
       played++;
     }
     expect(played, "more than one decided fixture was read").toBeGreaterThan(1);
+  });
+});
+
+describe("everyMatchTookTheDecidingPath, cricket's super over and DLS on hand-built drives (Task 21: paths the outcome cannot name are read from the PRODUCT's state)", () => {
+  const variant = variantFor("cricket");
+  const cfg = stageCfg("cricket", resolveSportCfg("cricket", variant), "knockout", variant);
+  const cfgOf = () => cfg;
+  const stream = (path: "superOver" | "dls", winner: "home" | "away" = "home"): StreamEvent[] =>
+    generateStream({ sportKey: "cricket", cfg, stageKind: "knockout", home: "a", away: "b", outcome: { kind: "win", winner, path }, lineups: PROBE_LINEUPS });
+  /** A drive as decideFixture records it: the stream the harness posted, the outcome the product answered, and the product's
+   *  own /state - here the fold of `shown` (what the product held), which a wrong-product test replaces. */
+  const drive = (path: "superOver" | "dls", over: Partial<BracketDrive> = {}) => {
+    const events = stream(path);
+    const method = (foldStream(cricket, cfg, "a", "b", events, PROBE_LINEUPS).outcome as { method?: string }).method;
+    const d: BracketDrive = {
+      fixtureId: "f1", stageKind: "knockout", sport: "cricket", home: "a", away: "b", asked: { kind: "win", winner: "home", path },
+      levelAs: null, status: "decided", outcome: { kind: "win", winner: "a", ...(method === undefined ? {} : { method }) }, loser: { line: "none" }, next: { line: "none" }, forfeitPlay: null, refusal: null,
+      product: productOf(cricket, cfg, "a", "b", events, PROBE_LINEUPS), lineups: PROBE_LINEUPS, ...over,
+    };
+    return { d, stream: events };
+  };
+  const one = (x: { d: BracketDrive; stream: StreamEvent[] }, key: W2eScenarioKey) => {
+    const r = new Recorder();
+    r.bracketDrives.push(x.d);
+    if (x.stream.length > 0) r.streams.set(x.d.fixtureId, x.stream);
+    return everyMatchTookTheDecidingPath(r, key, cfgOf);
+  };
+  /** The product's state of a plain regulation win: no super over was played and no target revised. */
+  const regulation = productOf(cricket, cfg, "a", "b", generateStream({ sportKey: "cricket", cfg, stageKind: "knockout", home: "a", away: "b", outcome: { kind: "win", winner: "home" } }));
+
+  it("the right path passes per key, counted; a super over or a revision the PRODUCT's state does not show reds even when the stream the harness posted was one (the local fold would pass)", () => {
+    const so = drive("superOver");
+    const dls = drive("dls");
+    expect(one(so, "W2E_SUPER_OVER")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(one(dls, "W2E_DLS")).toMatchObject({ verdict: "pass", checked: 1 });
+    const wrong: readonly [string, { d: BracketDrive; stream: StreamEvent[] }, W2eScenarioKey][] = [
+      ["a super over the product's state never played (its outcome claims one)", { ...so, d: { ...so.d, product: regulation } }, "W2E_SUPER_OVER"],
+      ["the product's state is the super over's with an unfinished pair", { ...so, d: { ...so.d, product: { ...(so.d.product as ProductFold), state: { ...(so.d.product!.state as object), superOver: { innings: [], dismissed: { home: [], away: [] } } } } } }, "W2E_SUPER_OVER"],
+      ["a regulation outcome with the super over's state", { ...so, d: { ...so.d, outcome: { kind: "win", winner: "a", method: "regulation" } } }, "W2E_SUPER_OVER"],
+      ["no product state was recorded", { ...so, d: { ...so.d, product: null } }, "W2E_SUPER_OVER"],
+      ["the lineups the stream was built against were not recorded (it cannot be refolded)", { ...so, d: { ...so.d, lineups: undefined } }, "W2E_SUPER_OVER"],
+      ["a revised target the product's state never held (its outcome claims DLS)", { ...dls, d: { ...dls.d, product: regulation } }, "W2E_DLS"],
+      ["a regulation outcome with a revised target's state", { ...dls, d: { ...dls.d, outcome: { kind: "win", winner: "a", method: "regulation" } } }, "W2E_DLS"],
+      ["the super over's drive under the DLS key", so, "W2E_DLS"],
+      ["the DLS drive under the super over key", dls, "W2E_SUPER_OVER"],
+      ["the other winner", { ...so, d: { ...so.d, outcome: { kind: "win", winner: "b", method: "super_over" } } }, "W2E_SUPER_OVER"],
+    ];
+    for (const [label, x, key] of wrong) expect(one(x, key), label).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(wrong.length).toBe(10);
   });
 });

@@ -29,8 +29,8 @@ export const rulesOfConfig = (config: Readonly<Record<string, unknown>> | undefi
   return r !== null && typeof r === "object" && !Array.isArray(r) ? (r as Record<string, unknown>) : undefined;
 };
 import { DEPARTED_STATUSES } from "../lib/observed.ts";
-import { forfeitPosting } from "../lib/streams/index.ts";
-import type { ForfeitReason, StreamEvent } from "../lib/streams/types.ts";
+import { STREAM_GENERATORS, forfeitPosting } from "../lib/streams/index.ts";
+import type { ForfeitReason, StreamEvent, StreamLineups } from "../lib/streams/types.ts";
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, VOID_EVENT, idempotencyKey, inSquadOrder, voidTargetOf,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
@@ -378,7 +378,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
     const kind = this.stageKindOf(f);
     try {
       // W2a: the product folds a bracket fixture under the stage's overlay (resolveFixtureCfg), and the status follows D3.
-      folded = foldStream(sportModule(this.sport), this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, next);
+      folded = foldStream(sportModule(this.sport), this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, next, this.foldLineupsOf(f));
     } catch (e) {
       // The product turns ONLY an EngineError into a status (http.ts:157-158);
       // anything else is a 500 INTERNAL there (http.ts:244-247). Here that is a
@@ -394,6 +394,19 @@ export class FakeLeagueDriver implements OrganiserDriver {
     f.events = next;
     f.outcome = folded.outcome;
     f.status = fixtureStatusFromFold(folded.outcome, liveEvents(next), kind);
+  }
+  /** W2e Task 21: the persons a fixture's two PUT lineups hold, when its sport's streams under the fold cfg name persons
+   *  (`namesPersons`: cricket's super over) - the starting slots in order_no order, as the product's `init(cfg, lineups)`
+   *  reads them. Undefined otherwise, and where a side was not PUT: every other sport folds as it always did, under none. */
+  protected foldLineupsOf(f: FakeFixture): StreamLineups | undefined {
+    if (STREAM_GENERATORS[this.sport]?.namesPersons?.(this.foldCfgOf(f)) !== true) return undefined;
+    const side = (entrant: string | null): string[] | undefined => {
+      const slots = entrant === null ? undefined : this.lineups.get(`${f.id}|${entrant}`);
+      return slots?.map((s, i) => ({ id: s.person_id, no: s.order_no ?? i + 1, slot: s.slot })).filter((s) => s.slot === "starting").sort((a, b) => a.no - b.no).map((s) => s.id);
+    };
+    const home = side(f.home_entrant_id);
+    const away = side(f.away_entrant_id);
+    return home === undefined || away === undefined ? undefined : { home, away };
   }
   /** The kind of the stage a fixture belongs to: this fake plays one stage (a subclass with several overrides it). */
   protected stageKindOf(_f: FakeFixture): string | null { return this.stage?.kind ?? null; }
@@ -615,10 +628,11 @@ export class FakeLeagueDriver implements OrganiserDriver {
           continue;
         }
         const events = this.tableEvents(f);
-        const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, events)!;
+        const lineups = this.foldLineupsOf(f);
+        const d = declaredPoints(m, cfg, ctx, f.home_entrant_id, f.away_entrant_id, events, lineups)!;
         pts.set(f.home_entrant_id, pts.get(f.home_entrant_id)! + d.home);
         pts.set(f.away_entrant_id, pts.get(f.away_entrant_id)! + d.away);
-        const folded = foldStream(m, cfg, f.home_entrant_id, f.away_entrant_id, events);
+        const folded = foldStream(m, cfg, f.home_entrant_id, f.away_entrant_id, events, lineups);
         if (folded.outcome !== null) for (const x of m.standingsDelta(folded.outcome, cfg, ctx, folded.state)) add(x);
       }
       const rows = [...pts].sort((a, b) => b[1] - a[1]).map(([entrantId, points], i) => ({ entrantId, rank: i + 1, points, ...detail.get(entrantId)! }));
@@ -823,7 +837,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
     const f = this.fixtures.find((x) => x.id === id);
     if (f === undefined || f.events.length === 0) return { ...base, summary: null, state: null };
     const module = sportModule(this.sport);
-    const { state } = foldStream(module, this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, f.events);
+    const { state } = foldStream(module, this.foldCfgOf(f), f.home_entrant_id!, f.away_entrant_id!, f.events, this.foldLineupsOf(f));
     return { ...base, ...(JSON.parse(JSON.stringify({ summary: module.summary(state), state })) as { summary: unknown; state: unknown }) };
   }
   /** fixture id → the next round's fixture and slot its winner fills. */

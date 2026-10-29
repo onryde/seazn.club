@@ -10,7 +10,7 @@ import { SPORT_KEYS, type RowKey } from "./catalogue.ts";
 import { W2E_SCENARIO_PATHS, type W2eScenarioKey } from "./scenarios/types.ts";
 import { resolveSportCfg, stageCfg } from "./sport-cfg.ts";
 import { generateStream } from "./streams/index.ts";
-import { GeneratorUnsupported, OutcomeUnreachable, type DecidingPath } from "./streams/types.ts";
+import { GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, type DecidingPath } from "./streams/types.ts";
 import { offlineBuilderDefault } from "./variants.ts";
 import { bracketRootRows } from "./w2a-cells.ts";
 
@@ -25,7 +25,9 @@ export function w2eBracketCfgOf(sport: string): unknown {
 export function w2ePathUnder(key: W2eScenarioKey, sport: string, cfg: unknown): DecidingPath | null {
   for (const path of W2E_SCENARIO_PATHS[key]) {
     try {
-      generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "win", winner: "home", path } });
+      // PROBE_LINEUPS: a path that names persons (cricket's super over) cannot be built without lineups, and the question here
+      // is whether the generator builds the path, not whom it names; the case plays against the lineups it PUT (common.ts).
+      generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "h", away: "a", outcome: { kind: "win", winner: "home", path }, lineups: PROBE_LINEUPS });
       return path;
     } catch (e) {
       if (e instanceof OutcomeUnreachable || e instanceof GeneratorUnsupported) continue;
