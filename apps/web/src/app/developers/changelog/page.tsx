@@ -14,6 +14,10 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
       "# now prints the row's stored place, as the public table does, where it used to print the row's position in the document. The engine's places run 1 to n and are distinct, so a table the engine ranked prints the same numbers; a stored table whose places are not 1 to n prints them as stored. Positions up to and including Pts do not move.",
       "Read the sheet by header text, treat \u2014 as no value, and do not assume Pts is the last column. The PDF's standings columns are also sized from their own content now.",
       "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-29",
     title: "Breaking: a cricket Test match's stage refuses minOversForResult",
     lines: [
       "minOversForResult (the fewest overs the chasing side must have faced before a DLS par may decide an abandoned match) is read only by a DLS par, and a Test match has no DLS. It is now settable only on the variants that can play DLS: t20, odi and hundred.",
