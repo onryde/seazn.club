@@ -406,3 +406,164 @@ test("badminton v3 console: a warning-level sanction sends one event and no prom
   await expect(prompt(page)).toHaveCount(0);
   expect(await measureOverflowPx(page)).toBe(0);
 });
+
+// ---------------------------------------------------------------------------
+// Volleyball — "Can <team> still field six players?" (W2e Task 31; D12, D13; rule VB-SE-1)
+// ---------------------------------------------------------------------------
+//
+// An expulsion or a disqualification never ends a volleyball match by itself. The sanction sheet ASKS before it writes
+// (`promptLevels`, the engine's declaration, read here); "No" sends the sanction and then `core.forfeit{retired}` as the same
+// bound pair as above, "Yes" sends the sanction alone and play continues. The ledger is read back through
+// `GET /fixtures/{id}/events` in every case: the question being on screen proves nothing about what was written.
+
+const VB = builtinModules.find((m) => m.key === "volleyball")!;
+const VB_DECL = VB.sanctionEnding!;
+/** The first level the engine declares as a prompt level, and the pad's own word for it. */
+const VB_LEVEL = VB_DECL.promptLevels[0]!;
+const VB_LEVEL_LABEL = EN[`sanction.${VB_LEVEL}`] ?? "";
+/** A level BELOW the prompt: the sheet must ask nothing for it (a warning is the ladder's first rung; asserted below, not assumed). */
+const VB_QUIET_LEVEL = "warning";
+
+/** A full indoor starting six (FIVB's catalog shape), so the sanction sheet asks WHO before it asks the question. */
+const COURT = ["S", "OH", "MB", "OPP", "OH", "MB"] as const;
+const indoorRoster = (label: string) => COURT.map((positionKey, i) => ({ fullName: `${label} P${i + 1} ${TAG}`, positionKey }));
+
+async function seedVolleyball(request: APIRequestContext, surface: string): Promise<RosteredFixture> {
+  return seedRosteredFixture(request, {
+    label: `V3 Field-six ${surface} ${TAG}`,
+    sportKey: "volleyball",
+    variantKey: "indoor",
+    home: indoorRoster(`V3 VB ${surface} Home`),
+    away: indoorRoster(`V3 VB ${surface} Away`),
+    emitCoreStart: true,
+  });
+}
+
+/** Tap the home side's sanction tile, the prompt level and the first player, and land on the question. Returns its title. */
+async function sanctionHomeUpToQuestion(page: Page): Promise<string> {
+  const tile = pad(page).locator('[data-tile-id="sanction-home"]');
+  await expect(tile, "the sanction tile must be offered on a live pad").toBeVisible({ timeout: 20_000 });
+  await tile.click();
+  await expect(sheet(page)).toBeVisible();
+  await sheet(page).getByRole("button", { name: VB_LEVEL_LABEL, exact: true }).click();
+  // WHO: the first on-field player (a team sheet is declared, so the person step is asked).
+  await sheet(page).locator("[data-candidate-id]").first().click();
+  const yes = sheet(page).locator('[data-choice-option-id="yes"]');
+  await expect(yes, `${VB_LEVEL} must ask the question before anything is recorded`).toBeVisible();
+  return (await sheet(page).locator(".mk-eyebrow").first().innerText()).trim();
+}
+
+const QUESTION = /still field six players\?/i;
+
+test("volleyball v3 console: answering No to 'Can <team> still field six players?' sends the sanction then the retired ending, and the other side wins", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(BUDGET_MS);
+  const fx = await seedVolleyball(request, "No");
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+
+  expect(await sanctionHomeUpToQuestion(page)).toMatch(QUESTION);
+  expect(await typesOf(request, fx.fixtureId), "asking must not write").toEqual(["core.start"]);
+  await sheet(page).locator('[data-choice-option-id="no"]').click();
+
+  // THE PAIR, in order, on the server's ledger: the sanction, then the retirement against the SAME entrant.
+  await expect.poll(async () => (await typesOf(request, fx.fixtureId)).length, { timeout: DRAIN_MS }).toBe(3);
+  const rows = await ledger(request, fx.fixtureId);
+  expect(rows.map((e) => e.type)).toEqual(["core.start", VB_DECL.eventType, "core.forfeit"]);
+  expect(rows[1]!.payload.by, "the sanction names the home entrant").toBe(fx.homeEntrantId);
+  expect(rows[1]!.payload.level).toBe(VB_LEVEL);
+  expect(rows[2]!.payload, "the ending is the incomplete-team retirement (VB-RT-1) against the SAME entrant").toEqual({
+    by: fx.homeEntrantId,
+    reason: "retired",
+  });
+
+  const state = await apiJson<{ outcome: { winner?: string; loser?: string; reason?: string } | null }>(
+    request,
+    `/api/v1/fixtures/${fx.fixtureId}/state`,
+  );
+  expect(state.status).toBe(200);
+  expect(state.data?.outcome?.winner, "the OTHER side wins").toBe(fx.awayEntrantId);
+  expect(state.data?.outcome?.loser).toBe(fx.homeEntrantId);
+  expect(state.data?.outcome?.reason).toBe("retired");
+  // Nothing was left pending: this is a retirement, not an unended card.
+  await expect(prompt(page)).toHaveCount(0);
+});
+
+test("volleyball v3 console: answering Yes sends the sanction alone and play continues", async ({ page, request }) => {
+  test.setTimeout(BUDGET_MS);
+  const fx = await seedVolleyball(request, "Yes");
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+
+  expect(await sanctionHomeUpToQuestion(page)).toMatch(QUESTION);
+  await sheet(page).locator('[data-choice-option-id="yes"]').click();
+
+  await expect.poll(async () => (await typesOf(request, fx.fixtureId)).length, { timeout: DRAIN_MS }).toBe(2);
+  const rows = await ledger(request, fx.fixtureId);
+  expect(rows.map((e) => e.type), "one ordinary event, no ending").toEqual(["core.start", VB_DECL.eventType]);
+  expect(rows[1]!.payload.level).toBe(VB_LEVEL);
+  await expect(prompt(page), "volleyball never pends on an expulsion").toHaveCount(0);
+  await expect(pad(page).locator('[data-role="v3-tiles"]'), "the board is still there").toBeVisible();
+
+  // Play continues: the other side's rally is taken by the strict write path and the match is not decided.
+  await scorebugHalves(page).nth(1).click();
+  await expect
+    .poll(async () => (await typesOf(request, fx.fixtureId)).includes("volleyball.rally"), { timeout: DRAIN_MS })
+    .toBe(true);
+  const state = await apiJson<{ outcome: unknown }>(request, `/api/v1/fixtures/${fx.fixtureId}/state`);
+  expect(state.data?.outcome, "no outcome: play goes on").toBeNull();
+  expect(await measureOverflowPx(page)).toBe(0);
+});
+
+test("volleyball v3 console: a level below the prompt (a warning) asks nothing and sends one event", async ({ page, request }) => {
+  test.setTimeout(BUDGET_MS);
+  expect(VB_DECL.promptLevels, "the engine does not prompt on a warning").not.toContain(VB_QUIET_LEVEL);
+  const fx = await seedVolleyball(request, "Warn");
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+  const tile = pad(page).locator('[data-tile-id="sanction-home"]');
+  await expect(tile).toBeVisible({ timeout: 20_000 });
+  await tile.click();
+  await sheet(page).getByRole("button", { name: EN[`sanction.${VB_QUIET_LEVEL}`]!, exact: true }).click();
+  await sheet(page).locator("[data-candidate-id]").first().click();
+  // No question follows the person: the sheet is done and the event goes out alone.
+  await expect(sheet(page).locator('[data-choice-option-id="no"]'), "a warning asks nothing about six players").toHaveCount(0);
+  await expect.poll(async () => (await typesOf(request, fx.fixtureId)).length, { timeout: DRAIN_MS }).toBe(2);
+  expect((await typesOf(request, fx.fixtureId)).slice(1)).toEqual([VB_DECL.eventType]);
+});
+
+test("volleyball v3 device link: a scorer's No sends the retired ending (D13 admits it right after the sanction, and nowhere else)", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(BUDGET_MS);
+  const fx = await seedVolleyball(request, "DL");
+  const minted = await apiJson<{ secret: string }>(request, `/api/v1/fixtures/${fx.fixtureId}/device-links`, "POST", {
+    label: `V3 Field-six volleyball ${TAG}`,
+  });
+  expect(minted.status, `mint device link: ${JSON.stringify(minted.error)}`).toBe(201);
+  const ctx = await browser.newContext({ storageState: await consentedAnonymousState(), viewport: { width: 1280, height: 900 } });
+  try {
+    const page = await ctx.newPage();
+    await page.goto(`/score/${minted.data!.secret}`);
+    const accept = page.getByRole("button", { name: "Accept", exact: true });
+    if ((await accept.count()) > 0) await accept.click();
+    await expect(pad(page), "the v3 pad must render on the device link").toBeVisible({ timeout: 20_000 });
+
+    expect(await sanctionHomeUpToQuestion(page)).toMatch(QUESTION);
+    await sheet(page).locator('[data-choice-option-id="no"]').click();
+
+    // The scorer's own session writes both: the server's `scorerMayForfeit` admits `retired` after a prompt-level sanction.
+    await expect.poll(async () => (await typesOf(request, fx.fixtureId)).length, { timeout: DRAIN_MS }).toBe(3);
+    const rows = await ledger(request, fx.fixtureId);
+    expect(rows.map((e) => e.type)).toEqual(["core.start", VB_DECL.eventType, "core.forfeit"]);
+    expect(rows[2]!.payload).toEqual({ by: fx.homeEntrantId, reason: "retired" });
+    const state = await apiJson<{ outcome: { winner?: string; reason?: string } | null }>(request, `/api/v1/fixtures/${fx.fixtureId}/state`);
+    expect(state.data?.outcome?.winner).toBe(fx.awayEntrantId);
+    expect(state.data?.outcome?.reason).toBe("retired");
+  } finally {
+    await ctx.close();
+  }
+});
