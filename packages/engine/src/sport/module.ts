@@ -888,6 +888,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // `lineupPolicy: () => DEFAULT_LINEUP_POLICY` rather than omitting it.
   lineupPolicy?(cfg: Cfg): LineupPolicy;
   onLineup?(state: State, squads: SquadState): State;
+  // W2e T32 fix (M12b) — a module whose OWN events also move people on and off (football's `football.sub`) hands the kernel
+  // the squads a `core.lineup.*` event is judged against, with who is on the field read from its State. Full reasoning on
+  // FoldableModule (src/core/events.ts). Absent ⇒ the kernel's own squads.
+  squadsForLineup?(state: State, squads: SquadState): SquadState;
   /**
    * W2e (spec 2026-10-28 §5.2; D3 (1), D12, D13; rule X-SE-1) — restated from FoldableModule (src/core/events.ts) because
    * this is the interface a sport author reads. Which levels of the sport's sanction event END the match (`endLevels`:

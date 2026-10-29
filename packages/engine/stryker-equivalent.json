@@ -206,7 +206,7 @@
       "reason": "`by` comes from CoreForfeit.safeParse, whose `by` is EntrantId (z.string().min(1)), so `by === \"\"` is false for every parsed payload; and a parsed `by: \"both\"` must carry reason \"walkover\" (the schema's refine), which the `reason === \"walkover\"` operand already reads as unplayed (the ruling-115 `dqUnplayed` operand before it is true only for a \"disqualified\" reason). Both readings give the same role. Re-judged after ruling 115, then ruling 127 (`afterPlay`), rewrote the line."
     },
     {
-      "mutant": "src/stats/stats.ts:686:51 ConditionalExpression → true",
+      "mutant": "src/stats/stats.ts:688:51 ConditionalExpression → true",
       "original": "metric.appearance === true",
       "line": "const unplayed = model.metrics.some((metric) => metric.appearance === true) && !playedInStats(active, { playerStats: model });",
       "reason": "The `.some(appearance)` gate only decides whether `unplayed` is computed; the metric loop re-tests `metric.appearance === true` before skipping, so a model with no appearance metric credits exactly the same rows whether `unplayed` is computed or not. Computing it cannot throw or write: `playedInStats` re-resolves voids over `active`, which holds no `core.void` (resolveVoids throws only on one), and what it reaches (the model's own `unplayed` — boardgameUnplayed → statsUnplayed — forfeitStatsRole, playRecorded) is pure and reads forfeits through safeParse. Re-judged after ruling 120 moved the reading into playedInStats."
@@ -470,55 +470,55 @@
       "reason": "Only a hook-less fake reaches this fallback, and only a DECIDED fold reads the decided arm: there guarantee 4 (ALREADY_DECIDED) answers every forfeit before the phase guard except a withdrawal over a held level result, and \"withdrew\" is admitted in every phase (R5), so the phase name is never read into a refusal."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:4106:57 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4124:57 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = cricketForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "cricketForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:4108:75 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4126:75 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"home\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:4109:75 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4127:75 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"away\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/football/football.ts:1787:7 ConditionalExpression → false",
+      "mutant": "src/sports/football/football.ts:1779:7 ConditionalExpression → false",
       "original": "reason === \"bye\"",
       "line": "if (reason === \"bye\") return state.goals;",
       "reason": "For a bye footballForfeitCredit returns the played ledger, whose gf is state.goals[side] (sideMetrics with zero=false), so displayedGoals reads state.goals either way."
     },
     {
-      "mutant": "src/sports/football/football.ts:1787:18 StringLiteral → \"\"",
+      "mutant": "src/sports/football/football.ts:1779:18 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (reason === \"bye\") return state.goals;",
       "reason": "For a bye footballForfeitCredit returns the played ledger, whose gf is state.goals[side] (sideMetrics with zero=false), so displayedGoals reads state.goals either way."
     },
     {
-      "mutant": "src/sports/football/football.ts:2800:58 StringLiteral → \"\"",
+      "mutant": "src/sports/football/football.ts:2853:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = footballForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "footballForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/football/football.ts:2801:133 BooleanLiteral → true",
+      "mutant": "src/sports/football/football.ts:2854:133 BooleanLiteral → true",
       "original": "false",
       "line": "const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });",
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
     },
     {
-      "mutant": "src/sports/football/football.ts:2792:61 BooleanLiteral → true",
+      "mutant": "src/sports/football/football.ts:2845:61 BooleanLiteral → true",
       "original": "false",
       "line": "metrics: creditedMetrics(sideMetrics(state, side, false), credit, side),",
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; every non-bye credit carries gf, ga and gd, and a bye's credit is the played ledger with the real goals (computed with zero=false), so creditedMetrics overwrites those three keys either way."
     },
     {
-      "mutant": "src/sports/football/football.ts:2872:9 ConditionalExpression → false",
+      "mutant": "src/sports/football/football.ts:2925:9 ConditionalExpression → false",
       "original": "cfg.points.soBonus === undefined",
       "line": "...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),",
       "reason": "With no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key)."
@@ -614,25 +614,25 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/core/events.ts:1085:7 LogicalOperator → decided || event.type === \"core.forfeit\"",
+      "mutant": "src/core/events.ts:1094:7 LogicalOperator → decided || event.type === \"core.forfeit\"",
       "original": "decided &&",
       "line": "decided &&",
       "reason": "Undecided, a withdrawal is over a level result only if outcomeOf reads level, and an undecided fold's outcomeOf is null or a settle's win (CoreSettle requires a winner), never level — so `decided ||` admits nothing that `decided &&` does not."
     },
     {
-      "mutant": "src/core/events.ts:1086:7 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:1095:7 ConditionalExpression → true",
       "original": "event.type === \"core.forfeit\"",
       "line": "event.type === \"core.forfeit\" &&",
       "reason": "forfeitReasonOf parses the payload as CoreForfeit, a strict {by, reason} object; no other kernel or sport event declares exactly that shape (set sanctions need `level`, period suspensions `class`, carrom adjustments `entrantId` and `delta`, nested game awards `winner`), so only a core.forfeit reads \"withdrew\"."
     },
     {
-      "mutant": "src/core/events.ts:1111:11 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:1120:11 ConditionalExpression → true",
       "original": "phase !== \"over\"",
       "line": "if (phase !== \"over\") {",
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."
     },
     {
-      "mutant": "src/core/events.ts:1111:21 StringLiteral → \"\"",
+      "mutant": "src/core/events.ts:1120:21 StringLiteral → \"\"",
       "original": "\"over\"",
       "line": "if (phase !== \"over\") {",
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."
@@ -1658,31 +1658,31 @@
       "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:1177:5 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:1184:5 ConditionalExpression → false",
       "original": "state.quota === null",
       "line": "state.quota === null ||",
-      "reason": "W2e T25 (moved into dlsAbandonmentPar by T8). Reached only past `!state.cfg.dls.enabled`, and DLS is on only with balls per innings (the config refine, cricket.ts:137); quota starts as cfg.ballsPerInnings and its one other write is a revise's number (a timeless revise is refused), so quota is never null here. Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
+      "reason": "W2e T25 (moved into dlsAbandonmentPar by T8). Reached only past `!state.cfg.dls.enabled`, and DLS is on only with balls per innings (the config refine, cricket.ts:144); quota starts as cfg.ballsPerInnings and its one other write is a revise's number (a timeless revise is refused), so quota is never null here. Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:1179:5 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:1186:5 ConditionalExpression → false",
       "original": "state.r1 === null",
       "line": "state.r1 === null ||",
       "reason": "W2e T25. Past the DLS conjunct the quota is never null (DLS needs balls per innings), so createInnings set R1 when the first innings opened and a revise only lowers it; R1 is never null here (TypeScript narrowing). Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:1180:5 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:1187:5 ConditionalExpression → false",
       "original": "state.r2 === null",
       "line": "state.r2 === null ||",
       "reason": "W2e T25. Past the DLS conjunct the quota is never null, and dlsAbandonmentPar is reached only for a one-innings match (applyAbandon draws two-innings matches first; nrrCredits returns first), so createInnings set R2 when the chase opened; R2 is never null here (TypeScript narrowing). Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:1181:5 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:1188:5 ConditionalExpression → false",
       "original": "chase.ballsLimit === null",
       "line": "chase.ballsLimit === null",
       "reason": "W2e T25. The chase's ballsLimit is the quota it opened with (createInnings) or a revise's number, and past the DLS conjunct the quota is never null (DLS needs balls per innings), so the allocation is never null here (TypeScript narrowing). Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3647:19 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:3654:19 ConditionalExpression → false",
       "original": "chase.ballsLimit === null",
       "line": "if (!revised || chase.ballsLimit === null) return played;",
       "reason": "W2e T25 (nrrCredits, T8). A chase's ballsLimit is null only in a timeless match, where it equals cfg.ballsPerInnings (both null) and targetSource stays null (a revise and a DLS target both need limited overs), so `revised` is false and the first operand already returns: the second operand is TypeScript narrowing for `balls: chase.ballsLimit`."
@@ -1796,16 +1796,16 @@
       "reason": "W2e T25 (summary.shootoutNext, HK-SO-1). A TypeScript narrowing conjunct past phase === 'SHOOTOUT'. The one transition into that phase (resolveEnd, kernel.ts:1104) happens only when state.cfg.shootout !== null, and a match's cfg is fixed by its fold, so cfg.shootout is never null in that phase."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3637:41 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:3644:41 ConditionalExpression → false",
       "original": "team1 === undefined",
       "line": "if (state.cfg.inningsPerSide !== 1 || team1 === undefined || chase === undefined) return played;",
       "reason": "W2e T25 (nrrCredits, CK-RR-1). Array destructuring: team1 is innings[0], so whenever it is undefined, chase (innings[1]) is undefined too and the next operand still returns played. The test 'a settled win over a match that never reached its chase' pins the no-innings case."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3637:7 LogicalOperator → state.cfg.inningsPerSide !== 1 && team1 === undefined",
+      "mutant": "src/sports/cricket/cricket.ts:3644:7 LogicalOperator → state.cfg.inningsPerSide !== 1 && team1 === undefined",
       "original": "state.cfg.inningsPerSide !== 1 || team1 === undefined",
       "line": "if (state.cfg.inningsPerSide !== 1 || team1 === undefined || chase === undefined) return played;",
-      "reason": "W2e T25 (nrrCredits, CK-RR-1). Lets a two-innings match with a second innings past the guard, where it is credited as played anyway. A two-innings match takes no revise (cricket.ts:1096, refused on replay too) and gets no DLS target (maybeComputeDlsTarget, cricket.ts:1067, gates on one innings), so r1, r2 and targetSource stay null and ballsLimit stays the quota, and neither the par branch nor the revised branch can apply."
+      "reason": "W2e T25 (nrrCredits, CK-RR-1). Lets a two-innings match with a second innings past the guard, where it is credited as played anyway. A two-innings match takes no revise (cricket.ts:1103, refused on replay too) and gets no DLS target (maybeComputeDlsTarget, cricket.ts:1074, gates on one innings), so r1, r2 and targetSource stay null and ballsLimit stays the quota, and neither the par branch nor the revised branch can apply."
     },
     {
       "mutant": "src/sports/nested/kernel.ts:921:14 MethodExpression → Math.max(h, a)",

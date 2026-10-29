@@ -158,7 +158,10 @@ Football sets the pattern the other families copy, so this is explicit.
    on the incoming slot. **One fixture should use one vocabulary.** Membership
    is merged correctly either way (`mergeFromKernel` applies the kernel's delta
    rather than overwriting, so a red card, a sin bin and a legacy substitution
-   all survive a later kernel event), but two things are undefined in a mixed
+   all survive a later kernel event), and since W2e M12b a kernel event is also
+   JUDGED against football's pitch (`squadsForLineup`): retiring the substitute a
+   `football.sub` brought on is accepted, retiring the starter he replaced or a
+   player sent off is refused. Two things remain undefined in a mixed
    fixture: positions, as above, and the CAP as the kernel counts it —
    `SideSquad.subsUsed` never sees a `football.sub`, so a kernel substitution
    made after legacy ones is judged against a low count. The legacy path does

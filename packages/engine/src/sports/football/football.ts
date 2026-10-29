@@ -2206,6 +2206,36 @@ function liftSquads(state: FootballState): KernelSquads {
   return { home: liftSide(state, "home"), away: liftSide(state, "away") };
 }
 
+/**
+ * W2e Task 32 fix (M12b; PO decision I-1, 2026-10-29) — the kernel's side with WHO IS ON THE FIELD read from football's
+ * pitch, for judging a `core.lineup.*` event (`FoldableModule.squadsForLineup`).
+ *
+ * The mirror of `liftSide`. That one lifts football's squad so a `football.sub` meets the kernel's reducer; this one makes a
+ * kernel event meet football's pitch, which the kernel never folds a `football.sub`, a sending-off or a sin bin into. Only
+ * `onField` moves, plus what `takeOff` records beside it for someone who LEFT: `timesOff` (so Law 3.3's no-return still
+ * refuses him through the kernel), and he no longer stands at a position. Roles, numbers and the counts the kernel owns are
+ * kept.
+ * (`timesOn` is not bumped for someone football brought on: only a `reentry: "once"` policy reads it, and football's is
+ * `none` or `unlimited`. A non-player is never on football's pitch, so a starting-slot coach reads as off, which every
+ * kernel reader already filters to — ruling 3.)
+ */
+function pitchSide(side: SideSquad, squad: FootballSquad): SideSquad {
+  const pitch = new Set(squad.onPitch);
+  const members = side.members.map((member): SquadMember => {
+    if (pitch.has(member.personId) === member.onField) return member;
+    if (!member.onField) return { ...member, onField: true };
+    // `positionKey` means "where this person is now" (`takeOff`), so it goes. No `lastPositionKey`: only FIVB's position
+    // lock reads it, and football's `reentryPositionLock` is false.
+    const { positionKey: _left, ...rest } = member;
+    return { ...rest, onField: false, timesOff: member.timesOff + 1 };
+  });
+  return { ...side, members };
+}
+
+function squadsForLineup(state: FootballState, squads: KernelSquads): KernelSquads {
+  return { home: pitchSide(squads.home, state.squads.home), away: pitchSide(squads.away, state.squads.away) };
+}
+
 // The event dispatch, unchanged since W4. It is lifted out of `apply` so that
 // `apply` can wrap it in the game-time frame — validate the stamp, sweep,
 // dispatch, sweep again for the one release case, record `asOf` — rather than
@@ -2671,6 +2701,9 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       },
     };
   },
+
+  // W2e T32 fix (M12b) — a `core.lineup.*` event is judged against football's own pitch, so a `football.sub` counts.
+  squadsForLineup,
 
   // W4a (#425) §7 — the SAME function the fold kernel's monotonic guard reads,
   // handed over directly rather than as a copy of its output. `sweepExpired`
