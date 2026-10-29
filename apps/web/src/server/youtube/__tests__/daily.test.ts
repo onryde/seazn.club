@@ -1448,7 +1448,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(passes, "anti-vacuity: seven slices judged").toBe(7);
     });
 
-    it("the connections a slice cuts are the LEAST recently checked, so the next pass reaches them first: three channels and a slice for one - three passes check three different channels, each pass defers the other two", async () => {
+    it("a connection the slice cuts BEFORE it starts is unstamped, so it is the least recently checked and the next pass reaches it first: three channels and a slice for one - three passes check three different channels, each pass defers the other two", async () => {
       const w = await world();
       await w.addChannel();
       await w.addChannel();
@@ -1462,6 +1462,37 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
         seen.push(await stamped());
       }
       expect(seen, "each pass reached a channel the earlier ones had not").toEqual([1, 2, 3]);
+    });
+
+    it("a connection cut AFTER its health check (round 2 C3) is counted deferred but already stamped, so it is NOT first tomorrow: it queues behind the connection the slice never reached, and its refresh waits for its own next full turn; the ceiling's lapsed leg is what keeps the rows it leaves from outliving 30 days", async () => {
+      const w = await world();   // A: a stale row to confirm, so its refresh needs a fourth call
+      const a = { connectionId: w.connectionId };
+      const b = await w.addChannel();   // B: nothing to refresh (three calls complete it)
+      const m = await completedMatch(w, w.fixtures[0]!);
+      await shiftBroadcasts([m.broadcastId], "refreshed_at", YOUTUBE_REFRESH_AFTER_DAYS + 1);
+      await sql`update org_youtube_connections set last_health_at = now() - interval '3 days' where id = ${a.connectionId}`;   // A is the least recently checked...
+      await sql`update org_youtube_connections set last_health_at = now() - interval '2 days' where id = ${b.connectionId}`;   // ...then B
+      const stamp = async (id: string) => (await connRow(id)).last_health_at!.getTime();
+      const [a0, b0] = [await stamp(a.connectionId), await stamp(b.connectionId)];
+      const refreshedAt = async () => (await broadcastRow(m.broadcastId)).refreshed_at.getTime();
+      const r0 = await refreshedAt();
+
+      // Pass 1: a slice of three calls. A (first in line) spends them on its health check, so its refresh is cut; B is never started.
+      expect(await passOf(w, 3), "A cut after its health check, B never started: both deferred").toEqual({ ...ZERO, checked: 1, deferred: 2 });
+      const a1 = await stamp(a.connectionId);
+      expect(a1, "A's health WAS checked: stamped").toBeGreaterThan(a0);
+      expect(await stamp(b.connectionId), "B was not: its stamp is untouched").toBe(b0);
+      expect(await refreshedAt(), "A's stale row was not confirmed").toBe(r0);
+
+      // Pass 2: the same slice. B (older stamp) goes first and completes; A - cut yesterday - is NOT first: it waits behind B.
+      expect(await passOf(w, 3), "B is checked in full; A is not started").toEqual({ ...ZERO, checked: 1, deferred: 1 });
+      expect(await stamp(a.connectionId), "A was not reached again").toBe(a1);
+      expect(await stamp(b.connectionId), "B was checked").toBeGreaterThan(b0);
+      expect(await refreshedAt(), "and A's row is still waiting").toBe(r0);
+
+      // Pass 3: room for everything. A's turn comes round (its stamp is the older one) and its refresh completes.
+      expect(await daily(w), "both channels, A's row confirmed").toEqual({ ...ZERO, checked: 2, refreshed: 1 });
+      expect(await refreshedAt()).toBeGreaterThan(r0);
     });
 
     it("the slice bounds the YouTube calls of the connection leg and nothing else: with no time at all the expired grant is still deleted, the 30-day-dead grant is still purged AND revoked at Google (the revoke has its own allowance, not the slice), and the connected channel is deferred", async () => {

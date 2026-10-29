@@ -37,9 +37,10 @@ import "server-only";
 //
 // THE BUDGET. The pass shares the Worker's 60 s with the relay sweep that follows it, and a connection is three or four Google calls: every
 // call of the connection leg (health, refresh) and the idle keys' stream deletes starts only while `YOUTUBE_DAILY_BUDGET_MS` has time left
-// (`gated`). A connection the slice cut - never started, or left between two calls - is counted `deferred` (not `failed`: the Worker's alert
-// is unchanged) and, being the least recently checked, is the first one tomorrow. The dead grants' Google revokes take their own, smaller
-// allowance (4). The database-only deletes (the lapsed videos, the idle and retired key rows, the retention, a purge with nothing to
+// (`gated`). A connection the slice cut is counted `deferred` (not `failed`: the Worker's alert is unchanged). One cut BEFORE its first call
+// has not been stamped, so it is the least recently checked and the first one tomorrow. One cut AFTER its health check (during its refresh)
+// IS stamped (`last_health_at`), so it queues behind the connections not yet checked and its refresh waits for its own next turn; the lapsed
+// leg (2b) is what keeps the rows it leaves from outliving the ceiling. The dead grants' Google revokes take their own, smaller allowance (4). The database-only deletes (the lapsed videos, the idle and retired key rows, the retention, a purge with nothing to
 // revoke) call nobody, spend neither, and always run: the 30-day ceiling is not the budget's to defer.
 //
 // DECISIONS the brief left open (also in the T17 report):
@@ -74,7 +75,8 @@ import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken, revokeConn
  *  retention); `keysRemoved` pooled stream keys deleted (retired ones, and ones idle past the ceiling); `purged` connections whose data was
  *  purged; `failed` what did not work and is retried tomorrow, plus every stuck broadcast (the Worker alerts on this one); `deferred`
  *  connections a wall-clock budget cut short (not started, or left between two of their YouTube calls) and dead grants whose purge waits
- *  for the revoke allowance - not a failure: tomorrow's pass reaches them. */
+ *  for the revoke allowance - not a failure: a later pass reaches them (a connection never started is the first one tomorrow; one cut
+ *  after its health check queues behind the ones not yet checked). */
 export type YoutubeDailyResult = {
   checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number; deferred: number;
 };
@@ -473,7 +475,7 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
     if (await checkHealth(p, at, c)) await refreshVideos(p, at, c);
   } catch (err) {
     if (!(err instanceof BudgetSpent)) throw err;
-    p.out.deferred++;   // the slice ran out between two of its calls: what is left (the rest of the refresh) waits for tomorrow
+    p.out.deferred++;   // the slice ran out between two of its calls: its health is stamped, so what is left (the rest of the refresh) waits for its next turn
   }
 }
 
@@ -757,7 +759,7 @@ export async function youtubeDaily(
   });
 
   // 2. Health and refresh, per connected channel (the least-recently checked first, so a pass cut short by its budget - the gated port
-  //    refuses to start a call past it, the connection it cut is counted `deferred` - reaches the rest tomorrow).
+  //    refuses to start a call past it, the connection it cut is counted `deferred` - reaches the ones it never started tomorrow).
   await leg(p, "connections", async () => {
     const connected = await sql<Conn[]>`
       select id, org_id, channel_id, channel_title from org_youtube_connections
