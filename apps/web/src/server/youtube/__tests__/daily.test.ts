@@ -246,7 +246,7 @@ const keyIdOf = async (broadcastId: string): Promise<string | null> =>
  *  needed for a key nothing has used: no producer leaves one (a Go live always names its key in a broadcast). */
 async function seedKey(w: World, slot: number, ageDays: number): Promise<KeyRow> {
   const stream = await w.fake.insertStream(await w.fake.accessToken(w.token), { title: "t17 unused key" });
-  const { keyId } = await insertPooledKey(sql, { orgId: w.orgId, connectionId: w.connectionId, slot, liveStreamId: stream.streamId, ingest: stream.ingest });
+  const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: w.orgId, connectionId: w.connectionId, slot, liveStreamId: stream.streamId, ingest: stream.ingest }));
   await ageKey(keyId, ageDays);
   return (await keyRows(w.connectionId)).find((k) => k.id === keyId)!;
 }
