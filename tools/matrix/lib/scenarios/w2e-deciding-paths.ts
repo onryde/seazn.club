@@ -11,6 +11,10 @@
 //           (G6: badminton, volleyball, table tennis)
 //   W2E_CAP every match's sets ended by the score cap, cap : cap-1 (G7: badminton, whose variants declare one - 30-29 under
 //           3x21, 21-20 under 3x15 - and any set sport whose cfg does)
+//   W2E_TB_SET  every match won by a set a tie-break closed at the MATCH margin - the set tie-break (7-6 with its tb), the slam's
+//           final-set tie-break, the doubles norm's match tie-break (G8: tennis, whose default variant plays them)
+//   W2E_SHORT_SETS  every match won by a set the SHORT-SET tie-break closed (G8: tennis; the builder default has none, so the
+//           case carries the overrides that make it the first variant that does - w2e-cells.ts w2eOverridesFor)
 //
 // The sport's own rule decides every match, so no organiser settle or tie-break is owed (life-bracket-decider-
 // exercised is left out, as W2a's BRACKET_EXTRA_BOARD leaves it). The shared bracket assertions apply, and the
@@ -19,7 +23,7 @@
 // can say it, never on the stream the harness posted alone. What the outcome cannot say is the shoot-out's NAME (hockey's
 // SO and the IIHF's GWS both write method `shootout`): that half is read from the product's summary headline, which prints
 // the label the engine gives the cfg's shoot-out (`preset.shootoutLabel`, read off the pad panel that carries it); and a
-// path that is state only (cricket's super over; the set sports' deciding set and cap, Task 22) is read from the product's state
+// path that is state only (cricket's super over; the set sports' deciding set and cap, Task 22; tennis's tie-break set and short-set tie-break, Task 23) is read from the product's state
 // and refused when the drive recorded no product. The local strict fold is still the
 // parity gate (the stream posted must fold to the request), but it is no longer the witness's evidence.
 import type { MatchOutcome, StageKind } from "@seazn/engine/core";
@@ -32,7 +36,7 @@ import { sportModule } from "../sport-cfg.ts";
 import { STREAM_GENERATORS, matchesRequest } from "../streams/index.ts";
 import { idOf, outcomeLabel, type RequestedOutcome } from "../streams/types.ts";
 import { bracketRootRows } from "../w2a-cells.ts";
-import { w2eApplies, w2ePathUnder } from "../w2e-cells.ts";
+import { w2eBracketCfgOf, w2ePathUnder } from "../w2e-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, caseStageCfg, playDivision, setUpDivision, snapshot, type BracketPick } from "./common.ts";
@@ -107,7 +111,8 @@ function scenario(key: W2eScenarioKey): Scenario {
     async run(ctx) {
       const { row, sport } = ctx.spec;
       if (!(bracketRootRows() as readonly string[]).includes(row)) throw new W2eMisplanned(key, row, sport, `the row's root stage is not a bracket kind, so no match plays a decider (only ${bracketRootRows().join(", ")})`);
-      if (!w2eApplies(key, sport)) throw new W2eMisplanned(key, row, sport, `this sport's generator builds no such path (${W2E_SCENARIO_PATHS[key].join(", ")}) under the bracket presets (w2e-cells.ts)`);
+      // The CASE's own cfg (its variant under its overrides, w2eOverridesFor): a hand-built case on the wrong variant is refused by name.
+      if (w2ePathUnder(key, sport, w2eBracketCfgOf(sport, ctx.spec.overrides)) === null) throw new W2eMisplanned(key, row, sport, `this case's cfg (variant ${ctx.spec.variant}, overrides ${JSON.stringify(ctx.spec.overrides ?? {})}) builds no such path (${W2E_SCENARIO_PATHS[key].join(", ")}) under the bracket presets (w2e-cells.ts)`);
       const rec = new Recorder();
       const setup = await setUpDivision(ctx, rec, fieldSizeFor(row, key, ctx.spec.template));
       const plays = await playDivision(ctx, rec, setup, { bracketPick: pathPick(key, row, sport) });
@@ -142,4 +147,6 @@ export const w2eScenarios: Readonly<Record<W2eScenarioKey, Scenario>> = Object.f
   W2E_DLS: scenario("W2E_DLS"),
   W2E_DECIDER: scenario("W2E_DECIDER"),
   W2E_CAP: scenario("W2E_CAP"),
+  W2E_TB_SET: scenario("W2E_TB_SET"),
+  W2E_SHORT_SETS: scenario("W2E_SHORT_SETS"),
 });

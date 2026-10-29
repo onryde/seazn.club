@@ -21,9 +21,9 @@ export type W2bScenarioKey = (typeof W2B_SCENARIO_KEYS)[number];
 
 /** W2e (Tasks 19–23, spec §10, D16): the opt-in deciding-path scenarios — every bracket match of the case forced down
  *  one sport-rule path (football's extra time and shoot-out; the period kernel's overtime and shoot-out; cricket's
- *  super over and DLS-revised target (Task 21); the set sports' deciding set and score cap (Task 22); Task 23 adds its). Planned ONLY by `--set w1-driving --scenario <key>`, as W2a's and W2b's are; each key's paths are
+ *  super over and DLS-revised target (Task 21); the set sports' deciding set and score cap (Task 22); tennis's tie-break set and short-set tie-break (Task 23)). Planned ONLY by `--set w1-driving --scenario <key>`, as W2a's and W2b's are; each key's paths are
  *  w2e-deciding-paths.ts's W2E_SCENARIO_PATHS. */
-export const W2E_SCENARIO_KEYS = ["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS", "W2E_DECIDER", "W2E_CAP"] as const;
+export const W2E_SCENARIO_KEYS = ["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS", "W2E_DECIDER", "W2E_CAP", "W2E_TB_SET", "W2E_SHORT_SETS"] as const;
 export type W2eScenarioKey = (typeof W2E_SCENARIO_KEYS)[number];
 /** The deciding paths each W2e key forces, in the order a sport's generator is asked for them (the first it builds is
  *  the case's). One authority: the cells (w2e-cells.ts), the pick and the scenario's own check all read it. The
@@ -31,7 +31,7 @@ export type W2eScenarioKey = (typeof W2E_SCENARIO_KEYS)[number];
  *  sport builds the one its engine calls its own, so each sport plays exactly one). */
 export const W2E_SCENARIO_PATHS: Readonly<Record<W2eScenarioKey, readonly DecidingPath[]>> = Object.freeze({
   W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"], W2E_SUPER_OVER: ["superOver"], W2E_DLS: ["dls"],
-  W2E_DECIDER: ["decidingSet"], W2E_CAP: ["cap"],
+  W2E_DECIDER: ["decidingSet"], W2E_CAP: ["cap"], W2E_TB_SET: ["tiebreakSet"], W2E_SHORT_SETS: ["shortSetTb"],
 });
 
 export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey;

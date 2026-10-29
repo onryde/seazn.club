@@ -6,19 +6,27 @@
 //
 // OPT-IN: --set w1-driving plans them only when --scenario names one (w1-driving-set.ts), so no committed plan holds
 // a cell of theirs.
+//
+// Task 23 (W2E_SHORT_SETS): a path can belong to a VARIANT the builder default is not (tennis's short-set tie-break is the
+// Fast4 and short-sets variants'; the default, tour, has none). A case plays the builder default's variant, with the division
+// config the editor would post (`overrides`, common.ts) - so where the default builds none of a key's paths, the cell carries the
+// override that turns the default into the FIRST other variant (engine order) whose bracket cfg does: the top-level cfg keys where
+// that variant's resolved cfg differs from the default's. Derived from the engine's own variants, never listed; checked by
+// resolving it back, so a variant the overrides cannot express is skipped, not planned.
 import { SPORT_KEYS, type RowKey } from "./catalogue.ts";
 import { W2E_SCENARIO_PATHS, type W2eScenarioKey } from "./scenarios/types.ts";
-import { resolveSportCfg, stageCfg } from "./sport-cfg.ts";
+import { resolveSportCfg, stageCfg, variantKeys } from "./sport-cfg.ts";
 import { generateStream } from "./streams/index.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, type DecidingPath } from "./streams/types.ts";
 import { offlineBuilderDefault } from "./variants.ts";
 import { bracketRootRows } from "./w2a-cells.ts";
 
-/** The cfg a bracket fixture of `sport` folds under in a W2e case: the builder default's knockout presets. W2e posts no
- *  stage rules (none of its keys is a hold-path scenario), so this is the cfg the case plays. */
-export function w2eBracketCfgOf(sport: string): unknown {
+/** The cfg a bracket fixture of `sport` folds under in a W2e case: the builder default's knockout presets, under the case's
+ *  division-config `overrides` (none for a case that plays the default as it is). W2e posts no stage rules (none of its keys is
+ *  a hold-path scenario), so this is the cfg the case plays. */
+export function w2eBracketCfgOf(sport: string, overrides: Readonly<Record<string, unknown>> = {}): unknown {
   const variant = offlineBuilderDefault(sport);
-  return stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant);
+  return stageCfg(sport, resolveSportCfg(sport, variant, { ...overrides }), "knockout", variant);
 }
 
 /** The first of `key`'s paths `sport`'s generator builds under `cfg`, or null when it builds none of them. */
@@ -37,15 +45,45 @@ export function w2ePathUnder(key: W2eScenarioKey, sport: string, cfg: unknown): 
   return null;
 }
 
-/** Whether `key` applies to `sport`: its generator builds one of the key's paths under the bracket presets. */
-export function w2eApplies(key: W2eScenarioKey, sport: string): boolean {
-  return w2ePathUnder(key, sport, w2eBracketCfgOf(sport)) !== null;
+/** A value as canonical JSON: object keys sorted (a cfg parsed from a preset and one parsed from overrides can differ in key order). */
+function canon(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
+  if (typeof v === "object" && v !== null) {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v) ?? "null";
 }
 
-export interface W2eCell { readonly row: RowKey; readonly sport: string }
+/** The division-config overrides under which the builder-default case of `sport` builds one of `key`'s paths: `{}` where the
+ *  default does already, the overrides that turn it into the first other declared variant that does (the top-level cfg keys that
+ *  differ, resolved back to that variant's cfg exactly), or null where no variant of the sport builds one. */
+export function w2eOverridesFor(key: W2eScenarioKey, sport: string): Readonly<Record<string, unknown>> | null {
+  if (w2ePathUnder(key, sport, w2eBracketCfgOf(sport)) !== null) return {};
+  const def = offlineBuilderDefault(sport);
+  const base = resolveSportCfg(sport, def) as Record<string, unknown>;
+  for (const variant of variantKeys(sport)) {
+    if (variant === def) continue;
+    const target = resolveSportCfg(sport, variant) as Record<string, unknown>;
+    const overrides: Record<string, unknown> = {};
+    for (const k of new Set([...Object.keys(base), ...Object.keys(target)])) if (canon(base[k]) !== canon(target[k])) overrides[k] = target[k];
+    // The overrides must express the variant exactly (a key the target lacks cannot be removed by an override).
+    if (canon(resolveSportCfg(sport, def, { ...overrides })) !== canon(target)) continue;
+    if (w2ePathUnder(key, sport, stageCfg(sport, target, "knockout", variant)) === null) continue;
+    return overrides;
+  }
+  return null;
+}
+
+/** Whether `key` applies to `sport`: its generator builds one of the key's paths under the bracket presets (of the builder default, or of another variant the case's overrides turn it into). */
+export function w2eApplies(key: W2eScenarioKey, sport: string): boolean {
+  return w2eOverridesFor(key, sport) !== null;
+}
+
+export interface W2eCell { readonly row: RowKey; readonly sport: string; readonly overrides?: Readonly<Record<string, unknown>> }
 
 /** Every bracket-root row × every applicable sport, less the cells the committed drop list drops from LIFECYCLE. */
 export function w2eCells(key: W2eScenarioKey, isDropped: (row: RowKey, sport: string) => boolean = () => false): W2eCell[] {
-  const sports = SPORT_KEYS.filter((s) => w2eApplies(key, s));
-  return bracketRootRows().flatMap((row) => sports.filter((sport) => !isDropped(row, sport)).map((sport) => ({ row, sport })));
+  const sports = SPORT_KEYS.flatMap((sport) => { const overrides = w2eOverridesFor(key, sport); return overrides === null ? [] : [{ sport, overrides }]; });
+  return bracketRootRows().flatMap((row) => sports.filter((c) => !isDropped(row, c.sport)).map((c): W2eCell => (Object.keys(c.overrides).length === 0 ? { row, sport: c.sport } : { row, sport: c.sport, overrides: c.overrides })));
 }

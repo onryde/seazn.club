@@ -1,6 +1,6 @@
 // W2e Tasks 19–24 (spec §10, D16): the opt-in deciding-path scenarios the local truth run plays with `--scenario`, one key
 // per stream (W2E_ET and W2E_SO from Task 19, W2E_OT from Task 20, W2E_SUPER_OVER and W2E_DLS from Task 21, W2E_DECIDER and
-// W2E_CAP from Task 22). Each forces EVERY bracket match of a bracket-root row down its key's path,
+// W2E_CAP from Task 22, W2E_TB_SET and W2E_SHORT_SETS from Task 23). Each forces EVERY bracket match of a bracket-root row down its key's path,
 // so a green run cannot have got there by the policy's rotation. Expected values come from the engine's own declarations
 // (`decidedInFor` over the module's win-method table; the decider presets a bracket stage is created with), never from
 // the scenario's text.
@@ -10,6 +10,7 @@ import { deciderKeysFor, stageKeysFor } from "@seazn/engine/sport";
 import { football } from "@seazn/engine/sports/football";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbased";
+import { tennis } from "@seazn/engine/sports/tennis";
 import { hockey } from "@seazn/engine/sports/hockey";
 import { icehockey } from "@seazn/engine/sports/icehockey";
 import { describe, expect, it } from "vitest";
@@ -24,16 +25,17 @@ import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { W2E_SCENARIO_KEYS, type CaseSpec, type W2eScenarioKey } from "../lib/scenarios/types.ts";
 import { W2E_SCENARIO_PATHS, W2eMisplanned, everyMatchTookTheDecidingPath } from "../lib/scenarios/w2e-deciding-paths.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
-import { resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
+import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { PROBE_LINEUPS, type ProductFold, type StreamEvent, type StreamLineups } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
 import { bracketRootRows } from "../lib/w2a-cells.ts";
-import { w2eApplies, w2eBracketCfgOf, w2eCells } from "../lib/w2e-cells.ts";
+import { w2eApplies, w2eBracketCfgOf, w2eCells, w2eOverridesFor } from "../lib/w2e-cells.ts";
 import type { FixtureStateOut } from "../lib/driver/types.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
 import { capBinds, decidingSetReachable, setSportsOf, type SetCfg, type SetFoldState } from "./set-oracles.ts";
+import { tbIsClosestFinish, type TennisCfg, type TennisFoldState } from "./tennis-oracles.ts";
 
 const variantFor = offlineBuilderDefault;
 /** What the product serves at /state for a fixture folded to `stream`: the engine's own summary of the fold and the fold's
@@ -45,27 +47,46 @@ function productOf(module: ReturnType<typeof sportModule>, cfg: unknown, home: s
 }
 /** What decides each key's matches, in the engine's own vocabulary (sport/module.ts DecidedIn): extra time and overtime are
  *  decided "in overtime", the shoot-out (and the GWS) "by a shoot-out". */
-const DECIDED_IN: Readonly<Record<W2eScenarioKey, DecidedIn>> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot", W2E_SUPER_OVER: "so", W2E_DLS: "regulation", W2E_DECIDER: "regulation", W2E_CAP: "regulation" };
+const DECIDED_IN: Readonly<Record<W2eScenarioKey, DecidedIn>> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot", W2E_SUPER_OVER: "so", W2E_DLS: "regulation", W2E_DECIDER: "regulation", W2E_CAP: "regulation", W2E_TB_SET: "regulation", W2E_SHORT_SETS: "regulation" };
 /** Task 22: the set sports' two keys. Neither path is a stage decider or a decidedIn the outcome can name (a set sport's win is
  *  'regulation' whichever way its sets went), so the engine's declarations that make them reachable are the set kernel's own:
  *  `reachableSetScores` (a deciding set is played) and the rally fold that closes a set at the cap (set-oracles.ts). */
 const SET_KEYS = ["W2E_DECIDER", "W2E_CAP"] as const;
 type SetKey = (typeof SET_KEYS)[number];
 const isSetKey = (k: W2eScenarioKey): k is SetKey => (SET_KEYS as readonly string[]).includes(k);
+/** Task 23: tennis's two keys. A tennis win is a 'regulation' win however its sets ended (nothing in the outcome names either path),
+ *  so the engine's declarations that make them reachable are the nested kernel's cfg: `set.tiebreakAt` (a set can end in a tie-break)
+ *  and `set.tiebreakWinBy` (the field the engine declares for the SHORT-SET tie-break, TN-SS-2 - Fast4 and the short-sets variant). */
+const TB_KEYS = ["W2E_TB_SET", "W2E_SHORT_SETS"] as const;
+type TbKey = (typeof TB_KEYS)[number];
+const isTbKey = (k: W2eScenarioKey): k is TbKey => (TB_KEYS as readonly string[]).includes(k);
+/** A cfg's nested-kernel tie-break declarations (the engine's cfg, not the generator's reading of it). */
+const nestedSet = (cfg: unknown): { tiebreakAt?: number | null; tiebreakWinBy?: number } | null => {
+  const set = (cfg as { set?: unknown } | null)?.set;
+  return typeof set === "object" && set !== null ? (set as { tiebreakAt?: number | null; tiebreakWinBy?: number }) : null;
+};
+/** Whether `sport` is a nested-kernel sport (its module declares `<sport>.set_summary`) and the key applies: W2E_TB_SET where the
+ *  builder default's sets end in a tie-break; W2E_SHORT_SETS where SOME variant's do at the set's own margin. */
+const tbKeyApplies = (k: TbKey, s: string): boolean => {
+  if (!Object.keys(sportModule(s).eventSchemas ?? {}).includes(`${s}.set_summary`)) return false;
+  if (k === "W2E_TB_SET") return nestedSet(resolveSportCfg(s, variantFor(s)))?.tiebreakAt != null;
+  return variantKeys(s).some((v) => { const set = nestedSet(resolveSportCfg(s, v)); return set?.tiebreakAt != null && set.tiebreakWinBy !== undefined; });
+};
 /** The method a product result carries when the key's path decided it, where the engine's win-method table cannot say so on
  *  its own: a DLS win is decidedIn 'regulation' (a revised target is no extra play), so only its method names it. */
 const METHOD_OF: Readonly<Partial<Record<W2eScenarioKey, string>>> = { W2E_DLS: "dls" };
 /** Which of the engine's decider rule keys each scenario plays (`deciderKeysFor`: football's extraTime and shootout, the
  *  period kernel's overtime and shootout — the IIHF's is its GWS). With DECIDED_IN it names the sports the key is FOR. */
-const ENGINE_DECIDER: Readonly<Record<Exclude<W2eScenarioKey, SetKey>, string>> = { W2E_ET: "extraTime", W2E_SO: "shootout", W2E_OT: "overtime", W2E_SUPER_OVER: "superOver", W2E_DLS: "dls" };
+const ENGINE_DECIDER: Readonly<Record<Exclude<W2eScenarioKey, SetKey | TbKey>, string>> = { W2E_ET: "extraTime", W2E_SO: "shootout", W2E_OT: "overtime", W2E_SUPER_OVER: "superOver", W2E_DLS: "dls" };
 /** The rule keys the engine lets a knockout stage set: the deciders (`decider: true`) for the first four keys; cricket's `dls`
  *  is a stage rule but no decider (a revised target is no extra play), so it is read off the stage's settable keys. */
-const keysOf = (k: Exclude<W2eScenarioKey, SetKey>, s: string): readonly string[] => (k === "W2E_DLS" ? stageKeysFor : deciderKeysFor)(sportModule(s), "knockout", variantFor(s));
+const keysOf = (k: Exclude<W2eScenarioKey, SetKey | TbKey>, s: string): readonly string[] => (k === "W2E_DLS" ? stageKeysFor : deciderKeysFor)(sportModule(s), "knockout", variantFor(s));
 /** The sports the ENGINE declares the key's decider for on a knockout, and whose bracket preset reaches the decidedIn it
  *  produces — derived from the modules, not from any generator or scenario. The set keys (Task 22) read the set kernel's own
  *  declarations on the builder default's knockout cfg: a deciding set where `reachableSetScores` has a split-then-decided
  *  score, a cap where the engine's rally fold closes a set at cap : cap-1. */
 const engineSports = (k: W2eScenarioKey): string[] => SPORT_KEYS.filter((s) => {
+  if (isTbKey(k)) return tbKeyApplies(k, s);
   if (isSetKey(k)) {
     if (!setSportsOf([s]).length) return false;
     const cfg = w2eBracketCfgOf(s) as SetCfg;
@@ -76,9 +97,9 @@ const engineSports = (k: W2eScenarioKey): string[] => SPORT_KEYS.filter((s) => {
 });
 
 describe("the W2e keys: frozen names, registered, opt-in", () => {
-  it("the keys are W2E_ET and W2E_SO (Task 19), W2E_OT (Task 20), W2E_SUPER_OVER and W2E_DLS (Task 21) and W2E_DECIDER and W2E_CAP (Task 22), each naming its deciding paths — the shoot-out key lists the IIHF's GWS after hockey's shoot-out; each is registered under its own key with no canary, outside the slice and the w1-driving scripts", () => {
-    expect([...W2E_SCENARIO_KEYS]).toEqual(["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS", "W2E_DECIDER", "W2E_CAP"]);
-    expect(W2E_SCENARIO_PATHS).toEqual({ W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"], W2E_SUPER_OVER: ["superOver"], W2E_DLS: ["dls"], W2E_DECIDER: ["decidingSet"], W2E_CAP: ["cap"] });
+  it("the keys are W2E_ET and W2E_SO (Task 19), W2E_OT (Task 20), W2E_SUPER_OVER and W2E_DLS (Task 21), W2E_DECIDER and W2E_CAP (Task 22) and W2E_TB_SET and W2E_SHORT_SETS (Task 23), each naming its deciding paths — the shoot-out key lists the IIHF's GWS after hockey's shoot-out; each is registered under its own key with no canary, outside the slice and the w1-driving scripts", () => {
+    expect([...W2E_SCENARIO_KEYS]).toEqual(["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS", "W2E_DECIDER", "W2E_CAP", "W2E_TB_SET", "W2E_SHORT_SETS"]);
+    expect(W2E_SCENARIO_PATHS).toEqual({ W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"], W2E_SUPER_OVER: ["superOver"], W2E_DLS: ["dls"], W2E_DECIDER: ["decidingSet"], W2E_CAP: ["cap"], W2E_TB_SET: ["tiebreakSet"], W2E_SHORT_SETS: ["shortSetTb"] });
     let checked = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       expect(SCENARIOS[k].key, k).toBe(k);
@@ -87,22 +108,50 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       expect((W1_DRIVING_SCENARIOS as readonly string[]).includes(k), `${k} is one of the w1-driving scripts`).toBe(false);
       checked++;
     }
-    expect(checked).toBe(7);
+    expect(checked).toBe(9);
   });
 
   it("no filter plans none of them; a named key plans only its own cells, with the w1-driving case-id shape", () => {
     const all = planW1Driving(variantFor, {});
     expect(all.filter((c) => (W2E_SCENARIO_KEYS as readonly string[]).includes(c.scenario))).toEqual([]);
     let planned = 0;
+    let overridden = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       const cases = planW1Driving(variantFor, { scenario: k });
       expect(cases.length, k).toBe(w2eCells(k).length);
       expect(cases.length, k).toBeGreaterThan(0);
       expect(new Set(cases.map((c) => c.scenario)), k).toEqual(new Set([k]));
-      expect(cases.every((c) => c.caseId === `${c.row}|${c.sport}|${c.variant}|${k}` && !c.canary && c.overrides === undefined), k).toBe(true);
+      // A case plays the builder default's variant; where the default builds none of the key's paths (tennis's short-set tie-break) it
+      // carries the division-config overrides that turn it into the first variant that does (w2e-cells.ts) - and only then.
+      expect(cases.every((c) => c.caseId === `${c.row}|${c.sport}|${c.variant}|${k}` && !c.canary && c.variant === variantFor(c.sport)), k).toBe(true);
+      for (const c of cases) {
+        const want = w2eOverridesFor(k, c.sport)!;
+        expect(c.overrides, `${k} ${c.row}|${c.sport}`).toEqual(Object.keys(want).length === 0 ? undefined : want);
+        if (c.overrides !== undefined) overridden++;
+      }
       planned += cases.length;
     }
     expect(planned).toBeGreaterThan(0);
+    // Exactly the short-set key's cells carry overrides: nine keys, one of them (W2E_SHORT_SETS) on tennis's eight bracket rows.
+    expect(overridden).toBe(bracketRootRows().length);
+  });
+
+  it("W2E_SHORT_SETS plans tennis's default (tour has no short-set tie-break) as the first variant that has one: the overrides resolve back to that variant's cfg exactly, the variant is not the default, and its sets close at the set's own margin; W2E_TB_SET needs none", () => {
+    const def = variantFor("tennis");
+    const overrides = w2eOverridesFor("W2E_SHORT_SETS", "tennis")!;
+    expect(Object.keys(overrides).length, "the default is not already a short-set variant").toBeGreaterThan(0);
+    expect(w2eOverridesFor("W2E_TB_SET", "tennis"), "tour plays tie-break sets as it is").toEqual({});
+    const cfg = resolveSportCfg("tennis", def, { ...overrides });
+    const same = variantKeys("tennis").filter((v) => JSON.stringify(Object.entries(resolveSportCfg("tennis", v) as object).sort()) === JSON.stringify(Object.entries(cfg as object).sort()));
+    expect(same, "exactly one declared variant is what the overrides make the default").toHaveLength(1);
+    expect(same[0], "...and it is not the default").not.toBe(def);
+    expect(nestedSet(cfg)!.tiebreakWinBy, "...and it declares the short set's own margin").toBeDefined();
+    expect(variantKeys("tennis").find((v) => v !== def && nestedSet(resolveSportCfg("tennis", v))?.tiebreakWinBy !== undefined), "the FIRST such variant, in the engine's order").toBe(same[0]);
+    // Overrides are not invented for a sport whose default already builds the key's path, or that has no variant that does.
+    for (const k of W2E_SCENARIO_KEYS) for (const sport of SPORT_KEYS) {
+      const o = w2eOverridesFor(k, sport);
+      if (o !== null && Object.keys(o).length > 0) expect([k, sport], "only tennis's short-set cells carry overrides").toEqual(["W2E_SHORT_SETS", "tennis"]);
+    }
   });
 
   it("a filter that plans nothing is refused by name: a sport whose generator builds no such path, a table row, an unknown key", () => {
@@ -126,6 +175,11 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
     expect(() => planW1Driving(variantFor, { scenario: "W2E_CAP", only: "knockout|badminton" })).not.toThrow();
     for (const only of ["knockout|volleyball", "knockout|tabletennis", "knockout|tennis", "knockout|football", "league|badminton"]) expect(() => planW1Driving(variantFor, { scenario: "W2E_CAP", only }), only).toThrow(/plans no case/);
     for (const only of ["knockout|tennis", "knockout|cricket", "knockout|generic", "league|volleyball"]) expect(() => planW1Driving(variantFor, { scenario: "W2E_DECIDER", only }), only).toThrow(/plans no case/);
+    // Task 23: tennis alone plays a tie-break set and a short-set tie-break (the nested kernel's tie-break sets); no other sport, no table row.
+    for (const scenario of ["W2E_TB_SET", "W2E_SHORT_SETS"] as const) {
+      expect(() => planW1Driving(variantFor, { scenario, only: "knockout|tennis" }), scenario).not.toThrow();
+      for (const only of ["knockout|badminton", "knockout|volleyball", "knockout|football", "knockout|cricket", "knockout|generic", "league|tennis"]) expect(() => planW1Driving(variantFor, { scenario, only }), `${scenario} ${only}`).toThrow(/plans no case/);
+    }
     expect(() => planW1Driving(variantFor, { scenario: "W2E_NOPE" })).toThrow(/--scenario.*W2E_NOPE/);
   });
 
@@ -158,6 +212,10 @@ describe("the cells: bracket-root rows × the sports whose generator builds the 
     // that decides a set - volleyball's and table tennis's cap is null.
     expect(engineSports("W2E_DECIDER")).toEqual(SPORT_KEYS.filter((s) => setSportsOf([s]).length > 0));
     expect(engineSports("W2E_CAP")).toEqual(["badminton"]);
+    // Task 23: tennis alone ends sets in a tie-break (a nested-kernel sport whose cfg declares tiebreakAt); the short-set tie-break
+    // belongs to its variants that declare the set's own margin (tiebreakWinBy), not to the builder default.
+    expect(engineSports("W2E_TB_SET")).toEqual(["tennis"]);
+    expect(engineSports("W2E_SHORT_SETS")).toEqual(["tennis"]);
     let total = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       const cells = w2eCells(k);
@@ -182,8 +240,10 @@ describe("the cells: bracket-root rows × the sports whose generator builds the 
 describe("each key, run on the knockout fake for every sport it is for", () => {
   async function runScenario(key: W2eScenarioKey, row: RowKey = "knockout", sport = "football") {
     const variant = variantFor(sport);
-    const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|${key}`, row, sport, variant, scenario: key, canary: false };
-    const out = await SCENARIOS[key].run({ driver: new FakeKnockoutDriver(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    // The case as the planner builds it (w1-driving-set.ts): the builder default's variant, under the overrides the cell carries.
+    const overrides = w2eOverridesFor(key, sport);
+    const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|${key}`, row, sport, variant, scenario: key, canary: false, ...(overrides === null || Object.keys(overrides).length === 0 ? {} : { overrides }) };
+    const out = await SCENARIOS[key].run({ driver: new FakeKnockoutDriver(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant, { ...(spec.overrides ?? {}) }), tag: "t", denied: [] });
     const checks = [...evaluateInvariants(out.observed), ...out.assertions];
     return { out, checks, state: decideState({ checks, deferred: null, error: null }).state };
   }
@@ -676,5 +736,189 @@ describe("Task 22: what the fake knockout product holds for each W2E_DECIDER / W
     // The rulebook's: BWF 7.4 (29-all, the 30th point), the 3x15 format (20-all, the 21st), the junior short game's cap 15.
     expect(Object.fromEntries(seen)).toEqual({ bwf: [30, 29], "bwf-3x15": [21, 20], short: [15, 14] });
     expect(matches).toBeGreaterThan(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 23 - tennis's tie-break set and short-set tie-break are STATE ONLY (a tennis win is 'regulation' however its sets went), so
+// the scenario check reads them from the PRODUCT's state, as the set sports' (Task 22).
+
+describe("everyMatchTookTheDecidingPath, tennis's tie-break set and short-set tie-break on hand-built drives (Task 23: a state-only path is read from the PRODUCT's state)", () => {
+  type TnPath = "tiebreakSet" | "shortSetTb";
+  const KEY_OF: Readonly<Record<TnPath, W2eScenarioKey>> = { tiebreakSet: "W2E_TB_SET", shortSetTb: "W2E_SHORT_SETS" };
+  const OTHER_OF: Readonly<Record<TnPath, TnPath>> = { tiebreakSet: "shortSetTb", shortSetTb: "tiebreakSet" };
+  const cfgOfCase = (variant: string) => stageCfg("tennis", resolveSportCfg("tennis", variant), "knockout", variant) as TennisCfg;
+  const streamOf = (cfg: unknown, path?: TnPath): StreamEvent[] =>
+    generateStream({ sportKey: "tennis", cfg, stageKind: "knockout", home: "a", away: "b", outcome: path === undefined ? { kind: "win", winner: "home" } : { kind: "win", winner: "home", path } });
+  const productFor = (cfg: unknown, events: readonly StreamEvent[]): ProductFold => productOf(tennis, cfg, "a", "b", events);
+  /** A drive as decideFixture records it: the stream the harness posted, the outcome the product answered and its own /state. */
+  const build = (variant: string, path: TnPath) => {
+    const cfg = cfgOfCase(variant);
+    const events = streamOf(cfg, path);
+    const d: BracketDrive = {
+      fixtureId: "f1", stageKind: "knockout", sport: "tennis", home: "a", away: "b", asked: { kind: "win", winner: "home", path },
+      levelAs: null, status: "decided", outcome: { kind: "win", winner: "a", method: "regulation" }, loser: { line: "none" }, next: { line: "none" }, forfeitPlay: null, refusal: null,
+      product: productFor(cfg, events),
+    };
+    return { variant, path, cfg, d, stream: events, plain: productFor(cfg, streamOf(cfg)) };
+  };
+  const check = (x: { d: BracketDrive; stream: StreamEvent[] }, key: W2eScenarioKey, cfg: unknown) => {
+    const r = new Recorder();
+    r.bracketDrives.push(x.d);
+    if (x.stream.length > 0) r.streams.set(x.d.fixtureId, x.stream);
+    return everyMatchTookTheDecidingPath(r, key, () => cfg);
+  };
+  /** Every shipped tennis variant x the paths it builds (the engine's cfg decides which: a path the cfg lacks is refused by name). */
+  const CASES = variantKeys("tennis").flatMap((variant) => (["tiebreakSet", "shortSetTb"] as const).flatMap((path) => {
+    try { streamOf(cfgOfCase(variant), path); } catch { return []; }
+    return [[variant, path] as const];
+  }));
+
+  it("the right path passes under its own key, counted; the same drive under the OTHER tennis key, a path asked of a sport that lacks it, a plain win, a held match and the other winner each red alone", () => {
+    expect(CASES.length, "some variant builds each path").toBeGreaterThan(2);
+    expect(new Set(CASES.map(([, p]) => p))).toEqual(new Set(["tiebreakSet", "shortSetTb"]));
+    let passes = 0;
+    let reds = 0;
+    for (const [variant, path] of CASES) {
+      const x = build(variant, path);
+      const at = `${variant} ${path}`;
+      expect(check(x, KEY_OF[path], x.cfg), at).toMatchObject({ verdict: "pass", checked: 1 });
+      passes++;
+      expect(check(x, KEY_OF[OTHER_OF[path]], x.cfg), `${at} under ${KEY_OF[OTHER_OF[path]]}`).toMatchObject({ verdict: "fail", checked: 1 });
+      for (const foreign of ["W2E_SO", "W2E_DECIDER", "W2E_CAP"] as const) expect(check(x, foreign, x.cfg), `${at} under ${foreign}`).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(check({ ...x, d: { ...x.d, asked: { kind: "win", winner: "home" } } }, KEY_OF[path], x.cfg), `${at}: a plain win`).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(check({ ...x, d: { ...x.d, status: "needs_decision" } }, KEY_OF[path], x.cfg), `${at}: held`).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(check({ ...x, d: { ...x.d, outcome: { kind: "win", winner: "b", method: "regulation" } } }, KEY_OF[path], x.cfg), `${at}: the other winner`).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(check({ d: x.d, stream: [] }, KEY_OF[path], x.cfg), `${at}: no stream`).toMatchObject({ verdict: "fail", checked: 1 });
+      reds += 7;
+    }
+    expect(passes).toBe(CASES.length);
+    expect(reds).toBe(CASES.length * 7);
+    expect(everyMatchTookTheDecidingPath(new Recorder(), "W2E_TB_SET", () => ({}))).toMatchObject({ verdict: "fail", checked: 0 });
+    expect(everyMatchTookTheDecidingPath(new Recorder(), "W2E_SHORT_SETS", () => ({}))).toMatchObject({ verdict: "fail", checked: 0 });
+  });
+
+  it("a WRONG PRODUCT reds even when the stream the harness posted is the path (the local fold would pass): a product that never reached the path (a plain win), one that reached the other path, no product at all, a half one, and one folded under another cfg", () => {
+    let rows = 0;
+    const fail = (label: string, x: { d: BracketDrive; stream: StreamEvent[] }, key: W2eScenarioKey, cfg: unknown) => {
+      expect(check(x, key, cfg), label).toMatchObject({ verdict: "fail", checked: 1 });
+      rows++;
+    };
+    let otherReached = 0;
+    for (const [variant, path] of CASES) {
+      const x = build(variant, path);
+      const key = KEY_OF[path];
+      const at = `${variant} ${path}`;
+      const product = x.d.product as ProductFold;
+      fail(`${at}: the product's state is a straight-sets plain win`, { ...x, d: { ...x.d, product: x.plain } }, key, x.cfg);
+      // The product reached the OTHER path (only a cfg that builds both has one; the short-set cfg with a final-set tie-break is built in the stream tests).
+      const otherEvents = (() => { try { return streamOf(x.cfg, OTHER_OF[path]); } catch { return null; } })();
+      if (otherEvents !== null) { fail(`${at}: the product's state is the ${OTHER_OF[path]} win's`, { ...x, d: { ...x.d, product: productFor(x.cfg, otherEvents) } }, key, x.cfg); otherReached++; }
+      fail(`${at}: product null`, { ...x, d: { ...x.d, product: null } }, key, x.cfg);
+      fail(`${at}: a drive that carried no product field`, { ...x, d: (({ product: _p, ...rest }) => rest)(x.d) }, key, x.cfg);
+      fail(`${at}: no summary`, { ...x, d: { ...x.d, product: { summary: null, state: product.state } } }, key, x.cfg);
+      fail(`${at}: no state`, { ...x, d: { ...x.d, product: { summary: product.summary, state: null } } }, key, x.cfg);
+      const strip = JSON.parse(JSON.stringify(product)) as { summary: { detail: { sets: { away: number }[] } } };
+      strip.summary.detail.sets[0]!.away += 1;
+      fail(`${at}: the summary's set strip is not the state's`, { ...x, d: { ...x.d, product: strip as unknown as ProductFold } }, key, x.cfg);
+      const cfgMoved = JSON.parse(JSON.stringify(product)) as { state: { cfg: TennisCfg } };
+      cfgMoved.state.cfg.set.tiebreakTo += 1;
+      fail(`${at}: the product folded under another tie-break target`, { ...x, d: { ...x.d, product: cfgMoved as unknown as ProductFold } }, key, x.cfg);
+      const outcomeMoved = JSON.parse(JSON.stringify(product)) as { state: { outcome: { winner: string } } };
+      outcomeMoved.state.outcome.winner = "b";
+      fail(`${at}: the product's own outcome names the other winner`, { ...x, d: { ...x.d, product: outcomeMoved as unknown as ProductFold } }, key, x.cfg);
+      const live = JSON.parse(JSON.stringify(product)) as { state: { phase: string } };
+      live.state.phase = "live";
+      fail(`${at}: the product's match is not done`, { ...x, d: { ...x.d, product: live as unknown as ProductFold } }, key, x.cfg);
+      const tbGone = JSON.parse(JSON.stringify(product)) as { state: { sets: { tb?: unknown; mtb?: boolean }[] }; summary: { detail: { sets: { tb?: unknown; mtb?: boolean }[] } } };
+      for (const sets of [tbGone.state.sets, tbGone.summary.detail.sets]) { delete sets.at(-1)!.tb; delete sets.at(-1)!.mtb; }
+      fail(`${at}: the product's last set shows no tie-break`, { ...x, d: { ...x.d, product: tbGone as unknown as ProductFold } }, key, x.cfg);
+      fail(`${at}: the product's outcome claims a shoot-out`, { ...x, d: { ...x.d, outcome: { kind: "win", winner: "a", method: "shootout" } } }, key, x.cfg);
+      fail(`${at}: the posted stream was a plain win`, { d: x.d, stream: streamOf(x.cfg) }, key, x.cfg);
+    }
+    console.info(`w2e-scenarios: ${rows} wrong-product row(s) over ${CASES.length} tennis case(s)`);
+    expect(rows).toBeGreaterThan(CASES.length * 10);
+    // No shipped variant builds both paths (the paths are told apart by the margin a variant plays its sets under), so the other-path
+    // product row has nothing to build here; the stream tests (w2e-streams.test.ts) build a cfg with both.
+    expect(otherReached).toBe(0);
+  });
+
+  it("a case whose OWN cfg builds no such path is refused by name before any driver call: W2E_SHORT_SETS on tennis's default with no overrides (tour has no short-set tie-break), and W2E_TB_SET under the short-set overrides (Fast4 ends its sets at the set's own margin)", async () => {
+    const def = variantFor("tennis");
+    const shortOverrides = w2eOverridesFor("W2E_SHORT_SETS", "tennis")!;
+    const cells: readonly (readonly [W2eScenarioKey, Record<string, unknown> | undefined])[] = [["W2E_SHORT_SETS", undefined], ["W2E_TB_SET", { ...shortOverrides }]];
+    for (const [key, overrides] of cells) {
+      const spec: CaseSpec = { caseId: `knockout|tennis|${def}|${key}`, row: "knockout", sport: "tennis", variant: def, scenario: key, canary: false, ...(overrides === undefined ? {} : { overrides }) };
+      const calls: string[] = [];
+      const driver = new Proxy(new FakeKnockoutDriver(), { get: (t, k, r) => { calls.push(String(k)); return Reflect.get(t, k, r) as unknown; } });
+      const err = await SCENARIOS[key].run({ driver, spec, orgSlug: "o", cfg: resolveSportCfg("tennis", def, { ...(overrides ?? {}) }), tag: "t", denied: [] }).then(() => null, (e: unknown) => e as Error);
+      expect(err, key).toBeInstanceOf(W2eMisplanned);
+      expect(err!.message, key).toMatch(/builds no such path/);
+      expect(calls, `${key}: nothing was asked of the driver`).toEqual([]);
+    }
+  });
+});
+
+describe("Task 23: what the fake knockout product holds for each W2E_TB_SET / W2E_SHORT_SETS match IS the path - read from its /state by the engine's cfg declarations, not by the witness", () => {
+  async function playedStates(key: "W2E_TB_SET" | "W2E_SHORT_SETS") {
+    const driver = new FakeKnockoutDriver();
+    const variant = variantFor("tennis");
+    const overrides = w2eOverridesFor(key, "tennis")!;
+    const spec: CaseSpec = { caseId: `knockout|tennis|${variant}|${key}`, row: "knockout", sport: "tennis", variant, scenario: key, canary: false, ...(Object.keys(overrides).length === 0 ? {} : { overrides }) };
+    const cfg = resolveSportCfg("tennis", variant, { ...overrides });
+    const out = await SCENARIOS[key].run({ driver, spec, orgSlug: "o", cfg, tag: "t", denied: [] });
+    const states: TennisFoldState[] = [];
+    for (const f of driver.rows()) {
+      if (f.status !== "decided") continue;
+      const st = await driver.fixtureState(f.id);
+      expect(st.state, f.id).not.toBeNull();
+      states.push(st.state as TennisFoldState);
+    }
+    return { out, states, cfg: stageCfg("tennis", cfg, "knockout", variant) as TennisCfg };
+  }
+
+  it("every decided match's last set was closed by a tie-break at the margin the key names - the match's (tiebreak.winBy) for W2E_TB_SET, the set's own (set.tiebreakWinBy) for W2E_SHORT_SETS - each at its closest finish, asked of the engine's strict fold", async () => {
+    const margins = new Set<number>();
+    let matches = 0;
+    for (const key of TB_KEYS) {
+      const { out, states, cfg } = await playedStates(key);
+      expect(out.assertions.find((a) => a.id === "w2e-every-match-took-the-path")!.verdict, key).toBe("pass");
+      expect(states.length, `${key}: more than one match decided`).toBeGreaterThan(1);
+      const want = key === "W2E_TB_SET" ? cfg.tiebreak.winBy : cfg.set.tiebreakWinBy!;
+      const target = cfg.set.tiebreakTo;
+      for (const st of states) {
+        const side = st.entrants.home === st.outcome!.winner ? "home" : "away";
+        const other = side === "home" ? "away" : "home";
+        const last = st.sets.at(-1)!;
+        expect(last.tb, `${key}: the last set ended in a tie-break`).toBeDefined();
+        expect([last.tb![side] - last.tb![other], last.tb![side]], `${key}: margin and target`).toEqual([want, target]);
+        margins.add(last.tb![side] - last.tb![other]);
+        matches++;
+      }
+    }
+    // The two keys' margins differ (the match's 2 against the short set's 1), so a key that played the other's tie-break would red.
+    expect(margins.size, "the keys play tie-breaks at different margins").toBe(2);
+    console.info(`w2e-scenarios: ${matches} tennis match(es) read off the product's state`);
+    expect(matches).toBeGreaterThan(2);
+  });
+
+  it("the stream a tennis scenario posts is the engine's closest finish: tbIsClosestFinish (accepted, one point short refused, one short of the margin refused) for every recorded stream", async () => {
+    let streams = 0;
+    for (const key of TB_KEYS) {
+      const driver = new FakeKnockoutDriver();
+      const variant = variantFor("tennis");
+      const overrides = w2eOverridesFor(key, "tennis")!;
+      const spec: CaseSpec = { caseId: `knockout|tennis|${variant}|${key}`, row: "knockout", sport: "tennis", variant, scenario: key, canary: false, ...(Object.keys(overrides).length === 0 ? {} : { overrides }) };
+      const cfg = resolveSportCfg("tennis", variant, { ...overrides });
+      await SCENARIOS[key].run({ driver, spec, orgSlug: "o", cfg, tag: "t", denied: [] });
+      const stageCfgOf = stageCfg("tennis", cfg, "knockout", variant);
+      for (const f of driver.fixtures) {
+        if (f.status !== "decided") continue;
+        expect(f.events.length, `${key} ${f.id}: the fake holds the stream the scenario posted`).toBeGreaterThan(1);
+        expect(tbIsClosestFinish(stageCfgOf, f.events), `${key} ${f.id}`).toEqual({ accepted: true, targetEdge: true, marginEdge: true });
+        streams++;
+      }
+    }
+    expect(streams, "some recorded stream was checked").toBeGreaterThan(0);
   });
 });
