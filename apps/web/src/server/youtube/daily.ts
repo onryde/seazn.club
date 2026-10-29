@@ -14,6 +14,7 @@ import "server-only";
 //      REFRESH — the `complete` rows whose video was last confirmed more than 25 days ago, in batches of 50 (Google's per-call id cap):
 //      still there → refreshed_at = the pass's now; gone → the row is deleted and fixtures.stream_url is cleared WHEN IT POINTS AT THAT
 //      VIDEO (a club's own link is never touched).
+//      IDLE KEYS — the pooled keys of a connected channel that nothing has used for the whole 30-day ceiling are deleted (`deleteIdleKeys`).
 //   2b. LAPSED VIDEOS — a `complete` row of a connection whose grant is dead cannot be refreshed; once it has gone the 30-day ceiling
 //      without a confirmation it is deleted (and the link that pointed at it cleared), without waiting for the grant's own purge (4).
 //   2c. RETIRED KEYS — a pooled key whose liveStream is gone at YouTube (retired by Go live) keeps a sealed ingest key for nothing: it is
@@ -139,6 +140,8 @@ export type DailyHooks = {
   afterLapsedListed?: () => Promise<void>;
   /** After the stuck broadcasts were listed, before the first is finalized. */
   afterStuckListed?: () => Promise<void>;
+  /** After a connected channel's videos were refreshed, before its idle pooled keys are looked at. */
+  beforeIdleKeys?: () => Promise<void>;
   /** After the dead grants were listed, before the first purge. */
   afterDeadGrantsListed?: () => Promise<void>;
   /** After the purge / removal read the fixtures' links, before it clears one. */
@@ -368,7 +371,10 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
     else failedStep(err, c, p.out, "token");
     return;
   }
-  if (await checkHealth(p, at, c)) await refreshVideos(p, at, c);
+  if (await checkHealth(p, at, c)) {
+    await refreshVideos(p, at, c);
+    await deleteIdleKeys(p, at, c);
+  }
 }
 
 // ─── leg 2b: videos the pass can no longer refresh ───────────────────────────────────────────────────────────────────────────────────
@@ -433,6 +439,48 @@ async function deleteRetiredKeys(p: Pass, c: { id: string; org_id: string }): Pr
     return deleteKeyRows(tx, c.org_id, c.id, keys.map((k) => k.id));
   });
   p.out.keysRemoved += gone.length;
+}
+
+/** An IDLE key (PO ruling, B6 batch review I1c): nothing refreshes a live pooled key's stored ingest key, so one that nothing has used for
+ *  the whole ceiling goes too - the key itself is older than the ceiling, no broadcast of it is open, and none was made in the last
+ *  ceiling's worth of days. "No broadcast of it is open" is `deleteKeyRows`' own guard (a key an open broadcast names is never deleted,
+ *  however old that broadcast), so the query below does not say it a second time. Its finished broadcasts forget it; the pool simply
+ *  regrows on the next Go live (one `liveStreams.insert`).
+ *  Judged INSIDE the transaction that holds the connection `for share`: Go live's pick takes it `for update`, so a key it is choosing
+ *  right now is either already named by a fresh broadcast (not idle) or picked after this commit (and finds one fewer key). Afterwards,
+ *  BEST EFFORT and outside every transaction, the liveStream is deleted at YouTube (a refusal is reported by its code only; the row is
+ *  gone either way). Only for a CONNECTED channel: a dead grant's keys go with the grant, at its 30-day purge. */
+async function deleteIdleKeys(p: Pass, at: string, c: Conn): Promise<void> {
+  const idleSince = daysBefore(p.now, YOUTUBE_DATA_CEILING_DAYS);
+  let streams: string[];
+  try {
+    await p.hooks.beforeIdleKeys?.();
+    streams = await sql.begin(async (tx) => {
+      if (!(await lockConnectionShared(tx, c.org_id, c.id))) return [];
+      const idle = await tx<{ id: string }[]>`
+        select k.id from youtube_stream_keys k
+         where k.connection_id = ${c.id} and k.org_id = ${c.org_id} and k.retired_at is null and k.created_at < ${idleSince}
+           and not exists (select 1 from youtube_broadcasts b where b.key_id = k.id and b.created_at >= ${idleSince})
+         order by k.id`;
+      return deleteKeyRows(tx, c.org_id, c.id, idle.map((k) => k.id));
+    });
+  } catch (err) {
+    failedStep(err, c, p.out, "idle_keys");
+    return;
+  }
+  p.out.keysRemoved += streams.length;
+  for (const streamId of streams) {
+    try {
+      await viaPort(() => p.port.deleteStream(at, streamId), c, "idle_stream");
+    } catch (err) {
+      // A stream already gone resolves (port.ts), so a refusal here is a real one: reported by its CODE (never a body, id or key).
+      if (err instanceof YouTubeError) {
+        captureError(new Error(`youtube daily: deleting an idle stream was refused (${err.code})`), {
+          orgId: c.org_id, route: "youtube.daily.idle_stream", extra: { connectionId: c.id },
+        });
+      }
+    }
+  }
 }
 
 // ─── leg 3: stuck broadcasts ─────────────────────────────────────────────────────────────────────────────────────────────────────────

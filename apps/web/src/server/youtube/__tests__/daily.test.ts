@@ -41,10 +41,11 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
   };
 });
 
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { youtubeWatchUrl } from "@/lib/youtube";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import { insertPooledKey } from "@/server/relay/secret-columns";
 import { pairPresentPhone, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { divisionRig, seedOrg } from "@/server/usecases/__tests__/_rig";
 import { grantCredits } from "@/server/usecases/stream-credits";
@@ -239,15 +240,29 @@ const keyRows = (connectionId: string) =>
   sql<KeyRow[]>`select id, slot, live_stream_id, retired_at, created_at from youtube_stream_keys where connection_id = ${connectionId} order by slot, created_at`;
 const keyIdOf = async (broadcastId: string): Promise<string | null> =>
   (await sql<{ key_id: string | null }[]>`select key_id from youtube_broadcasts where id = ${broadcastId}`)[0]!.key_id;
+/** A pooled key made the way Go live pools one (a liveStream at the fake, sealed by the real writer), aged `ageDays`. No Go live is
+ *  needed for a key nothing has used: no producer leaves one (a Go live always names its key in a broadcast). */
+async function seedKey(w: World, slot: number, ageDays: number): Promise<KeyRow> {
+  const stream = await w.fake.insertStream(await w.fake.accessToken(w.token), { title: "t17 unused key" });
+  const { keyId } = await insertPooledKey(sql, { orgId: w.orgId, connectionId: w.connectionId, slot, liveStreamId: stream.streamId, ingest: stream.ingest });
+  await ageKey(keyId, ageDays);
+  return (await keyRows(w.connectionId)).find((k) => k.id === keyId)!;
+}
+const ageKey = (id: string, days: number) =>
+  sql`update youtube_stream_keys set created_at = now() - (${days}::float8 * interval '1 day') where id = ${id}`;
+const ageBroadcast = (id: string, days: number) =>
+  sql`update youtube_broadcasts set created_at = now() - (${days}::float8 * interval '1 day') where id = ${id}`;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-/** Hold a connection row `for update` in another transaction (what Go live's pick and a disconnect's purge take), until `release()`. */
-async function holdConnection(connectionId: string): Promise<{ release: () => Promise<void> }> {
+/** Hold a connection row `for update` in another transaction (what Go live's pick and a disconnect's purge take), until `release()`;
+ *  `inTx` runs inside it, uncommitted (Go live's pick names a key in a new broadcast under that lock). */
+async function holdConnection(connectionId: string, inTx?: (t: Tx) => Promise<unknown>): Promise<{ release: () => Promise<void> }> {
   let open!: () => void;
   const gate = new Promise<void>((r) => { open = r; });
   let locked!: () => void;
   const held = new Promise<void>((r) => { locked = r; });
   const tx = sql.begin(async (t) => {
     await t`select 1 from org_youtube_connections where id = ${connectionId} for update`;
+    if (inTx) await inTx(t);
     locked();
     await gate;
   });
@@ -1327,6 +1342,125 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       await hold.release();
       expect(await pass).toEqual({ ...ZERO, keysRemoved: 1 });
       expect(await keyRows(w.connectionId)).toEqual([]);
+    });
+  });
+
+  // ═══ pooled stream keys: an IDLE key (B6 batch review I1c, PO ruling) ═══════════════════════════════════════════════════
+  describe("idle pooled keys", () => {
+    const CEIL = YOUTUBE_DATA_CEILING_DAYS;
+
+    it("EMPTY CASE FIRST (no key); then the matrix, every line a 29/31-day pair: the key's age and the age of the last broadcast that named it, and an OPEN broadcast however old - only the idle ones go, at YouTube too, and the finished rows forget them", async () => {
+      const w = await world({ fixtures: 3, credits: 3 });
+      const [f1, f2, f3] = w.fixtures as [string, string, string];
+      expect(await daily(w), "no key at all").toEqual({ ...ZERO, checked: 1 });
+      const a = await playAndStop(w, f1);
+      const b = await playAndStop(w, f2);
+      const open = await goLive(w, f3);
+      const openId = (await sessionRow(open.sessionId)).youtube_broadcast_id!;
+      expect(await w.step({ at: afterStop(b, min(6)) }), "premise: the two stopped matches are ended by the real end step").toMatchObject({ ended: 2 });
+      const [k1, k2, k3] = await keyRows(w.connectionId);
+      expect([k1?.slot, k2?.slot, k3?.slot], "premise: three keys, one per concurrent match").toEqual([1, 2, 3]);
+      expect([await keyIdOf(a.broadcastId), await keyIdOf(b.broadcastId), await keyIdOf(openId)]).toEqual([k1!.id, k2!.id, k3!.id]);
+      const k4 = await seedKey(w, 4, CEIL + 1);   // never used, older than the ceiling
+      const k5 = await seedKey(w, 5, CEIL - 1);   // never used, younger
+      for (const k of [k1!, k2!, k3!]) await ageKey(k.id, CEIL + 10);
+      await ageBroadcast(a.broadcastId, CEIL + 1);   // k1: last named 31 days ago
+      await ageBroadcast(b.broadcastId, CEIL - 1);   // k2: last named 29 days ago
+      await ageBroadcast(openId, CEIL + 10);         // k3: named by a broadcast that is STILL OPEN, however old
+      const streams = () => w.fake.streamsCount(w.channel.id);
+      expect(streams(), "premise: five liveStreams at YouTube").toBe(5);
+
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, keysRemoved: 2 });
+      expect((await keyRows(w.connectionId)).map((k) => k.id), "k1 and k4 went; k2 (29-day use), k3 (open), k5 (29-day key) stayed").toEqual([k2!.id, k3!.id, k5.id]);
+      expect(streams(), "and their liveStreams are gone at YouTube").toBe(3);
+      expect(w.fake.calls.filter((c) => c.method === "deleteStream").length).toBe(2);
+      expect(k4.id).toBeTruthy();
+      expect(await keyIdOf(a.broadcastId), "the finished row forgot its key").toBeNull();
+      expect((await broadcastRow(a.broadcastId)).state, "and is still the replay").toBe("complete");
+      expect(await streamUrlOf(f1)).toBe(youtubeWatchUrl(a.ytId));
+      expect(await keyIdOf(b.broadcastId)).toBe(k2!.id);
+      expect(await keyIdOf(openId)).toBe(k3!.id);
+      expect(await daily(w), "a second pass is idempotent").toEqual({ ...ZERO, checked: 1 });
+    });
+
+    it("the pool regrows on the next Go live: with its only key deleted as idle, a real Go live pools a fresh liveStream and binds it", async () => {
+      const w = await world();
+      const k = await seedKey(w, 1, CEIL + 1);
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect(await keyRows(w.connectionId)).toEqual([]);
+      const { sessionId } = await goLive(w, w.fixtures[0]!);
+      const b = await broadcastRow((await sessionRow(sessionId)).youtube_broadcast_id!);
+      const keys = await keyRows(w.connectionId);
+      expect(keys.length).toBe(1);
+      expect(keys[0]!.id, "a new key, not the deleted one").not.toBe(k.id);
+      expect(b.key_id).toBe(keys[0]!.id);
+      expect(b.state).toBe("live");
+    });
+
+    it("a liveStream YouTube refuses to delete is reported by its CODE only (never its id, key or a body) and the row is gone regardless; one already gone at YouTube is no report", async () => {
+      const w = await world();
+      const k = await seedKey(w, 1, CEIL + 1);
+      w.fake.failNext("deleteStream", "youtube_unavailable", "backendError", { channelId: w.channel.id });
+      expect(await daily(w), "the row is deleted whatever YouTube said; not a failure to retry").toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect(await keyRows(w.connectionId)).toEqual([]);
+      const reports = dailyReports().filter((c) => (c[1] as { route?: string }).route === "youtube.daily.idle_stream");
+      expect(reports.length, "reported once").toBe(1);
+      const text = `${(reports[0]![0] as Error).message} ${JSON.stringify(reports[0]![1])}`;
+      expect(text).toContain("youtube_unavailable");
+      expect(text, "no stream id").not.toContain(k.live_stream_id);
+
+      const k2 = await seedKey(w, 1, CEIL + 1);
+      await w.fake.deleteStream(await w.fake.accessToken(w.token), k2.live_stream_id);   // the club deleted it in Studio
+      sentry.captureError.mockClear();
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect(dailyReports(), "already gone: nothing to report").toEqual([]);
+    });
+
+    it("a DEAD grant's idle key is left to the grant's own purge (no token to delete the stream with); after a reconnect the next pass deletes it; a retired key is the retired leg's and costs YouTube no call", async () => {
+      const w = await world();
+      const k = await seedKey(w, 1, CEIL + 1);
+      const r = await seedKey(w, 2, CEIL + 1);
+      await sql`update youtube_stream_keys set retired_at = now() where id = ${r.id}`;
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      expect(await daily(w), "not connected: only the retired key goes").toEqual({ ...ZERO, keysRemoved: 1 });
+      expect((await keyRows(w.connectionId)).map((x) => x.id), "the idle key of a dead grant stays").toEqual([k.id]);
+
+      const g = await grant(w.org, { connectionId: w.connectionId, channels: [w.channel] });
+      await saveConnectionFromGrant({ pendingId: g.id, channelId: w.channel.id, userId: w.userId }, w.fake);
+      w.fake.seedGrant({ refreshToken: g.token, channelId: w.channel.id, channelTitle: w.channel.title });
+      const before = w.fake.calls.length;
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect(await keyRows(w.connectionId)).toEqual([]);
+      expect(w.fake.calls.slice(before).filter((c) => c.method === "deleteStream").length, "the idle key's stream, and only it").toBe(1);
+    });
+
+    it("a retired key that is also older than the ceiling is the retired leg's: removed once, with no YouTube call (its stream is already gone)", async () => {
+      const w = await world();
+      const r = await seedKey(w, 1, CEIL + 1);
+      await sql`update youtube_stream_keys set retired_at = now() where id = ${r.id}`;
+      const before = w.fake.calls.length;
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect(w.fake.calls.slice(before).filter((c) => c.method === "deleteStream")).toEqual([]);
+    });
+
+    it("RACE: a Go live choosing the idle key at that instant (the connection held `for update`, a fresh broadcast naming the key not yet committed) wins - the key is judged only once the pick has committed, and is kept", async () => {
+      const w = await world();
+      const k = await seedKey(w, 1, CEIL + 1);
+      let released = 0;
+      const out = await youtubeDaily(w.fake, new Date(), {
+        orgIds: [w.orgId],
+        hooks: {
+          beforeIdleKeys: async () => {
+            const hold = await holdConnection(w.connectionId, (t) => t`
+              insert into youtube_broadcasts (org_id, connection_id, fixture_id, key_id, title, privacy, state)
+              values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, ${k.id}, 't17 pick', 'unlisted', 'created')`);
+            setTimeout(() => { released++; void hold.release(); }, 500);
+          },
+        },
+      });
+      expect(released, "premise: the pick was committed while the pass waited").toBe(1);
+      expect(out).toEqual({ ...ZERO, checked: 1 });
+      expect((await keyRows(w.connectionId)).map((x) => x.id), "the key it picked is kept").toEqual([k.id]);
     });
   });
 
