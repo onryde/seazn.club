@@ -91,7 +91,8 @@ async function ensureDestination(tx: Tx, orgId: string, connectionId: string, ch
  *  statement (token-store.ts, R1). Around it, in the same transaction: the connection learns whose Google account now holds its
  *  token (T18's "revoke unless another connection shares the sub" reads it) and which scope was granted; a consent given on
  *  NEWER wording than the connection carries is recorded on it (replaceConnectionToken does not touch consent); and every open
- *  broadcast's retry backoff is cleared, so the end step that was waiting for a working token tries again at once. */
+ *  broadcast's retry backoff, failure count and stuck-age clock are cleared, so the end step that was waiting for a working token
+ *  tries again at once, from a fresh start. */
 async function reconnect(
   tx: Tx, p: PendingRow, connectionId: string, channel: { id: string; title: string }, token: string, consentVersionOnConnection: number,
 ): Promise<YoutubeConnectionSaved> {
@@ -104,9 +105,13 @@ async function reconnect(
       update org_youtube_connections set consent_version = ${p.consent_version}, consent_at = ${p.consent_at}, consent_by = ${p.user_id}
        where id = ${connectionId} and org_id = ${p.org_id}`;
   }
+  // A fresh start: the failure count and the stuck-age clock (claimed_at, read only by daily.ts's age rule) go with the backoff,
+  // or the daily pass would finalize `end_stuck` a row the club's reconnect just gave a working token, one failure later. An
+  // `ending` row with no backoff (an admission claim holds no lease) has no failure to clear but has aged all the same.
   await tx`
-    update youtube_broadcasts set next_attempt_at = null
-     where connection_id = ${connectionId} and org_id = ${p.org_id} and next_attempt_at is not null
+    update youtube_broadcasts
+       set next_attempt_at = null, attempts = 0, claimed_at = case when state = 'ending' then now() else claimed_at end
+     where connection_id = ${connectionId} and org_id = ${p.org_id} and (next_attempt_at is not null or state = 'ending')
        and state in ${tx(OPEN_BROADCAST_STATES)}`;
   const targetId = await ensureDestination(tx, p.org_id, connectionId, channel.id, channel.title);
   await tx`delete from youtube_connect_pending where id = ${p.id}`;

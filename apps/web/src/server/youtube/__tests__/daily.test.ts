@@ -884,7 +884,41 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(row.last_error_code).not.toBe("end_stuck");
     });
 
-    it("a row on a RECONNECT-NEEDED connection is waiting for the club, not stuck: untouched and unreported at 31 failures; once the club reconnects (the real save) the next pass finalizes it", async () => {
+    it("a REAL reconnect (the save) gives the open broadcasts a fresh start - attempts 0, no backoff - so one failure after it is not a stuck row; it can still become one by failing 31 times AGAIN (controller ruling, fix round 1)", async () => {
+      const w = await world();
+      refuseComplete(w.fake);
+      const m = await playAndStop(w, w.fixtures[0]!);
+      await failTo(w, m.broadcastId, STUCK_ATTEMPTS, afterStop(m, min(6)));
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);   // the grant died while the row was failing
+      expect(await broadcastRow(m.broadcastId), "premise: the history before the reconnect").toMatchObject({ attempts: STUCK_ATTEMPTS });
+
+      // The club took its time: the row has been `ending` for longer than the age bound by the DATABASE's clock (the world's simulated
+      // one ran ahead of it while the failures were played), so the age rule has its own say after the save.
+      await sql`update youtube_broadcasts set claimed_at = now() - (${STUCK_MINUTES + 60}::float8 * interval '1 minute') where id = ${m.broadcastId}`;
+
+      const g = await grant(w.org, { connectionId: w.connectionId, channels: [w.channel] });
+      w.fake.seedGrant({ refreshToken: g.token, channelId: w.channel.id, channelTitle: w.channel.title });
+      await saveConnectionFromGrant({ pendingId: g.id, channelId: w.channel.id, userId: w.userId }, w.fake);
+      expect((await connRow(w.connectionId)).status).toBe("connected");
+      expect(await broadcastRow(m.broadcastId), "the save cleared the failure history with the backoff").toMatchObject({ attempts: 0, next_attempt_at: null });
+
+      // The save stamps the database's own clock (claimed_at = now()), the 31 failures ran on the world's simulated one, a day ahead of it:
+      // bring the world back to the present, which is where a real reconnect and the failures after it happen together.
+      w.setNow(Date.now());
+      // ONE failure after the reconnect (the fake still refuses complete): attempts 1, not 32, and the row is minutes old, not days.
+      await w.step({ at: w.now() + min(1) });
+      expect(await broadcastRow(m.broadcastId)).toMatchObject({ state: "ending", attempts: 1 });
+      expect(await daily(w, { now: new Date(w.now()) }), "one failure is not a stuck row (the reconnected channel is health-checked, nothing else)").toEqual({ ...ZERO, checked: 1 });
+      expect((await broadcastRow(m.broadcastId)).state).toBe("ending");
+      expect(dailyReports()).toHaveLength(0);
+
+      // The positive pair: the fresh start did not switch the rule off - 31 failures after the reconnect is stuck again.
+      await failTo(w, m.broadcastId, STUCK_ATTEMPTS, w.now());
+      expect(await daily(w, { now: new Date(w.now()) })).toMatchObject({ failed: 1 });
+      expect(await broadcastRow(m.broadcastId)).toMatchObject({ state: "failed", last_error_code: "end_stuck" });
+    });
+
+    it("a row on a RECONNECT-NEEDED connection is waiting for the club, not stuck: untouched and unreported at 31 failures; with only the token replaced (no save, so the failure history stands) the next pass finalizes it", async () => {
       const w = await world();
       refuseComplete(w.fake);
       const m = await playAndStop(w, w.fixtures[0]!);
