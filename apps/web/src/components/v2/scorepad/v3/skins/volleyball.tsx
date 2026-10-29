@@ -206,6 +206,7 @@
 import type { LineupPolicy, LineupRejectionReason, SquadMember, SquadState } from "@seazn/engine/core";
 import { DEFAULT_LINEUP_POLICY, memberOf, onFieldPersons } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
+import { entrantKindCap } from "@seazn/engine/sport";
 import {
   volleyball as volleyballModule,
   setBasedServeContext,
@@ -250,7 +251,8 @@ export const RALLY_TYPE = `${SPORT}.rally`;
  *  (`reference_gallery_racquet_capture_traps.md`). */
 export const SUMMARY_TYPE = `${SPORT}.${volleyballModule.coarseEventType}`;
 export const SANCTION_TYPE = `${SPORT}.sanction`;
-/** The sanction sheet's last step (W2e T31, D12): "Can <team> still field six players?". */
+/** The sanction sheet's last step (W2e T31, D12): "Can <team> still field <N> players?" - N is six indoors and two on the beach
+ *  (`playersToField`). The id names the indoor question it was born as; the answers it stores are the same for both. */
 export const FIELD_SIX_STEP_ID = "fieldSix";
 export const TIMEOUT_TYPE = `${SPORT}.timeout`;
 /** FIVB's own scoresheet substitution-BOX tally (`SetBasedSub`,
@@ -1047,6 +1049,24 @@ function recordsFlag(view: PadHostView, flag: keyof VolleyballRecordFlags): bool
   return cfgOf(view).records?.[flag] === true;
 }
 
+/** The number words the field-six question can name: `playersToField` answers 6 (indoor) or 2 (a beach pair). */
+const PLAYER_COUNT_WORD: Readonly<Record<number, MessageKey>> = {
+  6: "pad.volleyball.sheet.sanction.fieldSix.count.6",
+  2: "pad.volleyball.sheet.sanction.fieldSix.count.2",
+};
+
+/**
+ * W2e T33a (PO decision): how many players a side must field for the match to go on - the number the field-six question
+ * names. Derived from this FIXTURE's cfg, never typed: the preset's `rotationImpliedBy` cfg flag (`records.substitutions`)
+ * says whether the side is a rotating six - indoor, the engine's `rotationCycle` - or a beach pair, whose size is the engine's
+ * own declaration for the pair kind (`entrantKindCap("pair")`), the same fact `fieldsTheRotation` reads from the other side.
+ */
+export function playersToField(view: PadHostView): number {
+  const implied = volleyballModule.serveRotation.rotationImpliedBy;
+  const rotates = implied !== undefined && recordsFlag(view, implied);
+  return rotates ? ROTATION_CYCLE : entrantKindCap("pair");
+}
+
 /** Whether a role a `SquadMember` carries includes "libero". */
 function hasLiberoRole(member: SquadMember): boolean {
   return member.roles?.includes("libero") === true;
@@ -1291,12 +1311,16 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
   const asksFieldSix = (answers: Readonly<Record<string, string>>): boolean => prompt.includes(answers[SANCTION_LEVEL_STEP_ID] ?? "");
   if (prompt.length > 0) {
     const team = sideNameOf(view.entrantNames, side, t);
+    const count = playersToField(view);
+    const countWord = PLAYER_COUNT_WORD[count];
+    // A count with no word (a custom cfg the engine would have to grow into) still reads: the numeral, never a blank.
+    const players = countWord !== undefined ? t(countWord) : String(count);
     steps.push({
       id: FIELD_SIX_STEP_ID,
       kind: "choice",
       title: "pad.volleyball.sheet.sanction.fieldSix.title",
-      // Pre-localised: the question names the team, which no dictionary holds (the key stays the canonical title).
-      titleText: t("pad.volleyball.sheet.sanction.fieldSix.title", { team }),
+      // Pre-localised: the question names the team and the count, which no dictionary holds (the key stays the canonical title).
+      titleText: t("pad.volleyball.sheet.sanction.fieldSix.title", { team, count: players }),
       when: asksFieldSix,
       // Both answers are sentences, so they read as full-width rows rather than pills.
       layout: "rows",

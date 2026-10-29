@@ -21,11 +21,14 @@
 // seam a green suite would never catch.
 import { describe, expect, it } from "vitest";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import { ribbonKeyFor } from "../../ribbon";
 import type { EventEnvelope, Lineup, LineupPair, LineupPolicy, SquadMember } from "@seazn/engine/core";
-import { memberOf, reduceLineupEvent } from "@seazn/engine/core";
-import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
+import { initSquads, memberOf, onFieldPersons, reduceLineupEvent } from "@seazn/engine/core";
+import { entrantKindCap, type FidelityBand, type ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { volleyball } from "@seazn/engine/sports/setbased";
 import { foldClient } from "../../../module-client";
@@ -976,6 +979,69 @@ describe("sheets()", () => {
     const soleSheet = buildSheets(view({ lineups: singleton }), t)[sanctionSheetKey("home")]!;
     expect(soleSheet.steps.map((step) => step.id)).toEqual(["level", "fieldSix"]);
     expect(soleSheet.buildPayload({ level: "warning" })).toMatchObject({ person: "H-solo" });
+  });
+
+  // W2e T33a (PO decision, ledger 290): the field-six question names the variant's real on-court count - six indoors, two on the
+  // beach - derived from the fixture's cfg. Expected values come from the lineups' own on-field counts (what each variant really
+  // puts on court) and the engine's declarations, never from the skin's helper.
+  describe("the field-six question names the number the variant fields", () => {
+    const BEACH_VARIANT_CFG = volleyball.configSchema.parse(volleyball.variants["beach"]!);
+    const questionOf = (v: PadHostView) => {
+      const step = buildSheets(v, t)[sanctionSheetKey("home")]!.steps.find((s) => s.id === "fieldSix");
+      if (step?.kind !== "choice") throw new Error("no field-six question");
+      return step;
+    };
+
+    it("indoor asks about six and beach about two - the count each variant's own lineup puts on court", () => {
+      let checked = 0;
+      for (const [name, lineups, cfg, wordKey, expected] of [
+        ["indoor", TEAM, VB_CFG, "pad.volleyball.sheet.sanction.fieldSix.count.6", 6],
+        ["beach", PAIR, BEACH_VARIANT_CFG, "pad.volleyball.sheet.sanction.fieldSix.count.2", 2],
+      ] as const) {
+        const v = view({ lineups, cfg });
+        const onCourt = onFieldPersons(initSquads(lineups).home).length;
+        expect(onCourt, `${name}: premise - the number of players the variant's side really fields`).toBe(expected);
+        const question = questionOf(v);
+        expect(question.titleText, name).toBe(
+          `pad.volleyball.sheet.sanction.fieldSix.title(${JSON.stringify({ team: "scorepad.attribution.home", count: wordKey })})`,
+        );
+        expect(wordKey.endsWith(`.${onCourt}`), `${name}: the word is the on-court count's`).toBe(true);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("the count is the engine's own: rotationCycle for a rotating six, the pair kind's cap for a beach pair", () => {
+      expect(volleyball.serveRotation.rotationCycle).toBe(6);
+      expect(entrantKindCap("pair")).toBe(2);
+      expect(BEACH_VARIANT_CFG.records.substitutions, "premise: the beach variant records no substitutions").toBe(false);
+      expect(VB_CFG.records.substitutions, "premise: indoor records substitutions").toBe(true);
+    });
+
+    it("the question is a fixture fact, not the roster's: a beach cfg on a team-sized sheet still asks about two, and the answers do not change", () => {
+      const v = view({ lineups: TEAM, cfg: BEACH_VARIANT_CFG });
+      expect(questionOf(v).titleText).toContain("fieldSix.count.2");
+      const spec = buildSheets(v, t)[sanctionSheetKey("home")]!;
+      expect(questionOf(v).options.map((o) => o.id)).toEqual(["yes", "no"]);
+      expect(spec.sideRetires?.({ level: "expulsion", fieldSix: "no" })).toBe(true);
+      expect(spec.sideRetires?.({ level: "expulsion", fieldSix: "yes" })).toBe(false);
+    });
+
+    it("the words exist in all four locales, differ between the two counts, and the title carries {team} and {count}", () => {
+      let checked = 0;
+      for (const [locale, dict] of Object.entries({ en: uiEn, es: uiEs, fr: uiFr, nl: uiNl }) as [string, Record<string, string>][]) {
+        const six = dict["pad.volleyball.sheet.sanction.fieldSix.count.6"];
+        const two = dict["pad.volleyball.sheet.sanction.fieldSix.count.2"];
+        expect(typeof six === "string" && six.length > 0, `${locale}: six`).toBe(true);
+        expect(typeof two === "string" && two.length > 0, `${locale}: two`).toBe(true);
+        expect(six, `${locale}: two counts, two words`).not.toBe(two);
+        const title = dict["pad.volleyball.sheet.sanction.fieldSix.title"]!;
+        expect(title, `${locale}: names the team`).toContain("{team}");
+        expect(title, `${locale}: names the count`).toContain("{count}");
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
   });
 });
 

@@ -1049,7 +1049,10 @@ describe("W2e T31 (VB-SE-1) - the field-six question is asked iff the level is o
         const step = spec.steps.find((s) => s.id === FIELD_SIX);
         if (step?.kind !== "choice") throw new Error(`${m.key}/${side}: no field-six choice step`);
         // `t` echoes the key and its variables, so the right key AND the right team are both witnessed.
-        expect(step.titleText, `${m.key}/${side}`).toBe(`pad.volleyball.sheet.sanction.fieldSix.title(${JSON.stringify({ team: NAMES[side] })})`);
+        // The default cfg is the indoor variant, so the count is six (the beach count is pinned in the skin's own test).
+        expect(step.titleText, `${m.key}/${side}`).toBe(
+          `pad.volleyball.sheet.sanction.fieldSix.title(${JSON.stringify({ team: NAMES[side], count: "pad.volleyball.sheet.sanction.fieldSix.count.6" })})`,
+        );
         expect(step.options.map((o) => o.id)).toEqual(["yes", "no"]);
         const no = step.options.find((o) => o.id === "no")!;
         expect(no.labelText, `${m.key}/${side}: the 'no' answer states what it does`).toBe(`pad.volleyball.sheet.sanction.fieldSix.no(${JSON.stringify({ team: NAMES[side] })})`);
@@ -1066,7 +1069,7 @@ describe("W2e T31 (VB-SE-1) - the field-six question is asked iff the level is o
     const spec = Object.values(resolvePad(m.key, t).sheets!(view)).find((s) => s.event === decl(m).eventType)!;
     const step = spec.steps.find((s) => s.id === FIELD_SIX);
     if (step?.kind !== "choice") throw new Error("no field-six step");
-    expect(step.titleText).toMatch(/^pad\.volleyball\.sheet\.sanction\.fieldSix\.title\(\{"team":"scorepad\.attribution\.(home|away)"\}\)$/);
+    expect(step.titleText).toMatch(/^pad\.volleyball\.sheet\.sanction\.fieldSix\.title\(\{"team":"scorepad\.attribution\.(home|away)","count":"[^"]+"\}\)$/);
   });
 
   it("the chassis prints the pre-localised title (titleText wins over the key), with both answers as full-width rows", () => {
@@ -1254,9 +1257,11 @@ describe("W2e T31 - the pair writes each reason as a literal (source seam; a tap
 describe("W2e T31 - the copy is in all four locales, with its variables intact", () => {
   const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
   const KEYS = {
-    "pad.volleyball.sheet.sanction.fieldSix.title": ["team"],
+    "pad.volleyball.sheet.sanction.fieldSix.title": ["team", "count"],
     "pad.volleyball.sheet.sanction.fieldSix.yes": [],
     "pad.volleyball.sheet.sanction.fieldSix.no": ["team"],
+    "pad.volleyball.sheet.sanction.fieldSix.count.6": [],
+    "pad.volleyball.sheet.sanction.fieldSix.count.2": [],
   } as const;
 
   it("every key is present, non-empty and carries exactly its variables in en, es, fr and nl; the locales differ from English", () => {
@@ -1266,14 +1271,20 @@ describe("W2e T31 - the copy is in all four locales, with its variables intact",
         const text = dict[key];
         expect(typeof text === "string" && text.length > 0, `${locale}:${key}`).toBe(true);
         expect([...text!.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).sort(), `${locale}:${key}`).toEqual([...vars].sort());
-        if (locale !== "en") expect(text, `${locale}:${key} is translated, not copied`).not.toBe(en[key as keyof typeof en]);
+        // French "six" is the English word: a true cognate, so it is the one entry the not-copied rule must excuse.
+        const cognate = locale === "fr" && key === "pad.volleyball.sheet.sanction.fieldSix.count.6";
+        if (locale !== "en" && !cognate) expect(text, `${locale}:${key} is translated, not copied`).not.toBe(en[key as keyof typeof en]);
         checked++;
       }
     }
     expect(checked).toBe(4 * Object.keys(KEYS).length);
   });
 
-  it("the English question is the one the owner approved (D12): 'Can <team> still field six players?'", () => {
-    expect(en["pad.volleyball.sheet.sanction.fieldSix.title" as keyof typeof en]).toBe("Can {team} still field six players?");
+  it("the English question is the one the owner approved (D12), with the number a variable (T33a): 'Can <team> still field <six|two> players?'", () => {
+    expect(en["pad.volleyball.sheet.sanction.fieldSix.title" as keyof typeof en]).toBe("Can {team} still field {count} players?");
+    // Read through the real translator, the indoor question is the approved sentence word for word.
+    expect(
+      en_t("pad.volleyball.sheet.sanction.fieldSix.title", { team: "Asha", count: en_t("pad.volleyball.sheet.sanction.fieldSix.count.6") }),
+    ).toBe("Can Asha still field six players?");
   });
 });

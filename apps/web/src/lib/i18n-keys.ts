@@ -4907,6 +4907,8 @@ export type DictionaryKey =
   | "pad.volleyball.scorebug.strip.sets"
   | "pad.volleyball.sheet.libero.off.title"
   | "pad.volleyball.sheet.libero.on.title"
+  | "pad.volleyball.sheet.sanction.fieldSix.count.2"
+  | "pad.volleyball.sheet.sanction.fieldSix.count.6"
   | "pad.volleyball.sheet.sanction.fieldSix.no"
   | "pad.volleyball.sheet.sanction.fieldSix.title"
   | "pad.volleyball.sheet.sanction.fieldSix.yes"
