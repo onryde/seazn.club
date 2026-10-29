@@ -153,8 +153,10 @@ const KNOWN_NO_PATH: Readonly<Record<string, Route>> = Object.freeze({
 });
 /** Design §4 "Known UI-only 🚫" (ruling 30), keyed by ATOM: an HTTP route
  *  exists (L3 runs), but no screen sends it (the L2 run records 🚫). M12b's
- *  `core.lineup.retirement` has no pad or console control, and no
- *  minimum-players rule exists; both are owed to W2. */
+ *  `core.lineup.retirement` has a pad control since W2e Task 32 in football,
+ *  volleyball, hockey and ice hockey (`UI_PATH_BUILT`); cricket and generic keep
+ *  this route by disposition (CK-DV-3, GN-DV-1), and no minimum-players rule
+ *  exists. */
 const KNOWN_UI_NO_PATH: Readonly<Record<string, Route>> = Object.freeze({
   M12b: routeTo("W2", "core.lineup.retirement has no pad control in cricket (CK-DV-3: the all-out count stays) or generic (GN-DV-1: LINEUP_NOT_SUPPORTED), by disposition (D3 (3) of the 2026-10-28 design); football, volleyball, hockey and ice hockey have it (UI_PATH_BUILT)"),
 });
