@@ -24,7 +24,7 @@ import {
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, hydrateRuleValues, rulesFor } from "./match-rules";
 import { visibleRuleFields } from "@/lib/match-rules";
-import { divisionFormatPatch } from "./division-format-patch";
+import { configUnderVariant, divisionFormatPatch, ruleValuesAfterVariantSwitch } from "./division-format-patch";
 import {
   LICHESS_CLOCK_FIELD_KEYS,
   selectedTimeControlKey,
@@ -55,7 +55,7 @@ import {
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
-import { variantWord } from "@/lib/variant-label-keys";
+import { variantHintKey, variantOptionLabel, variantWord } from "@/lib/variant-label-keys";
 import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online-link-gaps";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
@@ -422,7 +422,9 @@ export function DivisionSettings({
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
    *  is not org-scoped in its URL) — see saveRequiredCourtTags below. */
   orgId: string;
-  variants: { key: string; name: string }[];
+  /** `config` is the variant's preset as stored (only the keys it declares) and `system` marks a built-in: a variant switch
+   *  needs the presets of BOTH ends (W2e Task 29), a picker the flag to localise a built-in's name and leave an org's own. */
+  variants: { key: string; name: string; system?: boolean; config?: Record<string, unknown> }[];
   /** Fixtures exist - the stage structure cannot be replaced (`formatAlreadyLocked`, the page). NOT the rules: those lock
    *  per started stage (`lockedFields`), so a division with fixtures and no started stage keeps its rules editable. */
   structureLocked: boolean;
@@ -519,7 +521,29 @@ export function DivisionSettings({
   const pointsFieldKeys = editablePointsKeys(division.sport_key, cfg.points);
   // The saved config the rule fields fall back to. ONE value read by the grid (`MatchRuleFields`) and by the "kept" lines
   // (`refusedLines`), so both see the same visible controls (batch-6 T20-1: best of 1 hides one of the points pair).
-  const inheritedCfg = (division.config as Record<string, unknown>) ?? {};
+  // W2e Task 29: under the variant the form HOLDS, not the one saved - choosing 3x15 shows the fields (and converts cricket's
+  // overs) by 3x15's numbers, and the same config is what Save builds from (`divisionFormatPatch` derives the same one).
+  const presetOf = (key: string) => variants.find((v) => v.key === key)?.config;
+  const savedConfig = (division.config as Record<string, unknown>) ?? {};
+  const inheritedCfg = configUnderVariant(savedConfig, presetOf(division.variant_key), presetOf(variantKey), variantKey === division.variant_key);
+  const pickVariantKey = (next: string) => {
+    // The rule fields the organiser has not typed in take the new variant's own values, so the grid reads what Save will send.
+    setRuleValues(
+      ruleValuesAfterVariantSwitch({
+        sportKey: division.sport_key,
+        ruleValues,
+        divisionConfig: savedConfig,
+        savedPreset: presetOf(division.variant_key),
+        fromPreset: presetOf(variantKey),
+        toPreset: presetOf(next),
+        savedKey: division.variant_key,
+        fromKey: variantKey,
+        toKey: next,
+      }),
+    );
+    setVariantKey(next);
+  };
+  const variantHint = variantHintKey(division.sport_key, variantKey);
   const [pointsValues, setPointsValues] = useState<Record<string, string>>(() =>
     hydratePointsValues(division.sport_key, cfg.points),
   );
@@ -885,6 +909,8 @@ export function DivisionSettings({
         divisionConfig: (division.config as Record<string, unknown>) ?? {},
         savedVariantKey: division.variant_key,
         variantKey,
+        savedVariantPreset: presetOf(division.variant_key),
+        variantPreset: presetOf(variantKey),
         ruleValues,
         pointsFieldKeys,
         pointsValues,
@@ -1214,16 +1240,23 @@ export function DivisionSettings({
           <select
             disabled={!canEdit || variantLock !== undefined}
             value={variantKey}
-            onChange={(e) => setVariantKey(e.target.value)}
+            onChange={(e) => pickVariantKey(e.target.value)}
+            aria-describedby={variantHint === undefined ? undefined : "division-variant-hint"}
+            data-testid="division-settings-variant"
             className="input mt-1 w-full"
           >
             {variants.map((v) => (
               <option key={v.key} value={v.key}>
-                {v.name}
+                {variantOptionLabel(division.sport_key, v, msg)}
               </option>
             ))}
           </select>
         </label>
+        {variantHint !== undefined && (
+          <p id="division-variant-hint" role="note" data-testid="division-variant-hint" className="min-w-0 rounded-md bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700">
+            {msg(variantHint)}
+          </p>
+        )}
         {variantLock !== undefined && lockLine(variantLock, "division-locked-variant_key")}
 
         {division.sport_key === "boardgame" && onlineChessOffered && (
