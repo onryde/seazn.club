@@ -199,7 +199,7 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   if (o.kind === "sanctionEnd") return sanctionEndStream(req, o);
   // W2e (F8): a path is built only by a generator that can witness it; any other would build a plain win under its name.
   if (o.kind === "win" && o.path !== undefined && gen.pathWitness === undefined) {
-    throw new GeneratorUnsupported(req.sportKey, label, `its generator builds no deciding path (W2e Tasks 19–23 add each sport's), so '${o.path}' is not built as a plain win`);
+    throw new GeneratorUnsupported(req.sportKey, label, `its generator builds no deciding path (each sport's is added with its witness), so '${o.path}' is not built as a plain win`);
   }
   if (o.kind === "forfeit") {
     const play = o.at === "before_start" ? [] : partialPlay(req);
