@@ -11,6 +11,9 @@ import { type Session, type V1Res, newSession, call, check, setPlan, signIn, tag
  *
  *  - X-SE-1 / D13: a badminton black card ends the match; the next rally is 422 ENDING_SANCTION_PENDING, and the device
  *    link's forfeit is 403 unless it is the ending of the side's own sanction (the other side and the wrong reason), then 201.
+ *  - D13's second branch: volleyball has no end level, a prompt-level sanction (expulsion) is ended by `forfeit{retired}`, and the
+ *    device link may send exactly that, right after the sanction, against the same side: 403 before any sanction, with the
+ *    other reason and against the other side, then 201.
  *  - TN-SS-1: a tennis set summary no set can reach (8-6) is 422 SET_SCORE_UNREACHABLE.
  *  - CK-CH-1: a cricket chase total past the winning run is 422 CHASE_OVERSHOOT.
  *  - BG-RS-1: a board-game result whose method contradicts its winner is 422 RESULT_METHOD_CONTRADICTS_WINNER, both ways.
@@ -27,10 +30,10 @@ import { type Session, type V1Res, newSession, call, check, setPlan, signIn, tag
  * run that checked nothing fails. SMOKE_ONLY=w2eRefusals runs it alone (SELECTABLE_SUITES).
  */
 export async function w2eRefusalsSuite(): Promise<void> {
-  // 3 (badminton: the pending ending, the scorer's 403, the scorer's 201) + 4 (one per remaining code: the unreachable set, the
-  // chase overshoot, the contradicting method, the adjustment) + 2 (CONFIG_INVALID, the two sentences) + 2 (rank null on a
-  // level table, numbered ranks once a result counts).
-  const EXPECTED_CHECKS = 11;
+  // 3 (badminton: the pending ending, the scorer's 403, the scorer's 201) + 1 (volleyball: D13's `retired` branch) + 4 (one per
+  // remaining code: the unreachable set, the chase overshoot, the contradicting method, the adjustment) + 2 (CONFIG_INVALID,
+  // the two sentences) + 2 (rank null on a level table, numbered ranks once a result counts).
+  const EXPECTED_CHECKS = 12;
   let checked = 0;
   const w2eCheck = (label: string, cond: boolean) => {
     checked++;
@@ -114,6 +117,40 @@ export async function w2eRefusalsSuite(): Promise<void> {
     "w2e D13: the same link's forfeit{disqualified} against the sanctioned side is 201, and the match is forfeited" +
       (ending.status === 201 ? "" : ` — got ${ending.status} ${JSON.stringify(ending.json.error)}`),
     ending.status === 201 && ended?.status === "forfeited" && (await tip(bd.fixtureId)) === tipAtCard + 1,
+  );
+
+  // === 3b. D13's second branch: a prompt-level sanction is ended by forfeit{retired}, and by nothing else ==================
+  // Volleyball declares no end level (nothing is pending after a sanction); its expulsion asks "can the team still field six?",
+  // and "no" is the incomplete-team ending `forfeit{retired}` (FIVB 6.4.3, D12). The court phone may send exactly that, right
+  // after the sanction and against the sanctioned side. The event, the level and the reasons are the module's own declarations.
+  const vbDecl = moduleOf("volleyball")?.sanctionEnding;
+  const vbLevel = vbDecl?.promptLevels[0] ?? "";
+  const vb = await scene("W2e Volleyball", "volleyball", "indoor", "team");
+  const vbStart = await send(vb.fixtureId, "core.start", {});
+  const vbMinted = await v1(owner, `/api/v1/fixtures/${vb.fixtureId}/device-links`, "POST", { label: "W2e vb court" });
+  const vbSecret = v1data<{ secret?: string } | undefined>(vbMinted)?.secret ?? "";
+  const vbScorer = (type: string, payload: unknown) => sendAs(scorerSession, { Authorization: `Bearer ${vbSecret}` }, vb.fixtureId, type, payload);
+  const tipVbStart = await tip(vb.fixtureId);
+  // Not yet: the last live event is the start, not a sanction against this side.
+  const retiredBeforeCard = await vbScorer("core.forfeit", { by: vb.home, reason: "retired" });
+  const tipVbBeforeCard = await tip(vb.fixtureId);
+  const vbCard = await send(vb.fixtureId, vbDecl?.eventType ?? "volleyball.sanction", { by: vb.home, level: vbLevel });
+  const tipAtVbCard = await tip(vb.fixtureId);
+  const disqualifiedAfterCard = await vbScorer("core.forfeit", { by: vb.home, reason: "disqualified" }); // an end level's ending, not this one's
+  const retiredOtherSide = await vbScorer("core.forfeit", { by: vb.away, reason: "retired" });
+  const tipVbRefused = await tip(vb.fixtureId);
+  const retiredEnding = await vbScorer("core.forfeit", { by: vb.home, reason: "retired" });
+  w2eCheck(
+    "w2e D13: a volleyball expulsion is ended by the device link's forfeit{retired} for the sanctioned side (201, the match is forfeited); " +
+      "before any sanction, with reason disqualified, and for the other side it is 403 FORBIDDEN and nothing is written" +
+      (retiredEnding.status === 201 ? "" : ` — got ${retiredBeforeCard.status}, ${disqualifiedAfterCard.status}, ${retiredOtherSide.status}, then ${retiredEnding.status} ${JSON.stringify(retiredEnding.json.error)}`),
+    vbDecl !== undefined && vbLevel !== "" && vbDecl.promptLevels.includes(vbLevel) && !vbDecl.endLevels.includes(vbLevel) &&
+      vbStart.status === 201 && vbMinted.status === 201 && vbSecret.startsWith("dl_") && vbCard.status === 201 &&
+      retiredBeforeCard.status === 403 && codeOf(retiredBeforeCard) === "FORBIDDEN" && tipVbBeforeCard === tipVbStart &&
+      disqualifiedAfterCard.status === 403 && codeOf(disqualifiedAfterCard) === "FORBIDDEN" &&
+      retiredOtherSide.status === 403 && codeOf(retiredOtherSide) === "FORBIDDEN" && tipVbRefused === tipAtVbCard &&
+      retiredEnding.status === 201 && v1data<{ status?: string } | undefined>(retiredEnding)?.status === "forfeited" &&
+      (await tip(vb.fixtureId)) === tipAtVbCard + 1,
   );
 
   // === 4. SC-S1 / TN-SS-1: a tennis set summary no set can reach =========================================================
