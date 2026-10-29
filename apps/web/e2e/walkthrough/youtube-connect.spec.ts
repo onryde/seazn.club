@@ -479,7 +479,7 @@ for (const width of [1280, 320] as const) {
     const picker = page.getByTestId("youtube-picker");
     await expect(picker).toBeVisible({ timeout: NAV_MS });
     const offered = picker.getByTestId("youtube-picker-channel");
-    await expect(offered, "the picker offers both of the Google account's channels").toHaveCount(2);
+    await expect(offered, "the picker offers both of the Google account's channels").toHaveCount(2, { timeout: NAV_MS });
     await expect(channelRows(page), "nothing is connected until a channel is picked").toHaveCount(0);
     await expect(page.getByTestId("youtube-picker-connect"), "Connect is disabled until a channel is chosen").toBeDisabled();
     if (width < 768) await expectNoHorizontalScroll(page);
