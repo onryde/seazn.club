@@ -7722,6 +7722,7 @@ export type DictionaryKey =
   | "streaming.youtube.disconnectOnly.note"
   | "streaming.youtube.disconnectedLabel"
   | "streaming.youtube.dismiss"
+  | "streaming.youtube.error.endUnknown"
   | "streaming.youtube.error.gone"
   | "streaming.youtube.error.inUse"
   | "streaming.youtube.error.notOffered"

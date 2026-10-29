@@ -1444,6 +1444,7 @@
   "streaming.youtube.disconnect.doneUnconfirmed": "{name} is losgekoppeld. Seazn heeft verwijderd wat het voor dit kanaal van YouTube had opgeslagen, maar kon niet bevestigen dat Google de toegang van Seazn heeft ingetrokken. Verwijder Seazn voor de zekerheid via {link}.",
   "streaming.youtube.disconnect.googleLink": "de instellingen voor toegang van derden in je Google-account",
   "streaming.youtube.error.inUse": "Een wedstrijd is live op dit kanaal of staat op het punt live te gaan. Koppel het los zodra die wedstrijd is afgelopen.",
+  "streaming.youtube.error.endUnknown": "Seazn kan nu niet zien of een wedstrijd dit kanaal gebruikt, dus het is niet losgekoppeld. Probeer het over een paar minuten opnieuw.",
   "streaming.youtube.disconnectOnly.note": "Wedstrijden kunnen vanuit deze organisatie nu niet live gaan. Je kunt de YouTube-kanalen hieronder nog wel loskoppelen.",
   "streaming.youtube.disconnectOnly.none": "Er zijn geen YouTube-kanalen gekoppeld.",
   "streaming.youtube.dismiss": "Sluiten",

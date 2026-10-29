@@ -8,7 +8,8 @@ import "server-only";
 //      no oracle), then its broadcast rows `for update` (the connection-then-broadcast order T8's reconnect and the purge use).
 //   2. GUARD (the §9.3 mutation target). A broadcast in `reserved`, `bound` or `live` whose end is NOT yet due (end-rule.ts: null while a
 //      session is active, a reservation is unlapsed or nothing has streamed yet; later than now inside the grace after a Stop) is a match
-//      using the channel: 409 YOUTUBE_IN_USE and nothing is written. R9: an `ending` row (claimed, or left by a dead grant), a due row
+//      using the channel: 409 YOUTUBE_IN_USE and nothing is written. A broadcast whose facts BREAK the rule's invariant (end-rule.ts
+//      refuses to answer from them) is 409 YOUTUBE_END_UNKNOWN, reported with ids only - never a raw 500. R9: an `ending` row (claimed, or left by a dead grant), a due row
 //      and a `created` one do not block - they are purged. A row that is stuck `bound` with nothing streaming (an orphan) blocks until
 //      the end step's 10-minute orphan sweep removes it (ledger: accepted).
 //   3. Read what must be undone AT YOUTUBE (the open broadcasts' ids, the live pooled keys' stream ids) and the refresh token into memory.
@@ -41,7 +42,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { YoutubeDisconnected } from "@/server/api-v1/schemas";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { purgeConnectionData } from "./daily";
-import { broadcastEndDueAt, readEndFacts } from "./end-rule";
+import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts } from "./end-rule";
 import { OPEN_STATES } from "./end-step";
 import { YouTubeError, isDeadGrantRefusal, type YouTubePort } from "./port";
 import { YoutubeTokenUnreadableError, openToken, revokeConnection } from "./token-store";
@@ -50,6 +51,11 @@ import { YoutubeTokenUnreadableError, openToken, revokeConnection } from "./toke
 export const YOUTUBE_IN_USE = "YOUTUBE_IN_USE";
 /** What the refusal says in English API prose; the page never renders it (it maps the code). */
 export const YOUTUBE_IN_USE_MESSAGE = "A match is using this channel";
+/** The machine code of the refusal when the end rule cannot say whether a match is still using the channel (a broken fact it refuses to
+ *  answer from: end-rule.ts `EndRuleInvariantError`). Nothing was written; the break is reported. */
+export const YOUTUBE_END_UNKNOWN = "YOUTUBE_END_UNKNOWN";
+/** What it says in English API prose; the page maps the code to its own sentence. */
+export const YOUTUBE_END_UNKNOWN_MESSAGE = "Seazn could not tell whether a match is using this channel";
 /** The code recorded on the revoked connection when the Google revoke was skipped because another connection runs on the same account. */
 export const REVOKE_SKIPPED_SHARED_GRANT = "revoke_skipped_shared_grant";
 
@@ -128,7 +134,17 @@ export async function disconnectYoutube(
     const now = (opts.now ?? (() => new Date()))();
     for (const b of broadcasts) {
       if (!(BLOCKING_STATES as readonly string[]).includes(b.state)) continue;
-      const due = broadcastEndDueAt(await readEndFacts(tx, b.id), now);
+      let due: Date | null;
+      try {
+        due = broadcastEndDueAt(await readEndFacts(tx, b.id), now);
+      } catch (err) {
+        // Only the end rule's own refusal is named; anything else is a real failure and propagates.
+        if (!(err instanceof EndRuleInvariantError)) throw err;
+        // The facts break an assumption the rule rests on (a Stopped session with no ended_at; a finished fixture with no finished_at),
+        // so "is a match using this channel?" has no answer. Refused by NAME, never a raw 500, and reported with ids only.
+        captureError(err, { orgId, route: "youtube.disconnect.end_rule", extra: { connectionId, broadcastId: b.id } });
+        throw new HttpError(409, YOUTUBE_END_UNKNOWN_MESSAGE, YOUTUBE_END_UNKNOWN);
+      }
       if (due === null || due.getTime() > now.getTime()) throw new HttpError(409, YOUTUBE_IN_USE_MESSAGE, YOUTUBE_IN_USE);
     }
 

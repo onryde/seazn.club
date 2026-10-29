@@ -51,6 +51,7 @@ export function youtubeErrorText(msg: Msg, err: unknown): string {
     case "YOUTUBE_DIFFERENT_CHANNEL": return msg("streaming.youtube.landing.different_channel");
     case "YOUTUBE_CHANNEL_NOT_OFFERED": return msg("streaming.youtube.error.notOffered");
     case "YOUTUBE_IN_USE": return msg("streaming.youtube.error.inUse");
+    case "YOUTUBE_END_UNKNOWN": return msg("streaming.youtube.error.endUnknown");
     case "FORBIDDEN": return msg("streamDest.error.forbidden");
     case "UNAUTHENTICATED": return msg("streamDest.error.signedOut");
     case "PAYMENT_REQUIRED": return w.extra.feature_key === FROZEN_SEAT_FEATURE ? msg("streamDest.error.seatFrozen") : msg("streamDest.error.generic");

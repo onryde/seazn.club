@@ -541,7 +541,7 @@ describe.skipIf(!HAS_DB)("DELETE — Disconnect a channel (T18)", () => {
     expect((await disconnectCall(a.orgId, c.connectionId)).status).toBe(200);
   });
 
-  it("the spec documents the door: DELETE is a response-typed operation whose 403, 404 and 409 are responses and whose summary names YOUTUBE_IN_USE, the revoke and the purge (4 facts)", () => {
+  it("the spec documents the door: DELETE is a response-typed operation whose 403, 404 and 409 are responses and whose summary names YOUTUBE_IN_USE, YOUTUBE_END_UNKNOWN, the revoke and the purge (7 facts)", () => {
     const doc = buildOpenApiDocument() as {
       paths: Record<string, Record<string, { summary: string; responses: Record<string, { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> }> }>>;
     };
@@ -550,12 +550,13 @@ describe.skipIf(!HAS_DB)("DELETE — Disconnect a channel (T18)", () => {
     let checked = 0;
     for (const status of ["403", "404", "409"]) { expect(op.responses, `DELETE documents ${status}`).toHaveProperty(status); checked++; }
     expect(op.summary).toContain("YOUTUBE_IN_USE"); checked++;
+    expect(op.summary, "the named refusal for facts the end rule cannot answer from").toContain("YOUTUBE_END_UNKNOWN"); checked++;
     expect(op.summary.toLowerCase()).toContain("revoke"); checked++;
     expect(op.summary.toLowerCase()).toContain("purge"); checked++;
     const ok = op.responses["200"]!.content!["application/json"]!.schema!;
     const dataProps = Object.keys(((ok.properties!.data as { properties: Record<string, unknown> }).properties));
     expect(dataProps.sort()).toEqual(["keysDeleted", "purged", "revokeOutcome", "revokedAtGoogle"]);
-    expect(checked).toBe(6);
+    expect(checked).toBe(7);
   });
 });
 

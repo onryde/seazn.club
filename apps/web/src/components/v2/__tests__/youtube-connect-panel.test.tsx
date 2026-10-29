@@ -1043,6 +1043,19 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(nav.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("F2: 409 YOUTUBE_END_UNKNOWN (the end rule could not say whether a match is using the channel) is its OWN sentence in the row - not the 'a match is live' one, not the generic retry - and re-reads nothing", async () => {
+    const onDisconnected = vi.fn();
+    answerWith(async () => { throw await wire(new HttpError(409, "Seazn could not tell whether a match is using this channel", "YOUTUBE_END_UNKNOWN")); });
+    const row = mount({}, { onDisconnected });
+    await click(disconnectBtn(row));
+    expect(textAt(row.tree(), "youtube-error")).toBe(m("streaming.youtube.error.endUnknown"));
+    expect(textAt(row.tree(), "youtube-error")).not.toBe(m("streaming.youtube.error.inUse"));
+    expect(textAt(row.tree(), "youtube-error")).not.toBe(m("streamDest.error.generic"));
+    expect(textAt(row.tree(), "youtube-error"), "plain words, not the server's English").not.toContain("could not tell");
+    expect(nav.refresh).not.toHaveBeenCalled();
+    expect(onDisconnected).not.toHaveBeenCalled();
+  });
+
   it("other refusals: a channel already gone (404) re-reads the list and says so; a viewer's stale tab (403) says so and re-reads nothing; a dropped connection is the generic retry line", async () => {
     const cases: [name: string, err: () => Promise<unknown>, sentence: string, refreshes: number][] = [
       ["404", () => wire(new HttpError(404, "Not found")), m("streaming.youtube.error.gone"), 1],
@@ -1192,7 +1205,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     ];
     const plainKeys: MessageKey[] = [
       "streaming.youtube.action.disconnect", "streaming.youtube.disconnect.body", "streaming.youtube.disconnect.confirm", "streaming.youtube.error.inUse",
-      "streaming.youtube.disconnectOnly.note", "streaming.youtube.disconnectOnly.none", "streaming.youtube.disconnect.googleLink",
+      "streaming.youtube.disconnectOnly.note", "streaming.youtube.disconnectOnly.none", "streaming.youtube.disconnect.googleLink", "streaming.youtube.error.endUnknown",
     ];
     let checked = 0;
     for (const l of LOCALES) {

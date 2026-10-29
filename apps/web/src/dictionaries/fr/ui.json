@@ -1444,6 +1444,7 @@
   "streaming.youtube.disconnect.doneUnconfirmed": "{name} est déconnectée. Seazn a supprimé ce qu’il avait enregistré depuis YouTube pour cette chaîne, mais n’a pas pu confirmer que Google a retiré l’accès de Seazn. Pour en être sûr, retirez Seazn dans {link}.",
   "streaming.youtube.disconnect.googleLink": "les paramètres d’accès tiers de votre compte Google",
   "streaming.youtube.error.inUse": "Un match est en direct sur cette chaîne, ou sur le point de l’être. Déconnectez-la une fois ce match terminé.",
+  "streaming.youtube.error.endUnknown": "Seazn ne peut pas savoir si un match utilise cette chaîne en ce moment ; elle n’a donc pas été déconnectée. Réessayez dans quelques minutes.",
   "streaming.youtube.disconnectOnly.note": "Les matchs ne peuvent pas passer en direct depuis cette organisation pour le moment. Vous pouvez tout de même déconnecter les chaînes YouTube ci-dessous.",
   "streaming.youtube.disconnectOnly.none": "Aucune chaîne YouTube n’est connectée.",
   "streaming.youtube.dismiss": "Fermer",

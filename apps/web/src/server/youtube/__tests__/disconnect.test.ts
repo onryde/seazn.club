@@ -838,6 +838,66 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect(await v.step({ at: afterStop(mv, min(5)) }), "the end step ends it at exactly the same instant").toMatchObject({ ended: 1 });
   });
 
+  // ═══ F2: the end rule refuses to answer from broken facts ═════════════════════════════════════════════════════════════
+  it("F2: a broadcast whose facts break the end rule's invariant (a Stopped session with no ended_at; a finished fixture with no finished_at) is a NAMED refusal 409 YOUTUBE_END_UNKNOWN, reported with ids only, nothing changed, YouTube asked nothing - and once the facts are whole the same call succeeds (anti-vacuity: 2 breaks)", async () => {
+    const breaks: { name: string; break: (w: World, m: Match) => Promise<void>; repair: (w: World, m: Match) => Promise<void> }[] = [
+      {
+        name: "a terminal session with no ended_at",
+        break: async (_w, m) => { await sql`update fixture_stream_sessions set ended_at = null where id = ${m.sessionId}`; },
+        repair: async (_w, m) => { await sql`update fixture_stream_sessions set ended_at = ${m.endedAt} where id = ${m.sessionId}`; },
+      },
+      {
+        // SQL on purpose: no producer writes a finished fixture without its finished_at. The V430/V432 trigger stamps it on the update
+        // that names status, so the stamp is removed by a second statement that does not.
+        name: "a finished fixture with no finished_at",
+        break: async (w) => {
+          await sql`update fixtures set status = 'decided' where id = ${w.fixtures[0]!}`;
+          await sql`update fixtures set finished_at = null where id = ${w.fixtures[0]!}`;
+          expect((await sql<{ finished_at: Date | null }[]>`select finished_at from fixtures where id = ${w.fixtures[0]!}`)[0]!.finished_at, "premise: the break took").toBeNull();
+        },
+        repair: async (w, m) => { await sql`update fixtures set finished_at = ${m.endedAt} where id = ${w.fixtures[0]!}`; },
+      },
+    ];
+    let reached = 0;
+    for (const b of breaks) {
+      sentry.captureError.mockClear();
+      const w = await world();
+      const m = await playAndStop(w, w.fixtures[0]!);
+      await b.break(w, m);
+      const at = afterStop(m, min(6));
+      const before = await snapshot(w);
+
+      const err = await disconnect(w, { now: at }).then(() => null, (e: unknown) => e);
+      expect(err, `${b.name}: refused`).toMatchObject({ status: 409, code: "YOUTUBE_END_UNKNOWN" });
+      expect((err as { code: string }).code, `${b.name}: not the in-use code - nobody said a match is using it`).not.toBe("YOUTUBE_IN_USE");
+      expect(await snapshot(w), `${b.name}: nothing changed`).toEqual(before);
+      expect(w.fake.calls.length, `${b.name}: YouTube was asked nothing`).toBe(before.youtubeCalls);
+      const reports = disconnectReports();
+      expect(reports.length, `${b.name}: reported once`).toBe(1);
+      expect(reports[0]![1], b.name).toMatchObject({ orgId: w.orgId, route: "youtube.disconnect.end_rule", extra: { connectionId: w.connectionId, broadcastId: m.broadcastId } });
+      expect(Object.keys((reports[0]![1] as { extra: object }).extra).sort(), `${b.name}: ids only`).toEqual(["broadcastId", "connectionId"]);
+      expect(JSON.stringify(sentry.captureError.mock.calls.map(([e, c]) => [(e as Error).message, c])), `${b.name}: no secret`).not.toContain(w.token);
+
+      await b.repair(w, m);
+      await expect(disconnect(w, { now: at }), `${b.name}: whole facts disconnect`).resolves.toMatchObject({ revokeOutcome: "revoked" });
+      reached++;
+    }
+    expect(reached).toBe(breaks.length);
+  });
+
+  it("F2: only the end rule's own refusal is named - any other failure inside the guard still fails loudly and changes nothing (no catch-all)", async () => {
+    const w = await world();
+    const m = await playAndStop(w, w.fixtures[0]!);
+    await sql`update youtube_broadcasts set state = 'reserved', reserved_until = ${new Date(afterStop(m, min(30)))} where id = ${m.broadcastId}`;   // SQL on purpose: a reservation the rule must compare with `now`
+    class Exploding extends Date { override getTime(): number { throw new TypeError("not an end-rule refusal"); } }
+    const before = await snapshot(w);
+    const failure = await disconnectYoutube(w.auth, w.orgId, w.connectionId, w.fake, { now: () => new Exploding(afterStop(m, min(6))) }).then(() => null, (e: unknown) => e);
+    expect(failure, "it rejected").toBeInstanceOf(TypeError);
+    expect((failure as { code?: string }).code, "and it is not the named refusal").toBeUndefined();
+    expect(await snapshot(w)).toEqual(before);
+    expect(disconnectReports(), "and not reported as an end-rule break").toEqual([]);
+  });
+
   it("O-T17a for MANY divisions: every division whose fixture carried a replay link is revalidated, not only the first (anti-vacuity: two divisions)", async () => {
     const w = await world({ credits: 2 });
     const second = await divisionRig(w.auth, { entrants: 2 });
