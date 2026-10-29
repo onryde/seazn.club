@@ -25,8 +25,8 @@ import { answerStep, backStep, currentStep, initialSheetState, resolveInitial } 
 import type { GuidedSheetState } from "../guided-sheet";
 import type { GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, PadHostView, SwapSlot, TileSpec } from "../types";
 import { SPORT_PALETTES, SPORT_TONES } from "../sport-theme";
-import { hockeySkinV3, hockeySpec, HOCKEY_REASONS } from "../skins/hockey";
-import { icehockeySkinV3, icehockeySpec, ICEHOCKEY_REASONS } from "../skins/icehockey";
+import { hockeySkinV3, hockeySpec } from "../skins/hockey";
+import { icehockeySkinV3, icehockeySpec } from "../skins/icehockey";
 import {
   bandsOf,
   buildClock,
@@ -72,13 +72,13 @@ interface Sport {
 }
 
 const SPORTS: readonly Sport[] = [
-  { key: "hockey", module: hockey as AnySportModule, factory: hockeySkinV3, spec: hockeySpec, reasons: HOCKEY_REASONS },
+  { key: "hockey", module: hockey as AnySportModule, factory: hockeySkinV3, spec: hockeySpec, reasons: hockeySpec.rules.suspensionReasons },
   {
     key: "icehockey",
     module: icehockey as AnySportModule,
     factory: icehockeySkinV3,
     spec: icehockeySpec,
-    reasons: ICEHOCKEY_REASONS,
+    reasons: icehockeySpec.rules.suspensionReasons,
   },
 ];
 
@@ -1279,7 +1279,7 @@ describe("what each sport's goal dock offers", () => {
       // sent without its type (W2d T18, hockey): there the untyped goal's dock
       // is the choice, and Field goal is its first answer. That flag is pinned
       // to the engine's own refusal by `hockey-goal-type.test.ts`.
-      const required = sport.spec.goalKindRequired === true;
+      const required = sport.spec.rules.goalKindRequired;
       expect(dock.requires).toBe(required ? "kind" : undefined);
       const kinds = (cfg as { goalKinds: string[] }).goalKinds.filter((k) => k !== "og" && (required || k !== "fg"));
       expect(dock.chips.filter((c) => c.id.startsWith("kind:")).map((c) => c.id.slice(5))).toEqual(kinds);

@@ -114,12 +114,12 @@ describe("W2d T18 — the skin's goalKindRequired mirror is the engine's refusal
     let checked = 0;
     for (const sport of SPORTS) {
       // The skin declares what the rule row says…
-      expect(sport.spec.goalKindRequired === true, `${sport.key}: rule row vs skin`).toBe(GOAL_TYPE_RANKS[sport.key] === true);
+      expect(sport.spec.rules.goalKindRequired, `${sport.key}: rule row vs skin`).toBe(GOAL_TYPE_RANKS[sport.key] === true);
       for (const { variant, cfg } of shippedVariantCfgs(sport.module)) {
         const state = foldPeriod(sport.module, cfg, [["core.start"]]);
         // …and the engine refuses exactly there (a mirror owes a test that reads the real module).
         const code = writeCode(sport.module, state, `${sport.key}.goal`, { by: "H" });
-        expect(code === "GOAL_KIND_REQUIRED", `${sport.key}/${variant}: engine vs skin`).toBe(sport.spec.goalKindRequired === true);
+        expect(code === "GOAL_KIND_REQUIRED", `${sport.key}/${variant}: engine vs skin`).toBe(sport.spec.rules.goalKindRequired);
         checked++;
       }
     }

@@ -46,6 +46,9 @@ import { fileURLToPath } from "node:url";
  */
 export const BANNED: Readonly<Record<string, readonly string[]>> = {
   // P1: period sports (period-shared, hockey, icehockey, football)
+  "period-shared.ts": ["SWAP_BAND"],
+  "hockey.tsx": ["HOCKEY_REASONS"],
+  "icehockey.tsx": ["ICEHOCKEY_REASONS"],
   // P2: cricket
   // P3: set-based sports + tennis (badminton, tabletennis, volleyball, tennis)
   // P4: carrom, boardgame, generic, and POST_PHASES in every file that declares it

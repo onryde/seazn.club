@@ -45,6 +45,7 @@ import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
+  FidelityBand,
   ModuleEvent,
   PadAction,
   PadField,
@@ -282,10 +283,14 @@ export function makePeriodConfigSchema(
 
 const PersonId = z.string().min(1);
 
+/** At most two assists per goal, A1 then A2 (icehockey/DOMAIN.md, the assists row). Declared once so the goal schema and the pad's
+ *  assist picker (`@seazn/engine/pad`'s `assistsMax`) read the same cap. */
+export const PERIOD_ASSISTS_MAX = 2;
+
 export const PeriodGoal = z.strictObject({
   by: EntrantId, // for kind 'og': the side whose player struck it (credits opponent)
   person: PersonId.optional(),
-  assists: z.array(PersonId).max(2).optional(),
+  assists: z.array(PersonId).max(PERIOD_ASSISTS_MAX).optional(),
   kind: z.string().min(1).optional(), // validated against cfg.goalKinds
   period: z.string().min(1).optional(), // the scorer's own period label for the log
   // W4 (#407) — empty-net goal. Orthogonal to `kind`: IIHF situation codes
@@ -429,7 +434,7 @@ export const PeriodShootoutAttempt = z.strictObject({
       ineligible: z.boolean().optional(), // GWS penalty-box flag, recorded only
     })
     .optional(),
-  // W4a review — cards are already stampable in "SHOOTOUT" (`suspensionAllowed`
+  // W4a review — cards are already stampable in "SHOOTOUT" (`EVENT_PHASES`
   // and `playPhases` both admit it), and the attempt is the only other event
   // that phase is made of. Leaving it unstampable froze `State.asOf` at the
   // last stamped card for the whole decider, so a consumer reading "as of when
@@ -752,7 +757,7 @@ function isPlayPhase(state: PeriodState): boolean {
  * this exact function reference, so a sport that builds its own copy fails.
  *
  * WIDER than `scoringPhases`, and that is the point:
- *  - "pre" — a card before the opening whistle is legal (`suspensionAllowed`),
+ *  - "pre" — a card before the opening whistle is legal (`EVENT_PHASES`),
  *    and so is a stoppage: a floodlight failure during the warm-up.
  *  - "SHOOTOUT" — cards are legal there too, and it sorts LAST, after any
  *    overtime, because that is when it happens. Listed only when this cfg can
@@ -769,6 +774,56 @@ export function playPhases(cfg: PeriodCfg): string[] {
     ...scoringPhases(cfg),
     ...(cfg.shootout === null ? [] : ["SHOOTOUT"]),
   ];
+}
+
+/** The part after `<sport>.` of each of this kernel's eight event types. */
+export type PeriodEventSuffix =
+  | "goal"
+  | "period.advance"
+  | "clock"
+  | "suspension.start"
+  | "suspension.end"
+  | "shootout.attempt"
+  | "set_piece"
+  | "shot";
+
+/** A phase as the event table reads it: before the opening whistle, a running period or overtime (this cfg's `scoringPhases`), or the
+ *  shoot-out. A decided, finalized or abandoned match is in none of them. */
+export type PeriodPhaseClass = "pre" | "play" | "SHOOTOUT";
+
+/**
+ * P1.1 (pad wave) — the phases each event is legal in, ONE table read by both the fold's WRONG_PHASE guards (`applyGoal` …
+ * `applyShot`, through `periodEventAllowedInPhase`) and the pad (`@seazn/engine/pad`'s `eventAllowedInPhase`), so the tile the pad
+ * hides and the write the fold refuses cannot drift apart. The rows are the rulebook's:
+ *  - goal, period advance, clock, set piece, shot: in play only. No match clock before the whistle or in the shoot-out, and the
+ *    shoot-out credits no player goal (an attempt is its own event).
+ *  - suspension start/end: before the opening whistle, in play and during the shoot-out (hockey/DOMAIN.md and icehockey/DOMAIN.md,
+ *    the card-time rows), never once the match is decided (mirrors football's card window).
+ *  - shoot-out attempt: the shoot-out only, and only for a cfg that has one.
+ */
+export const EVENT_PHASES: Readonly<Record<PeriodEventSuffix, readonly PeriodPhaseClass[]>> = {
+  goal: ["play"],
+  "period.advance": ["play"],
+  clock: ["play"],
+  "suspension.start": ["pre", "play", "SHOOTOUT"],
+  "suspension.end": ["pre", "play", "SHOOTOUT"],
+  "shootout.attempt": ["SHOOTOUT"],
+  set_piece: ["play"],
+  shot: ["play"],
+};
+
+function periodPhaseClass(phase: string, cfg: PeriodCfg): PeriodPhaseClass | null {
+  if (phase === "pre") return "pre";
+  if (phase === "SHOOTOUT") return "SHOOTOUT";
+  return scoringPhases(cfg).includes(phase) ? "play" : null;
+}
+
+/** Whether `<sport>.<suffix>` may be recorded in `phase` under `cfg`: EVENT_PHASES' row, plus the one row that is a cfg fact as well as
+ *  a phase one (a cfg with no shoot-out has no attempt to take). The fold's guards and the pad both call this; neither re-derives it. */
+export function periodEventAllowedInPhase(suffix: PeriodEventSuffix, phase: string, cfg: PeriodCfg): boolean {
+  const cls = periodPhaseClass(phase, cfg);
+  if (cls === null || !EVENT_PHASES[suffix].includes(cls)) return false;
+  return suffix !== "shootout.attempt" || cfg.shootout !== null;
 }
 
 function inOvertime(state: PeriodState): boolean {
@@ -1127,7 +1182,7 @@ function applyGoal(
   strict: boolean,
   kindRequired: boolean,
 ): PeriodState {
-  if (!isPlayPhase(state)) {
+  if (!periodEventAllowedInPhase("goal", state.phase, state.cfg)) {
     wrongPhase(`goal not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const by = sideOf(state, payload.by);
@@ -1215,7 +1270,9 @@ function applyAdvance(
   strict: boolean,
 ): PeriodState {
   const expected = expectedAdvance(state);
-  if (expected === null) {
+  // `expected` is non-null in exactly the phases EVENT_PHASES allows an advance in (both are this cfg's scoring phases); the second
+  // test narrows it.
+  if (!periodEventAllowedInPhase("period.advance", state.phase, state.cfg) || expected === null) {
     wrongPhase(`period advance not allowed in phase "${state.phase}"`);
   }
   // STRICT ONLY (§3.3 seam). `expected` is computed from `periods.count` and
@@ -1240,16 +1297,10 @@ function applyAdvance(
 }
 
 function applyClock(state: PeriodState, payload: PeriodClock): PeriodState {
-  if (!isPlayPhase(state)) {
+  if (!periodEventAllowedInPhase("clock", state.phase, state.cfg)) {
     wrongPhase(`clock not allowed in phase "${state.phase}"`);
   }
   return { ...state, clockRunning: payload.running };
-}
-
-function suspensionAllowed(state: PeriodState): boolean {
-  // Cards happen pre-kickoff, in play and during a shootout — never once the
-  // match is decided (mirrors football's card window).
-  return state.phase === "pre" || isPlayPhase(state) || state.phase === "SHOOTOUT";
 }
 
 function applySuspensionStart(
@@ -1260,7 +1311,7 @@ function applySuspensionStart(
   if (strict && state.cfg.suspensions === null) {
     invalid("this sport does not track suspensions");
   }
-  if (!suspensionAllowed(state)) {
+  if (!periodEventAllowedInPhase("suspension.start", state.phase, state.cfg)) {
     wrongPhase(`suspension not allowed in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
@@ -1351,7 +1402,7 @@ function applySuspensionEnd(
   payload: z.infer<typeof PeriodSuspensionEnd>,
 ): PeriodState {
   if (state.cfg.suspensions === null) invalid("this sport does not track suspensions");
-  if (!suspensionAllowed(state)) {
+  if (!periodEventAllowedInPhase("suspension.end", state.phase, state.cfg)) {
     wrongPhase(`suspension release not allowed in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
@@ -1393,7 +1444,8 @@ function applyShootoutAttempt(
   order: ShootoutOrder,
   strict: boolean,
 ): PeriodState {
-  if (state.phase !== "SHOOTOUT" || state.shootout === null || state.cfg.shootout === null) {
+  // EVENT_PHASES' row carries the phase and `cfg.shootout`; the last two tests narrow (a SHOOTOUT phase always holds its record).
+  if (!periodEventAllowedInPhase("shootout.attempt", state.phase, state.cfg) || state.shootout === null || state.cfg.shootout === null) {
     wrongPhase(`shootout attempt in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
@@ -1444,7 +1496,7 @@ function applySetPiece(
   if (strict && allowedKinds.length === 0) {
     invalid("this sport does not record set pieces");
   }
-  if (!isPlayPhase(state)) {
+  if (!periodEventAllowedInPhase("set_piece", state.phase, state.cfg)) {
     wrongPhase(`set piece not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const side = sideOf(state, payload.by);
@@ -1489,7 +1541,7 @@ function applyShot(
   enabled: boolean,
 ): PeriodState {
   if (!enabled) invalid("this sport does not record shots");
-  if (!isPlayPhase(state)) {
+  if (!periodEventAllowedInPhase("shot", state.phase, state.cfg)) {
     wrongPhase(`shot not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const side = sideOf(state, payload.by);
@@ -2023,10 +2075,41 @@ export interface PeriodPreset {
    * pad, the API before W2d), so replay must keep folding them, and B3 reads such a goal as a field goal. A preset flag
    * and not a cfg key because it is a fact about the federation's ranking, never an organiser's choice, and a cfg
    * default would land in every recorded config. Omitted or `false` ⇒ the goal type stays optional (IIHF ranks on no
-   * goal type). `hockey` sets it; `icehockey` does not.
+   * goal type). `hockey` sets it `true`; `icehockey` sets it `false` (both declare it, for `@seazn/engine/pad`).
    */
   goalKindRequired?: boolean;
 }
+
+/** The least whole minute a `<key>.suspension.start` may award: `PeriodSuspensionStart.minutes` is a positive integer. */
+export const PERIOD_SUSPENSION_MINUTES_MIN = 1;
+
+/** The awarded-minutes bound padSpec declares on `<key>.suspension.start`, and the pad's minutes stepper reads
+ *  (`@seazn/engine/pad`'s `suspensionMinutes`).
+ *
+ *  Cfg-derived, not a hardcoded ceiling: an umpire may award MORE than a class's nominal (an FIH yellow is a MINIMUM of 5, 10 is
+ *  common — suspensions.ts's own SuspensionDetail.minutes doc), so double the longest FINITE nominal this cfg actually declares
+ *  (permanent classes carry `minutes: null` and award no duration at all, so they are excluded from the bound they cannot inform).
+ *  This is also the field that makes hockey `youth` vs adult padSpec DEMONSTRABLY different: both declare the same three class
+ *  NAMES (green/yellow/red — only the durations were wrong), so the class enum alone cannot witness the fix; this bound does.
+ *  Falls back to a generic 20 when no class carries a finite duration at all (every class permanent, or no suspension track). */
+export function periodSuspensionMinutesBound(cfg: PeriodCfg): { min: number; max: number } {
+  const finiteClassMinutes = (cfg.suspensions === null ? [] : Object.values(cfg.suspensions.classes))
+    .map((cls) => cls.minutes)
+    .filter((m): m is number => m !== null);
+  return {
+    min: PERIOD_SUSPENSION_MINUTES_MIN,
+    max: finiteClassMinutes.length > 0 ? Math.max(...finiteClassMinutes) * 2 : 20,
+  };
+}
+
+/** (c) The minutes stepper's opening value when nothing better is known: no class answered yet, or none this cfg declares carries a
+ *  finite duration. The least award the schema takes, so the opening value is always one the fold accepts. */
+export const PERIOD_SUSPENSION_MINUTES_FALLBACK = PERIOD_SUSPENSION_MINUTES_MIN;
+
+/** (c) The band at which the pad offers a lineup swap (`core.lineup.substitution`). A core event, so no padSpec of this kernel
+ *  declares its band; it sits where football's own `football.sub` does — a band-0/1 record is the score and the cards, and who was
+ *  on the ice at the time is exactly the detail band 2 ("timeline") buys. */
+export const PERIOD_SWAP_BAND: FidelityBand = 2;
 
 export function makePeriodModule(
   preset: PeriodPreset,
@@ -2092,24 +2175,21 @@ export function makePeriodModule(
   // bounds come from `cfg` — never a hardcoded preset number, so a variant
   // that changes a bound (youth's roster, recreational's class list) is
   // reflected here automatically rather than needing its own case.
+  // The bands padSpec declares (its own comment below says why each sits where it does). One frozen object for every cfg.
+  const fidelity: Readonly<Record<string, FidelityBand>> = Object.freeze({
+    [goalType]: 0,
+    [advanceType]: 0,
+    [clockType]: 0,
+    [attemptType]: 0,
+    [suspStartType]: 1,
+    [suspEndType]: 1,
+    [setPieceType]: 2,
+    ...(shotTracking ? { [shotType]: 3 } : {}),
+  });
+
   const padSpec = (cfg: PeriodCfg): PadSpec => {
     const suspensionClassKeys = cfg.suspensions === null ? [] : Object.keys(cfg.suspensions.classes);
-    // Cfg-derived, not a hardcoded ceiling: an umpire may award MORE than a
-    // class's nominal (an FIH yellow is a MINIMUM of 5, 10 is common —
-    // suspensions.ts's own SuspensionDetail.minutes doc), so double the
-    // longest FINITE nominal this cfg actually declares (permanent classes
-    // carry `minutes: null` and award no duration at all, so they are
-    // excluded from the bound they cannot inform). This is also the field
-    // that makes hockey `youth` vs adult padSpec DEMONSTRABLY different:
-    // both declare the same three class NAMES (green/yellow/red — only the
-    // durations were wrong), so the class enum alone cannot witness the
-    // fix; this bound does. Falls back to a generic 20 when no class
-    // carries a finite duration at all (every class permanent, or no
-    // suspension track).
-    const finiteClassMinutes = (cfg.suspensions === null ? [] : Object.values(cfg.suspensions.classes))
-      .map((cls) => cls.minutes)
-      .filter((m): m is number => m !== null);
-    const suspensionMinutesMax = finiteClassMinutes.length > 0 ? Math.max(...finiteClassMinutes) * 2 : 20;
+    const suspensionMinutes = periodSuspensionMinutesBound(cfg);
 
     // "fg"/"og" are ALWAYS valid regardless of `cfg.goalKinds` (applyGoal's
     // own check: `kind !== "fg" && kind !== "og" && !goalKinds.includes(kind)`
@@ -2179,8 +2259,8 @@ export function makePeriodModule(
       {
         kind: "number",
         path: "minutes",
-        min: 1,
-        max: suspensionMinutesMax,
+        min: suspensionMinutes.min,
+        max: suspensionMinutes.max,
         labelKey: { key: `pad.${preset.key}.action.suspensionStart.field.minutes`, label: "Minutes" },
       },
     ];
@@ -2375,16 +2455,10 @@ export function makePeriodModule(
       // later session — this is that session. Gated on `shotTracking`, not
       // unconditional, so a period-kernel sport without the flag declares no
       // band-3 event at all (`fidelity` has no `[shotType]` key).
-      fidelity: {
-        [goalType]: 0,
-        [advanceType]: 0,
-        [clockType]: 0,
-        [attemptType]: 0,
-        [suspStartType]: 1,
-        [suspEndType]: 1,
-        [setPieceType]: 2,
-        ...(shotTracking ? { [shotType]: 3 } : {}),
-      },
+      //
+      // P1.1 (pad wave) — built ONCE per module (`fidelity` above), not per call: every band is a preset fact, none reads the
+      // cfg, and `@seazn/engine/pad`'s `eventBands` holds this very object.
+      fidelity,
     }, eventSchemas);
   };
 

@@ -35,6 +35,7 @@
 //                UI concept here, never by widening `PadPhase`.
 
 import { AttemptOutcome, onFieldPersons, playingSquad } from "@seazn/engine/core";
+import type { PeriodPadRules } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -156,9 +157,11 @@ function periodKey(spec: PeriodSkinSpec, name: PeriodMessageKeyName): MessageKey
 }
 
 /**
- * The three genuine divergences between the two skins. Deliberately small: a
- * field here is a claim that the two federations differ, and every field that
- * could be read off `cfg` or `summary` instead was.
+ * The genuine divergences between the two skins. Deliberately small: a field
+ * here is a claim that the two federations differ, and every field that could
+ * be read off `cfg` or `summary` instead was. The rule facts (bands, offences,
+ * the goal-type flag, phase legality, the minutes bound) are not restated here
+ * at all: `rules` is the engine's own record (pad wave P1.1).
  */
 export interface PeriodSkinSpec {
   /** The engine module key, and the `pad.<key>.*` dictionary namespace. Only
@@ -187,31 +190,18 @@ export interface PeriodSkinSpec {
    */
   readonly classes: Readonly<Record<string, readonly SportTone[]>>;
   /**
-   * The offences this federation offers, in the order its own `padSpec` enum
-   * lists them (`PeriodPreset.suspensionReasons`, kernel.ts:1953-1955).
+   * The engine's pad record for this sport (`@seazn/engine/pad`'s `hockeyPadRules` / `icehockeyPadRules`): the
+   * fidelity bands, the offence list (copy for every member ships in four locales via `ENUM_VOCAB.reason`, S4/#428),
+   * the goal-type flag, the phase table the fold's WRONG_PHASE guards read, the minutes bound and the assist cap.
    *
-   * A MIRROR of the engine, and it comes with the obligation every mirror in
-   * this chassis carries (`SkinDefV3.refusedEventTypes`' own doc): the skin owes
-   * a test that reads the real `padSpec` and fails when the two disagree.
-   * `__tests__/period-pair.test.ts` is that test. Copy for every member already
-   * ships in four locales via `ENUM_VOCAB.reason`, minted by S4/#428.
+   * `goalKindRequired` (W2d T18, HK-TB-2, B3; PS-7d): the engine REFUSES this sport's goal without its type on the
+   * write path (`GOAL_KIND_REQUIRED`). FIH ranks level teams on field goals (GTR App. 3), so a hockey goal must say
+   * whether it came from open play, a penalty corner or a penalty stroke; IIHF ranks on no goal type, so ice hockey's
+   * stays optional enrichment. When true, the goal dock for an UNTYPED goal is a CHOICE (`DockSpec.requires: "kind"`):
+   * the kinds, Field goal first, plus the Own goal flag — and the host queues nothing until one is picked. Once the
+   * payload carries a kind, the dock is the ordinary enrichment dock without the kind chips.
    */
-  readonly reasons: readonly string[];
-  /**
-   * W2d T18 (HK-TB-2, B3; PS-7d) — the engine REFUSES this sport's goal without its type on the write path
-   * (`GOAL_KIND_REQUIRED`, `PeriodPreset.goalKindRequired` in `sports/period/kernel.ts`). FIH ranks level teams on
-   * field goals (GTR App. 3), so a hockey goal must say whether it came from open play, a penalty corner or a penalty
-   * stroke; IIHF ranks on no goal type, so ice hockey's stays optional enrichment.
-   *
-   * When true, the goal dock for an UNTYPED goal is a CHOICE (`DockSpec.requires: "kind"`): the cfg's kinds, Field
-   * goal first, plus the Own goal flag — and the host queues nothing until one is picked. Once the payload carries a
-   * kind, the dock is the ordinary enrichment dock without the kind chips.
-   *
-   * A MIRROR of a preset flag the pad view does not carry, with the obligation every mirror here has:
-   * `__tests__/hockey-goal-type.test.ts` folds an untyped goal through the real module and fails if the engine's
-   * refusal and this flag disagree.
-   */
-  readonly goalKindRequired?: boolean;
+  readonly rules: PeriodPadRules;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,48 +439,26 @@ export function eventTypesOf(spec: PeriodSkinSpec): PeriodEventTypes {
 }
 
 /**
- * The band each type first becomes recordable at — `makePeriodModule`'s own
- * `padSpec(cfg).fidelity` (kernel.ts:2161-2169), restated because the view
- * carries `band` but not `padSpec`. Pinned against the real module by
- * `__tests__/period-pair.test.ts`, which is what keeps the restatement honest.
+ * The band each type first becomes recordable at: the module's own
+ * `padSpec(cfg).fidelity` object, held by the engine's record (`eventBands`).
  */
 export function bandsOf(spec: PeriodSkinSpec): Readonly<Record<string, FidelityBand>> {
-  const e = eventTypesOf(spec);
-  return {
-    [e.goal]: 0,
-    [e.advance]: 0,
-    [e.attempt]: 0,
-    [e.clock]: 0,
-    [e.suspStart]: 1,
-    [e.suspEnd]: 1,
-    [e.setPiece]: 2,
-    [e.shot]: 3,
-  };
+  return spec.rules.eventBands;
 }
-
-/**
- * The SWAP's band. `core.lineup.substitution` is a core event and carries no
- * `padSpec.fidelity` entry of its own, so this is a pad policy rather than an
- * engine one: it sits at 2 for the reason football's own `football.sub` does —
- * a band-0/1 record is the score and the cards, and who was on the ice at the
- * time is exactly the detail band 2 buys.
- */
-export const SWAP_BAND: FidelityBand = 2;
 
 export const SWAP_TYPE = "core.lineup.substitution";
 
 /**
  * Whether the sport's own fold would take this type in this view, at all.
  *
- * Mirrors five reducer guards, each cited: `applyGoal`/`applySetPiece`/
- * `applyShot` require `isPlayPhase` (kernel.ts:1040, 1335, 1380);
- * `suspensionAllowed` is pre|play|SHOOTOUT (kernel.ts:1142-1146);
- * `applyShootoutAttempt` is SHOOTOUT only (kernel.ts:1287); `applyAdvance`
- * refuses when `expectedAdvance` is null (kernel.ts:1119-1122) — which is read
- * from the summary rather than recomputed. The cfg-driven refusals are here
- * too: no `suspensions.classes` means the fold refuses both suspension events,
- * an empty `setPieceKinds` means it refuses set pieces, and a null `shootout`
- * means the SHOOTOUT phase is unreachable.
+ * The phase half is the engine's: `rules.eventAllowedInPhase` reads the very
+ * table (`EVENT_PHASES`, sports/period/kernel.ts) the fold's WRONG_PHASE guards
+ * read, with the cfg (its scoring phases, and whether it has a shoot-out). The
+ * cfg-driven capability refusals sit on top: no suspension class means the fold
+ * refuses both suspension events, an empty `setPieceKinds` means it refuses set
+ * pieces, and the whistle needs the `nextAdvance` the summary publishes (the
+ * tile's own target). A type that is not one of the module's own is not this
+ * guard's to refuse.
  *
  * `__tests__/period-pair.test.ts` drives every one of these at the REAL
  * reducer, in every phase both kernels can reach, for both sports. A mirror
@@ -501,20 +469,11 @@ export function phaseAllows(
   eventType: string,
   view: PadHostView,
 ): boolean {
+  if (!Object.hasOwn(spec.rules.eventBands, eventType)) return true;
   const e = eventTypesOf(spec);
-  const state = asState(view.state);
-  const cfg = asCfg(view.cfg);
-  const phase = readPhase(state);
-  const play = isPlayPhaseToken(phase);
-  const hasClasses = Object.keys(cfg.suspensions?.classes ?? {}).length > 0;
-
-  if (eventType === e.goal || eventType === e.shot) return play;
-  if (eventType === e.clock) return play;
-  if (eventType === e.setPiece) return play && (cfg.setPieceKinds ?? []).length > 0;
-  if (eventType === e.suspStart || eventType === e.suspEnd) {
-    return hasClasses && (phase === "pre" || play || phase === SHOOTOUT_PHASE);
-  }
-  if (eventType === e.attempt) return phase === SHOOTOUT_PHASE;
+  if (!spec.rules.eventAllowedInPhase(eventType, readPhase(view.state), view.cfg)) return false;
+  if (eventType === e.setPiece) return (asCfg(view.cfg).setPieceKinds ?? []).length > 0;
+  if (eventType === e.suspStart || eventType === e.suspEnd) return spec.rules.suspensionClasses(view.cfg).length > 0;
   if (eventType === e.advance) return nextAdvanceOf(view) !== null;
   return true;
 }
@@ -1011,7 +970,7 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
     });
   }
 
-  if (view.band >= SWAP_BAND && isPlayPhaseToken(readPhase(state))) {
+  if (view.band >= spec.rules.swapBand && isPlayPhaseToken(readPhase(state))) {
     for (const side of SIDES) {
       tiles.push({
         id: swapSlotId(side),
@@ -1124,8 +1083,7 @@ function classOptions(spec: PeriodSkinSpec, view: PadHostView, t: TFn) {
 }
 
 /** Every FINITE (non-permanent) class nominal this cfg declares — the raw
- *  material for both bounds below, mirroring `padSpec`'s own
- *  `finiteClassMinutes` (kernel.ts:1902-1904). */
+ *  material for the stepper's opening value below. */
 function finiteClassMinutes(view: PadHostView): number[] {
   const classes = asCfg(view.cfg).suspensions?.classes ?? {};
   return Object.values(classes)
@@ -1156,24 +1114,11 @@ function finiteClassMinutes(view: PadHostView): number[] {
  *  or a class this cfg does not declare / declares without a numeric duration.
  *  A permanent class never reaches this step at all — `classIsPermanent`
  *  gates it out. */
-function defaultMinutesOf(view: PadHostView, classKey?: string): number {
+function defaultMinutesOf(spec: PeriodSkinSpec, view: PadHostView, classKey?: string): number {
   const declared = classKey === undefined ? undefined : asCfg(view.cfg).suspensions?.classes?.[classKey]?.minutes;
   if (typeof declared === "number") return declared;
   const finite = finiteClassMinutes(view);
-  return finite.length > 0 ? Math.min(...finite) : 1;
-}
-
-/** The pad's own mirror of `padSpec`'s `minutes` field bound
- *  (kernel.ts:1890-1905): double the longest FINITE class nominal this cfg
- *  declares — an FIH yellow is a MINIMUM of 5 minutes and 10 is common, so
- *  the umpire must be able to award more than the class nominal — or 20 when
- *  nothing declares one. `__tests__/period-pair.test.ts` pins this against
- *  the real `module.padSpec(cfg)` field — for both sports and both the default
- *  and `youth` cfgs — so the two cannot drift apart. (That claim was false
- *  when first written: no such test existed until R6's W-2 fix wrote it.) */
-function suspensionMinutesMaxOf(view: PadHostView): number {
-  const finite = finiteClassMinutes(view);
-  return finite.length > 0 ? Math.max(...finite) * 2 : 20;
+  return finite.length > 0 ? Math.min(...finite) : spec.rules.suspensionMinutes(view.cfg).fallback;
 }
 
 /** Whether `classKey` has no numeric duration at all — "for the rest of the
@@ -1203,7 +1148,7 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
       id: "reason",
       kind: "choice",
       title: periodKey(spec, "sheet.suspension.reason.title"),
-      options: spec.reasons.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
+      options: spec.rules.suspensionReasons.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
       // The offence is band-2 detail; below that the sheet is one tap and the
       // step never renders (`GuidedSheetStep.when` skips without asking).
       when: () => view.band >= 2,
@@ -1222,12 +1167,15 @@ function suspensionSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side, t:
       id: "minutes",
       kind: "number",
       title: periodKey(spec, "action.suspensionStart.field.minutes"),
-      initial: (answers) => defaultMinutesOf(view, answers.class),
+      initial: (answers) => defaultMinutesOf(spec, view, answers.class),
       // This seed READS `class`, so changing the class must discard it —
       // otherwise a Back-and-repick carries the old class's duration.
       resetOn: ["class"],
-      min: 1,
-      max: suspensionMinutesMaxOf(view),
+      // The engine's own bound (padSpec's `minutes` field): double the longest
+      // FINITE class nominal this cfg declares — an FIH yellow is a MINIMUM of
+      // 5 minutes and 10 is common — or 20 when nothing declares one.
+      min: spec.rules.suspensionMinutes(view.cfg).min,
+      max: spec.rules.suspensionMinutes(view.cfg).max,
       // A class with no numeric duration ("for the rest of the match") has
       // nothing here to ask — see `classIsPermanent`'s own doc.
       when: (answers) => !classIsPermanent(view, answers.class),
@@ -1471,7 +1419,7 @@ function periodCandidateMeta(
 
 export function buildSwap(spec: PeriodSkinSpec, view: PadHostView, t: TFn): SwapSlot[] {
   const state = asState(view.state);
-  if (!isPlayPhaseToken(readPhase(state)) || view.band < SWAP_BAND) return [];
+  if (!isPlayPhaseToken(readPhase(state)) || view.band < spec.rules.swapBand) return [];
   return SIDES.map((side) => {
     const members = view.squads[side].members;
     const onField = onFieldOf(view, side);
@@ -1563,9 +1511,9 @@ function roleChip(id: string, field: string, personId: string, labelText: string
   };
 }
 
-/** Append to a string array field, capped — `PeriodGoal.assists` is
- *  `z.array(PersonId).max(2)`, so a third chip would take the whole event down
- *  with it rather than being ignored. */
+/** Append to a string array field, capped at the engine's `assistsMax` —
+ *  `PeriodGoal.assists` is `.max(PERIOD_ASSISTS_MAX)`, so one chip past it
+ *  would take the whole event down with it rather than being ignored. */
 function assistChip(spec: PeriodSkinSpec, id: string, personId: string, labelText: string): DockChip {
   return {
     id,
@@ -1573,7 +1521,7 @@ function assistChip(spec: PeriodSkinSpec, id: string, personId: string, labelTex
     labelText,
     mutate: (payload) => {
       const current = Array.isArray(payload.assists) ? (payload.assists as string[]) : [];
-      if (current.includes(personId) || current.length >= 2) return payload;
+      if (current.includes(personId) || current.length >= spec.rules.assistsMax) return payload;
       return { ...payload, assists: [...current, personId] };
     },
   };
@@ -1597,18 +1545,20 @@ export function buildDock(
     // first answer, then the existing Own goal flag (`og` still moves the goal to the other side, B3 counts it as a
     // field goal for the side credited). No scorer or empty-net chip rides the choice — the host has queued nothing
     // yet, so there is no held payload for them to enrich; they come on the next dock, once the kind is set.
-    if (spec.goalKindRequired === true && payload?.kind === undefined) {
+    // The kinds are the engine's (padSpec's goal `kind` enum, `rules.goalKinds`): exactly what the fold accepts.
+    const goalKinds = spec.rules.goalKinds(view.cfg);
+    if (spec.rules.goalKindRequired && payload?.kind === undefined) {
       const choice: DockChip[] = [];
-      for (const kind of cfg.goalKinds ?? []) {
+      for (const kind of goalKinds) {
         if (kind === "og") continue;
         choice.push({ id: `kind:${kind}`, label: `pad.${spec.key}.kind.${kind}`, mutate: (p) => ({ ...p, kind }) });
       }
-      if ((cfg.goalKinds ?? []).includes("og")) {
+      if (goalKinds.includes("og")) {
         choice.push({ id: "ownGoal", label: `pad.${spec.key}.dock.ownGoal`, kind: "flag", mutate: (p) => ({ ...p, kind: "og" }) });
       }
       return { title: t(`pad.${spec.key}.dock.goal.kind.title`), chips: choice, requires: "kind" };
     }
-    const required = spec.goalKindRequired === true;
+    const required = spec.rules.goalKindRequired;
     const chips: DockChip[] = [];
     // HOW it was scored, from the cfg's own list. `fg` is the default and needs
     // no chip; `og` is the own-goal FLAG below, because it does not describe the
@@ -1616,7 +1566,7 @@ export function buildDock(
     // opponent for it). A sport that REQUIRES the type answered it on the choice
     // above, so neither is offered again (a chip mutates at most once and is never
     // undone — `dockController` — so a second kind chip could only contradict it).
-    for (const kind of required ? [] : (cfg.goalKinds ?? [])) {
+    for (const kind of required ? [] : goalKinds) {
       if (kind === "fg" || kind === "og") continue;
       chips.push({
         id: `kind:${kind}`,

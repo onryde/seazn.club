@@ -12,6 +12,7 @@ export type { PadFieldScope } from "./spec-lookup.ts";
 // apart) and the merges do not touch one another's lines.
 
 // P1: period + football
+export { hockeyPadRules, icehockeyPadRules } from "./period.ts";
 
 // P2: cricket
 
