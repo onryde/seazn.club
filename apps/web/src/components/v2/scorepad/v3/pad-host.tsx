@@ -1622,21 +1622,31 @@ export interface EndingPlan {
   readonly payload: Record<string, unknown>;
   /** The sanctioned entrant: the `by` of both the sanction and the forfeit that ends the match. */
   readonly by: string;
+  /** The ending's reason: `disqualified` after an END level (D3, badminton's black card, tennis's default), `retired` after a
+   *  PROMPT level the scorer answered "no" to (D12, volleyball's incomplete team). The engine's `scorerMayForfeit` admits each
+   *  only after its own class of level. */
+  readonly reason: "disqualified" | "retired";
 }
 
 /**
  * The plan for `type`/`payload`, or null when it is not an ending: not the module's declared sanction event, no entrant
- * named, or a level the module does not declare as ending the match (a warning is one ordinary event). The levels are the
- * ENGINE's declaration, read here, never a list of this file's own.
+ * named, or a level that does not end the match (a warning is one ordinary event). The levels are the ENGINE's declaration,
+ * read here, never a list of this file's own.
+ *
+ * An END level is an ending, `disqualified`. A PROMPT level (volleyball, D12) is an ending only when the scorer answered the
+ * sheet's question "no" (`sideRetires`) and then it is `retired`; asked about a level the declaration does not prompt on, a
+ * stray `sideRetires` is ignored, so an answer that was never asked cannot end a match.
  */
-export function endingPlanOf(module: AnySportModule, type: string, payload: unknown): EndingPlan | null {
+export function endingPlanOf(module: AnySportModule, type: string, payload: unknown, sideRetires = false): EndingPlan | null {
   const decl = module.sanctionEnding;
   if (decl === undefined || type !== decl.eventType) return null;
   if (typeof payload !== "object" || payload === null) return null;
   const fields = payload as Record<string, unknown>;
   if (typeof fields.by !== "string" || fields.by.length === 0) return null;
-  if (typeof fields.level !== "string" || !decl.endLevels.includes(fields.level)) return null;
-  return { type, payload: fields, by: fields.by };
+  if (typeof fields.level !== "string") return null;
+  if (decl.endLevels.includes(fields.level)) return { type, payload: fields, by: fields.by, reason: "disqualified" };
+  if (sideRetires && decl.promptLevels.includes(fields.level)) return { type, payload: fields, by: fields.by, reason: "retired" };
+  return null;
 }
 
 /**
@@ -1653,7 +1663,10 @@ export function endingPlanOf(module: AnySportModule, type: string, payload: unkn
 export async function runEnding(plan: EndingPlan, io: AmendSubmitters): Promise<string | null> {
   const held = await io.submitHeld(plan.type, plan.payload);
   if (held === null) return null;
-  await io.submit("core.forfeit", { by: plan.by, reason: "disqualified" }, { dropWith: held.heldId });
+  // One literal per reason, not `reason: plan.reason`: forfeit-vocabulary-scan reads every `core.forfeit` write's reason as a
+  // literal against the engine's closed vocabulary, and a variable would be a named exception there.
+  if (plan.reason === "retired") await io.submit("core.forfeit", { by: plan.by, reason: "retired" }, { dropWith: held.heldId });
+  else await io.submit("core.forfeit", { by: plan.by, reason: "disqualified" }, { dropWith: held.heldId });
   return held.heldId;
 }
 
@@ -2358,7 +2371,7 @@ export function PadHostV3(props: PadHostV3Props) {
     [heldSubmit, pipeline.submit, msg],
   );
   const send = useCallback(
-    (type: string, payload: unknown, opts?: { endsMatchOnConfirm?: boolean }): void => {
+    (type: string, payload: unknown, opts?: { endsMatchOnConfirm?: boolean; sideRetires?: boolean }): void => {
       // W2e T30: an open ending prompt is modal too. The write path refuses everything but the ending (`ENDING_SANCTION_
       // PENDING`), so this tap is not recorded, the scorer is told why, and the prompt stays in front. The board is not
       // rendered while it is open; this is the guard for the controls that remain (the scorebug's own taps).
@@ -2384,12 +2397,13 @@ export function PadHostV3(props: PadHostV3Props) {
       // must be the time of the TAP, not of the last tick.
       const stamped = stampFor(props.module, type, payload, clock, Date.now());
       // W2e T30 (D3): a sheet that was confirmed ("This ends the match: <side> loses") on an end-level sanction sends the
-      // sanction AND its ending, as one bound pair (`runEnding`). Only a SHEET completion may become an ending: the
+      // sanction AND its ending, as one bound pair (`runEnding`). W2e T31 (D12): so does volleyball's "No" to "Can <team> still
+      // field six players?" on an expulsion or a disqualification (`sideRetires`), with the retired ending. Only a SHEET completion may become an ending: the
       // confirm step belongs to the sheet, and any other route that records an end-level sanction simply lands on the
       // pending prompt. It goes around `dispatch` the way `runAmend`'s re-append does: `core.forfeit` is an organiser-only
       // core type no skin declares (so `createSkinDispatch` would refuse it), and neither badminton's nor tennis's
       // sanction has a dock for `dispatch` to soft-commit (pinned in w2e-ending-sanction.test.ts), so nothing is skipped.
-      const plan = opts?.endsMatchOnConfirm === true ? endingPlanOf(props.module, type, stamped) : null;
+      const plan = opts?.endsMatchOnConfirm === true ? endingPlanOf(props.module, type, stamped, opts.sideRetires === true) : null;
       if (plan !== null) {
         void sendEnding(plan);
         return;
@@ -3111,7 +3125,7 @@ export function PadHostV3(props: PadHostV3Props) {
               t={t}
               onComplete={(event) => {
                 setOpenSheet(null);
-                send(event.type, event.payload, { endsMatchOnConfirm: true });
+                send(event.type, event.payload, { endsMatchOnConfirm: true, sideRetires: event.sideRetires === true });
               }}
               onCancel={() => setOpenSheet(null)}
             />

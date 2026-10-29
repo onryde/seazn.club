@@ -30,6 +30,7 @@ import {
   lastLiveEvent,
   outcomeOf,
   pendingEndingSanction,
+  initSquads,
   matchEndFacts,
   scorerMayForfeit,
   type EventEnvelope,
@@ -49,12 +50,12 @@ import { enqueue, enqueueHeld, dropHeld } from "../../queue";
 import { memoryQueueStore, type QueueStore } from "../../queue-store";
 import type { PadTransport } from "../../transport";
 import type { PendingEvent } from "../../types";
-import { answerStep, currentStep, initialSheetState } from "../guided-sheet";
+import { GuidedSheet, answerStep, currentStep, initialSheetState } from "../guided-sheet";
 import { EndingPrompt } from "../ending-prompt";
 import { PadHostV3, admitsTapWhileEndingPending, endingPlanOf, endingPromptOf, runEnding, sanctionRowOf } from "../pad-host";
 import { resolvePad } from "../registry";
 import type { ActivityEvent } from "../activity";
-import type { GuidedSheetSpec, PadHostView, SheetChoiceStep } from "../types";
+import type { GuidedSheetSpec, PadHostView, SheetChoiceStep, SheetCompletion } from "../types";
 import { liveView } from "./_views";
 
 // `typescript` through require, not import: vite's import analysis chokes on the 10 MB CJS bundle (the precedent is
@@ -769,10 +770,12 @@ describe("W2e T30 — the host wires the pair, the modal and the buttons (source
   const src = readFileSync(resolve(__dirname, "../pad-host.tsx"), "utf8");
 
   it("a completed sheet sends its event through the ending path, bypassing createSkinDispatch the way runAmend does", () => {
-    expect(src).toMatch(/onComplete=\{\(event\) => \{\s*setOpenSheet\(null\);\s*send\(event\.type, event\.payload, \{ endsMatchOnConfirm: true \}\);/);
+    expect(src).toMatch(
+      /onComplete=\{\(event\) => \{\s*setOpenSheet\(null\);\s*send\(event\.type, event\.payload, \{ endsMatchOnConfirm: true, sideRetires: event\.sideRetires === true \}\);/,
+    );
     // In `send`: only a SHEET completion may become an ending, and it runs the pair instead of `dispatch`.
     const send = src.slice(src.indexOf("const send = useCallback("), src.indexOf("const cancelQuestion = useCallback("));
-    expect(send).toContain("opts?.endsMatchOnConfirm === true ? endingPlanOf(props.module, type, stamped) : null");
+    expect(send).toContain("opts?.endsMatchOnConfirm === true ? endingPlanOf(props.module, type, stamped, opts.sideRetires === true) : null");
     expect(send).toMatch(/void sendEnding\(plan\)/);
     expect(send).toContain("admitsTapWhileEndingPending(endingPrompt)");
     // The modal check comes BEFORE anything is stamped or sent.
@@ -936,5 +939,325 @@ describe("W2e T30 — the copy is in all four locales, with its variables intact
     expect(en["pad.sanction.endsMatch" as keyof typeof en]).toBe("This ends the match: {side} loses");
     expect(en["pad.ending.record" as keyof typeof en]).toBe("Record the ending");
     expect(en["pad.ending.void" as keyof typeof en]).toBe("Void the sanction");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2e Task 31 (B2-2; D12, D13; rule VB-SE-1) - volleyball: "Can <team> still field six players?"
+// ---------------------------------------------------------------------------
+//
+// An expulsion or a disqualification never ends a volleyball match by itself (FIVB: the team plays on while it can field
+// six). The pad asks, BEFORE the write, and "no" is the incomplete-team ending (VB-RT-1, FIVB 6.4.3), `core.forfeit` with
+// reason `retired`, sent as Task 30's bound pair. Which levels ask is the ENGINE's declaration (`promptLevels`), read here.
+
+/** The sports whose declaration has a PROMPT level - the engine's own list, never a typed one. */
+const PROMPTING = builtinModules.filter((m) => (m.sanctionEnding?.promptLevels.length ?? 0) > 0);
+const promptLevelsOf = (m: AnySportModule): readonly string[] => decl(m).promptLevels;
+const FIELD_SIX = "fieldSix";
+
+/** Drive a sheet like the chassis does with the scorer's `answers` (a level, and the field-six answer where asked). The person
+ *  step takes the side's first player. Returns the steps the scorer SAW and the completion (null when it never completed). */
+function driveAnswers(spec: GuidedSheetSpec, side: Side, answers: { level: string; fieldSix?: "yes" | "no" }) {
+  let state = initialSheetState();
+  const seen: { id: string; kind: string }[] = [];
+  for (let guard = 0; guard < 12; guard++) {
+    const step = currentStep(spec, state);
+    if (step === null) break;
+    seen.push({ id: step.id, kind: step.kind });
+    const answer =
+      step.id === "level"
+        ? answers.level
+        : step.id === FIELD_SIX
+          ? (answers.fieldSix ?? "yes")
+          : step.kind === "person"
+            ? `${ENTRANT[side]}-p1`
+            : step.kind === "confirm"
+              ? "confirmed"
+              : (step as SheetChoiceStep).options[0]!.id;
+    const out = answerStep(spec, state, answer);
+    if (out.done) return { seen, event: out.event as SheetCompletion };
+    state = out.state;
+  }
+  return { seen, event: null };
+}
+
+const nonPromptLevelsOf = (m: AnySportModule, spec: GuidedSheetSpec): string[] =>
+  (spec.steps.find((s) => s.id === "level") as SheetChoiceStep).options.map((o) => o.id).filter((id) => !promptLevelsOf(m).includes(id));
+
+describe("W2e T31 (VB-SE-1) - anti-vacuity: the sports this task covers", () => {
+  it("the engine declares a PROMPT level for at least volleyball, and its v3 skin builds a sanction sheet per side", () => {
+    expect(PROMPTING.map((m) => m.key)).toEqual(expect.arrayContaining(["volleyball"]));
+    let sheets = 0;
+    for (const m of PROMPTING) for (const side of SIDES) {
+      expect(sanctionSheetOf(rigOf(m), side).spec.steps.length, `${m.key}/${side}`).toBeGreaterThan(0);
+      sheets++;
+    }
+    expect(sheets).toBe(PROMPTING.length * 2);
+  });
+});
+
+describe("W2e T31 (VB-SE-1) - the field-six question is asked iff the level is one the engine declares to prompt", () => {
+  it("every level of every prompting sport, both sides: the question is a step iff level is in promptLevels, and it is the LAST thing asked", () => {
+    let checked = 0;
+    let asked = 0;
+    let quiet = 0;
+    for (const m of PROMPTING) {
+      for (const side of SIDES) {
+        const { spec } = sanctionSheetOf(rigOf(m), side);
+        const levelStep = spec.steps.find((s) => s.id === "level") as SheetChoiceStep;
+        for (const option of levelStep.options) {
+          const { seen, event } = driveAnswers(spec, side, { level: option.id, fieldSix: "yes" });
+          const isPrompt = promptLevelsOf(m).includes(option.id);
+          expect(seen.some((s) => s.id === FIELD_SIX), `${m.key}/${side}/${option.id}: asked iff a prompt level`).toBe(isPrompt);
+          // Asked BEFORE the write: it is a step of the sheet, last, so the write is the answer to it.
+          if (isPrompt) expect(seen.at(-1)?.id, `${m.key}/${side}/${option.id}: nothing is asked after the question`).toBe(FIELD_SIX);
+          expect(event, `${m.key}/${side}/${option.id}: the sheet completes`).not.toBeNull();
+          expect(event!.type).toBe(decl(m).eventType);
+          expect((event!.payload as { level: string }).level).toBe(option.id);
+          checked++;
+          if (isPrompt) asked++;
+          else quiet++;
+        }
+      }
+    }
+    expect(checked, "levels checked").toBeGreaterThan(0);
+    expect(asked, "prompt levels seen").toBeGreaterThan(0);
+    expect(quiet, "non-prompt levels seen").toBeGreaterThan(0);
+  });
+
+  it("the question reads 'Can <team> still field six players?' naming the SANCTIONED side (by name, else the side word); yes / no are its two answers", () => {
+    let checked = 0;
+    for (const m of PROMPTING) {
+      for (const side of SIDES) {
+        const { spec } = sanctionSheetOf(rigOf(m), side);
+        const step = spec.steps.find((s) => s.id === FIELD_SIX);
+        if (step?.kind !== "choice") throw new Error(`${m.key}/${side}: no field-six choice step`);
+        // `t` echoes the key and its variables, so the right key AND the right team are both witnessed.
+        expect(step.titleText, `${m.key}/${side}`).toBe(`pad.volleyball.sheet.sanction.fieldSix.title(${JSON.stringify({ team: NAMES[side] })})`);
+        expect(step.options.map((o) => o.id)).toEqual(["yes", "no"]);
+        const no = step.options.find((o) => o.id === "no")!;
+        expect(no.labelText, `${m.key}/${side}: the 'no' answer states what it does`).toBe(`pad.volleyball.sheet.sanction.fieldSix.no(${JSON.stringify({ team: NAMES[side] })})`);
+        expect(step.layout, "sentence answers are full-width rows").toBe("rows");
+        checked++;
+      }
+    }
+    expect(checked).toBe(PROMPTING.length * 2);
+  });
+
+  it("with no entrant name the question falls back to the side word, never to an empty team", () => {
+    const m = PROMPTING[0]!;
+    const view = liveView(m.key, {});
+    const spec = Object.values(resolvePad(m.key, t).sheets!(view)).find((s) => s.event === decl(m).eventType)!;
+    const step = spec.steps.find((s) => s.id === FIELD_SIX);
+    if (step?.kind !== "choice") throw new Error("no field-six step");
+    expect(step.titleText).toMatch(/^pad\.volleyball\.sheet\.sanction\.fieldSix\.title\(\{"team":"scorepad\.attribution\.(home|away)"\}\)$/);
+  });
+
+  it("the chassis prints the pre-localised title (titleText wins over the key), with both answers as full-width rows", () => {
+    const m = PROMPTING[0]!;
+    // The skin built with a REAL translator (the file's `t` echoes keys), so the markup carries the words a person reads.
+    const sheets = resolvePad(m.key, en_t).sheets!(liveView(m.key, { entrantNames: NAMES }));
+    const spec = Object.values(sheets).find((s) => s.event === decl(m).eventType && (s.buildPayload({ level: "x" }) as { by: string }).by === ENTRANT.home)!;
+    // A one-step sheet built from the REAL question step: the sheet opens on step 0, so this is what the scorer sees there.
+    // Its `when` (asked only for a prompt level) is lifted: alone, there is no level answer for it to read.
+    const question: GuidedSheetSpec = { ...spec, steps: [{ ...spec.steps.find((s) => s.id === FIELD_SIX)!, when: undefined }] };
+    const squads = initSquads(rigOf(m).lineups);
+    const html = renderToStaticMarkup(
+      createElement(GuidedSheet, { spec: question, views: { home: { squad: squads.home }, away: { squad: squads.away } }, personNames: {}, t: en_t, onComplete: () => {} }),
+    );
+    expect(html).toContain(`Can ${NAMES.home} still field six players?`);
+    expect(html).toContain('data-choice-option-id="yes"');
+    expect(html).toContain('data-choice-option-id="no"');
+    expect(html).toContain(`No. This ends the match: ${NAMES.home} loses`);
+  });
+});
+
+describe("W2e T31 (VB-SE-1) - the answers", () => {
+  it("VB-SE-1 No sends sanction then forfeit retired: the sanction held, the forfeit bound to it, and the real engine ends the match for the other side", async () => {
+    let pairs = 0;
+    for (const m of PROMPTING) {
+      const rig = rigOf(m);
+      for (const side of SIDES) {
+        const { spec } = sanctionSheetOf(rig, side);
+        for (const level of promptLevelsOf(m)) {
+          const { event } = driveAnswers(spec, side, { level, fieldSix: "no" });
+          expect(event!.sideRetires, `${m.key}/${side}/${level}: the 'no' answer reaches the host with the completion`).toBe(true);
+          const plan = endingPlanOf(m, event!.type, event!.payload, event!.sideRetires === true);
+          expect(plan, `${m.key}/${side}/${level}: 'no' is an ending`).not.toBeNull();
+          expect(plan!.reason).toBe("retired");
+
+          const store = memoryQueueStore();
+          const heldId = await runEnding(plan!, realQueueIo(store, 10_000));
+          expect(heldId).not.toBeNull();
+          const queued = await store.list();
+          // THE TWO PAYLOADS, in order: the sanction the sheet built, then the retirement naming the SAME entrant.
+          expect(queued.map((e) => e.type), `${m.key}/${side}/${level}`).toEqual([decl(m).eventType, "core.forfeit"]);
+          expect(queued[0]!.payload).toEqual(event!.payload);
+          expect(queued[1]!.payload).toEqual({ by: ENTRANT[side], reason: "retired" });
+          expect(queued[0]!.heldUntil, "the sanction is the held one").toBeDefined();
+          expect(queued[1]!.dropWith, "the forfeit is bound to it").toBe(queued[0]!.idempotencyKey);
+          expect(queued[1]!.heldUntil, "and is not itself held").toBeUndefined();
+
+          // THE ENGINE, strictly, over the very payloads the queue holds: both are admitted and the OTHER side wins, as a retirement.
+          const events = ledger([START, ...queued.map((q) => [q.type, q.payload] as const)]);
+          const folded = foldMatchWithStoppage(m, rig.cfg, rig.lineups, events, { strictFromSeq: 0 });
+          expect(outcomeOf(m, folded), `${m.key}/${side}/${level}`).toEqual({
+            kind: "award",
+            winner: ENTRANT[OTHER[side]],
+            loser: ENTRANT[side],
+            reason: "retired",
+          });
+          // D13: the server admits a SCORER's retired forfeit right after this sanction (the pair is writable by a scorer).
+          expect(scorerMayForfeit(m, lastLiveEvent(ledger([START, sanctionRow(m, side, level)])), { by: ENTRANT[side], reason: "retired" }), `${m.key}/${side}/${level}`).toBe(true);
+          pairs++;
+        }
+      }
+    }
+    expect(pairs).toBe(PROMPTING.reduce((n, m) => n + promptLevelsOf(m).length * 2, 0));
+    expect(pairs).toBeGreaterThan(0);
+  });
+
+  it("VB-SE-1 Yes sends only the sanction and play continues: no plan, no prompt, and the strict fold takes the next rally", () => {
+    let checked = 0;
+    for (const m of PROMPTING) {
+      const rig = rigOf(m);
+      for (const side of SIDES) {
+        const { spec } = sanctionSheetOf(rig, side);
+        for (const level of promptLevelsOf(m)) {
+          const { event } = driveAnswers(spec, side, { level, fieldSix: "yes" });
+          expect(event!.sideRetires, `${m.key}/${side}/${level}`).toBeUndefined();
+          expect(endingPlanOf(m, event!.type, event!.payload, event!.sideRetires === true), `${m.key}/${side}/${level}: one ordinary event`).toBeNull();
+          const history = ledger([START, [event!.type, event!.payload] as const]);
+          // Play continues: nothing is pending, and the strict write path takes the other side's rally.
+          expect(promptFor(rig, history), `${m.key}/${side}/${level}: no ending prompt`).toBeNull();
+          expect(refusedAsPending(rig, history), `${m.key}/${side}/${level}: the write path refuses nothing`).toBe(false);
+          const rally = scoreEvent(m, OTHER[side]);
+          const next = makeEnvelope(history.length + 1, rally);
+          const folded = strictFold(rig, history, next);
+          expect(outcomeOf(m, folded), `${m.key}/${side}/${level}: the match is not decided`).toBeNull();
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(PROMPTING.reduce((n, m) => n + promptLevelsOf(m).length * 2, 0));
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a warning asks nothing: no question, one ordinary event, and even a stray 'no' cannot make it an ending", () => {
+    let checked = 0;
+    for (const m of PROMPTING) {
+      for (const side of SIDES) {
+        const { spec } = sanctionSheetOf(rigOf(m), side);
+        const quietLevels = nonPromptLevelsOf(m, spec);
+        expect(quietLevels, `${m.key}: the ladder has levels below the prompt`).toContain("warning");
+        for (const level of quietLevels) {
+          const { seen, event } = driveAnswers(spec, side, { level, fieldSix: "no" });
+          expect(seen.some((s) => s.id === FIELD_SIX), `${m.key}/${side}/${level}`).toBe(false);
+          expect(event!.sideRetires, `${m.key}/${side}/${level}: nothing was asked, so nothing is retired`).toBeUndefined();
+          // The spec's own predicate and the host's plan both refuse a 'no' for a level that never asked.
+          expect(spec.sideRetires?.({ level, [FIELD_SIX]: "no" }), `${m.key}/${level}: predicate`).toBe(false);
+          expect(endingPlanOf(m, event!.type, event!.payload, true), `${m.key}/${level}: plan`).toBeNull();
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a 'no' is an ending only on a prompt level of the declared sanction event, and an END level keeps its own reason", () => {
+    let checked = 0;
+    for (const m of PROMPTING) {
+      const d = decl(m);
+      expect(endingPlanOf(m, `${m.key}.rally`, { by: "H", level: d.promptLevels[0] }, true), "another event type").toBeNull();
+      expect(endingPlanOf(m, d.eventType, { level: d.promptLevels[0] }, true), "no sanctioned side").toBeNull();
+      expect(endingPlanOf(m, d.eventType, undefined, true), "no payload").toBeNull();
+      // Without the answer a prompt level is no ending at all.
+      for (const level of d.promptLevels) expect(endingPlanOf(m, d.eventType, { by: "H", level }, false), `${m.key}/${level}`).toBeNull();
+      checked += 3 + d.promptLevels.length;
+    }
+    // The opposite direction, over every declaring sport: an END level is `disqualified` whatever the flag says.
+    for (const m of DECLARING) {
+      const d = decl(m);
+      for (const flag of [false, true]) {
+        expect(endingPlanOf(m, d.eventType, { by: "H", level: d.endLevels[0] }, flag)?.reason, `${m.key}/${flag}`).toBe("disqualified");
+        checked++;
+      }
+      // A sport with no prompt level never turns a 'no' into a retirement.
+      if (d.promptLevels.length === 0) {
+        expect(endingPlanOf(m, d.eventType, { by: "H", level: "warning" }, true), m.key).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("assumption guard: no prompting skin offers a dock for its sanction, so the pair, sent without `dispatch`, skips nothing", () => {
+    let checked = 0;
+    for (const m of PROMPTING) {
+      const rig = rigOf(m);
+      for (const side of SIDES) {
+        const { view, spec } = sanctionSheetOf(rig, side);
+        for (const level of promptLevelsOf(m)) {
+          const { event } = driveAnswers(spec, side, { level, fieldSix: "no" });
+          expect(resolvePad(m.key, t).dock?.(event!.type, view, event!.payload as Record<string, unknown>) ?? null, `${m.key}/${side}/${level}`).toBeNull();
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("sports without a prompt level never ask the question (the registry sweep's negative side)", () => {
+    // `liveView` parses the module's own default cfg: a sport with required cfg fields (generic) has none to parse.
+    const others = builtinModules.filter((m) => (m.sanctionEnding?.promptLevels.length ?? 0) === 0 && m.configSchema.safeParse({}).success);
+    expect(others.length).toBeGreaterThan(5);
+    let sheets = 0;
+    for (const m of others) {
+      const view = liveView(m.key, {});
+      const specs = Object.values(resolvePad(m.key, t).sheets?.(view) ?? {});
+      for (const spec of specs) {
+        expect(spec.steps.some((s) => s.id === FIELD_SIX), `${m.key}/${spec.event}`).toBe(false);
+        expect(spec.sideRetires, `${m.key}/${spec.event}`).toBeUndefined();
+        sheets++;
+      }
+    }
+    expect(sheets, "sheets inspected").toBeGreaterThan(0);
+  });
+});
+
+describe("W2e T31 - the pair writes each reason as a literal (source seam; a tap cannot be driven in node, e2e/scorepad-v3-ending-sanction.spec.ts drives it)", () => {
+  const src = readFileSync(resolve(__dirname, "../pad-host.tsx"), "utf8");
+
+  it("`runEnding` writes each reason as a LITERAL (the forfeit-vocabulary scan reads literals), disqualified and retired", () => {
+    const run = src.slice(src.indexOf("export async function runEnding("), src.indexOf("export function admitsTapWhileEndingPending("));
+    expect(run).toMatch(/"core\.forfeit", \{ by: plan\.by, reason: "disqualified" \}/);
+    expect(run).toMatch(/"core\.forfeit", \{ by: plan\.by, reason: "retired" \}/);
+  });
+});
+
+describe("W2e T31 - the copy is in all four locales, with its variables intact", () => {
+  const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
+  const KEYS = {
+    "pad.volleyball.sheet.sanction.fieldSix.title": ["team"],
+    "pad.volleyball.sheet.sanction.fieldSix.yes": [],
+    "pad.volleyball.sheet.sanction.fieldSix.no": ["team"],
+  } as const;
+
+  it("every key is present, non-empty and carries exactly its variables in en, es, fr and nl; the locales differ from English", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      for (const [key, vars] of Object.entries(KEYS)) {
+        const text = dict[key];
+        expect(typeof text === "string" && text.length > 0, `${locale}:${key}`).toBe(true);
+        expect([...text!.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).sort(), `${locale}:${key}`).toEqual([...vars].sort());
+        if (locale !== "en") expect(text, `${locale}:${key} is translated, not copied`).not.toBe(en[key as keyof typeof en]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4 * Object.keys(KEYS).length);
+  });
+
+  it("the English question is the one the owner approved (D12): 'Can <team> still field six players?'", () => {
+    expect(en["pad.volleyball.sheet.sanction.fieldSix.title" as keyof typeof en]).toBe("Can {team} still field six players?");
   });
 });

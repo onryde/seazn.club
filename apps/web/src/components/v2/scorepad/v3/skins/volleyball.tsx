@@ -235,6 +235,7 @@ import {
   type WhoLine,
 } from "../types";
 import type { SportTone } from "../sport-theme";
+import { SANCTION_LEVEL_STEP_ID, sideNameOf } from "./sanction-ending";
 
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 export type Side = "home" | "away";
@@ -248,6 +249,8 @@ export const RALLY_TYPE = `${SPORT}.rally`;
  *  (`reference_gallery_racquet_capture_traps.md`). */
 export const SUMMARY_TYPE = `${SPORT}.${volleyballModule.coarseEventType}`;
 export const SANCTION_TYPE = `${SPORT}.sanction`;
+/** The sanction sheet's last step (W2e T31, D12): "Can <team> still field six players?". */
+export const FIELD_SIX_STEP_ID = "fieldSix";
 export const TIMEOUT_TYPE = `${SPORT}.timeout`;
 /** FIVB's own scoresheet substitution-BOX tally (`SetBasedSub`,
  *  `setbased/kernel.ts`) — `{by, off?, on?}`, a per-set count with no policy
@@ -1247,13 +1250,13 @@ function setScoreSheet(view: PadHostView): GuidedSheetSpec {
  *  four-step ladder. `reason` is free text with no text step in this
  *  chassis, so it is not collected, same ruling badminton/table tennis both
  *  record for their own sanction sheets. */
-function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
+function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
   const state = asState(view.state);
   const players = onFieldPlayers(view.squads, side);
   const sole = players.length === 1 ? players[0]!.personId : null;
   const steps: GuidedSheetStep[] = [
     {
-      id: "level",
+      id: SANCTION_LEVEL_STEP_ID,
       kind: "choice",
       title: "pad.volleyball.sheet.sanction.level.title",
       options: SANCTION_LEVELS.map((level) => ({
@@ -1273,6 +1276,34 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
       candidates: players.map((member) => member.personId),
     });
   }
+  // W2e T31 (D12, VB-SE-1): an expulsion or a disqualification never ends a volleyball match by itself (FIVB: the team plays
+  // on while it can field six), so the sheet ASKS before the write, as its last step, and only for the levels the ENGINE's
+  // declaration names (`sanctionEnding.promptLevels`). "No" is the incomplete-team ending (VB-RT-1, FIVB 6.4.3): the host
+  // sends the sanction and then `core.forfeit{retired}` as one bound pair (pad-host.tsx's `runEnding`). "Yes" sends the
+  // sanction alone.
+  const prompt = volleyballModule.sanctionEnding?.promptLevels ?? [];
+  const asksFieldSix = (answers: Readonly<Record<string, string>>): boolean => prompt.includes(answers[SANCTION_LEVEL_STEP_ID] ?? "");
+  if (prompt.length > 0) {
+    const team = sideNameOf(view.entrantNames, side, t);
+    steps.push({
+      id: FIELD_SIX_STEP_ID,
+      kind: "choice",
+      title: "pad.volleyball.sheet.sanction.fieldSix.title",
+      // Pre-localised: the question names the team, which no dictionary holds (the key stays the canonical title).
+      titleText: t("pad.volleyball.sheet.sanction.fieldSix.title", { team }),
+      when: asksFieldSix,
+      // Both answers are sentences, so they read as full-width rows rather than pills.
+      layout: "rows",
+      options: [
+        { id: "yes", label: "pad.volleyball.sheet.sanction.fieldSix.yes" },
+        {
+          id: "no",
+          label: "pad.volleyball.sheet.sanction.fieldSix.no",
+          labelText: t("pad.volleyball.sheet.sanction.fieldSix.no", { team }),
+        },
+      ],
+    });
+  }
   return {
     event: SANCTION_TYPE,
     steps,
@@ -1284,6 +1315,9 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
         ...(person !== undefined && person !== null ? { person } : {}),
       };
     },
+    // The answer travels beside the payload (which is the same for yes and no). Re-checked against the level: an answer to a
+    // question that was never asked for this level (Back-and-change) retires nobody.
+    sideRetires: (answers) => asksFieldSix(answers) && answers[FIELD_SIX_STEP_ID] === "no",
   };
 }
 
@@ -1383,7 +1417,7 @@ function serveAnchorSheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
-export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
+export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
     [SET_SCORE_TILE_ID]: setScoreSheet(view),
     [SERVE_ANCHOR_TILE_ID]: serveAnchorSheet(view),
@@ -1393,7 +1427,7 @@ export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> 
   // reachable (`needsSetOpener`). A sheet nobody opens is inert — the same
   // posture `sanctionSheetKey`'s pair already takes.
   for (const side of SIDES) sheets[openerSheetKey(side)] = serveOpenerSheet(view, side);
-  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side);
+  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side, t);
   return sheets;
 }
 
@@ -1834,7 +1868,7 @@ export function volleyballSkinV3(t: TFn): SkinDefV3<PadHostView> {
     scorebug: (view) => buildScorebug(view, t),
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
-    sheets: buildSheets,
+    sheets: (view) => buildSheets(view, t),
     swap: (view) => buildSwap(view, t),
     refusedEventTypes,
     activityDetail: volleyballDetail,

@@ -713,7 +713,22 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * so far, like `when`, so Back-and-change rewrites it. Pre-localised, skin-supplied (the sheet interpolates names no dictionary
  * holds). Returning no lines renders no block.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: MessageKey; options: SheetChoiceOption[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked; layout?: "rows"; context?(answers: Readonly<Record<string, string>>): readonly SheetContextLine[] }
+export interface SheetChoiceStep {
+  id: string;
+  kind: "choice";
+  title: MessageKey;
+  /** W2e Task 31 (D12) - an already-resolved title that WINS over `title`, the `SheetChoiceOption.labelText` / `TileSpec.labelText`
+   *  convention for a value no dictionary can hold: volleyball's "Can <team> still field six players?" names the team. `title`
+   *  stays the canonical key (a sweep collecting every key still sees one per step). Absent renders `t(title)`, as every step
+   *  shipped before this does. */
+  titleText?: string;
+  options: SheetChoiceOption[];
+  when?: StepPredicate;
+  hintKey?: string;
+  blocked?(answers: Readonly<Record<string, string>>): Blocked;
+  layout?: "rows";
+  context?(answers: Readonly<Record<string, string>>): readonly SheetContextLine[];
+}
 /**
  * A colour disc: the chess piece colour a result or a line is ABOUT. `white` and `black` are the two sides' pieces; `split` is
  * the draw, half of each. Always `aria-hidden` — the text beside it names the colour (a locale's own word), so the disc is the
@@ -898,7 +913,24 @@ export interface SheetConfirmStep {
   context?(answers: Readonly<Record<string, string>>): readonly SheetContextLine[];
 }
 export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep | SheetConfirmStep;
-export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
+export interface GuidedSheetSpec {
+  event: string;
+  steps: GuidedSheetStep[];
+  buildPayload: (answers: Record<string, string>) => Record<string, unknown>;
+  /**
+   * W2e Task 31 (D12, VB-SE-1) - an ending the scorer's ANSWERS call for that the payload does not carry. Volleyball's
+   * sanction sheet asks "Can <team> still field six players?" before the write; the sanction's payload is the same for yes and
+   * no, so the answer travels beside it: `true` makes the completion carry `sideRetires`, and the host appends the sanctioned
+   * side's incomplete-team ending (`core.forfeit{retired}`) behind the sanction as Task 30's bound pair. Absent (every sheet
+   * but volleyball's) means the answers never end a match.
+   */
+  sideRetires?(answers: Readonly<Record<string, string>>): boolean;
+}
+
+/** What a finished sheet hands the host: the event it built, and (D12) whether the scorer's answers retire the sanctioned side. */
+export interface SheetCompletion extends TapEvent {
+  readonly sideRetires?: true;
+}
 
 /**
  * R2/task B — the reserved `{sheet}` key that means "open the chassis's

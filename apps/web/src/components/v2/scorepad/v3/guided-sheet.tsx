@@ -72,7 +72,7 @@
 // `primary` violet fill; every choice, Back and Cancel stay as described above.
 import { useState, type ReactNode } from "react";
 import { renderCandidateRow, resolvePool, type PoolView, type TFn } from "./context-strip";
-import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetChoiceOption, SheetConfirmStep, SheetContextLine, SheetDisc, SheetNumberStep, SheetPersonStep, TapEvent } from "./types";
+import type { Blocked, GuidedSheetSpec, GuidedSheetStep, SheetChoiceOption, SheetConfirmStep, SheetContextLine, SheetDisc, SheetCompletion, SheetNumberStep, SheetPersonStep } from "./types";
 import { SPORT_TONE_CLASSES } from "./tokens";
 import type { SportTone } from "./sport-theme";
 
@@ -266,7 +266,7 @@ export function currentStep(spec: GuidedSheetSpec, state: GuidedSheetState): Gui
   return idx === null ? null : spec.steps[idx]!;
 }
 
-export type GuidedSheetAdvance = { done: false; state: GuidedSheetState } | { done: true; event: TapEvent };
+export type GuidedSheetAdvance = { done: false; state: GuidedSheetState } | { done: true; event: SheetCompletion };
 
 /**
  * Answers the CURRENT step with `value` and moves forward — the whole
@@ -316,7 +316,10 @@ export function answerStep(spec: GuidedSheetSpec, state: GuidedSheetState, value
   const answers = pruneAnswers(spec, raw);
   const nextIndex = firstVisibleFrom(spec, answers, state.stepIndex + 1);
   if (nextIndex === null) {
-    return { done: true, event: { type: spec.event, payload: spec.buildPayload(answers) } };
+    // W2e T31 (D12): the key is present only when the answers retire the side, so a completion that retires nobody is exactly
+    // the `{type, payload}` every sheet has always handed back.
+    const sideRetires = spec.sideRetires?.(answers) === true;
+    return { done: true, event: { type: spec.event, payload: spec.buildPayload(answers), ...(sideRetires ? { sideRetires: true as const } : {}) } };
   }
   return { done: false, state: { stepIndex: nextIndex, answers } };
 }
@@ -682,7 +685,7 @@ export interface GuidedSheetProps {
    *  whole flow. Nothing here decides what the event means or dispatches
    *  it — same thin-renderer posture as every other v3 primitive
    *  (scorebug's onTap, tile-grid's onAction, swap-sheet's onSwap). */
-  onComplete: (event: TapEvent) => void;
+  onComplete: (event: SheetCompletion) => void;
   /** Fires when Cancel is tapped. `onComplete` is never called in this
    *  case — Cancel emits nothing, by design (task brief, explicit
    *  constraint). Optional: a caller not yet wired to remove this sheet
@@ -761,7 +764,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
             row is bar + one text item — loose text nodes beside the nowrap run would each become a flex item and
             stack out of order. The bar keeps its width (`before:shrink-0`) while the words wrap beside Back. */}
         <p className="mk-eyebrow min-w-0 flex-1 break-words text-slate-600 before:shrink-0">
-          <span>{keepHyphenatedWordsWhole(t(step.title))}</span>
+          <span>{keepHyphenatedWordsWhole(step.kind === "choice" && step.titleText !== undefined ? step.titleText : t(step.title))}</span>
         </p>
         {state.stepIndex > 0 && (
           <button type="button" onClick={handleBack} style={{ minHeight: 44 }} className={backButtonClass}>
