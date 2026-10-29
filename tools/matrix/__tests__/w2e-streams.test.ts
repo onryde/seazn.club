@@ -382,6 +382,27 @@ describe("G2 G3 hockey and icehockey: a win by overtime, by the shoot-out, by th
     expect(foreign).toBe(PERIOD.length * DECIDING_PATHS.length - PERIOD.reduce((n, s) => n + ownPathsOf(s).length, 0));
   });
 
+  it("a foreign path on a cfg that plays NO shoot-out still names the sport's own shoot-out by the engine's label (ice hockey's GWS, hockey's shootout), never a default 'shootout' (Task 20 M3)", () => {
+    let named = 0;
+    for (const sport of PERIOD) {
+      const ko = PERIOD_CELLS.find((c) => c.sport === sport && c.variant === offlineBuilderDefault(sport) && c.kind === "knockout")!;
+      const off = { ...(ko.cfg as object), shootout: null };
+      expect(shootoutLabel(sport, off), `${sport}: premise, the cfg plays no shoot-out so the engine has no panel for it`).toBeNull();
+      const own = ownPathsOf(sport);
+      // A shoot-out path asked of a cfg with none is refused earlier ("the cfg does not switch the shoot-out on"); the paths that reach the
+      // sport's own list are the ones it has no rule for (hockey's overtime, every other sport's path).
+      const shootoutNames = Object.values(LABEL_PATH);
+      for (const path of DECIDING_PATHS.filter((p) => !own.includes(p) && !shootoutNames.includes(p))) {
+        const ask = () => generateStream(req(sport, off, "knockout", { kind: "win", winner: "home", path }));
+        expect(ask, `${sport} ${path}`).toThrow(OutcomeUnreachable);
+        expect(ask, `${sport} ${path}`).toThrow(`${sport} has no '${path}' deciding path (its deciders: ${own.join(", ")})`);
+        named++;
+      }
+    }
+    expect(named, "some foreign path was asked of a shoot-out-less cfg").toBeGreaterThan(0);
+    expect(ownPathsOf("icehockey"), "premise: the engine's own name for ice hockey's shoot-out is the GWS").toContain("gws");
+  });
+
   it("G2 G3: every variant whose cfg declares overtime or a shoot-out builds a win down EACH declared path, for both winners, under a strict fold — decided in the engine's own 'ot' / 'so', the goal or the kicks in the right phase, counted per variant", () => {
     const perVariant = new Map<string, number>();
     const perPath = new Map<DecidingPath, number>();

@@ -128,7 +128,10 @@ function decidingPath(req: DecidedRequest, winner: Side, path: DecidingPath): St
   const label = outcomeLabel(req.outcome);
   const keys = deciderKeysFor(sportModule(req.sportKey), req.stageKind, null);
   const foreign = (): never => {
-    const own = keys.map((k) => (k === "shootout" ? (cfg.shootout ? shootoutPathOf(req.sportKey, cfg) : null) ?? "shootout" : k));
+    // The sport's own name for its shoot-out ('shootout' for hockey, 'gws' for ice hockey) is the engine's label for the PANEL that
+    // carries it, which a cfg with no shoot-out has none of: ask with one switched on, so a cfg that plays none still names its sport's.
+    const withShootout = { ...cfg, shootout: cfg.shootout ?? { attempts: 1 } };
+    const own = keys.map((k) => (k === "shootout" ? shootoutPathOf(req.sportKey, withShootout) ?? k : k));
     throw new OutcomeUnreachable(req.sportKey, label, `${req.sportKey} has no '${path}' deciding path (its deciders: ${own.join(", ")})`);
   };
   const regulation = periodLabels(cfg.periods.count);
