@@ -7,6 +7,46 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-28",
+    title: "Breaking: a hockey or ice hockey shoot-out config no longer carries suddenDeath",
+    lines: [
+      "config.shootout.suddenDeath (a boolean, true in both presets) had no effect on any kick or result and is removed: GET /divisions/{id} stops returning it once the stored copies are migrated.",
+      "POST /competitions/{id}/divisions, PATCH /divisions/{id}, POST and PUT /divisions/{id}/stages, PUT /stages/{id}/rules and PUT /fixtures/{id}/rules do not refuse a hockey or ice hockey config that still sends it: the key is dropped and the rest of the shoot-out is read as before.",
+      "Stored copies are removed by the release's migration, which runs before the deploy. Until the new server is up, PATCH /divisions/{id} on a hockey or ice hockey division with a shoot-out answers 422 CONFIG_INVALID (issue path shootout); a retry succeeds after the deploy, and scoring is not affected. The fold epochs are now 5 (hockey) and 3 (ice hockey): a native scoring client still on the old epoch must update.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
+    title: "Breaking: The Hundred's net run rate is printed per five-ball over",
+    lines: [
+      "A cricket table's net run rate is runs per over (ECB The Hundred Playing Conditions 2026, 16.9.4(a)), and an over on The Hundred is five balls (17.1). The division table, the hub table and the qualification what-if now print NRR per over of the division's own length: five balls on The Hundred (config.ballsPerOver 5), six anywhere else.",
+      "A side that scored 120 off 100 balls and conceded 100 off 100 balls printed +1.200 and now prints +1.000. thehundred.com's explainer divides by balls faced (+0.200 here), so the printed figure reads five times it.",
+      "Nothing on the wire changes: GET /stages/{id}/standings carries the ledger in balls (runs_for, balls_faced_eff, runs_against, balls_bowled_eff), and the order of a table does not move. A client that works NRR out itself divides by config.ballsPerOver, not by six.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
+    title: "Breaking: a dismissal a no ball or a wide does not admit is refused",
+    lines: [
+      "A cricket.ball or cricket.superover.ball whose runs.extras.kind is noball or wide is now refused when its wicket.kind is not one the delivery admits: off a no ball only hitballtwice, obstructed and runout stand (ICC Playing Conditions 21.18); off a wide only hitwicket, obstructed, runout and stumped (22.9). Retired and timedout are refused on both. A wicket on a legal delivery is unchanged.",
+      "POST /fixtures/{id}/events answers 422 INVALID_EVENT (message: \"bowled\" cannot dismiss on a no ball) and nothing is written. POST /divisions/{id}/events/import still returns 200; that stream is rejected with error.code import.fold_rejected and error.engineCode INVALID_EVENT.",
+      "Send the delivery without a wicket when the batter was not out. A delivery already recorded with such a dismissal still replays and can be voided.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
+    title: "Breaking: a cricket match decided by DLS or with revised overs credits the first side as the ICC does",
+    lines: [
+      "For a one-innings cricket match that Duckworth-Lewis-Stern decided, or that was played with revised overs, the first side's net run rate ledger is no longer its own innings (ICC Playing Conditions 16.10.7). Abandoned with a DLS result, it is credited Team 2's par score off the balls Team 2 faced; with DLS applied earlier, or revised overs, it is credited one run less than Team 2's final target off the overs allocated to Team 2. Team 2 is credited as played, an all-out innings at its full allocated overs.",
+      "GET /stages/{id}/standings moves runs_for, balls_faced_eff and run_diff for such a match: 200 off 20 overs, with a chase revised to 160 off 15 overs, now reads 159 off 90 balls (+1.267 for the match, was +0.667). A table whose order NRR decides can reorder. Every other match, a two-innings match and a forfeit are unchanged.",
+      "A stored standings snapshot keeps its old figures until the stage's table is next recomputed. No recorded match changes its result.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: a set target below 5, or a tennis best of 1 with a match tie-break, is refused when written",
     lines: [
       "POST /competitions/{id}/divisions, PATCH /divisions/{id}, POST and PUT /divisions/{id}/stages, PUT /stages/{id}/rules and PUT /fixtures/{id}/rules refuse a volleyball or table tennis config whose setTo or finalSetTo is below 5 with 422 CONFIG_INVALID, and nothing is written. error.issues carries the sentence: \"A set must be played to at least 5 points.\"",

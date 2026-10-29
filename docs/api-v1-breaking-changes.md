@@ -7,6 +7,194 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a hockey or ice hockey shoot-out config no longer carries `suddenDeath`
+
+The hockey and ice hockey configs (`config.shootout`, for a variant that plays
+a shoot-out) had a `suddenDeath` flag, `true` in both presets. Nothing ever read
+it: it changed no kick, no result and no screen. It is removed.
+
+**What changed.** `config.shootout.suddenDeath` is no longer part of a hockey or
+ice hockey config. A request that still sends it is not refused: the key is
+dropped, and the rest of the shoot-out is read as before.
+
+| Path | Before | Now |
+|---|---|---|
+| `POST /api/v1/competitions/{id}/divisions`, `PATCH /api/v1/divisions/{id}`, `POST` and `PUT /api/v1/divisions/{id}/stages` (a stage's `rules`), `PUT /api/v1/stages/{id}/rules`, `PUT /api/v1/fixtures/{id}/rules`, a hockey or ice hockey config with a `shootout` | `suddenDeath` was a required boolean and was stored | accepted and dropped: 200 as before, and the stored config has no `suddenDeath` |
+| `GET /api/v1/divisions/{id}`, `config.shootout` | `suddenDeath` present (a boolean) | absent once the stored copy is removed (see below) |
+
+**What replaces it.** Nothing: the key did nothing. Stop sending it, and stop
+reading it.
+
+**What a consumer sees.** No error. A client that sends the old value
+(`"suddenDeath": true`) keeps working unchanged. A client that reads
+`config.shootout.suddenDeath` gets `undefined` where it used to get a boolean.
+
+**Data.** The release's migration, which runs before the deploy, removes every
+stored copy: from the division's config, a stage's rules, a match's own format,
+a match's frozen snapshot and its cached state. Until it has run, a stored copy
+is still there and still ignored. The fold epochs of both sports are raised in
+the same release (hockey from 4 to 5, ice hockey from 2 to 3), so the server's
+epoch gate refuses a native scoring client that still sends the old epoch for a
+hockey or ice hockey fixture until it updates.
+
+The migration runs before the new server is deployed, and the previous server
+still requires the key. For those minutes `PATCH /api/v1/divisions/{id}` on a
+hockey or ice hockey division with a shoot-out answers 422, `error.code`
+`"CONFIG_INVALID"` (`"invalid icehockey config"`, issue path `shootout`), and so
+does a new client's save that reaches a server not yet replaced. A retry
+succeeds once the deploy is done. Scoring is not affected.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, decision D4 (rules HK-SO-2 and IH-SO-2). The pinning tests
+are `packages/engine/src/sports/period/w2e-period.test.ts` and
+`apps/web/src/server/engine-db/__tests__/w2e-suddendeath-strip.test.ts`; the
+migration's is `apps/web/src/server/__tests__/w2e-migration.test.ts`.
+
+## 2026-10-28 — The Hundred's net run rate is printed per five-ball over
+
+A cricket table's net run rate (NRR) is the average runs per over a team scored
+less the average runs per over scored against it (ECB The Hundred Playing
+Conditions 2026, 16.9.4(a)), and an over on The Hundred "shall comprise 5
+balls" (17.1). Seazn printed every cricket table's NRR per six-ball over. It now
+prints it per over of the division's own length: five balls on The Hundred, six
+anywhere else.
+
+**What changed.** Nothing on the wire: `GET /api/v1/stages/{id}/standings`
+carries the ledger in balls (`runs_for`, `balls_faced_eff`, `runs_against`,
+`balls_bowled_eff`) as before, and the order of a table does not move. The
+ratio printed from it does.
+
+| Where | Before | Now |
+|---|---|---|
+| The NRR cell of a division on The Hundred (`config.ballsPerOver: 5`): the public division table, the hub table, and the "Now: you …, they …" sentence of the qualification what-if | runs per six balls | runs per five balls |
+| The same cells for any other cricket division (T20, ODI, a six-ball test) | runs per six balls | unchanged |
+
+A side that scored 120 off 100 balls and conceded 100 off 100 balls printed
+`+1.200` and now prints `+1.000`. thehundred.com's own explainer divides by
+balls faced, a per-ball figure (`+0.200` here) and names no unit; the Playing
+Conditions are the authority, so the figure Seazn prints reads five times the
+explainer's.
+
+**What replaces it.** Nothing to send. A client that works NRR out from the
+ledger itself divides by the division's `config.ballsPerOver`, not by six.
+
+**What a consumer sees.** A number: the same table, the same order, a smaller
+figure on The Hundred.
+
+**No data migration was required.** NRR is worked out from the stored ledger
+when a table is shown.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, decision D19 (owner), rule CK-BO-2. The pinning tests are
+`packages/engine/src/competition/display-nrr-scale.test.ts` and
+`apps/web/src/server/public-site/__tests__/standings-nrr-scale.test.ts`.
+
+## 2026-10-28 — a dismissal a no ball or a wide does not admit is refused
+
+Off a no ball a batter can be out only by hitting the ball twice, obstructing
+the field or being run out (ICC Men's T20 World Cup 2026 Playing Conditions
+21.18). Off a wide only hit wicket, obstructing the field, run out and stumped
+stand (22.9). Both scoring write paths now refuse any other mode on such a
+delivery.
+
+**What changed.** A `cricket.ball` (or `cricket.superover.ball`) whose
+`payload.runs.extras.kind` is `"noball"` or `"wide"` was accepted with a
+`payload.wicket` of any `kind`. It is now refused unless the kind is one of
+these:
+
+| Delivery | Dismissals that stand (`wicket.kind`) | Refused |
+|---|---|---|
+| No ball | `hitballtwice`, `obstructed`, `runout` | `bowled`, `caught`, `lbw`, `stumped`, `hitwicket`, `retired`, `timedout` |
+| Wide | `hitwicket`, `obstructed`, `runout`, `stumped` | `bowled`, `caught`, `lbw`, `hitballtwice`, `retired`, `timedout` |
+
+Retired and timed out are not among the clauses' modes, so they are refused on
+both deliveries too (the clauses' text, read narrowly). A wide that is also a
+free hit is bound by the free hit first (21.19.2), so `stumped` is refused
+there. A wicket on a legal delivery is unchanged, in every format.
+
+| Write path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events`, such a delivery | accepted | 422, `error.code` `"INVALID_EVENT"`, nothing written |
+| `POST /api/v1/divisions/{id}/events/import`, a stream with such a delivery | imported | 200; that stream is rejected with `"import.fold_rejected"`, `engineCode` `"INVALID_EVENT"`, and nothing is written for its fixture |
+
+**What replaces it.** Send what happened on the delivery. A batter bowled off a
+no ball is not out: send the delivery without a `wicket`. A stumping off a wide
+stays a wicket.
+
+**What a consumer sees.** On the scoring endpoint:
+
+```json
+{ "ok": false, "error": { "code": "INVALID_EVENT", "message": "\"bowled\" cannot dismiss on a no ball" }, "requestId": "…" }
+```
+
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** Only a NEW write is judged. A delivery
+already in a match's ledger with such a dismissal still replays to the result
+it recorded, and a void of it is accepted.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, decision D8, rules CK-NB-1 and CK-WD-1. The pinning test
+is `packages/engine/src/sports/cricket/w2e-cricket.test.ts`.
+
+## 2026-10-28 — a cricket match decided by DLS or with revised overs credits the first side as the ICC does
+
+A cricket table's net run rate (NRR) is worked out from each match's ledger. For
+a match that Duckworth-Lewis-Stern decided, or that was played with revised
+overs, the ICC does not credit the side that batted first with the runs it
+scored: it credits the par score, or one run less than the chasing side's
+target, off the overs the chasing side had (ICC Men's T20 World Cup 2026
+Playing Conditions 16.10.7). Every cricket match is now credited this way; there
+is no setting.
+
+**What changed.** The ledger of a one-innings match (`metrics` on a row of
+`GET /api/v1/stages/{id}/standings`: `runs_for`, `balls_faced_eff`,
+`runs_against`, `balls_bowled_eff`, `run_diff`) moves for the first side:
+
+| Match | Before | Now |
+|---|---|---|
+| Abandoned, with a result reached under DLS (the chase still open) | the first side's runs off the balls it faced | Team 2's par score on abandonment, off the balls Team 2 faced; Team 2's runs and balls as played |
+| DLS applied earlier in the match (a revised target, computed or confirmed by the umpires), or a chase with revised overs and no DLS (the target stays Team 1's total plus one) | the first side's runs off the balls it faced | one run less than Team 2's final target, off the overs allocated to Team 2; Team 2 as played, and an all-out innings counted at its full allocated overs |
+| Any other match, a two-innings match, a forfeit | as played | unchanged |
+
+A tie at par, or on a revised target, is a result and counts. Where a revision
+during Team 1's innings left Team 2 more resources than Team 1, the par on
+abandonment is the engine's approximation (the final target pro-rated by the
+resources Team 2 used), not the Standard Edition table's own redistribution.
+
+A first side that made 200 in 20 overs, then a chase revised to 160 off 15
+overs that finished on 140 for 6: the first side's row read `runs_for` 200,
+`balls_faced_eff` 120 and `run_diff` 60; it now reads 159, 90 and 19. Its NRR
+for the match moves from +0.667 to +1.267. A table whose order NRR decides can
+reorder.
+
+**What replaces it.** Nothing to send. A client that works NRR out from the
+ledger gets the credited figures.
+
+**What a consumer sees.** A different ledger for the match, in the same shape:
+
+```json
+{ "runs_for": 159, "balls_faced_eff": 90, "runs_against": 140, "balls_bowled_eff": 90, "run_diff": 19 }
+```
+
+**No data migration was required.** NRR is worked out from the match's ledger
+when its table is built, and no stored match changes shape. A stored standings
+snapshot keeps its old figures until the stage's table is next recomputed. No
+recorded match changes its result.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, decision D18 (no setting, no freeze), rule CK-RR-1
+(rulebook RB2A-20, audit row SC-C5). The pinning test is
+`packages/engine/src/sports/cricket/w2e-cricket.test.ts`.
+
 ## 2026-10-28 — a set target below 5, or a tennis best of 1 with a match tie-break, is refused when written
 
 W2e ruling 31: a volleyball or table tennis set is played to at least 5
