@@ -16,7 +16,7 @@ import { selectorForTapStep } from "../../bench/lib/drivers/scorer.ts";
 import { ORGANISER_ONLY_EVENT_TYPES, ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../apps/web/src/lib/organiser-only-events.ts";
 import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../apps/web/src/lib/forfeit-phase-refusal.ts";
 import { ConsoleChoiceNotOffered, FORFEIT_NEITHER_TESTID } from "../lib/browser/pages/fixture-console.ts";
-import { FORFEIT_REASONS as ENGINE_FORFEIT_REASONS } from "@seazn/engine/core";
+import { FORFEIT_REASONS as ENGINE_FORFEIT_REASONS, type StageKind } from "@seazn/engine/core";
 import type { LedgerRow } from "../../bench/lib/ledger.ts";
 import { FLOOR_MS, SLACK_MS, TAP_PACE_MS } from "../lib/browser/budget.ts";
 import { Evidence, type EvidenceFs } from "../lib/browser/evidence.ts";
@@ -24,7 +24,7 @@ import { navBudget, type DivisionWhere, type PageCtx } from "../lib/browser/page
 import type { StageOut } from "../lib/browser/pages/division-builder.ts";
 import type { EntrantIn } from "../lib/browser/pages/entrants.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
-import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, SPORT_KEYS, TEMPLATE_ROW_KEYS, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
@@ -33,7 +33,8 @@ import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { builtAsPosted } from "../lib/scenarios/assertions.ts";
 import { Recorder, TEMPLATE_ENDS_ON, playStage, setUpDivision } from "../lib/scenarios/common.ts";
-import { resolveSportCfg } from "../lib/sport-cfg.ts";
+import { resolveSportCfg, sportModule } from "../lib/sport-cfg.ts";
+import { storedStageRules } from "../../../apps/web/src/lib/stage-decider-off.ts";
 import { noPadReason } from "../lib/pad-sports.ts";
 import { CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE, CRICKET_NO_CONTROL, CRICKET_SUMMARY, cricketPad } from "../lib/pads/cricket.ts";
 import { boardgamePad } from "../lib/pads/boardgame.ts";
@@ -415,6 +416,89 @@ describe("BrowserDriver — creation, from the product's answers (ruling B)", ()
     expect(http.calls).not.toContain("postStages");
     expect(only(driver, "builder-posted-as-harness")).toMatchObject({ verdict: "pass", checked: bodies.length });
     expect(only(driver, "organiser-ui-path")).toMatchObject({ verdict: "pass", checked: 1 });
+  });
+
+  // W2e Task 35 (the truth run's first finding): the unit tests above build the "product's" stages FROM the harness's own bodies, so
+  // both ends said the same thing and the check never met a real create door. The door owns two keys the harness never posts: an
+  // `rngSeed` on every stage (W2d Task 10: a random 31-bit integer) and, on a stage whose kind and variant declare one, the sport's
+  // preset `rules` (W2c Task 12). A real builder run reddened on `rngSeed` in 164 of 176 L1 cells. The rules the door stores come from the
+  // PRODUCT's own composition (storedStageRules), never a table typed here.
+  const SEED_BOUND = 2 ** 31;
+  /** The stages as the product's create door stores them for `row` in `sport`: the harness's bodies, a door-owned rngSeed, and the preset rules. */
+  function builtByDoor(row: RowKey, sport: string, edit: (config: Record<string, unknown>, seq: number) => Record<string, unknown> = (c) => c): StageOut[] {
+    const variant = offlineBuilderDefault(sport);
+    return stagesForRow(row).map((b) => {
+      const stored = storedStageRules(sportModule(sport), b.kind as StageKind, variant, b.config.rules ?? null);
+      const posted = Object.fromEntries(Object.entries(b.config).filter(([k]) => k !== "rules"));
+      const config = { ...posted, rngSeed: 1_234_567 + b.seq, ...(stored !== null && Object.keys(stored).length > 0 ? { rules: stored } : {}) };
+      return { id: `s${b.seq}`, division_id: "d1", seq: b.seq, kind: b.kind, name: b.name, config: edit(config, b.seq), progression: b.progression, status: "pending" };
+    });
+  }
+  /** A driver whose builder answers `stages`, for a case of `row` in `sport` at the sport's builder default; the check it left. */
+  async function checkOf(row: RowKey, sport: string, stages: StageOut[], bodies = stagesForRow(row)): Promise<CheckResult> {
+    const s = spec(row, sport, { variant: offlineBuilderDefault(sport) });
+    const { driver } = league({
+      spec: s,
+      pages: { createDivisionUi: async (_c, _s, compId, i) => ({
+        division: { id: "d1", competition_id: compId, name: i.name, slug: PRODUCT_DIV_SLUG, sport_key: i.sportKey, variant_key: i.variantKey, config: {}, status: "draft" },
+        stages,
+      }) },
+    });
+    const { divId } = await built(driver, s);
+    await driver.postStages(divId, bodies);
+    return only(driver, "builder-posted-as-harness");
+  }
+
+  it("T35: the keys the create door owns are no difference — a door-seeded rngSeed on every stage and the sport's preset rules on a bracket stage; the preset is the product's own composition", async () => {
+    // Football's knockout carries a preset (extra time and a shoot-out) and its league stage none: both shapes in one division.
+    const stages = builtByDoor("groups_ko", "football");
+    const rules = stages.map((s) => s.config.rules);
+    expect(rules.filter((r) => r !== undefined).length, "the knockout stage holds a preset (else this test proves nothing)").toBeGreaterThan(0);
+    expect(rules.filter((r) => r === undefined).length, "the pool stage holds none").toBeGreaterThan(0);
+    expect(await checkOf("groups_ko", "football", stages)).toMatchObject({ verdict: "pass", checked: stages.length });
+  });
+
+  it("T35 sweep: the door's stages equal the harness's bodies in EVERY sport and row (a counted sweep, preset sports among them)", async () => {
+    let checked = 0, withPreset = 0;
+    for (const sport of SPORT_KEYS) {
+      for (const row of TEMPLATE_ROW_KEYS) {
+        if (refusedCell(row, sport) !== null) continue;
+        const stages = builtByDoor(row, sport);
+        if (stages.some((s) => s.config.rules !== undefined)) withPreset++;
+        const c = await checkOf(row, sport, stages);
+        expect(c, `${row}|${sport}`).toMatchObject({ verdict: "pass", checked: stages.length });
+        checked++;
+      }
+    }
+    expect(checked, "cells swept").toBeGreaterThan(SPORT_KEYS.length * 10);
+    expect(withPreset, "cells whose door stored a preset").toBeGreaterThan(0);
+  }, 60_000);
+
+  it("T35: a door-owned key is still judged — a preset rule the door would not store, a rule it stores differently, an rngSeed that is no seed, and any other extra key all fail, each named", async () => {
+    const preset = (builtByDoor("knockout", "football")[0]!.config.rules ?? {}) as Record<string, unknown>;
+    expect(Object.keys(preset)).toContain("shootoutAttempts");
+    const rulesAttempts = Number(preset.shootoutAttempts) + 94;
+    const named = async (edit: (c: Record<string, unknown>) => Record<string, unknown>): Promise<string[]> => {
+      const c = await checkOf("knockout", "football", builtByDoor("knockout", "football", edit));
+      expect(c.verdict).toBe("fail");
+      return c.evidence as string[];
+    };
+    expect(await named((c) => ({ ...c, rules: { ...preset, shootoutAttempts: rulesAttempts } }))).toEqual([`stage[1].config.rules.shootoutAttempts: built ${rulesAttempts}, harness ${String(preset.shootoutAttempts)}`]);
+    expect(await named((c) => ({ ...c, rules: { ...preset, extra: true } }))).toEqual(["stage[1].config.rules.extra: built true, harness (absent)"]);
+    expect(await named((c) => { const { rules: _dropped, ...rest } = c; return rest; })).toHaveLength(1); // a preset the door would store, missing
+    for (const bad of ["12", -1, SEED_BOUND, 1.5, null]) {
+      expect(await named((c) => ({ ...c, rngSeed: bad })), `rngSeed ${JSON.stringify(bad)}`).toEqual([`stage[1].config.rngSeed: built ${JSON.stringify(bad)}, the door stores an integer in [0, ${SEED_BOUND})`]);
+    }
+    expect(await named((c) => ({ ...c, foo: 1 }))).toEqual(["stage[1].config.foo: built 1, harness (absent)"]);
+  });
+
+  it("T35: an rngSeed the harness POSTED is a posted key — kept as sent, so a built seed that differs fails and an equal one passes", async () => {
+    const bodies = stagesForRow("knockout").map((b) => ({ ...b, config: { ...b.config, rngSeed: 7 } }));
+    const withSeed = (seed: number) => builtByDoor("knockout", "generic", (c) => ({ ...c, rngSeed: seed }));
+    expect(await checkOf("knockout", "generic", withSeed(7), bodies)).toMatchObject({ verdict: "pass", checked: 1 });
+    const c = await checkOf("knockout", "generic", withSeed(8), bodies);
+    expect(c.verdict).toBe("fail");
+    expect(c.evidence).toEqual(["stage[1].config.rngSeed: built 8, harness 7"]);
   });
 
   // The brief's example (bodies say legs 3, the builder posts 1) is a false
