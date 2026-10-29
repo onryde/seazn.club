@@ -66,13 +66,14 @@ export interface PadRulesBase {
 }
 export interface PeriodPadRules extends PadRulesBase {        // hockey, icehockey (P1)
   readonly suspensionReasons: readonly string[];
-  readonly suspensionClassKeys: readonly string[];
+  readonly suspensionClassKeys: readonly string[];          // the static catalogue that keys tone maps
+  suspensionClasses(cfg: unknown): readonly string[];        // review I1: what this cfg offers (icehockey recreational ≠ iihf)
   readonly goalKindRequired: boolean;
   readonly assistsMax: number;
   readonly swapBand: FidelityBand;                            // (c)
   suspensionMinutes(cfg: unknown): { readonly min: number; readonly max: number; readonly fallback: number }; // (c) fallback
   goalKinds(cfg: unknown): readonly string[];
-  eventAllowedInPhase(eventType: string, phase: string): boolean;
+  eventAllowedInPhase(eventType: string, phase: string, cfg: unknown): boolean;   // review I2: the fold's phase guards read cfg
 }
 export interface FootballPadRules extends PadRulesBase {      // P1
   readonly cardColors: readonly string[];
@@ -82,7 +83,7 @@ export interface FootballPadRules extends PadRulesBase {      // P1
   readonly playPhases: readonly string[];
   readonly teamSizeDefault: number;
   subWindowsCap(cfg: unknown): number | undefined;
-  eventAllowedInPhase(eventType: string, phase: string): boolean;
+  eventAllowedInPhase(eventType: string, phase: string, cfg: unknown): boolean;   // review I2: the fold's phase guards read cfg
 }
 export interface CricketPadRules extends PadRulesBase {       // P2
   readonly wicketKinds: readonly string[];
@@ -151,14 +152,14 @@ export interface PadRulesBySport {
 }
 ```
 
-`index.ts` exports `type *` from `types.ts`, plus `padFieldOf`, `padEnumValues` and `padNumberBound` from `spec-lookup.ts`. Each later batch adds one `export const <sport>PadRules: <Type>` to `index.ts`. P4 adds `POST_PHASES`. `spec-lookup.ts` signatures:
+`index.ts` exports `type *` from `types.ts`, plus `padFieldOf`, `padEnumValues` and `padNumberBound` from `spec-lookup.ts`. **Review round (I3, m1), as built:** `export interface PadFieldScope { action?: string }`, matched against the action's `labelKey.key`. An unknown action throws and lists the event type's actions; an ambiguous key throws and lists the candidate action keys. Enum and number lookups judge agreement only on what they return. The three real ambiguous keys (boardgame `result` `method`, carrom `game.adjust` `delta`, generic `score` `points`) are read with `scope`. Each later batch adds one `export const <sport>PadRules: <Type>` to `index.ts`. P4 adds `POST_PHASES`. `spec-lookup.ts` signatures:
 
 ```ts
-export function padFieldOf(spec: PadSpec, eventType: string, path: string): PadField | undefined;
+export function padFieldOf(spec: PadSpec, eventType: string, path: string, scope?: PadFieldScope): PadField | undefined;
 /** Throws (an Error naming eventType and path) when absent or not an enum: a missing field is a build bug, never []. */
-export function padEnumValues(spec: PadSpec, eventType: string, path: string): readonly string[];
+export function padEnumValues(spec: PadSpec, eventType: string, path: string, scope?: PadFieldScope): readonly string[];
 /** Throws likewise when absent or not a number field. */
-export function padNumberBound(spec: PadSpec, eventType: string, path: string): { min: number; max: number };
+export function padNumberBound(spec: PadSpec, eventType: string, path: string, scope?: PadFieldScope): { min: number; max: number };
 ```
 
 - [ ] **Step 1: Write the failing test.** `pad.test.ts`:
@@ -193,7 +194,7 @@ export function padNumberBound(spec: PadSpec, eventType: string, path: string): 
 
 ## Batch P1 — period sports: hockey, icehockey, football
 
-Branch `feat/pad-wave-p1`, off main after P0. Its files are disjoint from P2 and P3.
+Branch `feat/pad-wave-p1`, off main after P0. Its files are disjoint from P2 and P3 except `src/pad/index.ts` (each batch appends one export) and the `phone-subpaths.json` closure re-pin: expect a small rebase, not a conflict of substance (P0.1 review m5).
 
 Re-pinned items (skin → engine). (b) = duplicate, delete it and import. (c) = declare it first. "trace" = the scout did not follow it end to end; the implementer reads the guard and records what they find before swapping.
 
@@ -346,7 +347,7 @@ Branch `feat/pad-wave-p2`, off main after P0.
 
 ## Batch P3 — set-based sports and tennis
 
-Branch `feat/pad-wave-p3`, off main after P0. Two tasks with disjoint files: P3.1 (setbased) and P3.2 (nested/tennis).
+Branch `feat/pad-wave-p3`, off main after P0 (shares `src/pad/index.ts` and the closure pin with P1/P2, review m5). Two tasks with disjoint files: P3.1 (setbased) and P3.2 (nested/tennis).
 
 | Fact | Skin | Engine source | Kind |
 |---|---|---|---|
