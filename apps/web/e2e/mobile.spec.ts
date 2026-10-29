@@ -43,6 +43,7 @@ import {
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
 import { SPORT_RULES } from "../src/lib/match-rules";
+import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 import { withDb } from "./rs007-money-kit";
 import { STORAGE_KEY as GAME_2048_STORAGE_KEY, type GameState as Game2048State } from "../src/games/2048/state";
@@ -4514,12 +4515,12 @@ for (const sport of ENDING_SPORTS) {
 // pre-W2e ledger, where something was recorded after the card and the device did not write the sanction: only the organiser can
 // resolve it), and VOID ONLY (below).
 //
-// The two seeded here are the two a fresh device can reach. `voidOnly` is the card with the LONGEST copy in every locale and one
-// button, and it is NOT seeded: it needs a device that wrote the sanction ITSELF in this mount (`ownEventIds` is in-memory only and
-// is empty on a fresh page, so a seeded device never owns the row) AND a row recorded after it, which the write path refuses and
-// only raw SQL can add - a live two-step the runner cannot be given blind. Its structure (one 44px button, full width below `md`,
-// `break-words`/`min-w-0`) is pinned by the three-way render in `w2e-ending-sanction.test.ts`; its length at 320 is not browser-proved.
-// `neither` has no button to anchor the layout.
+// Two of them are SEEDED here: the two a fresh device can reach. The third, `voidOnly`, is the card with the LONGEST copy in
+// every locale and one button, and it cannot be seeded: it needs a device that wrote the sanction ITSELF in this mount
+// (`ownEventIds` is in-memory only and is empty on a fresh page, so a seeded device never owns the row) AND a row recorded after
+// it. It is driven in the mount instead, below the loop (W2e T33b, N2): the handed device sends the sanction through the pad,
+// a row lands behind it while its ending is still on the wire, and the server refuses the ending. `neither` has no button to
+// anchor the layout.
 //
 // The `neither` ledger cannot be written through the API (the write path refuses everything after an ending sanction), so the
 // event after the card is written by raw SQL: the one way such a row exists, the shape an earlier build left behind. A stoppage is
@@ -4580,6 +4581,136 @@ for (const sport of ENDING_SPORTS) {
       }
     });
   }
+}
+
+// VOID ONLY (W2e T33b, N2) - the one card layout the seeded cases above cannot reach, driven through the pad itself.
+//
+// The pad sends an ending sanction as TWO appends: the sanction (held for `HOLD_MS`), then its ending behind it. The device
+// owns the sanction it sent in this mount, so the prompt may offer it a void. What makes the card "void only" is a row recorded
+// after the sanction, which the server's D13 rule reads as "the sanction is no longer the last live event, so a scorer may not
+// record its ending". The only writer of such a row is raw SQL (the write path refuses everything after an ending sanction), so
+// the test holds the ENDING at the wire (a route handler that waits), writes a `core.suspend` behind the sanction (the same row
+// the `neither` case writes), and lets the ending go. The server then answers it for real: the request is stale (SEQ_CONFLICT,
+// the pad resyncs and merges the suspend) and, asked again against the new tip, it is a 403 - a permanent refusal, so the
+// ending is dropped and the sanction stays. Nothing in the answer is faked; only WHEN the ending is sent is controlled.
+//
+// What it proves at this width: the card shows the voidOnly copy and exactly one button (the void, hit-testable at 44px), the
+// record button is absent, nothing in the card is clipped, the page does not scroll sideways, the card fits the viewport, and
+// below `md` the lone button spans the card (minus its gutters) rather than shrinking to its label.
+for (const sport of ENDING_SPORTS) {
+  test(`${sport.key} v3 pad (handed device, voidOnly): the device's own sanction with a row behind it - the prompt's longest copy and its one button fit, reachable at 44px, nothing clipped, no horizontal scroll`, async ({
+    browser,
+    request,
+  }) => {
+    // Derived from the hold, never typed (AGENTS.md failure class 20): the sanction waits out HOLD_MS before anything is sent,
+    // and the merge may wait for the pad's 15s poll if the conflict resync does not get there first.
+    test.setTimeout(Math.max(150_000, 90_000 + 6 * HOLD_MS));
+    const fx = await seedRosteredFixture(request, {
+      label: `Mobile Ending Scorer voidOnly ${sport.key} ${TAG}-${projectTag()}`,
+      sportKey: sport.key,
+      variantKey: ENDING_SEEDS[sport.key]!.variantKey,
+      entrantKind: "individual",
+      home: [{ fullName: `Mobile End VO ${sport.key} Home ${TAG}-${projectTag()}` }],
+      away: [{ fullName: `Mobile End VO ${sport.key} Away ${TAG}-${projectTag()}` }],
+      // No fixture lineup for tennis: nobody to ask "which player" in the sanction sheet, as scorepad-v3-ending-sanction.spec.ts
+      // seeds it. Badminton singles has one on-field player, so its sheet is level -> confirm as well.
+      skipLineups: sport.key === "tennis",
+      emitCoreStart: true,
+    });
+    const link = await apiJson<{ secret: string }>(request, `/api/v1/fixtures/${fx.fixtureId}/device-links`, "POST", {
+      label: `mobile ending voidOnly ${projectTag()}`,
+    });
+    expect(link.status, JSON.stringify(link.error)).toBe(201);
+    const voidOnlyCopy = uiEn["pad.ending.body.voidOnly"];
+    expect(voidOnlyCopy, "the dictionary carries the voidOnly copy (an empty string would match any card)").toBeTruthy();
+    const levelLabel = uiEn[`sanction.${sport.level}`];
+    expect(levelLabel, `the dictionary names the ${sport.level} level`).toBeTruthy();
+
+    let releaseEnding!: () => void;
+    const endingMayGo = new Promise<void>((resolve) => {
+      releaseEnding = resolve;
+    });
+    let endingsOnTheWire = 0;
+
+    const ctx = await browser.newContext({ viewport: projectViewport() ?? undefined, storageState: await consentedAnonymousState() });
+    try {
+      const page = await ctx.newPage();
+      // Hold the ENDING (a core.forfeit POST) at the wire until the test says go. Every other request, including the
+      // sanction's own POST and every ledger read, passes straight through to the real server.
+      await page.route(`**/api/v1/fixtures/${fx.fixtureId}/events`, async (route) => {
+        const req = route.request();
+        const body = req.method() === "POST" ? (req.postDataJSON() as { type?: string } | null) : null;
+        if (body?.type !== "core.forfeit") return route.continue();
+        endingsOnTheWire++;
+        await endingMayGo;
+        return route.continue();
+      });
+
+      await page.goto(`/score/${link.data!.secret}`, { waitUntil: "load" });
+      await dismissCookieBanner(page);
+      const pad = page.locator('[data-role="pad-v3"]');
+      await expect(pad).toBeVisible({ timeout: 20_000 });
+
+      // The device records the end-level sanction through the pad: tile -> level -> read-back -> Confirm.
+      const tile = pad.locator('[data-tile-id="sanction-home"]');
+      await expect(tile, "the sanction tile is on a live pad").toBeVisible({ timeout: 20_000 });
+      await tile.click();
+      const sheet = pad.locator('[data-role="v3-sheet"]');
+      await expect(sheet, "the sanction sheet opens").toBeVisible({ timeout: 20_000 });
+      await sheet.getByRole("button", { name: levelLabel!, exact: true }).click();
+      await expect(sheet.getByTestId("pad-sheet-summary"), `${sport.level} asks 'This ends the match' before anything is sent`).toBeVisible();
+      await sheet.getByTestId("pad-sheet-confirm").click();
+
+      // The sanction drains first (after its hold), the ending right behind it - and waits at the wire.
+      await expect
+        .poll(() => endingsOnTheWire, { timeout: HOLD_MS + 30_000, message: "the pad sent the ending behind the sanction" })
+        .toBeGreaterThan(0);
+      const sent = await apiJson<{ seq: number; type: string }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
+      expect(
+        (sent.data ?? []).map((e) => e.type),
+        "premise: the sanction is on the ledger and the ending is not (it is held at the wire)",
+      ).toEqual(["core.start", sport.eventType]);
+
+      // A row behind the sanction: the one way such a ledger exists (an earlier build left them), as in the `neither` case.
+      await withDb(async (sql) => {
+        const [t] = await sql<{ tip: number }[]>`select coalesce(max(seq), 0)::int as tip from score_events where fixture_id = ${fx.fixtureId}`;
+        await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at)
+                  values (${randomUUID()}, ${fx.fixtureId}, ${t!.tip + 1}, 'core.suspend', ${sql.json({ reason: "rain" })}, now())`;
+      });
+      releaseEnding();
+
+      // The server refuses the ending and the pad lands on the voidOnly card: the copy is the proof the device owns the
+      // sanction (a pad that did not would say `neither`) and that it may no longer record the ending.
+      const prompt = pad.getByTestId("pad-ending-pending");
+      await expect(prompt, "the card says only the void is left").toContainText(voidOnlyCopy!, { timeout: 60_000 });
+      const after = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
+      expect((after.data ?? []).map((e) => e.type), "the refused ending wrote nothing").toEqual(["core.start", sport.eventType, "core.suspend"]);
+
+      await expect(prompt.getByTestId("pad-ending-record"), "where the server answers 403, the card offers no record button").toHaveCount(0);
+      const voidButton = prompt.getByTestId("pad-ending-void");
+      await expect(voidButton, "the device's own sanction can be voided").toHaveCount(1);
+      await assertTapFloor(voidButton, "Void the sanction");
+      await expect(pad.locator('[data-role="v3-tiles"]')).toHaveCount(0);
+
+      await expectNoHorizontalScroll(page);
+      const { clipped } = await overflowingIn(page, '[data-role="v3-ending"]', "*", "the ending prompt was not in the DOM");
+      expect(clipped, "the ending prompt must not clip its own content at this width").toEqual([]);
+
+      const width = projectViewport()?.width ?? 1280;
+      const [cardBox, buttonBox] = [await prompt.boundingBox(), await voidButton.boundingBox()];
+      expect(cardBox, "the prompt has no box").not.toBeNull();
+      expect(buttonBox, "the void button has no box").not.toBeNull();
+      expect(cardBox!.width, "the card fits the viewport width").toBeLessThanOrEqual(width + 0.5);
+      expect(buttonBox!.width, "the button stays inside the card").toBeLessThanOrEqual(cardBox!.width + 0.5);
+      // Below `md` (768) the buttons stack full width (`flex-col`); the card's gutters are `px-4` (16px a side).
+      if (width < 768) {
+        expect(buttonBox!.width, "below md the lone button spans the card, minus its gutters").toBeGreaterThanOrEqual(cardBox!.width - 32 - 1);
+      }
+    } finally {
+      releaseEnding();
+      await ctx.close();
+    }
+  });
 }
 
 test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px floor, no horizontal scroll", async ({
