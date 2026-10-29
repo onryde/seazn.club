@@ -10,7 +10,7 @@
 // a page that now 404s, so it asks the server for the page again at `STREAMING_DISCONNECTED_HREF` - the one address that renders the
 // emptied page instead of the 404 (the notice and the list are this component's state, which that re-render keeps). A reload of the
 // bare address, or the next navigation, is the 404.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { STREAMING_DISCONNECTED_HREF } from "@/lib/youtube";
@@ -24,11 +24,17 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
   const [disconnected, setDisconnected] = useState<DisconnectNews | null>(null);
   const channels = targets.filter((t) => t.youtube !== null && !gone.has(t.id));
 
-  // A channel leaves the list; the last one to leave takes the page's nav with it (see the header).
-  const leave = (id: string) => {
-    setGone((g) => new Set(g).add(id));
-    if (channels.every((c) => c.id === id)) router.replace(STREAMING_DISCONNECTED_HREF);
-  };
+  // A channel leaves the list.
+  const leave = (id: string) => setGone((g) => new Set(g).add(id));
+
+  // The last one to leave takes the page's nav with it (see the header). Judged from the RENDERED list, in an effect, and not in `leave`:
+  // a row's callback is the one its click began with, and when two disconnects are in flight each sees the other's channel still there,
+  // so neither would ask. "Some channel has left and none is left" is true once, whichever lands last, and is false for a list that
+  // arrives empty (we are already at the emptied address, or the org never had a channel).
+  const emptied = channels.length === 0 && gone.size > 0;
+  useEffect(() => {
+    if (emptied) router.replace(STREAMING_DISCONNECTED_HREF);
+  }, [emptied, router]);
 
   return (
     <div data-testid="stream-disconnect-only" className="space-y-4">

@@ -1386,6 +1386,36 @@ describe("the disconnect-only Streaming page (T18) - an org that can no longer g
     expect(nav.replace).not.toHaveBeenCalled();
   });
 
+  it("N1: two disconnects in flight at once (each row's callback taken from the SAME render, as a click that began before the other finished holds it): whichever lands LAST empties the list, and the page asks to re-render itself exactly once - in either order, and for a success beside a 404", () => {
+    type Done = (n: { name: string; outcome: string }) => void;
+    let orders = 0;
+    for (const order of [[0, 1], [1, 0]] as const) {
+      nav.replace.mockReset();
+      const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
+      const rows = rowsOf(panel);
+      expect(rows, "premise: two rows").toHaveLength(2);
+      const done = rows.map((r) => attr(r, "onDisconnected") as Done);   // both taken BEFORE either lands
+      done[order[0]]!({ name: "A", outcome: "revoked" });
+      expect(nav.replace, `${order}: one channel is still there`).not.toHaveBeenCalled();
+      done[order[1]]!({ name: "B", outcome: "revoked" });
+      expect(rowsOf(panel), `${order}: the list is empty`).toHaveLength(0);
+      expect(nav.replace, `${order}: the last one to leave asked for the emptied page`).toHaveBeenCalledTimes(1);
+      expect(nav.replace).toHaveBeenCalledWith("/streaming?disconnected=1");
+      orders++;
+    }
+    // a success beside a 404 (the other tab disconnected one): the same exit
+    nav.replace.mockReset();
+    const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
+    const [first, second] = rowsOf(panel);
+    const gone = attr(first!, "onGone") as () => void;
+    const done = attr(second!, "onDisconnected") as (n: { name: string; outcome: string }) => void;
+    gone();
+    expect(nav.replace, "one left").not.toHaveBeenCalled();
+    done({ name: "B", outcome: "revoked" });
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(orders, "anti-vacuity: both orders ran").toBe(2);
+  });
+
   it("the LAST channel leaves: an empty line instead of a list, the news stays, still no re-read (the empty case, then the sequence)", async () => {
     const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
     (attr(rowsOf(panel)[0]!, "onDisconnected") as (n: { name: string; outcome: string }) => void)({ name: "Riverside FC", outcome: "revoked" });
