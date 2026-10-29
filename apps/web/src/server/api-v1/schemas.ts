@@ -2186,6 +2186,16 @@ export const YoutubeConnectionSettings = z
     message: "send at least one of privacy, madeForKids or consent",
   });
 export type YoutubeConnectionSettings = z.infer<typeof YoutubeConnectionSettings>;
+/** DELETE /orgs/{id}/youtube-connections/{connectionId} — what a disconnect did (YouTube Connect T18). `revokedAtGoogle`: the grant was
+ *  revoked at Google - false when another connection runs on the same Google account (it is left alone) or when Google or YouTube did
+ *  not answer (the purge happened all the same). `keysDeleted`: stream keys Seazn made on the channel that were deleted at YouTube.
+ *  `purged`: the broadcast records removed, and the match stream links that pointed at their videos cleared. */
+export const YoutubeDisconnected = z.object({
+  revokedAtGoogle: z.boolean(),
+  keysDeleted: z.number().int(),
+  purged: z.object({ broadcasts: z.number().int(), streamUrlsCleared: z.number().int() }),
+});
+export type YoutubeDisconnected = z.infer<typeof YoutubeDisconnected>;
 
 /** The Machine's beat (§6.3) — the control channel; the reply carries desired_state. */
 export const RelayHeartbeat = z
