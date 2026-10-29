@@ -49,10 +49,13 @@ export class UnknownVariant extends Error {
 
 export class CfgInvalid extends Error {
   readonly detail: string;
-  constructor(sportKey: string, variantKey: string, detail: string) {
+  /** The rule row of the write door that refused the cfg (after the schema accepted it), or null for a schema refusal. */
+  readonly doorRow: string | null;
+  constructor(sportKey: string, variantKey: string, detail: string, doorRow: string | null = null) {
     super(`sport-cfg: ${sportKey}/${variantKey} config invalid — ${detail}`);
     this.name = "CfgInvalid";
     this.detail = detail;
+    this.doorRow = doorRow;
   }
 }
 
@@ -94,7 +97,7 @@ export function writeDoorRefusal(sportKey: string, issues: readonly string[]): s
 export function resolveSportCfg(sportKey: string, variantKey: string, overrides: Record<string, unknown> = {}): unknown {
   const cfg = resolveSchemaCfg(sportKey, variantKey, overrides);
   const issues = writeConfigIssues(sportModule(sportKey), cfg);
-  if (issues.length > 0) throw new CfgInvalid(sportKey, variantKey, writeDoorRefusal(sportKey, issues));
+  if (issues.length > 0) throw new CfgInvalid(sportKey, variantKey, writeDoorRefusal(sportKey, issues), WRITE_DOOR_ROW[sportKey]);
   return cfg;
 }
 

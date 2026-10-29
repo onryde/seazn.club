@@ -110,19 +110,77 @@ describe("the generator plans no case the door refuses (variants.json input)", (
     console.info(`write-door: pairs the engine door refuses, over the generator's input - ${seen.join("; ")}`);
   });
 
-  it("no generated case of a door sport is one the door refuses, and a pair only the refused combination could cover is uncoverable naming the row (counted)", () => {
+  it("no generated case of a door sport is one the door refuses", () => {
     let cases = 0;
-    const named: string[] = [];
     for (const sport of DOOR_SPORTS) {
-      const v = buildSportVariants(sport);
-      for (const c of v.cases) {
+      for (const c of buildSportVariants(sport).cases) {
         expect(writeConfigIssues(sportModule(sport), resolveSchemaCfg(sport, c.preset, c.overrides)), `${c.id}`).toEqual([]);
         cases++;
       }
-      for (const u of v.uncoverable) if (u.reason.includes(RULEBOOK_ROW[sport]!)) named.push(`${sport}: ${u.a} x ${u.b}`);
     }
     expect(cases, "some case was checked").toBeGreaterThan(0);
-    console.info(`write-door: ${cases} generated case(s) checked; uncoverable naming a row: ${named.length}`);
-    expect(named.length, "at least one pair exists only inside a refused combination").toBeGreaterThan(0);
+  });
+
+  /** Every combination of the generator's factor levels (row aside: it cannot change a cfg), each judged by the ENGINE alone: the
+   *  schema (`resolveSchemaCfg`) and then its write door (`writeConfigIssues`), through the builder's own override - never through
+   *  buildVariant. "hidden" = a valued field the editor does not show, or a cfg the schema refuses. */
+  function productStates(sport: string): { levels: readonly number[]; state: "hidden" | "door" | "ok" }[] {
+    const fs = factorsFor(sport);
+    const out: { levels: readonly number[]; state: "hidden" | "door" | "ok" }[] = [];
+    const levels: number[] = new Array<number>(fs.length).fill(0);
+    const walk = (k: number): void => {
+      if (k === fs.length) {
+        const presetKey = fs[1]!.levels[levels[1]!]!.raw;
+        const values: Record<string, string> = {};
+        for (let f = 2; f < fs.length; f++) if (fs[f]!.levels[levels[f]!]!.raw !== "") values[fs[f]!.name] = fs[f]!.levels[levels[f]!]!.raw;
+        const inherited = ((sportModule(sport).variants as Record<string, unknown>)[presetKey] ?? {}) as Record<string, unknown>;
+        const shown = new Set(visibleRuleFields(sport, values, inherited).map((x) => x.key));
+        let state: "hidden" | "door" | "ok" = "hidden";
+        if (Object.keys(values).every((x) => shown.has(x))) {
+          try {
+            const cfg = resolveSchemaCfg(sport, presetKey, JSON.parse(JSON.stringify(buildRuleOverride(sport, values, inherited))) as Record<string, unknown>);
+            state = writeConfigIssues(sportModule(sport), cfg).length > 0 ? "door" : "ok";
+          } catch (e) { if (!(e instanceof CfgInvalid)) throw e; }
+        }
+        out.push({ levels: [...levels], state });
+        return;
+      }
+      for (let l = 0; l < fs[k]!.levels.length; l++) { levels[k] = l; walk(k + 1); }
+    };
+    walk(1);
+    return out;
+  }
+
+  it("every uncoverable pair of a door sport names its rule row exactly when the engine's door is what refuses its completions: the schema accepts some, the door refuses all (derived by exhaustive product, counted)", () => {
+    const seen: string[] = [];
+    for (const sport of DOOR_SPORTS) {
+      const fs = factorsFor(sport);
+      const states = productStates(sport);
+      expect(states.length, sport).toBe(fs.slice(1).reduce((n, f) => n * f.levels.length, 1));
+      /** The (factor, level) a label `name=cls` names, in the generator's own factor list. */
+      const locate = (label: string): [number, number] => {
+        for (let f = 0; f < fs.length; f++) for (let l = 0; l < fs[f]!.levels.length; l++) if (`${fs[f]!.name}=${fs[f]!.levels[l]!.cls}` === label) return [f, l];
+        throw new Error(`${sport}: no factor level is labelled '${label}'`);
+      };
+      const v = buildSportVariants(sport);
+      let doorClass = 0;
+      let named = 0;
+      for (const u of v.uncoverable) {
+        const [fa, la] = locate(u.a);
+        const [fb, lb] = locate(u.b);
+        const mine = states.filter((x) => (fa === 0 || x.levels[fa] === la) && (fb === 0 || x.levels[fb] === lb));
+        expect(mine.length, `${sport} ${u.a} x ${u.b}: the pair has completions`).toBeGreaterThan(0);
+        expect(mine.some((x) => x.state === "ok"), `${sport} ${u.a} x ${u.b}: uncoverable, yet the engine accepts a completion`).toBe(false);
+        const byDoor = mine.some((x) => x.state === "door");
+        if (byDoor) doorClass++;
+        const names = u.reason.includes(RULEBOOK_ROW[sport]!);
+        if (names) named++;
+        expect(names, `${sport} ${u.a} x ${u.b}: ${u.reason}`).toBe(byDoor);
+      }
+      expect(named, sport).toBe(doorClass);
+      seen.push(`${sport}: ${doorClass} door-class of ${v.uncoverable.length} uncoverable (${states.length} combinations)`);
+      if (sport !== "tennis") expect(doorClass, `${sport}: the door's class is non-empty`).toBeGreaterThan(0);
+    }
+    console.info(`write-door: ${seen.join("; ")}`);
   });
 });
