@@ -798,7 +798,7 @@ async function tapDisconnect(page: Page, row: Locator, title: string): Promise<v
   await expect(dialog).toHaveCount(0, { timeout: SAVE_MS });
 }
 
-spec("disconnect: refused while the match is live AND inside the grace after its Stop; once the end is due the disconnect succeeds, the broadcast is wound down and the row is gone", async ({ page }) => {
+spec("disconnect: refused while the match is live AND inside the grace after its Stop; once the end is due the disconnect succeeds, the row is gone and what Seazn stored from YouTube is purged", async ({ page }) => {
   test.setTimeout(budget({ navs: 8, cycles: 1, slot: true }));
   await page.setViewportSize({ width: 1280, height: 900 });
   const rig = await seedRig(page, { entrants: 2 });
@@ -839,7 +839,9 @@ spec("disconnect: refused while the match is live AND inside the grace after its
   await expect(rowTitled(page, t.title), "the row is gone").toHaveCount(0, { timeout: SAVE_MS });
   await expect(channelRows(page), "and no channel is left").toHaveCount(0);
 
-  // What Seazn stored from YouTube is gone: the connection is revoked, its broadcasts and keys are deleted.
+  // What Seazn stored from YouTube is gone: the connection is revoked, its broadcasts and keys are deleted. (That Disconnect also completes the
+  // still-live video at YouTube is disconnect.test.ts's, against the fake's own `inspectBroadcast`: the control route's `state` reads OUR
+  // broadcast rows, so once they are purged it has nothing left to say about the video, and the walkthrough does not claim it.)
   const conn = await withDb((sql) => sql<{ status: string; channel_id: string | null }[]>`select status, channel_id from org_youtube_connections where id = ${t.connectionId}`);
   expect(conn.map((c) => [c.status, c.channel_id]), "the connection is revoked and its channel id scrubbed").toEqual([["revoked", null]]);
   expect(await broadcastRows(fixtureId), "the broadcast rows are purged").toEqual([]);
