@@ -6,3 +6,4 @@
 // (P4 also adds POST_PHASES).
 export type * from "./types.ts";
 export { padFieldOf, padEnumValues, padNumberBound } from "./spec-lookup.ts";
+export type { PadFieldScope } from "./spec-lookup.ts";
