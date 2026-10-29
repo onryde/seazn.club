@@ -563,6 +563,23 @@ describe("the two checks this task adds, on their own", () => {
     expect(withdrawnQualifiers([{ kind: "roundLosers", round: 1, count: 2 }], bracket, all).sort()).toEqual(["b", "c"]);
     expect(() => withdrawnQualifiers([{ kind: "picks" }], sole, all)).toThrow(UnknownTakeKind);
   });
+  it("W2e Task 27 carry (D11 b): a LEVEL table's rows come back with rank null — withdrawnQualifiers counts a withdrawn level row inside every take (an upper bound: the product still orders it by seed, the wire does not say where), never as rank 0", () => {
+    // The API serves `rank: null` on every row of a table with no counted result (isLevelTable); the product's own
+    // progression still seats by its stored order (seed, then id), which the harness cannot read off the wire.
+    const lv = (entrantId: string) => ({ entrantId, rank: null, points: null });
+    const level = { standings: [{ poolId: null, rows: [lv("a"), lv("b"), lv("c")] }], fixtures: [] };
+    const out = new Set(["b"]);
+    let checked = 0;
+    for (const take of [{ kind: "rankRange", from: 2, to: 3 }, { kind: "rankRange", from: 1, to: 1 }, { kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }]) {
+      expect(withdrawnQualifiers([take], level, out), JSON.stringify(take)).toEqual(["b"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // A ranked row keeps its place: the bound loosens only where the wire gave no rank.
+    const mixed = { standings: [{ poolId: "A", rows: [r("a", 1), r("b", 2)] }, { poolId: "B", rows: [lv("c"), lv("d")] }], fixtures: [] };
+    expect(withdrawnQualifiers([{ kind: "topNPerGroup", n: 1 }], mixed, new Set(["b", "d"]))).toEqual(["d"]);
+    expect(withdrawnQualifiers([{ kind: "topNPerGroup", n: 1 }], mixed, new Set(["b"]))).toEqual([]);
+  });
   it("T6-R3 (m-12): life-draw-path-exercised's drawOk is any REACHED stage's own declaration, never the root's alone", () => {
     const sport = "football";
     const variant = offlineBuilderDefault(sport);
