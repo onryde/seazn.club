@@ -704,7 +704,7 @@ describe("refusedEventTypes()", () => {
     // REFUSED mid-game, and the three unrecordable types never build a panel.
     const v = view({ events: stream(rally("H")) });
     const tiles = buildTiles(v);
-    const sheets = buildSheets(v);
+    const sheets = buildSheets(v, t);
     const scorebug = buildScorebug(v, t);
     const dedicated = dedicatedEventTypes(tiles, sheets, [], scorebug);
     expect(dedicated).toContain(RALLY_TYPE);
@@ -725,7 +725,7 @@ describe("refusedEventTypes()", () => {
 describe("sheets()", () => {
   it("prefills the Set score sheet from the CURRENT game, and clamps to the cap", () => {
     const v = view({ events: stream(summary(21, 15)) });
-    const sheet = buildSheets(v)[SET_SCORE_TILE_ID]!;
+    const sheet = buildSheets(v, t)[SET_SCORE_TILE_ID]!;
     expect(sheet.event).toBe(SUMMARY_TYPE);
     const [home, away] = sheet.steps;
     expect(home!.kind).toBe("number");
@@ -739,18 +739,20 @@ describe("sheets()", () => {
 
   it("prefills from the live score once the game is under way", () => {
     const v = view({ events: stream(rally("H"), rally("H"), rally("A")) });
-    const sheet = buildSheets(v)[SET_SCORE_TILE_ID]!;
+    const sheet = buildSheets(v, t)[SET_SCORE_TILE_ID]!;
     expect((sheet.steps[0] as { initial: number }).initial).toBe(2);
     expect((sheet.steps[1] as { initial: number }).initial).toBe(1);
   });
 
   it("asks a PAIR who was carded and stamps a SINGLES side's sole player without asking", () => {
-    const singles = buildSheets(view())[sanctionSheetKey("home")]!;
-    expect(singles.steps.map((step) => step.id)).toEqual(["level"]);
+    const singles = buildSheets(view(), t)[sanctionSheetKey("home")]!;
+    // W2e T30: the sheet closes on the end-of-match read-back (the module declares `disqualification` as ending the match),
+    // which is gated on the level answer and so is only ASKED for that level (see w2e-ending-sanction.test.ts).
+    expect(singles.steps.map((step) => step.id)).toEqual(["level", "endsMatch"]);
     expect(singles.buildPayload({ level: "warning" })).toEqual({ by: "H", level: "warning", person: "H1" });
 
-    const doubles = buildSheets(view({ lineups: DOUBLES }))[sanctionSheetKey("away")]!;
-    expect(doubles.steps.map((step) => step.id)).toEqual(["level", "person"]);
+    const doubles = buildSheets(view({ lineups: DOUBLES }), t)[sanctionSheetKey("away")]!;
+    expect(doubles.steps.map((step) => step.id)).toEqual(["level", "person", "endsMatch"]);
     const personStep = doubles.steps[1] as { candidates: readonly string[]; side: string };
     // First-named FIRST — `pairOrder`, not `orderNo`, which the fixture
     // deliberately runs the other way.
@@ -764,7 +766,7 @@ describe("sheets()", () => {
   });
 
   it("tones the ladder — yellow is a caution, everything above it is the dismissal end", () => {
-    const sheet = buildSheets(view())[sanctionSheetKey("home")]!;
+    const sheet = buildSheets(view(), t)[sanctionSheetKey("home")]!;
     const level = sheet.steps[0] as { options: { id: string; tone?: readonly string[] }[] };
     expect(level.options.map((option) => option.id)).toEqual([...SANCTION_LEVELS]);
     expect(level.options.find((option) => option.id === "warning")!.tone).toEqual(["caution"]);
@@ -776,7 +778,7 @@ describe("sheets()", () => {
   it("every tile that opens a sheet names a sheet this skin actually declares", () => {
     for (const band of [0, 1, 2, 3] as const) {
       const v = view({ band });
-      const sheets = buildSheets(v);
+      const sheets = buildSheets(v, t);
       for (const tile of buildTiles(v)) {
         if (!("sheet" in tile.action)) continue;
         if (tile.action.sheet.startsWith("__pad-host/")) continue;
@@ -957,9 +959,17 @@ describe("factory wiring — every builder is threaded the REAL translator", () 
     for (const sheet of Object.values(sheets)) {
       for (const step of sheet.steps) {
         expect(step.title.startsWith("XLATED:"), `${step.id}'s title must not be pre-resolved`).toBe(false);
-        expect(step.title.startsWith("pad.badminton.")).toBe(true);
+        // The sheet's own keys, plus the shared end-of-match read-back's (W2e T30: `pad.sanction.confirm.title`).
+        expect(/^pad\.(badminton|sanction)\./.test(step.title), `${step.id}: ${step.title}`).toBe(true);
       }
     }
+  });
+
+  it("threads it into the end-of-match read-back — the one sheet string a skin resolves itself (W2e T30)", () => {
+    const confirm = skin.sheets!(view())[sanctionSheetKey("home")]!.steps.find((s) => s.kind === "confirm");
+    expect(confirm?.kind).toBe("confirm");
+    if (confirm?.kind !== "confirm") return;
+    expect(confirm.summary({ level: "disqualification" }).startsWith("XLATED:pad.sanction.endsMatch")).toBe(true);
   });
 
   it("threads it into the dock's title", () => {
@@ -1019,7 +1029,7 @@ describe("copy truth", () => {
         keys.add(tile.label);
         if (tile.sublabel !== undefined) keys.add(tile.sublabel);
       }
-      for (const sheet of Object.values(buildSheets(v))) {
+      for (const sheet of Object.values(buildSheets(v, t))) {
         for (const step of sheet.steps) {
           keys.add(step.title);
           if (step.kind === "choice") for (const option of step.options) keys.add(option.label);

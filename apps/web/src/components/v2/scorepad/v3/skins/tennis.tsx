@@ -77,6 +77,7 @@
 import type { SquadState } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
 import { serveContext, type NestedState } from "@seazn/engine/sports/nested";
+import { tennis as tennisModule } from "@seazn/engine/sports/tennis";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -97,6 +98,7 @@ import {
   type WhoLine,
 } from "../types";
 import type { SportTone } from "../sport-theme";
+import { SANCTION_LEVEL_STEP_ID, endsMatchStep } from "./sanction-ending";
 
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 export type Side = "home" | "away";
@@ -927,14 +929,14 @@ function setScoreSheet(view: PadHostView): GuidedSheetSpec {
  *  rather than passing `undefined` for `candidates`, so the skip is driven
  *  by the SAME list the step would otherwise render from, not a second,
  *  separately-computed condition that could drift from it. */
-function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
+function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
   const state = asState(view.state);
   const by = entrantOf(state, side);
   const candidates = onFieldPlayers(view.squads, side).map((member) => member.personId);
   const hasCandidates: StepPredicate = () => candidates.length > 0;
   const steps: GuidedSheetStep[] = [
     {
-      id: "level",
+      id: SANCTION_LEVEL_STEP_ID,
       kind: "choice",
       title: "pad.tennis.sheet.sanction.level.title",
       options: SANCTION_LEVELS.map((level) => ({
@@ -953,6 +955,11 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
       when: hasCandidates,
     },
   ];
+  // W2e T30 (D3): a level the module declares as ENDING the match (the ITF default) closes the sheet on its read-back and one
+  // Confirm. Last, so nothing is asked after the question "this ends the match".
+  if (tennisModule.sanctionEnding !== undefined) {
+    steps.push(endsMatchStep(tennisModule.sanctionEnding, side, view.entrantNames, t));
+  }
   return {
     event: SANCTION_TYPE,
     steps,
@@ -1054,12 +1061,12 @@ function interruptionSheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
-export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
+export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
     setScore: setScoreSheet(view),
     interruption: interruptionSheet(view),
   };
-  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side);
+  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side, t);
   return sheets;
 }
 
@@ -1310,7 +1317,7 @@ export function tennisSkinV3(t: TFn): SkinDefV3<PadHostView> {
     scorebug: (view) => buildScorebug(view, t),
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
-    sheets: buildSheets,
+    sheets: (view) => buildSheets(view, t),
     refusedEventTypes,
     activityDetail: tennisDetail,
     // No swap()/context()/contextSelect() — see this file's header.

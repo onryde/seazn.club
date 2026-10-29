@@ -351,7 +351,9 @@ interface Props {
    * W2a X-ST-2 (finding 11; owner ruling D-O1) — the viewer is an ORGANISER (owner/admin: the page's own `canEdit`),
    * not merely someone who may score. `canEdit` above is the page's `canScore`, which an accepted official scorer also
    * holds; settle, forfeit and abandon are organiser-only on the server (`isOrganiserOnlyEvent`, scoring.ts), so a
-   * scorer offered them would only ever earn a 403. Required, never defaulted: a forgotten prop must not fail open.
+   * scorer offered them would only ever earn a 403 — except the one forfeit that ENDS the scorer's own side's
+   * disqualifying sanction (W2e D13), which the pad's ending prompt offers on its own gate (`scorerMayForfeit`), never this
+   * prop. Required, never defaulted: a forgotten prop must not fail open.
    */
   canOrganise: boolean;
   /** The fixture's stage kind (`loadFixturePadCfg`), or null for a fixture with no stage. A held bracket fixture's
@@ -929,7 +931,9 @@ export function FixtureConsole({
   // The match-actions band's two halves, each decided ONCE and read both by the band's own gate and by the control it
   // renders (two gates for one fact would each cover for the other, and neither would be tested).
   //  - Finding 27: a held fixture's Finalize is refused (LEVEL_RESULT_IN_BRACKET), so it is not offered.
-  //  - Finding 11 / X-ST-2: forfeit and abandon are organiser-only on the server; a scorer is never offered them.
+  //  - Finding 11 / X-ST-2: forfeit and abandon are organiser-only on the server; a scorer is never offered them HERE.
+  //    (The one forfeit a scorer may send, the ending of its own side's disqualifying sanction under W2e D13, is the pad's
+  //    ending prompt, gated on the server's own `scorerMayForfeit`, not this Forfeit control.)
   //  - Fix round 1 (I1): nor while HELD — the settle above is the organiser's way out, and the engine would take an
   //    abandon on a chess tie-break, so THIS gate is what keeps Abandon off a held match.
   //  - W2b-R14 (BG-WO-3): EXCEPT the Forfeit on a chess knockout whose tie-break is pending — a player who does not turn

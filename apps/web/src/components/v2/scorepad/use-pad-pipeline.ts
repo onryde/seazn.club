@@ -1837,8 +1837,17 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
             ...(outcome.nextMatch ? { nextMatch: outcome.nextMatch } : {}),
             ...(outcome.reason ? { reason: outcome.reason } : {}),
           });
+          // W2e T30 — an entry bound to this one (`dropWith`) exists only to FOLLOW it: the ending behind a
+          // disqualifying sanction, the void behind an amendment's re-append. A permanently refused parent never
+          // happened, so its followers go with it, from the queue AND the optimistic mirror. Left behind they drain
+          // ALONE: a forfeit then ends (or is refused for) a match whose sanction was never recorded, and a void
+          // deletes a scored event whose replacement was refused. Read from the SAME `boundTo` rule `dropHeld` uses.
+          const followers = boundTo(await store.list(), next.idempotencyKey);
+          for (const followerId of followers) await store.delete(followerId);
+          if (followers.length > 0) await refreshDepth();
           const remaining = new Map(pendingEnvelopesRef.current);
           remaining.delete(next.idempotencyKey);
+          for (const followerId of followers) remaining.delete(followerId);
           commitPendingEnvelopes(remaining);
           // W2c Task 15 (X-SR-7): the tap was made under rules the organiser has since corrected. Dropped above, never
           // resent; said out loud (`lastRejection`); and the pad moves to the corrected rules so the scorer retakes it

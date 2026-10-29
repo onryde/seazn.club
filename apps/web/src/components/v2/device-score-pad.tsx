@@ -407,9 +407,12 @@ export function DeviceScorePad({
             "device.failed",
             err instanceof ApiV1Error ? err.extra : null,
             // `locale` formats one refusal only — FORFEIT_REASON_WRONG_PHASE's list of admitted reasons — and that is a
-            // refusal of `core.forfeit`, which this pad never sends (design review M-8): it is organiser-only, the
+            // refusal of `core.forfeit`, which this pad's TILES never send (design review M-8): it is organiser-only, the
             // pad's tile grid drops any tile dispatching it and no padSpec declares it (`scorepad/v3/__tests__/
-            // authority-only-tiles.test.ts` pins all three). Passed so the call reads as the console's does.
+            // authority-only-tiles.test.ts` pins all three). The ONE forfeit a scorer's pad does send is the ending of its
+            // own side's disqualifying sanction (W2e D13, `ending-prompt.tsx`), and the server admits exactly that one
+            // (`isOwnSanctionEnding`); a refusal of it carries no reason list either. Passed so the call reads as the
+            // console's does.
             locale,
           ));
         }
@@ -791,7 +794,9 @@ export function DeviceScorePad({
               // W2c Task 15: the rules this chrome reloaded, when it did; else what the page loaded the pad with.
               rulesVersion={chromeRules?.rulesVersion ?? scorePadV2.rulesVersion}
               onRulesChanged={handlePadRulesChanged}
-              // A device link is never an organiser: settle, forfeit and abandon are refused to it (X-ST-2, D-O1).
+              // A device link is never an organiser: settle and abandon are refused to it, and so is a forfeit — except the
+              // ending of its OWN side's disqualifying sanction, directly after it (W2e D13), which the pad's ending prompt
+              // offers it when the server's own predicate (`scorerMayForfeit`) says it may (X-ST-2, D-O1).
               canOrganise={false}
               onEvents={handlePadEvents}
               onTerminalRefusal={enterCarriedForward}

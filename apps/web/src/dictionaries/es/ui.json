@@ -6923,5 +6923,15 @@
   "rules.err.formatDoesNotFitPlayBecause": "Lo jugado hasta ahora no encaja con ese formato: {reason}",
   "matchRules.show": "Mostrar las reglas del partido",
   "matchRules.hide": "Ocultar las reglas del partido",
-  "disc.panel.noEntrant": "Este jugador no figura en la lista de ningún participante de esta división, así que la sanción nunca podría cumplirse. Añádelo primero a una lista o retira la sanción."
+  "disc.panel.noEntrant": "Este jugador no figura en la lista de ningún participante de esta división, así que la sanción nunca podría cumplirse. Añádelo primero a una lista o retira la sanción.",
+  "pad.sanction.confirm.title": "¿Terminar el partido?",
+  "pad.sanction.endsMatch": "Esto termina el partido: {side} pierde",
+  "pad.ending.title": "Una sanción contra {side} termina el partido",
+  "pad.ending.body.both": "Registra el final para cerrar el partido, o anula la sanción para seguir jugando.",
+  "pad.ending.body.recordOnly": "Registra el final para cerrar el partido.",
+  "pad.ending.body.voidOnly": "Solo un organizador puede registrar el final. Anula la sanción para seguir jugando, o pídeselo al organizador.",
+  "pad.ending.body.neither": "Solo un organizador puede registrar el final o anular la sanción. Avisa al organizador.",
+  "pad.ending.record": "Registrar el final",
+  "pad.ending.void": "Anular la sanción",
+  "pad.ending.blocked": "Registra el final o anula la sanción primero. Ese toque no se registró."
 }

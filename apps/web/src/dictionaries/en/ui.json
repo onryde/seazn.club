@@ -6923,5 +6923,15 @@
   "rules.err.formatDoesNotFitPlayBecause": "The match so far doesn't fit that format: {reason}",
   "matchRules.show": "Show match rules",
   "matchRules.hide": "Hide match rules",
-  "disc.panel.noEntrant": "This player isn't on any entrant's roster in this division, so the ban could never be served. Add them to a roster first, or waive the ban."
+  "disc.panel.noEntrant": "This player isn't on any entrant's roster in this division, so the ban could never be served. Add them to a roster first, or waive the ban.",
+  "pad.sanction.confirm.title": "End the match?",
+  "pad.sanction.endsMatch": "This ends the match: {side} loses",
+  "pad.ending.title": "A sanction against {side} ends the match",
+  "pad.ending.body.both": "Record the ending to finish the match, or void the sanction to keep playing.",
+  "pad.ending.body.recordOnly": "Record the ending to finish the match.",
+  "pad.ending.body.voidOnly": "Only an organiser can record the ending. Void the sanction to keep playing, or ask the organiser.",
+  "pad.ending.body.neither": "Only an organiser can record the ending or void the sanction. Ask the organiser.",
+  "pad.ending.record": "Record the ending",
+  "pad.ending.void": "Void the sanction",
+  "pad.ending.blocked": "Record the ending or void the sanction first. That tap was not recorded."
 }

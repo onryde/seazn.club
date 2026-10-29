@@ -6923,5 +6923,15 @@
   "rules.err.formatDoesNotFitPlayBecause": "Wat tot nu toe gespeeld is, past niet bij dat format: {reason}",
   "matchRules.show": "Wedstrijdregels tonen",
   "matchRules.hide": "Wedstrijdregels verbergen",
-  "disc.panel.noEntrant": "Deze speler staat in de selectie van geen enkele deelnemer in deze divisie, dus de schorsing kan nooit worden uitgezeten. Voeg de speler eerst aan een selectie toe, of trek de schorsing in."
+  "disc.panel.noEntrant": "Deze speler staat in de selectie van geen enkele deelnemer in deze divisie, dus de schorsing kan nooit worden uitgezeten. Voeg de speler eerst aan een selectie toe, of trek de schorsing in.",
+  "pad.sanction.confirm.title": "De wedstrijd beëindigen?",
+  "pad.sanction.endsMatch": "Hiermee eindigt de wedstrijd: {side} verliest",
+  "pad.ending.title": "Een sanctie tegen {side} beëindigt de wedstrijd",
+  "pad.ending.body.both": "Leg het einde vast om de wedstrijd af te sluiten, of maak de sanctie ongedaan om verder te spelen.",
+  "pad.ending.body.recordOnly": "Leg het einde vast om de wedstrijd af te sluiten.",
+  "pad.ending.body.voidOnly": "Alleen een organisator kan het einde vastleggen. Maak de sanctie ongedaan om verder te spelen, of vraag het de organisator.",
+  "pad.ending.body.neither": "Alleen een organisator kan het einde vastleggen of de sanctie ongedaan maken. Vraag het de organisator.",
+  "pad.ending.record": "Einde vastleggen",
+  "pad.ending.void": "Sanctie ongedaan maken",
+  "pad.ending.blocked": "Leg eerst het einde vast of maak de sanctie ongedaan. Die tik is niet vastgelegd."
 }

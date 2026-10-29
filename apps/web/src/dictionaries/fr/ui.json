@@ -6923,5 +6923,15 @@
   "rules.err.formatDoesNotFitPlayBecause": "Le jeu déjà joué ne correspond pas à ce format : {reason}",
   "matchRules.show": "Afficher les règles de la rencontre",
   "matchRules.hide": "Masquer les règles de la rencontre",
-  "disc.panel.noEntrant": "Ce joueur ne figure dans la liste d'aucun participant de cette division : la suspension ne pourrait jamais être purgée. Ajoutez-le d'abord à une liste, ou levez la suspension."
+  "disc.panel.noEntrant": "Ce joueur ne figure dans la liste d'aucun participant de cette division : la suspension ne pourrait jamais être purgée. Ajoutez-le d'abord à une liste, ou levez la suspension.",
+  "pad.sanction.confirm.title": "Terminer le match ?",
+  "pad.sanction.endsMatch": "Cela termine le match : {side} perd",
+  "pad.ending.title": "Une sanction contre {side} met fin au match",
+  "pad.ending.body.both": "Enregistrez la fin pour clore le match, ou annulez la sanction pour continuer à jouer.",
+  "pad.ending.body.recordOnly": "Enregistrez la fin pour clore le match.",
+  "pad.ending.body.voidOnly": "Seul un organisateur peut enregistrer la fin. Annulez la sanction pour continuer à jouer, ou demandez à l'organisateur.",
+  "pad.ending.body.neither": "Seul un organisateur peut enregistrer la fin ou annuler la sanction. Demandez à l'organisateur.",
+  "pad.ending.record": "Enregistrer la fin",
+  "pad.ending.void": "Annuler la sanction",
+  "pad.ending.blocked": "Enregistrez d'abord la fin ou annulez la sanction. Ce geste n'a pas été enregistré."
 }
