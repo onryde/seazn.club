@@ -1269,3 +1269,43 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     expect([...new Set(unsupplied)]).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// W2e T32 fix round 2 (item 2) — ONE AUTHORITY for judging a lineup event. The fold judges a football `core.lineup.*`
+// event on football's own pitch (`squadsForLineup`); this replay restates the fold's loop, so it must judge the same
+// way or a ledger the fold accepted loses its derived lines here. single-sport: only football declares the hook (the
+// skins' invariant in w2e-retirement.test.ts pins that).
+// ---------------------------------------------------------------------------
+
+describe("W2e T32 fix round 2: the timeline judges a lineup event the way the fold does", () => {
+  it("[football.sub p2->b2, core.lineup.substitution b2->b3, goal by b3]: the strict fold accepts it, and the timeline replays to the end with no degrade warning", () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const base = args({ sportKey: "football" });
+      const bench = (side: LineupPair["home"]): LineupPair["home"] => ({
+        ...side,
+        slots: [
+          ...side.slots,
+          ...[1, 2, 3].map((n) => ({ personId: `${side.entrantId}-b${n}`, slot: "bench" as const, orderNo: 20 + n })),
+        ],
+      });
+      const lineups: LineupPair = { home: bench(base.lineups.home), away: bench(base.lineups.away) };
+      const home = lineups.home.entrantId;
+      const events = [
+        env(0, "core.start", {}),
+        env(1, "football.sub", { by: home, off: `${home}-p2`, on: `${home}-b2` }),
+        env(2, "core.lineup.substitution", { side: home, off: `${home}-b2`, on: { personId: `${home}-b3`, slot: "bench", orderNo: 22 } }),
+        env(3, "football.goal", { by: home, scorer: `${home}-b3` }),
+      ];
+      // Legal on the WRITE path first, so a red below is this builder's, never the ledger's.
+      foldMatchWithStoppage(base.module as never, base.cfg as never, lineups, events, { strictFromSeq: 0 });
+      const result = buildTimeline({ ...base, lineups, events });
+      expect(result.derivedComplete, "the derived pass reaches the goal").toBe(true);
+      expect(warn).not.toHaveBeenCalled();
+      // Anti-vacuity: every event rendered a recorded line (the goal included).
+      expect(result.lines.length).toBeGreaterThanOrEqual(events.length);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
