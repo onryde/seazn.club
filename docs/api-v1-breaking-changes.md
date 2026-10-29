@@ -62,7 +62,7 @@ real ledger never gets near the bound.
 
 **Background.** W2e Task 2 review (M1). The pinning tests are
 `apps/web/src/server/api-v1/__tests__/schemas.test.ts` and
-`apps/web/src/server/api-v1/__tests__/expected-seq-bound.route.test.ts`.
+`apps/web/src/app/api/v1/fixtures/[id]/events/__tests__/expected-seq-bound.route.test.ts`.
 
 ## 2026-10-28 — a hockey or ice hockey shoot-out config no longer carries `suddenDeath`
 
