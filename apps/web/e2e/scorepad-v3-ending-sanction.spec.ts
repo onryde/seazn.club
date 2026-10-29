@@ -154,12 +154,14 @@ for (const sport of SPORTS) {
       });
 
       // The match is DECIDED for the other side.
-      const state = await apiJson<{ outcome: { winner?: string; reason?: string } | null }>(
+      const state = await apiJson<{ outcome: { winner?: string; loser?: string; reason?: string } | null }>(
         request,
         `/api/v1/fixtures/${fx.fixtureId}/state`,
       );
       expect(state.status).toBe(200);
       expect(state.data?.outcome?.winner, "the OTHER side wins").toBe(fx.awayEntrantId);
+      expect(state.data?.outcome?.loser, "the sanctioned side loses").toBe(fx.homeEntrantId);
+      expect(state.data?.outcome?.reason).toBe("disqualified");
 
       // No prompt once it is decided; the device chrome's own "Void my last entry" takes the ending back.
       await expect(prompt(page)).toHaveCount(0);
