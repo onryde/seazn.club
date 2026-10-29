@@ -12,7 +12,7 @@
 // the code under test.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "./errors.ts";
-import { foldMatchWithStoppage, forfeitOf, outcomeOf, type EventEnvelope, type FoldableModule } from "./events.ts";
+import { foldMatchWithStoppage, forfeitOf, outcomeOf, resolveVoids, type EventEnvelope, type FoldableModule } from "./events.ts";
 import {
   lastLiveEvent,
   matchEndFacts,
@@ -164,6 +164,10 @@ describe("X-SE-1 the pending-ending refusal (stub sport, preflight F1)", () => {
           const error = refusal(() => write(DECLARING, history, candidate));
           expect(error.code, candidate.type).toBe("ENDING_SANCTION_PENDING");
           expect(error.data, candidate.type).toEqual({ by, level });
+          // The message tells the scorer what was refused and why: the event, the level and the sanctioned side.
+          for (const named of [candidate.type, level, by]) {
+            expect(error.message, `${candidate.type}: names ${named}`).toMatch(new RegExp(`(^|[^\\w.])${named.replace(/\./g, "\\.")}([^\\w.]|$)`));
+          }
           // The differential: the same append on a sport that declares nothing is admitted, so the refusal is the
           // declaration's and not the stub's own phase rules.
           expect(() => write(UNDECLARED, history, candidate), candidate.type).not.toThrow();
@@ -434,6 +438,18 @@ describe("pendingEndingSanction", () => {
     expect(() => scorerMayForfeit(DECLARING, { type: DECL.eventType, payload: null }, { by: H, reason: "disqualified" })).toThrow(
       /carries no string `by` and `level`/,
     );
+    // The contract is BOTH fields: a payload missing either one alone, or carrying either as a non-string, is the same bug.
+    const halves: unknown[] = [{ by: H }, { level: "dq" }, { by: H, level: 3 }, { by: 7, level: "dq" }];
+    let refused = 0;
+    for (const payload of halves) {
+      expect(() => scorerMayForfeit(DECLARING, { type: DECL.eventType, payload }, { by: H, reason: "disqualified" }), JSON.stringify(payload)).toThrow(
+        /carries no string `by` and `level`/,
+      );
+      refused++;
+    }
+    expect(refused).toBe(4);
+    // The positive pair: both fields as strings pass the contract.
+    expect(() => scorerMayForfeit(DECLARING, { type: DECL.eventType, payload: { by: H, level: "dq" } }, { by: H, reason: "disqualified" })).not.toThrow();
   });
 });
 
@@ -502,6 +518,26 @@ describe("lastLiveEvent (review M-2)", () => {
     ];
     expect(lastLiveEvent(rows)).toBe(rows[1]);
   });
+
+  it("reads voids exactly as the fold does: only a core.void's target is gone, a stray `voids` on another row hides nothing (counted)", () => {
+    // The fold's own reading is resolveVoids (core/events.ts): it takes a target only from a core.void row. The last live
+    // event must be that reading's last row, for ordinary voids and for a non-void row that carries a `voids` field.
+    const S = sanction(2, H, "dq");
+    const ledgers: EventEnvelope[][] = [
+      [ev(0, "core.start"), ev(1, "stub.point", { to: "home" }, "e-2"), S],
+      [ev(0, "core.start"), point(1, "home"), S, ev(3, "stub.point", { to: "away" }, "e-2")],
+      [ev(0, "core.start"), point(1, "home"), S, ev(3, "core.void", {}, "e-2")],
+      [ev(0, "core.start"), point(1, "home"), ev(2, "core.void", {}, "e-1")],
+    ];
+    let checked = 0;
+    for (const [i, ledger] of ledgers.entries()) {
+      expect(lastLiveEvent(ledger), `ledger ${i}`).toBe(resolveVoids(ledger).at(-1) ?? null);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // The stray `voids` cases leave the sanction live, so the scorer may still confirm the ending.
+    expect(lastLiveEvent(ledgers[0]!)).toBe(S);
+  });
 });
 
 describe("sanctionEndingIssues (review M-1)", () => {
@@ -527,6 +563,15 @@ describe("sanctionEndingIssues (review M-1)", () => {
       expect(issues[0]).toMatch(fault);
     }
     expect(cases.length).toBe(7);
+  });
+
+  it("names every level that sits in both lists, each as its own word, in one issue", () => {
+    // Two shared levels: the author is told about each of them, not a run-together "dqexp" naming neither.
+    const shared = ["dq", "exp"] as const;
+    const issues = sanctionEndingIssues({ ...DECL, endLevels: [...shared], promptLevels: [...shared].reverse() });
+    expect(issues).toHaveLength(1);
+    for (const level of shared) expect(issues[0], level).toMatch(new RegExp(`\\b${level}\\b`));
+    expect(issues[0]).toMatch(/both an end level and a prompt level/);
   });
 });
 
