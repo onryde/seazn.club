@@ -136,13 +136,17 @@ test("TN-CF-1 tennis best of 1 with a match tie-break is refused in the editor, 
   // The sentence sits beside the fields it is about, before any Save...
   await expect(page.getByTestId("rule-field-bestOf").getByRole("alert")).toHaveText(sentence);
   await expect(page.getByTestId("rule-field-finalSet").getByRole("alert")).toHaveText(sentence);
-  // ...and Save is answered with it, not with a request.
+  // ...and Save is answered with it, not with a request. The save's own answer is the banner (`division-settings-error`), a
+  // node the two field alerts above are not: absent before Save, present with the sentence after it. Asserting the sentence
+  // anywhere in the tab would pass on the field alerts alone, whatever Save did.
   const patches: string[] = [];
   page.on("request", (r) => {
     if (r.method() === "PATCH" && r.url().includes(`/api/v1/divisions/${tennisDivId}`)) patches.push(r.url());
   });
+  const banner = page.getByTestId("division-settings-error");
+  await expect(banner, "no save banner before Save").toHaveCount(0);
   await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
-  await expect(page.getByTestId("division-settings").getByText(sentence).first()).toBeVisible({ timeout: STEP_MS });
+  await expect(banner).toHaveText(sentence, { timeout: STEP_MS });
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toHaveCount(0);
   expect(patches, "the refused format never left the browser").toEqual([]);
   const after = (await apiJson<Division>(request, `/api/v1/divisions/${tennisDivId}`)).data!;

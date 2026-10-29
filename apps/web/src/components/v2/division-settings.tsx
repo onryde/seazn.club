@@ -832,7 +832,7 @@ export function DivisionSettings({
         </div>
       )}
       {error && (
-        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">
+        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600" data-testid="division-settings-error">
           {error}
         </p>
       )}
