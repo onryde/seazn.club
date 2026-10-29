@@ -65,6 +65,7 @@ import type {
   DockChip,
   DockSpec,
   GuidedSheetSpec,
+  GuidedSheetStep,
   PadHostView,
   PadPhase,
   ScorebugSpec,
@@ -203,8 +204,20 @@ function sideAnswer(value: string | undefined): Side {
   return value === "away" ? "away" : "home";
 }
 
-function sideOptions(): { id: string; label: MessageKey }[] {
-  return SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] }));
+function sideOptions(sides: readonly Side[] = SIDES): { id: string; label: MessageKey }[] {
+  return sides.map((side) => ({ id: side, label: SIDE_LABEL[side] }));
+}
+
+/**
+ * W2e T33a (PO decision, SC-O9 follow-up): a side's running score in the OPEN game - while the match is live that is the
+ * last game (the engine's `openGame`: a new game opens the moment the previous one decides, so the last game is never a
+ * decided one). A strict deduction may take a score to zero and no lower (`applyAdjust`: "would take the game score below
+ * zero"), so this is the most a side can lose. A pad with no game yet reads 0, which offers no deduction.
+ */
+function openScore(state: CarromStateShape, side: Side): number {
+  const games = state.games ?? [];
+  const score = games[games.length - 1]?.score?.[side];
+  return typeof score === "number" && Number.isFinite(score) && score > 0 ? score : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +412,9 @@ export function buildTiles(view: PadHostView): TileSpec[] {
         phases: ["live"],
         action: { sheet: "adjustCredit" },
       });
+      // Transient, not permanent: a deduction needs a score to take points off. At 0-0 the tile stays on screen but cannot
+      // be opened (every deduction would be refused as "below zero"), and it wakes the moment a board scores.
+      const state = asState(view.state);
       tiles.push({
         id: "adjustDeduct",
         label: "pad.carrom.action.adjustDeduct",
@@ -406,6 +422,7 @@ export function buildTiles(view: PadHostView): TileSpec[] {
         span: 2,
         phases: ["live"],
         action: { sheet: "adjustDeduct" },
+        disabled: SIDES.every((side) => openScore(state, side) < 1),
       });
     }
   }
@@ -498,28 +515,61 @@ function boardQueenSheet(state: CarromStateShape): GuidedSheetSpec {
  *  delta` is `.refine(d => d !== 0)` — a single field spanning both signs
  *  would let a scorer land on exactly zero and be refused after the fact.
  *  Mirrors `generic.tsx`'s own `correctionSheet`, which splits at zero for
- *  the identical reason. */
+ *  the identical reason.
+ *
+ *  A DEDUCTION is bounded again by the side it is taken from (W2e T33a): an open game's score is below `gameTo`, so a
+ *  `-gameTo` chip always failed the strict "below zero" rule. The sheet therefore offers only a side with points to lose,
+ *  and asks that side's own number, down to its current score and no further (one number step per side, shown by `when`). */
 function adjustSheet(state: CarromStateShape, cfg: CarromCfgShape, mode: "credit" | "deduct"): GuidedSheetSpec {
   const gameTo = cfg.gameTo ?? 25;
-  const bound = mode === "credit" ? { min: 1, max: gameTo } : { min: -gameTo, max: -1 };
-  const initial = mode === "credit" ? 1 : -1;
+  const reasonStep: GuidedSheetStep = {
+    id: "reason",
+    kind: "choice",
+    title: "pad.carrom.sheet.adjust.reason.title",
+    options: ADJUST_REASONS.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
+  };
+  if (mode === "credit") {
+    return {
+      event: "carrom.game.adjust",
+      steps: [
+        { id: "side", kind: "choice", title: "pad.carrom.sheet.adjust.side.title", options: sideOptions() },
+        { id: "delta", kind: "number", title: "pad.carrom.sheet.adjust.delta.title", initial: 1, min: 1, max: gameTo },
+        reasonStep,
+      ],
+      buildPayload: (answers) => ({
+        entrantId: entrantOf(state, sideAnswer(answers.side)),
+        delta: Number(answers.delta ?? 1),
+        reason: answers.reason,
+      }),
+    };
+  }
+  const withPoints = SIDES.filter((side) => openScore(state, side) >= 1);
+  const deltaId = (side: Side): string => `delta:${side}`;
   return {
     event: "carrom.game.adjust",
     steps: [
-      { id: "side", kind: "choice", title: "pad.carrom.sheet.adjust.side.title", options: sideOptions() },
-      { id: "delta", kind: "number", title: "pad.carrom.sheet.adjust.delta.title", initial, ...bound },
-      {
-        id: "reason",
-        kind: "choice",
-        title: "pad.carrom.sheet.adjust.reason.title",
-        options: ADJUST_REASONS.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
-      },
+      { id: "side", kind: "choice", title: "pad.carrom.sheet.adjust.side.title", options: sideOptions(withPoints) },
+      ...withPoints.map(
+        (side): GuidedSheetStep => ({
+          id: deltaId(side),
+          kind: "number",
+          title: "pad.carrom.sheet.adjust.delta.title",
+          initial: -1,
+          min: Math.max(-gameTo, -openScore(state, side)),
+          max: -1,
+          when: (answers) => answers.side === side,
+        }),
+      ),
+      reasonStep,
     ],
-    buildPayload: (answers) => ({
-      entrantId: entrantOf(state, sideAnswer(answers.side)),
-      delta: Number(answers.delta ?? initial),
-      reason: answers.reason,
-    }),
+    buildPayload: (answers) => {
+      const side = sideAnswer(answers.side);
+      return {
+        entrantId: entrantOf(state, side),
+        delta: Number(answers[deltaId(side)] ?? -1),
+        reason: answers.reason,
+      };
+    },
   };
 }
 

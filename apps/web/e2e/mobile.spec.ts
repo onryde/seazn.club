@@ -4509,10 +4509,17 @@ for (const sport of ENDING_SPORTS) {
 }
 
 // The SCORER's prompt (M-6). A device link is offered less than the organiser, and the copy changes with it, so the card has
-// three layouts, not one: both answers (the organiser test above), "Record the ending" alone (a fresh device: the sanction is the
-// last live event so the server admits its ending, but the row is not the device's own to void), and NEITHER (a pre-W2e ledger,
-// where something was recorded after the card: only the organiser can resolve it). `neither` is the longest copy the card carries,
-// and the only one with no button to anchor the layout.
+// FOUR layouts, not one (`endingBodyKey`): both answers (the organiser test above), "Record the ending" alone (a fresh device: the
+// sanction is the last live event so the server admits its ending, but the row is not the device's own to void), NEITHER (a
+// pre-W2e ledger, where something was recorded after the card and the device did not write the sanction: only the organiser can
+// resolve it), and VOID ONLY (below).
+//
+// The two seeded here are the two a fresh device can reach. `voidOnly` is the card with the LONGEST copy in every locale and one
+// button, and it is NOT seeded: it needs a device that wrote the sanction ITSELF in this mount (`ownEventIds` is in-memory only and
+// is empty on a fresh page, so a seeded device never owns the row) AND a row recorded after it, which the write path refuses and
+// only raw SQL can add - a live two-step the runner cannot be given blind. Its structure (one 44px button, full width below `md`,
+// `break-words`/`min-w-0`) is pinned by the three-way render in `w2e-ending-sanction.test.ts`; its length at 320 is not browser-proved.
+// `neither` has no button to anchor the layout.
 //
 // The `neither` ledger cannot be written through the API (the write path refuses everything after an ending sanction), so the
 // event after the card is written by raw SQL: the one way such a row exists, the shape an earlier build left behind. A stoppage is
