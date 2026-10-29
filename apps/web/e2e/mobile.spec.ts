@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator, type APIRequestContext } from "@playwright/test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -4449,30 +4449,37 @@ test("ending prompt (W2e T30) covers every sport that declares an ending level",
   );
 });
 
+/** A rostered fixture whose ledger is [core.start, <end-level sanction against home>] — an ending PENDING, the way a reload finds one.
+ *  The sanction is appended through the API (an organiser may append it; the write path refuses what comes AFTER it). Names carry
+ *  `projectTag()`: two width projects share one process and `seedRosteredFixture` get-or-creates a person by name. */
+async function seedPendingEnding(request: APIRequestContext, sport: (typeof ENDING_SPORTS)[number], who: string) {
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Ending ${who} ${sport.key} ${TAG}-${projectTag()}`,
+    sportKey: sport.key,
+    variantKey: ENDING_SEEDS[sport.key]!.variantKey,
+    entrantKind: "individual",
+    home: [{ fullName: `Mobile End ${who} ${sport.key} Home ${TAG}-${projectTag()}` }],
+    away: [{ fullName: `Mobile End ${who} ${sport.key} Away ${TAG}-${projectTag()}` }],
+    emitCoreStart: true,
+  });
+  const before = await apiJson<{ seq: number }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
+  const tip = Math.max(0, ...(before.data ?? []).map((e) => e.seq));
+  const sanction = await apiJson(request, `/api/v1/fixtures/${fx.fixtureId}/events`, "POST", {
+    expected_seq: tip,
+    type: sport.eventType,
+    payload: { by: fx.homeEntrantId, level: sport.level },
+  });
+  expect(sanction.status, `seeding the pending sanction: ${JSON.stringify(sanction.error)}`).toBeLessThan(300);
+  return fx;
+}
+
 for (const sport of ENDING_SPORTS) {
   test(`${sport.key} v3 pad: a pending ending sanction opens the pad on the ending prompt — both answers reachable at 44px, no horizontal scroll`, async ({
     page,
     request,
   }) => {
     test.setTimeout(90_000);
-    const fx = await seedRosteredFixture(request, {
-      label: `Mobile Ending ${sport.key} ${TAG}-${projectTag()}`,
-      sportKey: sport.key,
-      variantKey: ENDING_SEEDS[sport.key]!.variantKey,
-      entrantKind: "individual",
-      // Names carry `projectTag()`: two width projects share one process and `seedRosteredFixture` get-or-creates a person by name.
-      home: [{ fullName: `Mobile End ${sport.key} Home ${TAG}-${projectTag()}` }],
-      away: [{ fullName: `Mobile End ${sport.key} Away ${TAG}-${projectTag()}` }],
-      emitCoreStart: true,
-    });
-    const before = await apiJson<{ seq: number }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
-    const tip = Math.max(0, ...(before.data ?? []).map((e) => e.seq));
-    const sanction = await apiJson(request, `/api/v1/fixtures/${fx.fixtureId}/events`, "POST", {
-      expected_seq: tip,
-      type: sport.eventType,
-      payload: { by: fx.homeEntrantId, level: sport.level },
-    });
-    expect(sanction.status, `seeding the pending sanction: ${JSON.stringify(sanction.error)}`).toBeLessThan(300);
+    const fx = await seedPendingEnding(request, sport, "Organiser");
 
     await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
     const pad = page.getByTestId("score-pad");
@@ -4499,6 +4506,73 @@ for (const sport of ENDING_SPORTS) {
     const { clipped } = await overflowingIn(page, '[data-role="v3-ending"]', "*", "the ending prompt was not in the DOM");
     expect(clipped, "the ending prompt must not clip its own content at this width").toEqual([]);
   });
+}
+
+// The SCORER's prompt (M-6). A device link is offered less than the organiser, and the copy changes with it, so the card has
+// three layouts, not one: both answers (the organiser test above), "Record the ending" alone (a fresh device: the sanction is the
+// last live event so the server admits its ending, but the row is not the device's own to void), and NEITHER (a pre-W2e ledger,
+// where something was recorded after the card: only the organiser can resolve it). `neither` is the longest copy the card carries,
+// and the only one with no button to anchor the layout.
+//
+// The `neither` ledger cannot be written through the API (the write path refuses everything after an ending sanction), so the
+// event after the card is written by raw SQL: the one way such a row exists, the shape an earlier build left behind. A stoppage is
+// the sport-blind event for it (the T29 route test uses the same `[sanction, suspend]` shape).
+const ENDING_SCORER_VARIANTS = [
+  { name: "record-only", between: false, bodyKey: "pad.ending.body.recordOnly", record: true },
+  { name: "neither", between: true, bodyKey: "pad.ending.body.neither", record: false },
+] as const;
+
+for (const sport of ENDING_SPORTS) {
+  for (const variant of ENDING_SCORER_VARIANTS) {
+    test(`${sport.key} v3 pad (handed device, ${variant.name}): the prompt's own copy and buttons fit — reachable at 44px, nothing clipped, no horizontal scroll`, async ({
+      browser,
+      request,
+    }) => {
+      test.setTimeout(90_000);
+      const fx = await seedPendingEnding(request, sport, `Scorer ${variant.name}`);
+      if (variant.between) {
+        await withDb(async (sql) => {
+          const [t] = await sql<{ tip: number }[]>`select coalesce(max(seq), 0)::int as tip from score_events where fixture_id = ${fx.fixtureId}`;
+          await sql`insert into score_events (id, fixture_id, seq, type, payload, recorded_at)
+                    values (${randomUUID()}, ${fx.fixtureId}, ${t!.tip + 1}, 'core.suspend', ${sql.json({ reason: "rain" })}, now())`;
+        });
+      }
+      const link = await apiJson<{ secret: string }>(request, `/api/v1/fixtures/${fx.fixtureId}/device-links`, "POST", {
+        label: `mobile ending ${variant.name} ${projectTag()}`,
+      });
+      expect(link.status, JSON.stringify(link.error)).toBe(201);
+
+      // The token is the ONLY credential on this surface: no session, the project's own viewport.
+      const ctx = await browser.newContext({ viewport: projectViewport() ?? undefined, storageState: await consentedAnonymousState() });
+      try {
+        const page = await ctx.newPage();
+        await page.goto(`/score/${link.data!.secret}`, { waitUntil: "load" });
+        await dismissCookieBanner(page);
+        // The handed device has no console wrapper: the pad is addressed by its own `data-role`, not the console's `score-pad`.
+        const pad = page.locator('[data-role="pad-v3"]');
+        await expect(pad).toBeVisible({ timeout: 20_000 });
+        const prompt = pad.getByTestId("pad-ending-pending");
+        await expect(prompt, "a handed device opens on the ending prompt for a pending ledger").toBeVisible({ timeout: 20_000 });
+        await expect(prompt, `the ${variant.name} copy is what is on the card`).toContainText(uiEn[variant.bodyKey]!);
+
+        // What this scorer is offered, and only that: never the void (not the device's own row), the record only where admitted.
+        await expect(prompt.getByTestId("pad-ending-void"), "a handed device is not offered a void of a row it did not write").toHaveCount(0);
+        if (variant.record) await assertTapFloor(prompt.getByTestId("pad-ending-record"), "Record the ending");
+        else await expect(prompt.getByTestId("pad-ending-record"), "where the server would answer 403, the card offers no button").toHaveCount(0);
+        await expect(pad.locator('[data-role="v3-tiles"]')).toHaveCount(0);
+
+        await expectNoHorizontalScroll(page);
+        const { clipped } = await overflowingIn(page, '[data-role="v3-ending"]', "*", "the ending prompt was not in the DOM");
+        expect(clipped, "the ending prompt must not clip its own content at this width").toEqual([]);
+        // The whole card is reachable: its bottom edge is inside the document, so scrolling brings all of it on screen.
+        const box = await prompt.boundingBox();
+        expect(box, "the prompt has no box").not.toBeNull();
+        expect(box!.width, "the card fits the viewport width").toBeLessThanOrEqual((projectViewport()?.width ?? 1280) + 0.5);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
 }
 
 test("table tennis v3 pad: the serve-anchor tile and its sheet hold the 44px floor, no horizontal scroll", async ({
