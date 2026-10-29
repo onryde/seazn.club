@@ -187,10 +187,12 @@ export const YOUTUBE_TOS_URL = "https://www.youtube.com/t/terms";
 export const YOUTUBE_GUIDELINES_URL = "https://www.youtube.com/t/community_guidelines";
 /** Developer Policies III.A.2: the privacy policy must link Google's, exactly as Google spells it. */
 export const GOOGLE_PRIVACY_URL = "http://www.google.com/policies/privacy";
-/** Where a person removes Seazn from their Google account: its third-party access page. The ONE link for it - Developer Policies III.A.2
- *  ("where a user revokes access to Seazn") and the Disconnect notice for an organiser whose revoke Seazn could not confirm are the same
- *  place (a plain link - no Google logo). The old `security.google.com/settings/security/permissions` form is not kept beside it. */
-export const GOOGLE_THIRD_PARTY_ACCESS_URL = "https://myaccount.google.com/connections";
+/** Where a person removes Seazn from their Google account: Google's security-permissions page, the URL the Developer Policies name
+ *  (III.A.2.h, "users can revoke access via ..."; it answers 301 to myaccount.google.com/permissions). The ONE link for it - the privacy
+ *  policy and the Disconnect notice for an organiser whose revoke Seazn could not confirm are the same place (a plain link - no Google
+ *  logo). T19 fix round 1 (PO ruling) moved it here from `myaccount.google.com/connections`, which the policy does not name; no second
+ *  constant for the page may exist (lib/__tests__/youtube-google-urls.test.ts sweeps every export). */
+export const GOOGLE_THIRD_PARTY_ACCESS_URL = "https://security.google.com/settings/security/permissions";
 
 // --- The Streaming page and the connect round trip's landing --------------------------------------------------------------
 

@@ -18,6 +18,7 @@ vi.mock("@/components/marketing-nav", () => ({ MarketingNav: () => null }));
 vi.mock("@/components/marketing-footer", () => ({ MarketingFooter: () => null }));
 
 import PrivacyPage from "../privacy/page";
+import { GOOGLE_THIRD_PARTY_ACCESS_URL } from "@/lib/youtube";
 
 // ─── the rulebook ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const POLICY_GOOGLE_PRIVACY = "http://www.google.com/policies/privacy"; // III.A.2.c, exactly as Google spells it (http)
@@ -67,7 +68,9 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
     // Each predicate returns what is MISSING; [] is a pass.
     ["says Seazn uses YouTube API Services (III.A.2.b)", () => ["Seazn Club uses YouTube API Services"].filter((n) => !ytText.includes(n))],
     ["links Google's privacy policy (III.A.2.c)", () => [`href="${POLICY_GOOGLE_PRIVACY}"`].filter((n) => !yt.includes(n))],
-    ["links Google's security-permissions page to revoke (III.A.2.h)", () => [`href="${POLICY_PERMISSIONS}"`].filter((n) => !yt.includes(n))],
+    // Both ends of one seam: the policy's literal, AND the constant the Disconnect notice links (F2: one revocation URL, the policy's).
+    ["links Google's security-permissions page to revoke (III.A.2.h), the same URL the Disconnect notice uses", () =>
+      [`href="${POLICY_PERMISSIONS}"`, `href="${GOOGLE_THIRD_PARTY_ACCESS_URL}"`].filter((n) => !yt.includes(n))],
     ["links the YouTube Terms of Service (III.A.1) and says users are bound by them", () =>
       [`href="${POLICY_YOUTUBE_TOS}"`].filter((n) => !yt.includes(n)).concat(["agree to be bound by the YouTube Terms of Service"].filter((n) => !ytText.includes(n)))],
     ["names what is accessed, stored, used and shared, and how long it is kept (III.A.2.d/e, III.E.4)", () => {

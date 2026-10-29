@@ -26,7 +26,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { LOCALES, type Dict } from "@/lib/i18n-constants";
 import { messages, type MessageKey } from "@/lib/messages";
-import { YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
+import { GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
 import { ROUTES } from "@/server/api-v1/openapi";
 import { v1 } from "@/server/api-v1/http";
 import { PickYoutubeChannel, StreamTargetKind, YOUTUBE_REVOKE_OUTCOMES, YoutubeConnectionSaved, YoutubeConnectionSettings, type StreamTarget } from "@/server/api-v1/schemas";
@@ -1254,11 +1254,13 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
         expect(html, `${l}/${outcome}: outcome marker`).toContain(`data-outcome="${outcome}"`);
         expect(html, `${l}/${outcome}: no logo in the notice`).not.toMatch(/<svg|<img/);
         if (want.link) {
-          expect(html, `${l}/${outcome}: the plain link`).toMatch(/<a\b[^>]*href="https:\/\/myaccount\.google\.com\/connections"[^>]*>/);
+          // The href is the ONE constant (lib/youtube.ts); the literal it must equal - the page the Developer Policies name - is pinned in
+          // lib/__tests__/youtube-google-urls.test.ts.
+          expect(html, `${l}/${outcome}: the plain link`).toContain(`href="${GOOGLE_THIRD_PARTY_ACCESS_URL}"`);
           expect(html, `${l}/${outcome}: opens safely in a new tab`).toMatch(/<a\b[^>]*target="_blank"[^>]*rel="noopener noreferrer"|<a\b[^>]*rel="noopener noreferrer"[^>]*target="_blank"/);
           expect(plain(html.match(/<a\b[^>]*>([\s\S]*?)<\/a>/)![1]!), `${l}: the link text`).toBe(dict["streaming.youtube.disconnect.googleLink"]);
         } else {
-          expect(html, `${l}/${outcome}: no Google link where there is nothing to do there`).not.toContain("myaccount.google.com");
+          expect(html, `${l}/${outcome}: no Google link where there is nothing to do there`).not.toContain(new URL(GOOGLE_THIRD_PARTY_ACCESS_URL).hostname);
         }
         sentences.add(plain(html));
         checked++;
