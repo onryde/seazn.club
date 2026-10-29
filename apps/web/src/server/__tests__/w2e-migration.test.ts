@@ -1034,6 +1034,35 @@ describe.skipIf(!HAS_DB)("W2e migration — fails loud on a stored config the wr
     });
   }, 60_000);
 
+  // Review M-1 (fix round 1): a refused format is counted once, on the layer that names `bestOf` or `finalSet` itself. A
+  // stage that changed something else inherits both halves, and the engine refuses its resolved config too, but the
+  // remedy is the division's: the abort names the division alone.
+  it("D18 fail loud: a stage that only inherits a refused division's best of 1 and match tie-break is not counted again; the abort names the division alone (review M-1)", async () => {
+    await rolledBack(async (tx) => {
+      const seed: Seed = {
+        label: "tennis Bo1 + match tie-break division, a stage that changed only no-ad",
+        sport: "tennis",
+        variant: "tour",
+        division: { ...TENNIS_TOUR, bestOf: 1, finalSet: MTB },
+        stageRules: { game: { noAd: true } },
+      };
+      const stageCfg = liveCfg(seed.division, { kind: "league", config: { rules: seed.stageRules } } as never, tennis as never);
+      expect(writeConfigIssues(tennis, stageCfg), "premise: the engine refuses the stage's resolved config").toEqual([BO1_MATCH_TIEBREAK]);
+      const { orgId, rows } = await seedRows(tx, [seed]);
+      await asTenant(tx, orgId);
+      const v = await refusalOf(tx);
+      const named = v && Object.fromEntries(COLUMNS.map((c) => [c, v[c]]));
+      expect(v?.count, "refused once").toBe(1);
+      expect(named).toEqual({
+        "divisions.config": [rows[0]!.divisionId],
+        "stages.config.rules": [],
+        "fixtures.rules_override": [],
+        "fixtures.config_snapshot": [],
+        "match_states.state.cfg": [],
+      });
+    });
+  }, 60_000);
+
   // Review I-1: the SQL predicates mirror the engine's write doors, so pin them to the doors. Each shape is a diff over a
   // clean shipped config, stored in each A0.7 place in turn (alone in its organization); the delta counts it there iff
   // the engine's `writeConfigIssues` refuses the config that place resolves to. The shapes are built from the engine's
