@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "mode": "faults",
+  "exit": 0,
+  "layer": "L3",
+  "runs": [
+    "ci-40874582041-1-l3"
+  ],
+  "plannedNotRun": "allow",
+  "compared": 930,
+  "skipped": 0,
+  "skippedIds": [],
+  "unexpectedSkips": [],
+  "faults": [],
+  "differing": [],
+  "missing": [],
+  "regressed": [],
+  "absent": []
+}
