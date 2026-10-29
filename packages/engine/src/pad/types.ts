@@ -107,14 +107,25 @@ export interface TennisPadRules extends PadRulesBase {
   readonly pointKinds: readonly string[];
   readonly interruptionKinds: readonly string[];
   readonly sanctionLevels: readonly string[];
-  /** (c) 3600. */
+  /** 3600: the kernel's own plausibility sentinel for a break's duration (PLAUSIBLE_INTERRUPTION_SECONDS), never refused by the fold. */
   readonly interruptionMaxSeconds: number;
-  /** (c) ["0","15","30","40"]. */
+  /** ["0","15","30","40"]: the kernel's own POINT_CALLS (ITF Rule 5(a)), which its spoken game score reads. */
   readonly pointCalls: readonly string[];
-  /** (c). */
+  /** (c) ITF Rule 10: whether the changeover just had (after the last game, or the last tie-break point) changed ends. False with no
+   *  folded state, before the first game and once the match is over. */
   endsChanged(state: unknown): boolean;
   gamesFieldBound(cfg: unknown): number;
   tiebreakFieldBound(cfg: unknown): number;
+  /** P3.2: the cfg's own `bestOf`. */
+  bestOf(cfg: unknown): number;
+  /** P3.2: whether a `home`–`away` set score for the set about to be scored is its tie-break score, the one the fold banks only with
+   *  the tie-break's points (`tb`): never in an advantage set or a match tie-break decider. A pre-fold `{}` is the first set. */
+  setScoreTakesTiebreak(state: unknown, cfg: unknown, home: number, away: number): boolean;
+  /** P3.2: a tie-break or match tie-break is being played: the fold refuses a game award (GAME_AWARD_DURING_TIEBREAK), and serve
+   *  turns over by points. False with no folded state. */
+  breakerInForce(state: unknown): boolean;
+  /** P3.2: ITF Rule 5(b), whether the serve changes after a breaker's `pointsPlayed`-th point (the fold's own rotation). */
+  tiebreakServeRotatesAfter(pointsPlayed: number): boolean;
 }
 
 /** carrom (P4). */

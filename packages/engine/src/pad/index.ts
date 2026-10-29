@@ -16,5 +16,6 @@ export type { PadFieldScope } from "./spec-lookup.ts";
 // P2: cricket
 
 // P3: set-based + tennis
+export { tennisPadRules } from "./tennis.ts";
 
 // P4: carrom, boardgame, generic, POST_PHASES

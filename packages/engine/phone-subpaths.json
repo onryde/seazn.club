@@ -16,6 +16,7 @@
       "src/core/types.ts",
       "src/pad/index.ts",
       "src/pad/spec-lookup.ts",
+      "src/pad/tennis.ts",
       "src/sport/abandon-share.ts",
       "src/sport/catalog.ts",
       "src/sport/entrant-model.ts",
