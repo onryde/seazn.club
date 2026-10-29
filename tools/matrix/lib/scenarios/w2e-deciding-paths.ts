@@ -7,6 +7,10 @@
 //           shoot-out, every kick in the order the engine names (G2 football and hockey; G3 ice hockey's GWS — the sport
 //           plays the one name its engine gives the shoot-out, 'shootout' or 'gws')
 //   W2E_OT  every match level through regulation and won by a goal in overtime (G3, ice hockey)
+//   W2E_DECIDER  every match taken to the deciding set - the sets level, the last played to the cfg's own deciding target
+//           (G6: badminton, volleyball, table tennis)
+//   W2E_CAP every match's sets ended by the score cap, cap : cap-1 (G7: badminton, whose variants declare one - 30-29 under
+//           3x21, 21-20 under 3x15 - and any set sport whose cfg does)
 //
 // The sport's own rule decides every match, so no organiser settle or tie-break is owed (life-bracket-decider-
 // exercised is left out, as W2a's BRACKET_EXTRA_BOARD leaves it). The shared bracket assertions apply, and the
@@ -15,7 +19,8 @@
 // can say it, never on the stream the harness posted alone. What the outcome cannot say is the shoot-out's NAME (hockey's
 // SO and the IIHF's GWS both write method `shootout`): that half is read from the product's summary headline, which prints
 // the label the engine gives the cfg's shoot-out (`preset.shootoutLabel`, read off the pad panel that carries it); and a
-// path that is state only (cricket's super over) is read from the product's state. The local strict fold is still the
+// path that is state only (cricket's super over; the set sports' deciding set and cap, Task 22) is read from the product's state
+// and refused when the drive recorded no product. The local strict fold is still the
 // parity gate (the stream posted must fold to the request), but it is no longer the witness's evidence.
 import type { MatchOutcome, StageKind } from "@seazn/engine/core";
 import { fieldSizeFor } from "../field-size.ts";
@@ -135,4 +140,6 @@ export const w2eScenarios: Readonly<Record<W2eScenarioKey, Scenario>> = Object.f
   W2E_OT: scenario("W2E_OT"),
   W2E_SUPER_OVER: scenario("W2E_SUPER_OVER"),
   W2E_DLS: scenario("W2E_DLS"),
+  W2E_DECIDER: scenario("W2E_DECIDER"),
+  W2E_CAP: scenario("W2E_CAP"),
 });

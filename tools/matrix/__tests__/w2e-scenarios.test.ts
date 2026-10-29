@@ -1,5 +1,6 @@
 // W2e Tasks 19–24 (spec §10, D16): the opt-in deciding-path scenarios the local truth run plays with `--scenario`, one key
-// per stream (W2E_ET and W2E_SO from Task 19, W2E_OT from Task 20, W2E_SUPER_OVER and W2E_DLS from Task 21). Each forces EVERY bracket match of a bracket-root row down its key's path,
+// per stream (W2E_ET and W2E_SO from Task 19, W2E_OT from Task 20, W2E_SUPER_OVER and W2E_DLS from Task 21, W2E_DECIDER and
+// W2E_CAP from Task 22). Each forces EVERY bracket match of a bracket-root row down its key's path,
 // so a green run cannot have got there by the policy's rotation. Expected values come from the engine's own declarations
 // (`decidedInFor` over the module's win-method table; the decider presets a bracket stage is created with), never from
 // the scenario's text.
@@ -8,6 +9,7 @@ import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { deciderKeysFor, stageKeysFor } from "@seazn/engine/sport";
 import { football } from "@seazn/engine/sports/football";
 import { cricket } from "@seazn/engine/sports/cricket";
+import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbased";
 import { hockey } from "@seazn/engine/sports/hockey";
 import { icehockey } from "@seazn/engine/sports/icehockey";
 import { describe, expect, it } from "vitest";
@@ -31,6 +33,7 @@ import { bracketRootRows } from "../lib/w2a-cells.ts";
 import { w2eApplies, w2eBracketCfgOf, w2eCells } from "../lib/w2e-cells.ts";
 import type { FixtureStateOut } from "../lib/driver/types.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
+import { capBinds, decidingSetReachable, setSportsOf, type SetCfg, type SetFoldState } from "./set-oracles.ts";
 
 const variantFor = offlineBuilderDefault;
 /** What the product serves at /state for a fixture folded to `stream`: the engine's own summary of the fold and the fold's
@@ -42,26 +45,40 @@ function productOf(module: ReturnType<typeof sportModule>, cfg: unknown, home: s
 }
 /** What decides each key's matches, in the engine's own vocabulary (sport/module.ts DecidedIn): extra time and overtime are
  *  decided "in overtime", the shoot-out (and the GWS) "by a shoot-out". */
-const DECIDED_IN: Readonly<Record<W2eScenarioKey, DecidedIn>> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot", W2E_SUPER_OVER: "so", W2E_DLS: "regulation" };
+const DECIDED_IN: Readonly<Record<W2eScenarioKey, DecidedIn>> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot", W2E_SUPER_OVER: "so", W2E_DLS: "regulation", W2E_DECIDER: "regulation", W2E_CAP: "regulation" };
+/** Task 22: the set sports' two keys. Neither path is a stage decider or a decidedIn the outcome can name (a set sport's win is
+ *  'regulation' whichever way its sets went), so the engine's declarations that make them reachable are the set kernel's own:
+ *  `reachableSetScores` (a deciding set is played) and the rally fold that closes a set at the cap (set-oracles.ts). */
+const SET_KEYS = ["W2E_DECIDER", "W2E_CAP"] as const;
+type SetKey = (typeof SET_KEYS)[number];
+const isSetKey = (k: W2eScenarioKey): k is SetKey => (SET_KEYS as readonly string[]).includes(k);
 /** The method a product result carries when the key's path decided it, where the engine's win-method table cannot say so on
  *  its own: a DLS win is decidedIn 'regulation' (a revised target is no extra play), so only its method names it. */
 const METHOD_OF: Readonly<Partial<Record<W2eScenarioKey, string>>> = { W2E_DLS: "dls" };
 /** Which of the engine's decider rule keys each scenario plays (`deciderKeysFor`: football's extraTime and shootout, the
  *  period kernel's overtime and shootout — the IIHF's is its GWS). With DECIDED_IN it names the sports the key is FOR. */
-const ENGINE_DECIDER: Readonly<Record<W2eScenarioKey, string>> = { W2E_ET: "extraTime", W2E_SO: "shootout", W2E_OT: "overtime", W2E_SUPER_OVER: "superOver", W2E_DLS: "dls" };
+const ENGINE_DECIDER: Readonly<Record<Exclude<W2eScenarioKey, SetKey>, string>> = { W2E_ET: "extraTime", W2E_SO: "shootout", W2E_OT: "overtime", W2E_SUPER_OVER: "superOver", W2E_DLS: "dls" };
 /** The rule keys the engine lets a knockout stage set: the deciders (`decider: true`) for the first four keys; cricket's `dls`
  *  is a stage rule but no decider (a revised target is no extra play), so it is read off the stage's settable keys. */
-const keysOf = (k: W2eScenarioKey, s: string): readonly string[] => (k === "W2E_DLS" ? stageKeysFor : deciderKeysFor)(sportModule(s), "knockout", variantFor(s));
+const keysOf = (k: Exclude<W2eScenarioKey, SetKey>, s: string): readonly string[] => (k === "W2E_DLS" ? stageKeysFor : deciderKeysFor)(sportModule(s), "knockout", variantFor(s));
 /** The sports the ENGINE declares the key's decider for on a knockout, and whose bracket preset reaches the decidedIn it
- *  produces — derived from the modules, not from any generator or scenario. */
-const engineSports = (k: W2eScenarioKey): string[] => SPORT_KEYS.filter((s) =>
-  keysOf(k, s).includes(ENGINE_DECIDER[k])
-  && sportModule(s).reachableDecidedIn(w2eBracketCfgOf(s) as never, "knockout").has(DECIDED_IN[k]));
+ *  produces — derived from the modules, not from any generator or scenario. The set keys (Task 22) read the set kernel's own
+ *  declarations on the builder default's knockout cfg: a deciding set where `reachableSetScores` has a split-then-decided
+ *  score, a cap where the engine's rally fold closes a set at cap : cap-1. */
+const engineSports = (k: W2eScenarioKey): string[] => SPORT_KEYS.filter((s) => {
+  if (isSetKey(k)) {
+    if (!setSportsOf([s]).length) return false;
+    const cfg = w2eBracketCfgOf(s) as SetCfg;
+    return k === "W2E_DECIDER" ? decidingSetReachable(s, cfg) : capBinds(s, cfg);
+  }
+  return keysOf(k, s).includes(ENGINE_DECIDER[k])
+    && sportModule(s).reachableDecidedIn(w2eBracketCfgOf(s) as never, "knockout").has(DECIDED_IN[k]);
+});
 
 describe("the W2e keys: frozen names, registered, opt-in", () => {
-  it("the keys are W2E_ET and W2E_SO (Task 19), W2E_OT (Task 20) and W2E_SUPER_OVER and W2E_DLS (Task 21), each naming its deciding paths — the shoot-out key lists the IIHF's GWS after hockey's shoot-out; each is registered under its own key with no canary, outside the slice and the w1-driving scripts", () => {
-    expect([...W2E_SCENARIO_KEYS]).toEqual(["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS"]);
-    expect(W2E_SCENARIO_PATHS).toEqual({ W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"], W2E_SUPER_OVER: ["superOver"], W2E_DLS: ["dls"] });
+  it("the keys are W2E_ET and W2E_SO (Task 19), W2E_OT (Task 20), W2E_SUPER_OVER and W2E_DLS (Task 21) and W2E_DECIDER and W2E_CAP (Task 22), each naming its deciding paths — the shoot-out key lists the IIHF's GWS after hockey's shoot-out; each is registered under its own key with no canary, outside the slice and the w1-driving scripts", () => {
+    expect([...W2E_SCENARIO_KEYS]).toEqual(["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS", "W2E_DECIDER", "W2E_CAP"]);
+    expect(W2E_SCENARIO_PATHS).toEqual({ W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"], W2E_SUPER_OVER: ["superOver"], W2E_DLS: ["dls"], W2E_DECIDER: ["decidingSet"], W2E_CAP: ["cap"] });
     let checked = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       expect(SCENARIOS[k].key, k).toBe(k);
@@ -70,7 +87,7 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       expect((W1_DRIVING_SCENARIOS as readonly string[]).includes(k), `${k} is one of the w1-driving scripts`).toBe(false);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(7);
   });
 
   it("no filter plans none of them; a named key plans only its own cells, with the w1-driving case-id shape", () => {
@@ -103,6 +120,12 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       for (const only of ["knockout|football", "knockout|hockey", "knockout|icehockey", "knockout|generic"]) expect(() => planW1Driving(variantFor, { scenario, only }), `${scenario} ${only}`).toThrow(/plans no case/);
       expect(() => planW1Driving(variantFor, { scenario, only: "league|cricket" }), scenario).toThrow(/plans no case/);
     }
+    // Task 22: the deciding-set key plans all three set sports, the cap key badminton alone (the others' builder defaults declare no cap);
+    // neither plans a sport of another kernel, or a table row.
+    for (const only of ["knockout|badminton", "knockout|volleyball", "knockout|tabletennis"]) expect(() => planW1Driving(variantFor, { scenario: "W2E_DECIDER", only }), only).not.toThrow();
+    expect(() => planW1Driving(variantFor, { scenario: "W2E_CAP", only: "knockout|badminton" })).not.toThrow();
+    for (const only of ["knockout|volleyball", "knockout|tabletennis", "knockout|tennis", "knockout|football", "league|badminton"]) expect(() => planW1Driving(variantFor, { scenario: "W2E_CAP", only }), only).toThrow(/plans no case/);
+    for (const only of ["knockout|tennis", "knockout|cricket", "knockout|generic", "league|volleyball"]) expect(() => planW1Driving(variantFor, { scenario: "W2E_DECIDER", only }), only).toThrow(/plans no case/);
     expect(() => planW1Driving(variantFor, { scenario: "W2E_NOPE" })).toThrow(/--scenario.*W2E_NOPE/);
   });
 
@@ -131,6 +154,10 @@ describe("the cells: bracket-root rows × the sports whose generator builds the 
     // Task 21: cricket alone plays a super over (a decider of its limited-overs knockouts) and a DLS-revised target.
     expect(engineSports("W2E_SUPER_OVER")).toEqual(["cricket"]);
     expect(engineSports("W2E_DLS")).toEqual(["cricket"]);
+    // Task 22: every set sport can be taken to a deciding set; of the builder defaults only badminton's (bwf: cap 30) declares a cap
+    // that decides a set - volleyball's and table tennis's cap is null.
+    expect(engineSports("W2E_DECIDER")).toEqual(SPORT_KEYS.filter((s) => setSportsOf([s]).length > 0));
+    expect(engineSports("W2E_CAP")).toEqual(["badminton"]);
     let total = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       const cells = w2eCells(k);
@@ -480,5 +507,174 @@ describe("everyMatchTookTheDecidingPath, cricket's super over and DLS on hand-bu
     ];
     for (const [label, x, key] of wrong) expect(one(x, key), label).toMatchObject({ verdict: "fail", checked: 1 });
     expect(wrong.length).toBe(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 22 - the set sports' deciding set and cap are STATE ONLY (the outcome is a 'regulation' win however the sets went), so
+// the scenario check reads them from the PRODUCT's state: the Task 19 Important carry.
+
+describe("everyMatchTookTheDecidingPath, the set sports' deciding set and cap on hand-built drives (Task 22: a state-only path is read from the PRODUCT's state)", () => {
+  type SetPath = "decidingSet" | "cap";
+  const KEY_OF: Readonly<Record<SetPath, W2eScenarioKey>> = { decidingSet: "W2E_DECIDER", cap: "W2E_CAP" };
+  const modules = { badminton, volleyball, tabletennis } as const;
+  const cfgOfCase = (sport: keyof typeof modules, variant: string) => stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as SetCfg;
+  const streamOf = (sport: string, cfg: unknown, path?: SetPath): StreamEvent[] =>
+    generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "a", away: "b", outcome: path === undefined ? { kind: "win", winner: "home" } : { kind: "win", winner: "home", path } });
+  const productFor = (sport: keyof typeof modules, cfg: unknown, events: readonly StreamEvent[]): ProductFold => productOf(modules[sport], cfg, "a", "b", events);
+  /** A drive as decideFixture records it: the stream the harness posted, the outcome the product answered and the product's own
+   *  /state (here the fold of what the product held), which a wrong-product row replaces. */
+  const build = (sport: keyof typeof modules, variant: string, path: SetPath) => {
+    const cfg = cfgOfCase(sport, variant);
+    const events = streamOf(sport, cfg, path);
+    const d: BracketDrive = {
+      fixtureId: "f1", stageKind: "knockout", sport, home: "a", away: "b", asked: { kind: "win", winner: "home", path },
+      levelAs: null, status: "decided", outcome: { kind: "win", winner: "a", method: "regulation" }, loser: { line: "none" }, next: { line: "none" }, forfeitPlay: null, refusal: null,
+      product: productFor(sport, cfg, events),
+    };
+    return { sport, variant, path, cfg, d, stream: events, plain: productFor(sport, cfg, streamOf(sport, cfg)) };
+  };
+  const check = (x: { d: BracketDrive; stream: StreamEvent[] }, key: W2eScenarioKey, cfg: unknown) => {
+    const r = new Recorder();
+    r.bracketDrives.push(x.d);
+    if (x.stream.length > 0) r.streams.set(x.d.fixtureId, x.stream);
+    return everyMatchTookTheDecidingPath(r, key, () => cfg);
+  };
+  const CASES: readonly (readonly [keyof typeof modules, string, SetPath])[] = [
+    ["badminton", "bwf-3x15", "decidingSet"], ["badminton", "bwf-3x15", "cap"], ["badminton", "bwf", "cap"], ["badminton", "bwf", "decidingSet"], ["badminton", "short", "cap"],
+    ["volleyball", "indoor", "decidingSet"], ["volleyball", "beach", "decidingSet"], ["tabletennis", "bo5", "decidingSet"], ["tabletennis", "bo7", "decidingSet"],
+  ];
+
+  it("the right path passes under its own key, counted; the same drive under the OTHER set key, the path asked as a path the sport lacks, a plain win and a held match each red alone", () => {
+    let passes = 0;
+    let reds = 0;
+    for (const [sport, variant, path] of CASES) {
+      const x = build(sport, variant, path);
+      const at = `${sport}/${variant} ${path}`;
+      expect(check(x, KEY_OF[path], x.cfg), at).toMatchObject({ verdict: "pass", checked: 1 });
+      passes++;
+      // Right path under the wrong key.
+      const wrongKey = KEY_OF[path === "cap" ? "decidingSet" : "cap"];
+      expect(check(x, wrongKey, x.cfg), `${at} under ${wrongKey}`).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(check(x, "W2E_SO", x.cfg), `${at} under the shoot-out key`).toMatchObject({ verdict: "fail", checked: 1 });
+      // The harness asked for a plain win / another path than the stream and product show.
+      expect(check({ ...x, d: { ...x.d, asked: { kind: "win", winner: "home" } } }, KEY_OF[path], x.cfg), `${at}: a plain win`).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(check({ ...x, d: { ...x.d, status: "needs_decision" } }, KEY_OF[path], x.cfg), `${at}: held`).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(check({ ...x, d: { ...x.d, outcome: { kind: "win", winner: "b", method: "regulation" } } }, KEY_OF[path], x.cfg), `${at}: the other winner`).toMatchObject({ verdict: "fail", checked: 1 });
+      expect(check({ d: x.d, stream: [] }, KEY_OF[path], x.cfg), `${at}: no stream`).toMatchObject({ verdict: "fail", checked: 1 });
+      reds += 5;
+    }
+    expect(passes).toBe(CASES.length);
+    expect(reds).toBe(CASES.length * 5);
+    expect(check({ d: build("badminton", "bwf", "cap").d, stream: [] }, "W2E_CAP", cfgOfCase("badminton", "bwf")), "an empty stream").toMatchObject({ verdict: "fail" });
+    expect(everyMatchTookTheDecidingPath(new Recorder(), "W2E_DECIDER", () => ({}))).toMatchObject({ verdict: "fail", checked: 0 });
+    expect(everyMatchTookTheDecidingPath(new Recorder(), "W2E_CAP", () => ({}))).toMatchObject({ verdict: "fail", checked: 0 });
+  });
+
+  it("a WRONG PRODUCT reds even when the stream the harness posted is the path (the local fold would pass): a product that never reached the deciding set or the cap, one that reached the other path, no product at all, a half one, and one folded under another cfg - and the product, not the stream, is believed", () => {
+    let rows = 0;
+    const fail = (label: string, x: { d: BracketDrive; stream: StreamEvent[] }, key: W2eScenarioKey, cfg: unknown) => {
+      expect(check(x, key, cfg), label).toMatchObject({ verdict: "fail", checked: 1 });
+      rows++;
+    };
+    for (const [sport, variant, path] of CASES) {
+      const x = build(sport, variant, path);
+      const key = KEY_OF[path];
+      const at = `${sport}/${variant} ${path}`;
+      const product = x.d.product as ProductFold;
+      // The product never reached the path: its state is a straight-sets win (the local fold, on the stream posted, did).
+      fail(`${at}: the product's state is a straight-sets win`, { ...x, d: { ...x.d, product: x.plain } }, key, x.cfg);
+      // The product reached the OTHER path (where the cfg has one).
+      const otherPath: SetPath = path === "cap" ? "decidingSet" : "cap";
+      const otherEvents = (() => { try { return streamOf(sport, x.cfg, otherPath); } catch { return null; } })();
+      if (otherEvents !== null) fail(`${at}: the product's state is the ${otherPath} win's`, { ...x, d: { ...x.d, product: productFor(sport, x.cfg, otherEvents) } }, key, x.cfg);
+      // No product at all, and a drive recorded before Task 21 that carried none.
+      fail(`${at}: product null`, { ...x, d: { ...x.d, product: null } }, key, x.cfg);
+      fail(`${at}: a drive that carried no product field`, { ...x, d: (({ product: _p, ...rest }) => rest)(x.d) }, key, x.cfg);
+      // A half product, and an inconsistent one.
+      fail(`${at}: no summary`, { ...x, d: { ...x.d, product: { summary: null, state: product.state } } }, key, x.cfg);
+      fail(`${at}: no state`, { ...x, d: { ...x.d, product: { summary: product.summary, state: null } } }, key, x.cfg);
+      const strip = JSON.parse(JSON.stringify(product)) as { summary: { detail: { sets: { away: number }[] } } };
+      strip.summary.detail.sets[0]!.away += 1;
+      fail(`${at}: the summary's set strip is not the state's`, { ...x, d: { ...x.d, product: strip as unknown as ProductFold } }, key, x.cfg);
+      const cfgMoved = JSON.parse(JSON.stringify(product)) as { state: { cfg: SetCfg } };
+      cfgMoved.state.cfg.winBy += 1;
+      fail(`${at}: the product folded under another winBy`, { ...x, d: { ...x.d, product: cfgMoved as unknown as ProductFold } }, key, x.cfg);
+      const outcomeMoved = JSON.parse(JSON.stringify(product)) as { state: { outcome: { winner: string } } };
+      outcomeMoved.state.outcome.winner = "b";
+      fail(`${at}: the product's own outcome names the other winner`, { ...x, d: { ...x.d, product: outcomeMoved as unknown as ProductFold } }, key, x.cfg);
+      const live = JSON.parse(JSON.stringify(product)) as { state: { phase: string } };
+      live.state.phase = "live";
+      fail(`${at}: the product's match is not done`, { ...x, d: { ...x.d, product: live as unknown as ProductFold } }, key, x.cfg);
+      // The product claims a win the set kernel does not declare (a shoot-out): named, never thrown.
+      fail(`${at}: the product's outcome claims a shoot-out`, { ...x, d: { ...x.d, outcome: { kind: "win", winner: "a", method: "shootout" } } }, key, x.cfg);
+      // The stream the harness posted is a plain win although the product shows the path: the local parity gate still reds.
+      fail(`${at}: the posted stream was a plain win`, { d: x.d, stream: streamOf(sport, x.cfg) }, key, x.cfg);
+    }
+    console.info(`w2e-scenarios: ${rows} wrong-product row(s) over ${CASES.length} case(s)`);
+    expect(rows).toBeGreaterThan(CASES.length * 10);
+  });
+});
+
+describe("Task 22: what the fake knockout product holds for each W2E_DECIDER / W2E_CAP match IS the path - read from its /state by the engine's declarations, not by the witness", () => {
+  /** Runs `key` on the fake for `sport` at `variant`; returns the decided fixtures' product states, in order. */
+  async function playedStates(key: "W2E_DECIDER" | "W2E_CAP", sport: string, variant: string) {
+    const driver = new FakeKnockoutDriver();
+    const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|${key}`, row: "knockout", sport, variant, scenario: key, canary: false };
+    const out = await SCENARIOS[key].run({ driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] });
+    const states: SetFoldState[] = [];
+    for (const f of driver.rows()) {
+      if (f.status !== "decided") continue;
+      const st = await driver.fixtureState(f.id);
+      expect(st.state, f.id).not.toBeNull();
+      states.push(st.state as SetFoldState);
+    }
+    return { out, states, cfg: stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as SetCfg };
+  }
+  const winnerSide = (st: SetFoldState): "home" | "away" => (st.entrants.home === st.outcome!.winner ? "home" : "away");
+  const wonBy = (st: SetFoldState, side: "home" | "away") => st.sets.filter((s) => s.closed && s[side] > s[side === "home" ? "away" : "home"]).length;
+
+  it("W2E_DECIDER: every decided match, for every sport the engine says reaches a deciding set, went the distance - level before the last set, the last played to the cfg's finalSetTo", async () => {
+    let matches = 0;
+    const sports = engineSports("W2E_DECIDER");
+    expect(sports.length).toBeGreaterThan(1);
+    for (const sport of sports) {
+      const { out, states, cfg } = await playedStates("W2E_DECIDER", sport, variantFor(sport));
+      expect(out.assertions.find((a) => a.id === "w2e-every-match-took-the-path")!.verdict, sport).toBe("pass");
+      expect(states.length, `${sport}: more than one match decided`).toBeGreaterThan(1);
+      for (const st of states) {
+        const side = winnerSide(st);
+        const other = side === "home" ? "away" : "home";
+        expect(st.sets.length, `${sport}`).toBe(cfg.bestOf);
+        expect(wonBy(st, side), sport).toBe(Math.ceil(cfg.bestOf / 2));
+        expect(wonBy(st, other), sport).toBe(Math.ceil(cfg.bestOf / 2) - 1);
+        expect(Math.max(st.sets.at(-1)!.home, st.sets.at(-1)!.away), `${sport}: the deciding set's own target`).toBe(cfg.finalSetTo);
+        matches++;
+      }
+    }
+    console.info(`w2e-scenarios: ${matches} W2E_DECIDER match(es) read off the product's state across ${sports.join(", ")}`);
+    expect(matches).toBeGreaterThan(sports.length);
+  });
+
+  it("W2E_CAP: every decided match ended on the cap - 30-29 under bwf (3x21) and 21-20 under bwf-3x15, the variant on the case, which a typed constant could not do for both", async () => {
+    const seen = new Map<string, [number, number]>();
+    let matches = 0;
+    for (const variant of ["bwf", "bwf-3x15", "short"]) {
+      const { out, states, cfg } = await playedStates("W2E_CAP", "badminton", variant);
+      expect(out.assertions.find((a) => a.id === "w2e-every-match-took-the-path")!.verdict, variant).toBe("pass");
+      expect(states.length, `${variant}: more than one match decided`).toBeGreaterThan(1);
+      for (const st of states) {
+        const side = winnerSide(st);
+        const other = side === "home" ? "away" : "home";
+        for (const s of st.sets) {
+          expect([s[side], s[other]], variant).toEqual([cfg.cap, cfg.cap! - 1]);
+          seen.set(variant, [s[side], s[other]]);
+        }
+        matches++;
+      }
+    }
+    // The rulebook's: BWF 7.4 (29-all, the 30th point), the 3x15 format (20-all, the 21st), the junior short game's cap 15.
+    expect(Object.fromEntries(seen)).toEqual({ bwf: [30, 29], "bwf-3x15": [21, 20], short: [15, 14] });
+    expect(matches).toBeGreaterThan(3);
   });
 });
