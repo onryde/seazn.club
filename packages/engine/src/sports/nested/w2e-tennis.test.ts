@@ -250,6 +250,40 @@ describe("TN-SS-1 a set summary must be a score the set can reach (SC-S1; RBS:34
     expect(refusal(() => started(cfg).summary(max + 1, max - 1)).code).toBe("SET_SCORE_UNREACHABLE");
   });
 
+  it("TN-SS-1 the bound holds for the away side too: the away player's set at the away field's maximum is taken, one past it refused", () => {
+    // Rule 6a has no side: the away player wins an advantage set n–(n−2) exactly as the home player does, and the pad's
+    // away field declares its own maximum (padSpec), so the write path mirrors the home side's answer.
+    const cfg = advantageCfg();
+    const fields = tennis.padSpec!(cfg).panels.flatMap((p) => p.actions).find((a) => a.type === "tennis.set_summary")!.fields;
+    const maxOf = (path: string): number => {
+      const f = fields.find((x) => x.path === path);
+      if (f?.kind !== "number" || f.max === undefined) throw new Error(`premise: the set-score action declares a ${path} maximum`);
+      return f.max;
+    };
+    const max = maxOf("away");
+    expect(max, "premise: both sides' fields declare the same games maximum").toBe(maxOf("home"));
+    expect(max, "premise: the advantage set's bound is past every RBS example").toBeGreaterThan(EDGE);
+    expect(started(cfg).summary(max - 2, max).state.sets).toEqual([{ home: max - 2, away: max }]);
+    const past = refusal(() => started(cfg).summary(max - 1, max + 1));
+    expect(past.code).toBe("SET_SCORE_UNREACHABLE");
+    // The refusal names the score it refused, so the scorer can see which entry the engine would not take.
+    expect(past.message).toMatch(new RegExp(`\\b${max - 1}\\s*[–-]\\s*${max + 1}\\b`));
+  });
+
+  it("TN-SS-1 a games score below zero is no score a set can reach: false on either side, never a throw (counted)", () => {
+    // `reachableLiveGames` is the exported judge (DOMAIN.md TN-SS-1); no set holds a negative game count, so whatever a
+    // client sends, a negative side answers "not reachable" rather than raising.
+    let checked = 0;
+    for (const cfg of [cfgFor("tour"), advantageCfg(), cfgFor("fast4")]) {
+      for (const [h, a] of [[-1, 0], [-2, 0], [-2, 3], [0, -1], [0, -2], [3, -2], [-2, -2]] as const) {
+        expect(() => reachableLiveGames(h, a, cfg.set), `${h}-${a}`).not.toThrow();
+        expect(reachableLiveGames(h, a, cfg.set), `${h}-${a}`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe(21);
+  });
+
   it("TN-SS-1 the sequence: the second set and a set re-entered after a void are judged the same way", () => {
     const cfg = cfgFor("tour");
     // Second set: 6–4 banked, then 8–6 refused and 7–5 taken.
@@ -705,6 +739,24 @@ describe("TN-SS-2 short sets and the set tie-break's own margin (RB2A-12; ITF Ap
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("TN-SS-2 the tour pad's tie-break fields admit RBS:339's two-clear finals past seven (8–6, 9–7)", () => {
+    // RBS:339 (Rule 5b): the tie-break game is won at seven with a two-point lead, so 8–6 and 9–7 are legal tie-break
+    // scores and the pad must take them. Tour plays its decider like every other set (no deciding-set tie-break target of
+    // its own), so the set tie-break alone sets these fields' maximum.
+    const cfg = cfgFor("tour");
+    expect(cfg.finalSet, "premise: tour has no decider-only tie-break target").toBe("same");
+    const fields = tennis.padSpec!(cfg).panels.flatMap((p) => p.actions).filter((a) => a.type === "tennis.set_summary").flatMap((a) => a.fields);
+    let checked = 0;
+    for (const path of ["tb.home", "tb.away"]) {
+      const f = fields.find((x) => x.path === path);
+      if (f?.kind !== "number" || f.max === undefined) throw new Error(`premise: tour ${path} declares a maximum`);
+      expect(f.max, path).toBeGreaterThanOrEqual(9);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(tbSetAnswer(cfg, 7, 6, { home: 9, away: 7 }), "the write path takes the 9–7 the field admits").toBe("taken");
   });
 
   it("TN-SS-2 the generator's short-set tie-breaks are all ones the write path takes, and it reaches the deciding point (counted)", () => {
