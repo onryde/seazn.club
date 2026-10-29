@@ -192,6 +192,8 @@ export function padNumberBound(spec: PadSpec, eventType: string, path: string, s
 
 ---
 
+**Every batch, before its PR (P0 batch review I2):** main's engine CI job is red on `stryker-sizing` (stale legs, owned by the mutation session), and that red skips its Sim matrix step. So each batch runs `SIM_SEEDS=5 npm run sim:matrix --workspace packages/engine` locally (EXIT=0) and reads the CI job log for the step, rather than trusting the job colour. Each batch also adds its export under its own anchor comment in `src/pad/index.ts`, and its deleted names must match the P0 inventory in `no-rule-literals.test.ts`.
+
 ## Batch P1 — period sports: hockey, icehockey, football
 
 Branch `feat/pad-wave-p1`, off main after P0. Its files are disjoint from P2 and P3 except `src/pad/index.ts` (each batch appends one export) and the `phone-subpaths.json` closure re-pin: expect a small rebase, not a conflict of substance (P0.1 review m5).
@@ -471,7 +473,7 @@ Branch `feat/pad-wave-p4`, off main after P1, P2 and P3 merge. `POST_PHASES` tou
 - Test: `packages/engine/src/core/phase-tokens.test.ts`, and the existing `no-rule-literals.test.ts`.
 
 - [ ] **Step 1: Engine test.** `every module's terminal phases are POST_PHASES`: for each registered sport, drive the testkit to finish, abandon and forfeit a match. Each resulting `phase` is in `POST_PHASES`, and every `POST_PHASES` member is reached by at least one sport. Count the sports, which must be 11.
-- [ ] **Step 2:** Add `POST_PHASES` to `BANNED` for every skin file that declared it. Add the final assertion: `namesChecked >= 40` (the sum of the BANNED lists at the end of P4; recount it and pin it).
+- [ ] **Step 2:** Add `POST_PHASES` to `BANNED` for every skin file that declared it. Add the final assertions (P0 batch review m1, m3): every inventory pair is now in `BANNED` (none still declared); a whole-tree check that no banned name is declared in ANY skin file, not only its own; and `namesChecked === <exact count, 46 at P0 review>`, not `>= 40`. Was: `namesChecked >= 40` (the sum of the BANNED lists at the end of P4; recount it and pin it).
 - [ ] **Steps 3–4:** Red, then implement.
 - [ ] **Step 5: Verify.**
   - Engine: `src/core src/pad` plus each sport dir touched.
