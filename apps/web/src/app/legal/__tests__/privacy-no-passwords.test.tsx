@@ -56,10 +56,11 @@ describe("legal pages — no mention of password sign-in", () => {
 
   it("the privacy policy says how people sign in instead, in the places the password lines were", () => {
     const text = textOf(renderToStaticMarkup(<PrivacyPage />));
-    // Security section: the replacement sentence sits in section 11 beside the TLS line it used to follow.
-    const from = text.indexOf("11. Security");
-    expect(from, "section 11 exists").toBeGreaterThan(-1);
-    const security = text.slice(from, text.indexOf("12.", from));
+    // Security section: the replacement sentence sits in section 12 (11 until YouTube Connect T19 inserted section 7) beside the TLS
+    // line it used to follow.
+    const from = text.indexOf("12. Security");
+    expect(from, "section 12 exists").toBeGreaterThan(-1);
+    const security = text.slice(from, text.indexOf("13.", from));
     expect(security).toContain("Data is encrypted in transit (TLS) and at rest.");
     expect(security).toContain("Sign-in is by a single-use emailed link or by Google.");
     // Account data lists the email, name and avatar and nothing about credentials.
