@@ -44,6 +44,7 @@ export function RuleFieldControl({
   sequenceInherits,
   optionStates,
   describedBy,
+  invalid,
 }: {
   sportKey: string;
   field: RuleField;
@@ -59,8 +60,16 @@ export function RuleFieldControl({
   optionStates?: ReadonlyMap<string, OptionState>;
   /** The id of the element that says why an option is unavailable, so the select is described by it. */
   describedBy?: string;
+  /** W2e Task 29: the sentence a write door would refuse this field's value with, drawn beside it (role="alert") and named by
+   *  the control's `aria-describedby`; the control is `aria-invalid`. Absent: nothing is wrong with it. */
+  invalid?: string;
 }) {
   const msg = useMsg();
+  // Derived, not `useId`: the test harness that expands this control (`expandWithHooks`) reads context hooks only, and one grid is
+  // on a page at a time (the builder's or Settings'; the stage row passes no `invalid`).
+  const problemId = `rule-problem-${sportKey}-${field.key}`;
+  const described = [describedBy, invalid === undefined ? undefined : problemId].filter((id) => id !== undefined).join(" ") || undefined;
+  const invalidMark = invalid === undefined ? undefined : true;
   const label = field.labelKey === undefined ? field.label : msg(field.labelKey);
   const help = field.helpKey === undefined ? field.help : msg(field.helpKey);
   const offered = field.kind === "bool" ? ["on", "off"] : (field.options ?? []).map((o) => o.value);
@@ -83,6 +92,7 @@ export function RuleFieldControl({
   }
 
   return (
+    <>
     <label className="block">
       <span className="label">{label}</span>
       {field.kind === "number" ? (
@@ -94,6 +104,8 @@ export function RuleFieldControl({
           value={value}
           onChange={(e) => onEdit(e.target.value)}
           placeholder={inheritedPlaceholder(msg("rules.default"), inherited?.[field.key])}
+          aria-describedby={described}
+          aria-invalid={invalidMark}
           className="input"
         />
       ) : (
@@ -101,7 +113,8 @@ export function RuleFieldControl({
           disabled={disabled}
           value={value}
           onChange={(e) => onEdit(e.target.value)}
-          aria-describedby={describedBy}
+          aria-describedby={described}
+          aria-invalid={invalidMark}
           className="select"
         >
           <option value="">{msg("rules.default")}</option>
@@ -136,5 +149,12 @@ export function RuleFieldControl({
         <span className="mt-0.5 block text-[11px] text-slate-600">{help}</span>
       )}
     </label>
+    {/* Outside the label, so the sentence is not read as part of the control's name; the control names it by aria-describedby. */}
+    {invalid !== undefined && (
+      <span id={problemId} role="alert" className="mt-1 block text-[11px] font-medium leading-snug text-red-700">
+        {invalid}
+      </span>
+    )}
+    </>
   );
 }

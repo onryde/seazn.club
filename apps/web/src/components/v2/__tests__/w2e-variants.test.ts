@@ -11,7 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { builtinModules } from "@seazn/engine/sports";
-import type { AnySportModule } from "@seazn/engine/sport";
+import { BO1_MATCH_TIEBREAK, type AnySportModule } from "@seazn/engine/sport";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { hydrateRuleValues, rulesFor } from "@/lib/match-rules";
 import { PREFERRED_VARIANT, pickVariant } from "@/lib/preferred-variant";
@@ -401,6 +401,126 @@ describe("the Settings island: choosing a variant shows its numbers and saves th
   });
 });
 
+describe("TN-CF-1 the tennis fields refuse best of 1 with a match tie-break in the editor", () => {
+  const rows = (m: AnySportModule) => Object.keys(presetsOf(m)).map((key) => ({ sport_key: m.key, key, name: key, is_system: true, config: presetsOf(m)[key]! }));
+  const tennisModule = moduleOf("tennis");
+  const TENNIS: SportOption[] = sportOptionsFrom([{ key: "tennis", name: "Tennis" }], rows(tennisModule));
+  const mountBuilder = () =>
+    renderIsland(DivisionBuilder, {
+      competitionId: "c1", orgSlug: "org", compSlug: "comp", sports: TENNIS,
+      constraintsAllowed: true, archivedSlotsExplainRefusal: false, viewerPlan: "community",
+    });
+  type B = ReturnType<typeof mountBuilder>;
+  const gridOf = (h: B): ReactElement => {
+    const g = h.tree().find((e) => typeof propsOf(e).sportKey === "string" && typeof propsOf(e).onChange === "function" && propsOf(e).values !== undefined);
+    if (!g) throw new Error("no rule grid");
+    return g;
+  };
+  const typeRules = (h: B, next: Record<string, string>) => (propsOf(gridOf(h)).onChange as (v: Record<string, string>) => void)({ ...(propsOf(gridOf(h)).values as Record<string, string>), ...next });
+  const clickButton = (h: B, label: string) => {
+    const el = h.tree().find((e) => e.type === "button" && textOf(e).trim() === label);
+    if (!el) throw new Error(`no button ${label}`);
+    (propsOf(el).onClick as () => void)();
+  };
+  const nameIt = (h: B) => {
+    const input = h.tree().find((e) => e.type === "input" && propsOf(e).placeholder === activeDict.current["wizard.divisionNamePlaceholder"]);
+    (propsOf(input!).onChange as (e: unknown) => void)({ target: { value: "Open" } });
+  };
+  const eligibilityHidden = (h: B): boolean => {
+    const sec = h.tree().find((e) => e.type === "section" && /\bcard\b/.test(String(propsOf(e).className)) && textOf(e).includes(enUi["wizard.tab.eligibility"]));
+    return /\bhidden\b/.test(String(propsOf(sec!).className));
+  };
+  const SENTENCE = (dict: Record<string, string>) => dict["rules.err.bo1MatchTiebreak"]!;
+
+  beforeEach(() => {
+    activeDict.current = enUi as Record<string, string>;
+    net.calls.length = 0;
+  });
+
+  it("TN-CF-1 the builder: best of 1 with a match tie-break stops Next on the basics tab and says why; one field of the pair fixed, Next goes on", () => {
+    const h = mountBuilder();
+    nameIt(h);
+    typeRules(h, { bestOf: "1", finalSet: "mtb10" });
+    expect(propsOf(gridOf(h)).state, "the grid is told").toBeDefined();
+    clickButton(h, enUi["wizard.next"]);
+    expect(h.text()).toContain(SENTENCE(enUi as Record<string, string>));
+    expect(eligibilityHidden(h), "still on the basics tab").toBe(true);
+    typeRules(h, { finalSet: "tb10" });
+    clickButton(h, enUi["wizard.next"]);
+    expect(eligibilityHidden(h), "off the basics tab").toBe(false);
+    expect(h.text()).not.toContain(SENTENCE(enUi as Record<string, string>));
+  });
+
+  it("TN-CF-1 the builder says it in Spanish too, and tells the grid which fields it is about", () => {
+    activeDict.current = esUi as Record<string, string>;
+    const h = mountBuilder();
+    nameIt(h);
+    typeRules(h, { bestOf: "1", finalSet: "mtb7" });
+    const state = propsOf(gridOf(h)).state as { invalid: Map<string, string[]> };
+    expect([...state.invalid.keys()].sort()).toEqual(["bestOf", "finalSet"]);
+    clickButton(h, esUi["wizard.next"]);
+    expect(h.text()).toContain(SENTENCE(esUi as Record<string, string>));
+    expect(SENTENCE(esUi as Record<string, string>)).not.toBe(SENTENCE(enUi as Record<string, string>));
+    expect(h.text(), "not the engine's English constant").not.toContain(BO1_MATCH_TIEBREAK);
+  });
+
+  it("TN-CF-1 the builder's Create refuses it too, when the rules were broken after the basics tab was passed (the guard is reached through the grid's handler)", async () => {
+    const h = mountBuilder();
+    nameIt(h);
+    clickButton(h, enUi["wizard.tab.scheduling"]);
+    typeRules(h, { bestOf: "1", finalSet: "mtb10" });
+    net.calls.length = 0;
+    clickButton(h, enUi["wizard.create"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(net.calls.filter((c) => c.url.endsWith("/divisions")), "no division was POSTed").toEqual([]);
+    expect(h.text()).toContain(SENTENCE(enUi as Record<string, string>));
+  });
+
+  it("TN-CF-1 Settings: Save is refused before any PATCH, in the reader's language; the pair mended, the PATCH goes", async () => {
+    const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
+    const h = renderIsland(DivisionSettings, {
+      division: { id: "d1", name: "Open", sport_key: "tennis", variant_key: "tour", config: storedFor(tennisModule, "tour"), logo_url: null, logo_storage_path: null },
+      orgId: "org1", variants: rows(tennisModule), structureLocked: false, lockedFields: [], stages: [], canEdit: true,
+      divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
+      entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
+    } as unknown as Parameters<typeof DivisionSettings>[0]);
+    const grid = () => h.tree().find((e) => typeof propsOf(e).sportKey === "string" && typeof propsOf(e).onChange === "function" && propsOf(e).values !== undefined)!;
+    const typeIt = (next: Record<string, string>) => (propsOf(grid()).onChange as (v: Record<string, string>) => void)({ ...(propsOf(grid()).values as Record<string, string>), ...next });
+    const save = async () => {
+      net.calls.length = 0;
+      const btn = h.tree().find((n) => n.type === "button" && textOf(n).trim() === enUi["divset.saveRules"])!;
+      (propsOf(btn).onClick as () => void)();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return net.calls.filter((c) => c.options?.method === "PATCH");
+    };
+    typeIt({ bestOf: "1", finalSet: "mtb10" });
+    expect([...(propsOf(grid()).state as { invalid: Map<string, string[]> }).invalid.keys()].sort(), "the grid is told which fields").toEqual(["bestOf", "finalSet"]);
+    expect(await save(), "no PATCH while the pair is refused").toEqual([]);
+    expect(h.text()).toContain(SENTENCE(enUi as Record<string, string>));
+    typeIt({ finalSet: "same" });
+    expect((await save()).length, "the PATCH goes once the pair is mended").toBe(1);
+  });
+
+  it("VB-CF-1 Settings: a set target below the floor is refused before any PATCH (volleyball)", async () => {
+    const volleyball = moduleOf("volleyball");
+    const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
+    const h = renderIsland(DivisionSettings, {
+      division: { id: "d1", name: "Open", sport_key: "volleyball", variant_key: "indoor", config: storedFor(volleyball, "indoor"), logo_url: null, logo_storage_path: null },
+      orgId: "org1", variants: rows(volleyball), structureLocked: false, lockedFields: [], stages: [], canEdit: true,
+      divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
+      entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
+    } as unknown as Parameters<typeof DivisionSettings>[0]);
+    const grid = h.tree().find((e) => typeof propsOf(e).sportKey === "string" && typeof propsOf(e).onChange === "function" && propsOf(e).values !== undefined)!;
+    (propsOf(grid).onChange as (v: Record<string, string>) => void)({ ...(propsOf(grid).values as Record<string, string>), setTo: "3" });
+    net.calls.length = 0;
+    const btn = h.tree().find((n) => n.type === "button" && textOf(n).trim() === enUi["divset.saveRules"])!;
+    (propsOf(btn).onClick as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(net.calls.filter((c) => c.options?.method === "PATCH")).toEqual([]);
+    expect(h.text()).toContain(enUi["rules.err.setTargetBelowFloor"]!.replace("{min}", "5"));
+  });
+});
+
 describe("pickers print the localised variant label, with the raw name as fallback", () => {
   const optionsOf = (select: ReactElement): { value: string; text: string }[] =>
     (propsOf(select).children as ReactElement[]).map((o) => ({ value: String(propsOf(o).value), text: textOf(o).trim() }));
@@ -474,7 +594,7 @@ describe("pickers print the localised variant label, with the raw name as fallba
   });
 
   it("the BWF date hint shows for bwf and bwf-3x15 only, in the reader's language, linked to the select", () => {
-    const hintOf = (h: ReturnType<typeof renderIsland>) => h.tree().find((e) => propsOf(e)["data-testid"] === "division-variant-hint");
+    const hintOf = (h: { tree: () => ReactElement[] }) => h.tree().find((e) => propsOf(e)["data-testid"] === "division-variant-hint");
     for (const [dict, label] of [[enUi, "en"], [esUi, "es"]] as const) {
       activeDict.current = dict as Record<string, string>;
       const seen: Record<string, boolean> = {};

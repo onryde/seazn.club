@@ -26,8 +26,8 @@ type Cfg = Record<string, unknown>;
 type SetCfg = { gamesTo: number; winBy: number; tiebreakAt: number | null; tiebreakTo: number; tiebreakWinBy?: number };
 const variants = tennis.variants as Record<string, Cfg>;
 /** A variant's stored config: its preset parsed through the schema (the module's defaults fill the rest). */
-const storedFor = (variant: string): Cfg => tennis.configSchema.parse(variants[variant]) as Cfg;
-const defaults = (): Cfg => tennis.configSchema.parse({}) as Cfg;
+const storedFor = (variant: string): Cfg => tennis.configSchema.parse(variants[variant]) as unknown as Cfg;
+const defaults = (): Cfg => tennis.configSchema.parse({}) as unknown as Cfg;
 /** The margin the kernel plays a SET's tie-break by: its own, else the match's (kernel.ts `setTiebreakWinBy`). */
 const setMargin = (cfg: Cfg): number => ((cfg.set as SetCfg).tiebreakWinBy ?? (cfg.tiebreak as { winBy: number }).winBy);
 const fields = Object.fromEntries(SPORT_RULES.tennis!.map((f) => [f.key, f]));
@@ -51,7 +51,7 @@ describe("TN-SS-2 the set type field reads and writes the set's own tie-break ma
       const values = hydrateRuleValues("tennis", stored);
       expect(values.setType, `${variant}: reads as its set type, not blank`).toBe(OPTION_OF_VARIANT[variant]);
       const built = buildRuleOverride("tennis", { setType: values.setType! }) as { set: SetCfg };
-      const after = tennis.configSchema.parse({ ...stored, ...built }) as Cfg;
+      const after = tennis.configSchema.parse({ ...stored, ...built }) as unknown as Cfg;
       expect(setMargin(after), `${variant}: the margin its sets are played by`).toBe(setMargin(stored));
       const was = stored.set as SetCfg;
       const now = after.set as SetCfg;

@@ -48,6 +48,13 @@ function sentenceMatcher(sentence: string): RegExp {
   return new RegExp(`^${literal.replace(/\\\{(\w+)\\\}/g, "(?<$1>\\d+)")}$`);
 }
 
+/** The numbers a message carries in the slots of `template` (`{min}` -> `{ min: "5" }`), or null when the message is not that
+ *  sentence. The same whole-message match `configIssueText` localizes by, for a caller that needs the numbers themselves. */
+export function sentenceSlots(message: string, template: string): Record<string, string> | null {
+  const found = sentenceMatcher(template).exec(message);
+  return found === null ? null : { ...found.groups };
+}
+
 const CONFIG_ISSUE_MATCHERS: readonly (readonly [RegExp, MessageKey])[] = [...LOCALIZED_CONFIG_ISSUES].map(([sentence, key]) => [sentenceMatcher(sentence), key] as const);
 
 /** One issue as the reader should see it: the localized sentence when this app owns it (its slots filled from the

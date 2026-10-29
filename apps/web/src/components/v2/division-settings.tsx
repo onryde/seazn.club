@@ -12,7 +12,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { settingsSaveErrorText } from "@/lib/config-issue-copy";
+import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
@@ -23,6 +23,7 @@ import {
 } from "@/lib/chess-individual-only";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, hydrateRuleValues, rulesFor } from "./match-rules";
+import { ruleFormState } from "./match-rules-state";
 import { visibleRuleFields } from "@/lib/match-rules";
 import { configUnderVariant, divisionFormatPatch, ruleValuesAfterVariantSwitch } from "./division-format-patch";
 import {
@@ -550,6 +551,10 @@ export function DivisionSettings({
   const [ruleValues, setRuleValues] = useState<Record<string, string>>(() =>
     hydrateRuleValues(division.sport_key, division.config),
   );
+  // W2e Task 29: what the grid knows before Save - the write doors' refusals beside their fields (TN-CF-1, VB-CF-1, TT-CF-1),
+  // the fields this variant has no use for, the detail a switch holds (cricket's result floor while DLS is off). Judged against
+  // the saved config as it reads under the variant the form holds.
+  const ruleState = ruleFormState({ sportKey: division.sport_key, variantKey, values: ruleValues, base: inheritedCfg });
   // R3.5 review F6 — hydratePointsValues/hydrateRuleValues above only ever
   // ran in the useState INITIALIZER, so once this instance is mounted,
   // saving through `run()` (every action in this component funnels through
@@ -896,6 +901,10 @@ export function DivisionSettings({
 
   const applyFormat = () =>
     run(async () => {
+      // A format the write door would refuse is stopped here, in the reader's language and beside the field it is about,
+      // instead of travelling to a CONFIG_INVALID.
+      const problem = ruleState.problems[0];
+      if (problem !== undefined) throw new Error(configIssueText({ path: [], message: problem.sentence }, msg));
       let advanced: Record<string, unknown> | null = null;
       if (advancedText.trim() !== "") {
         try {
@@ -1367,6 +1376,7 @@ export function DivisionSettings({
           inherited={inheritedCfg}
           lockedFields={locks}
           omit={lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined}
+          state={ruleState}
         />
 
         {stages.length > 0 && (
