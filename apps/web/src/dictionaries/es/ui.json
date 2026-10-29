@@ -2588,7 +2588,7 @@
   "compset.save": "Guardar ajustes",
   "divset.failed": "Error",
   "rules.err.shareNeedsDraws": "Compartir los puntos requiere que se permitan los empates: activa primero 'Permitir empates'.",
-  "rules.err.shareNeedsDrawnGame": "Compartir los puntos requiere que sea posible un juego empatado: primero cambia 'Partida empatada en el máximo de tableros' a 'Partida empatada'.",
+  "rules.err.shareNeedsDrawnGame": "Compartir los puntos requiere que sea posible una partida empatada: primero cambia 'Partida empatada en el máximo de tableros' a 'Partida empatada'.",
   "rules.err.setTargetBelowFloor": "Un set debe jugarse a un mínimo de {min} puntos.",
   "rules.err.bo1MatchTiebreak": "Un super tie-break sustituye al set decisivo; un partido a un solo set no tiene ninguno.",
   "rules.err.maxOversPerBowlerExceedsInnings": "Un lanzador no puede lanzar más overs de los que tiene la entrada.",
