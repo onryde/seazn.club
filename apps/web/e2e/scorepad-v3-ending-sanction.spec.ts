@@ -332,6 +332,53 @@ for (const sport of SPORTS) {
 }
 
 // ---------------------------------------------------------------------------
+// The ribbon's Take back clears the stale refusal (W2e T29 carry M1; T32 fix round 1, review M1)
+// ---------------------------------------------------------------------------
+
+test("badminton v3 console: on a ledger that ends on the sanction, a refused scorebug tap's banner is cleared by the ribbon's Take back, which voids the sanction", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(BUDGET_MS);
+  // single-sport: the refusal banner and the ribbon's Take back are the chassis's own and sport-blind; badminton is the
+  // declaring sport the console tests above already seed.
+  const sport = SPORTS.find((s) => s.key === "badminton")!;
+  expect(sport, "badminton must declare an end level").toBeDefined();
+  const fx = await seed(request, sport.key, "TakeBack");
+  // The sanction alone, appended through the API (an organiser may append it; the write path refuses what comes after it):
+  // the ending is pending, as a reload after a failed second append finds it.
+  const tip = Math.max(0, ...(await ledger(request, fx.fixtureId)).map((e) => e.seq));
+  const sanction = await apiJson<{ seq: number; event_id: string }>(request, `/api/v1/fixtures/${fx.fixtureId}/events`, "POST", {
+    expected_seq: tip,
+    type: sport.eventType,
+    payload: { by: fx.homeEntrantId, level: sport.level },
+  });
+  expect(sanction.status, `seeding the pending sanction: ${JSON.stringify(sanction.error)}`).toBe(201);
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(prompt(page), "the pad opens on the ending prompt").toBeVisible({ timeout: 20_000 });
+
+  // A habitual tap on the score is refused, in the scorer's words: the banner is up.
+  const banner = page.locator('[data-role="v3-rejection"]');
+  await scorebugHalves(page).first().click({ force: true });
+  await expect(banner, "the refused tap says why").toHaveText(EN["pad.ending.blocked"]!);
+
+  // The ribbon's Take back targets the newest voidable row, the sanction, and voids it (handleUndo, the pad's one void path).
+  const takeBack = pad(page).locator('[data-role="v3-ribbon-undo"]');
+  await expect(takeBack, "Take back is offered under the prompt").toBeVisible();
+  await takeBack.click();
+  await expect.poll(async () => (await typesOf(request, fx.fixtureId)).at(-1), { timeout: 30_000 }).toBe("core.void");
+  expect((await ledger(request, fx.fixtureId)).at(-1)!.payload, "the void names the sanction").toMatchObject({
+    event_id: sanction.data!.event_id,
+  });
+
+  // The ending is no longer pending, play resumes, and the stale sentence went with the void that resolved it.
+  await expect(prompt(page)).toHaveCount(0, { timeout: 30_000 });
+  await expect(banner, "Take back clears the stale refusal").toHaveCount(0);
+  await expect(pad(page).locator('[data-role="v3-tiles"]'), "the board is back").toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
 // The official scorer — session auth, not an organiser and not a device link (D13's headline path)
 // ---------------------------------------------------------------------------
 
@@ -507,8 +554,13 @@ test("volleyball v3 console: answering Yes sends the sanction alone and play con
   await expect(prompt(page), "volleyball never pends on an expulsion").toHaveCount(0);
   await expect(pad(page).locator('[data-role="v3-tiles"]'), "the board is still there").toBeVisible();
 
-  // Play continues: the other side's rally is taken by the strict write path and the match is not decided.
+  // Play continues: the other side's rally is taken by the strict write path and the match is not decided. At 0-0 nobody has
+  // served yet, so the tap first asks who served (both halves carry the serve-opener sheet) and writes nothing until it is
+  // answered: answer it as a scorer would (scorepad-v3-soft-commit-inventory.spec.ts's volleyball pattern).
   await scorebugHalves(page).nth(1).click();
+  const opener = sheet(page).locator('[data-choice-option-id="home"]');
+  await expect(opener, "the first rally asks who served").toBeVisible({ timeout: 10_000 });
+  await opener.click();
   await expect
     .poll(async () => (await typesOf(request, fx.fixtureId)).includes("volleyball.rally"), { timeout: DRAIN_MS })
     .toBe(true);
