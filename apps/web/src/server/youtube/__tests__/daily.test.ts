@@ -56,6 +56,7 @@ import {
   YOUTUBE_DATA_CEILING_DAYS, YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, deriveStuckBounds, purgeConnectionData, youtubeDaily,
   type PurgeResult, type YoutubeDailyResult,
 } from "../daily";
+import { disconnectYoutube } from "../disconnect";
 import { CLAIM_LEASE_MINUTES, endBackoffMinutes, endDueBroadcasts, type EndStepHooks, type YoutubeEndResult } from "../end-step";
 import { FakeYouTube } from "../fake";
 import { YouTubeError, type YouTubePort } from "../port";
@@ -1237,6 +1238,79 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(out).toMatchObject({ removed: 0, failed: 0 });
       expect((await connRow(w.connectionId)).status).toBe("connected");
       expect((await broadcastRow(m.broadcastId)).state, "the reconnect won: the row is kept").toBe("complete");
+    });
+  });
+
+  // ═══ lock order (B6 batch review m1: two deadlocks, read in the code and now driven) ═══════════════════════════════════
+  describe("lock order", () => {
+    /** True while another transaction holds the pending grant's row (`for update nowait` is refused with 55P03). */
+    const pendingIsLocked = (id: string): Promise<boolean> =>
+      sql.begin(async (t) => { await t`select id from youtube_connect_pending where id = ${id} for update nowait`; return false; })
+        .catch((e: { code?: string }) => { if (e.code === "55P03") return true; throw e; });
+
+    it("a reconnect's SAVE holds its pending grant and waits for the connection that a purge holds: the purge does not wait for the grant (no deadlock) - the save refuses (404), the grant it held survives and the stranded leg removes it", async () => {
+      const w = await world();
+      const g = await grant(w.org, { connectionId: w.connectionId, channels: [w.channel] });
+      expect(await pendingCount(g.id), "premise: a reconnect grant for this connection").toBe(1);
+      let save!: Promise<unknown>;
+      const purged = await sql.begin(async (h) => {
+        await h`select 1 from org_youtube_connections where id = ${w.connectionId} for update`;   // the purge's / disconnect's first lock
+        save = saveConnectionFromGrant({ pendingId: g.id, channelId: w.channel.id, userId: w.userId }, w.fake).then(() => "saved" as const, (e: unknown) => e);
+        for (let i = 0; i < 60 && !(await pendingIsLocked(g.id)); i++) await sleep(100);
+        expect(await pendingIsLocked(g.id), "premise: the REAL save holds its grant and is waiting for the connection").toBe(true);
+        expect(await revokeConnection(h, w.orgId, w.connectionId)).toBe(true);
+        return purgeConnectionData(h, w.connectionId);   // would wait for the grant's row, whose holder waits for this connection
+      });
+      expect(purged).toMatchObject({ broadcasts: 0 });
+      expect(await save, "the save finds the connection revoked and refuses").toMatchObject({ status: 404 });
+      expect(await pendingCount(g.id), "the grant the save held was skipped, not deleted under it").toBe(1);
+      expect(await daily(w), "the stranded leg takes the grant it left").toEqual({ ...ZERO, purged: 1 });
+      expect(await pendingCount(g.id)).toBe(0);
+      expect(await daily(w), "and a second pass finds nothing").toEqual(ZERO);
+    });
+
+    it("the refresh's transaction (updates the rows YouTube still has, then deletes the ones it lost) and a disconnect (locks every row of the connection in id order) QUEUE on the connection instead of deadlocking: the pass confirms one row and removes one, the disconnect then purges the rest", async () => {
+      const w = await world();
+      const c: Chan = { connectionId: w.connectionId, targetId: w.targetId, token: w.token, channel: w.channel };
+      const [lost, kept] = (await seedCompleteRows(w, c, 2, 26)).sort((a, b) => (a.id < b.id ? -1 : 1)) as [{ id: string; ytId: string }, { id: string; ytId: string }];
+      // `lost` has the lower id: a disconnect locks it first, then waits for `kept`, which the refresh holds - while the refresh wants `lost`.
+      await w.fake.deleteBroadcast(await w.fake.accessToken(w.token), lost.ytId);
+      let disc!: Promise<unknown>;
+      let started = 0;
+      const out = await youtubeDaily(w.fake, new Date(), {
+        orgIds: [w.orgId],
+        hooks: {
+          afterLinksRead: async () => {   // inside the refresh transaction, after it updated `kept`, before it deletes `lost`
+            started++;
+            disc = disconnectYoutube(w.auth, w.orgId, w.connectionId, w.fake).then((r) => r, (e: unknown) => e);
+            await sleep(1500);   // long enough for the disconnect to reach its row locks, and for Postgres to call a deadlock (1 s)
+          },
+        },
+      });
+      expect(started, "premise: the disconnect started inside the refresh transaction").toBe(1);
+      expect(out, "no deadlock: one confirmed, one removed, nothing failed").toEqual({ ...ZERO, checked: 1, refreshed: 1, removed: 1 });
+      expect(await disc, "and the disconnect went through after it").toMatchObject({ revokeOutcome: "revoked", purged: { broadcasts: 1 } });
+      expect((await broadcastsOfConnection(w.connectionId)).length).toBe(0);
+      expect(kept.id).toBeTruthy();
+      expect(await daily(w), "a second pass finds nothing").toEqual(ZERO);
+    });
+
+    it("a disconnect that lands between YouTube's answer to a refresh batch and its write: the write finds the connection revoked - nothing is counted refreshed, nothing fails", async () => {
+      const w = await world();
+      const c: Chan = { connectionId: w.connectionId, targetId: w.targetId, token: w.token, channel: w.channel };
+      await seedCompleteRows(w, c, 2, 26);
+      const port = Object.create(w.fake) as FakeYouTube;
+      let disconnected = 0;
+      port.existingVideos = async (at, ids) => {
+        const present = await w.fake.existingVideos(at, ids);
+        await disconnectYoutube(w.auth, w.orgId, w.connectionId, w.fake);
+        disconnected++;
+        return present;
+      };
+      expect(await daily(w, { port })).toEqual({ ...ZERO, checked: 1 });
+      expect(disconnected, "premise: the disconnect ran in the window").toBe(1);
+      expect((await connRow(w.connectionId)).status).toBe("revoked");
+      expect((await broadcastsOfConnection(w.connectionId)).length, "its rows were purged by the disconnect").toBe(0);
     });
   });
 

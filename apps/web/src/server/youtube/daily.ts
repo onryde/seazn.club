@@ -210,9 +210,13 @@ async function deleteBroadcasts(
  *    break it, so a connection in any other status throws and nothing changes. A connection that does not exist is a no-op (nothing of it
  *    can remain: every table cascades from the org).
  *  - IDEMPOTENT: a second call finds nothing and returns zeros.
- *  - It locks the connection and then its broadcast rows (the order T8's reconnect uses) and writes nothing outside the transaction. It
- *    cannot expire the public pages itself (a revalidation inside an open transaction would race the commit): the caller expires
- *    `result.divisions` after the commit. */
+ *  - LOCK ORDER. It locks the connection and then its broadcast rows - the order every writer of a connection's rows takes (Go live's
+ *    pick, the refresh, a disconnect). A reconnect's SAVE is the one writer that comes the other way: it locks its pending grant FIRST
+ *    and the connection second. So the pending grants below are deleted `skip locked`: a grant a save holds is left alone (that save then
+ *    finds the connection revoked and refuses, rolling its take back), instead of this transaction waiting for a row whose holder is
+ *    waiting for the connection this one holds - a deadlock. A grant left behind is the stranded leg's, on the next pass.
+ *  - It writes nothing outside the transaction, and cannot expire the public pages itself (a revalidation inside an open transaction
+ *    would race the commit): the caller expires `result.divisions` after the commit. */
 export async function purgeConnectionData(tx: Tx, connectionId: string, hooks: DailyHooks = {}): Promise<PurgeResult> {
   const [c] = await tx<{ org_id: string; status: string }[]>`
     select org_id, status from org_youtube_connections where id = ${connectionId} for update`;
@@ -225,7 +229,9 @@ export async function purgeConnectionData(tx: Tx, connectionId: string, hooks: D
   await tx`delete from youtube_stream_keys where connection_id = ${connectionId} and org_id = ${orgId}`;
   await tx`update org_stream_targets set watch_url = null where youtube_connection_id = ${connectionId} and org_id = ${orgId} and watch_url is not null`;
   await tx`update org_youtube_connections set google_sub = null where id = ${connectionId} and org_id = ${orgId} and google_sub is not null`;
-  await tx`delete from youtube_connect_pending where connection_id = ${connectionId} and org_id = ${orgId}`;
+  await tx`
+    delete from youtube_connect_pending
+     where id in (select id from youtube_connect_pending where connection_id = ${connectionId} and org_id = ${orgId} for update skip locked)`;
   return { broadcasts: gone.deleted, streamUrlsCleared: gone.cleared, divisions: gone.divisions };
 }
 
@@ -260,6 +266,16 @@ async function flip(c: Conn, out: YoutubeDailyResult): Promise<void> {
 function failedStep(err: unknown, c: Conn, out: YoutubeDailyResult, step: string): void {
   out.failed++;
   if (!(err instanceof YouTubeError)) captureError(err, { orgId: c.org_id, route: `youtube.daily.${step}`, extra: { connectionId: c.id } });
+}
+
+/** The connection row, held `for share` for the rest of the transaction: Go live's pick, a disconnect and a purge hold it `for update`, so
+ *  the work below (the refresh's row writes, the key deletes) queues behind them, and they behind it, instead of meeting them half-way
+ *  through a set of row locks - the order every writer of this connection's rows takes is the connection first, then its rows.
+ *  False when the connection is gone or revoked (its rows are the purge's). */
+async function lockConnectionShared(tx: Tx, orgId: string, connectionId: string): Promise<boolean> {
+  const [c] = await tx<{ status: string }[]>`
+    select status from org_youtube_connections where id = ${connectionId} and org_id = ${orgId} for share`;
+  return !!c && c.status !== "revoked";
 }
 
 // ─── leg 2: health and refresh, per connected channel ─────────────────────────────────────────────────────────────────────────────────
@@ -335,11 +351,16 @@ async function refreshVideos(p: Pass, at: string, c: Conn): Promise<void> {
       const here = batch.filter((r) => present.has(r.yt_broadcast_id));
       const gone = batch.filter((r) => !present.has(r.yt_broadcast_id));
       const removed = await sql.begin(async (tx) => {
+        // The connection first, `for share`: a disconnect locks it `for update` and then ALL the connection's rows in id order, while this
+        // transaction updates the rows YouTube still has and only then deletes the ones it lost - two writers meeting in the middle of a
+        // set of row locks. Holding the connection makes them queue instead.
+        if (!(await lockConnectionShared(tx, c.org_id, c.id))) return null;
         if (here.length > 0) {
           await tx`update youtube_broadcasts set refreshed_at = ${p.now} where id = any(${here.map((r) => r.id)}::uuid[]) and org_id = ${c.org_id}`;
         }
         return deleteBroadcasts(tx, c.org_id, gone, p.hooks);
       });
+      if (removed === null) return;   // disconnected meanwhile: its rows are purged, nothing is left to confirm
       p.out.refreshed += here.length;
       p.out.removed += removed.deleted;
       expirePages(removed.divisions);
@@ -418,15 +439,6 @@ async function deleteKeyRows(tx: Tx, orgId: string, connectionId: string, keyIds
        and not exists (select 1 from youtube_broadcasts b where b.key_id = k.id)
     returning k.live_stream_id`;
   return gone.map((g) => g.live_stream_id);
-}
-
-/** The connection row, held `for share` for the rest of the transaction: Go live's pick and a disconnect's purge hold it `for update`, so
- *  the key work below queues behind them (and they behind it) instead of meeting them half-way through a set of row locks - the order every
- *  writer of this connection's rows takes is the connection first, then its rows. False when the connection is gone or revoked. */
-async function lockConnectionShared(tx: Tx, orgId: string, connectionId: string): Promise<boolean> {
-  const [c] = await tx<{ status: string }[]>`
-    select status from org_youtube_connections where id = ${connectionId} and org_id = ${orgId} for share`;
-  return !!c && c.status !== "revoked";
 }
 
 /** A RETIRED key (its liveStream is gone at YouTube: prepare.ts `retireKey`) is of no use to anyone and still holds a sealed ingest key:
