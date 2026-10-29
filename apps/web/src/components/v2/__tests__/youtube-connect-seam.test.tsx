@@ -64,7 +64,7 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { DELETE as DISCONNECT } from "@/app/api/v1/orgs/[id]/youtube-connections/[connectionId]/route";
 import { listStreamTargets } from "@/server/usecases/stream-targets";
-import { channelId, connect, fake as rigFake, org as rigOrg, refreshToken } from "@/server/youtube/__tests__/_connect-rig";
+import { connect, fake as rigFake, org as rigOrg } from "@/server/youtube/__tests__/_connect-rig";
 import type { Dict } from "@/lib/i18n-constants";
 import { KidsChoice, PrivacyChoice, YoutubeChannelRow, YoutubeConnectCard, YoutubeDisconnectedNotice } from "../youtube-connect-panel";
 import { StreamDestinationsPanel } from "../stream-destinations-panel";
@@ -298,6 +298,5 @@ describe.skipIf(!HAS_DB)("the Disconnect row -> DELETE /api/v1/orgs/:id/youtube-
     }
     expect(seen, "all four scenarios ran").toHaveLength(4);
     expect(new Set(seen.map((x) => x.split("=")[1])), "and the three outcomes were all produced by the real route").toEqual(new Set(["revoked", "skipped_shared_account", "not_confirmed"]));
-    void channelId; void refreshToken;
   });
 });
