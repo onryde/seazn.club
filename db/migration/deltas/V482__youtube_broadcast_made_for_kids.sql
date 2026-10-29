@@ -8,8 +8,9 @@
 -- how a replay may be shown is the one YouTube was told when the broadcast was created (liveBroadcasts.insert
 -- `status.selfDeclaredMadeForKids`), so the row carries it: server/youtube/prepare.ts stamps it at insert from the SAME value it
 -- sends (one source - the connection is read once, then passed through, never re-read), and a later PATCH moves no existing row.
--- The end step ORs in YouTube's own determination (`status.madeForKids` of the liveBroadcasts.list it already makes) when it
--- finalizes a broadcast, so a flag goes from false to true and never back.
+-- YouTube's own determination is OR-ed in wherever a call we already make returns it: the end step (`status.madeForKids` of the
+-- liveBroadcasts.list it makes when it finalizes a broadcast) and the daily re-confirm (`videos.list part=id,status`, every 25
+-- days). Either can only set the flag false -> true, never back.
 --
 -- ─── The data move (LOUD, and before the deploy) ────────────────────────────────────────────────────────────────────────
 -- Rows that exist when this runs were made before the flag was kept. Each is given its connection's CURRENT flag - the nearest fact
@@ -42,7 +43,7 @@ $$;
 alter table youtube_broadcasts alter column made_for_kids set not null;
 
 comment on column youtube_broadcasts.made_for_kids is
-  'Made for kids: the value Go live sent YouTube when it made the broadcast (selfDeclaredMadeForKids), OR-ed with YouTube''s own status.madeForKids when the end step finalizes it. Per broadcast - a later change of the connection''s flag moves no existing row. A replay with this true is a link out on the public match page, never an embedded player (DP III.E.4.j).';
+  'Made for kids: the value Go live sent YouTube when it made the broadcast (selfDeclaredMadeForKids), OR-ed with YouTube''s own status.madeForKids when the end step finalizes it and at each daily re-confirm (false to true only). Per broadcast - a later change of the connection''s flag moves no existing row. A replay with this true is a link out on the public match page, never an embedded player (DP III.E.4.j).';
 
 -- ─── public_fixture_youtube_parts_v: each part carries its flag ────────────────────────────────────────────────────────
 -- The public match page reads its parts through this view (server/youtube/parts.ts `replayParts`), so the flag reaches the page the
