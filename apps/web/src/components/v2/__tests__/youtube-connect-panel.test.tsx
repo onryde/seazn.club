@@ -35,6 +35,7 @@ import {
   channelStatus, youtubeErrorText, youtubeTargetLabel,
 } from "../youtube-connect-panel";
 import { YoutubeDisconnectOnlyPanel } from "../youtube-disconnect-only-panel";
+import { REFUSAL_FOCUS_RING } from "../refusal-focus";
 import { AddForm, DestinationRow, StreamDestinationsPanel } from "../stream-destinations-panel";
 
 // ─── doubles ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1143,6 +1144,50 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(html).toMatch(/data-testid="youtube-disconnected"[^>]*\brole="status"|\brole="status"[^>]*data-testid="youtube-disconnected"/);
     (attr(notice!, "onDismiss") as () => void)();
     expect(ofType(panel.tree(), YoutubeDisconnectedNotice), "dismissed").toBeUndefined();
+  });
+
+  it("m6: the news of a disconnect TAKES FOCUS as it appears (the button that asked left with the row, and focus would fall to the top of the page): the notice is a focusable block that hands itself the focus on attach, with the house ring; each new piece of news is a new element, so it focuses again - on the full page and on the restricted one", () => {
+    // The notice itself
+    const notice = renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "revoked", onDismiss: () => {} });
+    const box = byTestId(notice.tree(), "youtube-disconnected")!;
+    expect(box, "the notice box").toBeDefined();
+    expect(attr(box, "tabIndex"), "focusable, but not in the tab order").toBe(-1);
+    expect(attr(box, "role"), "and still announced").toBe("status");
+    for (const token of REFUSAL_FOCUS_RING.split(/\s+/)) expect(String(attr(box, "className")), `the house ring: ${token}`).toContain(token);
+    const attach = attr(box, "ref") as ((el: { focus: () => void } | null) => void) | undefined;
+    expect(attach, "a ref that runs when the box attaches").toBeTypeOf("function");
+    const el = { focus: vi.fn() };
+    attach!(el);
+    expect(el.focus, "focused on attach").toHaveBeenCalledTimes(1);
+    expect(() => attach!(null), "and the detach does nothing").not.toThrow();
+    expect(el.focus).toHaveBeenCalledTimes(1);
+    // an alert (a revoke Seazn could not confirm) is focusable the same way
+    const alert = byTestId(renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "not_confirmed", onDismiss: () => {} }).tree(), "youtube-disconnected")!;
+    expect(attr(alert, "role")).toBe("alert");
+    expect(attr(alert, "tabIndex")).toBe(-1);
+
+    // The mount sites: a different piece of news is a different element (a key), so a second disconnect focuses again.
+    type Done = (n: { name: string; outcome: string }) => void;
+    const pair = (): StreamTarget[] => [
+      channel({ connectionId: "c-1", channelTitle: "Riverside FC" }, { id: "t-1" }),
+      channel({ connectionId: "c-2", channelTitle: "Riverside Juniors" }, { id: "t-2" }),
+    ];
+    const rowsIn = (panel: { tree: () => ReactElement[] }) => panel.tree().filter((x) => x.type === YoutubeChannelRow);
+    let sites = 0;
+    for (const [where, panel] of [
+      ["the full page", renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: pair(), locale: "en" })],
+      ["the restricted page", renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: pair() })],
+    ] as const) {
+      const [a, b] = rowsIn(panel).map((r) => attr(r, "onDisconnected") as Done);   // both taken from the same render
+      a!({ name: "Riverside FC", outcome: "revoked" });
+      const first = ofType(panel.tree(), YoutubeDisconnectedNotice)!.key;
+      b!({ name: "Riverside Juniors", outcome: "revoked" });
+      const second = ofType(panel.tree(), YoutubeDisconnectedNotice)!.key;
+      expect(first, `${where}: the notice is keyed`).toBeTypeOf("string");
+      expect(second, `${where}: the next news is another element`).not.toBe(first);
+      sites++;
+    }
+    expect(sites, "anti-vacuity: both mount sites judged").toBe(2);
   });
 
   it("F5: after a disconnect the connect round trip's landing banner ('YouTube channel connected.') does not sit above 'X is disconnected' - every non-picker landing goes, and its ?youtube= query with it; the picker, other landings' absence and a no-landing page are unaffected (anti-vacuity: every banner code)", () => {

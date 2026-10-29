@@ -41,7 +41,7 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
       <p data-testid="stream-disconnect-only-note" className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
         {msg("streaming.youtube.disconnectOnly.note")}
       </p>
-      {disconnected !== null && <YoutubeDisconnectedNotice name={disconnected.name} outcome={disconnected.outcome} onDismiss={() => setDisconnected(null)} />}
+      {disconnected !== null && <YoutubeDisconnectedNotice key={`${disconnected.name}:${disconnected.outcome}`} name={disconnected.name} outcome={disconnected.outcome} onDismiss={() => setDisconnected(null)} />}
       {channels.length > 0 ? (
         <div className="card overflow-visible">
           <ul data-testid="youtube-channel-list" className="divide-y divide-slate-100" aria-label={msg("streaming.youtube.channels")}>

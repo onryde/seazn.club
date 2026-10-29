@@ -189,7 +189,7 @@ export function StreamDestinationsPanel({
     <div data-testid="stream-destinations" className="space-y-4">
       {landing && landing.code !== "pick" && !landingCleared && <YoutubeLandingNotice code={landing.code} />}
       {pickPending !== null && <YoutubeChannelPicker orgId={orgId} pendingId={pickPending} />}
-      {disconnected !== null && <YoutubeDisconnectedNotice name={disconnected.name} outcome={disconnected.outcome} onDismiss={() => setDisconnected(null)} />}
+      {disconnected !== null && <YoutubeDisconnectedNotice key={`${disconnected.name}:${disconnected.outcome}`} name={disconnected.name} outcome={disconnected.outcome} onDismiss={() => setDisconnected(null)} />}
       {canEdit && targets.length > 0 && (
         <div className="flex flex-wrap gap-2 max-md:flex-col">
           <button

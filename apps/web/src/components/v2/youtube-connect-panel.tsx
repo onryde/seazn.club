@@ -24,6 +24,7 @@ import {
   type YoutubeLandingCode, type YoutubePrivacy,
 } from "@/lib/youtube";
 import type { StreamTarget, YoutubeConnectionSaved, YoutubeDisconnected, YoutubePendingChannels } from "@/server/api-v1/schemas";
+import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
 import { YoutubeIconLink } from "./youtube-icon";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -272,7 +273,9 @@ export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
 export type DisconnectNews = { name: string; outcome: YoutubeDisconnected["revokeOutcome"] };
 
 /** What a disconnect said, once the channel has left the list: this is the PAGE's notice, because the row that asked is gone with the
- *  refresh. Dismissing it is local state (it is not a URL outcome like the landing banner). The sentence follows the revoke's outcome:
+ *  refresh. The button that asked left with the row, which would drop focus to the top of the page, so the notice takes focus as it
+ *  attaches (refusal-focus.tsx: a callback ref, so a re-render does not steal it back); the page keys it by its news, so the next
+ *  disconnect is a new element and focuses again. Dismissing it is local state (it is not a URL outcome like the landing banner). The sentence follows the revoke's outcome:
  *  the grant was revoked; it was left alone on purpose (another channel on the same Google account still runs on it); or Seazn could not
  *  confirm it - then the person is told where to remove Seazn themselves, a plain link to their Google account's third-party access. */
 export function YoutubeDisconnectedNotice({ name, outcome, onDismiss }: DisconnectNews & { onDismiss: () => void }) {
@@ -286,10 +289,12 @@ export function YoutubeDisconnectedNotice({ name, outcome, onDismiss }: Disconne
     });
   return (
     <div
+      ref={focusRefusalBlock}
+      tabIndex={-1}
       data-testid="youtube-disconnected"
       data-outcome={outcome}
       role={unconfirmed ? "alert" : "status"}
-      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${unconfirmed ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}
+      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${REFUSAL_FOCUS_RING} ${unconfirmed ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}
     >
       <p className="min-w-0 flex-1 break-words">{sentence}</p>
       <button type="button" data-testid="youtube-disconnected-dismiss" onClick={onDismiss} className="btn btn-ghost min-h-11 shrink-0 px-3 max-md:w-full">
