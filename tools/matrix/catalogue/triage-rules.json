@@ -396,13 +396,14 @@
         "reason": "paired nobody (SW-H1)",
         "failing": [
           "I4-nothing-ends-stuck",
+          "life-bracket-decider-exercised",
           "life-loop-bounded"
         ]
       },
       "gap": "SW-H1",
       "wave": "W3",
       "was": "P6",
-      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red."
+      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red. Since W2a the run also fails life-bracket-decider-exercised on these cells (the Swiss stage never completes, so the bracket stage after it never posts a decider: 0 settles, 0 tie-breaks): a consequence of this same dead end, so it rides in this rule's closed set (W2e Task 35)."
     },
     {
       "id": "swiss-round-paired-nobody-swiss-playoff",
@@ -412,13 +413,14 @@
         "reason": "paired nobody (SW-H1)",
         "failing": [
           "I4-nothing-ends-stuck",
+          "life-bracket-decider-exercised",
           "life-loop-bounded"
         ]
       },
       "gap": "SW-H1",
       "wave": "W3",
       "was": "P6",
-      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red."
+      "note": "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red. Since W2a the run also fails life-bracket-decider-exercised on these cells (the Swiss stage never completes, so the bracket stage after it never posts a decider: 0 settles, 0 tie-breaks): a consequence of this same dead end, so it rides in this rule's closed set (W2e Task 35)."
     },
     {
       "id": "mexicano-stalled-on-forfeit",
