@@ -102,8 +102,8 @@ export const STRYKER_GROUPS = {
   // ---- modules ----
   // exports/build.ts 405
   "modules-1": ["src/exports/build.ts"],
-  // exports/types.ts 59, import/types.ts 60, sport/entrant-model.ts 62; plus every other file under src/import/, src/exports/, src/sport/, src/stats/, src/officials/, src/history/ (new files land here)
-  "modules-2": ["src/import/**/*.ts", "src/exports/**/*.ts", "src/sport/**/*.ts", "src/stats/**/*.ts", "src/officials/**/*.ts", "src/history/**/*.ts", "!src/exports/build.ts", "!src/history/history.ts", "!src/history/types.ts", "!src/import/plan.ts", "!src/officials/assign.ts", "!src/officials/source.ts", "!src/officials/types.ts", "!src/sport/catalog.ts", "!src/sport/module.ts", "!src/sport/registry.ts", "!src/stats/stats.ts", ...NO_TESTS],
+  // exports/types.ts 59, import/types.ts 60, sport/entrant-model.ts 62; plus every other file under src/import/, src/exports/, src/sport/, src/pad/, src/stats/, src/officials/, src/history/ (new files land here)
+  "modules-2": ["src/import/**/*.ts", "src/exports/**/*.ts", "src/sport/**/*.ts", "src/pad/**/*.ts", "src/stats/**/*.ts", "src/officials/**/*.ts", "src/history/**/*.ts", "!src/exports/build.ts", "!src/history/history.ts", "!src/history/types.ts", "!src/import/plan.ts", "!src/officials/assign.ts", "!src/officials/source.ts", "!src/officials/types.ts", "!src/sport/catalog.ts", "!src/sport/module.ts", "!src/sport/registry.ts", "!src/stats/stats.ts", ...NO_TESTS],
   // history/history.ts 283, officials/source.ts 90
   "modules-3": ["src/history/history.ts", "src/officials/source.ts"],
   // history/types.ts 6, officials/assign.ts 353, officials/types.ts 23
