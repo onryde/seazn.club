@@ -15,7 +15,7 @@ const ACCOUNT_PAGE = /^https?:\/\/(?:myaccount|security|accounts)\.google\.com\/
 
 describe("lib/youtube: the Google account-access link is one constant", () => {
   it("EMPTY CASE FIRST: the module exports strings at all (a sweep over nothing would pass)", () => {
-    const strings = Object.values(youtube).filter((v): v is string => typeof v === "string");
+    const strings = Object.values(youtube).flatMap((v) => (typeof v === "string" ? [v] : []));
     expect(strings.length).toBeGreaterThan(5);
   });
 
