@@ -79,7 +79,7 @@ export const JOBS: readonly Job[] = [
   // (per-session advisory locks) is unproven. A missed day costs nothing,
   // because the sweep owns nothing time-critical (relay-sweep.ts:2-3).
   // YouTube Connect T17 (spec §6.6): the same daily firing runs the daily YouTube pass (channel health, the 25-day video
-  // refresh, the 30-day dead-grant purge) before the sweep, on a relay-disabled deployment too. `youtube.failed` counts what
+  // refresh, the 7-day dead-grant purge) before the sweep, on a relay-disabled deployment too. `youtube.failed` counts what
   // did not work this pass (a connection or leg that threw, a refresh batch YouTube could not answer) plus every broadcast
   // the end step can never settle - all retried the next day, or needing a person. A dead grant (`reconnectNeeded`) is the pass
   // WORKING, not failing, so it is not a failure counter. The sweep reports no counter of its own.

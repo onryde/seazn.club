@@ -52,7 +52,7 @@ import "server-only";
 //    constants), or sits `ending` longer than that schedule takes to run (a claim deferred on every firing never counts an attempt). It is
 //    reported (captureError, codes and ids only) and counted `failed` (the Worker's degraded line), and finalized `failed` / `end_stuck`
 //    so its key frees, UNLESS a session on it is active (a key is never freed under a stream). A row on a `reconnect_needed` connection is
-//    not stuck: it waits for the club (a reconnect clears the backoff and the end succeeds) and for the 30-day purge.
+//    not stuck: it waits for the club (a reconnect clears the backoff and the end succeeds) and for the 7-day dead-grant purge.
 //  - c (stranded). A revoked connection's rows are PURGED, not finalized: the connection is gone, and DP III.E.4 asks for the data to go.
 //
 // purgeConnectionData is SHARED with T18's disconnect: it takes a transaction, refuses a connection that is not revoked, is idempotent, and
