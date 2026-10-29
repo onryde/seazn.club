@@ -177,10 +177,15 @@ export const TILE_GRID_CLASS = "grid grid-cols-4 max-md:flex max-md:flex-wrap ga
  *  a span-1 tile a third (`(100% - 2 gaps) / 3`, so three fit exactly), a span-2 tile a half (`(100% - 1 gap) / 2`), spans 3
  *  and 4 the whole row. `grow` shares what a row has left equally, which is what fills a row that holds fewer tiles than its
  *  basis allows. Written `_-_` inside the calc: Tailwind turns the underscores into the spaces a CSS `calc` needs around `-`.
+ *
+ *  Each calc basis also gives up half a pixel (`- 0.5px`). Without it N tiles and their N-1 gaps are EXACTLY the row, so a
+ *  browser that rounds a basis up to a device pixel (WebKit / iOS, half a CSS pixel at 2x) pushes the Nth tile past the row
+ *  and wraps it onto a line of its own. The half pixel is slack, not a smaller tile: `grow` hands it straight back, so a full
+ *  row still fills to the pixel. Spans 3 and 4 are `basis-full` (a bare 100%, no calc), which cannot overflow, so they carry none.
  *  Exported for the same reason as `TILE_GRID_CLASS`. */
 export const SPAN_CLASS: Record<NonNullable<TileSpec["span"]>, string> = {
-  1: "col-span-1 max-md:grow max-md:basis-[calc((100%_-_1rem)/3)]",
-  2: "col-span-2 max-md:grow max-md:basis-[calc((100%_-_0.5rem)/2)]",
+  1: "col-span-1 max-md:grow max-md:basis-[calc((100%_-_1rem)/3_-_0.5px)]",
+  2: "col-span-2 max-md:grow max-md:basis-[calc((100%_-_0.5rem)/2_-_0.5px)]",
   3: "col-span-3 max-md:grow max-md:basis-full",
   4: "col-span-4 max-md:grow max-md:basis-full",
 };
