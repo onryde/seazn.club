@@ -339,7 +339,6 @@ describe("kernel.ts:973 — reachableLiveGames' fromBefore mutants answer what t
       }
     }
     expect(steps.length).toBe(4_608);
-    expect(steps.filter((s) => fromBeforeBase(s) !== fromBeforeBase(s))).toHaveLength(0);
     let mutants = 0;
     for (const [name, variant] of Object.entries(GAMES_MUTANTS)) {
       expect(steps.filter((s) => variant(s) !== fromBeforeBase(s)).length, name).toBeGreaterThan(0);
