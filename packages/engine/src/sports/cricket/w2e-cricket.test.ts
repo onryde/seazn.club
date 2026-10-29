@@ -609,6 +609,39 @@ describe("CK-RR-1 net run rate under DLS or revised overs (ICC 16.10.7, RB2A-20,
     expect(checked).toBe(states.length);
   });
 
+  it("CK-RR-1 premise: DLS is on only in a limited-overs match and a timeless one takes no revise, so a DLS chase always holds its quota, R1, R2 and allocation", () => {
+    // DLS is a limited-overs method, and the engine says so twice: its config refuses DLS without balls per innings, and
+    // a revise applies to limited-overs matches only. These are the premises the stryker-equivalent.json rows on the null
+    // guards of `dlsAbandonmentPar` and `nrrCredits` rest on (W2e Task 25): once DLS is on, none of the quota, R1, R2 or
+    // the chase's allocation is ever null, so those guards narrow types and decide nothing.
+    const timeless = { ...cricket.variants.t20, ballsPerInnings: null };
+    expect(cricket.configSchema.safeParse(timeless).success, "positive pair: a timeless one-innings match parses").toBe(true);
+    expect(cricket.configSchema.safeParse({ ...timeless, dls: { enabled: true, edition: "standard" } }).success, "DLS on a timeless match").toBe(false);
+    const TIMELESS = parse(timeless);
+    const revise: Spec[] = [["core.start"], ["cricket.revise", { oversPerSide: 10 }]];
+    for (const [path, opts] of [["write", STRICT_ALL], ["read", {}]] as const) {
+      expect(codeOf(() => foldMatch(cricket, TIMELESS, lineupsFor(TIMELESS), ledger(revise), opts)), `${path}: a timeless revise`).toBe("INVALID_EVENT");
+    }
+    // The positive side: an open DLS chase holds all four, unrevised and revised between the innings.
+    const chases: [name: string, cfg: CricketCfg, events: Spec[]][] = [
+      ["T20, no revise", T20_DLS, [...T20_160, summary(80, 2, 60, true)]],
+      ["ODI, chase cut to 25 overs", ODI_DLS, [...ODI_250, CUT_TO_25, summary(80, 2, 60, true)]],
+    ];
+    let checked = 0;
+    for (const [name, cfg, events] of chases) {
+      const state = foldMatch(cricket, cfg, lineupsFor(cfg), ledger(events), STRICT_ALL);
+      expect(state.innings[1]?.closed, `${name}: premise, the chase is open`).toBe(false);
+      expect({ quota: state.quota, r1: state.r1, r2: state.r2, allocation: state.innings[1]?.ballsLimit }, name).toEqual({
+        quota: expect.any(Number),
+        r1: expect.any(Number),
+        r2: expect.any(Number),
+        allocation: expect.any(Number),
+      });
+      checked++;
+    }
+    expect(checked).toBe(chases.length);
+  });
+
   it("CK-RR-1 a table with a DLS match orders by the ICC NRR", () => {
     // ODI, DLS on. Q (home) 250/5 v P: the chase is cut to 25 overs (target 167) and P gets there, 167/3 off 140 balls.
     // R (home) 200/7 off 50 overs v S, all out for 150 off 280 balls (charged 300): R by 50 runs.
