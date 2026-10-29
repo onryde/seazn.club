@@ -102,6 +102,10 @@ describe("CK-BO-2 net run rate is runs per over of the competition's own length"
     let refused = 0;
     for (const bad of [0, -5, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => derivedMetricText(r, "nrr", bad), String(bad)).toThrow(/over length/i);
+      // a config refusal is CONFIG_INVALID (the engine's write-door convention), naming the value it refused
+      expect(() => derivedMetricText(r, "nrr", bad), String(bad)).toThrow(
+        expect.objectContaining({ name: "EngineError", code: "CONFIG_INVALID", data: { ballsPerOver: bad } }),
+      );
       refused++;
     }
     expect(refused).toBe(5);
@@ -136,7 +140,12 @@ describe("CK-BO-2 the table layout carries the over length", () => {
   });
 
   it("CK-BO-2 tableLayoutOf refuses a junk over length", () => {
-    for (const bad of [0, -1, 2.5, Number.NaN]) expect(() => tableLayoutOf(rule, reach, bad), String(bad)).toThrow(/over length/i);
+    for (const bad of [0, -1, 2.5, Number.NaN]) {
+      expect(() => tableLayoutOf(rule, reach, bad), String(bad)).toThrow(/over length/i);
+      expect(() => tableLayoutOf(rule, reach, bad), String(bad)).toThrow(
+        expect.objectContaining({ code: "CONFIG_INVALID", data: { ballsPerOver: bad } }),
+      );
+    }
   });
 });
 
