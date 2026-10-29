@@ -31,7 +31,7 @@ import { dlsTarget, resourcesFromBalls, soBattingSideAt } from "@seazn/engine/sp
 import { foldStream } from "../fold.ts";
 import { sportModule } from "../sport-cfg.ts";
 import {
-  GeneratorUnsupported, OutcomeUnreachable, START, outcomeLabel,
+  GeneratorUnsupported, OutcomeUnreachable, START, evidenceState, outcomeLabel,
   type DecidedRequest, type DecidingPath, type Side, type SportStreamGenerator, type StreamEvent, type StreamLineups, type StreamRequest,
 } from "./types.ts";
 
@@ -302,7 +302,7 @@ export const cricketGenerator: SportStreamGenerator = {
   // but only the state holds the innings played); a DLS win is decided in regulation, so only its method and the revised
   // target the state holds name it.
   pathWitness(path, fold) {
-    const state = (fold.product === null ? fold.state : fold.product.state) as WitnessState | null;
+    const state = evidenceState(fold.evidence) as WitnessState | null;
     if (state === null || typeof state !== "object") return false;
     const method = (fold.outcome as { method?: unknown }).method;
     if (path === "superOver") {

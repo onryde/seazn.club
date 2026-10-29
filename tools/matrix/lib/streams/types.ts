@@ -167,19 +167,39 @@ export interface SportStreamGenerator {
  *  /state answer carried (usecases/fixtures.ts FixtureStateOut), through JSON as the match_states columns hold them. */
 export interface ProductFold { readonly summary: unknown; readonly state: unknown }
 
-/** W2e (Task 19, preflight F8): what a path witness reads — the STRICT fold (lib/fold.ts `foldStream`) of the stream as
- *  posted, and the cfg it was folded under. `outcome` is the win matchesRequest already matched to the requested winner.
+/** W2e (Task 24, Task 22 M1): WHERE a witness's state comes from, named - never inferred from a null. Two sources, two
+ *  entry points: `local` is the strict fold of the stream the generator built (matchesRequest, the generator's own
+ *  request match: "does the stream I built reach the path?"); `product` is what the PRODUCT holds for the fixture after
+ *  the harness drove it (the scenario check: "did the product end the match down the path?"). A witness reads
+ *  `evidenceState` and cannot fall back from one source to the other: a product check handed local evidence is a type
+ *  error at the call site, and a product-less drive is refused by the scenario before a witness runs. */
+export type FoldEvidence =
+  | { readonly source: "local"; readonly state: unknown }
+  | { readonly source: "product"; readonly product: ProductFold };
+
+export const localEvidence = (state: unknown): FoldEvidence => ({ source: "local", state });
+export const productEvidence = (product: ProductFold): FoldEvidence => ({ source: "product", product });
+
+/** The state the evidence carries: the local fold's, or the product's own. */
+export function evidenceState(evidence: FoldEvidence): unknown {
+  switch (evidence.source) {
+    case "local": return evidence.state;
+    case "product": return evidence.product.state;
+  }
+}
+
+/** W2e (Task 19, preflight F8): what a path witness reads — the outcome, the cfg, and the evidence (`FoldEvidence`): the
+ *  STRICT fold (lib/fold.ts `foldStream`) of the stream as posted, or the product's own summary and state. `outcome` is
+ *  the win matchesRequest already matched to the requested winner (the product's own outcome in the scenario check).
  *  `sportKey` (Task 20): a generator that serves several sports (the period kernel's hockey and ice hockey) reads the
  *  sport's own module with it — the outcome and state alone do not say which sport folded them.
- *  `product` (Task 21): the product's own summary and state for the fixture, recorded after the post - what a path the
- *  outcome cannot name (a shoot-out's label, a super over) is witnessed on. Null for a fold that has none (the stream
- *  generators' own request match, which never saw a product); the scenario check refuses a drive that recorded none. */
+ *  Product evidence (Task 21) is what a path the outcome cannot name (a shoot-out's label, a super over) is witnessed
+ *  on; the scenario check refuses a drive that recorded none. */
 export interface PathFold {
   readonly sportKey: string;
   readonly outcome: MatchOutcome;
-  readonly state: unknown;
   readonly cfg: unknown;
-  readonly product: ProductFold | null;
+  readonly evidence: FoldEvidence;
 }
 
 /** First in every stream that plays. A walkover and a double walkover are recorded BEFORE it (W2b D3: the phase guard

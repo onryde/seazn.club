@@ -21,7 +21,7 @@ import { EngineError } from "@seazn/engine/core";
 import { sportModule } from "../sport-cfg.ts";
 import { winningSetScore } from "./setbased.ts";
 import {
-  GeneratorUnsupported, OutcomeUnreachable, START, outcomeLabel,
+  GeneratorUnsupported, OutcomeUnreachable, START, evidenceState, outcomeLabel,
   type DecidedRequest, type DecidingPath, type PathFold, type Side, type SportStreamGenerator, type StreamEvent,
 } from "./types.ts";
 
@@ -172,9 +172,9 @@ export const tennisGenerator: SportStreamGenerator = {
   // state, or whose own outcome names another winner, is no evidence.
   pathWitness(path, fold: PathFold) {
     if (!OWN_PATHS.includes(path)) return false;
-    const product = fold.product;
+    const product = fold.evidence.source === "product" ? fold.evidence.product : null;
     if (product !== null && !isRecord(product.summary)) return false;
-    const raw: unknown = product === null ? fold.state : product.state;
+    const raw = evidenceState(fold.evidence);
     if (!isRecord(raw)) return false;
     const st = raw as WitnessState;
     const cfg = fold.cfg as TennisCfg;

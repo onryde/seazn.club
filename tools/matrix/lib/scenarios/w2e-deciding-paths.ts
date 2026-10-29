@@ -34,7 +34,7 @@ import type { BracketDrive } from "../reference-bracket.ts";
 import type { CheckResult } from "../results.ts";
 import { sportModule } from "../sport-cfg.ts";
 import { STREAM_GENERATORS, matchesRequest } from "../streams/index.ts";
-import { idOf, outcomeLabel, type RequestedOutcome } from "../streams/types.ts";
+import { idOf, outcomeLabel, productEvidence, type RequestedOutcome } from "../streams/types.ts";
 import { bracketRootRows } from "../w2a-cells.ts";
 import { w2eBracketCfgOf, w2ePathUnder } from "../w2e-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
@@ -98,7 +98,7 @@ export function everyMatchTookTheDecidingPath(rec: Recorder, key: W2eScenarioKey
     if (d.product === undefined || d.product === null) return { ok: false, note: note("the product's own /state (summary and state) was not recorded for it") };
     const loser = winner === d.home ? d.away : d.home;
     const shown: MatchOutcome = product.method === undefined ? { kind: "win", winner, loser } : { kind: "win", winner, loser, method: product.method };
-    return { ok: gen.pathWitness(path, { sportKey: d.sport, outcome: shown, state: local.state, cfg: req.cfg, product: d.product }), note: note(`the product's outcome and state are not decided down '${path}'`) };
+    return { ok: gen.pathWitness(path, { sportKey: d.sport, outcome: shown, cfg: req.cfg, evidence: productEvidence(d.product) }), note: note(`the product's outcome and state are not decided down '${path}'`) };
   });
   return assertion("w2e-every-match-took-the-path", items);
 }

@@ -172,8 +172,8 @@ export const periodGenerator: SportStreamGenerator = {
     if (want === undefined || decidedInFor(sportModule(fold.sportKey), fold.outcome) !== want) return false;
     if (want === "ot") return true;
     if (shootoutPathOf(fold.sportKey, fold.cfg) !== path) return false;
-    if (fold.product === null) return true;
-    const headline = (fold.product.summary as { headline?: unknown } | null)?.headline;
+    if (fold.evidence.source === "local") return true;
+    const headline = (fold.evidence.product.summary as { headline?: unknown } | null)?.headline;
     return typeof headline === "string" && headline.includes(`(${shootoutLabelOf(fold.sportKey, fold.cfg)} `);
   },
   // W2b (HK-RT-1, IH-RT-1): a goal each, no period advanced — `${key}.goal {by}` (`{by, kind}` for hockey, W2d T18).

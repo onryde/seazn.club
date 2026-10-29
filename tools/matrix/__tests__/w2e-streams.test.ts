@@ -20,7 +20,7 @@ import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
 import { setbasedGenerator } from "../lib/streams/setbased.ts";
 import { tennisGenerator } from "../lib/streams/tennis.ts";
 import {
-  ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, outcomeLabel,
+  ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, evidenceState, localEvidence, outcomeLabel, productEvidence,
   type DecidingPath, type PathFold, type ProductFold, type RequestedOutcome, type Side, type StreamEvent, type StreamLineups, type StreamRequest,
 } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -111,6 +111,30 @@ describe("W2e request vocabulary (Task 19: the interface Tasks 20–24 build on)
     expect(() => matchesRequest(r, folded.outcome)).toThrow(/path 'shootout' is witnessed on the folded state/);
     // A request that names no path is matched on the outcome alone, as before W2e.
     expect(matchesRequest(req("football", cfg, "knockout", { kind: "win", winner: "home" }), folded.outcome)).toBe("match");
+  });
+
+  it("FoldEvidence names its source (Task 22 M1): evidenceState reads the local fold's state or the product's, and a witness handed PRODUCT evidence is never answered from the local fold - a product that did not reach the path fails where the same stream's local fold reaches it", () => {
+    expect(evidenceState(localEvidence({ a: 1 }))).toEqual({ a: 1 });
+    expect(evidenceState(productEvidence({ summary: { s: 1 }, state: { b: 2 } }))).toEqual({ b: 2 });
+    // The set sports' and tennis's witnesses read their state through evidenceState: the local evidence of the path's own stream
+    // passes, the product evidence of a plain win (no deciding set, no tie-break set) fails, with the same outcome and cfg.
+    const cases: readonly [string, DecidingPath][] = [["badminton", "decidingSet"], ["volleyball", "decidingSet"], ["tennis", "tiebreakSet"]];
+    let checked = 0;
+    for (const [sport, path] of cases) {
+      const variant = offlineBuilderDefault(sport);
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant);
+      const events = generateStream(req(sport, cfg, "knockout", { kind: "win", winner: "home", path }));
+      const plain = foldStream(sportModule(sport), cfg, ID.home, ID.away, generateStream(req(sport, cfg, "knockout", { kind: "win", winner: "home" })));
+      const own = foldStream(sportModule(sport), cfg, ID.home, ID.away, events);
+      const at = `${sport} ${path}`;
+      const fold = (evidence: PathFold["evidence"]): PathFold => ({ sportKey: sport, outcome: own.outcome!, cfg, evidence });
+      const productOfState = (state: unknown): ProductFold => JSON.parse(JSON.stringify({ summary: sportModule(sport).summary(state as never), state })) as ProductFold;
+      expect(STREAM_GENERATORS[sport]!.pathWitness!(path, fold(localEvidence(own.state))), `${at} local`).toBe(true);
+      expect(STREAM_GENERATORS[sport]!.pathWitness!(path, fold(productEvidence(productOfState(own.state)))), `${at} product of the same stream`).toBe(true);
+      expect(STREAM_GENERATORS[sport]!.pathWitness!(path, fold(productEvidence(productOfState(plain.state)))), `${at} product of a plain win`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 });
 
@@ -845,7 +869,7 @@ const productOfFold = (sport: string, cfg: unknown, events: readonly StreamEvent
 /** A PathFold for `events` folded locally, handed `product` as the product's evidence (null = none: the generator's own request match). */
 const pathFoldOf = (sport: string, cfg: unknown, events: readonly StreamEvent[], product: ProductFold | null): PathFold => {
   const f = foldStream(sportModule(sport), cfg, ID.home, ID.away, events);
-  return { sportKey: sport, outcome: f.outcome!, state: f.state, cfg, product };
+  return { sportKey: sport, outcome: f.outcome!, cfg, evidence: product === null ? localEvidence(f.state) : productEvidence(product) };
 };
 const witnessOf = (sport: string, path: DecidingPath, fold: PathFold): boolean => STREAM_GENERATORS[sport]!.pathWitness!(path, fold);
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
