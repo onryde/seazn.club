@@ -771,11 +771,11 @@ describe("a failing timeouts file tells its author what to write (FINAL-FIX M3)"
   it("a map with a timeout too high, one too low and one right names exactly the two, and the hint it prints is a file that passes", () => {
     const names = ["competition-1", "modules-3", "sports-cricket-10", "sports-period-1", "sports-period-8", "probe"];
     const ok = regeneratedTimeouts(names);
-    // by hand from the measurements: competition-1 took 45.5 min -> 69; modules-3 took 1 minute -> the floor, 10; the first half of
+    // by hand from the measurements: competition-1 took 2,797 s (46.6 min) cold after W2d PR B (job 123201730218) -> 4,195.5 s = 69.9 min -> 70; modules-3 took 1 minute -> the floor, 10; the first half of
     // sports-cricket-10 RAN again cold after W2b (job 115452733659, 4,835 s) -> 7,252.5 s = 120.875 min -> 121; sports-period-1's first part RAN,
     // 6,660 s -> 9,990 s = 166.5 min -> 167; sports-period-8 RAN again cold after W2d (job 122570515255, 7,758 s) -> 11,637 s = 193.95 min -> 194;
     // the probe 96 (a part that has not run is worked by hand in "the bootstrap of a NEW cut" above)
-    expect(ok).toEqual({ "competition-1": 69, "modules-3": 10, "sports-cricket-10": 121, "sports-period-1": 167, "sports-period-8": 194, probe: 96 });
+    expect(ok).toEqual({ "competition-1": 70, "modules-3": 10, "sports-cricket-10": 121, "sports-period-1": 167, "sports-period-8": 194, probe: 96 });
     const doctored = { ...ok, "competition-1": (ok["competition-1"] as number) + 120, "sports-cricket-10": (ok["sports-cricket-10"] as number) - 1 };
     const faults = Object.entries(doctored).flatMap(([g, t]) => timeoutFault(g, t, ok[g] as number) ?? []);
     expect(faults.map((f) => f.split(":")[0])).toEqual(["competition-1", "sports-cricket-10"]);

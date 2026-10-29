@@ -9,10 +9,15 @@
   },
   "measured": {
     "competition-1": {
-      "mutants": 407,
-      "wallSeconds": 2733,
-      "dryRunSeconds": 152,
-      "phaseSeconds": 2538
+      "mutants": 541,
+      "wallSeconds": 2797,
+      "dryRunSeconds": 228,
+      "phaseSeconds": 2536,
+      "run": {
+        "id": 40798797026,
+        "job": 123201730218,
+        "sha": "1d36e5b62"
+      }
     },
     "competition-2": {
       "mutants": 1172,
@@ -99,10 +104,15 @@
       "phaseSeconds": 514
     },
     "modules-1": {
-      "mutants": 405,
-      "wallSeconds": 74,
+      "mutants": 446,
+      "wallSeconds": 82,
       "dryRunSeconds": 2,
-      "phaseSeconds": 41
+      "phaseSeconds": 55,
+      "run": {
+        "id": 40798800262,
+        "job": 123201726105,
+        "sha": "1d36e5b62"
+      }
     },
     "modules-2": {
       "mutants": 439,
