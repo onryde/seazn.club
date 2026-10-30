@@ -1470,7 +1470,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs default to one
       // Law 41 award (`cricketPadRules.penaltyRuns`, five), not the ordinary
       // single every OTHER minor extra opens with — a real, deliberate
-      // exception, not an oversight. A no ball opens at its Law 21.14
+      // exception, not an oversight. A no ball opens at its ICC 21.15
       // penalty (`noBallDefaultRuns`); a bye and a leg bye keep
       // `extraPayload`'s own single.
       const runs = kind === "penalty" ? cricketPadRules.penaltyRuns : kind === "noball" ? cricketPadRules.noBallDefaultRuns : undefined;
@@ -2317,13 +2317,15 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       // Ruling 242 (CK-WK-2): obstructing the field credits a fielder when one
       // is named, but Law 37 names none (obstruction "by word" has no
       // fielder), so the scorer may decline: `optional` renders the
-      // "nobody" control, whose `""` answer drops the field.
+      // decline control ("No fielder", its own label, never the sin-bin's
+      // shared one), whose `""` answer drops the field.
       id: "fielderOptional",
       kind: "person",
       title: "pad.cricket.sheet.wicket.fielder.title",
       pool: "onfield",
       side: people.bowlingSide,
       optional: true,
+      noneLabel: "pad.cricket.sheet.wicket.fielder.none",
       when: (answers) => fielderOptional(answers.kind ?? ""),
     },
   ];

@@ -73,7 +73,7 @@ export interface CricketPadRules extends PadRulesBase {
   readonly penaltyRuns: number;
   /** (c) Law 22.6: 1. */
   readonly wideDefaultRuns: number;
-  /** (c) Law 21.14: 1. */
+  /** (c) ICC playing conditions 21.15 (MCC Law 21.14): 1. */
   readonly noBallDefaultRuns: number;
   /** The cricket.* event types the fold accepts in a super over. */
   readonly superOverEventTypes: readonly string[];

@@ -1286,13 +1286,13 @@ export const FIELDER_OPTIONAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKin
  *  every mode, so it also takes the non-striker out bowled or caught, which no Law allows (CK-WK-4, owed). */
 export const VARIABLE_OUT_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["runout", "obstructed", "retired"]);
 
-/** (pad wave P2) MCC Law 21.14 ("A penalty of one run shall be awarded instantly on the call of No ball") and Law 22.6 (the
- *  same for a Wide): a wide and a no ball each carry a penalty of one run. The batters never run it, so `applyDelivery`'s
- *  striker rotation nets it off both before it counts crossings. */
+/** (pad wave P2) ICC playing conditions 21.15, Law 21.14 in the current MCC Laws ("A penalty of one run shall be
+ *  awarded instantly on the call of No ball"), and 22.6 (the same for a Wide): a wide and a no ball each carry a penalty
+ *  of one run. The batters never run it, so `applyDelivery`'s striker rotation nets it off both before it counts crossings. */
 export const WIDE_NO_BALL_PENALTY_RUNS = 1;
 /** (pad wave P2) A bare wide records its one-run penalty (Law 22.6) and nothing more: the runs the pad's wide tile records. */
 export const WIDE_DEFAULT_RUNS = WIDE_NO_BALL_PENALTY_RUNS;
-/** (pad wave P2) A bare no ball records its one-run penalty (Law 21.14): the runs the pad's no-ball tile opens at. */
+/** (pad wave P2) A bare no ball records its one-run penalty (ICC 21.15; MCC Law 21.14): the runs the pad's no-ball tile opens at. */
 export const NO_BALL_DEFAULT_RUNS = WIDE_NO_BALL_PENALTY_RUNS;
 /** (pad wave P2) MCC Law 41.2.1, "the award of 5 Penalty runs": one award of penalty runs is five. The fold does not compute
  *  it (a `penalty` extra carries its own runs; two awards on one ball are ten), so nothing in `applyDelivery` reads this:
@@ -3141,6 +3141,14 @@ function ballBaseFields(cfg: CricketCfg): PadField[] {
   ];
 }
 
+/** (pad wave P2) The cricket.* events the fold accepts while a super over is being played (phase "super_over"): its own
+ *  balls, and a player line (`applyPlayerLine` has no phase guard; it files a line against a closed main innings). Every
+ *  other type is refused WRONG_PHASE by its own handler's guard (`state.phase !== "live"`, `requireOpenInnings`, the toss's
+ *  "pre", the interruption's and the revise's "pre"/"live"). The handlers do not read this set: pad/cricket.test.ts folds
+ *  every type in a real super over and holds the set equal to what they accept. Refusing a review (and a retirement) here
+ *  departs from the ICC playing conditions, Appendix F ¶12 and its preamble: rules row CK-SO-3, open, owed O-12. */
+export const SUPER_OVER_EVENT_TYPES: ReadonlySet<string> = new Set(["cricket.superover.ball", "cricket.player.line"]);
+
 // S6 owner ruling (`_INDEX.md`, "OWNER RULING: redesign the fidelity
 // model, in S6") — one band per event type, no repetition. The retired
 // cumulative-tier model listed `cricket.superover.ball` in BOTH tier 1
@@ -3150,13 +3158,6 @@ function ballBaseFields(cfg: CricketCfg): PadField[] {
 // band 3 here, matching `cricket.ball`, not band 1.
 //
 // One map for every cfg (pad wave P2): `padSpec(cfg).fidelity` is this object, and `@seazn/engine/pad` reads the same one.
-/** (pad wave P2) The cricket.* events the fold accepts while a super over is being played (phase "super_over"): its own
- *  balls, and a player line (`applyPlayerLine` has no phase guard; it files a line against a closed main innings). Every
- *  other type is refused WRONG_PHASE by its own handler's guard (`state.phase !== "live"`, `requireOpenInnings`, the toss's
- *  "pre", the interruption's and the revise's "pre"/"live"). The handlers do not read this set: pad/cricket.test.ts folds
- *  every type in a real super over and holds the set equal to what they accept. */
-export const SUPER_OVER_EVENT_TYPES: ReadonlySet<string> = new Set(["cricket.superover.ball", "cricket.player.line"]);
-
 /** padSpec's fidelity bands, one frozen object shared by every `padSpec(cfg)` and by `cricketPadRules.eventBands`. */
 export const CRICKET_FIDELITY: Readonly<Record<string, FidelityBand>> = Object.freeze({
   "cricket.innings.summary": 0,

@@ -30,6 +30,7 @@ import {
   type CricketCfg,
   type CricketState,
 } from "../sports/cricket/cricket.ts";
+import { aggregatePlayerStats } from "../stats/stats.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
 import { cricketPadRules, padNumberBound } from "./index.ts";
@@ -129,6 +130,17 @@ describe("P2.1 premise (Q1b): which batter the fold accepts as `out`", () => {
     expect(unnamed.fine.fielding, "no fielder named, nobody credited").toBeUndefined();
   });
 
+  it("CK-WK-2 the player stats do not yet count an obstruction's named fielder, while they count a run out's (owed work O-11: this pin reds on purpose when the stats model counts it)", () => {
+    const model = cricket.playerStats;
+    if (model === undefined) throw new Error("premise: cricket declares a player-stats model");
+    const runOutsOf = (kind: Mode): number => {
+      const events = ledger([["core.start"], delivery({ wicket: wicketOf(kind, STRIKER, { fielder: FIELDER }) })]);
+      return aggregatePlayerStats(events, model, lineupsFor(T20)).find((row) => row.personId === FIELDER)?.stats.run_outs ?? 0;
+    };
+    expect(runOutsOf("runout"), "control: a run out's named fielder is counted").toBe(1);
+    expect(runOutsOf("obstructed"), "O-11: an obstruction's named fielder is not counted yet").toBe(0);
+  });
+
   it("CK-WK-3 a retired wicket and a retirement both fold with EITHER batter (MCC Law 25.4.1: a batter may retire at any time the ball is dead)", () => {
     let folded = 0;
     for (const out of [STRIKER, NON_STRIKER]) {
@@ -170,7 +182,8 @@ const LAW_41_ONE_AWARD = 5;
 /** MCC Law 22.6: "A penalty of one run shall be awarded instantly on the call of Wide ball" - a bare wide records it and nothing
  *  else. */
 const LAW_WIDE_PENALTY = 1;
-/** MCC Law 21.14: "A penalty of one run shall be awarded instantly on the call of No ball". */
+/** ICC playing conditions 21.15, "Penalty for a No ball" (Law 21.14 in the current MCC Laws): "A penalty of one run shall be
+ *  awarded instantly on the call of No ball". */
 const LAW_NO_BALL_PENALTY = 1;
 
 const sorted = (xs: readonly (string | number)[]) => [...xs].sort();
@@ -338,7 +351,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(bare.legalBalls).toBe(0);
     expect(bare.fine.bowlerRuns[BOWLER]).toBe(LAW_WIDE_PENALTY);
     expect(bare.fine.striker, "the penalty run is never run").toBe(STRIKER);
-    // The same net-off the fold applies to a wide and a no ball alike (Laws 22.6 and 21.14: one penalty run each).
+    // The same net-off the fold applies to a wide and a no ball alike (22.6 and ICC 21.15: one penalty run each).
     for (const kind of ["wide", "noball"]) {
       const ranOne = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind, runs: LAW_WIDE_PENALTY + 1 } })]));
       expect(ranOne.runs, kind).toBe(LAW_WIDE_PENALTY + 1);
@@ -346,7 +359,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     }
   });
 
-  it("CK-EX-2 noBallDefaultRuns: a bare no ball scores its one-run penalty (Law 21.14), no ball faced, no crossing, and arms the free hit", () => {
+  it("CK-EX-2 noBallDefaultRuns: a bare no ball scores its one-run penalty (ICC 21.15, MCC Law 21.14), no ball faced, no crossing, and arms the free hit", () => {
     expect(cricketPadRules.noBallDefaultRuns).toBe(LAW_NO_BALL_PENALTY);
     const bare = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind: "noball", runs: cricketPadRules.noBallDefaultRuns } })]));
     expect(bare.runs).toBe(LAW_NO_BALL_PENALTY);
@@ -405,7 +418,7 @@ describe("CK-SO-3 CK-DV-2 cricketPadRules.superOverEventTypes against a real sup
     [1, 2, 3, 4, 5, 6].map((n) => ["cricket.ball", { over: 0, ballInOver: n, striker, nonStriker, bowler, runs: { bat: 0 } }]);
   const TIED: readonly Spec[] = [["core.start"], ...side("H-p1", "H-p2", "A-p11"), ...side("A-p1", "A-p2", "H-p11")];
 
-  it("the fold accepts exactly these cricket.* types in phase super_over, and refuses every other on its phase (WRONG_PHASE)", () => {
+  it("the fold accepts exactly these cricket.* types in phase super_over (each folded outright), and refuses every other on its phase (WRONG_PHASE)", () => {
     expect(fold(SO_CFG, TIED).phase, "premise: the tie sends the fold to the super over").toBe("super_over");
     const lineups = lineupsFor(SO_CFG);
     const ball = { over: 0, ballInOver: 1, striker: "A-p1", nonStriker: "A-p2", bowler: "H-p10", runs: { bat: 0 } };
@@ -425,7 +438,8 @@ describe("CK-SO-3 CK-DV-2 cricketPadRules.superOverEventTypes against a real sup
       "cricket.powerplay": { kind: "batting", phase: "start" },
       "cricket.review": { by: lineups.away.entrantId, kind: "player", outcome: "upheld" },
       "cricket.retire": { person: "A-p1", reason: "hurt" },
-      "cricket.player.line": { innings: 1, person: "H-p1", batting: { runs: 0, balls: 3 } },
+      // H-p1 faced all six of the first innings' balls: a line the innings totals agree with, so the fold takes it.
+      "cricket.player.line": { innings: 1, person: "H-p1", batting: { runs: 0, balls: 6 } },
     };
     const types = Object.keys(cricket.eventSchemas ?? {}).filter((t) => t.startsWith("cricket."));
     expect(sorted(Object.keys(VALID))).toEqual(sorted(types));
@@ -435,7 +449,7 @@ describe("CK-SO-3 CK-DV-2 cricketPadRules.superOverEventTypes against a real sup
       expect(cricket.eventSchemas?.[type]?.safeParse(VALID[type]).success, `${type}: the payload is schema-valid`).toBe(true);
       const refusal = refusalOf(() => fold(SO_CFG, [...TIED, [type, VALID[type]]]));
       if (cricketPadRules.superOverEventTypes.includes(type)) {
-        expect(refusal ?? "", `${type} in a super over: not refused on its phase`).not.toMatch(/^WRONG_PHASE/);
+        expect(refusal, `${type} in a super over: accepted outright`).toBeNull();
         accepted++;
       } else {
         expect(refusal ?? "accepted", `${type} in a super over`).toMatch(/^WRONG_PHASE/);

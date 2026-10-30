@@ -4449,6 +4449,7 @@ export type DictionaryKey =
   | "pad.cricket.sheet.review.outcome.title"
   | "pad.cricket.sheet.toss.elected.title"
   | "pad.cricket.sheet.toss.wonBy.title"
+  | "pad.cricket.sheet.wicket.fielder.none"
   | "pad.cricket.sheet.wicket.fielder.title"
   | "pad.cricket.sheet.wicket.incoming.title"
   | "pad.cricket.sheet.wicket.kind.freeHitHint"

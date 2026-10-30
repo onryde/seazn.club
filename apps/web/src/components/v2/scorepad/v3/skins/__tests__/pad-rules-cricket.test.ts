@@ -8,12 +8,15 @@
 // that comparison is always green). Every comparison is counted; the last test fails if fewer than the plan's 16 were made.
 //
 // single-sport: cricket's dismissal modes, extras and free hit exist in no other sport.
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { foldMatch, initSquads, type EventEnvelope } from "@seazn/engine/core";
 import { cricketPadRules } from "@seazn/engine/pad";
 import { cricket, type CricketCfg, type CricketState } from "@seazn/engine/sports/cricket";
 import { cricketEnvelopes, cricketLineups, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
-import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
+import uiEn from "@/dictionaries/en/ui.json";
+import { GuidedSheet, answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import { dedicatedEventTypes, moreActions } from "../../pad-host";
 import type { GuidedSheetSpec, GuidedSheetStep, PadHostView, TileSpec } from "../../types";
 import { buildDock, buildScorebug, buildSheets, buildTiles, refusedEventTypes, type TFn } from "../cricket";
@@ -183,6 +186,37 @@ describe("the wicket sheet offers the engine's modes", () => {
       folded++;
     }
     expect(folded).toBe(RULEBOOK_FREE_HIT.length);
+  });
+});
+
+describe("the obstructing fielder's decline control reads cricket's own label (review I-A)", () => {
+  /** The decline control's text, rendered by the real GuidedSheet on `step` alone (its `when` dropped so it is step one). */
+  const declineText = (view: PadHostView, spec: GuidedSheetSpec, step: GuidedSheetStep): string | undefined => {
+    const html = renderToStaticMarkup(
+      createElement(GuidedSheet, {
+        spec: { ...spec, steps: [{ ...step, when: undefined }] },
+        views: { home: { squad: view.squads.home }, away: { squad: view.squads.away } },
+        personNames: {},
+        t: (key: string) => key,
+        onComplete: () => undefined,
+      }),
+    );
+    return /data-role="v3-person-none"[^>]*>([^<]*)</.exec(html)?.[1];
+  };
+
+  it("the obstructed fielder step declines with \"No fielder\" (pad.cricket.sheet.wicket.fielder.none); a step that names no label, as the sin-bin's servedBy, keeps the shared pad.sheet.person.none", () => {
+    const view = viewOf(T20, START);
+    const spec = buildSheets(view, t).wicket;
+    const step = spec.steps.find((s) => s.id === "fielderOptional");
+    if (step === undefined || step.kind !== "person") throw new Error("premise: the obstructed fielder step is a person step");
+    same(step.noneLabel, "pad.cricket.sheet.wicket.fielder.none", "the step's own label");
+    same(declineText(view, spec, step), "pad.cricket.sheet.wicket.fielder.none", "the rendered decline control");
+    // The shared default, unchanged for every step that sets no label (period-shared's servedBy sets none).
+    same(declineText(view, spec, { ...step, noneLabel: undefined }), "pad.sheet.person.none", "a step with no label");
+    // A required step renders no decline control at all.
+    same(declineText(view, spec, { ...step, optional: undefined }), undefined, "a required step has no decline control");
+    // The copy differs: the sin-bin's sentence is about who serves a penalty.
+    expect(uiEn["pad.cricket.sheet.wicket.fielder.none"]).not.toBe(uiEn["pad.sheet.person.none"]);
   });
 });
 
