@@ -73699,7 +73699,7 @@
     },
     "/api/v1/orgs/{id}/youtube-connections/{connectionId}": {
       "patch": {
-        "summary": "Change a YouTube connection's default visibility ({privacy}), made-for-kids ({madeForKids}) and/or give the consent on the current wording ({consent: true}, 'Review updated terms'; it records the caller and the time, and a second press does not replace who consented). At least one field; 404 for a connection that is missing, disconnected or another organisation's",
+        "summary": "Change a YouTube connection's default visibility ({privacy}), made-for-kids ({madeForKids}) and/or give the consent on the current wording ({consent: true, consentMinors: true}, 'Review updated terms': both boxes, the terms and YouTube's under-16 rule, and one without the other is 400; it records the caller and the time, and a second press does not replace who consented). At least one field; 404 for a connection that is missing, disconnected or another organisation's",
         "tags": [
           "fixtures"
         ],
@@ -73745,6 +73745,10 @@
                   "consent": {
                     "type": "boolean",
                     "const": true
+                  },
+                  "consentMinors": {
+                    "type": "boolean",
+                    "const": true
                   }
                 },
                 "additionalProperties": false
@@ -73752,7 +73756,8 @@
               "example": {
                 "privacy": "unlisted",
                 "madeForKids": true,
-                "consent": true
+                "consent": true,
+                "consentMinors": true
               }
             }
           }

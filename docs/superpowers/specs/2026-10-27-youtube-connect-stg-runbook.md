@@ -77,7 +77,8 @@ competition public or unlisted, and notes the organisation id and its default lo
 
 1. Seazn → **Streaming** (top nav, `/streaming`) → **Connect YouTube**.
 2. The consent step: leave **Who can watch = Unlisted** (preselected; keep it: Private hides replays from the match
-   page, step 7), **Made for kids = No**, tick the required box, **Continue to Google**.
+   page, step 7), **Made for kids = No**, tick BOTH required boxes (the terms, and the under-16 rule: Continue stays
+   disabled with only one), **Continue to Google**.
 3. On Google: choose the account, pass the "unverified app" screen (Testing mode), and allow the YouTube access.
    If the account has several channels, pick yours under **Choose a channel** → **Connect channel**.
 
@@ -273,7 +274,7 @@ select f.id, f.status, f.finished_at, f.stream_url,
 ```
 
 **S1 — the connection (after step 2).** Expect one row: `status = connected`, `default_privacy = unlisted`,
-`made_for_kids = false`, `consent_version = 2` (the current `YOUTUBE_CONSENT_VERSION`; 1 before the D16 under-16 clause), `last_error_code` null; and its destination row `kind = youtube`,
+`made_for_kids = false`, `consent_version = 3` (the current `YOUTUBE_CONSENT_VERSION`: the two consent boxes of D16; 2 was the under-16 clause inside the one box, 1 the launch wording), `last_error_code` null; and its destination row `kind = youtube`,
 `archived_at` null.
 
 ```sql
@@ -507,7 +508,7 @@ Read from the tree on `4e3b165274`.
 
 | Value | Source |
 |---|---|
-| Scope `https://www.googleapis.com/auth/youtube`; consent version 1 | `lib/youtube.ts:6`, `:10` |
+| Scope `https://www.googleapis.com/auth/youtube`; consent version 3 (the two boxes, D16; it was 1 on `4e3b165274`) | `lib/youtube.ts:6`, `:12` |
 | Callback path `/api/youtube/connect/callback`; `YOUTUBE_REDIRECT_URI` overrides | `lib/oauth.ts:59-61` |
 | stg / prod hosts `stg.seazn.club` / `seazn.club`; stg crons `17 * * * *`, `*/5 * * * *`; prod `17 * * * *`, `* * * * *` | `apps/cron-worker/wrangler.json` |
 | Grace after Stop: 5 min | `YOUTUBE_GRACE_MINUTES`, `lib/youtube.ts:214` |

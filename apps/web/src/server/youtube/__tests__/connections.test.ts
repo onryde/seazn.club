@@ -611,21 +611,42 @@ describe.skipIf(!HAS_DB)("updateConnectionSettings", () => {
     consent.version = 2;
     expect((await connectionViews(o.orgId)).get(c.connectionId)!.termsOutdated, "wording moved on: outdated").toBe(true);
     const before = await connRow(c.connectionId);
-    const view = await updateConnectionSettings(other, o.orgId, c.connectionId, { consent: true });
+    const view = await updateConnectionSettings(other, o.orgId, c.connectionId, { consent: true, consentMinors: true });
     expect(view.termsOutdated).toBe(false);
     const after = await connRow(c.connectionId);
     expect(after).toMatchObject({ consent_version: 2, consent_by: other.userId });
     expect(after.consent_at.getTime()).toBeGreaterThan(before.consent_at.getTime());
 
     const third = await colleague(o);
-    await updateConnectionSettings(third, o.orgId, c.connectionId, { consent: true });
+    await updateConnectionSettings(third, o.orgId, c.connectionId, { consent: true, consentMinors: true });
     expect(await connRow(c.connectionId), "already at the current wording: nothing re-stamped").toEqual(after);
 
     // The other direction: a consent given under a LATER wording than this build's is not outdated, and a consent press does not lower it.
     consent.version = 1;
     expect((await connectionViews(o.orgId)).get(c.connectionId)!.termsOutdated).toBe(false);
-    await updateConnectionSettings(o.auth, o.orgId, c.connectionId, { consent: true });
+    await updateConnectionSettings(o.auth, o.orgId, c.connectionId, { consent: true, consentMinors: true });
     expect((await connRow(c.connectionId)).consent_version, "never lowered").toBe(2);
+  });
+
+  it("half a consent is refused HERE too (a caller that bypasses the wire schema): the terms alone or the under-16 box alone is 422 YOUTUBE_CONSENT_INVALID and writes nothing; both together stamp the current wording (owner, PO 2026-10-30)", async () => {
+    const o = await org();
+    const c = await connect(o, { consentVersion: 1 });
+    consent.version = 2;
+    const before = await connRow(c.connectionId);
+    let refused = 0;
+    const halves: Parameters<typeof updateConnectionSettings>[3][] = [
+      { consent: true }, { consentMinors: true }, { consent: true, consentMinors: false as never }, { consent: false as never, consentMinors: true },
+      { consentMinors: true, privacy: "public" },
+    ];
+    for (const half of halves) {
+      expect(await refusal(() => updateConnectionSettings(o.auth, o.orgId, c.connectionId, half)), JSON.stringify(half)).toMatchObject({ status: 422, code: "YOUTUBE_CONSENT_INVALID" });
+      expect(await connRow(c.connectionId), `${JSON.stringify(half)}: nothing written`).toEqual(before);
+      refused++;
+    }
+    expect(refused, "anti-vacuity: five half consents checked").toBe(5);
+    // The positive pair: both boxes.
+    expect((await updateConnectionSettings(o.auth, o.orgId, c.connectionId, { consent: true, consentMinors: true })).termsOutdated).toBe(false);
+    expect((await connRow(c.connectionId)).consent_version).toBe(2);
   });
 
   it("consent needs a person: a key (no user) is 403 and writes nothing", async () => {
@@ -634,7 +655,7 @@ describe.skipIf(!HAS_DB)("updateConnectionSettings", () => {
     consent.version = 2;
     const key: AuthCtx = { orgId: o.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID() };
     const before = await connRow(c.connectionId);
-    expect((await refusal(() => updateConnectionSettings(key, o.orgId, c.connectionId, { consent: true }))).status).toBe(403);
+    expect((await refusal(() => updateConnectionSettings(key, o.orgId, c.connectionId, { consent: true, consentMinors: true }))).status).toBe(403);
     expect(await connRow(c.connectionId)).toEqual(before);
     // The positive pair: the same key may change a plain setting through this function (the route bars keys, not the usecase).
     expect(await updateConnectionSettings(key, o.orgId, c.connectionId, { madeForKids: true })).toMatchObject({ madeForKids: true });

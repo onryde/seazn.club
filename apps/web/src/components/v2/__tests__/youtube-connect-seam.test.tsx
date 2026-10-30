@@ -152,12 +152,15 @@ async function liveConnection(r: { orgId: string; userId: string }, consentVersi
 }
 const rowMarkup = (t: StreamTarget, orgId: string): string => renderToStaticMarkup((<ConfirmProvider><ul><YoutubeChannelRow t={t} canEdit orgId={orgId} badge={null} /></ul></ConfirmProvider>) as ReactElement);
 
+/** The consent is two boxes (owner, PO 2026-10-30): the terms and YouTube's under-16 rule — the form fields T7's route reads, typed. */
+const BOTH_BOXES = ["consent", "consentMinors"];
+
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => {
   it("the form as shipped, ticked: the route sends the browser to Google (the fake hop) and records the consent with the DEFAULTS the spec names — Unlisted, not for kids, the CURRENT consent version, by this user", async () => {
     const r = await rig();
     const html = renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />);
-    const res = await post(formFields(html, { tick: ["consent"] }));
+    const res = await post(formFields(html, { tick: BOTH_BOXES }));
     expect(res.status).toBe(303);
     expect(new URL(res.headers.get("location")!).pathname).toBe("/api/youtube/connect/fake-authorize");
     const rows = await pendingRows(r.orgId);
@@ -173,9 +176,29 @@ describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => 
     expect(await pendingRows(r.orgId)).toEqual([]);
   });
 
+  it("BOTH boxes, from the form's own markup: its checkboxes are exactly the two the route reads, and every tick short of both — one, the other, none — is refused 400 with no pending row; both go ahead", async () => {
+    const r = await rig();
+    const html = renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />);
+    // The boxes as the markup has them, so a third box (or a renamed one) is seen here rather than silently left unticked below.
+    const boxes = [...html.matchAll(/<input\b([^>]*)>/g)].map(([, a = ""]) => a).filter((a) => /\btype="checkbox"/.test(a)).map((a) => /\bname="([^"]*)"/.exec(a)?.[1]);
+    expect(boxes, "the form's checkboxes are the route's two consent fields").toEqual(BOTH_BOXES);
+    let refused = 0;
+    for (const tick of [["consent"], ["consentMinors"], []]) {
+      const fields = formFields(html, { tick });
+      expect(BOTH_BOXES.filter((b) => fields.has(b)), `PREMISE: the form posts only ${JSON.stringify(tick)}`).toEqual(tick);
+      const res = await post(fields);
+      expect(res.status, `ticked ${JSON.stringify(tick)}`).toBe(400);
+      expect(await pendingRows(r.orgId), `ticked ${JSON.stringify(tick)}: no pending row`).toEqual([]);
+      refused++;
+    }
+    expect(refused, "anti-vacuity: the three tick states that are not a consent").toBe(3);
+    expect((await post(formFields(html, { tick: BOTH_BOXES }))).status, "both: sent on").toBe(303);
+    expect((await pendingRows(r.orgId)).length).toBe(1);
+  });
+
   it("every visibility x made-for-kids the form can post is one the route accepts and stores — six combinations, each from the choice component's own markup", async () => {
     const r = await rig();
-    const base = formFields(renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />), { tick: ["consent"] });
+    const base = formFields(renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />), { tick: BOTH_BOXES });
     let checked = 0;
     for (const privacy of ["unlisted", "public", "private"] as const) {
       for (const kids of ["0", "1"] as const) {

@@ -2183,13 +2183,19 @@ export type YoutubeConnectionSaved = z.infer<typeof YoutubeConnectionSaved>;
 /** GET /orgs/{id}/youtube-connections/pending/{pendingId} — the channels a grant offers, for the picker. */
 export const YoutubePendingChannels = z.object({ channels: z.array(z.object({ id: z.string(), title: z.string() })) });
 export type YoutubePendingChannels = z.infer<typeof YoutubePendingChannels>;
-/** PATCH /orgs/{id}/youtube-connections/{connectionId} — the connection's settings. `consent` can only be `true`: ticking
- *  the box on the updated wording ("Review updated terms"); there is no way to withdraw consent here (Disconnect is that). */
+/** PATCH /orgs/{id}/youtube-connections/{connectionId} — the connection's settings. `consent` and `consentMinors` can only be
+ *  `true`, and only together: ticking BOTH boxes on the updated wording ("Review updated terms": the terms, and YouTube's under-16 rule —
+ *  D16, PO 2026-10-30); one without the other is refused. There is no way to withdraw consent here (Disconnect is that). */
 export const YoutubeConnectionSettings = z
-  .object({ privacy: YoutubePrivacy.optional(), madeForKids: z.boolean().optional(), consent: z.literal(true).optional() })
+  .object({
+    privacy: YoutubePrivacy.optional(), madeForKids: z.boolean().optional(), consent: z.literal(true).optional(), consentMinors: z.literal(true).optional(),
+  })
   .strict()
-  .refine((b) => b.privacy !== undefined || b.madeForKids !== undefined || b.consent !== undefined, {
+  .refine((b) => b.privacy !== undefined || b.madeForKids !== undefined || b.consent !== undefined || b.consentMinors !== undefined, {
     message: "send at least one of privacy, madeForKids or consent",
+  })
+  .refine((b) => (b.consent === undefined) === (b.consentMinors === undefined), {
+    message: "consent and consentMinors are given together: both boxes are ticked, or neither is sent",
   });
 export type YoutubeConnectionSettings = z.infer<typeof YoutubeConnectionSettings>;
 /** DELETE /orgs/{id}/youtube-connections/{connectionId} — what a disconnect did (YouTube Connect T18). `revokeOutcome` says what became of

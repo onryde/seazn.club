@@ -169,7 +169,8 @@ async function connectOverHttp(o: Org, channel: { id: string; title: string }): 
     method: "POST",
     redirect: "manual",
     headers: { cookie: cookies(), "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ orgId: o.orgId, privacy: "unlisted", consent: "1" }),
+    // Both consent boxes, as the form posts them ticked: the terms (`consent`) and YouTube's under-16 rule (`consentMinors`).
+    body: new URLSearchParams({ orgId: o.orgId, privacy: "unlisted", consent: "1", consentMinors: "1" }),
   });
   take(start);
   premise(start.status === 303, `the connect start answered ${start.status}, not the 303 to the authorize hop`);
@@ -348,20 +349,25 @@ export async function youtubeConnectSuite(): Promise<void> {
 
   // --- 3. connect without consent is refused (T7) -----------------------------------------------------------------------------
   await probe("connect without consent is refused", async (step) => {
-    const send = (consent: boolean): Promise<Response> =>
+    // The consent is two boxes (PO 2026-10-30): the terms (`consent`) and YouTube's under-16 rule (`consentMinors`). Only both is a consent.
+    const send = (boxes: { terms: boolean; minors: boolean }): Promise<Response> =>
       fetch(`${BASE}/api/youtube/connect`, {
         method: "POST",
         redirect: "manual",
         headers: { cookie: cookieHeader(a.s), "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ orgId: a.orgId, privacy: "unlisted", ...(consent ? { consent: "1" } : {}) }),
+        body: new URLSearchParams({ orgId: a.orgId, privacy: "unlisted", ...(boxes.terms ? { consent: "1" } : {}), ...(boxes.minors ? { consentMinors: "1" } : {}) }),
       });
-    const refused = await send(false);
-    step(`the form without the consent box is refused 400 (got ${refused.status})`, refused.status === 400);
-    // The pair: the same request with the box ticked is what sends the person on, to the authorize hop (the fake Google in CI).
-    const ticked = await send(true);
+    const refused = await send({ terms: false, minors: false });
+    step(`the form without either consent box is refused 400 (got ${refused.status})`, refused.status === 400);
+    const termsOnly = await send({ terms: true, minors: false });
+    step(`the form with only the terms box is refused 400 (got ${termsOnly.status})`, termsOnly.status === 400);
+    const minorsOnly = await send({ terms: false, minors: true });
+    step(`the form with only the under-16 box is refused 400 (got ${minorsOnly.status})`, minorsOnly.status === 400);
+    // The pair: the same request with both boxes ticked is what sends the person on, to the authorize hop (the fake Google in CI).
+    const ticked = await send({ terms: true, minors: true });
     const where = new URL(ticked.headers.get("location") ?? "", BASE);
     step(
-      `the same form with consent=1 is sent on: 303 to the fake authorize hop (got ${ticked.status} ${where.pathname})`,
+      `the same form with consent=1 and consentMinors=1 is sent on: 303 to the fake authorize hop (got ${ticked.status} ${where.pathname})`,
       ticked.status === 303 && where.pathname === "/api/youtube/connect/fake-authorize" && where.searchParams.has("state"),
     );
   });

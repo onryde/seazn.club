@@ -191,51 +191,99 @@ const panelHtml = (p: Partial<Parameters<typeof StreamDestinationsPanel>[0]> & {
   );
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// The consent is TWO boxes (owner, PO 2026-10-30): the terms, and YouTube's under-16 rule. Their testids and the form fields the connect
+// route reads, typed from the ruling and T7's contract — never read back from the component.
+const TERMS_BOX = "youtube-consent";
+const MINORS_BOX = "youtube-consent-minors";
+type Box = typeof TERMS_BOX | typeof MINORS_BOX;
+
+/** A tick on one box, through its REAL checkbox: the island renders `ConsentBox` one level deep, so that element is rendered in turn with
+ *  the very props the island gave it, and the named <input>'s own onChange fires — which lands in the island's state the way a browser's
+ *  change event would. A box that is not there, or has no onChange, throws: a helper that found nothing cannot pass quietly. */
+function tickBox(tree: () => ReactElement[], box: Box, on: boolean): void {
+  const el = ofType(tree(), ConsentBox);
+  if (!el) throw new Error("no ConsentBox in the tree");
+  const inner = renderIsland(ConsentBox, propsOf(el) as Parameters<typeof ConsentBox>[0]);
+  const input = byTestId(inner.tree(), box);
+  const onChange = input && (propsOf(input).onChange as ((e: { target: { checked: boolean } }) => void) | undefined);
+  if (!onChange) throw new Error(`no ${box} checkbox with an onChange — the test is asserting nothing`);
+  onChange({ target: { checked: on } });
+}
+/** What each REAL box shows right now: ConsentBox rendered with the island's current props, each <input>'s `checked`. */
+function boxesShown(tree: () => ReactElement[]): Record<Box, unknown> {
+  const el = ofType(tree(), ConsentBox);
+  if (!el) throw new Error("no ConsentBox in the tree");
+  const inner = renderIsland(ConsentBox, propsOf(el) as Parameters<typeof ConsentBox>[0]).tree();
+  const of = (b: Box) => {
+    const input = byTestId(inner, b);
+    if (!input) throw new Error(`no ${b} checkbox`);
+    return attr(input, "checked");
+  };
+  return { [TERMS_BOX]: of(TERMS_BOX), [MINORS_BOX]: of(MINORS_BOX) } as Record<Box, unknown>;
+}
+/** Every tick state of the two boxes, and whether it is a consent: only BOTH is (typed from the ruling). Four, all of them. */
+const TICK_STATES: { terms: boolean; minors: boolean; name: string; consent: boolean }[] = [
+  { terms: false, minors: false, name: "neither box", consent: false },
+  { terms: true, minors: false, name: "only the terms box", consent: false },
+  { terms: false, minors: true, name: "only the under-16 box", consent: false },
+  { terms: true, minors: true, name: "both boxes", consent: true },
+];
+/** Put the two boxes into a state, each through its own checkbox. */
+function setBoxes(tree: () => ReactElement[], s: { terms: boolean; minors: boolean }): void {
+  tickBox(tree, TERMS_BOX, s.terms);
+  tickBox(tree, MINORS_BOX, s.minors);
+}
+
 describe("the consent step", () => {
   const mount = () => renderIsland(YoutubeConnectCard, { orgId: "org-1", onCancel: vi.fn() });
-  const tick = (island: ReturnType<typeof mount>, on: boolean) => {
-    const box = ofType(island.tree(), ConsentBox);
-    if (!box) throw new Error("the card rendered no ConsentBox");
-    (propsOf(box).onChange as (v: boolean) => void)(on);
-  };
 
-  it("Continue to Google is DISABLED until the box is ticked, enabled once it is, disabled again when it is unticked — and the hint goes and comes with it", () => {
+  it("Continue to Google is enabled ONLY with both boxes ticked: disabled with none, with only the terms, with only the under-16 box; the hint goes and comes with it — every state, and back again (the sequence)", () => {
     const card = mount();
     const state = () => ({
       disabled: attr(byTestId(card.tree(), "youtube-connect-submit")!, "disabled"),
       hint: byTestId(card.tree(), "youtube-consent-required"),
-      checked: attr(ofType(card.tree(), ConsentBox)!, "checked"),
+      shown: boxesShown(card.tree),
     });
-    expect(state().disabled, "unticked: disabled").toBe(true);
-    expect(state().checked).toBe(false);
+    expect(state().disabled, "untouched: disabled").toBe(true);
+    expect(state().shown, "untouched: both boxes empty").toEqual({ [TERMS_BOX]: false, [MINORS_BOX]: false });
     expect(textAt(card.tree(), "youtube-consent-required")).toBe(m("streaming.youtube.consent.required"));
     expect(textAt(card.tree(), "youtube-connect-submit")).toBe(m("streaming.youtube.consent.continue"));
 
-    tick(card, true);
-    expect(state().disabled, "ticked: enabled").toBe(false);
-    expect(state().checked).toBe(true);
-    expect(state().hint, "the hint is gone once ticked").toBeUndefined();
-
-    tick(card, false);
-    expect(state().disabled, "unticked again: disabled again").toBe(true);
-    expect(state().hint, "the hint is back").toBeDefined();
+    // Forward through every state, then back down: each box moves only itself, and only both enables Continue.
+    let checked = 0;
+    for (const s of [...TICK_STATES, ...[...TICK_STATES].reverse()]) {
+      setBoxes(card.tree, s);
+      expect(state().shown, `${s.name}: each box shows its own tick`).toEqual({ [TERMS_BOX]: s.terms, [MINORS_BOX]: s.minors });
+      expect(state().disabled, `${s.name}: Continue ${s.consent ? "enabled" : "disabled"}`).toBe(!s.consent);
+      if (s.consent) expect(state().hint, `${s.name}: the hint is gone`).toBeUndefined();
+      else expect(textAt(card.tree(), "youtube-consent-required"), `${s.name}: the hint says what is missing`).toBe(m("streaming.youtube.consent.required"));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four states, there and back").toBe(8);
   });
 
-  it("Enter inside a field cannot submit past an unticked box: the form refuses it (preventDefault), and lets a ticked one through", async () => {
+  it("Enter inside a field cannot submit past a missing tick: the form refuses it (preventDefault) with none, only the terms or only the under-16 box, and lets both through", async () => {
     const card = mount();
-    expect((await submit(byTestId(card.tree(), "youtube-connect-form"))).prevented, "unticked: stopped on the page").toBe(true);
-    tick(card, true);
-    expect((await submit(byTestId(card.tree(), "youtube-connect-form"))).prevented, "ticked: the browser posts it").toBe(false);
+    let checked = 0;
+    for (const s of TICK_STATES) {
+      setBoxes(card.tree, s);
+      expect((await submit(byTestId(card.tree(), "youtube-connect-form"))).prevented, `${s.name}: ${s.consent ? "the browser posts it" : "stopped on the page"}`).toBe(!s.consent);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
-  it("the markup: a real <form method=post> to the connect route, unticked and with Continue disabled in the HTML itself, carrying the org", () => {
+  it("the markup: a real <form method=post> to the connect route with TWO checkboxes, terms then under-16, each unticked and posting its own field; Continue disabled in the HTML itself; carrying the org", () => {
     const html = inLocale("en", <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
     expect(html).toMatch(/<form[^>]*\bmethod="post"/);
     expect(html).toMatch(/<form[^>]*\baction="\/api\/youtube\/connect"/);
     const hidden = inputsOf(html).filter((i) => i.type === "hidden");
     expect(hidden).toEqual([expect.objectContaining({ name: "orgId", value: "org-1" })]);
-    const consent = inputsOf(html).find((i) => i.name === "consent");
-    expect(consent, "the consent checkbox").toMatchObject({ type: "checkbox", value: "1", checked: false });
+    const boxes = inputsOf(html).filter((i) => i.type === "checkbox");
+    expect(boxes, "two checkboxes, terms first").toEqual([
+      { type: "checkbox", name: "consent", value: "1", testid: TERMS_BOX, checked: false, disabled: false },
+      { type: "checkbox", name: "consentMinors", value: "1", testid: MINORS_BOX, checked: false, disabled: false },
+    ]);
     expect(html, "the submit button is disabled in the server HTML too").toMatch(/<button[^>]*data-testid="youtube-connect-submit"[^>]*\bdisabled=""|<button[^>]*\bdisabled=""[^>]*data-testid="youtube-connect-submit"/);
   });
 
@@ -286,86 +334,100 @@ describe("the consent step", () => {
     expect(m("streaming.youtube.settingsNote")).toMatch(/already connected/i);
   });
 
-  // PO 2026-10-30, owner-requested (after stg's test stream was flagged under YouTube's child-safety policy): the under-16 rule is part of
-  // what the organiser TICKS, not a separate note beside the box. The clause per locale: English typed from the ruling, the other three the
-  // translations shipped with it. Each is checked against its dictionary AND against the label the checkbox sits in.
-  const MINORS_CLAUSE: Record<string, string> = {
+  // PO 2026-10-30, owner-requested: the consent is TWO boxes. Box 1 is the launch terms sentence (the wording before #1092, without the
+  // under-16 clause); box 2, right after it, is YouTube's under-16 rule and what breaking it costs, as its own tick. #1092 had folded the rule
+  // into box 1 as a clause; that clause, per locale as #1092 shipped it (typed), must be gone from box 1 now that it has its own box.
+  const CLAUSE_1092: Record<string, string> = {
     en: "makes sure an adult is visibly present whenever players under 16 are on camera",
     es: "se asegura de que un adulto esté visiblemente presente siempre que aparezcan en cámara jugadores menores de 16 años",
     fr: "veille à ce qu’un adulte soit visiblement présent chaque fois que des joueurs de moins de 16 ans sont filmés",
     nl: "ervoor zorgt dat er zichtbaar een volwassene aanwezig is wanneer spelers onder de 16 in beeld zijn",
   };
+  /** The <label> around the checkbox with this testid, in markup: the words a tap ticks, and what a screen reader reads as its name. */
+  const labelAround = (html: string, testid: string): { open: number; close: number; label: string } => {
+    const at = html.indexOf(`data-testid="${testid}"`);
+    if (at < 0) throw new Error(`no ${testid} in the markup`);
+    const open = html.lastIndexOf("<label", at);
+    const close = html.indexOf("</label>", at);
+    return { open, close, label: html.slice(open, close) };
+  };
 
-  it("PO 2026-10-30: YouTube's under-16 rule is a clause of the consent the organiser TICKS — inside the checkbox's label, after the rights clause, before Continue — in EVERY locale", () => {
-    expect(Object.keys(MINORS_CLAUSE).sort(), "a clause for every locale, and no other").toEqual([...LOCALES].sort());
+  it("PO 2026-10-30: TWO boxes in EVERY locale — box 1 reads the terms sentence (slots filled), box 2 right after it reads the under-16 sentence, each in its own label, both before Continue; the hint asks for both", () => {
     let checked = 0;
     for (const l of LOCALES) {
-      const clause = MINORS_CLAUSE[l]!;
       const dict = localeDict(l);
-      const body = dict["streaming.youtube.consent.body"]!;
-      // Where the ruling puts it: after the rights clause (the sentence's one parenthesis, "(venue, players, music)") and before what
-      // Seazn will do (the sentence's one "Seazn").
-      expect(body, `${l}: the consent sentence carries the clause`).toContain(clause);
-      expect(body.indexOf(")"), `${l}: after the rights clause`).toBeLessThan(body.indexOf(clause));
-      expect(body.indexOf(clause), `${l}: before what Seazn will do`).toBeLessThan(body.indexOf("Seazn"));
       const html = inLocale(l, <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
-      // The <label> the consent checkbox sits in: the words a tap ticks, and what a screen reader reads as the box's name.
-      const box = html.indexOf('data-testid="youtube-consent"');
+      const terms = labelAround(html, TERMS_BOX);
+      const minors = labelAround(html, MINORS_BOX);
       const button = html.indexOf('data-testid="youtube-connect-submit"');
-      expect(box, `${l}: the checkbox is in the markup`).toBeGreaterThan(-1);
       expect(button, `${l}: the go-to-Google button is in the markup`).toBeGreaterThan(-1);
-      const open = html.lastIndexOf("<label", box);
-      const close = html.indexOf("</label>", box);
-      expect(open, `${l}: the checkbox is inside a label`).toBeGreaterThan(-1);
-      const label = html.slice(open, close);
-      const filled = body.replace("{tos}", dict["streaming.youtube.consent.tos"]!).replace("{guidelines}", dict["streaming.youtube.consent.guidelines"]!);
-      expect(plain(label), `${l}: the label reads the dictionary's sentence, slots filled`).toBe(filled);
-      expect(label, `${l}: the clause is in the label`).toContain(esc(clause));
-      expect(close, `${l}: and that label closes before Continue to Google`).toBeLessThan(button);
+      expect(terms.open, `${l}: box 1 is inside a label`).toBeGreaterThan(-1);
+      const filled = dict["streaming.youtube.consent.body"]!.replace("{tos}", dict["streaming.youtube.consent.tos"]!).replace("{guidelines}", dict["streaming.youtube.consent.guidelines"]!);
+      expect(plain(terms.label), `${l}: box 1 reads the terms sentence, slots filled`).toBe(filled);
+      expect(plain(minors.label), `${l}: box 2 reads the under-16 sentence`).toBe(dict["streaming.youtube.consent.minors"]);
+      expect(terms.close, `${l}: box 1's label closes before box 2's opens (two labels, not one)`).toBeLessThan(minors.open);
+      // Right after it: nothing but markup between the two labels — no sentence a person would read in between.
+      expect(plain(html.slice(terms.close, minors.open)), `${l}: box 2 comes right after box 1`).toBe("");
+      expect(minors.close, `${l}: and both close before Continue to Google`).toBeLessThan(button);
+      expect(plain(html), `${l}: the hint asks for both`).toContain(dict["streaming.youtube.consent.required"]);
+      if (l !== "en") {
+        for (const k of ["streaming.youtube.consent.minors", "streaming.youtube.consent.required"] as const) {
+          expect(dict[k], `${l}: ${k} translated, not the English`).not.toBe(m(k));
+        }
+      }
       checked++;
     }
     expect(checked).toBe(4);
-    // English: the ruling's own words, in their place in the sentence.
-    expect(m("streaming.youtube.consent.body")).toContain(
-      "has the rights to stream this content (venue, players, music), makes sure an adult is visibly present whenever players under 16 are on camera, and agrees that Seazn will",
-    );
   });
 
-  it("the separate under-16 note #1089 added is GONE: no key in any dictionary, nothing rendered beside the box — the rule is said once, in the consent", () => {
+  it("the under-16 rule is said ONCE, in its own box: #1092's clause is gone from box 1 in every locale, and #1089's separate note is gone too (no key, nothing rendered)", () => {
+    expect(Object.keys(CLAUSE_1092).sort(), "a clause for every locale, and no other").toEqual([...LOCALES].sort());
     const OLD_KEY = "streaming.youtube.connect.minors";
     // The #1089 sentence's opening, typed: a note that came back under another key is caught too.
     const OLD_EN = "Streaming junior matches? YouTube doesn't allow live streams showing children under 16";
     let checked = 0;
     for (const l of LOCALES) {
-      expect(localeDict(l)[OLD_KEY], `${l}: the key is deleted`).toBeUndefined();
+      const dict = localeDict(l);
+      expect(dict["streaming.youtube.consent.body"], `${l}: box 1 no longer carries #1092's clause`).not.toContain(CLAUSE_1092[l]!);
+      expect(dict[OLD_KEY], `${l}: #1089's key is deleted`).toBeUndefined();
       const html = inLocale(l, <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
       expect(html, `${l}: no note element`).not.toContain('data-testid="youtube-minors-note"');
-      // The positive pair: the rule is still on the card, exactly once (in the consent), in this locale.
-      expect(plain(html).split(MINORS_CLAUSE[l]!).length - 1, `${l}: the clause, once`).toBe(1);
+      expect(plain(html), `${l}: #1092's clause is nowhere on the card`).not.toContain(CLAUSE_1092[l]!);
+      // The positive pair: the rule is still on the card, exactly once, and it is box 2's label.
+      const sentence = dict["streaming.youtube.consent.minors"]!;
+      expect(typeof sentence === "string" && sentence.length > 0, `${l}: the dictionary carries box 2's sentence`).toBe(true);
+      expect(plain(html).split(sentence).length - 1, `${l}: box 2's sentence, once`).toBe(1);
+      expect(plain(labelAround(html, MINORS_BOX).label), `${l}: and it is the label of box 2`).toBe(sentence);
       checked++;
     }
     expect(checked).toBe(4);
     expect(plain(inLocale("en", <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />))).not.toContain(OLD_EN);
   });
 
-  it("the consent wording and its version move TOGETHER: this is the English text YOUTUBE_CONSENT_VERSION 2 names (1 -> 2 when the under-16 clause joined, PO 2026-10-30)", () => {
+  it("the consent wording and its version move TOGETHER: these are the English texts YOUTUBE_CONSENT_VERSION 3 names (1 launch, 2 the under-16 clause inside the box, 3 the under-16 rule as its own box — PO 2026-10-30)", () => {
     // If this fails you changed the words a person ticks. Update the pin AND bump YOUTUBE_CONSENT_VERSION (lib/youtube.ts) in the SAME
     // change: that is what makes every new connection record the text it ticked, and every older one read "Review updated terms" (spec
     // §6.1.5 — Go live is never blocked by it). Never the pin alone.
-    expect(YOUTUBE_CONSENT_VERSION).toBe(2);
+    expect(YOUTUBE_CONSENT_VERSION).toBe(3);
+    // Box 1: the launch sentence, restored (owner 2026-10-30).
     expect(m("streaming.youtube.consent.body")).toBe(
-      "I confirm this organisation will follow YouTube's {tos} and {guidelines}, has the rights to stream this content (venue, players, music), makes sure an adult is visibly present whenever players under 16 are on camera, and agrees that Seazn will create, title, start and end a YouTube live broadcast on this channel for each match we stream here.",
+      "I confirm this organisation will follow YouTube's {tos} and {guidelines}, has the rights to stream this content (venue, players, music), and agrees that Seazn will create, title, start and end a YouTube live broadcast on this channel for each match we stream here.",
+    );
+    // Box 2: the owner's sentence, verbatim (2026-10-30, with the consequence and "block or disable").
+    expect(m("streaming.youtube.consent.minors")).toBe(
+      "I confirm an adult will be visibly present whenever players under 16 are on camera. If not, YouTube can block or disable live streaming on this channel, temporarily or permanently.",
     );
     expect(m("streaming.youtube.consent.disclaimer")).toBe(
       "YouTube alone decides whether this channel can stream; Seazn is not responsible if YouTube restricts or disables live streaming, removes a stream, issues a strike, or does not save a replay.",
     );
     expect(m("streaming.youtube.consent.bound")).toBe("By connecting you agree to be bound by the {tos}. See our {privacy}.");
+    expect(m("streaming.youtube.consent.required")).toBe("Tick both boxes to continue.");
   });
 
   it("the consent text: the spec's words, the ToS / Community Guidelines / Privacy Policy links (external ones noopener), and no unfilled {slot} in ANY locale", () => {
     let checked = 0;
     for (const l of LOCALES) {
-      const html = inLocale(l, <ConsentBox checked={false} onChange={() => {}} withName />);
+      const html = inLocale(l, <ConsentBox value={{ terms: false, minors: false }} onChange={() => {}} withName />);
       const text = plain(html);
       expect(text, `${l}: no unfilled slot`).not.toMatch(/\{\w+\}/);
       const links = [...html.matchAll(/<a\b([^>]*)>/g)].map(([, a = ""]) => ({ href: /\bhref="([^"]*)"/.exec(a)?.[1], rel: /\brel="([^"]*)"/.exec(a)?.[1], target: /\btarget="([^"]*)"/.exec(a)?.[1] }));
@@ -383,18 +445,18 @@ describe("the consent step", () => {
     }
     expect(checked).toBe(LOCALES.length);
     // English: the sentence the owner approved in the spec, link labels in place.
-    const en = plain(inLocale("en", <ConsentBox checked={false} onChange={() => {}} withName />));
+    const en = plain(inLocale("en", <ConsentBox value={{ terms: false, minors: false }} onChange={() => {}} withName />));
     expect(en).toContain("I confirm this organisation will follow YouTube's Terms of Service and Community Guidelines");
     expect(en).toContain("create, title, start and end a YouTube live broadcast on this channel for each match we stream here");
     expect(en).toContain("By connecting you agree to be bound by the YouTube Terms of Service. See our Privacy Policy.");
   });
 
-  it("the review-terms variant of the box posts no field (it is a PATCH, not a form POST); the connect one posts consent=1", () => {
-    const named = inputsOf(renderToStaticMarkup(<ConsentBox checked={false} onChange={() => {}} withName />))[0]!;
-    const bare = inputsOf(renderToStaticMarkup(<ConsentBox checked={false} onChange={() => {}} withName={false} />))[0]!;
-    expect(named).toMatchObject({ type: "checkbox", name: "consent", value: "1" });
-    expect(bare.name).toBeUndefined();
-    expect(bare.value).toBeUndefined();
+  it("the review-terms variant of the boxes posts no field (it is a PATCH, not a form POST); the connect one posts consent=1 and consentMinors=1", () => {
+    const none = { terms: false, minors: false };
+    const named = inputsOf(renderToStaticMarkup(<ConsentBox value={none} onChange={() => {}} withName />));
+    const bare = inputsOf(renderToStaticMarkup(<ConsentBox value={none} onChange={() => {}} withName={false} />));
+    expect(named.map((i) => [i.type, i.testid, i.name, i.value])).toEqual([["checkbox", TERMS_BOX, "consent", "1"], ["checkbox", MINORS_BOX, "consentMinors", "1"]]);
+    expect(bare.map((i) => [i.type, i.testid, i.name, i.value])).toEqual([["checkbox", TERMS_BOX, undefined, undefined], ["checkbox", MINORS_BOX, undefined, undefined]]);
   });
 
   it("Cancel hands control back", async () => {
@@ -943,7 +1005,7 @@ describe("a connected channel's row", () => {
     expect(form![0]).toMatch(/\baction="\/api\/youtube\/connect"/);
     const fields = Object.fromEntries(inputsOf(form![1]!).map((i) => [i.name, i.value]));
     expect(fields).toEqual({ orgId: "o", connectionId: "11111111-2222-4333-8444-555555555555", privacy: "public", madeForKids: "1" });
-    expect(inputsOf(form![1]!).some((i) => i.name === "consent")).toBe(false);
+    expect(inputsOf(form![1]!).filter((i) => i.name === "consent" || i.name === "consentMinors"), "neither box's field").toEqual([]);
   });
 
   describe("Settings", () => {
@@ -1030,34 +1092,42 @@ describe("a connected channel's row", () => {
 
   describe("Review updated terms", () => {
     const mount = (y: Partial<View> = {}) => renderIsland(YoutubeChannelRow, { t: channel({ connectionId: "c-7", termsOutdated: true, ...y }), canEdit: true, orgId: "org-1", badge: null });
-    const tickTerms = (row: ReturnType<typeof mount>, on: boolean) => (attr(ofType(row.tree(), ConsentBox)!, "onChange") as (v: boolean) => void)(on);
-
-    it("shows the consent text with an untouched box; Accept is disabled until ticked; ticking and accepting PATCHes {consent: true} (the route's own schema), refreshes, closes", async () => {
+    it("shows BOTH boxes untouched; Accept is disabled with none, only the terms or only the under-16 box, and Enter sends nothing then; both ticked and accepted PATCHes {consent: true, consentMinors: true} (the route's own schema), refreshes, closes", async () => {
       const row = mount();
       await click(byTestId(row.tree(), "youtube-review-terms"));
       expect(ofType(row.tree(), ConsentBox), "the wording is on screen to be read").toBeDefined();
       expect(attr(ofType(row.tree(), ConsentBox)!, "withName"), "a PATCH, not a form field").toBe(false);
-      expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled")).toBe(true);
-      await submit(byTestId(row.tree(), "youtube-terms-form"));
-      expect(apiCalls, "unticked: Enter sends nothing").toEqual([]);
+      expect(boxesShown(row.tree), "both boxes start empty").toEqual({ [TERMS_BOX]: false, [MINORS_BOX]: false });
 
-      tickTerms(row, true);
-      expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled")).toBe(false);
+      let refused = 0;
+      for (const s of TICK_STATES.filter((x) => !x.consent)) {
+        setBoxes(row.tree, s);
+        expect(boxesShown(row.tree), s.name).toEqual({ [TERMS_BOX]: s.terms, [MINORS_BOX]: s.minors });
+        expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled"), `${s.name}: Accept disabled`).toBe(true);
+        await submit(byTestId(row.tree(), "youtube-terms-form"));
+        expect(apiCalls, `${s.name}: Enter sends nothing`).toEqual([]);
+        refused++;
+      }
+      expect(refused, "anti-vacuity: the three states that are not a consent").toBe(3);
+
+      setBoxes(row.tree, { terms: true, minors: true });
+      expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled"), "both: Accept enabled").toBe(false);
       await submit(byTestId(row.tree(), "youtube-terms-form"));
-      expect(apiCalls).toEqual([{ url: "/api/v1/orgs/org-1/youtube-connections/c-7", method: "PATCH", json: { consent: true } }]);
+      expect(apiCalls).toEqual([{ url: "/api/v1/orgs/org-1/youtube-connections/c-7", method: "PATCH", json: { consent: true, consentMinors: true } }]);
       expect(isRealRoute("PATCH", apiCalls[0]!.url)).toBe(true);
       expect(() => YoutubeConnectionSettings.parse(apiCalls[0]!.json)).not.toThrow();
       expect(nav.refresh).toHaveBeenCalledTimes(1);
       expect(byTestId(row.tree(), "youtube-terms-form")).toBeUndefined();
     });
 
-    it("the tick does not survive a close: reopening starts unticked (consent is given each time it is read)", async () => {
+    it("the ticks do not survive a close: reopening starts with both boxes empty (consent is given each time it is read)", async () => {
       const row = mount();
       await click(byTestId(row.tree(), "youtube-review-terms"));
-      tickTerms(row, true);
+      setBoxes(row.tree, { terms: true, minors: true });
       await click(byTestId(row.tree(), "youtube-terms-cancel"));
       await click(byTestId(row.tree(), "youtube-review-terms"));
-      expect(attr(ofType(row.tree(), ConsentBox)!, "checked")).toBe(false);
+      expect(boxesShown(row.tree)).toEqual({ [TERMS_BOX]: false, [MINORS_BOX]: false });
+      expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled")).toBe(true);
       expect(apiCalls).toEqual([]);
     });
 
