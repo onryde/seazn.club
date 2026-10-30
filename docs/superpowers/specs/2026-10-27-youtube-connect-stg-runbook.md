@@ -82,8 +82,8 @@ competition public or unlisted, and notes the organisation id and its default lo
    If the account has several channels, pick yours under **Choose a channel** → **Connect channel**.
 
 **Expect.** You land on Streaming with "YouTube channel connected." and a row for your channel (channel name,
-visibility Unlisted, "Not made for kids"). Straight after connecting the badge may read **Not checked yet** ("Seazn hasn't
-confirmed that this channel can go live yet."): that is correct until a Go live succeeds or the 04:17 UTC daily check
+visibility Unlisted, "Not made for kids"). Straight after connecting the badge may read **Not checked yet** ("Seazn checks this
+the next time you go live."): that is correct until a Go live succeeds or the 04:17 UTC daily check
 runs (`connections.ts:221-229`, `prepare.ts:399-407`). **Record** the badge text, whether Google showed the unverified
 screen, and what the permissions page lists for Seazn now.
 
@@ -129,7 +129,10 @@ For **each** of the two videos in Studio:
   from `schedule.vs`; in English it is `vs`; the spec writes `v`, the shipped text is `vs`). A missing entrant reads
   `TBD`. At most 100 characters; an over-long title gives up the competition first, then the division
   (`server/youtube/title.ts:13-14`, `prepare.ts:279-285`).
-- **Description** is "Live score and results:" followed by the public match page URL.
+- **Description** is two paragraphs: "Live score and results:" followed by the public match page URL, then a blank line and
+  "Powered by Seazn Club · <this environment's site origin>/" (stg links stg, prod links prod; the words are in the
+  organisation's default locale; owner request 2026-10-29). Shown for every organisation, including ones with
+  `dashboard.branding` (owner, 2026-10-29).
 - **Visibility.** This is the spec §10 unknown: whether YouTube forces an unverified project's videos to Private even
   when the API asks for Unlisted. Seazn asked for Unlisted; **record what Studio's Visibility column says**, and open
   each video's watch link in a window that is NOT signed in to Google (an Unlisted video plays by link; Private says the
@@ -160,7 +163,8 @@ Only after the agent has finished S0–S4. Disconnect is refused while a match i
    removed its access.
 3. Verify at Google: reload the third-party access page. **Record** what it lists for Seazn now (gone entirely, or only
    its YouTube access gone, or still listed), against the two snapshots from steps 1 and 2.
-4. Verify in YouTube Studio: the stream keys Seazn created (named **Seazn stream key**) are gone from the stream-key
+4. Verify in YouTube Studio: the stream keys Seazn created (named **Seazn Club · stream key 1**, **… 2**, … by pool slot, in the
+   organisation's default locale) are gone from the stream-key
    list. **The two videos stay** ("Videos already on YouTube stay there.", says the Disconnect dialog).
 5. Verify on the match page: the replay player and the stream link are gone.
 
@@ -372,7 +376,7 @@ select s.id, s.youtube_broadcast_id
 | 2 | Join (R-VRVN) | Studio shows **one** video for Run A; S2/S3: one broadcast, `sessions = 2`, one `youtube_broadcast_id` |
 | 3 | End timing | S2 `completed_after_stop` and `youtube_end_after_stop` both in [5, 10) minutes on stg, for both broadcasts |
 | 4 | Gap | Run B is a **different** broadcast id; Studio shows **two** videos |
-| 5 | Titles | Both videos (Studio and S2) titled `<Home> vs <Away> · <Division> · <Competition>`, description has the match URL |
+| 5 | Titles | Both videos (Studio and S2) titled `<Home> vs <Away> · <Division> · <Competition>`, description has the match URL and, below it, the "Powered by Seazn Club" line linking the site (shown for every org, including ones with `dashboard.branding`) |
 | 6 | Replay | S4: Part 1 and Part 2, `stream_url` = Part 1; the match page shows both tabs and each opens its own video |
 | 7 | Visibility | **Recorded, not graded** (spec §10): Studio's value and the signed-out behaviour for each video |
 | 8 | Disconnect | S5 as above; Seazn's keys gone from Studio; videos remain; match page shows no player and no link; Google page recorded |
@@ -427,6 +431,11 @@ Also by design, seen during this run:
 - **A Private channel gets no public replay**: a Private broadcast is not a part the public sees, and the end step does
   not write its link (`V480`, `end-step.ts:328`). That is why step 2 keeps Unlisted.
 - **The first part owns `fixtures.stream_url`**: written only while empty (`usecases/fixtures.ts:521-535`).
+- **Studio's own Go live page shows a yellow "Error: Stream key is currently assigned …"** while a match streams
+  (stg run, 2026-10-29). That page opens on Studio's own stream event and picks the most recent key, which is the one
+  Seazn bound to the match's broadcast; Studio refuses to share it and says so. The match broadcast is unaffected (it
+  was live and playable signed-out the whole time). Watch the match from **Content → Live → <the match's video>** or
+  **Change dashboard**, not from Studio's Go live page.
 
 ---
 
@@ -504,7 +513,7 @@ Read from the tree on `4e3b165274`.
 | Dead-grant purge: 7 days | `YOUTUBE_DEAD_GRANT_PURGE_DAYS`, `lib/youtube.ts:206` |
 | Refresh at 25 days, ceiling 30, failed-row retention 30, revoke allowance 5 s | `server/youtube/daily.ts:86`, `:89`, `:94`, `:107` |
 | 10 live keys per channel | `lib/youtube.ts:33` |
-| Pooled key's name in Studio: "Seazn stream key" | `server/youtube/prepare.ts:66` |
+| Pooled key's name in Studio: "Seazn Club · stream key {n}", n = its pool slot 1–10 (never the match; es/fr/nl words in `dictionaries/*/ui.json` `streaming.youtube.streamKeyTitle`); read just before the stream is made, so two Go lives racing may share a number | `growPool` in `server/youtube/prepare.ts` |
 | Title shape, 100-character limit, `vs` word from `schedule.vs` | `server/youtube/title.ts:13-14`, `prepare.ts:279-285`, `dictionaries/en/ui.json` |
 | Streaming page `/streaming` | `STREAMING_PAGE_HREF`, `lib/youtube.ts:221` |
 | Google permissions page the policy names | `GOOGLE_THIRD_PARTY_ACCESS_URL`, `lib/youtube.ts:195` |
