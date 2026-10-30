@@ -1065,8 +1065,9 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(apiCalls).toEqual([{ url: DELETE_URL, method: "DELETE", json: undefined }]);
     expect(isRealRoute("DELETE", DELETE_URL), "the route table serves this path and method").toBe(true);
     expect(onDisconnected).toHaveBeenCalledTimes(1);
-    // the stand-in transport answers `{}`: no outcome on the wire is told as the cautious one, never as a confirmed revoke
-    expect(onDisconnected).toHaveBeenCalledWith({ name: "Riverside FC", outcome: "not_confirmed" });
+    // the stand-in transport answers `{}`: no outcome on the wire is told as the cautious one, never as a confirmed revoke - and no
+    // keysLeft is "not confirmed" too (null), never a 0 that would read as "every key went"
+    expect(onDisconnected).toHaveBeenCalledWith({ name: "Riverside FC", outcome: "not_confirmed", keysLeft: null });
     expect(nav.refresh).toHaveBeenCalledTimes(1);
     expect(byTestId(row.tree(), "youtube-error"), "no error line").toBeUndefined();
   });
@@ -1197,12 +1198,13 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
   it("the panel keeps the news of a disconnect after the row has left the list, and Dismiss clears it", async () => {
     const panel = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [channel()], locale: "en" });
     expect(ofType(panel.tree(), YoutubeDisconnectedNotice), "no notice before").toBeUndefined();
-    (attr(ofType(panel.tree(), YoutubeChannelRow)!, "onDisconnected") as (news: { name: string; outcome: string }) => void)({ name: "Riverside FC", outcome: "revoked" });
+    (attr(ofType(panel.tree(), YoutubeChannelRow)!, "onDisconnected") as (news: { name: string; outcome: string; keysLeft: number | null }) => void)({ name: "Riverside FC", outcome: "revoked", keysLeft: 0 });
     const notice = ofType(panel.tree(), YoutubeDisconnectedNotice);
     expect(notice, "the notice").toBeDefined();
     expect(attr(notice!, "name")).toBe("Riverside FC");
     expect(attr(notice!, "outcome")).toBe("revoked");
-    const html = renderToStaticMarkup(<DictProvider dict={messages as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name="Riverside FC" outcome="revoked" onDismiss={() => {}} /></DictProvider>);
+    expect(attr(notice!, "keysLeft")).toBe(0);
+    const html = renderToStaticMarkup(<DictProvider dict={messages as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name="Riverside FC" outcome="revoked" keysLeft={0} onDismiss={() => {}} /></DictProvider>);
     expect(plain(html)).toContain("Riverside FC is disconnected. Seazn deleted what it stored from YouTube for this channel.");
     expect(html).toMatch(/data-testid="youtube-disconnected"[^>]*\brole="status"|\brole="status"[^>]*data-testid="youtube-disconnected"/);
     (attr(notice!, "onDismiss") as () => void)();
@@ -1211,7 +1213,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
 
   it("m6: the news of a disconnect TAKES FOCUS as it appears (the button that asked left with the row, and focus would fall to the top of the page): the notice is a focusable block that hands itself the focus on attach, with the house ring; each new piece of news is a new element, so it focuses again - on the full page and on the restricted one", () => {
     // The notice itself
-    const notice = renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "revoked", onDismiss: () => {} });
+    const notice = renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "revoked", keysLeft: 0, onDismiss: () => {} });
     const box = byTestId(notice.tree(), "youtube-disconnected")!;
     expect(box, "the notice box").toBeDefined();
     expect(attr(box, "tabIndex"), "focusable, but not in the tab order").toBe(-1);
@@ -1225,12 +1227,12 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(() => attach!(null), "and the detach does nothing").not.toThrow();
     expect(el.focus).toHaveBeenCalledTimes(1);
     // an alert (a revoke Seazn could not confirm) is focusable the same way
-    const alert = byTestId(renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "not_confirmed", onDismiss: () => {} }).tree(), "youtube-disconnected")!;
+    const alert = byTestId(renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "not_confirmed", keysLeft: 0, onDismiss: () => {} }).tree(), "youtube-disconnected")!;
     expect(attr(alert, "role")).toBe("alert");
     expect(attr(alert, "tabIndex")).toBe(-1);
 
     // The mount sites: a different piece of news is a different element (a key), so a second disconnect focuses again.
-    type Done = (n: { name: string; outcome: string }) => void;
+    type Done = (n: { name: string; outcome: string; keysLeft?: number | null }) => void;
     const pair = (): StreamTarget[] => [
       channel({ connectionId: "c-1", channelTitle: "Riverside FC" }, { id: "t-1" }),
       channel({ connectionId: "c-2", channelTitle: "Riverside Juniors" }, { id: "t-2" }),
@@ -1251,6 +1253,25 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
       sites++;
     }
     expect(sites, "anti-vacuity: both mount sites judged").toBe(2);
+  });
+
+  it("keys left reach the notice from BOTH mount sites - the full page and the restricted one - as the row handed them: a count, and null (anti-vacuity: 2 sites x 2 values)", () => {
+    type Done = (n: { name: string; outcome: string; keysLeft: number | null }) => void;
+    let checked = 0;
+    for (const [where, make] of [
+      ["the full page", () => renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [channel()], locale: "en" })],
+      ["the restricted page", () => renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: [channel()] })],
+    ] as const) {
+      for (const keysLeft of [3, null]) {
+        const panel = make();
+        (attr(ofType(panel.tree(), YoutubeChannelRow)!, "onDisconnected") as Done)({ name: "Riverside FC", outcome: "revoked", keysLeft });
+        const notice = ofType(panel.tree(), YoutubeDisconnectedNotice);
+        expect(notice, `${where}/${keysLeft}: the notice`).toBeDefined();
+        expect(attr(notice!, "keysLeft"), `${where}/${keysLeft}: handed on`).toBe(keysLeft);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
   });
 
   it("F5: after a disconnect the connect round trip's landing banner ('YouTube channel connected.') does not sit above 'X is disconnected' - every non-picker landing goes, and its ?youtube= query with it; the picker, other landings' absence and a no-landing page are unaffected (anti-vacuity: every banner code)", () => {
@@ -1293,13 +1314,26 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(Object.keys(OUTCOME_COPY).sort(), "a declared outcome without copy would be told as another").toEqual([...YOUTUBE_REVOKE_OUTCOMES].sort());
     let checked = 0;
     for (const outcome of YOUTUBE_REVOKE_OUTCOMES) {
-      answerWith(async () => ({ revokeOutcome: outcome, keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } }));
+      answerWith(async () => ({ revokeOutcome: outcome, keysDeleted: 0, keysLeft: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } }));
       const onDisconnected = vi.fn();
       await click(disconnectBtn(mount({ channelTitle: "Riverside FC" }, { onDisconnected })));
-      expect(onDisconnected, outcome).toHaveBeenCalledWith({ name: "Riverside FC", outcome });
+      expect(onDisconnected, outcome).toHaveBeenCalledWith({ name: "Riverside FC", outcome, keysLeft: 0 });
       checked++;
     }
     expect(checked).toBe(YOUTUBE_REVOKE_OUTCOMES.length);
+  });
+
+  it("keys left: the row hands the page the `keysLeft` the wire carried - a count, null (the channel could not be read) - and an answer without one is told as null, the cautious one (anti-vacuity: 4 answers)", async () => {
+    const answers: [wire: unknown, want: number | null][] = [[2, 2], [1, 1], [null, null], [undefined, null]];
+    let checked = 0;
+    for (const [wire, want] of answers) {
+      answerWith(async () => ({ revokeOutcome: "revoked", keysDeleted: 0, ...(wire === undefined ? {} : { keysLeft: wire }), purged: { broadcasts: 0, streamUrlsCleared: 0 } }));
+      const onDisconnected = vi.fn();
+      await click(disconnectBtn(mount({ channelTitle: "Riverside FC" }, { onDisconnected })));
+      expect(onDisconnected, String(wire)).toHaveBeenCalledWith({ name: "Riverside FC", outcome: "revoked", keysLeft: want });
+      checked++;
+    }
+    expect(checked).toBe(answers.length);
   });
 
   it("F1: the notice tells the three outcomes apart in all four locales, from the dictionaries - revoked and 'kept on purpose' are calm statuses; 'not confirmed' is an alert that carries the plain Google link, and ONLY that one does (anti-vacuity: 3 outcomes x 4 locales)", () => {
@@ -1309,12 +1343,13 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
       const sentences = new Set<string>();
       for (const outcome of YOUTUBE_REVOKE_OUTCOMES) {
         const want = OUTCOME_COPY[outcome];
-        const html = inLocale(l, <YoutubeDisconnectedNotice name="Riverside FC" outcome={outcome} onDismiss={() => {}} />);
+        const html = inLocale(l, <YoutubeDisconnectedNotice name="Riverside FC" outcome={outcome} keysLeft={0} onDismiss={() => {}} />);
         const expected = dict[want.key]!.replaceAll("{name}", "Riverside FC").replaceAll("{link}", dict["streaming.youtube.disconnect.googleLink"]!);
         expect(plain(html), `${l}/${outcome}: the dictionary's sentence`).toContain(expected);
         expect(html, `${l}/${outcome}: no placeholder left in the page`).not.toMatch(/\{(name|link)\}/);
         expect(html, `${l}/${outcome}: role`).toMatch(new RegExp(`role="${want.role}"`));
         expect(html, `${l}/${outcome}: outcome marker`).toContain(`data-outcome="${outcome}"`);
+        expect(html, `${l}/${outcome}: nothing left`).toContain('data-keys-left="0"');
         expect(html, `${l}/${outcome}: no logo in the notice`).not.toMatch(/<svg|<img/);
         if (want.link) {
           // The href is the ONE constant (lib/youtube.ts); the literal it must equal - the page the Developer Policies name - is pinned in
@@ -1331,6 +1366,82 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
       expect(sentences.size, `${l}: three different sentences`).toBe(YOUTUBE_REVOKE_OUTCOMES.length);
     }
     expect(checked).toBe(LOCALES.length * YOUTUBE_REVOKE_OUTCOMES.length);
+  });
+
+  // Keys left on the channel (stg 2026-10-30, PO ruling): "deleted" must never be said while a Seazn key is still in the club's Studio. The
+  // sentence LEADS with what is left and where to delete it - a count (Intl.PluralRules picks `.one` / `.other`, the repo's plural keys) or,
+  // when the channel could not be read, "couldn't check" - and the grant's own outcome follows as a sentence of its own. Expected text is the
+  // dictionaries' in every locale, the plural form chosen by the platform's CLDR rules - never read back from the component.
+  const pluralOf = (dict: Record<string, string>, l: string, key: string, count: number) =>
+    dict[`${key}.${new Intl.PluralRules(l).select(count)}`] ?? dict[`${key}.other`]!;
+  const KEYS_STATES = [
+    { keysLeft: 1, outcome: "revoked", tail: null },
+    { keysLeft: 2, outcome: "revoked", tail: null },
+    { keysLeft: null, outcome: "revoked", tail: null },
+    { keysLeft: 1, outcome: "skipped_shared_account", tail: "streaming.youtube.disconnect.keysTail.shared" },
+    { keysLeft: null, outcome: "not_confirmed", tail: "streaming.youtube.disconnect.keysTail.unconfirmed" },
+  ] as const;
+
+  it("keys left, in all four locales: the sentence says how many keys are still on the channel (or that Seazn couldn't check) and where to delete them - never the 'deleted' sentence - and the shared and not-confirmed outcomes still say theirs after it; an alert with its own marker (anti-vacuity: 5 states x 4 locales)", () => {
+    let checked = 0;
+    const perLocale = new Map<string, number>();
+    for (const l of LOCALES) {
+      const dict = localeDict(l);
+      const sentences = new Set<string>();
+      for (const st of KEYS_STATES) {
+        const html = inLocale(l, <YoutubeDisconnectedNotice name="Riverside FC" outcome={st.outcome} keysLeft={st.keysLeft} onDismiss={() => {}} />);
+        const where = `${l}/${st.outcome}/${st.keysLeft}`;
+        const lead = (st.keysLeft === null ? dict["streaming.youtube.disconnect.keysUnchecked"]! : pluralOf(dict, l, "streaming.youtube.disconnect.keysLeft", st.keysLeft))
+          .replaceAll("{name}", "Riverside FC").replaceAll("{count}", String(st.keysLeft));
+        const tail = st.tail === null ? "" : ` ${dict[st.tail]!.replaceAll("{link}", dict["streaming.youtube.disconnect.googleLink"]!)}`;
+        expect(plain(html), `${where}: the dictionary's sentence(s)`).toContain(`${lead}${tail}`);
+        if (st.keysLeft !== null) expect(plain(html), `${where}: the count is in it`).toContain(String(st.keysLeft));
+        for (const told of ["streaming.youtube.disconnect.done", "streaming.youtube.disconnect.doneShared", "streaming.youtube.disconnect.doneUnconfirmed"]) {
+          expect(plain(html), `${where}: never "${told}"`).not.toContain(dict[told]!.replaceAll("{name}", "Riverside FC").split("{link}")[0]!.trim());
+        }
+        expect(html, `${where}: no placeholder left`).not.toMatch(/\{(name|count|link)\}/);
+        expect(html, `${where}: an alert - there is something for the organiser to do`).toMatch(/role="alert"/);
+        expect(html, `${where}: the outcome marker stands`).toContain(`data-outcome="${st.outcome}"`);
+        expect(html, `${where}: the keys marker`).toContain(`data-keys-left="${st.keysLeft === null ? "unknown" : st.keysLeft}"`);
+        const linked = html.includes(`href="${GOOGLE_THIRD_PARTY_ACCESS_URL}"`);
+        expect(linked, `${where}: the Google link only where the revoke was not confirmed`).toBe(st.outcome === "not_confirmed");
+        sentences.add(plain(html));
+        checked++;
+      }
+      expect(sentences.size, `${l}: five different notices`).toBe(KEYS_STATES.length);
+      perLocale.set(l, sentences.size);
+    }
+    expect(perLocale.size, "the new sentence rendered in every locale").toBe(4);
+    expect(checked).toBe(LOCALES.length * KEYS_STATES.length);
+  });
+
+  it("keys left: the new sentences exist in every locale, are not the English in es/fr/nl, keep their slots, and the plural pair differs (one key vs several) - and nothing is left (0) is the plain 'deleted' sentence, the positive pair", () => {
+    const slots: Record<string, string[]> = {
+      "streaming.youtube.disconnect.keysLeft.one": ["{name}", "{count}"],
+      "streaming.youtube.disconnect.keysLeft.other": ["{name}", "{count}"],
+      "streaming.youtube.disconnect.keysUnchecked": ["{name}"],
+      "streaming.youtube.disconnect.keysTail.shared": [],
+      "streaming.youtube.disconnect.keysTail.unconfirmed": ["{link}"],
+    };
+    let checked = 0;
+    for (const l of LOCALES) {
+      const d = localeDict(l);
+      for (const [k, want] of Object.entries(slots)) {
+        const v = d[k];
+        expect(v, `${l} ${k}`).toBeTypeOf("string");
+        if (l !== "en") expect(v, `${l} ${k} is not the English`).not.toBe(localeDict("en")[k]);
+        expect((v!.match(/\{\w+\}/g) ?? []).sort(), `${l} ${k}: its slots`).toEqual([...want].sort());
+        checked++;
+      }
+      expect(d["streaming.youtube.disconnect.keysLeft.one"], `${l}: one key reads differently from several`).not.toBe(d["streaming.youtube.disconnect.keysLeft.other"]);
+      const none = plain(inLocale(l, <YoutubeDisconnectedNotice name="Riverside FC" outcome="revoked" keysLeft={0} onDismiss={() => {}} />));
+      expect(none, `${l}: nothing left is the plain sentence`).toContain(d["streaming.youtube.disconnect.done"]!.replaceAll("{name}", "Riverside FC"));
+    }
+    expect(checked).toBe(LOCALES.length * Object.keys(slots).length);
+    // the English, typed from the PO ruling
+    expect(m("streaming.youtube.disconnect.keysLeft.other", { name: "X", count: 2 })).toBe(
+      "X is disconnected, but Seazn couldn't delete 2 stream keys from YouTube. Delete them in YouTube Studio → Go live → Stream → Manage stream keys.",
+    );
   });
 
   it("F1: only the unconfirmed sentence says Google may still hold access, and only the shared one says why it stays (the English wording, typed from the ruling)", () => {
@@ -1784,11 +1895,19 @@ describe("the copy", () => {
     const used = new Set([...(SOURCE + PANEL_SOURCE).matchAll(/"((?:streaming\.youtube|streaming\.keys)\.[A-Za-z_.]+)"/g)].map((x) => x[1]!));
     expect(used.size, "the scan found keys").toBeGreaterThan(40);
     let checked = 0;
+    let plurals = 0;
     for (const k of used) {
-      expect((messages as Record<string, string>)[k], k).toBeTypeOf("string");
+      const dict = messages as Record<string, string>;
+      // A key read through the plural helper (`useMsgPlural`) is a BASE: it resolves to `<base>.<CLDR category>`, falling back to
+      // `<base>.other`, which must therefore exist (lib/i18n-runtime.ts `plural`).
+      if (dict[k] === undefined && typeof dict[`${k}.other`] === "string") {
+        expect(dict[`${k}.one`], `${k}: a plural base has its singular`).toBeTypeOf("string");
+        plurals++;
+      } else expect(dict[k], k).toBeTypeOf("string");
       checked++;
     }
     expect(checked).toBe(used.size);
+    expect(plurals, "the one plural base the notice reads (keys left)").toBe(1);
   });
 
   it("the user-visible strings in the new component are all dictionary keys: no English sentence is hardcoded in its JSX", () => {
