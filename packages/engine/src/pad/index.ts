@@ -25,8 +25,11 @@ import {
   CricketToss,
   ExtraKind,
   FIELDER_CREDIT_COLUMN,
+  FIELDER_OPTIONAL_KINDS,
   FREE_HIT_DISMISSAL_KINDS,
+  NO_BALL_DEFAULT_RUNS,
   PENALTY_RUNS,
+  SUPER_OVER_EVENT_TYPES,
   VARIABLE_OUT_KINDS,
   WIDE_DEFAULT_RUNS,
   WicketKind,
@@ -40,6 +43,7 @@ export const cricketPadRules: CricketPadRules = Object.freeze({
   wicketKinds: WicketKind.options,
   extraKinds: ExtraKind.options,
   fielderCreditedKinds: Object.freeze(Object.keys(FIELDER_CREDIT_COLUMN)),
+  fielderOptionalKinds: Object.freeze([...FIELDER_OPTIONAL_KINDS]),
   freeHitDismissalKinds: Object.freeze([...FREE_HIT_DISMISSAL_KINDS]),
   bowlerCreditedKinds: Object.freeze([...BOWLER_CREDITED_KINDS]),
   variableOutKinds: Object.freeze([...VARIABLE_OUT_KINDS]),
@@ -51,6 +55,8 @@ export const cricketPadRules: CricketPadRules = Object.freeze({
   reviewOutcomes: CricketReview.shape.outcome.options,
   penaltyRuns: PENALTY_RUNS,
   wideDefaultRuns: WIDE_DEFAULT_RUNS,
+  noBallDefaultRuns: NO_BALL_DEFAULT_RUNS,
+  superOverEventTypes: Object.freeze([...SUPER_OVER_EVENT_TYPES]),
   ballsPerOver: (cfg: unknown): number =>
     CricketCfg.shape.ballsPerOver.parse(cfg !== null && typeof cfg === "object" ? (cfg as { ballsPerOver?: unknown }).ballsPerOver : undefined),
 });

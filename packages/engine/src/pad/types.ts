@@ -59,7 +59,9 @@ export interface CricketPadRules extends PadRulesBase {
   readonly fielderCreditedKinds: readonly string[];
   readonly freeHitDismissalKinds: readonly string[];
   readonly bowlerCreditedKinds: readonly string[];
-  /** (c) - Q1b. */
+  /** Members of fielderCreditedKinds whose fielder is optional (ruling 242: obstructed). */
+  readonly fielderOptionalKinds: readonly string[];
+  /** (c) - Q1b, ruling 242. */
   readonly variableOutKinds: readonly string[];
   readonly boundaryValues: readonly number[];
   readonly tossElections: readonly string[];
@@ -69,8 +71,12 @@ export interface CricketPadRules extends PadRulesBase {
   readonly reviewOutcomes: readonly string[];
   /** (c) Law 41: 5. */
   readonly penaltyRuns: number;
-  /** (c) Law 22: 1. */
+  /** (c) Law 22.6: 1. */
   readonly wideDefaultRuns: number;
+  /** (c) Law 21.14: 1. */
+  readonly noBallDefaultRuns: number;
+  /** The cricket.* event types the fold accepts in a super over. */
+  readonly superOverEventTypes: readonly string[];
   ballsPerOver(cfg: unknown): number;
 }
 

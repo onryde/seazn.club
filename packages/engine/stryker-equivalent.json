@@ -470,19 +470,19 @@
       "reason": "Only a hook-less fake reaches this fallback, and only a DECIDED fold reads the decided arm: there guarantee 4 (ALREADY_DECIDED) answers every forfeit before the phase guard except a withdrawal over a held level result, and \"withdrew\" is admitted in every phase (R5), so the phase name is never read into a refusal."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:4152:57 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4178:57 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = cricketForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "cricketForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:4154:75 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4180:75 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"home\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:4155:75 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4181:75 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"away\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
@@ -1658,31 +1658,31 @@
       "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:1192:5 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:1200:5 ConditionalExpression → false",
       "original": "state.quota === null",
       "line": "state.quota === null ||",
       "reason": "W2e T25 (moved into dlsAbandonmentPar by T8). Reached only past `!state.cfg.dls.enabled`, and DLS is on only with balls per innings (the config refine, cricket.ts:144); quota starts as cfg.ballsPerInnings and its one other write is a revise's number (a timeless revise is refused), so quota is never null here. Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:1194:5 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:1202:5 ConditionalExpression → false",
       "original": "state.r1 === null",
       "line": "state.r1 === null ||",
       "reason": "W2e T25. Past the DLS conjunct the quota is never null (DLS needs balls per innings), so createInnings set R1 when the first innings opened and a revise only lowers it; R1 is never null here (TypeScript narrowing). Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:1195:5 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:1203:5 ConditionalExpression → false",
       "original": "state.r2 === null",
       "line": "state.r2 === null ||",
       "reason": "W2e T25. Past the DLS conjunct the quota is never null, and dlsAbandonmentPar is reached only for a one-innings match (applyAbandon draws two-innings matches first; nrrCredits returns first), so createInnings set R2 when the chase opened; R2 is never null here (TypeScript narrowing). Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:1196:5 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:1204:5 ConditionalExpression → false",
       "original": "chase.ballsLimit === null",
       "line": "chase.ballsLimit === null",
       "reason": "W2e T25. The chase's ballsLimit is the quota it opened with (createInnings) or a revise's number, and past the DLS conjunct the quota is never null (DLS needs balls per innings), so the allocation is never null here (TypeScript narrowing). Proved by w2e-cricket.test.ts 'CK-RR-1 premise: DLS is on only in a limited-overs match'."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3682:19 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:3708:19 ConditionalExpression → false",
       "original": "chase.ballsLimit === null",
       "line": "if (!revised || chase.ballsLimit === null) return played;",
       "reason": "W2e T25 (nrrCredits, T8). A chase's ballsLimit is null only in a timeless match, where it equals cfg.ballsPerInnings (both null) and targetSource stays null (a revise and a DLS target both need limited overs), so `revised` is false and the first operand already returns: the second operand is TypeScript narrowing for `balls: chase.ballsLimit`."
@@ -1796,13 +1796,13 @@
       "reason": "W2e T25 (summary.shootoutNext, HK-SO-1). A TypeScript narrowing conjunct past phase === 'SHOOTOUT'. The one transition into that phase (resolveEnd, kernel.ts:1104) happens only when state.cfg.shootout !== null, and a match's cfg is fixed by its fold, so cfg.shootout is never null in that phase."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3672:41 ConditionalExpression → false",
+      "mutant": "src/sports/cricket/cricket.ts:3698:41 ConditionalExpression → false",
       "original": "team1 === undefined",
       "line": "if (state.cfg.inningsPerSide !== 1 || team1 === undefined || chase === undefined) return played;",
       "reason": "W2e T25 (nrrCredits, CK-RR-1). Array destructuring: team1 is innings[0], so whenever it is undefined, chase (innings[1]) is undefined too and the next operand still returns played. The test 'a settled win over a match that never reached its chase' pins the no-innings case."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3672:7 LogicalOperator → state.cfg.inningsPerSide !== 1 && team1 === undefined",
+      "mutant": "src/sports/cricket/cricket.ts:3698:7 LogicalOperator → state.cfg.inningsPerSide !== 1 && team1 === undefined",
       "original": "state.cfg.inningsPerSide !== 1 || team1 === undefined",
       "line": "if (state.cfg.inningsPerSide !== 1 || team1 === undefined || chase === undefined) return played;",
       "reason": "W2e T25 (nrrCredits, CK-RR-1). Lets a two-innings match with a second innings past the guard, where it is credited as played anyway. A two-innings match takes no revise (cricket.ts:1103, refused on replay too) and gets no DLS target (maybeComputeDlsTarget, cricket.ts:1074, gates on one innings), so r1, r2 and targetSource stay null and ballsLimit stays the quota, and neither the par branch nor the revised branch can apply."

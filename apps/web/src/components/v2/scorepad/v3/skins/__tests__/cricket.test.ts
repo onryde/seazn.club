@@ -14,6 +14,8 @@ import { assertDisabledTilesExplained } from "../../tile-grid";
 import type { GuidedSheetSpec, PadHostView, SkinDefV3 } from "../../types";
 import {
   ballEventType,
+  closeReasonLabel,
+  retireReasonLabel,
   ballsPerOverOf,
   bowlerBlockReason,
   buildContext,
@@ -727,6 +729,20 @@ describe("cricketBallDetail — free hit note (R2b)", () => {
     expect(result).toBe("pad.cricket.ribbon.ball.dot");
   });
 
+  it("a super-over ball is labelled after a super-over no ball even when the main match is unlimited-overs (the engine's super over is always white-ball)", () => {
+    const history = [
+      { type: "cricket.superover.ball", payload: { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
+    ];
+    const result = cricketBallDetail({
+      t,
+      eventType: "cricket.superover.ball",
+      payload: { over: 0, ballInOver: 1, runs: { bat: 1 } },
+      history,
+      cfg: cfg({ ballsPerInnings: null, superOver: true }),
+    });
+    expect(result).toBe('pad.cricket.ribbon.ball.freeHit({"detail":"pad.cricket.ribbon.ball.run"})');
+  });
+
   it("cfg.ballsPerInnings === null: never labelled, even right after a no-ball", () => {
     const history = [
       { type: "cricket.ball", payload: { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } } },
@@ -776,18 +792,23 @@ describe("runRate", () => {
 });
 
 describe("variantCode", () => {
-  it("reads TEST for a two-innings cfg regardless of other fields", () => {
-    expect(variantCode({ inningsPerSide: 2, ballsPerOver: 6 })).toBe("TEST");
+  // Pad wave P2 (review, trace d): the presets are the engine's (`cricket.variants`), each parsed through its schema.
+  const SHIPPED_CODES: Readonly<Record<string, string>> = { t20: "T20", odi: "ODI", hundred: "HUNDRED", test: "TEST" };
+  const presets = cricket.variants as Record<string, unknown>;
+
+  it("names every engine preset by its shipped code, and the engine ships exactly the four", () => {
+    expect(Object.keys(presets).sort()).toEqual(Object.keys(SHIPPED_CODES).sort());
+    for (const [name, preset] of Object.entries(presets)) {
+      expect(variantCode(cricket.configSchema.parse(preset)), name).toBe(SHIPPED_CODES[name]);
+    }
   });
-  it("reads HUNDRED from the 5-ball over", () => {
-    expect(variantCode({ ballsPerOver: 5 })).toBe("HUNDRED");
+  it("keeps the code when a division changes a choice within the format (a super over)", () => {
+    expect(variantCode(cricket.configSchema.parse({ ...(presets.t20 as object), superOver: true }))).toBe("T20");
   });
-  it("reads T20/ODI from ballsPerInnings", () => {
-    expect(variantCode({ ballsPerOver: 6, ballsPerInnings: 120 })).toBe("T20");
-    expect(variantCode({ ballsPerOver: 6, ballsPerInnings: 300 })).toBe("ODI");
-  });
-  it("is null for a cfg matching none of the four shipped presets — never fabricates a label", () => {
-    expect(variantCode({ ballsPerOver: 6, ballsPerInnings: 40 })).toBeNull();
+  it("is null for a custom format the old single-key guesses misnamed — never fabricates a label", () => {
+    expect(variantCode({ inningsPerSide: 2, ballsPerOver: 6, ballsPerInnings: 120 }), "two innings of 120 balls (read TEST)").toBeNull();
+    expect(variantCode({ inningsPerSide: 1, ballsPerOver: 5, ballsPerInnings: 120 }), "five-ball overs, 120 balls (read HUNDRED)").toBeNull();
+    expect(variantCode({ inningsPerSide: 1, ballsPerOver: 6, ballsPerInnings: 40 })).toBeNull();
   });
 });
 
@@ -962,10 +983,18 @@ describe("buildScorebug", () => {
 // translated string is not a stable hook. Driven by the SAME
 // `freeHitPending` fold `cricketBallDetail`'s own note uses (that describe
 // block's header has the full correctness-trap/innings-boundary reasoning).
+// Pad wave P2 (review I2): the indicator reads the FOLD's flag
+// (`fine.freeHitPending`), never a scan of `view.events`; the real-fold
+// sequences (a taken-back no ball, a super-over no ball) are in
+// pad-rules-cricket.test.ts.
+const NO_BALL_EVENTS = [ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
+function freeHitState(over: Record<string, unknown> = {}) {
+  return state({ innings: [innings({ fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", freeHitPending: true } })], ...over });
+}
+
 describe("buildScorebug — free hit indicator (R2b)", () => {
-  it("appends an accented, identifiable strip item when a free hit is pending", () => {
-    const events = [ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
-    const spec = buildScorebug(view({ events }), t);
+  it("appends an accented, identifiable strip item when the fold has a free hit pending", () => {
+    const spec = buildScorebug(view({ state: freeHitState() }), t);
     expect(spec.strip.find((s) => s.id === "freeHit")).toEqual({
       id: "freeHit",
       value: "scorepad.skin.cricket.header.freeHit",
@@ -979,27 +1008,18 @@ describe("buildScorebug — free hit indicator (R2b)", () => {
     expect(spec.strip).toHaveLength(4);
   });
 
-  it("a legal ball after the no-ball clears it — the indicator disappears again", () => {
-    const events = [
-      ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
-      ballEvent("e2", { over: 0, ballInOver: 5, runs: { bat: 1 } }),
-    ];
-    const spec = buildScorebug(view({ events }), t);
+  it("reads the fold, not the event list: a no ball in view.events with the fold's flag clear shows nothing (a taken-back no ball)", () => {
+    const spec = buildScorebug(view({ events: NO_BALL_EVENTS }), t);
     expect(spec.strip.find((s) => s.id === "freeHit")).toBeUndefined();
   });
 
-  it("respects cfg.ballsPerInnings === null (a real unlimited-overs/test cfg) — no indicator even right after a no-ball", () => {
-    const events = [ballEvent("e1", { over: 0, ballInOver: 1, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
-    const spec = buildScorebug(
-      view({ cfg: cfg({ inningsPerSide: 2, ballsPerInnings: null }), events }),
-      t,
-    );
-    expect(spec.strip.find((s) => s.id === "freeHit")).toBeUndefined();
+  it("a closed innings carries none, even with its flag left set (a fresh innings starts without one)", () => {
+    const closed = state({ innings: [innings({ closed: true, fine: { striker: "h1", nonStriker: "h2", currentBowler: "a1", freeHitPending: true } })] });
+    expect(buildScorebug(view({ state: closed }), t).strip.find((s) => s.id === "freeHit")).toBeUndefined();
   });
 
   it("never shown outside live/super-over phase, even if a stale pending state were somehow computed", () => {
-    const events = [ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } })];
-    const spec = buildScorebug(view({ state: state({ phase: "done" }), events }), t);
+    const spec = buildScorebug(view({ state: freeHitState({ phase: "done" }), events: NO_BALL_EVENTS }), t);
     expect(spec.strip.find((s) => s.id === "freeHit")).toBeUndefined();
   });
 });
@@ -1043,18 +1063,40 @@ describe("chaseTarget", () => {
     ).toEqual({ value: 130, isDls: true });
   });
 
-  it("two-innings (test) cfg NEVER gets the arithmetic fallback — only an explicit revise, matching v2 exactly", () => {
+  // Pad wave P2 (review, trace b): a Test's target is the engine's own aggregation (`chaseTarget`), shown once the fourth
+  // innings exists. Expected values are the Laws' arithmetic (Law 16: the side batting last needs one more than the
+  // other side's aggregate less its own first innings), worked by hand below.
+  it("a two-innings (Test) match shows no target before its fourth innings", () => {
     const first = innings({ runs: 300, closed: true });
-    const second = innings({ runs: 40, closed: false });
-    expect(chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: [first, second] }))).toBeNull();
+    const second = innings({ battingSide: "away", runs: 40, closed: false });
+    expect(chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: [first, second], battingFirst: "home" }))).toBeNull();
+    const third = innings({ runs: 200, closed: true });
+    expect(chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: [first, { ...second, runs: 250, closed: true }, third], battingFirst: "home" }))).toBeNull();
   });
 
-  it("two-innings cfg DOES read an explicit revise", () => {
-    const first = innings({ runs: 300, closed: true });
-    const second = innings({ runs: 40, closed: false });
-    expect(
-      chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: [first, second], revisedTarget: 210, targetSource: "manual" })),
-    ).toEqual({ value: 210, isDls: false });
+  it("a Test's fourth innings chases the other side's aggregate less its own first innings, plus one (300 + 200 − 250 + 1 = 251)", () => {
+    const list = [
+      innings({ battingSide: "home", runs: 300, closed: true }),
+      innings({ battingSide: "away", runs: 250, closed: true }),
+      innings({ battingSide: "home", runs: 200, closed: true }),
+      innings({ battingSide: "away", runs: 10, closed: false }),
+    ];
+    expect(chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: list, battingFirst: "home" }))).toEqual({ value: 251, isDls: false });
+  });
+
+  it("after a follow-on the side that batted first chases (400 home; 150 and 300 away; 150 + 300 − 400 + 1 = 51)", () => {
+    const list = [
+      innings({ battingSide: "home", runs: 400, closed: true }),
+      innings({ battingSide: "away", runs: 150, closed: true }),
+      innings({ battingSide: "away", runs: 300, closed: true }),
+      innings({ battingSide: "home", runs: 0, closed: false }),
+    ];
+    expect(chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: list, battingFirst: "home", followOnEnforced: true }))).toEqual({ value: 51, isDls: false });
+  });
+
+  it("a Test whose state carries no battingFirst cannot name its chaser: no target, never a guess", () => {
+    const list = [innings({ runs: 300, closed: true }), innings({ battingSide: "away", runs: 250, closed: true }), innings({ runs: 200, closed: true }), innings({ battingSide: "away", runs: 10 })];
+    expect(chaseTarget(cfg({ inningsPerSide: 2 }), state({ innings: list }))).toBeNull();
   });
 });
 
@@ -2595,7 +2637,7 @@ describe("buildSheets — wicket flow (D-15)", () => {
     expect(spec.event).toBe("cricket.superover.ball");
   });
 
-  it("every WICKET_KINDS member is offered as a kind option, each with a real label", () => {
+  it("every engine wicket mode (cricketPadRules.wicketKinds) is offered as a kind option, each with a real label", () => {
     const spec = wicketSpec();
     const options = spec.steps[0]!.kind === "choice" ? spec.steps[0]!.options : [];
     expect(options.map((o) => o.id).sort()).toEqual([...cricketPadRules.wicketKinds].sort());
@@ -2662,26 +2704,20 @@ describe("buildSheets — wicket flow (D-15)", () => {
 // engine will refuse", `docs/superpowers/specs/2026-08-15-scoringpad-v3-
 // prompts/_INDEX.md`). The engine refuses every wicket kind except
 // runout/obstructed while `fine.freeHitPending` is true
-// (packages/engine/src/sports/cricket/cricket.ts:1275-1276) — before this,
-// the "kind" step offered all ten regardless, and a scorer picking e.g.
-// "bowled" on a free hit got a bare server rejection (the same generic-
-// rejection experience this whole branch exists to remove).
+// (`cricketPadRules.freeHitDismissalKinds`, the engine's
+// FREE_HIT_DISMISSAL_KINDS) — before this, the "kind" step offered all ten
+// regardless, and a scorer picking e.g. "bowled" on a free hit got a bare
+// server rejection (the same generic-rejection experience this whole branch
+// exists to remove).
 //
-// Driven by the SAME `freeHitPending` fold `buildScorebug`'s own indicator
-// and `cricketBallDetail`'s own activity note already use (that function's
-// own header, above) — reused here rather than a second derivation, which is
-// what stops this gate from ever disagreeing with what the scorer is already
-// shown on the scorebug strip. `FREE_HIT_WICKET_KINDS` (cricket.tsx, beside
-// WICKET_KINDS/FIELDER_ELIGIBLE_KINDS/VARIABLE_OUT_KINDS) is the closed set.
+// Driven by the fold's own flag (`foldFreeHitPending`), the one
+// `buildScorebug`'s indicator reads (pad wave P2, review I2), so this gate
+// can never disagree with the scorebug strip or with the engine.
 // ---------------------------------------------------------------------------
 
 describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
-  // Mirrors the exact fixture shape `describe("buildScorebug — free hit
-  // indicator (R2b)")` (above) already uses for "a free hit is pending" —
-  // one white-ball no-ball, nothing after it.
-  const freeHitEvents = [
-    ballEvent("e1", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }),
-  ];
+  // The fold's flag set, exactly as the indicator's own tests (above) set it.
+  const freeHitView = () => view({ state: freeHitState(), events: NO_BALL_EVENTS });
 
   function kindStepOf(spec: GuidedSheetSpec) {
     const step = spec.steps[0]!;
@@ -2690,7 +2726,7 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
   }
 
   it("free hit pending: the kind step offers EXACTLY runout and obstructed, nothing else, and carries a reason hint", () => {
-    const spec = buildSheets(view({ events: freeHitEvents }), t).wicket;
+    const spec = buildSheets(freeHitView(), t).wicket;
     const kind = kindStepOf(spec);
     expect(kind.options.map((o) => o.id).sort()).toEqual(["obstructed", "runout"]);
     expect(kind.hintKey).toBe("pad.cricket.sheet.wicket.kind.freeHitHint");
@@ -2703,17 +2739,14 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
     expect(kind.hintKey).toBeUndefined();
   });
 
-  it("no-ball -> wide -> legal ball still counts as pending here too — a wide must not un-gate the kind step (same fold as the indicator, never a second, driftable rule)", () => {
-    const events = [
-      ...freeHitEvents,
-      ballEvent("e2", { over: 0, ballInOver: 5, runs: { bat: 0, extras: { kind: "wide", runs: 1 } } }),
-    ];
-    const spec = buildSheets(view({ events }), t).wicket;
-    expect(kindStepOf(spec).options.map((o) => o.id).sort()).toEqual(["obstructed", "runout"]);
+  it("reads the fold, not the event list: a no ball in view.events with the fold's flag clear (taken back) offers all ten (review I2)", () => {
+    const spec = buildSheets(view({ events: NO_BALL_EVENTS }), t).wicket;
+    expect(kindStepOf(spec).options.map((o) => o.id)).toEqual([...cricketPadRules.wicketKinds]);
+    expect(kindStepOf(spec).hintKey).toBeUndefined();
   });
 
-  it("buildPayload still emits a valid payload for both allowed kinds during a free hit", () => {
-    const spec = buildSheets(view({ events: freeHitEvents }), t).wicket;
+  it("buildPayload emits the payload shape for both allowed kinds during a free hit (folded through the engine in pad-rules-cricket.test.ts)", () => {
+    const spec = buildSheets(freeHitView(), t).wicket;
 
     const afterKind = answerStep(spec, initialSheetState(), "runout");
     if (afterKind.done) throw new Error("expected not done");
@@ -2730,21 +2763,29 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
       wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" },
     });
 
-    // Pad wave P2 (Q1, Q1b owner rulings): obstructing the field asks who is out (either batter, Law 37.1.1) and the fielder
-    // the house rulebook credits a run out, exactly as run out does.
+    // Pad wave P2 (ruling 242): obstructing the field asks who is out (either batter, Law 37.1.1), then a fielder the
+    // scorer may decline (Law 37 names none; the house rulebook credits a run out to one named).
     const afterObstructed = answerStep(spec, initialSheetState(), "obstructed");
     if (afterObstructed.done) throw new Error("expected not done");
     expect(currentStep(spec, afterObstructed.state)!.id).toBe("out");
     const afterObstructedOut = answerStep(spec, afterObstructed.state, "h2");
     if (afterObstructedOut.done) throw new Error("expected not done");
-    expect(currentStep(spec, afterObstructedOut.state)!.id).toBe("fielder");
-    const afterObstructedFielder = answerStep(spec, afterObstructedOut.state, "a3");
-    if (afterObstructedFielder.done) throw new Error("expected not done");
-    const obstructedFinal = answerStep(spec, afterObstructedFielder.state, "h3");
-    if (!obstructedFinal.done) throw new Error("expected done");
-    expect(obstructedFinal.event.payload).toMatchObject({
+    const fielderStep = currentStep(spec, afterObstructedOut.state)!;
+    expect(fielderStep.id).toBe("fielderOptional");
+    expect(fielderStep.kind === "person" && fielderStep.optional).toBe(true);
+    const named = answerStep(spec, afterObstructedOut.state, "a3");
+    if (named.done) throw new Error("expected not done");
+    const namedFinal = answerStep(spec, named.state, "h3");
+    if (!namedFinal.done) throw new Error("expected done");
+    expect(namedFinal.event.payload).toMatchObject({
       wicket: { kind: "obstructed", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" },
     });
+    const declined = answerStep(spec, afterObstructedOut.state, "");
+    if (declined.done) throw new Error("expected not done");
+    const declinedFinal = answerStep(spec, declined.state, "h3");
+    if (!declinedFinal.done) throw new Error("expected done");
+    expect(declinedFinal.event.payload).toMatchObject({ wicket: { kind: "obstructed", out: "h2", bowlerCredited: false, incoming: "h3" } });
+    expect((declinedFinal.event.payload as { wicket: { fielder?: string } }).wicket.fielder).toBeUndefined();
   });
 });
 
@@ -4044,16 +4085,28 @@ describe("R3.5 F3 — every super-over window that disables review/retire/inning
 // doc on the method). `refusedEventTypes` mirrors `superOverTile`'s own
 // gate exactly, so the two can never disagree.
 // ---------------------------------------------------------------------------
-describe("refusedEventTypes (F2) — the five types a super over disables, and nothing else", () => {
-  it("lists exactly the five non-ball types superOverTile disables, during a super over", () => {
+describe("option labels for the engine's reasons are guarded, never a raw key", () => {
+  it("every engine retirement and innings-close reason has a label; a reason the skin has no label for throws", () => {
+    for (const reason of cricketPadRules.retireReasons) expect(retireReasonLabel(reason), reason).toBe(`pad.cricket.sheet.retire.reason.${reason}`);
+    for (const reason of cricketPadRules.inningsCloseReasons) expect(closeReasonLabel(reason), reason).toMatch(/^pad\.cricket\.sheet\.inningsClose\.reason\.[a-zA-Z]+$/);
+    expect(() => retireReasonLabel("abducted")).toThrow(/no label for retirement reason "abducted"/);
+    expect(() => closeReasonLabel("abducted")).toThrow(/no label for innings-close reason "abducted"/);
+  });
+});
+
+describe("refusedEventTypes (F2) — every type the fold refuses in a super over, and nothing else", () => {
+  it("during a super over: every cricket.* type except the engine's superOverEventTypes, which include the four the hand list missed (pad wave P2, trace c)", () => {
     const v = view({ state: state({ phase: "super_over" }) });
-    expect([...refusedEventTypes(v)].sort()).toEqual([
-      "cricket.innings.close",
-      "cricket.innings.declare",
-      "cricket.innings.summary",
-      "cricket.retire",
-      "cricket.review",
-    ]);
+    const types = Object.keys(cricket.eventSchemas ?? {}).filter((type) => type.startsWith("cricket."));
+    expect(types).toHaveLength(15);
+    const expected = types.filter((type) => !cricketPadRules.superOverEventTypes.includes(type)).sort();
+    expect([...refusedEventTypes(v)].sort()).toEqual(expected);
+    // The five superOverTile disables, and New ball / Powerplay / Interruption / Revise, are all refused (engine guards:
+    // requireOpenInnings, the interruption's and the revise's "pre"/"live").
+    for (const type of ["cricket.review", "cricket.retire", "cricket.innings.close", "cricket.innings.declare", "cricket.innings.summary", "cricket.newball", "cricket.powerplay", "cricket.interruption", "cricket.revise"]) {
+      expect(refusedEventTypes(v), type).toContain(type);
+    }
+    expect(refusedEventTypes(v)).not.toContain("cricket.superover.ball");
   });
 
   it("lists nothing outside a super over — live, pre, and done phases are all unrefused", () => {

@@ -12,10 +12,11 @@ import { describe, expect, it } from "vitest";
 import { foldMatch, initSquads, type EventEnvelope } from "@seazn/engine/core";
 import { cricketPadRules } from "@seazn/engine/pad";
 import { cricket, type CricketCfg, type CricketState } from "@seazn/engine/sports/cricket";
-import { cricketEnvelopes, cricketLineups, type CricketEventSpec } from "../../__tests__/_cricket-fold";
+import { cricketEnvelopes, cricketLineups, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
+import { dedicatedEventTypes, moreActions } from "../../pad-host";
 import type { GuidedSheetSpec, GuidedSheetStep, PadHostView, TileSpec } from "../../types";
-import { buildDock, buildSheets, buildTiles, type TFn } from "../cricket";
+import { buildDock, buildScorebug, buildSheets, buildTiles, refusedEventTypes, type TFn } from "../cricket";
 
 const t: TFn = (key) => key;
 const T20 = cricket.configSchema.parse(cricket.variants.t20);
@@ -31,6 +32,10 @@ const OBSTRUCTED = "obstructed";
 /** DOMAIN.md, "Free hit armed and consumed": "only run-out/obstruction may dismiss on it". A rulebook anchor, so a free-hit set
  *  that drifts in the ENGINE (the skin follows it) still goes red here. */
 const RULEBOOK_FREE_HIT = ["obstructed", "runout"];
+/** Ruling 242 (CK-WK-3): either batter can be out run out (Law 38.1), obstructing the field (Law 37.1.1) or retired (Law 25.4.1). */
+const LAWS_EITHER_BATTER = ["obstructed", "retired", "runout"];
+/** Ruling 242 (CK-WK-2): the fielder-credited mode the Laws name no fielder for, whose fielder the scorer may decline. */
+const LAWS_NO_FIELDER_NAMED = ["obstructed"];
 
 let compared = 0;
 /** One compared fact: an equality between what the skin's builder produced and what the engine declares or folds. */
@@ -116,34 +121,164 @@ describe("the wicket sheet offers the engine's modes", () => {
     same(offered, cricketPadRules.wicketKinds.filter((k) => offered.includes(k)), "free-hit options keep the engine's order");
   });
 
-  it("asks who is out exactly for variableOutKinds and the fielder exactly for fielderCreditedKinds, and every payload folds", () => {
+  it("asks who is out exactly for variableOutKinds and the fielder exactly for fielderCreditedKinds (optional exactly for fielderOptionalKinds), and every payload folds", () => {
+    same([...cricketPadRules.variableOutKinds].sort(), LAWS_EITHER_BATTER, "either-batter modes are the Laws'");
+    same([...cricketPadRules.fielderOptionalKinds].sort(), LAWS_NO_FIELDER_NAMED, "optional-fielder modes are the Laws'");
     const asked = new Map<string, string[]>();
+    let declined = 0;
     for (const kind of cricketPadRules.wicketKinds) {
-      const spec = buildSheets(viewOf(T20, START), t).wicket;
-      const { asked: steps, event } = walk(spec, (step) => {
+      const optional = cricketPadRules.fielderOptionalKinds.includes(kind);
+      // Pass 1 names the fielder; pass 2 (only where the step is optional) declines it with the sheet's own "" answer.
+      for (const fielderAnswer of optional ? [FIELDER, ""] : [FIELDER]) {
+        const spec = buildSheets(viewOf(T20, START), t).wicket;
+        const { asked: steps, event } = walk(spec, (step) => {
+          if (step.id === "kind") return kind;
+          if (step.id === "out") return NON_STRIKER; // the other batter: only a mode either batter can be out in asks
+          if (step.id === "fielder" || step.id === "fielderOptional") {
+            same(step.kind === "person" && step.optional === true, optional, `${kind}: the fielder step is optional`);
+            return fielderAnswer;
+          }
+          if (step.kind === "person" && step.candidates?.[0] !== undefined) return step.candidates[0];
+          throw new Error(`${kind}: unexpected step "${step.id}"`);
+        });
+        if (fielderAnswer === FIELDER) asked.set(kind, steps);
+        const variable = cricketPadRules.variableOutKinds.includes(kind);
+        const credited = cricketPadRules.fielderCreditedKinds.includes(kind);
+        same(steps.includes("out"), variable, `${kind}: who's out asked`);
+        same(steps.includes("fielder") || steps.includes("fielderOptional"), credited, `${kind}: fielder asked`);
+        const wicket = (event.payload as { wicket: { out: string; fielder?: string; bowlerCredited: boolean } }).wicket;
+        same(wicket.out, variable ? NON_STRIKER : STRIKER, `${kind}: out`);
+        same(wicket.bowlerCredited, cricketPadRules.bowlerCreditedKinds.includes(kind), `${kind}: bowlerCredited`);
+        // The seam's consumer: the engine takes the sheet's own payload on the write path, and credits the fielder it named.
+        const innings = openInnings(foldEmitted(T20, START, event));
+        same(innings.fine.dismissed, [wicket.out], `${kind}: the fold dismissed the batter the sheet named`);
+        same(innings.fine.fielding?.[FIELDER] !== undefined, credited && fielderAnswer === FIELDER, `${kind}: the fold credited the fielder`);
+        if (fielderAnswer === "") {
+          same(wicket.fielder, undefined, `${kind}: a declined fielder is not written`);
+          declined++;
+        }
+      }
+    }
+    // Ruling 242, pinned by name: obstructing asks who is out, then a fielder the scorer may decline; retired asks who is out.
+    same(asked.get(OBSTRUCTED), ["kind", "out", "fielderOptional", "incoming"], "obstructed's steps");
+    same(asked.get("retired"), ["kind", "out", "incoming"], "retired's steps");
+    console.info(`[pad-rules-cricket] wicket modes walked: ${asked.size}, fielder declined: ${declined}`);
+    expect(asked.size).toBe(10);
+    expect(declined).toBe(LAWS_NO_FIELDER_NAMED.length);
+  });
+
+  it("on a free hit the sheet's run out and obstructing payloads fold on the write path (review m3)", () => {
+    let folded = 0;
+    for (const kind of cricketPadRules.freeHitDismissalKinds) {
+      const spec = buildSheets(viewOf(T20, FREE_HIT_PENDING), t).wicket;
+      const { event } = walk(spec, (step) => {
         if (step.id === "kind") return kind;
-        if (step.id === "out") return NON_STRIKER; // the other batter: only a mode either batter can be out in asks
-        if (step.id === "fielder") return FIELDER;
+        if (step.id === "out") return STRIKER;
+        if (step.id === "fielder" || step.id === "fielderOptional") return FIELDER;
         if (step.kind === "person" && step.candidates?.[0] !== undefined) return step.candidates[0];
         throw new Error(`${kind}: unexpected step "${step.id}"`);
       });
-      asked.set(kind, steps);
-      const variable = cricketPadRules.variableOutKinds.includes(kind);
-      const credited = cricketPadRules.fielderCreditedKinds.includes(kind);
-      same(steps.includes("out"), variable, `${kind}: who's out asked`);
-      same(steps.includes("fielder"), credited, `${kind}: fielder asked`);
-      const wicket = (event.payload as { wicket: { out: string; fielder?: string; bowlerCredited: boolean } }).wicket;
-      same(wicket.out, variable ? NON_STRIKER : STRIKER, `${kind}: out`);
-      same(wicket.bowlerCredited, cricketPadRules.bowlerCreditedKinds.includes(kind), `${kind}: bowlerCredited`);
-      // The seam's consumer: the engine takes the sheet's own payload on the write path, and credits the fielder it named.
-      const innings = openInnings(foldEmitted(T20, START, event));
-      same(innings.fine.dismissed, [wicket.out], `${kind}: the fold dismissed the batter the sheet named`);
-      same(innings.fine.fielding?.[FIELDER] !== undefined, credited, `${kind}: the fold credited the fielder`);
+      const innings = openInnings(foldEmitted(T20, FREE_HIT_PENDING, event));
+      same(innings.fine.dismissed, [STRIKER], `${kind} on a free hit: folded`);
+      folded++;
     }
-    // Q1 and Q1b, pinned by name: obstructing the field asks who is out, then the fielder.
-    same(asked.get(OBSTRUCTED), ["kind", "out", "fielder", "incoming"], "obstructed's steps");
-    console.info(`[pad-rules-cricket] wicket modes walked: ${asked.size}`);
-    expect(asked.size).toBe(10);
+    expect(folded).toBe(RULEBOOK_FREE_HIT.length);
+  });
+});
+
+describe("the free hit is the fold's (review I2)", () => {
+  const freeHitChip = (view: PadHostView) => buildScorebug(view, t).strip.find((item) => item.id === "freeHit");
+
+  it("a no ball, taken back: the next delivery shows no free hit and offers every mode, and a bowled from the sheet folds", () => {
+    const specs: CricketEventSpec[] = [...START, ball(0, 1), ball(0, 2, { runs: { bat: 0, extras: { kind: "noball", runs: 1 } } }), ["core.void", {}, "e-2"]];
+    const view = viewOf(T20, specs);
+    expect(openInnings(view.state as CricketState).fine.freeHitPending, "premise: the fold cleared it").toBe(false);
+    same(freeHitChip(view), undefined, "no free-hit chip after the take-back");
+    same(choiceIds(buildSheets(view, t).wicket, "kind"), [...cricketPadRules.wicketKinds], "every mode offered after the take-back");
+    const { event } = walk(buildSheets(view, t).wicket, (step) => {
+      if (step.id === "kind") return "bowled";
+      if (step.kind === "person" && step.candidates?.[0] !== undefined) return step.candidates[0];
+      throw new Error(`bowled: unexpected step "${step.id}"`);
+    });
+    same(openInnings(foldEmitted(T20, specs, event)).wickets, 1, "a bowled after the take-back folds");
+  });
+
+  it("a no ball in a super over shows the free hit and narrows the sheet, even when the main match is unlimited-overs (the engine's super over is white-ball)", () => {
+    const cfgs = [
+      ["one over a side", tiedWithSuperOver()],
+      ["unlimited overs", cricket.configSchema.parse({ superOver: true, ballsPerInnings: null })],
+    ] as const;
+    let checked = 0;
+    for (const [name, cfg] of cfgs) {
+      const main: CricketEventSpec[] = cfg.ballsPerInnings === null
+        ? [["core.start"], ["cricket.ball", { over: 0, ballInOver: 1, striker: "H-1", nonStriker: "H-2", bowler: "A-11", runs: { bat: 1 } }], ["cricket.innings.close", { reason: "other" }],
+          ["cricket.ball", { over: 0, ballInOver: 1, striker: "A-1", nonStriker: "A-2", bowler: "H-11", runs: { bat: 1 } }], ["cricket.innings.close", { reason: "other" }]]
+        : [["core.start"], ...[1, 2, 3, 4, 5, 6].map((n): CricketEventSpec => ["cricket.ball", { over: 0, ballInOver: n, striker: "H-1", nonStriker: "H-2", bowler: "A-11", runs: { bat: 0 } }]),
+          ...[1, 2, 3, 4, 5, 6].map((n): CricketEventSpec => ["cricket.ball", { over: 0, ballInOver: n, striker: "A-1", nonStriker: "A-2", bowler: "H-11", runs: { bat: 0 } }])];
+      const tied = viewOf(cfg, main);
+      expect((tied.state as CricketState).phase, `${name}: premise, a super over`).toBe("super_over");
+      const noBall = tilePayload(buildTiles(tied, t).find((tile) => tile.id === "extra-noball"));
+      const specs: CricketEventSpec[] = [...main, ["cricket.superover.ball", noBall]];
+      const view = viewOf(cfg, specs);
+      same(freeHitChip(view)?.id, "freeHit", `${name}: the super-over no ball shows the free hit`);
+      same([...choiceIds(buildSheets(view, t).wicket, "kind")].sort(), RULEBOOK_FREE_HIT, `${name}: the sheet narrows to the free-hit modes`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe("in a super over the pad offers only what the fold accepts (review, trace c)", () => {
+  it.each([
+    ["no DLS", {}],
+    ["DLS on (Revise in padSpec)", { dls: { enabled: true, edition: "standard" } }],
+  ] as const)("%s: every enabled tile and the wicket sheet fold on the write path, and every More action is a type the engine accepts in a super over", (_name, overrides) => {
+    const cfg = tiedWithSuperOver(overrides);
+    const side = (striker: string, nonStriker: string, bowler: string): CricketEventSpec[] =>
+      [1, 2, 3, 4, 5, 6].map((n) => ["cricket.ball", { over: 0, ballInOver: n, striker, nonStriker, bowler, runs: { bat: 0 } }]);
+    const main: CricketEventSpec[] = [["core.start"], ...side("H-1", "H-2", "A-11"), ...side("A-1", "A-2", "H-11")];
+    const view = viewOf(cfg, main);
+    expect((view.state as CricketState).phase, "premise: a super over").toBe("super_over");
+    const tiles = buildTiles(view, t);
+    const sheets = buildSheets(view, t);
+    let offered = 0;
+    for (const tile of tiles) {
+      if (tile.disabled === true || tile.action === undefined) continue;
+      const action = tile.action;
+      if ("event" in action) {
+        expect(() => foldEmitted(cfg, main, action.event), `tile ${tile.id}`).not.toThrow();
+        offered++;
+      } else if ("sheet" in action && action.sheet === "wicket") {
+        const { event } = walk(sheets.wicket, (step) => {
+          if (step.id === "kind") return "bowled";
+          if (step.kind === "person" && step.candidates?.[0] !== undefined) return step.candidates[0];
+          throw new Error(`super-over wicket: unexpected step "${step.id}"`);
+        });
+        expect(() => foldEmitted(cfg, main, event), "the wicket sheet").not.toThrow();
+        offered++;
+      }
+    }
+    const dedicated = dedicatedEventTypes(tiles, sheets, [], buildScorebug(view, t));
+    const padSpec = cricket.padSpec?.(cfg);
+    if (padSpec === undefined) throw new Error("premise: cricket declares a padSpec");
+    const ctx = { state: view.state, summary: {}, phase: "live" as const, band: 3 as const };
+    const more = moreActions(padSpec, ctx, dedicated, new Set(refusedEventTypes(view)));
+    for (const action of more) {
+      same(cricketPadRules.superOverEventTypes.includes(action.type), true, `More offers ${action.type} in a super over`);
+      offered++;
+    }
+    // Not vacuous: padSpec still lists actions here (New ball, Powerplay, Interruption, and Revise with DLS); every one the
+    // skin withholds is one the engine refuses in a super over.
+    const unfiltered = moreActions(padSpec, ctx, dedicated, new Set());
+    const withheld = unfiltered.filter((action) => !more.some((kept) => kept.type === action.type));
+    for (const action of withheld) same(cricketPadRules.superOverEventTypes.includes(action.type), false, `More withholds ${action.type}`);
+    for (const type of ["cricket.newball", "cricket.powerplay", "cricket.interruption"]) {
+      expect(withheld.map((action) => action.type), `${type} is withheld`).toContain(type);
+    }
+    if ("dls" in overrides) expect(withheld.map((action) => action.type)).toContain("cricket.revise");
+    console.info(`[pad-rules-cricket] super over (${_name}): ${offered} offered actions folded/checked, ${withheld.length} More actions withheld`);
+    expect(offered).toBeGreaterThanOrEqual(5);
+    expect(withheld.length).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -159,6 +294,9 @@ describe("the tiles, dock and option sheets offer the engine's sets", () => {
 
     const runsOf = (kind: string) => (tilePayload(extraTiles[kinds.indexOf(kind)]).runs as { extras: { runs: number } }).extras.runs;
     same(runsOf("wide"), cricketPadRules.wideDefaultRuns, "wide tile runs");
+    same(runsOf("noball"), cricketPadRules.noBallDefaultRuns, "no-ball tile runs");
+    const noBall = openInnings(foldEmitted(T20, START, { type: "cricket.ball", payload: tilePayload(extraTiles[kinds.indexOf("noball")]) }));
+    same([noBall.runs, noBall.legalBalls, noBall.fine.freeHitPending], [cricketPadRules.noBallDefaultRuns, 0, true], "a no-ball tile, folded");
     same(runsOf("penalty"), cricketPadRules.penaltyRuns, "penalty tile runs");
     const wide = openInnings(foldEmitted(T20, START, { type: "cricket.ball", payload: tilePayload(extraTiles[kinds.indexOf("wide")]) }));
     same([wide.runs, wide.legalBalls, wide.fine.striker], [cricketPadRules.wideDefaultRuns, 0, STRIKER], "a wide tile, folded");

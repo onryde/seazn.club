@@ -17,8 +17,11 @@ import {
   CricketWicket,
   ExtraKind,
   FIELDER_CREDIT_COLUMN,
+  FIELDER_OPTIONAL_KINDS,
   FREE_HIT_DISMISSAL_KINDS,
+  NO_BALL_DEFAULT_RUNS,
   PENALTY_RUNS,
+  SUPER_OVER_EVENT_TYPES,
   VARIABLE_OUT_KINDS,
   WicketKind,
   WIDE_DEFAULT_RUNS,
@@ -95,10 +98,12 @@ describe("P2.1 premise (Q1b): which batter the fold accepts as `out`", () => {
     expect(outs).toEqual([STRIKER, NON_STRIKER]);
   });
 
-  it("the fold's only `out` check is crease membership: it accepts the non-striker for EVERY mode, and refuses a batter not at the crease", () => {
+  it("the fold's only `out` check is crease membership: it accepts the non-striker for EVERY mode, and refuses a batter not at the crease (lenient beyond the Laws; owed as rules row CK-WK-4, open: tightening the fold reds this on purpose)", () => {
     // This is what makes `variableOutKinds` a declaration (c) and not a mirror of a fold guard: cricket.ts's applyDelivery checks
     // `wicket.out` against the two batters at the crease and nothing else, so bowled-the-non-striker folds. Pinned here so a
-    // drift test can never claim the fold enforces "who can be out" per mode.
+    // drift test can never claim the fold enforces "who can be out" per mode. The Laws allow it for none of bowled, caught, lbw,
+    // stumped, hit wicket or hit the ball twice (Laws 32-36, 39); ruling 242 parks the fix (a fold change with a cricket
+    // FOLD_EPOCH bump) in docs/superpowers/specs/engine-split/2026-10-26-owed-work.md. When it lands, this test changes with it.
     const modes = CricketWicket.shape.kind.options;
     let acceptedNonStriker = 0;
     for (const kind of modes) {
@@ -115,9 +120,25 @@ describe("P2.1 premise (Q1b): which batter the fold accepts as `out`", () => {
     expect(acceptedNonStriker).toBeGreaterThan(0);
   });
 
-  it("an obstructing-the-field wicket that names a fielder credits that fielder a run out (DOMAIN.md, Dismissals: 'credits the fielder a run out')", () => {
-    const innings = openInnings(fold(T20, [["core.start"], delivery({ wicket: wicketOf("obstructed", NON_STRIKER, { fielder: FIELDER }) })]));
-    expect(innings.fine.fielding?.[FIELDER]).toEqual({ catches: 0, runOuts: 1, stumpings: 0 });
+  it("CK-WK-2 an obstructing-the-field wicket that names a fielder credits that fielder a run out (DOMAIN.md, Dismissals), and one that names none folds with no credit (Law 37 names no fielder; ruling 242)", () => {
+    const named = openInnings(fold(T20, [["core.start"], delivery({ wicket: wicketOf("obstructed", NON_STRIKER, { fielder: FIELDER }) })]));
+    expect(named.fine.fielding?.[FIELDER]).toEqual({ catches: 0, runOuts: 1, stumpings: 0 });
+    const unnamed = openInnings(fold(T20, [["core.start"], delivery({ wicket: wicketOf("obstructed", NON_STRIKER) })]));
+    expect(unnamed.wickets).toBe(1);
+    expect(unnamed.fine.dismissed).toEqual([NON_STRIKER]);
+    expect(unnamed.fine.fielding, "no fielder named, nobody credited").toBeUndefined();
+  });
+
+  it("CK-WK-3 a retired wicket and a retirement both fold with EITHER batter (MCC Law 25.4.1: a batter may retire at any time the ball is dead)", () => {
+    let folded = 0;
+    for (const out of [STRIKER, NON_STRIKER]) {
+      const onBall = openInnings(fold(T20, [["core.start"], delivery({ wicket: wicketOf("retired", out) })]));
+      expect(onBall.fine.dismissed, `retired on a ball, ${out}`).toEqual([out]);
+      const retire = openInnings(fold(T20, [["core.start"], delivery(), ["cricket.retire", { person: out, reason: "out" }]]));
+      expect(retire.fine.dismissed, `cricket.retire out, ${out}`).toEqual([out]);
+      folded += 2;
+    }
+    expect(folded).toBe(4);
   });
 });
 
@@ -134,16 +155,23 @@ const RULEBOOK_FIELDER_COLUMN: Readonly<Record<string, "catches" | "stumpings" |
   runout: "runOuts",
   obstructed: "runOuts",
 };
-/** MCC Law 38.1 "Either batter is out Run out"; Law 37.1.1 "Either batter is out Obstructing the field". Every other mode is the
- *  striker's (Laws 32-36, 39) or the incoming batter's (Law 40). */
-const LAWS_EITHER_BATTER: readonly Mode[] = ["runout", "obstructed"];
+/** MCC Law 38.1 "Either batter is out Run out"; Law 37.1.1 "Either batter is out Obstructing the field"; Law 25.4.1 "A batter
+ *  may retire at any time during their innings when the ball is dead". Every other mode is the striker's (Laws 32-36, 39) or the
+ *  incoming batter's (Law 40). Ruling 242 (CK-WK-3). */
+const LAWS_EITHER_BATTER: readonly Mode[] = ["runout", "obstructed", "retired"];
+/** The fielder-credited modes the Laws record against no fielder: obstructing the field (Law 37, "by word or action"). The
+ *  house rulebook credits one when named, so naming one is optional (ruling 242, CK-WK-2). */
+const LAWS_NO_FIELDER_NAMED: readonly Mode[] = ["obstructed"];
 /** DOMAIN.md, "Free hit armed and consumed": "only run-out/obstruction may dismiss on it" - CK-FH-1 as the engine holds it (ICC
  *  21.19.2 adds hit the ball twice; leaving it out is the row's recorded deviation, W2e ruling I-2). */
 const RULEBOOK_FREE_HIT: readonly Mode[] = ["runout", "obstructed"];
 /** MCC Law 41.2.1: "the award of 5 Penalty runs to the opposing team" - one award is five. */
 const LAW_41_ONE_AWARD = 5;
-/** MCC Law 37.5.1: "any one-run Penalty for No ball or Wide" - a bare wide records its one-run penalty and nothing else. */
+/** MCC Law 22.6: "A penalty of one run shall be awarded instantly on the call of Wide ball" - a bare wide records it and nothing
+ *  else. */
 const LAW_WIDE_PENALTY = 1;
+/** MCC Law 21.14: "A penalty of one run shall be awarded instantly on the call of No ball". */
+const LAW_NO_BALL_PENALTY = 1;
 
 const sorted = (xs: readonly (string | number)[]) => [...xs].sort();
 
@@ -182,14 +210,19 @@ describe("cricketPadRules: the static sets are the fold's own declarations", () 
     expect(sorted(cricketPadRules.freeHitDismissalKinds)).toEqual(sorted([...FREE_HIT_DISMISSAL_KINDS]));
     expect(sorted(cricketPadRules.bowlerCreditedKinds)).toEqual(sorted([...BOWLER_CREDITED_KINDS]));
     expect(sorted(cricketPadRules.variableOutKinds)).toEqual(sorted([...VARIABLE_OUT_KINDS]));
+    expect(sorted(cricketPadRules.fielderOptionalKinds)).toEqual(sorted([...FIELDER_OPTIONAL_KINDS]));
+    expect(sorted(cricketPadRules.superOverEventTypes)).toEqual(sorted([...SUPER_OVER_EVENT_TYPES]));
     expect(cricketPadRules.penaltyRuns).toBe(PENALTY_RUNS);
     expect(cricketPadRules.wideDefaultRuns).toBe(WIDE_DEFAULT_RUNS);
+    expect(cricketPadRules.noBallDefaultRuns).toBe(NO_BALL_DEFAULT_RUNS);
     expect(Object.isFrozen(cricketPadRules)).toBe(true);
   });
 
   it("eventBands is the padSpec fidelity map, the same object for every declared cfg", () => {
     const cfgs = declaredCfgs(cricket);
     for (const { name, cfg } of cfgs) expect(padSpec(cfg).fidelity, name).toBe(cricketPadRules.eventBands);
+    // One object shared by every padSpec(cfg) call in the process: frozen, so no consumer can leak an edit into another fixture.
+    expect(Object.isFrozen(cricketPadRules.eventBands)).toBe(true);
     // Every event type the module parses carries a band.
     const moduleTypes = Object.keys(cricket.eventSchemas ?? {}).filter((t) => t.startsWith("cricket."));
     expect(moduleTypes.length).toBeGreaterThan(0);
@@ -260,9 +293,10 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(checked).toBe(MODES.length);
   });
 
-  it("variableOutKinds (Q1b): the Laws' either-batter modes, each of which the fold accepts with either batter out", () => {
+  it("CK-WK-3 variableOutKinds (Q1b, ruling 242): the Laws' either-batter modes, each of which the fold accepts with either batter out", () => {
     expect(sorted(cricketPadRules.variableOutKinds)).toEqual(sorted(LAWS_EITHER_BATTER));
     expect(cricketPadRules.variableOutKinds).toContain("obstructed");
+    expect(cricketPadRules.variableOutKinds).toContain("retired");
     let folded = 0;
     for (const kind of cricketPadRules.variableOutKinds) {
       for (const out of [STRIKER, NON_STRIKER]) {
@@ -272,6 +306,19 @@ describe("cricketPadRules against the real fold (T20)", () => {
       }
     }
     expect(folded).toBe(2 * LAWS_EITHER_BATTER.length);
+  });
+
+  it("CK-WK-2 fielderOptionalKinds (ruling 242): the fielder-credited modes the Laws name no fielder for, and each folds with no fielder named", () => {
+    expect(sorted(cricketPadRules.fielderOptionalKinds)).toEqual(sorted(LAWS_NO_FIELDER_NAMED));
+    let folded = 0;
+    for (const kind of cricketPadRules.fielderOptionalKinds) {
+      expect(cricketPadRules.fielderCreditedKinds, `${kind} is credited when named`).toContain(kind);
+      const innings = openInnings(fold(T20, [["core.start"], delivery({ wicket: wicketOf(kind as Mode, STRIKER) })]));
+      expect(innings.wickets, kind).toBe(1);
+      expect(innings.fine.fielding, kind).toBeUndefined();
+      folded++;
+    }
+    expect(folded).toBe(LAWS_NO_FIELDER_NAMED.length);
   });
 
   it("penaltyRuns: Law 41's one award; a penalty extra of it lands on the batting side, charged to no bowler, run by nobody", () => {
@@ -291,12 +338,21 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(bare.legalBalls).toBe(0);
     expect(bare.fine.bowlerRuns[BOWLER]).toBe(LAW_WIDE_PENALTY);
     expect(bare.fine.striker, "the penalty run is never run").toBe(STRIKER);
-    // The same net-off the fold applies to a wide and a no ball alike (Law 37.5.1's "one-run Penalty for No ball or Wide").
+    // The same net-off the fold applies to a wide and a no ball alike (Laws 22.6 and 21.14: one penalty run each).
     for (const kind of ["wide", "noball"]) {
       const ranOne = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind, runs: LAW_WIDE_PENALTY + 1 } })]));
       expect(ranOne.runs, kind).toBe(LAW_WIDE_PENALTY + 1);
       expect(ranOne.fine.striker, `${kind} + 1 run: the batters crossed once`).toBe(NON_STRIKER);
     }
+  });
+
+  it("noBallDefaultRuns: a bare no ball scores its one-run penalty (Law 21.14), no ball faced, no crossing, and arms the free hit", () => {
+    expect(cricketPadRules.noBallDefaultRuns).toBe(LAW_NO_BALL_PENALTY);
+    const bare = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind: "noball", runs: cricketPadRules.noBallDefaultRuns } })]));
+    expect(bare.runs).toBe(LAW_NO_BALL_PENALTY);
+    expect(bare.legalBalls).toBe(0);
+    expect(bare.fine.striker, "the penalty run is never run").toBe(STRIKER);
+    expect(bare.fine.freeHitPending).toBe(true);
   });
 
   it("boundaryValues: the two the ball schema takes (Law 19: 4 and 6); the fold refuses any other", () => {
@@ -339,5 +395,58 @@ describe("cricketPadRules.ballsPerOver(cfg)", () => {
     expect(cricketPadRules.ballsPerOver(undefined)).toBe(schemaDefault);
     expect(cricketPadRules.ballsPerOver({ inningsPerSide: 2 })).toBe(schemaDefault);
     for (const bad of [0, -1, 2.5, "6"]) expect(() => cricketPadRules.ballsPerOver({ ballsPerOver: bad }), String(bad)).toThrow();
+  });
+});
+
+describe("cricketPadRules.superOverEventTypes against a real super over", () => {
+  /** A tied one-over-a-side match with the super over on: the shortest legal route to phase "super_over", folded. */
+  const SO_CFG = parse({ superOver: true, ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
+  const side = (striker: string, nonStriker: string, bowler: string): Spec[] =>
+    [1, 2, 3, 4, 5, 6].map((n) => ["cricket.ball", { over: 0, ballInOver: n, striker, nonStriker, bowler, runs: { bat: 0 } }]);
+  const TIED: readonly Spec[] = [["core.start"], ...side("H-p1", "H-p2", "A-p11"), ...side("A-p1", "A-p2", "H-p11")];
+
+  it("the fold accepts exactly these cricket.* types in phase super_over, and refuses every other on its phase (WRONG_PHASE)", () => {
+    expect(fold(SO_CFG, TIED).phase, "premise: the tie sends the fold to the super over").toBe("super_over");
+    const lineups = lineupsFor(SO_CFG);
+    const ball = { over: 0, ballInOver: 1, striker: "A-p1", nonStriker: "A-p2", bowler: "H-p10", runs: { bat: 0 } };
+    /** One payload per type, each valid against its own schema (checked below), so a refusal is the phase's, not the parse's. */
+    const VALID: Readonly<Record<string, unknown>> = {
+      "cricket.ball": ball,
+      "cricket.superover.ball": ball,
+      "cricket.innings.summary": { runs: 0, wickets: 0, legalBalls: 0 },
+      "cricket.toss": { wonBy: lineups.home.entrantId, elected: "bat" },
+      "cricket.innings.declare": {},
+      "cricket.innings.close": { reason: "other" },
+      "cricket.match.close": {},
+      "cricket.interruption": { kind: "rain" },
+      "cricket.revise": { target: 10 },
+      "cricket.followon": {},
+      "cricket.newball": {},
+      "cricket.powerplay": { kind: "batting", phase: "start" },
+      "cricket.review": { by: lineups.away.entrantId, kind: "player", outcome: "upheld" },
+      "cricket.retire": { person: "A-p1", reason: "hurt" },
+      "cricket.player.line": { innings: 1, person: "H-p1", batting: { runs: 0, balls: 3 } },
+    };
+    const types = Object.keys(cricket.eventSchemas ?? {}).filter((t) => t.startsWith("cricket."));
+    expect(sorted(Object.keys(VALID))).toEqual(sorted(types));
+    let accepted = 0;
+    let refused = 0;
+    for (const type of types) {
+      expect(cricket.eventSchemas?.[type]?.safeParse(VALID[type]).success, `${type}: the payload is schema-valid`).toBe(true);
+      const refusal = refusalOf(() => fold(SO_CFG, [...TIED, [type, VALID[type]]]));
+      if (cricketPadRules.superOverEventTypes.includes(type)) {
+        expect(refusal ?? "", `${type} in a super over: not refused on its phase`).not.toMatch(/^WRONG_PHASE/);
+        accepted++;
+      } else {
+        expect(refusal ?? "accepted", `${type} in a super over`).toMatch(/^WRONG_PHASE/);
+        refused++;
+      }
+    }
+    // The super-over ball is accepted outright, not merely past the phase check.
+    expect(refusalOf(() => fold(SO_CFG, [...TIED, ["cricket.superover.ball", ball]]))).toBeNull();
+    // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
+    console.info(`[pad/cricket] super over: ${types.length} types folded, ${accepted} accepted, ${refused} refused`);
+    expect(accepted + refused).toBe(15);
+    expect(accepted).toBe(2);
   });
 });

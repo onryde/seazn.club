@@ -87,7 +87,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // narrow the bowler chip's candidates, not merely to test one name), which is
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
-import { activeInnings, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
+import { activeInnings, chaseTarget as engineChaseTarget, cricket as cricketModule, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
 // Pad wave P2: every closed rule set this skin offers (dismissal modes, extras, who is credited, the free hit, toss/retire/
 // review/close options, the penalty and wide runs, balls per over) is the engine's own declaration, read here and never copied.
 import { cricketPadRules } from "@seazn/engine/pad";
@@ -758,9 +758,9 @@ function runPayload(base: Record<string, unknown>, runs: number): Record<string,
   return { ...base, runs: { bat: runs }, ...(boundary !== undefined ? { boundary } : {}) };
 }
 
-/** `runs` defaults to the single a no ball, a bye or a leg bye opens with
- *  (the dock raises it). The wide and the penalty tiles pass the engine's own
- *  runs (`cricketPadRules.wideDefaultRuns` / `.penaltyRuns`). */
+/** `runs` defaults to the single a bye or a leg bye opens with (the dock
+ *  raises it). The wide, no-ball and penalty tiles pass the engine's own runs
+ *  (`cricketPadRules.wideDefaultRuns` / `.noBallDefaultRuns` / `.penaltyRuns`). */
 function extraPayload(base: Record<string, unknown>, kind: string, runs = 1): Record<string, unknown> {
   return { ...base, runs: { bat: 0, extras: { kind, runs } } };
 }
@@ -855,11 +855,11 @@ function freeHitBallOf(
 }
 
 /**
- * R2b (owner ruling, live-tile audit — freeHit chip removal): the ONE
- * derivation shared by the read-only indicator (`buildScorebug`, below) and
- * the activity log's own label (`cricketBallDetail`, below) — they answer
- * the same question, "is/was a free hit pending", and must not risk drifting
- * apart into two implementations (the recurring defect class in this repo).
+ * R2b (owner ruling, live-tile audit — freeHit chip removal): the activity
+ * log's own label (`cricketBallDetail`, below) — "was a free hit pending" for
+ * one historical row. Pad wave P2 (review I2): the live indicator and the
+ * wicket sheet no longer read this scan; they read the fold's own flag
+ * (`foldFreeHitPending`, below), which resolves voids.
  * Given the whole ball history of ONE innings (or enough of it — see the
  * innings-boundary note below), oldest first, folds FORWARD through it and
  * returns whether a free hit is pending immediately AFTER the last event
@@ -914,6 +914,21 @@ export function freeHitPending(
     prevKey = { over: ball.over, ballInOver: ball.ballInOver };
   }
   return pending;
+}
+
+/**
+ * Pad wave P2 (review I2): is a free hit pending for the NEXT delivery,
+ * read off the fold — the engine's own `fine.freeHitPending` on the innings
+ * `currentInnings` resolves (the super over's during one). The fold resolves
+ * voids before it sets the flag and plays a super over white-ball, which the
+ * event scan above does neither of; the live indicator and the wicket sheet
+ * read this, and only the per-row activity label (whose history the caller
+ * has already stripped of voided rows) keeps the scan. A closed or absent
+ * innings has none: a fresh innings starts without one.
+ */
+export function foldFreeHitPending(state: CricketStateShape): boolean {
+  const innings = currentInnings(state);
+  return innings !== null && innings.closed !== true && innings.fine?.freeHitPending === true;
 }
 
 /**
@@ -1013,7 +1028,9 @@ export function cricketBallDetail(ctx: ActivityDetailContext): string | undefine
     detail = t("pad.cricket.ribbon.ball.bowlerChanged", { detail, name });
   }
   if (history !== undefined && cfg !== undefined) {
-    const whiteBall = asCfg(cfg).ballsPerInnings !== null;
+    // The engine's super over is white-ball whatever the cfg says
+    // (`applySuperOverBall` folds with `whiteBall: true`).
+    const whiteBall = eventType === "cricket.superover.ball" || asCfg(cfg).ballsPerInnings !== null;
     if (freeHitPending(history, whiteBall)) detail = t("pad.cricket.ribbon.ball.freeHit", { detail });
   }
   return detail;
@@ -1082,15 +1099,13 @@ export function runRate(runs: number, legalBalls: number, bpo: number): number |
  * manually set a target — showed nothing at all, even though that is the
  * COMMON case (most matches never see a `cricket.revise`).
  *
- * Single-innings: an explicit `revisedTarget` when one has been recorded,
- * else the trivial "first innings + 1" arithmetic — ONLY once a second
- * innings actually exists (there is nothing to chase before that). Two-
- * innings (test): only an EXPLICIT revision — the natural 4th-innings target
- * needs cross-innings aggregation the engine owns privately (`chaseTarget()`,
- * cricket.ts, not exported), and reimplementing that here would be exactly
- * the domain-logic duplication v2's own comment already warned against; a
- * two-innings match with no revise shows no target at all, matching v2 byte
- * for byte.
+ * The value is the engine's own `chaseTarget` (pad wave P2: exported for
+ * this, with a narrow input type), shown ONLY once the chasing innings
+ * exists: the second of a single-innings match (an explicit `revisedTarget`,
+ * else the first innings + 1), the fourth of a Test (the opponent's aggregate
+ * − the chaser's own first innings + 1; a Test cannot be revised). Before
+ * pad wave P2 a Test showed no target at all, because the aggregation was
+ * the engine's and not exported.
  *
  * `isDls` mirrors v2's own guard exactly: `cfg.dls` must be CURRENTLY
  * enabled, not merely true when the revise happened. When `value` comes from
@@ -1128,22 +1143,31 @@ export function chaseTarget(cfg: CricketCfgShape, state: CricketStateShape): { v
     const first = so[index - 1] as CricketInningsShape;
     return typeof first.runs === "number" ? { value: first.runs + 1, isDls: false } : null;
   }
+  // Pad wave P2 (review, trace b): the main match's target is the engine's
+  // (`chaseTarget`, its own aggregation: the revised target, else the first
+  // innings + 1, else a Test's aggregate − own + 1), shown once the chasing
+  // innings — the match's last, its second or its fourth — exists.
   const innings = state.innings ?? [];
-  const singleInnings = cfg.inningsPerSide !== 2;
-  let value: number | null;
-  if (singleInnings) {
-    if (innings.length < 2) {
-      value = null;
-    } else if (state.revisedTarget != null) {
-      value = state.revisedTarget;
-    } else {
-      const first = innings[0];
-      value = typeof first?.runs === "number" ? first.runs + 1 : null;
-    }
-  } else {
-    value = state.revisedTarget ?? null;
+  const inningsPerSide: 1 | 2 = cfg.inningsPerSide === 2 ? 2 : 1;
+  if (innings.length < inningsPerSide * 2) return null;
+  const played: { battingSide: "home" | "away"; runs: number }[] = [];
+  for (const i of innings) {
+    // A shape the fold never writes is "cannot determine", never a guess.
+    if ((i.battingSide !== "home" && i.battingSide !== "away") || typeof i.runs !== "number") return null;
+    played.push({ battingSide: i.battingSide, runs: i.runs });
   }
-  if (value === null) return null;
+  // battingFirst decides only a Test's chasing side (the engine's
+  // battingSideAt); a single-innings target never reads it, so a state
+  // without it is still answerable there and only there.
+  const battingFirst = state.battingFirst ?? (inningsPerSide === 1 ? "home" : null);
+  if (battingFirst === null) return null;
+  const value = engineChaseTarget({
+    cfg: { inningsPerSide },
+    battingFirst,
+    followOnEnforced: state.followOnEnforced === true,
+    revisedTarget: state.revisedTarget ?? null,
+    innings: played,
+  });
   return { value, isDls: cfg.dls?.enabled === true && state.targetSource === "dls" };
 }
 
@@ -1155,13 +1179,26 @@ export function chaseTarget(cfg: CricketCfgShape, state: CricketStateShape): { v
  * see `buildScorebug`'s own two new dictionary keys for those. `null` when
  * cfg matches none of the four shipped presets (a custom cfg) — the context
  * line simply omits this segment rather than fabricate a label.
+ *
+ * Pad wave P2 (review, trace d): the presets are the engine's own
+ * (`cricket.variants`, parsed through its schema), and a cfg carries a
+ * preset's code only when it plays that preset's FORMAT — innings per side,
+ * balls per over and balls per innings all equal. The single-key guesses this
+ * replaces read any two-innings cfg as TEST and any five-ball over as HUNDRED.
+ * The other keys (a super over, DLS, the bowler quota) are a division's
+ * choices within a format, not a different one, so they do not unset it.
  */
+const FORMAT_KEYS = ["inningsPerSide", "ballsPerOver", "ballsPerInnings"] as const;
+const VARIANT_FORMATS: readonly { code: string; format: Readonly<Record<(typeof FORMAT_KEYS)[number], unknown>> }[] = Object.entries(
+  cricketModule.variants ?? {},
+).map(([name, preset]) => {
+  const parsed = cricketModule.configSchema.parse(preset);
+  return { code: name.toUpperCase(), format: { inningsPerSide: parsed.inningsPerSide, ballsPerOver: parsed.ballsPerOver, ballsPerInnings: parsed.ballsPerInnings } };
+});
+
 export function variantCode(cfg: CricketCfgShape): string | null {
-  if (cfg.inningsPerSide === 2) return "TEST";
-  if (cfg.ballsPerOver === 5) return "HUNDRED";
-  if (cfg.ballsPerInnings === 120) return "T20";
-  if (cfg.ballsPerInnings === 300) return "ODI";
-  return null;
+  const match = VARIANT_FORMATS.find(({ format }) => FORMAT_KEYS.every((key) => cfg[key] === format[key]));
+  return match?.code ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1253,18 +1290,16 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // READ-ONLY replacement for the old dock chip — the scorer no longer
   // declares what the fold already knows. Appended LAST (after target, same
   // "never reindex the pinned strip[0..3] items" convention the target
-  // block above already established) — `freeHitPending` is the SAME fold
-  // `cricketBallDetail`'s own activity-log note uses (that function's own
-  // doc has the full correctness-trap/innings-boundary reasoning), called
-  // here with EVERYTHING recorded so far, which answers "is a free hit
-  // pending right now". Gated on live/super-over phase (matching
+  // block above already established). Pad wave P2 (review I2): it reads the
+  // fold's own flag (`foldFreeHitPending`), not a scan of `view.events` —
+  // that scan never resolved a `core.void`, so a taken-back no ball kept the
+  // chip lit while the engine had cleared it, and it read a super over's no
+  // ball by the main cfg's white-ball rule, where the engine's super over is
+  // always white-ball. Gated on live/super-over phase (matching
   // `buildContext`'s own gate) so a stray pending flag can never survive
   // into a finished match's display. `id: "freeHit"` is the stable,
   // i18n-independent Playwright hook (`StripItem.id`, types.ts).
-  if (
-    (state.phase === "live" || state.phase === "super_over") &&
-    freeHitPending(view.events, cfg.ballsPerInnings !== null)
-  ) {
+  if ((state.phase === "live" || state.phase === "super_over") && foldFreeHitPending(state)) {
     strip.push({ id: "freeHit", value: t("scorepad.skin.cricket.header.freeHit"), accent: true });
   }
 
@@ -1435,9 +1470,10 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs default to one
       // Law 41 award (`cricketPadRules.penaltyRuns`, five), not the ordinary
       // single every OTHER minor extra opens with — a real, deliberate
-      // exception, not an oversight. The other three kinds (noball/bye/
-      // legbye) keep `extraPayload`'s own default.
-      const runs = kind === "penalty" ? cricketPadRules.penaltyRuns : undefined;
+      // exception, not an oversight. A no ball opens at its Law 21.14
+      // penalty (`noBallDefaultRuns`); a bye and a leg bye keep
+      // `extraPayload`'s own single.
+      const runs = kind === "penalty" ? cricketPadRules.penaltyRuns : kind === "noball" ? cricketPadRules.noBallDefaultRuns : undefined;
       tiles.push(ballTile({
         id: `extra-${kind}`,
         label: requiredVocabKey("kind", kind),
@@ -1581,13 +1617,13 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
 export function refusedEventTypes(view: PadHostView): string[] {
   const state = asState(view.state);
   if (state.phase !== "super_over") return [];
-  return [
-    "cricket.review",
-    "cricket.retire",
-    "cricket.innings.close",
-    "cricket.innings.declare",
-    "cricket.innings.summary",
-  ];
+  // Pad wave P2 (review, trace c): every cricket.* type the fold refuses in a
+  // super over, read off the engine (`superOverEventTypes`: its own balls and
+  // a player line pass; every other type's handler refuses it on phase). The
+  // hand list it replaces named five and missed New ball, Powerplay,
+  // Interruption and Revise, each a live refusal in the More sheet.
+  const accepted = cricketPadRules.superOverEventTypes;
+  return Object.keys(cricketPadRules.eventBands).filter((type) => !accepted.includes(type));
 }
 
 // ---------------------------------------------------------------------------
@@ -2131,7 +2167,22 @@ const CLOSE_REASON_LABEL: Readonly<Record<string, string>> = {
   time: "time", weather: "weather", forfeited: "forfeited", other: "other",
 };
 
-function closeReasonLabel(reason: string): string {
+/** Presentation: each retirement reason's dictionary key. The reasons are the
+ *  engine's (`cricketPadRules.retireReasons`); one with no key here throws
+ *  rather than render a raw key, the same guard `closeReasonLabel` keeps. */
+const RETIRE_REASON_LABEL: Readonly<Record<string, string>> = {
+  hurt: "pad.cricket.sheet.retire.reason.hurt",
+  out: "pad.cricket.sheet.retire.reason.out",
+  other: "pad.cricket.sheet.retire.reason.other",
+};
+
+export function retireReasonLabel(reason: string): string {
+  const key = RETIRE_REASON_LABEL[reason];
+  if (key === undefined) throw new Error(`cricket skin: no label for retirement reason "${reason}"`);
+  return key;
+}
+
+export function closeReasonLabel(reason: string): string {
   const suffix = CLOSE_REASON_LABEL[reason];
   if (suffix === undefined) throw new Error(`cricket skin: no label for innings-close reason "${reason}"`);
   return `pad.cricket.sheet.inningsClose.reason.${suffix}`;
@@ -2205,20 +2256,20 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
   // so a not-yet-populated crease offers zero candidates rather than a
   // phantom "" entry `renderCandidateRow` would render as a blank button.
   const outCandidates = [people.striker, people.nonStriker].filter((id): id is string => id !== "");
-  // R2b-over (review finding — same recurring defect class this whole branch
-  // targets): the SAME `freeHitPending` fold buildScorebug's own indicator
-  // and cricketBallDetail's own activity note already use (that function's
-  // own header, above) — called here with the identical two arguments
-  // buildScorebug uses, so this gate can never disagree with what the
-  // scorer is already shown on the scorebug strip.
-  const freeHit = freeHitPending(view.events, cfg.ballsPerInnings !== null);
+  // Pad wave P2 (review I2): the fold's own flag, the same one
+  // buildScorebug's indicator reads (`foldFreeHitPending`), so this gate can
+  // never disagree with the scorebug strip, nor with the engine after a
+  // take-back or in a super over.
+  const freeHit = foldFreeHitPending(state);
   // R2b-over (review finding — the fourth instance of "the pad must never
   // offer what the engine will refuse", `_INDEX.md`): while a free hit is
   // pending the fold refuses every mode outside its free-hit set
   // (`cricketPadRules.freeHitDismissalKinds`, the engine's
   // FREE_HIT_DISMISSAL_KINDS), so the kind step narrows to it. Filtering the
   // engine's mode list keeps its order.
-  const { wicketKinds, freeHitDismissalKinds, variableOutKinds, fielderCreditedKinds, bowlerCreditedKinds } = cricketPadRules;
+  const { wicketKinds, freeHitDismissalKinds, variableOutKinds, fielderCreditedKinds, fielderOptionalKinds, bowlerCreditedKinds } = cricketPadRules;
+  const fielderRequired = (kind: string) => fielderCreditedKinds.includes(kind) && !fielderOptionalKinds.includes(kind);
+  const fielderOptional = (kind: string) => fielderCreditedKinds.includes(kind) && fielderOptionalKinds.includes(kind);
   const kindOptions = (freeHit ? wicketKinds.filter((k) => freeHitDismissalKinds.includes(k)) : wicketKinds).map((k) => ({
     id: k,
     label: requiredVocabKey("kind", k),
@@ -2246,9 +2297,10 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       pool: "onfield",
       side: people.battingSide,
       candidates: outCandidates,
-      // Either batter can be out run out (Law 38.1) or obstructing the field
-      // (Law 37.1.1): ask. Every other mode is the striker's, and asking would
-      // be the wasted tap D-15 exists to remove.
+      // Either batter can be out run out (Law 38.1), obstructing the field
+      // (Law 37.1.1) or retired (Law 25.4.1): ask (ruling 242, CK-WK-3).
+      // Every other mode is the striker's, and asking would be the wasted
+      // tap D-15 exists to remove.
       when: (answers) => variableOutKinds.includes(answers.kind ?? ""),
     },
     {
@@ -2257,9 +2309,22 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       title: "pad.cricket.sheet.wicket.fielder.title",
       pool: "onfield",
       side: people.bowlingSide,
-      // The modes the fold credits a named fielder for (FIELDER_CREDIT_COLUMN;
-      // obstructed is the house rulebook's, P2 Q1).
-      when: (answers) => fielderCreditedKinds.includes(answers.kind ?? ""),
+      // The modes the fold credits a named fielder for (FIELDER_CREDIT_COLUMN)
+      // and the Laws name one for: caught, stumped, run out.
+      when: (answers) => fielderRequired(answers.kind ?? ""),
+    },
+    {
+      // Ruling 242 (CK-WK-2): obstructing the field credits a fielder when one
+      // is named, but Law 37 names none (obstruction "by word" has no
+      // fielder), so the scorer may decline: `optional` renders the
+      // "nobody" control, whose `""` answer drops the field.
+      id: "fielderOptional",
+      kind: "person",
+      title: "pad.cricket.sheet.wicket.fielder.title",
+      pool: "onfield",
+      side: people.bowlingSide,
+      optional: true,
+      when: (answers) => fielderOptional(answers.kind ?? ""),
     },
   ];
   const incoming = incomingPersonStep(state, cfg, people, "pad.cricket.sheet.wicket.incoming.title");
@@ -2271,7 +2336,7 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
     buildPayload: (answers) => {
       const kind = answers.kind ?? "";
       const out = variableOutKinds.includes(kind) ? answers.out : people.striker;
-      const fielder = fielderCreditedKinds.includes(kind) ? answers.fielder : undefined;
+      const fielder = fielderRequired(kind) ? answers.fielder : fielderOptional(kind) ? answers.fielderOptional : undefined;
       return {
         ...base,
         runs: { bat: 0 },
@@ -2368,7 +2433,7 @@ function retireSheet(view: PadHostView): GuidedSheetSpec {
         id: "reason",
         kind: "choice",
         title: "pad.cricket.sheet.retire.reason.title",
-        options: cricketPadRules.retireReasons.map((id) => ({ id, label: `pad.cricket.sheet.retire.reason.${id}` })),
+        options: cricketPadRules.retireReasons.map((id) => ({ id, label: retireReasonLabel(id) })),
       },
       ...(incoming ? [incoming] : []),
     ],

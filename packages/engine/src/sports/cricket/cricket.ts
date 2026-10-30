@@ -800,7 +800,7 @@ export function nextBattingSide(
   return battingSideAt(state, state.inningsCount);
 }
 
-function aggregate(state: CricketState, side: Side): number {
+function aggregate(state: Pick<ChaseTargetInput, "innings">, side: Side): number {
   return state.innings.reduce(
     (sum, innings) => (innings.battingSide === side ? sum + innings.runs : sum),
     0,
@@ -811,8 +811,16 @@ function isChaseIndex(state: CricketState, index: number): boolean {
   return index === maxInningsCount(state.cfg) - 1;
 }
 
+/** Only the fields `chaseTarget` reads — narrower than CricketState for the same reason as BattingAlternationCfg (above):
+ *  apps/web's v3 cricket skin reads the target off it (pad wave P2) without holding a full CricketState. Every internal call
+ *  site passes a real CricketState, which satisfies it structurally — no behaviour change. */
+interface ChaseTargetInput extends BattingAlternationCfg {
+  revisedTarget: number | null;
+  innings: readonly { battingSide: Side; runs: number }[];
+}
+
 // Runs the batting side of the final innings needs to win (spec §2.3).
-export function chaseTarget(state: CricketState): number {
+export function chaseTarget(state: ChaseTargetInput): number {
   if (state.cfg.inningsPerSide === 1) {
     if (state.revisedTarget !== null) return state.revisedTarget;
     const first = state.innings[0];
@@ -1257,7 +1265,8 @@ export const FREE_HIT_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketK
 );
 
 // W4 — which dismissals put a fielder in the scorebook, and under which column. `obstructed` is the house rulebook's
-// (DOMAIN.md, Dismissals: "credits the fielder a run out"); MCC Law 37 credits nobody. Kept by owner ruling (pad wave P2, Q1).
+// (DOMAIN.md, Dismissals: "credits the fielder a run out"); MCC Law 37 credits nobody. Kept by owner ruling 242 (CK-WK-2), with
+// the fielder optional for it (FIELDER_OPTIONAL_KINDS below).
 export const FIELDER_CREDIT_COLUMN: Readonly<Record<string, keyof FieldingCredit>> = {
   caught: "catches",
   stumped: "stumpings",
@@ -1265,17 +1274,26 @@ export const FIELDER_CREDIT_COLUMN: Readonly<Record<string, keyof FieldingCredit
   obstructed: "runOuts",
 };
 
-/** (pad wave P2, Q1b) The modes in which EITHER batter can be the one out: run out (MCC Law 38.1, "Either batter is out Run
- *  out") and obstructing the field (Law 37.1.1, "Either batter is out Obstructing the field"); every other mode is the
- *  striker's. A declaration for the pad (it asks "who's out" for exactly these), NOT a fold guard: `applyDelivery` checks only
- *  that `wicket.out` is at the crease, for every mode. */
-export const VARIABLE_OUT_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["runout", "obstructed"]);
+/** (pad wave P2, ruling 242, CK-WK-2) The fielder-credited modes in which naming the fielder is optional: obstructing the
+ *  field, which the Laws record against no fielder (MCC Law 37; obstruction "by word" has none) but the house rulebook credits
+ *  a run out to when one is named. The fold has always taken `fielder` as optional for every mode; this is what the pad asks. */
+export const FIELDER_OPTIONAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["obstructed"]);
 
-/** (pad wave P2) MCC Law 37.5.1, "any one-run Penalty for No ball or Wide": a wide and a no ball each carry a penalty of one
- *  run. The batters never run it, so `applyDelivery`'s striker rotation nets it off both before it counts crossings. */
+/** (pad wave P2, ruling 242, CK-WK-3) The modes in which EITHER batter can be the one out: run out (MCC Law 38.1, "Either
+ *  batter is out Run out"), obstructing the field (Law 37.1.1, "Either batter is out Obstructing the field") and retired
+ *  (Law 25.4.1, "A batter may retire at any time during their innings when the ball is dead"). A declaration for the pad (it
+ *  asks "who's out" for exactly these), NOT a fold guard: `applyDelivery` checks only that `wicket.out` is at the crease, for
+ *  every mode, so it also takes the non-striker out bowled or caught, which no Law allows (CK-WK-4, owed). */
+export const VARIABLE_OUT_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["runout", "obstructed", "retired"]);
+
+/** (pad wave P2) MCC Law 21.14 ("A penalty of one run shall be awarded instantly on the call of No ball") and Law 22.6 (the
+ *  same for a Wide): a wide and a no ball each carry a penalty of one run. The batters never run it, so `applyDelivery`'s
+ *  striker rotation nets it off both before it counts crossings. */
 export const WIDE_NO_BALL_PENALTY_RUNS = 1;
-/** (pad wave P2) A bare wide records its one-run penalty and nothing more: the runs the pad's wide tile records. */
+/** (pad wave P2) A bare wide records its one-run penalty (Law 22.6) and nothing more: the runs the pad's wide tile records. */
 export const WIDE_DEFAULT_RUNS = WIDE_NO_BALL_PENALTY_RUNS;
+/** (pad wave P2) A bare no ball records its one-run penalty (Law 21.14): the runs the pad's no-ball tile opens at. */
+export const NO_BALL_DEFAULT_RUNS = WIDE_NO_BALL_PENALTY_RUNS;
 /** (pad wave P2) MCC Law 41.2.1, "the award of 5 Penalty runs": one award of penalty runs is five. The fold does not compute
  *  it (a `penalty` extra carries its own runs; two awards on one ball are ten), so nothing in `applyDelivery` reads this:
  *  it is the pad's runs for one award. */
@@ -3132,7 +3150,15 @@ function ballBaseFields(cfg: CricketCfg): PadField[] {
 // band 3 here, matching `cricket.ball`, not band 1.
 //
 // One map for every cfg (pad wave P2): `padSpec(cfg).fidelity` is this object, and `@seazn/engine/pad` reads the same one.
-export const CRICKET_FIDELITY: Readonly<Record<string, FidelityBand>> = {
+/** (pad wave P2) The cricket.* events the fold accepts while a super over is being played (phase "super_over"): its own
+ *  balls, and a player line (`applyPlayerLine` has no phase guard; it files a line against a closed main innings). Every
+ *  other type is refused WRONG_PHASE by its own handler's guard (`state.phase !== "live"`, `requireOpenInnings`, the toss's
+ *  "pre", the interruption's and the revise's "pre"/"live"). The handlers do not read this set: pad/cricket.test.ts folds
+ *  every type in a real super over and holds the set equal to what they accept. */
+export const SUPER_OVER_EVENT_TYPES: ReadonlySet<string> = new Set(["cricket.superover.ball", "cricket.player.line"]);
+
+/** padSpec's fidelity bands, one frozen object shared by every `padSpec(cfg)` and by `cricketPadRules.eventBands`. */
+export const CRICKET_FIDELITY: Readonly<Record<string, FidelityBand>> = Object.freeze({
   "cricket.innings.summary": 0,
   "cricket.toss": 1,
   "cricket.innings.declare": 1,
@@ -3148,7 +3174,7 @@ export const CRICKET_FIDELITY: Readonly<Record<string, FidelityBand>> = {
   "cricket.ball": 3,
   "cricket.superover.ball": 3,
   "cricket.retire": 3,
-};
+});
 
 export function padSpec(cfg: CricketCfg): PadSpec {
   const base = ballBaseFields(cfg);
