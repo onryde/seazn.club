@@ -43,6 +43,7 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { msgFor } from "@/lib/messages-i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
@@ -180,9 +181,12 @@ async function world(o: { fixtures?: number; credits?: number; sub?: string | nu
 /** The setup (Go live, Stop, the real end step) revalidates pages of its own: forget those, so what is counted is the DISCONNECT's. */
 const forgetRevalidations = () => { revalidateHook.calls = []; revalidateHook.seen = []; };
 
-/** The disconnect under test, on the world's injected clock (or `now`). */
-const disconnect = (w: World, o: { connectionId?: string; auth?: AuthCtx; orgId?: string; port?: YouTubePort; now?: number } = {}) =>
-  disconnectYoutube(o.auth ?? w.auth, o.orgId ?? w.orgId, o.connectionId ?? w.connectionId, o.port ?? w.fake, { now: () => new Date(o.now ?? w.now()) });
+/** The disconnect under test, on the world's injected clock (or `now`). The wait between two reads of a broadcast's life (before a refused
+ *  key delete is retried) is a no-op here unless a test hands its own: the clock under test is the wall-clock budget, not a real sleep. */
+const disconnect = (w: World, o: { connectionId?: string; auth?: AuthCtx; orgId?: string; port?: YouTubePort; now?: number; sleep?: (ms: number) => Promise<void> } = {}) =>
+  disconnectYoutube(o.auth ?? w.auth, o.orgId ?? w.orgId, o.connectionId ?? w.connectionId, o.port ?? w.fake, {
+    now: () => new Date(o.now ?? w.now()), sleep: o.sleep ?? (async () => {}),
+  });
 
 /** The organiser's Go live, on the start's own clock (W5 needs the phone present at it). */
 async function goLive(w: World, fixtureId: string, targetId = w.targetId) {
@@ -272,8 +276,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect(await keysOf(w.connectionId), "premise: no key").toBe(0);
     expect((await broadcastsOf(w.connectionId)).length, "premise: no broadcast").toBe(0);
 
-    expect(await disconnect(w)).toEqual({ revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
-    expect(methods(w.fake), "an access token to act with, then the revoke: nothing to end, nothing to delete").toEqual(["accessToken", "revoke"]);
+    expect(await disconnect(w)).toEqual({ revokeOutcome: "revoked", keysDeleted: 0, keysLeft: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
+    expect(methods(w.fake), "an access token to act with, a look at the channel's streams (none), then the revoke: nothing to end, nothing to delete").toEqual(["accessToken", "listStreams", "revoke"]);
     expect(await connRow(w.connectionId)).toMatchObject({ status: "revoked", channel_id: null, channel_title: null, google_sub: null });
 
     // The positive pair: the same use-case over a channel that HAS streamed reports non-zero counts.
@@ -282,6 +286,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     const out = await disconnect(busy);
     expect(out.purged.broadcasts).toBeGreaterThan(0);
     expect(out.keysDeleted).toBeGreaterThan(0);
+    expect(out.keysLeft, "and every one of them went").toBe(0);
   });
 
   it("an idle channel after played matches: token revoked at Google ONCE, the key's stream deleted at YouTube, token null, status revoked, destination archived, broadcast rows and key rows gone, the link pointing at its video cleared, a club's own link kept, a pending reconnect grant gone - and cleanup comes BEFORE the revoke", async () => {
@@ -303,7 +308,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
 
     const from = w.fake.calls.length;
     const out = await disconnect(w);
-    expect(out).toEqual({ revokeOutcome: "revoked", keysDeleted: 1, purged: { broadcasts: 2, streamUrlsCleared: 1 } });
+    expect(out).toEqual({ revokeOutcome: "revoked", keysDeleted: 1, keysLeft: 0, purged: { broadcasts: 2, streamUrlsCleared: 1 } });
 
     // At YouTube: the key's stream is deleted, the videos (complete broadcasts) are NOT touched, the grant is revoked once - last.
     expect(w.fake.streamsCount(w.channel.id)).toBe(0);
@@ -315,6 +320,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect(order[order.length - 1], "the revoke is the last call: nothing can be ended once the grant is dead").toBe("revoke");
     expect(order.indexOf("deleteStream")).toBeGreaterThan(-1);
     expect(order.indexOf("deleteStream")).toBeLessThan(order.indexOf("revoke"));
+    expect(order.indexOf("listStreams"), "the channel's streams are read after the pooled key went, before the revoke").toBeGreaterThan(order.indexOf("deleteStream"));
+    expect(order.indexOf("listStreams")).toBeLessThan(order.indexOf("revoke"));
     await expect(w.fake.accessToken(w.token), "the grant is dead at Google").rejects.toMatchObject({ code: "youtube_reconnect_needed" });
 
     // In the database.
@@ -337,12 +344,18 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
   it("a RETIRED pooled key (its stream is already gone at YouTube) is purged with the rest but is not asked about: no deleteStream call for it, keysDeleted counts only the live key", async () => {
     const w = await world();
     await completedMatch(w, w.fixtures[0]!);
-    await sql`update youtube_stream_keys set retired_at = now() where connection_id = ${w.connectionId}`;   // retired by SQL: only a lost stream retires a key
+    // Retired by SQL: only a LOST stream retires a key, so the stream is made lost at YouTube too (the fake's own delete) - the shape the
+    // product leaves. (A retired key whose stream were still there would be found by the sweep below and deleted: the sweep's own test.)
+    const [{ live_stream_id: lost }] = await sql<{ live_stream_id: string }[]>`select live_stream_id from youtube_stream_keys where connection_id = ${w.connectionId}`;
+    await w.fake.deleteStream(await w.fake.accessToken(w.token), lost);
+    await sql`update youtube_stream_keys set retired_at = now() where connection_id = ${w.connectionId}`;
     expect(await keysOf(w.connectionId), "premise: the (retired) key row is there").toBe(1);
+    const from = w.fake.calls.length;
 
     const out = await disconnect(w);
     expect(out.keysDeleted).toBe(0);
-    expect(count(w.fake, "deleteStream"), "a retired key is not a stream to delete").toBe(0);
+    expect(out.keysLeft, "and nothing is left: the channel has no Seazn key").toBe(0);
+    expect(count(w.fake, "deleteStream", from), "a retired key is not a stream to delete").toBe(0);
     expect(await keysOf(w.connectionId), "its row is purged all the same").toBe(0);
   });
 
@@ -498,7 +511,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     const callsBefore = w.fake.calls.length;
 
     const out = await disconnect(w);
-    expect(out).toMatchObject({ keysDeleted: 0, purged: { broadcasts: 1 } });
+    expect(out).toMatchObject({ keysDeleted: 0, keysLeft: null, purged: { broadcasts: 1 } });
     expect(await broadcastsOf(w.connectionId), "the claimed row is purged").toEqual([]);
     expect(await keysOf(w.connectionId)).toBe(0);
     expect(await connRow(w.connectionId)).toMatchObject({ status: "revoked", channel_id: null });
@@ -768,9 +781,18 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     w.fake.failNext("complete", "youtube_unavailable", "backendError", { channelId: w.channel.id });
     w.fake.failNext("deleteStream", "youtube_unavailable", "backendError", { channelId: w.channel.id });
     w.fake.failNext("revoke", "youtube_unavailable", "backendError", { channelId: w.channel.id });
+    const slept: number[] = [];
+    const from = w.fake.calls.length;
 
-    const out = await disconnect(w, { now: afterStop(m, min(6)) });
-    expect(out).toEqual({ revokeOutcome: "not_confirmed", keysDeleted: 0, purged: { broadcasts: 1, streamUrlsCleared: 0 } });
+    const out = await disconnect(w, { now: afterStop(m, min(6)), sleep: async (ms) => { slept.push(ms); } });
+    // The key's first delete failed; the broadcast that holds it never read complete (its complete failed), so the retry waited for it as
+    // long as it may - three reads of its life, a wait between each - then tried once more, and the delete went through.
+    expect(out).toEqual({ revokeOutcome: "not_confirmed", keysDeleted: 1, keysLeft: 0, purged: { broadcasts: 1, streamUrlsCleared: 0 } });
+    const order = methods(w.fake, from);
+    expect(order.filter((x) => x === "deleteStream"), "the delete, then its one retry").toHaveLength(2);
+    expect(order.slice(order.indexOf("deleteStream") + 1, order.lastIndexOf("deleteStream")), "between them: the broadcast's life read three times").toEqual(["broadcastLife", "broadcastLife", "broadcastLife"]);
+    expect(slept.length, "a wait between two reads, not after the last").toBe(2);
+    expect(w.fake.inspectBroadcast(m.ytId)!.life, "premise: the failed complete left it live").toBe("live");
     expect(await connRow(w.connectionId)).toMatchObject({ status: "revoked", channel_id: null, google_sub: null });
     expect(await openToken(sql, w.orgId, w.connectionId)).toBeNull();
     expect(await broadcastsOf(w.connectionId)).toEqual([]);
@@ -791,12 +813,13 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     broken.deleteStream = async () => { throw new TypeError("refresh_token=1//hunter2-leaked"); };
 
     const out = await disconnect(w, { port: broken });
-    expect(out).toMatchObject({ keysDeleted: 0, revokeOutcome: "revoked", purged: { broadcasts: 1 } });
+    // the delete and its one retry both threw: the key is still on the channel (the listing shows it), and the answer says so
+    expect(out).toMatchObject({ keysDeleted: 0, keysLeft: 1, revokeOutcome: "revoked", purged: { broadcasts: 1 } });
     expect((await connRow(w.connectionId)).status).toBe("revoked");
     const reports = disconnectReports();
-    expect(reports.length).toBe(1);
+    expect(reports.length, "the delete and its retry: one report each").toBe(2);
     expect(JSON.stringify(reports.map(([e, c]) => [(e as Error).message, c]))).not.toContain("hunter2");
-    expect((reports[0]![0] as Error).message).toContain("TypeError");
+    for (const [e] of reports) expect((e as Error).message).toContain("TypeError");
   });
 
   it("a saved token that will not open (a damaged envelope) does not make the channel undeletable: it is revoked and purged here, YouTube is asked nothing, the revoke is not_confirmed", async () => {
@@ -806,7 +829,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     const calls = w.fake.calls.length;
 
     const out = await disconnect(w);
-    expect(out).toMatchObject({ revokeOutcome: "not_confirmed", keysDeleted: 0, purged: { broadcasts: 1 } });
+    expect(out).toMatchObject({ revokeOutcome: "not_confirmed", keysDeleted: 0, keysLeft: null, purged: { broadcasts: 1 } });
     expect(w.fake.calls.length, "no token, no call").toBe(calls);
     expect(await connRow(w.connectionId)).toMatchObject({ status: "revoked", channel_id: null });
     expect(await broadcastsOf(w.connectionId)).toEqual([]);
@@ -823,12 +846,14 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     const from = w.fake.calls.length;
 
     const out = await disconnectYoutube(w.auth, w.orgId, w.connectionId, w.fake, { now: () => new Date(afterStop(m, min(6))), wallClock });
-    expect(out, "no broadcast ended, no key deleted - and the grant revoked").toEqual({ revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 1, streamUrlsCleared: 0 } });
+    expect(out, "no broadcast ended, no key deleted, the channel never read (so nothing is confirmed gone) - and the grant revoked").toEqual({
+      revokeOutcome: "revoked", keysDeleted: 0, keysLeft: null, purged: { broadcasts: 1, streamUrlsCleared: 0 },
+    });
     expect(methods(w.fake, from), "an access token, then the revoke: the two steps the budget does not cover").toEqual(["accessToken", "revoke"]);
     expect(w.fake.inspectBroadcast(m.ytId)!.life, "left live at YouTube: that is what the report is for").toBe("live");
     const reports = disconnectReports();
     expect(reports.length).toBe(1);
-    expect(reports[0]![1]).toMatchObject({ route: "youtube.disconnect.budget", extra: { skipped: 2 } });   // one broadcast + one key
+    expect(reports[0]![1]).toMatchObject({ route: "youtube.disconnect.budget", extra: { skipped: 3 } });   // one broadcast + one key + the listing
     expect(JSON.stringify(reports)).not.toContain(key.streamKey);
     expect((await connRow(w.connectionId)).status).toBe("revoked");
   });
@@ -848,10 +873,11 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     probed.complete = async (at, id) => { await probe(); return f.complete(at, id); };
     probed.deleteBroadcast = async (at, id) => { await probe(); return f.deleteBroadcast(at, id); };
     probed.deleteStream = async (at, id) => { await probe(); return f.deleteStream(at, id); };
+    probed.listStreams = async (at) => { await probe(); return f.listStreams(at); };
     probed.revoke = async (rt) => { await probe(); return f.revoke(rt); };
 
-    await expect(disconnect(w, { port: probed, now: afterStop(m, min(6)) })).resolves.toMatchObject({ revokeOutcome: "revoked", keysDeleted: 1 });
-    expect(probes, "accessToken, broadcastLife, complete, deleteStream, revoke").toBeGreaterThanOrEqual(5);
+    await expect(disconnect(w, { port: probed, now: afterStop(m, min(6)) })).resolves.toMatchObject({ revokeOutcome: "revoked", keysDeleted: 1, keysLeft: 0 });
+    expect(probes, "accessToken, broadcastLife, complete, deleteStream, listStreams, revoke").toBeGreaterThanOrEqual(6);
     expect(disconnectReports(), "no probe failed inside the cleanup").toEqual([]);
   });
 
@@ -1065,5 +1091,142 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     if (!out.ok) expect(out.e).toMatchObject({ status: 409, code: "YOUTUBE_IN_USE" });
     expect((await connRow(w.connectionId)).status).toBe("connected");
     expect(await broadcastsOf(w.connectionId), "the row is still there").toHaveLength(1);
+  });
+
+  // ═══ keys left on the channel (stg 2026-10-30: "deleted" was shown while Studio still listed a Seazn key) ══════════════════════════════
+  // The disconnect retries a refused key delete once (after the broadcast that held the key reads complete), then reads the channel's own
+  // streams and deletes every one Seazn named - recorded or not - and answers `keysLeft`: what it could not delete, or null when it could not
+  // read the channel. The names are the dictionaries' (`streaming.youtube.streamKeyTitle`, rendered as growPool renders it) and the two
+  // former ones from git history: "Seazn stream key" (79a208d8b0 removed it) and the fr "clé de diffusión" (#1088 corrected it).
+  const KEY_TITLE = (locale: "en" | "es" | "fr" | "nl", n: number) => msgFor(locale, "streaming.youtube.streamKeyTitle", { n });
+  const NAME_BEFORE_SLOTS = "Seazn stream key";
+  const FR_BEFORE_1088 = (n: number) => `Seazn Club · clé de diffusión ${n}`;
+  /** The pooled key's stream at YouTube (the one the real Go live made). */
+  const pooledStream = async (w: World): Promise<string> =>
+    (await sql<{ live_stream_id: string }[]>`select live_stream_id from youtube_stream_keys where connection_id = ${w.connectionId} and retired_at is null`)[0]!.live_stream_id;
+  /** A stream on the channel that no row of ours records, made through the port exactly as YouTube would hold it. */
+  const orphan = async (w: World, title: string, c: Chan = w): Promise<string> =>
+    (await w.fake.insertStream(await w.fake.accessToken(c.token), { title })).streamId;
+
+  it("a pooled key YouTube refuses to delete ONCE is retried after its broadcast reads complete, and goes: keysLeft 0, the plain answer - and the retry comes AFTER the complete and the read, the revoke after them all", async () => {
+    const w = await world();
+    const m = await playAndStop(w, w.fixtures[0]!);
+    const stream = await pooledStream(w);
+    w.fake.refuseStreamDelete(stream);   // once (liveStreamDeletionNotAllowed), then allowed
+    const from = w.fake.calls.length;
+
+    const out = await disconnect(w, { now: afterStop(m, min(6)) });
+    expect(out).toEqual({ revokeOutcome: "revoked", keysDeleted: 1, keysLeft: 0, purged: { broadcasts: 1, streamUrlsCleared: 0 } });
+    expect(w.fake.inspectStream(stream), "the key is gone from the channel").toBeNull();
+    const order = methods(w.fake, from);
+    const first = order.indexOf("deleteStream");
+    const retry = order.lastIndexOf("deleteStream");
+    expect(retry, "a second delete of the key").toBeGreaterThan(first);
+    expect(order.indexOf("complete"), "the broadcast was completed before the key was asked for").toBeLessThan(first);
+    expect(order.slice(first + 1, retry), "and read once more between the refusal and the retry: it said complete").toEqual(["broadcastLife"]);
+    expect(order.slice(retry + 1), "then the channel is read, then the grant revoked - last").toEqual(["listStreams", "revoke"]);
+    expect(disconnectReports().map(([, ctx]) => (ctx as { extra: { step: string } }).extra.step), "the refusal is reported, the retry's success is not").toEqual(["deleteStream"]);
+  });
+
+  it("a pooled key YouTube ALWAYS refuses: keysLeft 1 (the key is still on the channel), the revoke still made and made AFTER every delete; the delete was tried twice, never a third time by the sweep", async () => {
+    const w = await world();
+    const m = await completedMatch(w, w.fixtures[0]!);
+    const stream = await pooledStream(w);
+    w.fake.refuseStreamDelete(stream, { times: "always" });
+    const from = w.fake.calls.length;
+
+    const out = await disconnect(w, { now: afterStop(m, min(10)) });
+    expect(out).toEqual({ revokeOutcome: "revoked", keysDeleted: 0, keysLeft: 1, purged: { broadcasts: 1, streamUrlsCleared: 1 } });
+    expect(w.fake.inspectStream(stream), "premise of the answer: it IS still there").not.toBeNull();
+    const order = methods(w.fake, from);
+    expect(order.filter((x) => x === "deleteStream"), "the delete and its one retry").toHaveLength(2);
+    expect(order[order.length - 1], "the revoke is the last call").toBe("revoke");
+    expect(order.lastIndexOf("deleteStream"), "every delete came before the revoke").toBeLessThan(order.indexOf("revoke"));
+    expect(order.indexOf("listStreams")).toBeLessThan(order.indexOf("revoke"));
+    expect(count(w.fake, "revoke", from), "revoked once").toBe(1);
+    await expect(w.fake.accessToken(w.token), "the grant is dead at Google all the same").rejects.toMatchObject({ code: "youtube_reconnect_needed" });
+    expect(await keysOf(w.connectionId), "and our copy is purged all the same").toBe(0);
+    // the sequence: a second disconnect is the 404 of a revoked connection and asks YouTube nothing
+    const calls = w.fake.calls.length;
+    await expect(disconnect(w)).rejects.toMatchObject({ status: 404 });
+    expect(w.fake.calls.length).toBe(calls);
+  });
+
+  it("Seazn-named streams NO row records (the real Go live's own key unrecorded in fr, the former single name, the fr name with the accent, an es name) are found and deleted; the club's own keys ('TestYouTube', the default key) are NOT - nor a Seazn-named key on another club's channel (anti-vacuity: 4 deleted, 3 kept)", async () => {
+    const w = await world();
+    await sql`update organizations set default_locale = 'fr' where id = ${w.orgId}`;
+    await completedMatch(w, w.fixtures[0]!);
+    // the REAL producer's key, then lost from our records (growPool's pooling transaction failing after YouTube made the stream leaves this)
+    const unrecorded = await pooledStream(w);
+    expect(w.fake.inspectStream(unrecorded)!.title, "premise: growPool named it in the org's locale").toBe(KEY_TITLE("fr", 1));
+    await sql`update youtube_broadcasts set key_id = null where connection_id = ${w.connectionId}`;
+    await sql`delete from youtube_stream_keys where connection_id = ${w.connectionId}`;
+    const seazn = [unrecorded, await orphan(w, NAME_BEFORE_SLOTS), await orphan(w, FR_BEFORE_1088(2)), await orphan(w, KEY_TITLE("es", 3))];
+    const theirs = [await orphan(w, "TestYouTube"), await orphan(w, "Default stream key")];
+    const other = await seedYoutubeOrg();
+    const elsewhere = await w.addChannel({ org: other });
+    const notOurs = await orphan(w, NAME_BEFORE_SLOTS, elsewhere);
+    expect(await keysOf(w.connectionId), "premise: no key row records any of them").toBe(0);
+
+    const out = await disconnect(w);
+    expect(out).toMatchObject({ revokeOutcome: "revoked", keysDeleted: seazn.length, keysLeft: 0 });
+    let checked = 0;
+    for (const id of seazn) { expect(w.fake.inspectStream(id), `deleted: ${id}`).toBeNull(); checked++; }
+    for (const id of [...theirs, notOurs]) { expect(w.fake.inspectStream(id), `kept: ${w.fake.inspectStream(id)?.title}`).not.toBeNull(); checked++; }
+    expect(checked).toBe(7);
+    expect(w.fake.streamsCount(w.channel.id), "the channel keeps exactly the club's own").toBe(theirs.length);
+    expect((await connRow(elsewhere.connectionId)).status, "the other club is untouched").toBe("connected");
+  });
+
+  it("the channel cannot be read (liveStreams.list refused): keysLeft is null - NOT confirmed, never a 0 - the pooled key that was deleted still counts, the refusal is reported as a code, and the revoke is still made", async () => {
+    const w = await world();
+    await completedMatch(w, w.fixtures[0]!);
+    w.fake.failNext("listStreams", "youtube_unavailable", "backendError", { channelId: w.channel.id });
+
+    const out = await disconnect(w);
+    expect(out).toEqual({ revokeOutcome: "revoked", keysDeleted: 1, keysLeft: null, purged: { broadcasts: 1, streamUrlsCleared: 1 } });
+    expect(count(w.fake, "revoke")).toBe(1);
+    const reports = disconnectReports();
+    expect(reports.map(([e]) => (e as Error).message)).toEqual(["youtube disconnect: listStreams was refused (youtube_unavailable)"]);
+    // the pair: the same channel read fine answers a number
+    const ok = await world();
+    await completedMatch(ok, ok.fixtures[0]!);
+    expect((await disconnect(ok)).keysLeft).toBe(0);
+  });
+
+  it("only THIS channel's streams are swept: a Seazn-named stream a listing says belongs to another channel, or to no channel it names, is never deleted (the token of an account that manages several channels)", async () => {
+    const w = await world();
+    const ours = await orphan(w, NAME_BEFORE_SLOTS);
+    const f = w.fake;
+    const deleted: string[] = [];
+    const port = Object.create(f) as FakeYouTube;
+    port.listStreams = async (at) => [
+      ...(await f.listStreams(at)),
+      { id: "UCother-key", title: KEY_TITLE("en", 1), channelId: "UCsomeOtherChannel00000" },
+      { id: "nameless-key", title: KEY_TITLE("en", 2), channelId: null },
+    ];
+    port.deleteStream = async (at, id) => { deleted.push(id); return f.deleteStream(at, id); };
+
+    const out = await disconnect(w, { port });
+    expect(deleted, "only the stream on the disconnected channel").toEqual([ours]);
+    expect(out).toMatchObject({ keysDeleted: 1, keysLeft: 0 });
+  });
+
+  it("a SHARED Google account still reports correctly: the grant is left alone (skipped_shared_account) while this channel's keys are swept and counted - and a key left on it is reported beside the shared outcome; the other club's Seazn key is untouched", async () => {
+    const sub = `sub-yt-orphan-${randomUUID()}`;
+    const w = await world({ sub });
+    const b = await w.addChannel({ sub, org: await seedYoutubeOrg() });
+    const theirKey = await orphan(w, KEY_TITLE("en", 1), b);
+    const swept = await orphan(w, NAME_BEFORE_SLOTS);
+    const stuck = await orphan(w, KEY_TITLE("nl", 2));
+    w.fake.refuseStreamDelete(stuck, { times: "always" });
+
+    const out = await disconnect(w);
+    expect(out).toMatchObject({ revokeOutcome: "skipped_shared_account", keysDeleted: 1, keysLeft: 1 });
+    expect(w.fake.inspectStream(swept)).toBeNull();
+    expect(w.fake.inspectStream(stuck), "the one YouTube refused is still there - and counted").not.toBeNull();
+    expect(w.fake.inspectStream(theirKey), "the other club's key on its own channel is never touched").not.toBeNull();
+    expect(count(w.fake, "revoke"), "no revoke: another club runs on the grant").toBe(0);
+    await expect(w.fake.accessToken(b.token)).resolves.toEqual(expect.any(String));
   });
 });

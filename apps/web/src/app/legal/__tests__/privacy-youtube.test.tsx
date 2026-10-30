@@ -282,7 +282,10 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(windDown).toMatch(/case "live":\s*case "testing":\s*await attempt\(\(\) => port\.complete\(/);
     expect(windDown).toMatch(/case "created":\s*case "ready":\s*await attempt\(\(\) => port\.deleteBroadcast\(/);
     expect(windDown, "a finished, revoked or absent broadcast asks YouTube for nothing").toMatch(/case "complete":\s*case "revoked":\s*case "absent":\s*return;/);
-    expect(d).toContain("port.deleteStream(at.value, streamId)");
+    // every pooled key is deleted, a refused one is tried again, and a Seazn-named stream no row records is swept (fix 2026-10-30)
+    expect(d).toContain("port.deleteStream(at, k.streamId), c, \"deleteStream\")");
+    expect(d).toContain("port.deleteStream(at, k.streamId), c, \"deleteStream.retry\")");
+    expect(d).toContain("port.deleteStream(at, s.id), c, \"deleteStream.sweep\")");
     // The dead-grant purge asks Google to REVOKE only (its token is dead): the page does not promise a YouTube clean-up there.
     expect(dailySrc).toContain("await revokeConnection(tx, c.org_id, c.id)");
     expect(dailySrc).toContain("p.port.deleteStream(at, streamId)");
