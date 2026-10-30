@@ -311,11 +311,26 @@ describe("footballPadRules.eventAllowedInPhase", () => {
     expect(legalSeen).toBe(inPlayStates);
   });
 
-  it("fails open for a type it does not declare, never throws on a prototype key, and reads a cfg through the schema (an empty cfg is the halves default)", () => {
-    expect(footballPadRules.eventAllowedInPhase("football.var.review", "SHOOTOUT", cfgOf())).toBe(true);
-    for (const key of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
-      expect(footballPadRules.eventAllowedInPhase(key, "H1", {}), key).toBe(true);
+  it("a type that is not one of football's own event types throws, naming it (the period records' contract), a prototype key included; a stored cfg reads like its parsed default, twice", () => {
+    // P1 batch m1: one contract for every record. `true` for core.start in H1 was an answer the fold contradicts.
+    let refused = 0;
+    for (const type of ["football.var.review", "core.start", "core.lineup.substitution", "hockey.goal", "goal", "nonsense", "", "constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(() => footballPadRules.eventAllowedInPhase(type, "H1", {}), type).toThrow(`footballPadRules.eventAllowedInPhase: "${type}" is not one of the football module's own event types`);
+      refused++;
     }
+    expect(refused).toBe(11);
+    // The positive pair: every own type is answered, from the stored {} exactly as from the parsed default, and a second call agrees.
+    const parsed = cfgOf();
+    let answered = 0;
+    for (const type of Object.keys(FOOTBALL_EVENT_SCHEMAS)) {
+      for (const phase of ALL_PHASES) {
+        const first = footballPadRules.eventAllowedInPhase(type, phase, {});
+        expect(first, `${type} ${phase}`).toBe(footballPadRules.eventAllowedInPhase(type, phase, parsed));
+        expect(footballPadRules.eventAllowedInPhase(type, phase, {}), `${type} ${phase}: second call`).toBe(first);
+        answered++;
+      }
+    }
+    expect(answered).toBe(Object.keys(FOOTBALL_EVENT_SCHEMAS).length * ALL_PHASES.length);
     expect(footballPadRules.eventAllowedInPhase("football.goal", "H1", {})).toBe(true);
     expect(footballPadRules.eventAllowedInPhase("football.period", "H1", {})).toBe(true); // halves default: H1 -> HT
     expect(footballPadRules.eventAllowedInPhase("football.period", "Q2", {})).toBe(false); // quarters-only phase

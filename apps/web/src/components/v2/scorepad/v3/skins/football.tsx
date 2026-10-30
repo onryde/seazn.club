@@ -330,9 +330,12 @@ export function legalPeriodMarkers(phase: string, cfg: unknown): readonly string
  * away inside More as an un-narrowed generic form that `applyGoal` refuses.
  *
  * FAILS OPEN for a type the engine does not gate. A future `football.*` event must become reachable by existing, not by being listed
- * here - the engine's own test that every `eventSchemas` key is classified is what catches an unclassified one.
+ * here - the engine's own test that every `eventSchemas` key is classified is what catches an unclassified one. The open half is this
+ * skin's, as in period-shared's `phaseAllows`: the record answers for football's own types (its `eventBands` keys) and throws for any
+ * other, so a type outside them is filtered here first.
  */
 export function phaseAllows(eventType: string, phase: string, cfg: unknown): boolean {
+  if (!Object.hasOwn(footballPadRules.eventBands, eventType)) return true;
   return footballPadRules.eventAllowedInPhase(eventType, phase, cfg);
 }
 

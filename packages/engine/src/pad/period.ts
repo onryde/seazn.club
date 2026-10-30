@@ -61,7 +61,7 @@ function periodPadRules(module: PeriodModule, facts: PresetFacts): PeriodPadRule
 
   // The static catalogue: every class the schema default or any declared variant names, first-declared order.
   const declared = [module.configSchema.parse({}), ...Object.values(module.variants).map((v) => module.configSchema.parse(v))];
-  const classKeys = [...new Set(declared.flatMap((cfg) => Object.keys(cfg.suspensions?.classes ?? {})))];
+  const classKeys = Object.freeze([...new Set(declared.flatMap((cfg) => Object.keys(cfg.suspensions?.classes ?? {})))]);
 
   const suffixOf = (eventType: string): PeriodEventSuffix => {
     const suffix = eventType.startsWith(`${key}.`) ? eventType.slice(key.length + 1) : null;
@@ -71,7 +71,8 @@ function periodPadRules(module: PeriodModule, facts: PresetFacts): PeriodPadRule
     return suffix as PeriodEventSuffix;
   };
 
-  return {
+  // One frozen record per sport (spec section 3.1), as footballPadRules is.
+  return Object.freeze<PeriodPadRules>({
     eventBands: specOf(cfgOf({})).fidelity,
     suspensionReasons: facts.reasons,
     suspensionClassKeys: classKeys,
@@ -87,7 +88,7 @@ function periodPadRules(module: PeriodModule, facts: PresetFacts): PeriodPadRule
     },
     goalKinds: (cfg) => padEnumValues(specOf(cfgOf(cfg)), `${key}.goal`, "kind"),
     eventAllowedInPhase: (eventType, phase, cfg) => periodEventAllowedInPhase(suffixOf(eventType), phase, cfgOf(cfg)),
-  };
+  });
 }
 
 export const hockeyPadRules: PeriodPadRules = periodPadRules(hockey, {

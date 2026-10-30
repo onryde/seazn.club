@@ -1220,8 +1220,8 @@ async function capturePeriodPairExtra(
   await sheet.locator(`[data-choice-option-id="${recipe.shortClass}"]`).click();
   // `reason` — band-gated (`when: () => view.band >= 2`), and this harness's
   // org is Pro (`setOrgPlanBySql`, the shared per-sport setup), band 3.
-  // "tripping" is reason index 0 for BOTH federations (HOCKEY_REASONS,
-  // ICEHOCKEY_REASONS — hockey.tsx/icehockey.tsx).
+  // "tripping" is reason index 0 for BOTH federations (`hockeyPadRules` /
+  // `icehockeyPadRules.suspensionReasons`, `@seazn/engine/pad`).
   await expect(
     sheet.locator('[data-choice-option-id="tripping"]'),
     `gallery(${recipe.slug}): the reason step must follow the class step at band 3`,

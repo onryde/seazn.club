@@ -801,16 +801,16 @@ export type PeriodPhaseClass = "pre" | "play" | "SHOOTOUT";
  *    the card-time rows), never once the match is decided (mirrors football's card window).
  *  - shoot-out attempt: the shoot-out only, and only for a cfg that has one.
  */
-export const EVENT_PHASES: Readonly<Record<PeriodEventSuffix, readonly PeriodPhaseClass[]>> = {
-  goal: ["play"],
-  "period.advance": ["play"],
-  clock: ["play"],
-  "suspension.start": ["pre", "play", "SHOOTOUT"],
-  "suspension.end": ["pre", "play", "SHOOTOUT"],
-  "shootout.attempt": ["SHOOTOUT"],
-  set_piece: ["play"],
-  shot: ["play"],
-};
+export const EVENT_PHASES: Readonly<Record<PeriodEventSuffix, readonly PeriodPhaseClass[]>> = Object.freeze({
+  goal: Object.freeze<PeriodPhaseClass[]>(["play"]),
+  "period.advance": Object.freeze<PeriodPhaseClass[]>(["play"]),
+  clock: Object.freeze<PeriodPhaseClass[]>(["play"]),
+  "suspension.start": Object.freeze<PeriodPhaseClass[]>(["pre", "play", "SHOOTOUT"]),
+  "suspension.end": Object.freeze<PeriodPhaseClass[]>(["pre", "play", "SHOOTOUT"]),
+  "shootout.attempt": Object.freeze<PeriodPhaseClass[]>(["SHOOTOUT"]),
+  set_piece: Object.freeze<PeriodPhaseClass[]>(["play"]),
+  shot: Object.freeze<PeriodPhaseClass[]>(["play"]),
+});
 
 function periodPhaseClass(phase: string, cfg: PeriodCfg): PeriodPhaseClass | null {
   if (phase === "pre") return "pre";

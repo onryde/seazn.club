@@ -88,7 +88,7 @@ const LAW_12_COLOURS = ["yellow", "red", "second_yellow"];
 const LAW_14_UNCONVERTED = ["saved", "missed", "post"];
 
 describe("the engine's vocabularies are the Laws' (what a mutation of the enum would break)", () => {
-  it("cards, offences and unconverted-penalty outcomes are Law 12 / Law 14's sets", () => {
+  it("FB-CD-2 FB-PK-1 FB-PK-2: cards, offences and unconverted-penalty outcomes are Law 12 / Law 14's sets", () => {
     expect([...rules.cardColors].sort()).toEqual([...LAW_12_COLOURS].sort());
     expect([...rules.cardReasons].sort()).toEqual([...LAW_12_REASONS].sort());
     expect([...rules.penaltyOffences].sort()).toEqual([...LAW_12_PENALTY_OFFENCES].sort());

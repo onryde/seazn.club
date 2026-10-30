@@ -222,6 +222,37 @@ describe("suspensionReasons is the preset's own offence list", () => {
     expect(hockeyPadRules.suspensionReasons, "the two federations offer different lists").not.toEqual(icehockeyPadRules.suspensionReasons);
     expect(checked).toBeGreaterThanOrEqual(4);
   });
+
+  it("HK-SU-3 IH-SU-4: the two offence lists are the rule rows' (typed from rules/hockey.md HK-SU-3 and rules/icehockey.md IH-SU-4)", () => {
+    // Typed from the rule rows, never read off the preset: a reason added, dropped or renamed in hockey.ts / icehockey.ts reds here,
+    // where the identity checks above would carry it as correct. A set each; the order is the preset's, pinned through padSpec above.
+    const HK_SU_3 = ["tripping", "hooking", "obstruction", "dangerous_play", "dissent", "time_wasting", "other"];
+    const IH_SU_4 = [
+      "tripping", "hooking", "holding", "holding_the_stick", "slashing", "high_sticking", "cross_checking", "roughing", "elbowing",
+      "charging", "boarding", "checking_from_behind", "interference", "delay_of_game", "too_many_men", "unsportsmanlike_conduct",
+      "fighting", "illegal_equipment", "other",
+    ];
+    expect([...hockeyPadRules.suspensionReasons].sort()).toEqual([...HK_SU_3].sort());
+    expect([...icehockeyPadRules.suspensionReasons].sort()).toEqual([...IH_SU_4].sort());
+    expect(HK_SU_3.length + IH_SU_4.length).toBe(26);
+  });
+});
+
+describe("one frozen record per sport (spec section 3.1)", () => {
+  it("both records, their class catalogues and the kernel's EVENT_PHASES (which the fold reads) and every row of it are frozen", () => {
+    let checked = 0;
+    for (const sport of SPORTS) {
+      expect(Object.isFrozen(sport.rules), sport.key).toBe(true);
+      expect(Object.isFrozen(sport.rules.suspensionClassKeys), `${sport.key} class keys`).toBe(true);
+      checked += 2;
+    }
+    expect(Object.isFrozen(EVENT_PHASES)).toBe(true);
+    for (const [suffix, row] of Object.entries(EVENT_PHASES)) {
+      expect(Object.isFrozen(row), suffix).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2 * SPORTS.length + 8);
+  });
 });
 
 describe("suspension classes: the static catalogue, and what one cfg offers", () => {

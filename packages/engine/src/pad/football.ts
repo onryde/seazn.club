@@ -5,6 +5,7 @@
 import {
   CardColor,
   CardReason,
+  EVENT_PHASES,
   FOOTBALL_FIDELITY,
   FOOTBALL_TEAM_SIZE,
   FootballCfg,
@@ -23,6 +24,16 @@ import type { FootballPadRules } from "./types.ts";
  *  absent. An invalid cfg throws the schema's own error, as it does everywhere else the cfg is read. */
 const resolve = (cfg: unknown): FootballCfg => FootballCfg.parse(cfg);
 
+/** One of football's own event types (EVENT_PHASES' keys, plus `football.period`, the one whose gate reads the cfg), or a throw naming
+ *  it - the period records' contract (./types.ts). The fold's own `eventAllowedInPhase` fails open for a type it does not gate; the
+ *  record does not, because `true` for `core.start` in H1 would be an answer the fold contradicts. A skin filters first. */
+const ownType = (eventType: string): string => {
+  if (eventType !== "football.period" && !Object.hasOwn(EVENT_PHASES, eventType)) {
+    throw new Error(`footballPadRules.eventAllowedInPhase: "${eventType}" is not one of the football module's own event types`);
+  }
+  return eventType;
+};
+
 export const footballPadRules: FootballPadRules = Object.freeze<FootballPadRules>({
   eventBands: FOOTBALL_FIDELITY,
   cardColors: CardColor.options,
@@ -32,7 +43,7 @@ export const footballPadRules: FootballPadRules = Object.freeze<FootballPadRules
   playPhases: PLAY_PHASES,
   teamSizeDefault: FOOTBALL_TEAM_SIZE,
   subWindowsCap: (cfg) => subWindowsCap(resolve(cfg)),
-  eventAllowedInPhase: (eventType, phase, cfg) => eventAllowedInPhase(eventType, phase, resolve(cfg)),
+  eventAllowedInPhase: (eventType, phase, cfg) => eventAllowedInPhase(ownType(eventType), phase, resolve(cfg)),
   periodMarkers: (cfg) => periodMarkers(resolve(cfg)),
   legalPeriodMarkers: (phase, cfg) => legalPeriodMarkers(phase, resolve(cfg)),
   reentryAllowed: (cfg) => reentryAllowed(resolve(cfg)),
