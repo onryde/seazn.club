@@ -280,6 +280,7 @@ describe("boardgamePadRules", () => {
     }
     expect(folded).toBe(2 * boardgamePadRules.tiebreakScores.length);
     expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "rapid", winner: BH, score: "3–1" })]).tiebreak).toEqual({ rung: "rapid", score: "3–1" });
+    expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "blitz", winner: BH, score: "½–½" })]).tiebreak, "a half either side is a score").toEqual({ rung: "blitz", score: "½–½" });
     expect(refusal(() => boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "rapid", winner: BH, score: "2-0" })]))?.code, "a hyphen is not an en dash").toBe("INVALID_EVENT");
     report(`boardgame tie-break scores folded: ${folded}`);
     expect(folded).toBeGreaterThan(0);

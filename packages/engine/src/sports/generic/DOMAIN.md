@@ -44,8 +44,8 @@ lack of time.
 | Final result: a draw | both (needs `Cfg.allowDraws`) | entrant | `Ev.GenericResult.isDraw`, or level scores | modelled | refused when draws are off |
 | Final result: two scores | `score` | entrant | `Ev.GenericResult.{p1Score,p2Score}` | modelled | winner derived; contradictions between `winnerId`, `isDraw` and the scores are refused |
 | Per-person win/draw/loss and points-for, projected from the entrant-level result via the CALLER's roster | all | person | `playerStats.folded` (`wins`, `draws`, `losses`, `points_for`) | extended | S8/#417. NOT a new payload field — generic's schema still names no person on the result (see *the boundary*, below). A caller-supplied roster (`PlayerStatsFoldCtx`) is what turns "entrant H won" into "person h1 won"; an unparseable or absent roster leaves the projection off entirely, same as every other silent-gap row in this table |
-| A running score during play | all | entrant | `Ev.GenericScore.{by,points}` → `State.running` → `summary.headline` | extended | one scoring action per event; the tally renders live and disappears behind the result once decided |
-| Correcting a mis-pressed tally | all | entrant | `Ev.GenericScore.points` (negative) | extended | non-zero integers; a correction that would take a side below zero is refused |
+| A running score during play | all | entrant | `Ev.GenericScore.{by,points}` → `State.running` → `summary.headline` | extended | one scoring action per event (the pad bounds one press at 50: GN-SC-2); the tally renders live and disappears behind the result once decided |
+| Correcting a mis-pressed tally | all | entrant | `Ev.GenericScore.points` (negative) | extended | non-zero integers (the pad caps one press at 50, GN-SC-2); a correction that would take a side below zero is refused |
 | Who performed a scoring action | all | person: `person` | `Ev.GenericScore.person` → `playerStats` (`points`, `scores`) | extended | **deliberate**: an actor exists for a scoring action in nearly every sport, and it is the one person fact that needs no sport-specific structure. See [the boundary](#the-boundary) |
 | Settling the fixture from the tally | `score` | entrant | `Ev.GenericResult` `{}` + `State.running` | extended | the pad's natural flow: tally live, then press *final*. The terminal card still decides — the tally alone never ends a fixture |
 | Free-text annotation | all | — | `core.note` | modelled | no state effect, by contract |
@@ -61,7 +61,7 @@ lack of time.
 | Lineups, substitutions, bench | all | person | — | deferred | **boundary.** The position catalog is a single unnamed slot per side, on purpose |
 | Sets / games / frames / legs hierarchy | all | entrant | — | deferred | **boundary.** A nested-scoring grammar is what `setbased/` and `nested/` are |
 | Per-person non-scoring stats (saves, rebounds, fouls won) | all | person | — | deferred | **boundary.** Every such metric is sport vocabulary; `points` + `scores` is the sport-neutral maximum |
-| Sport-specific validity rules (a legal score, a maximum, a target) | all | entrant | — | deferred | **boundary.** The fallback cannot know them; the only invariants it enforces are internal consistency and a non-negative tally |
+| Sport-specific validity rules (a legal score, a maximum, a target) | all | entrant | — | deferred | **boundary.** The fallback cannot know them; the only invariants it enforces are internal consistency and a non-negative tally. The pad bounds a typed final score at 500 per side and one tally press at 50 (GN-SC-1, GN-SC-2); both are plausibility bounds of the pad, not fold rules |
 
 **Row counts:** 8 modelled, 5 extended, 9 deferred (22 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
