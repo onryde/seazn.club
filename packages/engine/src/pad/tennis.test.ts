@@ -126,6 +126,9 @@ describe("tennisPadRules.eventBands", () => {
 describe("tennisPadRules.interruptionMaxSeconds", () => {
   it("is the kernel's plausibility sentinel, the bound of the padSpec duration field for every cfg", () => {
     expect(tennisPadRules.interruptionMaxSeconds).toBe(PLAUSIBLE_INTERRUPTION_SECONDS);
+    // one hour: no ITF rule sets it (the allowances themselves are recorded, never refused), so it is pinned as the kernel's
+    // documented design value, and moving it is a reviewed decision rather than a silent one
+    expect(tennisPadRules.interruptionMaxSeconds).toBe(60 * 60);
     let compared = 0;
     for (const { name, cfg } of cfgsUnderTest()) {
       expect(padNumberBound(specOf(cfg), "tennis.interruption", "duration"), name).toEqual({ min: 0, max: tennisPadRules.interruptionMaxSeconds });
@@ -640,5 +643,7 @@ describe("tennisPadRules.breakerInForce: exactly when the strict fold refuses a 
   it("is false for a state that is not a fold's", () => {
     expect(tennisPadRules.breakerInForce({})).toBe(false);
     expect(tennisPadRules.breakerInForce(undefined)).toBe(false);
+    // a score with no game kind is not a fold's game points: nothing says a breaker is in force
+    expect(tennisPadRules.breakerInForce({ points: { home: 3, away: 2 } })).toBe(false);
   });
 });
