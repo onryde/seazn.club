@@ -1,11 +1,11 @@
 // cricket: the matrix generator emits one coarse `cricket.innings.summary
 // {runs, wickets, legalBalls}` per innings (streams/cricket.ts), which the pad
 // cannot write as one row. The references into cricket.tsx:
-//  - :1523-1556 the `overSummary` tile, offered while fidelity is not "fine";
-//  - :2558-2589 overSummarySheet: three number steps — this over's runs,
+//  - :1536-1569 the `overSummary` tile, offered while fidelity is not "fine";
+//  - :2606-2637 overSummarySheet: three number steps — this over's runs,
 //    wickets and balls (balls opening at ballsPerOver) — whose payload ADDS
-//    them onto the open innings and sets `partial: true` (:2585);
-//  - :2597 registers the sheet under "overSummary".
+//    them onto the open innings and sets `partial: true` (:2633);
+//  - :2645 registers the sheet under "overSummary".
 // Step 0 (2026-09-30, 320, the builder default `t20`, rosterless team
 // entrants) saw no toss, opener or lineup demanded: each over sheet wrote one
 // cumulative `{runs, wickets, legalBalls, partial: true}` row at once. The
@@ -28,10 +28,10 @@
 // four times over, with three differences, each read from the engine
 // (packages/engine/src/sports/cricket/cricket.ts):
 //  - the chase is the FOURTH innings, and its target is an aggregate:
-//    chaseTarget, :791-801 — the opponents' runs over the innings so far, less
+//    chaseTarget, :799-809 — the opponents' runs over the innings so far, less
 //    the chaser's own, plus one (no follow-on: home bats 1st and 3rd);
 //  - a declared innings (`declared: true` on the summary, :1704) is the over
-//    sheets and then the skin's `declare` tile (cricket.tsx:1506-1511), which
+//    sheets and then the skin's `declare` tile (cricket.tsx:1519-1524), which
 //    writes a SEPARATE `cricket.innings.declare` row (:3714-3722) — the
 //    declaration is not a key of any over row — and is only offered while the
 //    innings is still open (closedTile), so a declared innings the over sheets
@@ -65,9 +65,9 @@ import type { FallbackJudgement, MatrixPadAdapter } from "./types.ts";
 
 /** The engine's cricket event type (cricket.eventSchemas; pinned). */
 export const CRICKET_SUMMARY = "cricket.innings.summary";
-/** cricket.tsx:1536 (text-pinned in pad-adapters.test.ts). */
+/** cricket.tsx:1549 (text-pinned in pad-adapters.test.ts). */
 export const CRICKET_OVER_TILE = "overSummary";
-/** cricket.tsx:1507 (text-pinned): the declare tile, built only for two innings a side. */
+/** cricket.tsx:1520 (text-pinned): the declare tile, built only for two innings a side. */
 export const CRICKET_DECLARE_TILE = "declare";
 /** The engine's declaration event (cricket.eventSchemas; pinned) — what the declare tile writes. */
 export const CRICKET_DECLARE = "cricket.innings.declare";
@@ -78,7 +78,7 @@ export const CRICKET_MATCH_CLOSE = "cricket.match.close";
 export const CRICKET_SUPER_OVER_BALL = "cricket.superover.ball";
 export const CRICKET_INTERRUPTION = "cricket.interruption";
 export const CRICKET_REVISE = "cricket.revise";
-/** cricket.tsx:1321 (text-pinned in pad-adapters.test.ts): the bat-run values the skin has a `run${r}` tile for. */
+/** cricket.tsx:1329 (text-pinned in pad-adapters.test.ts): the bat-run values the skin has a `run${r}` tile for. */
 export const CRICKET_RUN_VALUES: readonly number[] = Object.freeze([0, 1, 2, 3, 4, 6]);
 /** The keys naming persons on a ball: the pad resolves these itself, so they are stamped, not compared. */
 const BALL_PERSONS = ["striker", "nonStriker", "bowler"] as const;
@@ -145,7 +145,7 @@ function summaryOf(payload: unknown, cfg: Cfg, allOut: number): Summary {
 }
 
 /** The runs the last innings needs to win, from the innings before it (the
- *  engine's chaseTarget, cricket.ts:791-801; no follow-on, so the pairs are
+ *  engine's chaseTarget, cricket.ts:799-809; no follow-on, so the pairs are
  *  home 1st and 3rd, away 2nd and 4th). One innings a side: the first innings'
  *  runs + 1. Two: the home aggregate, less away's first innings, + 1. */
 function chaseTargetOf(before: readonly Innings[], cfg: Cfg): number {
@@ -201,7 +201,7 @@ function summarySteps(event: StreamEvent, ctx: TapAdapterContext, tapped: Map<st
 const fixtureOf = (ctx: TapAdapterContext) => `${ctx.entrants.home}|${ctx.entrants.away}`;
 
 /** Fix round 1 (I-1): each over row is the open innings' running total
- *  (cricket.tsx:2585), so the innings' LAST over row, less `partial`, is the
+ *  (cricket.tsx:2633), so the innings' LAST over row, less `partial`, is the
  *  generated summary: every key it carries stored and equal, and `partial`
  *  the only other key, as true. A declared innings ends in the declare tile's
  *  own row (W1d item 16): an empty-payload `cricket.innings.declare`, and the
@@ -243,7 +243,7 @@ function superOverBallSteps(event: StreamEvent, ctx: TapAdapterContext, tapped: 
   if (runs.extras !== undefined || p.wicket !== undefined) {
     throw new Error(`cricketPad: ${CRICKET_SUPER_OVER_BALL} ${JSON.stringify(event.payload)} — a run tile writes bat runs only, and this ball carries extras or a wicket (other tiles; the generator builds none)`);
   }
-  const boundary = bat === 4 ? 4 : bat === 6 ? 6 : undefined; // cricket.tsx runPayload
+  const boundary = bat === 4 ? 4 : bat === 6 ? 6 : undefined; // cricket.tsx runPayload: the engine's boundaryValues, pinned in pad-adapters.test.ts
   if (p.boundary !== boundary) {
     throw new Error(`cricketPad: ${CRICKET_SUPER_OVER_BALL} ${JSON.stringify(event.payload)} — boundary ${show(p.boundary)}, where the run${bat} tile writes ${show(boundary)}`);
   }
@@ -273,7 +273,7 @@ export function makeCricketPad(): MatrixPadAdapter {
       {
         eventType: CRICKET_SUMMARY,
         writes: [CRICKET_SUMMARY, CRICKET_DECLARE],
-        why: "cricket.tsx:2585 — the pad authors an innings only as cumulative over summaries (partial: true, one row per over; Step 0 2026-09-30), and the innings ends itself, so its judge holds the innings' last over row, less `partial`, to the summary; a declared innings is those rows and then the declare tile's own cricket.innings.declare row (cricket.tsx:1510)",
+        why: "cricket.tsx:2633 — the pad authors an innings only as cumulative over summaries (partial: true, one row per over; Step 0 2026-09-30), and the innings ends itself, so its judge holds the innings' last over row, less `partial`, to the summary; a declared innings is those rows and then the declare tile's own cricket.innings.declare row (cricket.tsx:1523)",
         rowsFor: (event, ctx) => {
           const p = (event.payload ?? {}) as { legalBalls: number; declared?: unknown };
           return Math.ceil(p.legalBalls / cfgOf(ctx.cfg).ballsPerOver) + (p.declared === true ? 1 : 0);
@@ -283,7 +283,7 @@ export function makeCricketPad(): MatrixPadAdapter {
       {
         eventType: CRICKET_SUPER_OVER_BALL,
         writes: [CRICKET_SUPER_OVER_BALL],
-        why: "cricket.tsx:1431-1438 — the run tiles (`run${r}`, RUN_VALUES at :1321) write the ball with the persons the pad resolves itself (resolvePeople, :583), the type switching on the super-over phase (ballEventType, :534); so the row is the ball's over, ballInOver, runs and boundary (runPayload, :786), and the persons are judged only as ids",
+        why: "cricket.tsx:1442-1449 — the run tiles (`run${r}`, RUN_VALUES at :1329) write the ball with the persons the pad resolves itself (resolvePeople, :553), the type switching on the super-over phase (ballEventType, :504); so the row is the ball's over, ballInOver, runs and boundary (runPayload, :756), and the persons are judged only as ids",
         rowsFor: () => 1,
         judge: judgeSuperOverBall,
       },

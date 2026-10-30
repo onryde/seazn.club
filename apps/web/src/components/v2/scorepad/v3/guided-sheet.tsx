@@ -132,7 +132,7 @@ function renderPersonStep(
         style={{ minHeight: 44 }}
         className="rounded-full border border-dashed border-slate-300 px-4 text-sm text-slate-600 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
       >
-        {t("pad.sheet.person.none")}
+        {t(step.noneLabel ?? "pad.sheet.person.none")}
       </button>
     </div>
   );

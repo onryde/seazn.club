@@ -1919,6 +1919,17 @@ Elsewhere the text is the controller's record.
      `18155d5ca0`, with the two `stryker-sizing` tests red (owned by the mutation session's `chore/w2e-stryker-measure`):
      the owner's explicit go over a known red. "Rebase when possible" → lane W is rebased onto main (linear), gated on an
      empty tree diff against its pre-rebase tip.
+242. **Cricket dismissals on the scoring pad: obstructing and retired** (2026-10-30, owner "all yes", engine-split pad
+     wave P2, its review fix round). (a) The house rulebook credits the named fielder for an obstruction (cricket
+     `DOMAIN.md`, Dismissals), which departs from MCC Law 37: the Law credits no fielder (37.6: nor the bowler). Kept, and
+     the pad's fielder step for an obstruction is optional; the fold takes an obstruction with no fielder named and
+     credits nobody (rules row CK-WK-2, deviation). (b) Either batter can be out obstructing the field (Law 37.1.1) or
+     retired (Law 25.4.1); the fold takes either batter for both (folded both ways, the retirement as a wicket kind and
+     as `cricket.retire`), so the pad asks who is out for both, as it does for a run out (CK-WK-3, signed). (c) The fold
+     accepts the non-striker out bowled, caught, hit the ball twice, hit wicket, lbw or stumped, which the Laws forbid
+     (each dismisses the striker). Only an API write reaches it: the pad never asks who is out for those modes. Parked to
+     owed work: a fold change with a cricket `FOLD_EPOCH` bump after the pad wave (CK-WK-4, open; engine-split owed-work
+     O-8). No fold change in the pad wave.
 243. **The set-based deuce/setting note follows the rulebook** (2026-10-30, owner "apply rec", pad wave P3.1, review I2;
      242 is the cricket batch's). The note is the engine's `deuceNote` (`packages/engine/src/pad/setbased.ts`, read off
      the kernel's own `setWinner`): badminton shows Setting at every tie from target−1 up to the cap, where Golden point

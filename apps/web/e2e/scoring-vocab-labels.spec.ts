@@ -2,7 +2,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, apiJson, activeOrg } from "./helpers";
 
 // S7 (#427) shipped ~166 engine-vocabulary label keys in four locales, but two
-// of them could not reach a screen — the cricket pad's hard-coded WICKET_KINDS
+// of them could not reach a screen — the cricket pad's hard-coded mode list (now the engine's, cricketPadRules.wicketKinds)
 // was missing Law 34's `hitballtwice`, and `describeEvent` had no `.sanction`
 // branch, so a sanction's level fell through to the raw-payload dump and the
 // activity feed read `level: default`. Fixed in e55e10b7 (tennis) and
@@ -167,7 +167,7 @@ test("cricket: the tenth dismissal is offered as words, not snake_case", async (
   // `cricket.ball` dismissal, and the LEDGER (never merely the screen) is
   // what must carry the engine's actual "hitballtwice" wire value. Neither
   // `bowled`-family conditional step applies to `hitballtwice` (it is in
-  // neither VARIABLE_OUT_KINDS nor FIELDER_ELIGIBLE_KINDS), so this single
+  // neither cricketPadRules.variableOutKinds nor .fielderCreditedKinds), so this single
   // tap is the wizard's LAST step — it completes and dispatches immediately,
   // same one-tap shape the v2-era UI already had here. The pre-seeded
   // dismissal above is ALSO a "hitballtwice" ball, so polling on kind alone

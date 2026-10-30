@@ -76,7 +76,7 @@ export const inningsOfState = (state: unknown): InningsLike[] => (state as { inn
  *  tile, then runs, wickets and balls, each a number and a confirm, and writes
  *  ONE row — this over added onto the fold's open innings (0/0/0 when none is
  *  open), `partial: true`. Once the engine has an outcome the tile is gone. Two
- *  innings a side add the `declare` tile (cricket.tsx:1506-1511, an `{event}`
+ *  innings a side add the `declare` tile (cricket.tsx:1519-1524, an `{event}`
  *  tile that HOLDS until the replay's release): it sends the engine's
  *  declaration while an innings is open, and nothing otherwise (closedTile). */
 export function twoInningsModel(ctx: TapAdapterContext) {

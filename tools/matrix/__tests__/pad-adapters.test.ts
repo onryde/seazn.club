@@ -11,6 +11,7 @@ import { SETTLE_METHODS } from "@seazn/engine/core";
 import { writeConfigIssues } from "@seazn/engine/sport";
 import { ARMAGEDDON_RESULTS, BoardgameMethod, DECISIVE_METHODS, DRAWN_METHODS, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
+import { cricketPadRules } from "@seazn/engine/pad";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
 import { hockey } from "@seazn/engine/sports/hockey";
@@ -1765,7 +1766,10 @@ describe("cricket", () => {
     // The premise, from the product's text: the tile ids, the phase switch and the boundary rule.
     expect(skin).toMatch(/for \(const r of RUN_VALUES\) \{\s*tiles\.push\(ballTile\(\{\s*id: `run\$\{r\}`,/);
     expect(skin).toMatch(/return state\.phase === "super_over" \? "cricket\.superover\.ball" : "cricket\.ball";/);
-    expect(skin).toMatch(/const boundary = runs === 4 \? 4 : runs === 6 \? 6 : undefined;/);
+    // Pad wave P2: the skin's boundary flag is the engine's declared boundary values (`cricketPadRules.boundaryValues`), and
+    // this adapter mirrors them as 4 and 6 (lib/pads/cricket.ts), so the engine's set must be exactly those two.
+    expect(skin).toMatch(/function runPayload\(base: Record<string, unknown>, runs: number\): Record<string, unknown> \{\s*const boundary = cricketPadRules\.boundaryValues\.includes\(runs\) \? runs : undefined;/);
+    expect([...cricketPadRules.boundaryValues].sort((a, b) => a - b), "the adapter's 4 and 6 are the engine's boundary values").toEqual([4, 6]);
     const fb = cricketPad.fallbacks.find((f) => f.eventType === CRICKET_SUPER_OVER_BALL);
     expect(fb, "the super-over ball is declared a fallback").toBeDefined();
     expect(fb!.why).toMatch(/\.tsx?:\d+/);
