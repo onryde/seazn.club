@@ -23,13 +23,21 @@
 // `__tests__/football-dispatch-totality.test.ts` sweeps the registry across
 // the whole cfg space rather than trusting this comment.
 //
-// THREE ENGINE FACTS THIS FILE MIRRORS RATHER THAN IMPORTS (the closed
-// vocabularies below, and `periodMarkersOf`). Football's barrel exports the
-// module and its zod schemas but neither `padSpec` nor the private
-// `periodMarkers`, and cricket's own skin establishes the mirror-with-a-
-// comment precedent for exactly this. Every mirror is PINNED against the
-// engine's own `padSpec(cfg)` in this skin's test file, so a module change
-// reds there instead of drifting silently.
+// THE RULE FACTS COME FROM THE ENGINE (pad wave P1.2): the card colours and
+// reasons, the penalty outcomes and offences, the per-event bands, the in-play
+// phases, the phase gate of every event type, the period markers, the
+// substitution-window cap, the re-entry rule and the default team size are all
+// read from `footballPadRules` (`@seazn/engine/pad`), the objects football.ts's
+// own fold reads. This file keeps their presentation (tones, labels, order of
+// tiles) and nothing else. Two guards stop a copy growing back: the literal
+// scan (`no-rule-literals.test.ts`, which bans the deleted names) and the drift
+// guard (`pad-rules-football.test.ts`, which drives this file's builders in
+// real folded states against the record and the fold).
+//
+// STILL MIRRORED, and pinned against the fold where they are driven:
+// second-yellow eligibility (`cardCandidates`, football.ts `applyCard`), the
+// `maxSubs` arithmetic (`subPolicy`, football's `lineupPolicy`), and the
+// "decided" phases (`POST_PHASES`, owned by pad wave P4).
 //
 // WHAT THIS SKIN DELIBERATELY DOES NOT DECLARE:
 //   - `context()`. Football has no persistent per-person slot the fold could
@@ -44,6 +52,7 @@
 //     engine-side asymmetry recorded in this wave's report, not worked around
 //     here with a tile that throws on tap.
 "use client";
+import { footballPadRules } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 // R3.5 — the pad's own alternation and tally rules for the shoot-out, both
 // re-exported from the football module's own barrel (not imported out of
@@ -82,17 +91,10 @@ export type Side = "home" | "away";
 export type CardColor = "yellow" | "red" | "second_yellow";
 
 // ---------------------------------------------------------------------------
-// Closed vocabularies, MIRRORED from packages/engine/src/sports/football/
-// football.ts (see this file's header for why mirrored, and where the drift
-// pins live). Scouted 2026-08-24 against `CardColor` (:221), `CardReason`
-// (:226), `PenaltyOutcome` (:305) and `padSpec`'s own `fidelity` map (:2380).
+// Presentation of the engine's closed vocabularies. The vocabularies themselves
+// (card colours and reasons, penalty outcomes and offences, event bands, play
+// phases) are `footballPadRules.*` and are deliberately NOT redeclared here.
 // ---------------------------------------------------------------------------
-
-/** R3-1: THREE colours, not two. The brief's "yellow/red" is recorded false in
- *  `_INDEX.md` — `second_yellow` is its own colour in the engine, carries its
- *  own suspension tariff, and already has copy in all four locales
- *  (`cardColor.second_yellow`, scoring-vocab.ts). */
-export const CARD_COLORS: readonly CardColor[] = ["yellow", "red", "second_yellow"];
 
 /**
  * R3-6 / task B4 — the CARD CODE, and the load-bearing argument for the whole
@@ -132,80 +134,15 @@ export const CARD_TONES: Readonly<Record<CardColor, readonly SportTone[]>> = {
   second_yellow: ["caution", "dismissal"],
 };
 
-/** Law 12.3 cautionable + Law 12.4 sending-off offences, in the engine's own
- *  order. `FootballCard.reason` is `.optional()`, which is what lets bands 0-1
- *  commit a card without ever asking. */
-export const CARD_REASONS: readonly string[] = [
-  "unsporting_behaviour",
-  "dissent",
-  "persistent_offences",
-  "delaying_restart",
-  "failure_to_respect_distance",
-  "entering_or_leaving_without_permission",
-  "serious_foul_play",
-  "violent_conduct",
-  "spitting",
-  "denying_goal_by_handball",
-  "denying_obvious_goalscoring_opportunity",
-  "offensive_language",
-  "second_caution",
-];
-
-/** The shared attempt vocabulary MINUS `scored`: a converted penalty is a
- *  `football.goal {penalty: true}`, and accepting "scored" here would let one
- *  kick be counted twice (`PenaltyOutcome`'s own doc). */
-export const PENALTY_OUTCOMES: readonly string[] = ["saved", "missed", "post"];
-
-/** IFAB Law 12 §3 — the direct-free-kick offence that CONCEDED the penalty
- *  (`PenaltyOffence`, football.ts:314). A DIFFERENT question from
- *  `CardReason`: not every penalty carries a card, and a penalty for handball
- *  can sit beside a caution for dissent. `.optional()` on `FootballPenalty`,
- *  which is what lets bands 0-1 record a kick and nothing else. */
-export const PENALTY_OFFENCES: readonly string[] = [
-  "kicking",
-  "tripping",
-  "jumping_at",
-  "charging",
-  "pushing",
-  "striking",
-  "tackling",
-  "handball",
-];
-
-/**
- * One band per event type — `padSpec(cfg).fidelity` verbatim.
- *
- * Read by `buildTiles` for a reason the chassis's own band filter cannot
- * cover: `filterTilesByBand` (pad-host.tsx) filters on the bands the org is
- * ENTITLED to, while `buildPadView` drops an action whose band exceeds the
- * ACTIVE band (`view-model.ts:133`) — and `createSkinDispatch` refuses
- * anything the resulting view does not declare. So an entitled org scoring at
- * band 0 would SEE every card/sub tile and every tap would throw. Withholding
- * them here is the same "never offer what the engine will refuse" rule the
- * rest of this programme keeps applying, one layer earlier.
- */
-export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
-  "football.goal": 0,
-  "football.period": 0,
-  "football.shootout.kick": 0,
-  "football.clock": 0,
-  "football.card": 2,
-  "football.sub": 2,
-  "football.penalty": 2,
-  "football.sinbin.start": 2,
-  "football.sinbin.end": 2,
-  "football.shot": 3,
-};
-
-/** The phases in which the ball is in play — `PLAY_PHASES` (football.ts:628).
- *  A goal, a substitution, a penalty and a period marker are all refused
- *  outside one (`isPlayPhase` guards each `apply*`); a CARD is not, which is
- *  why the card tiles are not gated on this. */
-const PLAY_PHASES = new Set(["H1", "H2", "Q2", "Q3", "Q4", "ET_H1", "ET_H2"]);
-
 /** Phases in which the match is over — `applyCard`'s own refusal set, and the
  *  three that map to `PadPhase` "post". */
 const POST_PHASES = new Set(["done", "final", "abandoned"]);
+
+/** Whether the ball is in play in this phase: `footballPadRules.playPhases`, the set the fold's goal / sub / penalty / sin-bin / shot
+ *  / clock guards judge against (a card is NOT gated on it, which is why the card tiles are not). */
+function inPlay(phase: string): boolean {
+  return footballPadRules.playPhases.includes(phase);
+}
 
 // ---------------------------------------------------------------------------
 // State/cfg readers. `PadHostView.state`/`.cfg` are `unknown` by contract;
@@ -332,7 +269,7 @@ export function readClock(state: unknown, phase: string): string | undefined {
 export function buildFootballClock(view: PadHostView): PadClockSpec | null {
   const state = asState(view.state);
   const phase = readPhase(state);
-  if (!PLAY_PHASES.has(phase)) return null;
+  if (!inPlay(phase)) return null;
   const asOf = state.asOf;
   const fresh =
     asOf !== undefined &&
@@ -364,98 +301,42 @@ function stampOf(state: FootballStateShape): GameTimeShape | undefined {
 }
 
 /**
- * The `football.period` markers THIS cfg's fold accepts — mirrors the engine's
- * own private `periodMarkers` (football.ts:2157) so the sheet can never offer
- * a marker `applyPeriod` would then refuse for the wrong mode. Quarters
- * (`halves === 4`) get QT/HT/3QT/FT — Q1 itself reuses "H1" and is never a
- * marker; halves get HT/FT. Both gain ET_HT/ET_FT when extra time is enabled,
- * because `applyPeriod`'s ET arms are not gated on the halves mode at all.
+ * The `football.period` markers THIS cfg's fold accepts - `footballPadRules.periodMarkers`, the table `applyPeriod` reads (quarters
+ * get QT/HT/3QT/FT, halves HT/FT, both gain ET_HT/ET_FT with extra time).
  *
- * MODE ONLY — this is the cfg half of the answer and NOT the whole one. See
- * `legalPeriodMarkers` below for the phase half, and this file's ruling
- * comment there for why offering this list raw was a dead-end tap.
+ * MODE ONLY - this is the cfg half of the answer and NOT the whole one. See `legalPeriodMarkers` below for the phase half, and the
+ * period sheet for why offering this list raw was a dead-end tap.
  */
 export function periodMarkersOf(cfg: unknown): readonly string[] {
-  const c = asCfg(cfg);
-  return [
-    ...(c.halves === 4 ? ["QT", "HT", "3QT", "FT"] : ["HT", "FT"]),
-    ...(c.extraTime?.enabled === true ? ["ET_HT", "ET_FT"] : []),
-  ];
+  return footballPadRules.periodMarkers(cfg);
 }
 
 /**
- * The marker(s) `applyPeriod` will accept IN THIS PHASE — a strict subset of
- * `periodMarkersOf`, and the fix for the wave's first dead-end tap.
+ * The marker(s) `applyPeriod` will accept IN THIS PHASE - `footballPadRules.legalPeriodMarkers`, a strict subset of `periodMarkersOf`
+ * and the fix for the wave's first dead-end tap: `applyPeriod` gates on cfg.halves AND on `state.phase`, one arm per marker, so in
+ * halves mode at H1 a list of the cfg's markers offered Half time AND Full time and Full time raised WRONG_PHASE. Every play phase has
+ * EXACTLY ONE legal marker.
  *
- * `applyPeriod` gates on cfg.halves AND on `state.phase`, one arm per marker
- * (football.ts:1529-1578). `periodMarkersOf` mirrored only the first gate, so
- * in halves mode at H1 the sheet offered Half time AND Full time, and Full
- * time raised WRONG_PHASE; quarters plus extra time offered six markers of
- * which exactly one was legal. Every play phase has EXACTLY ONE legal marker,
- * which is what makes the list below a lookup rather than a filter:
- *
- *   halves    H1 -> HT      H2 -> FT
- *   quarters  H1 -> QT      Q2 -> HT     Q3 -> 3QT    Q4 -> FT
- *   either    ET_H1 -> ET_HT             ET_H2 -> ET_FT
- *
- * Intersected with `periodMarkersOf` rather than returned raw: the two mirrors
- * then cannot disagree about a cfg (an ET phase is unreachable without
- * `extraTime.enabled`, so the intersection never removes a legal marker — it
- * removes a mirror bug if one is ever introduced).
- *
- * EMPTY is a real answer, and the callers rely on it: at "pre", "SHOOTOUT" and
- * every decided phase there is no next whistle at all.
+ * EMPTY is a real answer, and the callers rely on it: at "pre", "SHOOTOUT" and every decided phase there is no next whistle at all.
  */
 export function legalPeriodMarkers(phase: string, cfg: unknown): readonly string[] {
-  const quarters = asCfg(cfg).halves === 4;
-  const marker =
-    phase === "ET_H1"
-      ? "ET_HT"
-      : phase === "ET_H2"
-        ? "ET_FT"
-        : quarters
-          ? { H1: "QT", Q2: "HT", Q3: "3QT", Q4: "FT" }[phase]
-          : { H1: "HT", H2: "FT" }[phase];
-  if (marker === undefined) return [];
-  return periodMarkersOf(cfg).includes(marker) ? [marker] : [];
+  return footballPadRules.legalPeriodMarkers(phase, cfg);
 }
 
 /**
- * The `football.*` types whose `apply` refuses outside a PLAY phase — every
- * one of them guards on `isPlayPhase(state.phase)` as its first statement
- * (`applyGoal:1070`, `applySub:1143`, `applyPenalty:1402`, `applyShot:1447`,
- * `applySinBinStart:1333`, `applySinBinEnd:1285`). The other three are the
- * exceptions: a card is legal in every phase but a decided one, a shoot-out
- * kick only inside the shoot-out, and a period marker per the table above.
- */
-const PLAY_PHASE_ONLY: readonly string[] = [
-  "football.goal",
-  "football.clock",
-  "football.sub",
-  "football.penalty",
-  "football.shot",
-  "football.sinbin.start",
-  "football.sinbin.end",
-];
-
-/**
- * Whether the FOLD accepts this type in this phase — the one place this skin
- * states football's phase rules, read by `buildTiles` (so a tile is never
- * drawn) and by `refusedEventTypes` (so the generic More sheet never lists it
- * either). ONE function because the two used to disagree: the tiles gated on
- * `inPlay` while More did not, so during a shoot-out the Goal tile vanished
- * and `football.goal` reappeared one tap away inside More as an un-narrowed
- * generic form that `applyGoal` refuses.
+ * Whether the FOLD accepts this type in this phase - `footballPadRules.eventAllowedInPhase`, read by `buildTiles` (so a tile is never
+ * drawn) and by `refusedEventTypes` (so the generic More sheet never lists it either). ONE function because the two used to disagree:
+ * the tiles gated on `inPlay` while More did not, so during a shoot-out the Goal tile vanished and `football.goal` reappeared one tap
+ * away inside More as an un-narrowed generic form that `applyGoal` refuses.
  *
- * FAILS OPEN for a type it does not know. A future `football.*` event must
- * become reachable by existing, not by being listed here — the totality sweep
- * catches an unreachable type, and nothing would catch one silently hidden.
+ * FAILS OPEN for a type the engine does not gate. A future `football.*` event must become reachable by existing, not by being listed
+ * here - the engine's own test that every `eventSchemas` key is classified is what catches an unclassified one. The open half is this
+ * skin's, as in period-shared's `phaseAllows`: the record answers for football's own types (its `eventBands` keys) and throws for any
+ * other, so a type outside them is filtered here first.
  */
 export function phaseAllows(eventType: string, phase: string, cfg: unknown): boolean {
-  if (eventType === "football.card") return !POST_PHASES.has(phase);
-  if (eventType === "football.shootout.kick") return phase === "SHOOTOUT";
-  if (eventType === "football.period") return legalPeriodMarkers(phase, cfg).length > 0;
-  return PLAY_PHASE_ONLY.includes(eventType) ? PLAY_PHASES.has(phase) : true;
+  if (!Object.hasOwn(footballPadRules.eventBands, eventType)) return true;
+  return footballPadRules.eventAllowedInPhase(eventType, phase, cfg);
 }
 
 /**
@@ -583,7 +464,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // youth or mini-soccer variant changes ("Small-sided/youth/mini variants
   // shrink via cfg only" — the wave brief). Always non-empty: the band renders
   // unconditionally (scorebug.tsx), and 11-a-side is a format like any other.
-  const contextParts = [t("pad.football.context.smallSided", { size: cfg.teamSize ?? 11 })];
+  const contextParts = [t("pad.football.context.smallSided", { size: cfg.teamSize ?? footballPadRules.teamSizeDefault })];
   if (cfg.halves === 4) contextParts.push(t("pad.football.context.quarters"));
 
   // THE STRIP IS THE FOURTH OFFICIAL'S ADDED-TIME BOARD (R3-6, task B4). Every
@@ -735,9 +616,21 @@ export function kickSheetKey(side: Side): string {
   return `kick-${side}`;
 }
 
-/** Whether this event may be dispatched at the ACTIVE band — see `EVENT_BAND`. */
+/**
+ * Whether this event may be dispatched at the ACTIVE band. The bands are `footballPadRules.eventBands` (= `padSpec(cfg).fidelity`
+ * verbatim, one band per event type).
+ *
+ * Read by `buildTiles` for a reason the chassis's own band filter cannot cover: `filterTilesByBand` (pad-host.tsx) filters on the bands
+ * the org is ENTITLED to, while `buildPadView` drops an action whose band exceeds the ACTIVE band (`resolveActionView`, scorepad/view-model.ts) - and
+ * `createSkinDispatch` refuses anything the resulting view does not declare. So an entitled org scoring at band 0 would SEE every
+ * card/sub tile and every tap would throw. Withholding them here is the same "never offer what the engine will refuse" rule the rest
+ * of this programme keeps applying, one layer earlier.
+ *
+ * The other skins' band gates (badminton, carrom, tennis, volleyball) cite this as "football's own `EVENT_BAND` doc": that constant now
+ * lives in the engine (`FOOTBALL_FIDELITY`), and this is the doc they mean.
+ */
 function withinBand(eventType: string, band: FidelityBand): boolean {
-  const declared = EVENT_BAND[eventType];
+  const declared = footballPadRules.eventBands[eventType];
   return declared === undefined || declared <= band;
 }
 
@@ -903,10 +796,11 @@ export function buildTiles(view: PadHostView): TileSpec[] {
 /**
  * `SkinDefV3.refusedEventTypes` — what the More sheet must not list right now.
  *
- * Derived from `EVENT_BAND`'s key set, which is `padSpec(cfg).fidelity`
- * verbatim and is PINNED against the engine in this skin's test file, so a
- * ninth-and-a-half event type cannot appear in the engine and be silently
- * absent from this sweep. `phaseAllows` decides each one.
+ * Derived from `footballPadRules.eventBands`' key set, which is the very
+ * object `padSpec(cfg).fidelity` returns (the engine test pins it and that
+ * every event type has a band), so a ninth-and-a-half event type cannot
+ * appear in the engine and be silently absent from this sweep. `phaseAllows`
+ * decides each one.
  *
  * Why the skin owes this at all, in one line: football's panels are ungated
  * `phase: "live"` and its phase rules live inside `apply`, so `buildPadView`
@@ -914,7 +808,7 @@ export function buildTiles(view: PadHostView): TileSpec[] {
  */
 export function refusedEventTypes(view: PadHostView): string[] {
   const phase = readPhase(asState(view.state));
-  return Object.keys(EVENT_BAND).filter((type) => !phaseAllows(type, phase, view.cfg));
+  return Object.keys(footballPadRules.eventBands).filter((type) => !phaseAllows(type, phase, view.cfg));
 }
 
 // ---------------------------------------------------------------------------
@@ -1005,7 +899,7 @@ function cardSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
   // about a side that has nobody to book.
   const eligible = cardCandidates(state, side, "red");
   const blockedColours: Record<string, string> = {};
-  for (const colour of CARD_COLORS) {
+  for (const colour of footballPadRules.cardColors) {
     if (cardCandidates(state, side, colour).length > 0) continue;
     blockedColours[colour] =
       eligible.length === 0
@@ -1023,10 +917,11 @@ function cardSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
       // new copy and no second wording for a colour. `tone` (B4) is the card
       // CODE beside that label — see CARD_TONES above for why it is a name and
       // not a colour, and why a second yellow carries two.
-      options: CARD_COLORS.map((colour) => ({
+      options: footballPadRules.cardColors.map((colour) => ({
         id: colour,
         label: vocabKey("color", colour) ?? colour,
-        tone: CARD_TONES[colour],
+        // keyed by the same colours (the drift guard pins CARD_TONES' keys to the engine's)
+        tone: CARD_TONES[colour as CardColor],
       })),
       blocked: () => blockedColours,
     },
@@ -1034,7 +929,7 @@ function cardSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
       id: "reason",
       kind: "choice",
       title: "pad.football.sheet.card.reason.title",
-      options: CARD_REASONS.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
+      options: footballPadRules.cardReasons.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
       when: () => asksOffence,
     },
   ];
@@ -1152,7 +1047,7 @@ function penaltySheet(view: PadHostView): GuidedSheetSpec {
         id: "outcome",
         kind: "choice",
         title: "pad.football.sheet.penalty.outcome.title",
-        options: PENALTY_OUTCOMES.map((outcome) => ({ id: outcome, label: vocabKey("outcome", outcome) ?? outcome })),
+        options: footballPadRules.penaltyOutcomes.map((outcome) => ({ id: outcome, label: vocabKey("outcome", outcome) ?? outcome })),
       },
     ],
     buildPayload: (answers) => ({ by: answers.by, outcome: answers.outcome }),
@@ -1249,14 +1144,15 @@ function subPolicy(
   }
 
   const stamp = stampOf(state);
-  if (stamp !== undefined && cfg.subWindows !== undefined) {
+  const windowCap = footballPadRules.subWindowsCap(cfg);
+  if (stamp !== undefined && windowCap !== undefined) {
     const known = squad.subWindows.some((w) => w.period === stamp.period && w.elapsed === stamp.elapsed);
-    if (!known && squad.subWindows.length >= cfg.subWindows) {
+    if (!known && squad.subWindows.length >= windowCap) {
       return {
         ok: false,
         message: t("pad.football.context.sub.blocked.subWindows", {
           side: t(SIDE_LABEL[side]),
-          windows: cfg.subWindows,
+          windows: windowCap,
         }),
       };
     }
@@ -1292,13 +1188,13 @@ function onCandidates(state: FootballStateShape, cfg: FootballCfgShape, side: Si
   const onPitch = new Set(squad.onPitch);
   const bench = squad.bench.filter((id) => !onPitch.has(id));
   const gone = squad.offUsed.filter((id) => !onPitch.has(id) && !squad.bench.includes(id));
-  const rolling = cfg.rollingSubs === true;
+  const mayReturn = footballPadRules.reentryAllowed(cfg);
 
   const blocked: Record<string, string> = {};
   const sentOff = new Set(squad.sentOff);
   for (const id of [...bench, ...gone]) {
     if (sentOff.has(id)) blocked[id] = t("pad.football.context.sub.blocked.sentOff.short");
-    else if (!rolling && gone.includes(id)) blocked[id] = t("pad.football.context.sub.blocked.reentry.short");
+    else if (!mayReturn && gone.includes(id)) blocked[id] = t("pad.football.context.sub.blocked.reentry.short");
   }
   return { candidates: [...bench, ...gone], blocked };
 }
@@ -1357,7 +1253,7 @@ function footballCandidateMeta(squads: SquadState, side: Side, t: TFn): Readonly
 
 /**
  * W2e Task 32 (M12b) -- the retirement slots ("player injured, no replacement") for both sides, under the substitution's own
- * gate: a play phase (`PLAY_PHASES`, the phases `buildSwap` below is offered in). Who may leave is the LIVE pitch --
+ * gate: a play phase (`footballPadRules.playPhases`, the phases `buildSwap` below is offered in). Who may leave is the LIVE pitch --
  * `squadOf(state, side).onPitch`, exactly as `buildSwap`'s `offCandidates` -- and never `view.squads`, which for football is
  * the frozen kickoff sheet: after a retirement it would offer the person who just left (`reduceLineupEvent` refuses "off"
  * for someone not on the field). `retirement-slot.ts` owns the event, the reason and the band.
@@ -1365,7 +1261,7 @@ function footballCandidateMeta(squads: SquadState, side: Side, t: TFn): Readonly
 export function buildRetirementSlots(view: PadHostView, t?: TFn): SwapSlot[] {
   const state = asState(view.state);
   return retirementSlotsOf(view, (side) => ({
-    inPlay: PLAY_PHASES.has(readPhase(state)),
+    inPlay: inPlay(readPhase(state)),
     by: entrantOf(state, side),
     onField: squadOf(state, side).onPitch,
     ...(t === undefined ? {} : { candidateMeta: footballCandidateMeta(view.squads, side, t) }),
@@ -1379,7 +1275,7 @@ export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
   // the shoot-out — so no slot is offerable there. An EMPTY array is the
   // contract's own "not applicable right now" (as opposed to
   // legal-but-refused, which is a returned slot with `policyOk: false`).
-  if (!PLAY_PHASES.has(readPhase(state))) return [];
+  if (!inPlay(readPhase(state))) return [];
 
   return SIDES.map((side) => {
     const by = entrantOf(state, side);
@@ -1532,7 +1428,7 @@ export function buildDock(
   // it costs nothing. Band >=2 exactly like the card's `reason` step.
   if (eventType === "football.penalty") {
     if (view.band < 2) return null;
-    const chips = PENALTY_OFFENCES.map((offence) => ({
+    const chips = footballPadRules.penaltyOffences.map((offence) => ({
       id: `offence:${offence}`,
       label: vocabKey("offence", offence) ?? offence,
       mutate: (p: Record<string, unknown>) => ({ ...p, offence }),

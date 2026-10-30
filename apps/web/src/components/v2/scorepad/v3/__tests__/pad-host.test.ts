@@ -1141,10 +1141,11 @@ describe("soft-commit inventory — HOLD only when dock has chips", () => {
           phase: "P1",
           entrants: { home: "H", away: "A" },
         },
+        // A cfg the module's own schema accepts (the period skins read it through `@seazn/engine/pad`, which parses).
         cfg: {
           goalKinds: ["fg"],
           assists: key === "icehockey",
-          suspensions: { classes: { minor: { minutes: 2 } } },
+          suspensions: { classes: { minor: { minutes: 2, teamShort: true } } },
           setPieceKinds: ["ps"],
         },
         squads: {

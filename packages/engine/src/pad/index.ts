@@ -12,6 +12,14 @@ export type { PadFieldScope } from "./spec-lookup.ts";
 // apart) and the merges do not touch one another's lines.
 
 // P1: period + football
+// Load-time work in a record runs when THIS barrel is imported, outside every error boundary: v3/registry.ts imports every skin,
+// scorepad/registry.tsx imports that, and fixture-console.tsx and device-score-pad.tsx import it, so a throw here would break the
+// fixture page and /score/[token] for EVERY sport, server render and client alike - not one sport's pad. (hockey/icehockey parse
+// their default and each declared variant cfg when built.) The rule for every later batch: load-time work reads engine constants
+// only ({}, module.variants, the module's own tables), never env or stored data, so a refusal is deterministic and fails every suite
+// that imports the barrel at collection. Keep the records eager: a lazy build would only move that throw to a sport's first render.
+export { hockeyPadRules, icehockeyPadRules } from "./period.ts";
+export { footballPadRules } from "./football.ts";
 
 // P2: cricket
 import {

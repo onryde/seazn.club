@@ -46,6 +46,11 @@ import { fileURLToPath } from "node:url";
  */
 export const BANNED: Readonly<Record<string, readonly string[]>> = {
   // P1: period sports (period-shared, hockey, icehockey, football)
+  "period-shared.ts": ["SWAP_BAND"],
+  "hockey.tsx": ["HOCKEY_REASONS"],
+  "icehockey.tsx": ["ICEHOCKEY_REASONS"],
+  // football.tsx keeps CARD_TONES (presentation) and POST_PHASES (P4); the rest of its inventory is read from footballPadRules.
+  "football.tsx": ["CARD_COLORS", "CARD_REASONS", "PENALTY_OUTCOMES", "PENALTY_OFFENCES", "EVENT_BAND", "PLAY_PHASES", "PLAY_PHASE_ONLY"],
   // P2: cricket
   "cricket.tsx": [
     "WICKET_KINDS",
@@ -70,7 +75,7 @@ export const BANNED: Readonly<Record<string, readonly string[]>> = {
  * (P1.x period-shared/hockey/icehockey/football; P2 cricket; P3 badminton/
  * tabletennis/volleyball/tennis; P4 carrom/boardgame/generic) plus `POST_PHASES`
  * in the nine files that declare it (P4.2), and volleyball's two rotation names
- * (P3.1 review m2). Typed from the plan, not from the skins: all 48 are declared
+ * (P3.1 review m2). Typed from the plan, not from the skins: all 49 are declared
  * at 17948f93a8. Presentation constants the plan keeps
  * (`CARD_TONES`, `HOCKEY_CLASSES`, ...) are deliberately absent. A name the plan
  * later adds or drops is edited here and in `BANNED` together.
@@ -86,6 +91,7 @@ export const RULE_CONSTANTS_AT_BASE: Readonly<Record<string, readonly string[]>>
     "PENALTY_OFFENCES",
     "EVENT_BAND",
     "PLAY_PHASES",
+    "PLAY_PHASE_ONLY",
     "POST_PHASES",
   ],
   "cricket.tsx": [
@@ -115,8 +121,9 @@ export const RULE_CONSTANTS_AT_BASE: Readonly<Record<string, readonly string[]>>
 };
 
 /** Pairs in `RULE_CONSTANTS_AT_BASE`: the plan's Step 5 lists (P1 9 + P2 7 + P3 14 + P4 7 = 37) + POST_PHASES in 9 files,
- *  + volleyball's ROTATION_CYCLE and ROTATION_VALUES (P3.1 review m2). */
-const PLANNED_PAIRS = 48;
+ *  + volleyball's ROTATION_CYCLE and ROTATION_VALUES (P3.1 review m2), + 1 the plan missed: football's `PLAY_PHASE_ONLY`
+ *  (the list of event types that are only legal in play, now `EVENT_PHASES` in the engine; P1.2 review). */
+const PLANNED_PAIRS = 49;
 
 /** Skin source files (`*.ts`/`*.tsx`, `__tests__` excluded) at 17948f93a8. Re-pin when a skin file is added. */
 const PINNED_SKIN_FILES = 13;

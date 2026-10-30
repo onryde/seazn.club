@@ -57,6 +57,7 @@ import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired, tracksFairPlay, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
+  FidelityBand,
   ModuleEvent,
   PadAction,
   PadAttributionItem,
@@ -80,6 +81,10 @@ import { playedInStats, type PlayerStatRow, type PlayerStatsFoldCtx } from "../.
 // ---------------------------------------------------------------------------
 // Cfg — spec 04 §1.1
 // ---------------------------------------------------------------------------
+
+/** Law 3 §1 - "not more than eleven players" a side. The most a side can field, the size an absent `teamSize` fields, and the size of
+ *  `positions.lineup`: ONE number, read by the schema bound below, the catalog and the pad (`footballPadRules.teamSizeDefault`). */
+export const FOOTBALL_TEAM_SIZE = 11;
 
 export const FootballCfg = z.object({
   // S5/#431 — the length of ONE PLAY PERIOD: normally a half, but at
@@ -179,7 +184,7 @@ export const FootballCfg = z.object({
   // PositionCatalog (`positionsFor`) rather than the fold: positions are lineup
   // data and never touch scoring math. Optional with no default — absent ≡ 11,
   // which is what every stream recorded before W4 assumed.
-  teamSize: z.number().int().min(2).max(11).optional(),
+  teamSize: z.number().int().min(2).max(FOOTBALL_TEAM_SIZE).optional(),
   // W4a (#425) §5.2 (Law 3) — the competition's allowance of substitution
   // WINDOWS, which is a different bound from `maxSubs` and applies alongside it:
   // senior 11-a-side permits five substitutions taken in three windows, so a
@@ -688,7 +693,124 @@ interface ShotRecord {
 // reaches "Q2"/"Q3"/"Q4" (applyPeriod refuses the markers that would produce
 // them under `cfg.halves === 2`), so widening this unconditionally costs
 // nothing and matches how ET_H1/ET_H2 were already handled before this wave.
-const PLAY_PHASES: readonly Phase[] = ["H1", "H2", "Q2", "Q3", "Q4", "ET_H1", "ET_H2"];
+//
+// Exported (pad wave P1.2): `footballPadRules.playPhases` is THIS object (toBe), so the pad reads the set the fold judges against.
+export const PLAY_PHASES: readonly Phase[] = Object.freeze<Phase[]>(["H1", "H2", "Q2", "Q3", "Q4", "ET_H1", "ET_H2"]);
+
+/** The football.* types whose phase gate is a fixed set of phases. `football.period` is the one that is not: which marker is legal
+ *  depends on `cfg.halves` as well as the phase (PERIOD_MARKER_PHASE). */
+type PhaseGatedType =
+  | "football.goal"
+  | "football.card"
+  | "football.sub"
+  | "football.penalty"
+  | "football.shot"
+  | "football.sinbin.start"
+  | "football.sinbin.end"
+  | "football.clock"
+  | "football.shootout.kick";
+
+/** The phases a card is legal in: the whistle before kick-off, play, and the shoot-out - never once the match is decided (football.md
+ *  section 9: a red card before kick-off is legal; `applyCard`). */
+const CARD_PHASES: readonly Phase[] = Object.freeze<Phase[]>(["pre", ...PLAY_PHASES, "SHOOTOUT"]);
+
+/**
+ * THE PHASE GATE of every football event type that has a fixed one, declared once (pad wave P1.2). Every `apply*` guard below reads it
+ * through `acceptsPhase`, and the pad reads the same object through `footballPadRules.eventAllowedInPhase`, so what the scorer is
+ * offered and what the fold accepts cannot drift. Before this table each guard spelled its own test (`isPlayPhase` x6, one inline
+ * done/final/abandoned test, one `!== "SHOOTOUT"`), and the v3 skin kept a seventh copy.
+ *
+ * `core.*` types are not here, and that is not "the kernel judges them": `applyEvent` is football's own and it refuses them by phase
+ * itself (`core.start` outside `pre`, `core.finalize` while the fixture is undecided, `core.forfeit` / `core.abandon` once it is
+ * decided - all WRONG_PHASE). `eventAllowedInPhase` therefore says nothing about a `core.*` type; it answers for `football.*` only.
+ */
+export const EVENT_PHASES: Readonly<Record<PhaseGatedType, readonly Phase[]>> = Object.freeze({
+  "football.goal": PLAY_PHASES,
+  "football.sub": PLAY_PHASES,
+  "football.penalty": PLAY_PHASES,
+  "football.shot": PLAY_PHASES,
+  "football.sinbin.start": PLAY_PHASES,
+  "football.sinbin.end": PLAY_PHASES,
+  "football.clock": PLAY_PHASES,
+  "football.card": CARD_PHASES,
+  "football.shootout.kick": Object.freeze<Phase[]>(["SHOOTOUT"]),
+});
+
+/** Whether the fold accepts `type` in `phase` - the one reading of EVENT_PHASES the apply* guards go through. */
+function acceptsPhase(type: PhaseGatedType, phase: Phase): boolean {
+  return EVENT_PHASES[type].includes(phase);
+}
+
+/**
+ * What each `football.period` marker ENDS: marker -> the phase it is legal in, per mode (S5/#431: quarters instead of halves).
+ * `applyPeriod` reads it (`markerClosesPhase`), and so does the pad (`periodMarkers` / `legalPeriodMarkers`), so the marker list the
+ * scorer is offered and the arm the fold takes are one table. Q1 is "H1" reused, never a marker of its own. The key order is the
+ * order the markers are offered in.
+ *
+ * `extraTime` is not mode-gated: its arms never were (`applyPeriod` does not test the flag). Only the OFFER is (`periodMarkers`). That
+ * is safe because an extra-time phase is entered from `resolveFullTime` alone, under `cfg.extraTime.enabled`; the guard test
+ * "extra time is unreachable without the flag" (pad/football.test.ts) explores the real fold to keep it so.
+ */
+export const PERIOD_MARKER_PHASE: Readonly<Record<"halves" | "quarters" | "extraTime", Readonly<Record<string, Phase>>>> = Object.freeze({
+  halves: Object.freeze<Record<string, Phase>>({ HT: "H1", FT: "H2" }),
+  quarters: Object.freeze<Record<string, Phase>>({ QT: "H1", HT: "Q2", "3QT": "Q3", FT: "Q4" }),
+  extraTime: Object.freeze<Record<string, Phase>>({ ET_HT: "ET_H1", ET_FT: "ET_H2" }),
+});
+
+/** The two cfg leaves the period markers read. Structural, so the resolved `FootballCfg` fits it and so does a partial cfg. */
+export interface PeriodModeCfg {
+  readonly halves?: number;
+  readonly extraTime?: { readonly enabled?: boolean };
+}
+
+/** Whether `applyPeriod` accepts `marker` while the match is in `phase` (mode only: extra-time arms are not gated on the flag). */
+function markerClosesPhase(marker: string, phase: Phase, quarters: boolean): boolean {
+  const regulation = PERIOD_MARKER_PHASE[quarters ? "quarters" : "halves"];
+  const extraTime = PERIOD_MARKER_PHASE.extraTime;
+  const from = Object.hasOwn(regulation, marker) ? regulation[marker] : Object.hasOwn(extraTime, marker) ? extraTime[marker] : undefined;
+  return from === phase;
+}
+
+/**
+ * Legal `football.period` MARKER strings for this cfg, in the order they are offered: quarters get QT/HT/3QT/FT, halves HT/FT, and
+ * both add ET_HT/ET_FT when extra time is enabled. The padSpec-level twin of `applyPeriod`'s own gating (S5/#431), read from
+ * PERIOD_MARKER_PHASE so the two cannot differ. Pad wave P1.2: exported, and `cfg` structural.
+ */
+export function periodMarkers(cfg: PeriodModeCfg): string[] {
+  return [
+    ...Object.keys(PERIOD_MARKER_PHASE[cfg.halves === 4 ? "quarters" : "halves"]),
+    ...(cfg.extraTime?.enabled === true ? Object.keys(PERIOD_MARKER_PHASE.extraTime) : []),
+  ];
+}
+
+/**
+ * The marker(s) `applyPeriod` accepts IN THIS PHASE under this cfg: a subset of `periodMarkers(cfg)`, and at most one (every play
+ * phase ends with exactly one whistle). EMPTY is a real answer - at "pre", "SHOOTOUT" and every decided phase there is no next whistle.
+ */
+export function legalPeriodMarkers(phase: string, cfg: PeriodModeCfg): string[] {
+  const quarters = cfg.halves === 4;
+  return periodMarkers(cfg).filter((marker) => markerClosesPhase(marker, phase as Phase, quarters));
+}
+
+/**
+ * Whether the FOLD accepts `eventType` in `phase` under `cfg` - the question every pad tile and the More sheet ask before offering an
+ * action. A table lookup (EVENT_PHASES) for the fixed gates; for `football.period`, whether any marker is legal here.
+ *
+ * FAILS OPEN for a type this module does not gate: a future `football.*` event, or any `core.*` type (football's `applyEvent` refuses
+ * those by phase itself, see EVENT_PHASES, so `true` here means "not answered", not "the fold accepts it"). The engine test that every
+ * `eventSchemas` key is classified is what stops a new `football.*` type slipping through unclassified.
+ */
+export function eventAllowedInPhase(eventType: string, phase: string, cfg: PeriodModeCfg): boolean {
+  if (eventType === "football.period") return legalPeriodMarkers(phase, cfg).length > 0;
+  if (!Object.hasOwn(EVENT_PHASES, eventType)) return true;
+  return acceptsPhase(eventType as PhaseGatedType, phase as Phase);
+}
+
+/** The cap on substitution WINDOWS this competition declared (Law 3: five substitutions in three windows), or undefined for none. The
+ *  bound `applySub` enforces alongside `maxSubs`; a declared 0 is a cap of zero windows, not "none". */
+export function subWindowsCap(cfg: Pick<FootballCfg, "subWindows">): number | undefined {
+  return cfg.subWindows;
+}
 
 function opponent(side: Side): Side {
   return side === "home" ? "away" : "home";
@@ -1130,7 +1252,7 @@ function removeFromPitch(squad: FootballSquad, person: string, sentOff: boolean)
 // ---------------------------------------------------------------------------
 
 function applyGoal(state: FootballState, payload: z.infer<typeof FootballGoal>): FootballState {
-  if (!isPlayPhase(state.phase)) {
+  if (!acceptsPhase("football.goal", state.phase)) {
     wrongPhase(`goal not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const by = sideOf(state, payload.by);
@@ -1150,7 +1272,7 @@ function applyGoal(state: FootballState, payload: z.infer<typeof FootballGoal>):
 function applyCard(state: FootballState, payload: z.infer<typeof FootballCard>): FootballState {
   // Cards valid pre-kickoff (red before kickoff — football.md §9), during
   // play and during a shootout; never once the match is decided.
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (!acceptsPhase("football.card", state.phase)) {
     wrongPhase(`card not allowed in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
@@ -1203,7 +1325,7 @@ function applySub(
   payload: z.infer<typeof FootballSub>,
   ctx?: FoldContext,
 ): FootballState {
-  if (!isPlayPhase(state.phase)) {
+  if (!acceptsPhase("football.sub", state.phase)) {
     wrongPhase(`substitution not allowed in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
@@ -1261,11 +1383,12 @@ function applySub(
       (window) => window.period === stamp.period && window.elapsed === stamp.elapsed,
     );
     if (!known) {
-      if (state.cfg.subWindows !== undefined && windows.length >= state.cfg.subWindows) {
+      const cap = subWindowsCap(state.cfg);
+      if (cap !== undefined && windows.length >= cap) {
         throw new EngineError(
           "SUB_WINDOW_EXCEEDED",
-          `"${payload.by}" has used all ${state.cfg.subWindows} substitution windows`,
-          { by: payload.by, subWindows: state.cfg.subWindows, at: stamp, used: [...windows] },
+          `"${payload.by}" has used all ${cap} substitution windows`,
+          { by: payload.by, subWindows: cap, at: stamp, used: [...windows] },
         );
       }
       subWindows = [...windows, stamp];
@@ -1335,7 +1458,7 @@ function applySinBinEnd(
   state: FootballState,
   payload: z.infer<typeof FootballSinBinEnd>,
 ): FootballState {
-  if (!isPlayPhase(state.phase)) {
+  if (!acceptsPhase("football.sinbin.end", state.phase)) {
     wrongPhase(`sin bin not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const side = sideOf(state, payload.by);
@@ -1383,7 +1506,7 @@ function applySinBinStart(
   state: FootballState,
   payload: z.infer<typeof FootballSinBinStart>,
 ): FootballState {
-  if (!isPlayPhase(state.phase)) {
+  if (!acceptsPhase("football.sinbin.start", state.phase)) {
     wrongPhase(`sin bin not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const side = sideOf(state, payload.by);
@@ -1452,7 +1575,7 @@ function applySinBinStart(
 // W4 (Law 14) — an open-play penalty that was not converted. The score is
 // untouched by construction; the record is what a match report needs.
 function applyPenalty(state: FootballState, payload: z.infer<typeof FootballPenalty>): FootballState {
-  if (!isPlayPhase(state.phase)) {
+  if (!acceptsPhase("football.penalty", state.phase)) {
     wrongPhase(`penalty not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const side = sideOf(state, payload.by);
@@ -1497,7 +1620,7 @@ function applyPenalty(state: FootballState, payload: z.infer<typeof FootballPena
 // period kernel — see `applyShot` in `period/kernel.ts` for that file's own
 // convention and why the two differ).
 function applyShot(state: FootballState, payload: z.infer<typeof FootballShot>): FootballState {
-  if (!isPlayPhase(state.phase)) {
+  if (!acceptsPhase("football.shot", state.phase)) {
     wrongPhase(`shot not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const side = sideOf(state, payload.by);
@@ -1579,11 +1702,12 @@ function applyPeriod(state: FootballState, payload: z.infer<typeof FootballPerio
   // WRONG_PHASE this switch already raises for every other illegal
   // transition. See DOMAIN.md's "Quarters instead of halves" row.
   const quarters = state.cfg.halves === 4;
+  // Each arm's phase test is PERIOD_MARKER_PHASE (the one table the pad's marker list reads too); what a marker does next stays here.
   switch (marker) {
     // Q1 -> Q2. Quarters-only: halves mode has no marker between kickoff and
     // "HT".
     case "QT":
-      if (!quarters || state.phase !== "H1") {
+      if (!markerClosesPhase(marker, state.phase, quarters)) {
         wrongPhase(`QT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
       }
       return pushPeriod(close(), "Q2");
@@ -1591,19 +1715,13 @@ function applyPeriod(state: FootballState, payload: z.infer<typeof FootballPerio
       // Quarters mode: Q2 -> Q3 — the SAME real half-time interval "HT"
       // always named, reused rather than duplicated. Halves mode: H1 -> H2,
       // unchanged from before this wave.
-      if (quarters) {
-        if (state.phase !== "Q2") {
-          wrongPhase(`HT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
-        }
-        return pushPeriod(close(), "Q3");
-      }
-      if (state.phase !== "H1") {
+      if (!markerClosesPhase(marker, state.phase, quarters)) {
         wrongPhase(`HT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
       }
-      return pushPeriod(close(), "H2");
+      return pushPeriod(close(), quarters ? "Q3" : "H2");
     // Q3 -> Q4. Quarters-only, symmetric with "QT" above.
     case "3QT":
-      if (!quarters || state.phase !== "Q3") {
+      if (!markerClosesPhase(marker, state.phase, quarters)) {
         wrongPhase(`3QT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
       }
       return pushPeriod(close(), "Q4");
@@ -1613,21 +1731,15 @@ function applyPeriod(state: FootballState, payload: z.infer<typeof FootballPerio
       // already phase-count-agnostic (it reads state.goals, never
       // state.phase or cfg.halves), so it needs no change either way. Halves
       // mode: H2 -> done/ET/shootout, unchanged from before this wave.
-      if (quarters) {
-        if (state.phase !== "Q4") {
-          wrongPhase(`FT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
-        }
-        return resolveFullTime(close(), "FT");
-      }
-      if (state.phase !== "H2") {
+      if (!markerClosesPhase(marker, state.phase, quarters)) {
         wrongPhase(`FT marker in phase "${state.phase}"`, { phase: state.phase, halves: state.cfg.halves });
       }
       return resolveFullTime(close(), "FT");
     case "ET_HT":
-      if (state.phase !== "ET_H1") wrongPhase(`ET_HT marker in phase "${state.phase}"`);
+      if (!markerClosesPhase(marker, state.phase, quarters)) wrongPhase(`ET_HT marker in phase "${state.phase}"`);
       return pushPeriod(close(), "ET_H2");
     case "ET_FT":
-      if (state.phase !== "ET_H2") wrongPhase(`ET_FT marker in phase "${state.phase}"`);
+      if (!markerClosesPhase(marker, state.phase, quarters)) wrongPhase(`ET_FT marker in phase "${state.phase}"`);
       return resolveFullTime(close(), "ET_FT");
   }
 }
@@ -1636,7 +1748,7 @@ function applyShootoutKick(
   state: FootballState,
   payload: z.infer<typeof FootballShootoutKick>,
 ): FootballState {
-  if (state.phase !== "SHOOTOUT" || state.shootout === null) {
+  if (!acceptsPhase("football.shootout.kick", state.phase) || state.shootout === null) {
     wrongPhase(`shootout kick in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
@@ -1827,7 +1939,7 @@ const positions: PositionCatalog = {
     { key: "ST", name: "Striker" },
   ],
   roles: [{ key: "captain", name: "Captain", unique: true }],
-  lineup: { size: 11, benchMax: 12 },
+  lineup: { size: FOOTBALL_TEAM_SIZE, benchMax: 12 },
 };
 
 // W4 (#407) — the catalog for a resolved config. Only the starting size moves:
@@ -1866,7 +1978,7 @@ function positionsFor(cfg: FootballCfg): PositionCatalog {
  *    undeclared key is refused, which is what stops a pad evading the cap by
  *    inventing one.
  */
-function lineupPolicy(cfg: FootballCfg): LineupPolicy {
+function lineupPolicy(cfg: Pick<FootballCfg, "rollingSubs" | "maxSubs" | "concussionSubs">): LineupPolicy {
   const rolling = cfg.rollingSubs === true;
   return {
     reentry: rolling ? "unlimited" : "none",
@@ -1877,6 +1989,13 @@ function lineupPolicy(cfg: FootballCfg): LineupPolicy {
       ? {}
       : { exemptions: { concussion: { max: cfg.concussionSubs } } }),
   };
+}
+
+/** Whether the fold lets a player who has come off go back on: `lineupPolicy(cfg).reentry` is "none" under the Laws and "unlimited" under
+ *  `rollingSubs` (FA youth and small-sided codes). The kernel's `reduceLineupEvent` refuses the return (`reentry-forbidden`) when it is
+ *  "none" - this is the question the pad asks BEFORE offering the player, and it reads the policy the fold applies. */
+export function reentryAllowed(cfg: Pick<FootballCfg, "rollingSubs">): boolean {
+  return lineupPolicy(cfg).reentry !== "none";
 }
 
 /** Football's flattened view of a kernel side, as `init` writes it. Ordered by
@@ -2262,7 +2381,7 @@ function squadsForLineup(state: FootballState, squads: KernelSquads): KernelSqua
 // threading a stamp through every branch. The switch returning directly is what
 // made post-processing impossible before.
 function applyFootballClock(state: FootballState, payload: FootballClock): FootballState {
-  if (!isPlayPhase(state.phase)) {
+  if (!acceptsPhase("football.clock", state.phase)) {
     wrongPhase(`clock not allowed in phase "${state.phase}"`);
   }
   return { ...state, clockRunning: payload.running };
@@ -2333,22 +2452,6 @@ const MAX_ELAPSED_SECONDS = 7200;
 const MAX_ADDED_MINUTES = 30;
 
 /**
- * Legal `football.period` MARKER strings for this cfg — the padSpec-level
- * twin of `applyPeriod`'s own gating (S5/#431), so a pad can never offer a
- * marker the fold would then refuse for the wrong mode. Quarters
- * (`cfg.halves === 4`) get "QT"/"HT"/"3QT"/"FT" (Q1 itself is "H1" reused,
- * never a marker of its own — see `PlayPhase`'s comment); halves get
- * "HT"/"FT". Both add "ET_HT"/"ET_FT" when `cfg.extraTime.enabled`, because
- * `applyPeriod`'s ET arms are not gated on `quarters` at all.
- */
-function periodMarkers(cfg: FootballCfg): string[] {
-  return [
-    ...(cfg.halves === 4 ? ["QT", "HT", "3QT", "FT"] : ["HT", "FT"]),
-    ...(cfg.extraTime.enabled ? ["ET_HT", "ET_FT"] : []),
-  ];
-}
-
-/**
  * `at.period` / `at.elapsed` — the W4a (#425) stamp every FootballEv branch
  * carries (`GameTime.optional()`). `at.period` reuses `playPhases(cfg)`
  * VERBATIM: it is the exact list `apply()`'s own strict-fold guard checks a
@@ -2374,6 +2477,35 @@ function stampFields(cfg: FootballCfg): PadField[] {
 }
 
 const BY_SIDE: PadAttributionItem = { kind: "side", path: "by" };
+
+/**
+ * One band per event type, declared once. `padSpec(cfg).fidelity` IS this object (every cfg, every call) and so is
+ * `footballPadRules.eventBands`, so the pad's band filter reads the map the module advertises (pad wave P1.2; it used to be a literal
+ * rebuilt inside `padSpec` and copied into the skin).
+ *
+ * S6 owner ruling (_INDEX.md, "redesign the fidelity model, in S6") - one band per event type, no repetition. The two REAL levels for
+ * football are "the bare score" and "the full timeline", which is exactly what these two bands carry. Band 1 is deliberately unused:
+ * this sport has no admin/context event group between them (no toss/interruption/powerplay equivalent exists for football today) - a
+ * different reason from carrom's stop-at-1, but the same shape, a module using only the bands it needs.
+ *
+ * S8/#417 W6 - band 3 ("detail") carries real content: `football.shot` is the one band-3 event. W1 (entitlements v18, 2026-09): this is
+ * a UX filter only - no band is paywalled. Bands 2 and 3 differ by exactly ONE event (`football.shot`). That split used to carry a
+ * billing meaning - band 3 had its own FeatureKey so the two bands stayed distinguishable to whatever read entitlements to decide what
+ * to show. W1 retired the entitlement model entirely, so the split now means only what it says: how much detail the scorer chose to
+ * record.
+ */
+export const FOOTBALL_FIDELITY: Readonly<Record<string, FidelityBand>> = Object.freeze({
+  "football.goal": 0,
+  "football.period": 0,
+  "football.clock": 0,
+  "football.shootout.kick": 0,
+  "football.card": 2,
+  "football.sub": 2,
+  "football.penalty": 2,
+  "football.sinbin.start": 2,
+  "football.sinbin.end": 2,
+  "football.shot": 3,
+});
 
 export function padSpec(cfg: FootballCfg): PadSpec {
   const stamp = stampFields(cfg);
@@ -2560,36 +2692,8 @@ export function padSpec(cfg: FootballCfg): PadSpec {
   return stampAttributionRequired(
     {
     panels,
-    // S6 owner ruling (_INDEX.md, "redesign the fidelity model, in S6") — one
-    // band per event type, no repetition. The two REAL levels for football
-    // are "the bare score" and "the full timeline", which is exactly what
-    // these two bands carry. Band 1 is deliberately unused: this sport has no
-    // admin/context event group between them (no toss/interruption/powerplay
-    // equivalent exists for football today) — a different reason from
-    // carrom's stop-at-1, but the same shape, a module using only the bands
-    // it needs.
-    //
-    // S8/#417 W6 — band 3 ("detail") carries real content: `football.shot` is
-    // the one band-3 event. W1 (entitlements v18, 2026-09): this is a UX
-    // filter only — no band is paywalled.
-    fidelity: {
-      "football.goal": 0,
-      "football.period": 0,
-      "football.clock": 0,
-      "football.shootout.kick": 0,
-      "football.card": 2,
-      "football.sub": 2,
-      "football.penalty": 2,
-      "football.sinbin.start": 2,
-      "football.sinbin.end": 2,
-      "football.shot": 3,
-    },
-    // Bands 2 and 3 differ by exactly ONE event (`football.shot`). That
-    // split used to carry a billing meaning — band 3 had its own
-    // FeatureKey so the two bands stayed distinguishable to whatever read
-    // entitlements to decide what to show. W1 retired the entitlement
-    // model entirely, so the split now means only what it says: how much
-    // detail the scorer chose to record.
+    // One band per event type: see FOOTBALL_FIDELITY (the same object, every call - `footballPadRules.eventBands`).
+    fidelity: FOOTBALL_FIDELITY,
     },
     FOOTBALL_EVENT_SCHEMAS,
   );

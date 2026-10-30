@@ -28,9 +28,8 @@ export const RETIREMENT_REASON = "injured";
 /**
  * The band at which the control appears -- the swap slot's own. `core.lineup.retirement` is a core event with no
  * `padSpec.fidelity` entry, so this is a pad policy, not an engine one: who is on the field is exactly the detail band 2
- * buys (`period-shared.ts`'s `SWAP_BAND`, which this must equal -- pinned equal in `__tests__/w2e-retirement.test.ts`, kept as
- * its own constant only because `period-shared.ts` imports THIS file for the hockey pads and the reverse import would be a
- * cycle).
+ * buys (the period skins' swap band, `@seazn/engine/pad`'s `hockeyPadRules.swapBand`, which this must equal -- pinned equal
+ * in `__tests__/w2e-retirement.test.ts`).
  */
 export const RETIREMENT_BAND: FidelityBand = 2;
 

@@ -35,6 +35,7 @@ import { scoringErrorText } from "@/lib/scoring-vocab";
 import { ScorePad, type ScorePadBootstrap } from "@/components/v2/scorepad/registry";
 import { RulesChangedBanner } from "@/components/v2/scorepad/v3/rules-changed-banner";
 import { rulesVersionOf, type FixtureRulesResult } from "@/components/v2/scorepad/transport";
+import { resolveModuleClient } from "@/components/v2/scorepad/module-client";
 import { entrantDisplayName } from "@/lib/entrant-name";
 import { deadLinkKey, VIEW_ONLY_COPY, type ViewOnlyReason } from "@/lib/scan-screen";
 import { officialLabelKey } from "@/lib/official-label";
@@ -329,9 +330,15 @@ export function DeviceScorePad({
       const read = await authed<FixtureRulesResult>(`/api/v1/fixtures/${fixture.id}/rules`);
       const version = rulesVersionOf(read.rules_version);
       if (version === undefined) return;
+      // Through the pinned module's own schema, as the mount's cfg is (`resolveScorePadBootstrap`) and the pad's own reload is
+      // (`use-pad-pipeline.ts`): GET /rules answers the raw stored cfg, and the inner pad's engine records read a parsed one. A cfg the
+      // schema refuses, or a pin that does not resolve, is a failed read (the catch), BEFORE the version moves, so the next refusal
+      // asks again. With no pad (no bootstrap, so no pin) nothing reads the cfg through a record: it is adopted as read.
+      const cfg: unknown =
+        scorePadV2 === null ? read.cfg : resolveModuleClient(sport.key, scorePadV2.moduleVersion).configSchema.parse(read.cfg);
       setRulesVersion((prev) => (prev === undefined || version > prev ? version : prev));
       setChromeRules({
-        cfg: read.cfg,
+        cfg,
         rulesVersion: version,
         formatLine: typeof read.format_line === "string" && read.format_line.length > 0 ? read.format_line : null,
       });
@@ -339,7 +346,7 @@ export function DeviceScorePad({
     } catch {
       // Kept as is: the refusal line already says the entry was not recorded.
     }
-  }, [authed, fixture.id]);
+  }, [authed, fixture.id, scorePadV2, sport.key]);
 
   /** W2c Task 15 — the inner pad reloaded the rules after its own tap was refused: this chrome's writes follow it,
    *  and the pad's own banner is the one that speaks (this chrome's would repeat it). */

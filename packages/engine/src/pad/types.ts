@@ -34,7 +34,8 @@ export interface PeriodPadRules extends PadRulesBase {
   /** The classes a fixture with this cfg is offered: equals the padSpec suspension `class` enum for the cfg. */
   suspensionClasses(cfg: unknown): readonly string[];
   goalKinds(cfg: unknown): readonly string[];
-  /** Takes the cfg because the fold's phase guards do: the scoring phases and the expected advance both read it. */
+  /** `eventType` is one of this sport's own event types; any other throws, naming it; a skin filters first. Takes the cfg because the
+   *  fold's phase guards do: the scoring phases and the expected advance both read it. */
   eventAllowedInPhase(eventType: string, phase: string, cfg: unknown): boolean;
 }
 
@@ -47,8 +48,14 @@ export interface FootballPadRules extends PadRulesBase {
   readonly playPhases: readonly string[];
   readonly teamSizeDefault: number;
   subWindowsCap(cfg: unknown): number | undefined;
-  /** Takes the cfg because the fold's period-marker refusals do (`cfg.halves`). */
+  /** `eventType` is one of this sport's own event types; any other throws, naming it; a skin filters first. Takes the cfg because the fold's period-marker refusals do (`cfg.halves`). */
   eventAllowedInPhase(eventType: string, phase: string, cfg: unknown): boolean;
+  /** The `football.period` markers this cfg offers, in offer order (halves HT/FT, quarters QT/HT/3QT/FT, plus ET_HT/ET_FT with extra time). Added by P1.2. */
+  periodMarkers(cfg: unknown): readonly string[];
+  /** The marker(s) the fold accepts in `phase` under this cfg: at most one, none outside the in-play phases. Added by P1.2. */
+  legalPeriodMarkers(phase: string, cfg: unknown): readonly string[];
+  /** Whether the fold lets a substituted-off player come back on (football's `lineupPolicy(cfg).reentry`; false under the Laws, true under `rollingSubs`). Added by P1.2. */
+  reentryAllowed(cfg: unknown): boolean;
 }
 
 /** cricket (P2). */
