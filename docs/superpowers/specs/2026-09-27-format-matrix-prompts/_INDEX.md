@@ -1975,6 +1975,23 @@ Elsewhere the text is the controller's record.
      and the pad enforces them while the fold does not (the fold takes any positive board number, any non-negative final
      score and any non-zero press). The three rows are `signed 248 2026-10-30`, cite "house limit, ruling 248" and say the
      fold does not enforce the limit. No code change; the tests that pin the three values stay change-detectors.
+249. **The pad wave's open rule rows are signed** (2026-10-30, owner "sign per rec", engine-split pad wave close). The
+     product owner's recommendation, taken whole: every row the pad wave left `⬜ open` is closed. No code change.
+     (A) 41 rulebook rows, `signed 249 2026-10-30`, citation kept: BD-CT-1, BD-IN-1, BD-RO-1, BD-SN-1, TT-EX-1, TT-FM-1,
+     TT-RO-1, TT-SN-1, VB-FM-1, VB-RC-1, VB-RO-2, VB-SN-1, TN-CF-2, TN-PT-1, TN-SC-1, TN-SE-3, TN-SS-3, TN-SV-1, CK-BD-1,
+     CK-EX-1, CK-EX-2, CK-PR-2, CK-TG-1, FB-CD-1, FB-CD-2, FB-ET-1, FB-PH-1, FB-PH-2, FB-PK-1, FB-PK-2, FB-SU-2, FB-TS-1,
+     HK-AS-1, HK-PH-1, IH-AS-1, IH-GL-1, IH-PH-1, IH-SU-2, CA-CN-1, CA-FM-1, X-PH-1. Where a citation ended "no ruling"
+     (or "no owner ruling yet") that tail now names this ruling, as 245 to 247 did.
+     (B) 10 house limits and product picklists, `signed 249 2026-10-30`, citing "house limit, ruling 249": the set-score
+     entry bounds BD-SC-2, TT-SC-2 and VB-SC-2 (`summaryScoreBound`), the tennis set-score ceilings TN-SS-4 and break
+     ceiling TN-RO-2, the hockey and ice-hockey card-minutes bounds HK-SU-2 and IH-SU-3, and the picklists HK-SU-3 and
+     IH-SU-4 (card and penalty reasons) and CA-AD-2 (carrom adjustment reasons). They are product limits and the pad's
+     own vocabulary, not rules of any sport; the pad enforces them and the fold or engine does not.
+     (C) 2 known deviations, `deviation 249 2026-10-30`: VB-LB-1 (the engine's libero exchange check is looser than FIVB
+     19.3.2; fix owed work O-9, a fold change with an epoch) and CK-WK-4 (the fold accepts the non-striker out in the six
+     striker-only modes; ruling 242 (c) parked it to O-8 and 249 records it as a deviation).
+     (D) CK-WK-5, `deviation 249 2026-10-30`: the pad should ask who is out for a timed out dismissal, as it does for run
+     out, obstructed and retired (CK-WK-3). Owed work O-16: a pad change alone, no fold change and no epoch.
 
 ## Recommendations (mine — not rulings)
 

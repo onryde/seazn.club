@@ -173,7 +173,7 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 ## Downstream owed
 
 - **Only the striker can be out bowled, caught, hit the ball twice, hit wicket, lbw or stumped; the fold takes the
-  non-striker too** (ruling 242 (c), rules row CK-WK-4, open). `applyDelivery` checks only that `wicket.out` is at the
+  non-striker too** (rulings 242 (c) and 249, rules row CK-WK-4, `deviation`). `applyDelivery` checks only that `wicket.out` is at the
   crease, for every mode, which no Law allows for these six (Laws 32 to 36 and 39 each dismiss the striker). The pad
   never offers it (it asks who is out only for run out, obstructing and retired), so only a write through the API can
   record one. The fix is a fold change with a cricket `FOLD_EPOCH` bump, after the pad wave (owed-work O-8).
@@ -186,6 +186,10 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
   Retired writes a `cricket.ball` (a legal dot ball, `legalBalls` +1), where the Retire sheet's out writes `cricket.retire`
   (no delivery); Law 25.4.1 retires a batter when the ball is dead. Both ways stay; whether the wicket sheet drops Retired
   or records no delivery for it is decided after the pad wave (owed-work O-13).
+- **Timed out: the pad records the striker and does not ask who is out** (ruling 249, rules row CK-WK-5, `deviation`).
+  Law 40 dismisses the incoming batter, who may come in at either end, so the wicket sheet should ask who is out for
+  timed out, as it does for run out, obstructed and retired (CK-WK-3). The fold already takes either batter, so the fix
+  is a pad change alone, with no `FOLD_EPOCH` bump (owed-work O-16).
 - **Position labels owed in all four locale dictionaries** (W4a T6b): `scoring.position.innings`, `scoring.position.over`.
   `SportModule.position` returns a stable segment `key` plus an ENGLISH `label`
   fallback — the engine writes no locale copy, by the same rule `MetricSpec.label`
