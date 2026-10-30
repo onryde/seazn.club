@@ -27,9 +27,13 @@ env:
   TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
 
 # Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
-# Every job only reads the repo; a job needing more declares its own block.
+# Every job only reads the repo and its packages; a job needing more declares its own block. `packages: read`: every
+# install fetches @seazn/engine (`npm:@onryde/seazn-engine`) from GitHub Packages (engine split 2b). A job-level block
+# REPLACES this one, so a job with its own block that installs repeats `packages: read`
+# (scripts/__tests__/registry-auth-workflows.test.ts).
 permissions:
   contents: read
+  packages: read
 
 jobs:
   # -------------------------------------------------------------------------
@@ -78,9 +82,13 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       # apps/cron-worker is a workspace no other test step collects
-      # (ci.yml runs apps/web and packages/engine by name). Its typecheck is
+      # (ci.yml runs apps/web by name). Its typecheck is
       # covered by `npx turbo run typecheck` below; the container job's
       # in-image typecheck never sees it (.dockerignore).
       - name: Cron worker tests
@@ -102,7 +110,6 @@ jobs:
       # that is what to go and find. toolchain.test.ts fails on any non-comment
       # line setting it, so this comment may name it plainly.
       - run: npx turbo run typecheck
-      - run: npm run engine:boundary
       # R26: no unreasoned single-sport pin count may rise — against the PR's
       # own baseline, and that baseline against the base branch's (--against),
       # so a PR cannot raise the ceiling it is checked against. HEAD^1: on a
@@ -121,15 +128,22 @@ jobs:
       # scripts' tests too; tools-tests-typecheck.test.ts proves its reach and
       # ci-wiring.test.ts pins this step (no `if:`, no continue-on-error:).
       - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json
-      # D14 (W1d): a Stryker floor never falls. HEAD^1 as for the lock gate. Absent at HEAD^1
-      # (PR-A's own first run) means "no floors yet": the CLI exits 0 for it.
-      - run: pnpm --filter ./packages/engine --fail-if-no-match mutation:floor --check-file-against HEAD^1
-      # Engine-split D15, D26 (batch 1e): a golden fold that moved must bump that sport's FOLD_EPOCH in the SAME diff, or an outdated phone
-      # folds differently from the server and nobody is told. HEAD^1 as for the floor gate above: the merge commit's first parent is the base
-      # tip, and the full-history checkout makes it present; a shallow checkout or a root commit has no HEAD^1 and the CLI refuses (exit 2),
-      # it does not pass. A name filter would otherwise match nothing and exit 0 in silence, so --fail-if-no-match. ci-wiring.test.ts pins
-      # that this step always runs and always gates.
-      - run: pnpm --filter @onryde/seazn-engine --fail-if-no-match fold-epoch:check --against HEAD^1
+      # Engine split 2b: @seazn/engine is the registry package, so no manifest may point it back at a local tree (a `link:` or
+      # `file:` spec installs green against stale source, AGENTS.md class 14), and each of the six consumers pins the alias.
+      # One grep each (D37); scripts/__tests__/registry-install.test.ts pins the alias spec itself.
+      - name: Registry engine guards (engine split 2b)
+        run: |
+          set -euo pipefail
+          if git grep -nE "@seazn/engine[\"']?: *[\"']?(link|file):" -- '*package.json' pnpm-workspace.yaml; then
+            echo "::error::@seazn/engine is a link:/file: dependency above. It is the registry package npm:@onryde/seazn-engine; point it at a local tree in your own checkout only, never in a commit."
+            exit 1
+          fi
+          n="$({ git grep -h -c 'npm:@onryde/seazn-engine@' -- '*package.json' || true; } | awk '{ s += $1 } END { print s + 0 }')"
+          if [ "$n" -ne 6 ]; then
+            echo "::error::$n manifests pin npm:@onryde/seazn-engine@, want 6 (root, apps/web, packages/reference, packages/scheduler, tools/bench, tools/matrix)."
+            exit 1
+          fi
+          echo "registry engine guards: no link:/file: engine dependency; $n manifests pin npm:@onryde/seazn-engine@"
       # v3/03 §6: retired plan tier must never reappear in UI copy.
       - name: Plan-scrub grep gate (PROMPT-32)
         run: bash scripts/check-plan-scrub.sh
@@ -155,33 +169,6 @@ jobs:
           npm run i18n:gen-keys
           git diff --exit-code apps/web/src/lib/i18n-keys.ts || {
             echo "i18n-keys.ts is stale — run 'npm run i18n:gen-keys' and commit."; exit 1; }
-      # Engine schema-snapshot drift gate (#429 scope item 2). The frozen golden
-      # corpora compare recorded bytes, so they red only on a state path some
-      # stream WRITES; a config knob no stream sets or an enum member no seed
-      # picks can be narrowed with all eleven corpora green. The committed
-      # sports/**/<key>.schema.json files are taken from the DECLARATION, so
-      # they cover the unexercised half, and this step is what makes them
-      # load-bearing rather than decorative.
-      #
-      # DELIBERATELY NOT gated on the `engine-changes` filter, unlike the
-      # coverage and sim-matrix steps below: those are expensive, this is ~1 s,
-      # and a drift gate that skips is a drift gate that reports success. It
-      # needs no DB and no build — the job-level `pnpm install` is the only
-      # prerequisite, and it touches no *.golden.json (no UPDATE_GOLDEN /
-      # REBASELINE_GOLDEN is involved; see packages/engine/src/testkit/GOLDEN-POLICY.md).
-      #
-      # `git status --porcelain`, not `git diff`: a NEW sport module's snapshot
-      # is written as an UNTRACKED file, which `git diff` does not see at all.
-      - name: Engine schema-snapshot drift gate (#429)
-        run: |
-          npm run schema:snapshot --workspace packages/engine
-          drift="$(git status --porcelain -- ':(glob)packages/engine/src/sports/**/*.schema.json')"
-          if [ -n "$drift" ]; then
-            echo "$drift"
-            echo "Engine schema snapshots are stale — run 'npm run schema:snapshot --workspace packages/engine' and commit."
-            git diff -- ':(glob)packages/engine/src/sports/**/*.schema.json'
-            exit 1
-          fi
       # eslint gate (#344). Nothing ran lint in CI before, and `main` carried 31
       # errors for long enough that none of them were recent. BLOCKING, not
       # advisory: an advisory gate on a repo that already had 31 errors just
@@ -236,15 +223,14 @@ jobs:
       # not prove the DB-free claim. Same explicit-binary-path +
       # explicit-target-path + dual reporter + testTimeout convention as the
       # "Repo-root scripts tests" step in the smoke-db job (this file,
-      # further down): no root-level vitest CONFIG exists (a root vitest
-      # devDependency does, since W1d item 7 — it only lets the tools-tests
-      # type-check resolve `vitest`'s types), so
-      # packages/engine's already-installed binary is invoked directly with
-      # an explicit target path rather than relying on config
+      # further down): no root-level vitest CONFIG exists, so the root's own
+      # vitest devDependency (the binary every root step runs since engine
+      # split 2b took packages/engine, and its copy, out of the tree) is
+      # invoked with an explicit target path rather than relying on config
       # auto-discovery, which would walk up from cwd and find nothing to
       # pick up the bench at all.
       - name: Bench lib unit tests (DB-free)
-        run: ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-bench.json --testTimeout=30000 tools/bench
+        run: ./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-bench.json --testTimeout=30000 tools/bench
 
       # Format × sport matrix harness (W1a; tools/matrix/**, workspace @seazn/matrix) — catalogue,
       # stream generators folded through the real engine for all 11 sports,
@@ -264,7 +250,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -f vitest-results-matrix.json
-          ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-matrix.json --testTimeout=30000 tools/matrix
+          ./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-matrix.json --testTimeout=30000 tools/matrix
           node -e '
             const fs = require("fs");
             const path = require("path");
@@ -283,14 +269,14 @@ jobs:
       # Trap 2 — tests are not run through turbo; a new package's tests need an
       # explicit step. Same strict judge as the matrix step. packages/reference
       # (ruling 27, design §7.2) is the rulebook oracle package; its import
-      # boundary is `npm run reference:boundary` above. The engine's vitest
+      # boundary is `npm run reference:boundary` above. The root's vitest
       # binary runs from the repo root with a positional, as in the matrix step;
       # the package's own vitest serves only `npm run test --workspace`.
       - name: Reference package tests (DB-free)
         run: |
           set -euo pipefail
           rm -f vitest-results-reference.json
-          ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-reference.json --testTimeout=30000 packages/reference
+          ./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-reference.json --testTimeout=30000 packages/reference
           node -e '
             const fs = require("fs");
             const path = require("path");
@@ -317,7 +303,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -f vitest-results-scheduler.json
-          ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-scheduler.json --testTimeout=30000 \
+          ./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-scheduler.json --testTimeout=30000 \
             --exclude packages/scheduler/src/__tests__/placement-integration.test.ts \
             --exclude packages/scheduler/src/__tests__/repair-decompose-cpsat-integration.test.ts \
             packages/scheduler
@@ -355,40 +341,15 @@ jobs:
             exit 1
           fi
 
-      # The engine rules reference (W2a ruling 75, packages/engine/rules/). Its rows are proved by tests in apps/web,
-      # e2e and tools, so this checker must run on a PR that touches none of packages/engine/**: the engine job
-      # further down is path-filtered, and this job is not. Same node judge discipline as the two steps above: red on
-      # zero tests, a failed test or suite, a skip or todo, and any file but the one asked for.
-      # packages/engine/test/rules-reference.test.ts is the file this step runs; scripts/__tests__/rules-reference.test.ts pins
-      # it (its CI-wiring describe) and runs in the step after it.
-      - name: Engine rules reference checker (DB-free)
-        run: |
-          set -euo pipefail
-          rm -f vitest-results-rules.json
-          ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-rules.json --testTimeout=30000 packages/engine/test/rules-reference.test.ts
-          node -e '
-            const fs = require("fs");
-            const r = JSON.parse(fs.readFileSync("vitest-results-rules.json", "utf8"));
-            const files = (r.testResults || []).map((t) => t.name);
-            console.log(`rules reference: ${r.numPassedTests}/${r.numTotalTests} tests passed in ${files.length} file(s), ${r.numFailedTestSuites} failed suite(s)`);
-            const fail = (msg) => { console.error(`::error::${msg}`); process.exit(1); };
-            if (!(r.numTotalTests > 0)) fail("the rules reference step ran ZERO tests. A suite that fails to collect reads 0/0, so this is a red, not a pass.");
-            if (r.numFailedTests !== 0) fail(`${r.numFailedTests} rules reference failed test(s).`);
-            if (r.numFailedTestSuites !== 0) fail(`${r.numFailedTestSuites} rules reference failed suite(s) (a file that fails to COLLECT counts here, not in numFailedTests).`);
-            if (r.numPendingTests !== 0) fail(`${r.numPendingTests} rules reference test(s) were skipped.`);
-            if (r.numTodoTests !== 0) fail(`${r.numTodoTests} rules reference test(s) are todo.`);
-            if (files.length !== 1) fail(`the rules reference step ran ${files.length} files, not exactly 1: ${files.join(", ")}`);
-          '
-
-      # The monorepo's half of the same checker (engine-split 1d-5): the proof and enforced-at paths that are NOT packages/engine/
-      # (apps/web, e2e, tools, packages/reference), the W2b rows' text against the W2b spec, and the CI wiring of both steps. A step
-      # of its own with its own report, so the step above keeps running only the engine file. It is the step above with its own file
-      # and report name, judge byte for byte (scripts/__tests__/rules-reference.test.ts derives it from that step and pins it).
+      # The monorepo's half of the engine rules reference checker (engine-split 1d-5): the proof and enforced-at paths that are NOT the
+      # engine's (apps/web, e2e, tools, packages/reference), the W2b rows' text against the W2b spec, and this step's CI wiring. Its engine
+      # half left with the engine (engine split 2b) and runs in onryde/seazn.club.engine's own CI. Red on zero tests, a failed test or
+      # suite, a skip or todo, and any file but the one asked for (scripts/__tests__/rules-reference.test.ts pins it).
       - name: Root rules reference checker (DB-free)
         run: |
           set -euo pipefail
           rm -f vitest-results-rules-root.json
-          ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-rules-root.json --testTimeout=30000 scripts/__tests__/rules-reference.test.ts
+          ./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-rules-root.json --testTimeout=30000 scripts/__tests__/rules-reference.test.ts
           node -e '
             const fs = require("fs");
             const r = JSON.parse(fs.readFileSync("vitest-results-rules-root.json", "utf8"));
@@ -459,7 +420,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
 
       - name: Unit suite (shard ${{ matrix.shard }}/4)
         run: npm test --workspace apps/web -- --shard=${{ matrix.shard }}/"$SHARD_TOTAL" --reporter=default --reporter=json --outputFile=vitest-results-unit.json
@@ -534,132 +499,6 @@ jobs:
         env:
           BILLING_LIVE: "1"
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-
-  # -------------------------------------------------------------------------
-  # Engine coverage gate + the bounded sim matrix — 281s and 4s respectively,
-  # and the largest single step in the old combined job. Both are gated on the
-  # engine actually having changed, so on an apps/web-only PR this job is just
-  # its own ~35s of setup, in parallel with everything else, costing no wall
-  # clock. The paths-filter stays INSIDE this job on purpose: hoisting it into
-  # a separate `changes` job would make every other job wait on a barrier to
-  # learn something only this job needs.
-  # -------------------------------------------------------------------------
-  engine:
-    name: Engine coverage + sim matrix
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    # paths-filter reads the PR's changed files via the API; the repo's
-    # default GITHUB_TOKEN is restricted and 403s without this.
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v5
-      # Engine coverage + sim matrix only run when the engine (or the
-      # dependency graph) changed — most PRs touch apps/web only.
-      - uses: dorny/paths-filter@v3
-        id: engine-changes
-        with:
-          filters: |
-            engine:
-              - 'packages/engine/**'
-              - 'pnpm-lock.yaml'
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-
-      # NO placement container here, deliberately — and this note exists so the
-      # idea is not retried.
-      #
-      # `placement-integration.test.ts` (now packages/scheduler/src/__tests__/, engine-split 1a; this
-      # job runs the engine suite only) gates on PLACEMENT_SERVICE_HOST, so
-      # without a service it SKIPS, and skipped code is uncovered code. Pointing
-      # this job at a container does lift coverage (measured 89.97% -> 90.64%),
-      # and it was tried — but it made the job RED, while the identical three
-      # tests passed in the live-service job (then placement-ci.yml's `integration`, now `scheduler-live`) on the same
-      # commit, same image: `total=3 passed=3 failed=0 skipped=0`.
-      #
-      # The difference is contention. That job runs those three tests alone;
-      # this one runs the whole engine suite, including the PROMPT-14
-      # simulation harness at 200 divisions per sport x format. Whether the
-      # solver beats greedy inside its wall is proof-time, and this is the
-      # contended box.
-      #
-      # So the tripwire lives in the job that can hold it. That job also fails
-      # if `skipped != 0`, so it cannot silently stop running — which is the
-      # failure mode that would otherwise make this note dangerous.
-      # Engine suite includes the PROMPT-14 simulation harness (SIM_RUNS
-      # defaults to 200 divisions per sport×format when CI=true) and the
-      # coverage gate (≥90% lines; 100% on core/ and tiebreakers.ts).
-      - run: npm run test:coverage --workspace packages/engine
-        if: steps.engine-changes.outputs.engine == 'true'
-
-      # Sim matrix (v3/09 §3): bounded profile — every module × format ×
-      # SIM_SEEDS seeds + the permanent scenario suites; emits sim-report.json.
-      # A failure line prints its reproducing seed token.
-      - name: Sim matrix (bounded CI profile)
-        if: steps.engine-changes.outputs.engine == 'true'
-        run: SIM_SEEDS=5 npm run sim:matrix --workspace packages/engine
-      - name: Sim report artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sim-report
-          path: packages/engine/sim-report.json
-          if-no-files-found: ignore
-      - name: Simulation failure artifacts (repro with `npm run sim:replay -- <seedToken>`)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sim-failures
-          path: packages/engine/sim-failures/
-          if-no-files-found: ignore
-
-  # -------------------------------------------------------------------------
-  # Engine packed-tarball proof (engine-split Task 1b-3, D14). The engine is consumed from
-  # the workspace as TypeScript source, but a registry consumer gets the tarball `pnpm pack`
-  # makes: compiled dist/, and `exports` rewritten from publishConfig. Nothing else in CI
-  # looks at that artifact. This builds it, packs it, and installs it into four fixtures in
-  # scratch directories OUTSIDE the repo: Node strip-types, a Next build with no
-  # transpilePackages, a Metro bundle compiled by Hermes, and tsc with skipLibCheck off.
-  # Each prints `<fixture>: <N> checked`; zero is a failure. Same shape as the `engine` job
-  # above: the paths-filter stays inside the job, and the install is unconditional (it also
-  # fills the store cache), so an apps/web-only PR costs this job its set-up and nothing else.
-  # -------------------------------------------------------------------------
-  engine-pack:
-    name: Engine packed-tarball proof
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
-    # paths-filter reads the PR's changed files via the API; the repo's
-    # default GITHUB_TOKEN is restricted and 403s without this.
-    permissions:
-      contents: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v3
-        id: engine-changes
-        with:
-          filters: |
-            engine:
-              - 'packages/engine/**'
-              - 'pnpm-lock.yaml'
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.34.5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 26
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      # run.mjs builds dist/, packs it with the repo-pinned pnpm (asserting the version it ran), and fails on any fixture
-      # that errors or checks nothing. The fixture installs reach the public npm registry.
-      - name: Pack the engine and consume the tarball (node, next, rn, types)
-        if: steps.engine-changes.outputs.engine == 'true'
-        run: node packages/engine/pack-proof/run.mjs
 
   # -------------------------------------------------------------------------
   # Security gate (doc 07 §4): secret scan + dependency audit. Secret leaks
@@ -887,7 +726,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
 
       # DO NOT hoist the placement image up here to overlap the database chain
       # without measuring. When the image was still BUILT in each job, hoisting
@@ -937,11 +780,12 @@ jobs:
       # vitest` from the repo root both failed to resolve the binary — proved
       # locally, not assumed; W1d item 7 has since added a root devDependency
       # so the tools-tests type-check can resolve `vitest`, which changes
-      # nothing below: still no root config). Invoking packages/engine's already-installed
-      # binary directly, with an EXPLICIT path argument rather than a
+      # nothing below: still no root config). Invoking that root binary
+      # (packages/engine's own copy until engine split 2b moved the engine
+      # out) directly, with an EXPLICIT path argument rather than a
       # config-driven include glob, sidesteps both: vitest's config
       # auto-discovery walks up from cwd, and the repo root has no
-      # vitest.config.*, so packages/engine's own restrictive one is never
+      # vitest.config.*, so no workspace's restrictive one is ever
       # picked up.
       #
       # That last sentence has a consequence worth spelling out, because it cost
@@ -964,7 +808,7 @@ jobs:
       # scripts/__tests__/rules-reference.test.ts has a step of its own in the gates job (own report, own judge), so it is excluded from
       # this whole-directory run instead of running twice per pull request (pinned by that file's CI-wiring describe).
       - name: Repo-root scripts tests (real Postgres)
-        run: ./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-scripts.json --testTimeout=30000 --exclude '**/scripts/__tests__/rules-reference.test.ts' scripts/__tests__
+        run: ./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=vitest-results-scripts.json --testTimeout=30000 --exclude '**/scripts/__tests__/rules-reference.test.ts' scripts/__tests__
 
       # src/lib is in scope alongside src/server. It used to be excluded, which
       # meant the two suites guarding the Event Pass invariant —
@@ -1261,7 +1105,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
 
       # A REAL solver, for the same reason smoke-db needs one: without a
       # reachable service build.ts catches the transport failure and returns a
@@ -1559,7 +1407,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
 
       - name: Cache Flyway CLI
         uses: actions/cache@v4
@@ -2227,7 +2079,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
 
       # `continue-on-error` so the assertion step below is what fails the
       # job. Vitest's exit code alone is not a usable gate here: a suite
@@ -2320,6 +2176,9 @@ jobs:
   # -------------------------------------------------------------------------
   # R27 (W1d D13): a PR touching the engine or stages.ts declares its matrix
   # rows; the sample runs them + a fixed 33 against the committed baseline.
+  # Since engine split 2b the engine is a registry package, so "touching the
+  # engine" is a version change of @onryde/seazn-engine in pnpm-lock.yaml
+  # (tools/matrix/ci/pr-rows.ts reads the lock's own diff).
   # The sample itself is matrix-truth.yml's `pr-sample` scope (a called
   # workflow, so the visibility guard and the shard recipe live in ONE file).
   # -------------------------------------------------------------------------
@@ -2330,6 +2189,7 @@ jobs:
       contents: read
       pull-requests: read
       actions: read
+      packages: read
     outputs:
       run: ${{ steps.filter.outputs.matrix }}
       rows: ${{ steps.rows.outputs.rows }}
@@ -2342,7 +2202,6 @@ jobs:
         with:
           filters: |
             matrix:
-              - 'packages/engine/**'
               - 'apps/web/src/server/**'
               - 'apps/web/src/lib/format-templates.ts'
               - 'apps/web/src/lib/bracket-next-match.ts'
@@ -2356,7 +2215,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - name: Rows the PR declares (R27)
         id: rows
         env:
@@ -2375,7 +2238,10 @@ jobs:
           # THREE dots (I1, T9-FIX1): the merge-base against the head, i.e. what THIS PR changed. Two dots diffs against
           # the base TIP, so a PR behind main would list main's own commits as its changes (fetch-depth: 0 has them).
           git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/changed.txt"
-          node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" >> "$GITHUB_OUTPUT"
+          # Engine split 2b (Review Focus 5): an engine bump arrives as an @onryde/seazn-engine version change in the lock, never as
+          # a packages/engine/ path, so pr-rows reads the lock's own diff over the same three-dot range.
+          git diff --no-renames "$BASE_SHA...$HEAD_SHA" -- pnpm-lock.yaml > "$RUNNER_TEMP/lock.diff"
+          node --experimental-strip-types --import ./scripts/lib/crash-exit.ts tools/matrix/ci/pr-rows.ts --body-file "$RUNNER_TEMP/body.txt" --changed-file "$RUNNER_TEMP/changed.txt" --lock-diff-file "$RUNNER_TEMP/lock.diff" >> "$GITHUB_OUTPUT"
       - name: Truth-run staleness (D1b, non-blocking)
         # always(): a failed rows step (R27 undeclared) must not hide the staleness signal (review m6).
         if: ${{ always() && vars.MATRIX_WEEKLY_ENABLED == 'true' }}
@@ -2389,9 +2255,11 @@ jobs:
     needs: matrix-rows
     # T9-FORK: a fork PR never reaches vars.MATRIX_RUNNER (the called workflow's jobs carry the same condition).
     if: needs.matrix-rows.outputs.run == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # packages: read: the called workflow installs @onryde/seazn-engine, and a called workflow's token cannot exceed its caller's.
     permissions:
       contents: read
       actions: read
+      packages: read
     uses: ./.github/workflows/matrix-truth.yml
     with:
       scope: pr-sample

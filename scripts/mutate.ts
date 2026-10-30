@@ -41,8 +41,9 @@ function stopInFlight(): void {
   try { process.kill(-pid, "SIGTERM"); } catch { /* already gone */ }
 }
 
-/** One vitest run of one killer: the engine's vitest binary at the repo root (CI's own recipe for scripts/ and
- *  tools/, ci.yml:257, :787), the workspace's own `pnpm exec vitest` inside a workspace. ASYNCHRONOUS on purpose: a
+/** One vitest run of one killer: the root's vitest binary at the repo root (CI's own recipe for scripts/ and tools/, the
+ *  gates job's root steps and smoke-db's scripts step; packages/engine's copy until engine split 2b moved the engine out),
+ *  the workspace's own `pnpm exec vitest` inside a workspace. ASYNCHRONOUS on purpose: a
  *  synchronous spawn blocks the event loop for the whole run, so the SIGINT/SIGTERM handlers in runMutants could never
  *  fire while a killer was in flight and a `kill <pid>` was ignored until every mutant had finished. */
 async function runKiller(repo: string, k: Killer): Promise<VitestJson> {
@@ -51,7 +52,7 @@ async function runKiller(repo: string, k: Killer): Promise<VitestJson> {
   try {
     const cwd = resolve(repo, k.cwd);
     const args = ["run", ...k.files, ...(k.name === undefined ? [] : ["-t", k.name]), "--reporter=json", `--outputFile=${file}`, "--testTimeout=30000"];
-    const [cmd, argv] = k.cwd === "." ? [join(repo, "packages/engine/node_modules/.bin/vitest"), args] : ["pnpm", ["exec", "vitest", ...args]];
+    const [cmd, argv] = k.cwd === "." ? [join(repo, "node_modules/.bin/vitest"), args] : ["pnpm", ["exec", "vitest", ...args]];
     const ended = await new Promise<{ error?: Error; status: number | null; signal: NodeJS.Signals | null }>((done) => {
       // detached: the killer leads its own process group, which stopInFlight (and the timeout) signal as one.
       const child = spawn(cmd, argv, { cwd, stdio: "ignore", detached: true });

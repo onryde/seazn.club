@@ -3,7 +3,7 @@
 // fetched) beside the changed files and prints `rows=<csv|all|none>` for $GITHUB_OUTPUT.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS } from "../lib/catalogue.ts";
@@ -272,6 +272,105 @@ describe("DECLARING is R27's two paths, verbatim from _RULES.md", () => {
   });
 });
 
+// Engine split 2b, Task A2 (plan Review Focus 5): the engine is the registry package @onryde/seazn-engine now, so no PR touches
+// packages/engine/** and an engine bump reaches this repo only as a version change in pnpm-lock.yaml. Such a lock diff is an
+// engine change for R27 and owes a declaration; a lock diff that leaves the engine's version alone does not.
+const LOCK = "pnpm-lock.yaml";
+const LOCK_HEAD = "diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml\nindex 1111111..2222222 100644\n--- a/pnpm-lock.yaml\n+++ b/pnpm-lock.yaml\n";
+/** `git diff -- pnpm-lock.yaml` for an engine bump `from` -> `to` within one caret range: an importer's version line, the
+ *  package entry and its snapshot key move; the specifier is a context line. Shapes copied from the committed lock. */
+function engineBump(from: string, to: string): string {
+  const peers = "(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)";
+  return `${LOCK_HEAD}@@ -25,7 +25,7 @@ importers:\n       '@seazn/engine':\n         specifier: npm:@onryde/seazn-engine@^1.0.0\n`
+    + `-        version: '@onryde/seazn-engine@${from}${peers}'\n+        version: '@onryde/seazn-engine@${to}${peers}'\n`
+    + `@@ -1233,2 +1233,2 @@ packages:\n-  '@onryde/seazn-engine@${from}':\n-    resolution: {integrity: sha512-aaaa, tarball: https://npm.pkg.github.com/download/@onryde/seazn-engine/${from}/4bed0ef3}\n`
+    + `+  '@onryde/seazn-engine@${to}':\n+    resolution: {integrity: sha512-bbbb, tarball: https://npm.pkg.github.com/download/@onryde/seazn-engine/${to}/9c1d2e3f}\n`
+    + `@@ -6766,1 +6766,1 @@ snapshots:\n-  '@onryde/seazn-engine@${from}${peers}':\n+  '@onryde/seazn-engine@${to}${peers}':\n`;
+}
+/** A lock diff that moves zod alone, the engine's lines untouched (one is context). */
+const ZOD_ONLY = `${LOCK_HEAD}@@ -5946,2 +5946,2 @@ packages:\n-  zod@4.4.3:\n-    resolution: {integrity: sha512-cccc}\n+  zod@4.4.4:\n+    resolution: {integrity: sha512-dddd}\n`
+  + "@@ -6766,3 +6766,3 @@ snapshots:\n   '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)':\n     dependencies:\n-      zod: 4.4.3\n+      zod: 4.4.4\n";
+/** The engine's version unchanged; a peer moved, so the lines naming the engine are rewritten with the same engine version. */
+const PEER_ONLY = `${LOCK_HEAD}@@ -27,2 +27,2 @@ importers:\n`
+  + "-        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'\n+        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.12)(zod@4.4.3)'\n";
+/** This PR's own lock diff: the workspace link leaves and the registry package arrives. */
+const ARRIVAL = `${LOCK_HEAD}@@ -25,3 +25,3 @@ importers:\n       '@seazn/engine':\n-        specifier: workspace:*\n-        version: link:packages/engine\n`
+  + "+        specifier: npm:@onryde/seazn-engine@^1.0.0\n+        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'\n";
+
+describe("pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5)", () => {
+  const WEB = "apps/web/src/components/x.tsx";
+
+  it("a lock diff moving @onryde/seazn-engine 1.0.0 → 1.1.0 requires declared rows: undeclared is exit 1, naming the lock and both versions", () => {
+    const d = decide({ body: "bumps the engine", changed: [LOCK], lockDiff: engineBump("1.0.0", "1.1.0") });
+    expect(d.exit).toBe(1);
+    const why = "why" in d ? d.why : "";
+    expect(why).toMatch(/R27/);
+    expect(why).toContain(LOCK);
+    expect(why).toContain("1.0.0");
+    expect(why).toContain("1.1.0");
+    expect(why).toMatch(/edit the PR body/i);
+  });
+
+  it("the same bump with a declaration is decided like any engine change (the declared rows, or none with a reason)", () => {
+    const lockDiff = engineBump("1.0.0", "1.1.0");
+    expect(decide({ body: "Matrix rows: swiss, league", changed: [LOCK, WEB], lockDiff })).toEqual({ exit: 0, rows: ["league", "swiss"] });
+    expect(decide({ body: "Matrix rows: none — the bump carries no rule change", changed: [LOCK], lockDiff })).toEqual({ exit: 0, rows: [] });
+  });
+
+  it("a lock diff that does not touch the engine does not: a zod-only bump is the fixed sample, undeclared", () => {
+    expect(decide({ body: "", changed: [LOCK, WEB], lockDiff: ZOD_ONLY })).toEqual({ exit: 0, rows: [] });
+  });
+
+  it("a peer-only re-resolution (the engine's version unchanged on every line that names it) is not an engine change", () => {
+    expect(decide({ body: "", changed: [LOCK], lockDiff: PEER_ONLY })).toEqual({ exit: 0, rows: [] });
+  });
+
+  it("the engine arriving in the lock (this cutover: a workspace link replaced by the registry package) is engine-touching", () => {
+    const d = decide({ body: "", changed: [LOCK], lockDiff: ARRIVAL });
+    expect(d.exit).toBe(1);
+    expect("why" in d ? d.why : "").toContain(LOCK);
+  });
+
+  it("a bump the other way (1.1.0 → 1.0.0, a revert) is an engine change too", () => {
+    expect(decide({ body: "", changed: [LOCK], lockDiff: engineBump("1.1.0", "1.0.0") }).exit).toBe(1);
+  });
+
+  it("empty case first: an empty lock diff with no lock in the change list decides exactly as before (a web-only PR, a declaring-path PR)", () => {
+    expect(decide({ body: "", changed: [WEB], lockDiff: "" })).toEqual({ exit: 0, rows: [] });
+    expect(decide({ body: "", changed: [WEB], lockDiff: "" })).toEqual(decide({ body: "", changed: [WEB] }));
+    expect(decide({ body: "", changed: [STAGES], lockDiff: "" }).exit).toBe(1);
+  });
+
+  it("the lock in the change list with no lock diff given is refused (exit 2): the job dropped --lock-diff-file, and an engine bump would pass undeclared", () => {
+    const d = decide({ body: "", changed: [LOCK, WEB] });
+    expect(d.exit).toBe(2);
+    expect("why" in d ? d.why : "").toMatch(/lock diff/i);
+    // a declaration does not paper over the wiring fault
+    expect(decide({ body: "Matrix rows: all", changed: [LOCK] }).exit).toBe(2);
+  });
+
+  it("the two inputs must agree: lock lines changed but the lock not in the change list, or the lock listed but its diff empty, is refused (exit 2)", () => {
+    let checked = 0;
+    for (const [what, input] of [
+      ["a lock diff, no lock in the list", { body: "", changed: [WEB], lockDiff: engineBump("1.0.0", "1.1.0") }],
+      ["the lock in the list, an empty diff", { body: "", changed: [LOCK], lockDiff: "" }],
+      ["the lock in the list, a diff of headers only", { body: "", changed: [LOCK], lockDiff: LOCK_HEAD }],
+    ] as const) {
+      const d = decide(input);
+      expect(d.exit, what).toBe(2);
+      expect("why" in d ? d.why : "", what).toMatch(/pnpm-lock\.yaml/);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a second call decides afresh, and the lock rule is earned by the version change alone (a zod diff of the same file stays undeclared)", () => {
+    expect(decide({ body: "", changed: [LOCK], lockDiff: engineBump("1.0.0", "1.1.0") }).exit).toBe(1);
+    expect(decide({ body: "", changed: [LOCK], lockDiff: ZOD_ONLY }).exit).toBe(0);
+    expect(decide({ body: "", changed: [LOCK], lockDiff: engineBump("1.0.0", "1.1.0") }).exit).toBe(1);
+  });
+});
+
 // --- the CLI --------------------------------------------------------------------------------------------------
 
 const out: string[] = [];
@@ -388,6 +487,45 @@ describe("main: --body-file <path> --changed-file <path>", () => {
     expect(main(argv(files(`Matrix rows: ${secret}`, `${ENGINE}\n`)))).toBe(2);
     expect(said()).not.toContain(secret);
     expect(said()).toMatch(/UnknownRow/);
+  });
+});
+
+describe("main: --lock-diff-file <path> (engine split 2b, A2)", () => {
+  /** The three files the job writes, the lock's own diff among them. */
+  const withLock = (body: string, changed: string, lockDiff: string): string[] => {
+    const f = files(body, changed);
+    const lock = join(dirname(f.body), "lock.diff");
+    writeFileSync(lock, lockDiff);
+    return [...argv(f), "--lock-diff-file", lock];
+  };
+
+  it("an undeclared engine bump in the lock exits 1, stdout empty, stderr naming the lock; declared, it prints the rows", () => {
+    expect(main(withLock("bumps the engine", `${LOCK}\n`, engineBump("1.0.0", "1.1.0")))).toBe(1);
+    expect(out.join("")).toBe("");
+    expect(err.join("")).toContain(LOCK);
+    err.length = 0;
+    expect(main(withLock("Matrix rows: knockout", `${LOCK}\n`, engineBump("1.0.0", "1.1.0")))).toBe(0);
+    expect(out.join("")).toBe("rows=knockout\n");
+  });
+
+  it("an empty lock diff beside a change list without the lock decides as the two-file call does", () => {
+    expect(main(withLock("", "apps/web/src/components/x.tsx\n", ""))).toBe(0);
+    expect(out.join("")).toBe("rows=none\n");
+  });
+
+  it("the lock in the change list and no --lock-diff-file is exit 2, stdout empty (the wiring fault, never a pass)", () => {
+    expect(main(argv(files("", `${LOCK}\n`)))).toBe(2);
+    expect(out.join("")).toBe("");
+    expect(err.join("")).toMatch(/lock diff/i);
+  });
+
+  it("an unreadable --lock-diff-file exits 2 naming the flag", () => {
+    const f = files("Matrix rows: all", `${LOCK}\n`);
+    expect(main([...argv(f), "--lock-diff-file", join(tmp, "nope.diff")])).toBe(2);
+    expect(out.join("")).toBe("");
+    // the read refusal, never the usage one (an unknown flag would name it too)
+    expect(err.join("")).toMatch(/--lock-diff-file \S+ is unreadable/);
+    expect(err.join("")).not.toMatch(/usage:/);
   });
 });
 

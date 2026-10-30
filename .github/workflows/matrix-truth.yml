@@ -55,9 +55,12 @@ on:
       - ".github/workflows/matrix-truth.yml"
       - "tools/matrix/ci/**"
 
+# packages: read: every job installs @seazn/engine (`npm:@onryde/seazn-engine`) from GitHub Packages (engine split 2b). When
+# ci.yml calls this workflow, its matrix-sample job grants the same: a called workflow's token cannot exceed its caller's.
 permissions:
   contents: read
   actions: read
+  packages: read
 
 # Its own group per event and scope, so ci.yml's call (event pull_request, scope
 # pr-sample) and this file's own pull_request run (scope 'self') never share one,
@@ -122,7 +125,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - name: Derive the shard matrix (D4)
         id: matrix
         env:
@@ -212,7 +219,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - name: Build the web app (standalone)
         run: npm run build --workspace apps/web
       # Serve the standalone output, as fly.toml does. `.next/static` and `public/`
@@ -331,7 +342,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - name: Download the build
         uses: actions/download-artifact@v4
         with:
@@ -487,7 +502,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - name: Download the shard artifacts
         uses: actions/download-artifact@v4
         with:

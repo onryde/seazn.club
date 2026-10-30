@@ -46,9 +46,12 @@ concurrency:
   cancel-in-progress: true
 
 # Least privilege for GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions).
-# Every job only reads the repo; a job needing more declares its own block.
+# Every job only reads the repo and its packages; a job needing more declares its own block. `packages: read`: the
+# install fetches @seazn/engine (`npm:@onryde/seazn-engine`) from GitHub Packages (engine split 2b;
+# scripts/__tests__/registry-auth-workflows.test.ts).
 permissions:
   contents: read
+  packages: read
 
 jobs:
   bench:
@@ -115,7 +118,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
 
       - name: Cache Flyway CLI
         uses: actions/cache@v4

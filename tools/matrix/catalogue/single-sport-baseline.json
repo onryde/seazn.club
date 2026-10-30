@@ -16,14 +16,7 @@
     "apps/web/src/server/public-site/__tests__/data-standings-timestamp.test.ts:football": 1,
     "apps/web/src/server/usecases/__tests__/progression-bye-is-decided.test.ts:badminton": 1,
     "apps/web/src/server/usecases/__tests__/progression-multi-source.test.ts:generic": 5,
-    "apps/web/src/server/usecases/__tests__/stage-progression.test.ts:generic": 6,
-    "packages/engine/src/competition/division.test.ts:generic": 1,
-    "packages/engine/src/competition/qualification.test.ts:generic": 1,
-    "packages/engine/src/competition/qualification.test.ts:icehockey": 1,
-    "packages/engine/src/competition/tie-what-if.test.ts:badminton": 1,
-    "packages/engine/src/competition/tie-what-if.test.ts:carrom": 1,
-    "packages/engine/src/competition/tie-what-if.test.ts:volleyball": 1,
-    "packages/engine/src/competition/tiebreak-rule-award-alias.test.ts:cricket": 1
+    "apps/web/src/server/usecases/__tests__/stage-progression.test.ts:generic": 6
   },
   "moves": {}
 }

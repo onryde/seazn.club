@@ -406,7 +406,7 @@ describe("ci.yml regenerates the TypeScript stubs from the vendored proto and di
       [
         "working-directory written AFTER the drift step's run (key order must not hide it)",
         () => {
-          const end = "      # The engine rules reference (W2a ruling 75";
+          const end = "      # The monorepo's half of the engine rules reference checker";
           expect(REAL.split(end).length - 1, "anchor occurs once").toBe(1);
           return REAL.replace(end, `        working-directory: packages/scheduler\n\n${end}`);
         },
@@ -444,7 +444,7 @@ describe("ci.yml regenerates the TypeScript stubs from the vendored proto and di
         "a step moved out of the gates job",
         () => {
           const a = REAL.indexOf(REGEN_HEAD);
-          const e = REAL.indexOf("      # The engine rules reference (W2a ruling 75");
+          const e = REAL.indexOf("      # The monorepo's half of the engine rules reference checker");
           return `${REAL.slice(0, a)}${REAL.slice(e)}`.trimEnd() + `\n\n${REAL.slice(a, e)}`;
         },
         /step "Regenerate TypeScript proto stubs" is not in job "gates"/,
@@ -470,7 +470,7 @@ describe("ci.yml regenerates the TypeScript stubs from the vendored proto and di
       expect(gateProblems(other, "gates", [REGENERATE, DRIFT]), "a different job's continue-on-error is not the gates job's").toEqual([]);
       expect(gateProblems(other, "test", []).join(), "and it IS flagged on its own job").toMatch(/job "test" carries/);
       // A NEIGHBOURING step in the same job is not one of ours: its own `if:` stays its own.
-      for (const neighbour of ["Scheduler package tests (DB-free)", "Engine rules reference checker (DB-free)"]) {
+      for (const neighbour of ["Scheduler package tests (DB-free)", "Root rules reference checker (DB-free)"]) {
         const head = `      - name: ${neighbour}\n`;
         const sibling = after(head, "        if: false\n        continue-on-error: true\n        working-directory: elsewhere\n");
         expect(sibling, "the fixture really muted the neighbour").not.toBe(REAL);

@@ -101,8 +101,10 @@ const SPORT_KEYS: readonly string[] = builtinModules.map((m) => m.key);
 // scenario-catalogue.test.ts). The type side is erased.
 const ts = createRequire(import.meta.url)("typescript") as typeof TS;
 
-export const SCOPE_DIRS = ["packages/engine/src/scheduling", "packages/engine/src/competition"] as const;
-export const NAME_ROOTS = ["packages/engine/src", "apps/web/src"] as const;
+// Engine split 2b: packages/engine/src/{scheduling,competition} and the packages/engine/src name root left with the engine. The
+// engine's own ratchet (onryde/seazn.club.engine, scripts/single-sport.ts) scans them there; this one keeps the app's pins.
+export const SCOPE_DIRS: readonly string[] = [];
+export const NAME_ROOTS = ["apps/web/src"] as const;
 export const TEST_FILE = /\.test\.tsx?$/;
 export const SCOPE_NAME = /(standing|progression|seeding|tiebreak)[^/\\]*\.test\.tsx?$/i;
 export const REGISTRY_EXPORTS: ReadonlySet<string> = new Set(["builtinModules", "SPORT_KEYS"]);

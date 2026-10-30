@@ -446,8 +446,10 @@ function runBody(step: Step): string {
 
 describe("the workflows: every placement image comes from the pin", () => {
   it("scans every workflow (anti-vacuity), and finds exactly the seven jobs that docker-run the CI placement image", () => {
-    expect(WORKFLOW_FILES.length, "workflow files scanned").toBeGreaterThan(10);
-    expect(ALL_JOBS.length, "jobs found").toBeGreaterThan(30);
+    // Floors lowered by exactly what engine split 2b deleted (mutation.yml and engine-canary.yml; their 5 jobs and ci.yml's
+    // engine and engine-pack): 2 workflows, 7 jobs.
+    expect(WORKFLOW_FILES.length, "workflow files scanned").toBeGreaterThan(8);
+    expect(ALL_JOBS.length, "jobs found").toBeGreaterThan(23);
     const found = ALL_JOBS.filter(runsPlacement).map(key).sort();
     expect(found.length, "jobs found that run placement-service:ci").toBe(RUNNERS.length);
     expect(found).toEqual([...RUNNERS].sort());
@@ -532,7 +534,7 @@ describe("the workflows: every placement image comes from the pin", () => {
       expect(text, `${file}: a \`context: services/placement\` build action`).not.toMatch(/context:\s*services\/placement/);
     }
     expect(jobsScanned, "jobs scanned across every workflow").toBe(ALL_JOBS.length);
-    expect(jobsScanned, "and that is a real number of jobs").toBeGreaterThan(30);
+    expect(jobsScanned, "and that is a real number of jobs").toBeGreaterThan(23);
     let blocks = 0;
     for (const id of RUNNERS) {
       const [file, jobId] = id.split(":") as [string, string];
