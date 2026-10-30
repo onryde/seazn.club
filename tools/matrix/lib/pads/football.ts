@@ -29,15 +29,15 @@ import type { MatrixPadAdapter } from "./types.ts";
 /** The engine's football event types (football.eventSchemas; pinned). */
 export const FOOTBALL_GOAL = "football.goal";
 export const FOOTBALL_PERIOD = "football.period";
-/** football.tsx:859 (text-pinned in pad-adapters.test.ts). */
+/** football.tsx:752 (text-pinned in pad-adapters.test.ts). */
 export const FOOTBALL_PERIOD_TILE = "period";
-/** football.tsx:764 (text-pinned). */
+/** football.tsx:657 (text-pinned). */
 export const footballGoalTile = (side: "home" | "away"): string => `goal-${side}`;
 /** W2e: the engine's shoot-out kick (football.eventSchemas; pinned). */
 export const FOOTBALL_SHOOTOUT_KICK = "football.shootout.kick";
-/** football.tsx:733 kickSheetKey (text-pinned). */
+/** football.tsx:615-616 kickSheetKey (text-pinned). */
 export const footballKickTile = (side: "home" | "away"): string => `kick-${side}`;
-/** football.tsx:1115 kickSheet's option ids (text-pinned). */
+/** football.tsx:1026-1027 kickSheet's option ids (text-pinned). */
 export const FOOTBALL_KICK_SCORED = "scored";
 export const FOOTBALL_KICK_MISSED = "missed";
 
@@ -83,7 +83,7 @@ export const footballPad: MatrixPadAdapter = {
     {
       eventType: FOOTBALL_GOAL,
       writes: [FOOTBALL_GOAL],
-      why: "football.tsx:770 — the goal tile writes {by} alone; the generated minute has no tap (Step 0 2026-09-30: row keys [by]), so its judge holds `by` to the side credited and any other key the row carries to the event",
+      why: "football.tsx:663 — the goal tile writes {by} alone; the generated minute has no tap (Step 0 2026-09-30: row keys [by]), so its judge holds `by` to the side credited and any other key the row carries to the event",
       rowsFor: () => 1,
       // Fix round 1 (I-1): the side credited is the goal. A minute the pad
       // might store later must equal the generated one; a key the goal never

@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
+import { hockeyPadRules, icehockeyPadRules } from "@seazn/engine/pad";
 import { writeConfigIssues } from "@seazn/engine/sport";
 import { ARMAGEDDON_RESULTS, BoardgameMethod, DECISIVE_METHODS, DRAWN_METHODS, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
@@ -1454,8 +1455,40 @@ describe("the period kernel pins (hockey + icehockey share period-shared.ts)", (
     expect(shared).toContain("...(next === \"home\" || next === \"away\" ? (next === side ? {} : { disabled: true }) : {}),");
     expect(shared).toContain("action: { sheet: attemptSheetKey(side) },");
     expect(shared).toContain("sheets[attemptSheetKey(side)] = attemptSheet(spec, view, side);");
-    expect(shared).toContain("if (eventType === e.attempt) return phase === SHOOTOUT_PHASE;");
-    const sheet = shared.slice(shared.indexOf("function attemptSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side): GuidedSheetSpec {"));
+    // P1 (pad wave) moved the attempt's phase window out of this file: phaseAllows asks the engine's pad record, whose row is the
+    // fold's own WRONG_PHASE table (EVENT_PHASES, sports/period/kernel.ts). Pin the hand-off, that each skin hands it its own
+    // sport's record, and that record's verdict in every phase a real shoot-out walk reaches, folded: the shoot-out only (the
+    // rulebook's window — no attempt before it, in a period, or once decided), and in no phase at all under a cfg with no shoot-out.
+    expect(shared).toContain("if (!spec.rules.eventAllowedInPhase(eventType, readPhase(view.state), view.cfg)) return false;");
+    let verdicts = 0;
+    for (const [key, m, rules] of [["hockey", hockey, hockeyPadRules], ["icehockey", icehockey, icehockeyPadRules]] as const) {
+      expect(readFileSync(resolve(REPO, SKINS, `${key}.tsx`), "utf8")).toContain(`rules: ${key}PadRules,`);
+      let inShootout = 0;
+      for (const v of variantKeys(key)) {
+        const cfg = stageCfg(key, resolveSportCfg(key, v), "knockout", v);
+        const noShootout = { ...(cfg as Record<string, unknown>), shootout: null };
+        for (const path of ["shootout", "gws"] as const) {
+          const evs = streamOf(bracketReq(key, cfg, { kind: "win", winner: "home", path }));
+          const phases = new Set<string>();
+          for (let i = 0; i <= evs.length; i++) {
+            const phase = (foldStream(m, cfg, HOME, AWAY, evs.slice(0, i)).state as { phase?: unknown }).phase;
+            expect(typeof phase, `${key} ${v} ${path} after ${i} event(s)`).toBe("string");
+            phases.add(phase as string);
+          }
+          for (const phase of phases) {
+            const at = `${key} ${v} ${path} ${phase}`;
+            expect(rules.eventAllowedInPhase(`${key}.shootout.attempt`, phase, cfg), at).toBe(phase === "SHOOTOUT");
+            expect(rules.eventAllowedInPhase(`${key}.shootout.attempt`, phase, noShootout), `${at}, no shoot-out`).toBe(false);
+            if (phase === "SHOOTOUT") inShootout++;
+            verdicts += 2;
+          }
+        }
+      }
+      expect(inShootout, `${key}: a walk reached the shoot-out`).toBeGreaterThan(0);
+    }
+    console.info(`pad-adapters: period attempt window: ${verdicts} record verdict(s) over the phases real shoot-out walks reach`);
+    expect(verdicts).toBeGreaterThan(0);
+    const sheet =shared.slice(shared.indexOf("function attemptSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side): GuidedSheetSpec {"));
     expect(sheet.length, "period-shared.ts no longer declares attemptSheet").toBeLessThan(shared.length);
     expect(sheet).toMatch(/^[\s\S]*?event: e\.attempt,[\s\S]*?\{ id: "scored", [\s\S]*?\{ id: "missed", [\s\S]*?buildPayload: \(answers\) => \(\{ by, scored: answers\.outcome === "scored" \}\),/);
     expect([PERIOD_ATTEMPT_SCORED, PERIOD_ATTEMPT_MISSED]).toEqual(["scored", "missed"]);
@@ -1463,6 +1496,50 @@ describe("the period kernel pins (hockey + icehockey share period-shared.ts)", (
       expect(Object.keys(m.eventSchemas ?? {})).toContain(`${key}.shootout.attempt`);
       expect(pad.emits).toContain(`${key}.shootout.attempt`);
     }
+  });
+});
+
+describe("the football and period adapters' skin cites", () => {
+  // P1 (pad wave) moved football.tsx and period-shared.ts and stranded every line these two adapters cite; two of the doc cites
+  // (kickSheetKey, attemptSheetKey) were already stale before it, because nothing read them. Each cite is keyed by the
+  // declaration it documents (`why` for a fallback's), beside text its line(s) must hold. A cite in either adapter that this
+  // table does not name is refused, so a new one cannot rot unread. Two adapters, not every one: these are the skins P1 moved.
+  const NEEDLES: Readonly<Record<string, readonly string[]>> = {
+    "football.ts FOOTBALL_PERIOD_TILE": [`id: "${FOOTBALL_PERIOD_TILE}",`],
+    "football.ts footballGoalTile": ["id: `goal-${side}`,"],
+    "football.ts footballKickTile": ["export function kickSheetKey(side: Side): string {", "return `kick-${side}`;"],
+    "football.ts FOOTBALL_KICK_SCORED": [`{ id: "${FOOTBALL_KICK_SCORED}", `, `{ id: "${FOOTBALL_KICK_MISSED}", `],
+    "football.ts why": [`action: { event: { type: "${FOOTBALL_GOAL}", payload: { by: entrantOf(state, side) } } },`],
+    "period.ts AT_STAMP": ["payload: at === undefined ? { to: next } : { to: next, at },"],
+    "period.ts PERIOD_ADVANCE_TILE": [`id: "${PERIOD_ADVANCE_TILE}",`],
+    "period.ts periodGoalTile": ["id: `goal-${side}`,"],
+    "period.ts periodAttemptTile": ["export function attemptSheetKey(side: Side): string {", "return `attempt-${side}`;"],
+    "period.ts PERIOD_ATTEMPT_SCORED": [`{ id: "${PERIOD_ATTEMPT_SCORED}", `, `{ id: "${PERIOD_ATTEMPT_MISSED}", `],
+    "period.ts why": ["payload: at === undefined ? { to: next } : { to: next, at },"],
+  };
+
+  it("every `<skin>:<line>` cite in tools/matrix/lib/pads/{football,period}.ts lands on the line(s) holding what it documents, and every cite is read", () => {
+    const seen: string[] = [];
+    for (const [adapter, skinFile] of [["football.ts", "football.tsx"], ["period.ts", "period-shared.ts"]] as const) {
+      const src = readFileSync(resolve(REPO, "tools/matrix/lib/pads", adapter), "utf8");
+      const skinLines = readFileSync(resolve(REPO, SKINS, skinFile), "utf8").split("\n");
+      for (const c of src.matchAll(/([\w-]+\.tsx?):(\d+)(?:-(\d+))?/g)) {
+        expect(c[1], `${adapter} cites ${c[0]}, not its skin`).toBe(skinFile);
+        const onWhy = /^\s*why: "$/.test(src.slice(src.lastIndexOf("\n", c.index) + 1, c.index));
+        const key = `${adapter} ${onWhy ? "why" : /(?:const|function) (\w+)/.exec(src.slice(c.index))?.[1]}`;
+        const needles = NEEDLES[key];
+        expect(needles, `${key} (${c[0]}) is a cite this test does not read`).toBeDefined();
+        const from = Number(c[2]);
+        const to = c[3] === undefined ? from : Number(c[3]);
+        expect(to - from, `${key}: ${c[0]} is a range of at most three lines`).toBeGreaterThanOrEqual(0);
+        expect(to - from, `${key}: ${c[0]} is a range of at most three lines`).toBeLessThanOrEqual(2);
+        const cited = skinLines.slice(from - 1, to).join("\n");
+        for (const n of needles!) expect(cited, `${key}: ${skinFile}:${from}-${to} no longer holds it`).toContain(n);
+        seen.push(key);
+      }
+    }
+    console.info(`pad-adapters: ${seen.length} skin cite(s) resolved across the football and period adapters`);
+    expect(seen.sort()).toEqual(Object.keys(NEEDLES).sort());
   });
 });
 
