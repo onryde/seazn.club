@@ -264,7 +264,7 @@ describe("boardgamePadRules", () => {
     expect(refusal(() => boardFold(cfg, [start, board(0)]))?.code).toBe("INVALID_EVENT");
   });
 
-  it("BG-KO-4: tiebreakScores is the module's TIEBREAK_SCORES - no score, the narrow 1½–½ and the clean 2–0 as the row names them", () => {
+  it("BG-TS-1: tiebreakScores is the module's TIEBREAK_SCORES - no score, the narrow 1½–½ and the clean 2–0 as the row names them", () => {
     expect(boardgamePadRules.tiebreakScores).toBe(TIEBREAK_SCORES);
     expect(Object.isFrozen(TIEBREAK_SCORES)).toBe(true);
     // the row: a two-game mini-match is won 2–0 or 1½–½ (from the winner's side), or the score is not recorded - typed from the row
@@ -272,7 +272,7 @@ describe("boardgamePadRules", () => {
     expect(boardgamePadRules.tiebreakScores).toHaveLength(3);
   });
 
-  it("BG-KO-4: TIEBREAK_SCORES is also the generator's draw list, so its ORDER is a seeded stream - a draw of 0 / 0.5 / 0.99 yields none / 1½–½ / 2–0, as it did before the record existed (counted)", () => {
+  it("BG-TS-1: TIEBREAK_SCORES is also the generator's draw list, so its ORDER is a seeded stream - a draw of 0 / 0.5 / 0.99 yields none / 1½–½ / 2–0, as it did before the record existed (counted)", () => {
     // Reordering the list would rewrite every seeded tie-break stream; the pad only needs the SET. The expected order is the generator's
     // own, from before P4.1 (`[null, "1½–½", "2–0"]`), typed here rather than read from the constant.
     const state = boardFold(koCfg(["rapid"]), drawnGame);
@@ -297,7 +297,7 @@ describe("boardgamePadRules", () => {
     expect(draws.length, "one draw per offered score").toBe(boardgamePadRules.tiebreakScores.length);
   });
 
-  it("BG-KO-4 (open question, pending an owner ruling): every score offered folds, and the fold's laxness is PINNED, not ruled - it takes any CHESS_SCORE shape, 3–1, ½–½, 1–1 and a loser-first ½–1½ included; only a hyphen is refused (counted)", () => {
+  it("BG-TS-1 (open question, pending an owner ruling): every score offered folds, and the fold's laxness is PINNED, not ruled - it takes any CHESS_SCORE shape, 3–1, ½–½, 1–1 and a loser-first ½–1½ included; only a hyphen is refused (counted)", () => {
     let folded = 0;
     for (const rung of BoardgameRungTiebreak.shape.rung.options) {
       for (const score of boardgamePadRules.tiebreakScores) {

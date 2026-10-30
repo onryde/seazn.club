@@ -509,7 +509,7 @@ function pairingSheet(view: PadHostView): GuidedSheetSpec {
 
 /** D6 — the optional mini-match score, written from the WINNER's side (the engine validates any `CHESS_SCORE`). Ids
  *  are the score itself; "none" sends no score. The ORDER is this file's presentation (none, clean, narrow); WHICH scores are
- *  offered is `boardgamePadRules.tiebreakScores` (BG-KO-4, `null` = none), compared as a set in `__tests__/pad-rules-small.test.ts`. */
+ *  offered is `boardgamePadRules.tiebreakScores` (BG-TS-1, `null` = none), compared as a set in `__tests__/pad-rules-small.test.ts`. */
 const SCORES = ["none", "2–0", "1½–½"] as const;
 const SCORE_LABEL: Record<(typeof SCORES)[number], MessageKey> = {
   none: "pad.boardgame.tiebreak.score.none",

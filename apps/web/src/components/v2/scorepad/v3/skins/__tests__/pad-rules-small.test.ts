@@ -5,7 +5,7 @@
 //
 // Where an expected value could come from the engine's declaration it does; where the declaration is what a mutation would change, the
 // value is ALSO typed here from the rule rows (packages/engine/rules/{carrom,boardgame,generic}.md - CA-AD-2, CA-CN-1, CA-FM-1, BG-PA-1,
-// BG-KO-2, BG-KO-4, GN-SC-1, GN-SC-2), so that editing the engine's constant reds here even though the record, padSpec and the skin would
+// BG-KO-2, BG-TS-1, GN-SC-1, GN-SC-2), so that editing the engine's constant reds here even though the record, padSpec and the skin would
 // all follow it. Only some of those anchors are the rulebook's: 9 coins left (CA-CN-1) and the 3/25/29 bestOf and gameTo values are
 // Laws anchors. The 200 board / 500 final score / 50 tally press (BG-PA-1, GN-SC-1, GN-SC-2) are the pad's plausibility bounds, written
 // into the rows FROM the constants, so here they are change-detectors, and the rows are open owner questions. Every comparison counts;
@@ -202,7 +202,7 @@ describe("chess skin reads boardgamePadRules", () => {
     }
   });
 
-  it("BG-KO-4: the tie-break score step offers exactly the scores the record names (none, the narrow 1½–½, the clean 2–0), and every one folds", () => {
+  it("BG-TS-1: the tie-break score step offers exactly the scores the record names (none, the narrow 1½–½, the clean 2–0), and every one folds", () => {
     // typed from the row: no score, 1½–½ or 2–0
     const typed = new Set<string | null>([null, "1½–½", "2–0"]);
     expect(new Set(boardgamePadRules.tiebreakScores)).toEqual(typed);
