@@ -6122,6 +6122,8 @@
   "stream.youtube.refused.reconnect": "YouTube opnieuw koppelen",
   "stream.youtube.refused.retry": "Opnieuw proberen",
   "stream.youtube.refused.pickAnother": "Een andere bestemming gebruiken",
+  "stream.youtube.link.live": "Live op YouTube",
+  "stream.youtube.link.ended": "Op YouTube",
   "stream.phone.loading": "Telefoonstream laden…",
   "stream.phone.unavailable": "Streamen vanaf telefoon is nu niet beschikbaar. De overlay voor OBS werkt nog wel.",
   "stream.phone.switchedOff": "Streamen is uitgeschakeld voor deze organisatie. Neem contact met ons op om het weer aan te zetten.",

@@ -6122,6 +6122,8 @@
   "stream.youtube.refused.reconnect": "Reconnect YouTube",
   "stream.youtube.refused.retry": "Try again",
   "stream.youtube.refused.pickAnother": "Use another destination",
+  "stream.youtube.link.live": "Live on YouTube",
+  "stream.youtube.link.ended": "On YouTube",
   "stream.phone.loading": "Loading the phone stream…",
   "stream.phone.unavailable": "Phone streaming is unavailable right now. The OBS overlay still works.",
   "stream.phone.switchedOff": "Streaming is switched off for this organisation. Contact us to turn it back on.",

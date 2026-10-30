@@ -42771,6 +42771,16 @@
                                 "additionalProperties": false
                               }
                             },
+                            "youtubeVideoUrl": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "target": {
                               "type": "object",
                               "properties": {
@@ -42962,6 +42972,7 @@
                             "endedAt",
                             "replayUrl",
                             "replayParts",
+                            "youtubeVideoUrl",
                             "target",
                             "fixtureDecided",
                             "fixtureHeld",
@@ -43022,6 +43033,7 @@
                         "private": true
                       }
                     ],
+                    "youtubeVideoUrl": "example",
                     "target": {
                       "id": "example",
                       "kind": "youtube",
@@ -43555,6 +43567,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "youtubeVideoUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -43746,6 +43768,7 @@
                         "endedAt",
                         "replayUrl",
                         "replayParts",
+                        "youtubeVideoUrl",
                         "target",
                         "fixtureDecided",
                         "fixtureHeld",
@@ -43801,6 +43824,7 @@
                         "private": true
                       }
                     ],
+                    "youtubeVideoUrl": "example",
                     "target": {
                       "id": "example",
                       "kind": "youtube",
