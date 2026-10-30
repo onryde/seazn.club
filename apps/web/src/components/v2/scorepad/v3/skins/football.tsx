@@ -613,7 +613,19 @@ export function kickSheetKey(side: Side): string {
   return `kick-${side}`;
 }
 
-/** Whether this event may be dispatched at the ACTIVE band - see `footballPadRules.eventBands`. */
+/**
+ * Whether this event may be dispatched at the ACTIVE band. The bands are `footballPadRules.eventBands` (= `padSpec(cfg).fidelity`
+ * verbatim, one band per event type).
+ *
+ * Read by `buildTiles` for a reason the chassis's own band filter cannot cover: `filterTilesByBand` (pad-host.tsx) filters on the bands
+ * the org is ENTITLED to, while `buildPadView` drops an action whose band exceeds the ACTIVE band (`resolveActionView`, scorepad/view-model.ts) - and
+ * `createSkinDispatch` refuses anything the resulting view does not declare. So an entitled org scoring at band 0 would SEE every
+ * card/sub tile and every tap would throw. Withholding them here is the same "never offer what the engine will refuse" rule the rest
+ * of this programme keeps applying, one layer earlier.
+ *
+ * The other skins' band gates (badminton, carrom, tennis, volleyball) cite this as "football's own `EVENT_BAND` doc": that constant now
+ * lives in the engine (`FOOTBALL_FIDELITY`), and this is the doc they mean.
+ */
 function withinBand(eventType: string, band: FidelityBand): boolean {
   const declared = footballPadRules.eventBands[eventType];
   return declared === undefined || declared <= band;

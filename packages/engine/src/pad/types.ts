@@ -47,7 +47,7 @@ export interface FootballPadRules extends PadRulesBase {
   readonly playPhases: readonly string[];
   readonly teamSizeDefault: number;
   subWindowsCap(cfg: unknown): number | undefined;
-  /** Takes the cfg because the fold's period-marker refusals do (`cfg.halves`). */
+  /** `football.*` event types only: a `core.*` type is not answered (true), football's `applyEvent` refuses those by phase itself. Takes the cfg because the fold's period-marker refusals do (`cfg.halves`). */
   eventAllowedInPhase(eventType: string, phase: string, cfg: unknown): boolean;
   /** The `football.period` markers this cfg offers, in offer order (halves HT/FT, quarters QT/HT/3QT/FT, plus ET_HT/ET_FT with extra time). Added by P1.2. */
   periodMarkers(cfg: unknown): readonly string[];

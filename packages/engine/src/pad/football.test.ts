@@ -155,12 +155,25 @@ describe("the folded states the sweeps run over", () => {
   });
 });
 
+describe("footballPadRules: the record", () => {
+  it("is frozen, so a consumer cannot rewrite the engine's declarations through it", () => {
+    expect(Object.isFrozen(footballPadRules)).toBe(true);
+    expect(() => {
+      (footballPadRules as { eventBands: unknown }).eventBands = {};
+    }).toThrow(TypeError);
+    expect(() => {
+      delete (footballPadRules as { playPhases?: unknown }).playPhases;
+    }).toThrow(TypeError);
+    expect(Object.keys(footballPadRules).length).toBeGreaterThanOrEqual(12);
+  });
+});
+
 describe("footballPadRules: the vocabularies are the engine's own", () => {
-  it("cardColors / cardReasons / penaltyOutcomes / penaltyOffences are the zod enums' options", () => {
-    expect(footballPadRules.cardColors).toEqual(CardColor.options);
-    expect(footballPadRules.cardReasons).toEqual(CardReason.options);
-    expect(footballPadRules.penaltyOutcomes).toEqual(PenaltyOutcome.options);
-    expect(footballPadRules.penaltyOffences).toEqual(PenaltyOffence.options);
+  it("cardColors / cardReasons / penaltyOutcomes / penaltyOffences ARE the zod enums' options (toBe: a literal copy is a second source)", () => {
+    expect(footballPadRules.cardColors).toBe(CardColor.options);
+    expect(footballPadRules.cardReasons).toBe(CardReason.options);
+    expect(footballPadRules.penaltyOutcomes).toBe(PenaltyOutcome.options);
+    expect(footballPadRules.penaltyOffences).toBe(PenaltyOffence.options);
     // not vacuous: a shoot-out outcome ("scored") is NOT a penalty outcome (the kick that scores is a football.goal)
     expect(footballPadRules.cardColors).toHaveLength(3);
     expect(footballPadRules.cardReasons.length).toBeGreaterThanOrEqual(13);
@@ -168,17 +181,17 @@ describe("footballPadRules: the vocabularies are the engine's own", () => {
     expect(footballPadRules.penaltyOffences.length).toBeGreaterThanOrEqual(8);
   });
 
-  it("agree with what padSpec offers, for every cfg football declares", () => {
+  it("are the very arrays padSpec offers (toBe), for every cfg football declares", () => {
     const cfgs = declaredCfgs(football);
     expect(cfgs.length).toBeGreaterThanOrEqual(2);
     let compared = 0;
     for (const { name, cfg } of cfgs) {
       const spec = padSpec(cfg);
-      expect(padEnumValues(spec, "football.card", "color"), `${name} card color`).toEqual(footballPadRules.cardColors);
-      expect(padEnumValues(spec, "football.card", "reason"), `${name} card reason`).toEqual(footballPadRules.cardReasons);
-      expect(padEnumValues(spec, "football.sinbin.start", "reason"), `${name} sin bin reason`).toEqual(footballPadRules.cardReasons);
-      expect(padEnumValues(spec, "football.penalty", "outcome"), `${name} penalty outcome`).toEqual(footballPadRules.penaltyOutcomes);
-      expect(padEnumValues(spec, "football.penalty", "offence"), `${name} penalty offence`).toEqual(footballPadRules.penaltyOffences);
+      expect(padEnumValues(spec, "football.card", "color"), `${name} card color`).toBe(footballPadRules.cardColors);
+      expect(padEnumValues(spec, "football.card", "reason"), `${name} card reason`).toBe(footballPadRules.cardReasons);
+      expect(padEnumValues(spec, "football.sinbin.start", "reason"), `${name} sin bin reason`).toBe(footballPadRules.cardReasons);
+      expect(padEnumValues(spec, "football.penalty", "outcome"), `${name} penalty outcome`).toBe(footballPadRules.penaltyOutcomes);
+      expect(padEnumValues(spec, "football.penalty", "offence"), `${name} penalty offence`).toBe(footballPadRules.penaltyOffences);
       compared += 5;
     }
     expect(compared).toBeGreaterThanOrEqual(10);
@@ -276,8 +289,9 @@ describe("footballPadRules.eventAllowedInPhase", () => {
     let legalSeen = 0;
     for (const { label, cfg, steps } of REACH) {
       const state = foldSteps(cfg, steps);
-      const offered = footballPadRules.periodMarkers(cfg);
-      const accepts = ALL_MARKERS.filter((marker) => offered.includes(marker) && verdictOf(state, "football.period", { phase: marker }) !== "wrong-phase");
+      // the fold side is NOT intersected with what the record offers: every marker is put to the real fold, so a marker the fold would
+      // accept but the record never offers (an extra-time phase reached without the flag) shows up as a difference
+      const accepts = ALL_MARKERS.filter((marker) => verdictOf(state, "football.period", { phase: marker }) === "accepted");
       expect(footballPadRules.legalPeriodMarkers(state.phase, cfg), `${label}: markers legal in ${state.phase}`).toEqual(accepts);
       expect(footballPadRules.eventAllowedInPhase("football.period", state.phase, cfg), label).toBe(accepts.length > 0);
       compared++;
@@ -290,14 +304,14 @@ describe("footballPadRules.eventAllowedInPhase", () => {
     expect(legalSeen).toBe(inPlayStates);
   });
 
-  it("fails open for a type it does not declare, never throws on a prototype key, and degrades a missing cfg to the halves mode", () => {
+  it("fails open for a type it does not declare, never throws on a prototype key, and reads a cfg through the schema (an empty cfg is the halves default)", () => {
     expect(footballPadRules.eventAllowedInPhase("football.var.review", "SHOOTOUT", cfgOf())).toBe(true);
     for (const key of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
       expect(footballPadRules.eventAllowedInPhase(key, "H1", {}), key).toBe(true);
     }
-    expect(footballPadRules.eventAllowedInPhase("football.goal", "H1", undefined)).toBe(true);
-    expect(footballPadRules.eventAllowedInPhase("football.period", "H1", undefined)).toBe(true); // halves: H1 -> HT
-    expect(footballPadRules.eventAllowedInPhase("football.period", "Q2", undefined)).toBe(false); // quarters-only phase
+    expect(footballPadRules.eventAllowedInPhase("football.goal", "H1", {})).toBe(true);
+    expect(footballPadRules.eventAllowedInPhase("football.period", "H1", {})).toBe(true); // halves default: H1 -> HT
+    expect(footballPadRules.eventAllowedInPhase("football.period", "Q2", {})).toBe(false); // quarters-only phase
     expect(footballPadRules.eventAllowedInPhase("football.goal", "", {})).toBe(false);
   });
 });
@@ -322,12 +336,134 @@ describe("footballPadRules.periodMarkers", () => {
     expect(lists.size).toBeGreaterThanOrEqual(4);
   });
 
-  it("reads a partial cfg the way the skin does: an absent halves is halves, an absent extraTime is no extra time", () => {
+  it("reads the cfg through the schema: an absent halves is the schema's halves, an absent extraTime is no extra time", () => {
     expect(footballPadRules.periodMarkers({})).toEqual(["HT", "FT"]);
-    expect(footballPadRules.periodMarkers(null)).toEqual(["HT", "FT"]);
     expect(footballPadRules.periodMarkers({ halves: 4 })).toEqual(["QT", "HT", "3QT", "FT"]);
-    expect(footballPadRules.periodMarkers({ extraTime: { enabled: true } })).toEqual(["HT", "FT", "ET_HT", "ET_FT"]);
-    expect(footballPadRules.periodMarkers({ extraTime: { enabled: false } })).toEqual(["HT", "FT"]);
+    expect(footballPadRules.periodMarkers({ extraTime: { enabled: true, halfMinutes: 15 } })).toEqual(["HT", "FT", "ET_HT", "ET_FT"]);
+    expect(footballPadRules.periodMarkers({ extraTime: { enabled: false, halfMinutes: 15 } })).toEqual(["HT", "FT"]);
+  });
+
+  it("refuses an invalid cfg with the schema's own error rather than reading it as halves (types.ts: never a fallback the schema does not declare)", () => {
+    const invalid: [string, unknown][] = [
+      ["null", null],
+      ["undefined", undefined],
+      ["an array", []],
+      ["halves as a string", { halves: "4" }],
+      ["halves 3", { halves: 3 }],
+      ["extraTime without halfMinutes", { extraTime: { enabled: true } }],
+    ];
+    let refused = 0;
+    for (const [name, cfg] of invalid) {
+      // every member reads the cfg through the same schema, so every member refuses it
+      expect(() => footballPadRules.periodMarkers(cfg), `periodMarkers: ${name}`).toThrow();
+      expect(() => footballPadRules.legalPeriodMarkers("H1", cfg), `legalPeriodMarkers: ${name}`).toThrow();
+      expect(() => footballPadRules.eventAllowedInPhase("football.goal", "H1", cfg), `eventAllowedInPhase: ${name}`).toThrow();
+      expect(() => footballPadRules.subWindowsCap(cfg), `subWindowsCap: ${name}`).toThrow();
+      expect(() => footballPadRules.reentryAllowed(cfg), `reentryAllowed: ${name}`).toThrow();
+      refused += 5;
+    }
+    expect(refused).toBe(invalid.length * 5);
+  });
+});
+
+describe("extra time is unreachable without the flag (the assumption behind offering ET_HT / ET_FT only when extraTime.enabled)", () => {
+  // applyPeriod accepts ET_HT in ET_H1 and ET_FT in ET_H2 WITHOUT testing cfg.extraTime.enabled, and periodMarkers offers them only WITH it. The
+  // two agree only while no cfg lacking the flag can ever be in an extra-time phase. That is a property of the fold (resolveFullTime is the one
+  // way in), so it is checked on the fold: every state reachable from kick-off by the events a scorer can send, breadth-first, deduplicated.
+  const DEPTH = 7;
+  const ALPHABET: readonly Step[] = [
+    ["core.start"],
+    ["football.goal", { by: "H" }],
+    ["football.goal", { by: "A" }],
+    ...ALL_MARKERS.map((marker): Step => ["football.period", { phase: marker }]),
+    ["football.shootout.kick", { by: "H", scored: true }],
+    ["football.shootout.kick", { by: "A", scored: false }],
+    ["core.finalize"],
+    ["core.abandon", { reason: "floodlights" }],
+  ];
+
+  function explore(cfg: FootballCfg): FootballState[] {
+    const keyOf = (s: FootballState): string => `${s.phase}|${s.goals.home}-${s.goals.away}|${s.shootout?.kicks.length ?? "-"}|${s.outcome?.kind ?? "-"}`;
+    const start = foldSteps(cfg, []);
+    const seen = new Map<string, FootballState>([[keyOf(start), start]]);
+    let frontier = [start];
+    let seq = 100;
+    for (let depth = 0; depth < DEPTH; depth++) {
+      const next: FootballState[] = [];
+      for (const state of frontier) {
+        for (const [type, payload] of ALPHABET) {
+          let after: FootballState;
+          try {
+            after = football.apply(state, makeEnvelope(seq++, { type, payload: payload ?? {} }) as never, { strict: true });
+          } catch {
+            continue; // an event the fold refuses in this state is not an edge
+          }
+          if (after.goals.home + after.goals.away > 2) continue; // goals only decide level vs not: two are enough to keep the walk small
+          const key = keyOf(after);
+          if (!seen.has(key)) {
+            seen.set(key, after);
+            next.push(after);
+          }
+        }
+      }
+      frontier = next;
+    }
+    return [...seen.values()];
+  }
+
+  const EXTRA_TIME = { enabled: true, halfMinutes: 15 };
+  const WITHOUT: { name: string; cfg: FootballCfg }[] = [
+    ...[2, 4].flatMap((halves) =>
+      [false, true].map((shootout) => ({ name: `halves ${halves}, shootout ${shootout}`, cfg: cfgOf({ halves, shootout }) })),
+    ),
+    ...declaredCfgs(football).filter(({ cfg }) => !cfg.extraTime.enabled).map(({ name, cfg }) => ({ name: `declared ${name}`, cfg })),
+  ];
+  const WITH: { name: string; cfg: FootballCfg }[] = [2, 4].map((halves) => ({
+    name: `halves ${halves} + extra time + shootout`,
+    cfg: cfgOf({ halves, shootout: true, extraTime: EXTRA_TIME }),
+  }));
+  const isExtraTime = (phase: string): boolean => phase === "ET_H1" || phase === "ET_H2";
+
+  it("no cfg without the flag reaches an extra-time phase, and the pad offers no extra-time marker there", () => {
+    expect(WITHOUT.length).toBeGreaterThanOrEqual(5);
+    let statesChecked = 0;
+    let lateStates = 0;
+    for (const { name, cfg } of WITHOUT) {
+      const states = explore(cfg);
+      const phases = new Set(states.map((state) => state.phase));
+      // the walk must get as far as full time and beyond, or "never reached ET" would hold of any walk that stops early
+      expect(phases.has(cfg.halves === 4 ? "Q4" : "H2"), `${name}: the walk reaches the last regulation period`).toBe(true);
+      expect(phases.has("done"), `${name}: the walk reaches a decided match`).toBe(true);
+      if (cfg.shootout) expect(phases.has("SHOOTOUT"), `${name}: a level full time goes to the kicks`).toBe(true);
+      for (const state of states) {
+        expect(isExtraTime(state.phase), `${name}: ${state.phase} is reachable although extraTime is not enabled`).toBe(false);
+        // and the record agrees with the fold marker by marker, with no intersection with what it offers
+        const accepts = ALL_MARKERS.filter((marker) => verdictOf(state, "football.period", { phase: marker }) === "accepted");
+        expect(footballPadRules.legalPeriodMarkers(state.phase, cfg), `${name}: markers legal in ${state.phase}`).toEqual(accepts);
+        expect(accepts.some((marker) => marker.startsWith("ET_")), `${name}: the fold accepts an extra-time marker in ${state.phase}`).toBe(false);
+        statesChecked++;
+        if (state.phase === "SHOOTOUT" || state.phase === "done") lateStates++;
+      }
+    }
+    expect(statesChecked).toBeGreaterThan(250);
+    expect(lateStates).toBeGreaterThan(40);
+  });
+
+  it("the same walk DOES reach both extra-time phases when the flag is on (the walk can see them; the offer and the fold agree there)", () => {
+    let statesChecked = 0;
+    for (const { name, cfg } of WITH) {
+      const states = explore(cfg);
+      const phases = new Set(states.map((state) => state.phase));
+      expect(phases.has("ET_H1"), `${name}: ET_H1`).toBe(true);
+      expect(phases.has("ET_H2"), `${name}: ET_H2`).toBe(true);
+      for (const state of states) {
+        const accepts = ALL_MARKERS.filter((marker) => verdictOf(state, "football.period", { phase: marker }) === "accepted");
+        expect(footballPadRules.legalPeriodMarkers(state.phase, cfg), `${name}: markers legal in ${state.phase}`).toEqual(accepts);
+        statesChecked++;
+      }
+    }
+    expect(WITH.length).toBe(2);
+    expect(statesChecked).toBeGreaterThan(80);
   });
 });
 
@@ -364,7 +500,6 @@ describe("footballPadRules.subWindowsCap", () => {
     const cfg = cfgOf({ rollingSubs: true });
     expect(footballPadRules.subWindowsCap(cfg)).toBeUndefined();
     expect(footballPadRules.subWindowsCap({})).toBeUndefined();
-    expect(footballPadRules.subWindowsCap(null)).toBeUndefined();
     expect(windowsAccepted(cfg, 6)).toEqual({ accepted: 6, refusal: undefined });
   });
 
@@ -409,7 +544,6 @@ describe("footballPadRules.reentryAllowed", () => {
 
   it("reads an absent rollingSubs as no return (the 11-a-side Law), and a partial cfg as such", () => {
     expect(footballPadRules.reentryAllowed({})).toBe(false);
-    expect(footballPadRules.reentryAllowed(null)).toBe(false);
     expect(footballPadRules.reentryAllowed({ rollingSubs: true })).toBe(true);
     expect(footballPadRules.reentryAllowed({ rollingSubs: false })).toBe(false);
   });

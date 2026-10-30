@@ -720,7 +720,9 @@ const CARD_PHASES: readonly Phase[] = Object.freeze<Phase[]>(["pre", ...PLAY_PHA
  * offered and what the fold accepts cannot drift. Before this table each guard spelled its own test (`isPlayPhase` x6, one inline
  * done/final/abandoned test, one `!== "SHOOTOUT"`), and the v3 skin kept a seventh copy.
  *
- * `core.*` types are not here: the kernel's own guards judge them (`applyEvent`).
+ * `core.*` types are not here, and that is not "the kernel judges them": `applyEvent` is football's own and it refuses them by phase
+ * itself (`core.start` outside `pre`, `core.finalize` while the fixture is undecided, `core.forfeit` / `core.abandon` once it is
+ * decided - all WRONG_PHASE). `eventAllowedInPhase` therefore says nothing about a `core.*` type; it answers for `football.*` only.
  */
 export const EVENT_PHASES: Readonly<Record<PhaseGatedType, readonly Phase[]>> = Object.freeze({
   "football.goal": PLAY_PHASES,
@@ -745,8 +747,9 @@ function acceptsPhase(type: PhaseGatedType, phase: Phase): boolean {
  * scorer is offered and the arm the fold takes are one table. Q1 is "H1" reused, never a marker of its own. The key order is the
  * order the markers are offered in.
  *
- * `extraTime` is not mode-gated: its arms never were (an extra-time phase is only reachable under `cfg.extraTime.enabled`, but
- * `applyPeriod` does not test the flag). Only the OFFER is (`periodMarkers`).
+ * `extraTime` is not mode-gated: its arms never were (`applyPeriod` does not test the flag). Only the OFFER is (`periodMarkers`). That
+ * is safe because an extra-time phase is entered from `resolveFullTime` alone, under `cfg.extraTime.enabled`; the guard test
+ * "extra time is unreachable without the flag" (pad/football.test.ts) explores the real fold to keep it so.
  */
 export const PERIOD_MARKER_PHASE: Readonly<Record<"halves" | "quarters" | "extraTime", Readonly<Record<string, Phase>>>> = Object.freeze({
   halves: Object.freeze<Record<string, Phase>>({ HT: "H1", FT: "H2" }),
@@ -793,8 +796,9 @@ export function legalPeriodMarkers(phase: string, cfg: PeriodModeCfg): string[] 
  * Whether the FOLD accepts `eventType` in `phase` under `cfg` - the question every pad tile and the More sheet ask before offering an
  * action. A table lookup (EVENT_PHASES) for the fixed gates; for `football.period`, whether any marker is legal here.
  *
- * FAILS OPEN for a type this module does not gate (a future `football.*` event, or a `core.*` type the kernel judges itself): the
- * engine test that every `eventSchemas` key is classified is what stops a new type slipping through unclassified.
+ * FAILS OPEN for a type this module does not gate: a future `football.*` event, or any `core.*` type (football's `applyEvent` refuses
+ * those by phase itself, see EVENT_PHASES, so `true` here means "not answered", not "the fold accepts it"). The engine test that every
+ * `eventSchemas` key is classified is what stops a new `football.*` type slipping through unclassified.
  */
 export function eventAllowedInPhase(eventType: string, phase: string, cfg: PeriodModeCfg): boolean {
   if (eventType === "football.period") return legalPeriodMarkers(phase, cfg).length > 0;

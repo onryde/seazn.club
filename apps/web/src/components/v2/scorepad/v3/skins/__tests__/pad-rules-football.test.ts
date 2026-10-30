@@ -172,6 +172,9 @@ describe("the tiles follow the engine's bands", () => {
   });
 });
 
+/** Every football.period marker the fold has an arm for (Law 7 half-time/full-time, mini-soccer quarters, extra time), typed here, not read from the record. */
+const ALL_PERIOD_MARKERS = ["QT", "HT", "3QT", "FT", "ET_HT", "ET_FT"];
+
 describe("the phase gate: what the More sheet is told to hide is exactly what the fold refuses", () => {
   it("refusedEventTypes equals the fold's WRONG_PHASE set, in every folded phase, for every cfg shape", () => {
     const phases = foldedPhases();
@@ -183,7 +186,9 @@ describe("the phase gate: what the More sheet is told to hide is exactly what th
       const types = Object.keys(rules.eventBands);
       const refusedByFold = types.filter((type) => {
         if (type === "football.period") {
-          const accepted = rules.periodMarkers(fp.cfg).some((marker) => phaseVerdict(fp.cfg, fp.state, type, { phase: marker }) !== "wrong-phase");
+          // every marker is put to the fold, not just the ones the record offers: a marker the fold would take but the record never offers
+          // (an extra-time phase reached without the flag) must show up here as a difference, not be filtered out by the subject under test
+          const accepted = ALL_PERIOD_MARKERS.some((marker) => phaseVerdict(fp.cfg, fp.state, type, { phase: marker }) !== "wrong-phase");
           return !accepted;
         }
         return phaseVerdict(fp.cfg, fp.state, type, probeOf(type, fp.state)) === "wrong-phase";
