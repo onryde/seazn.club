@@ -1,0 +1,89 @@
+{
+ "batch": "2b-readers",
+ "note": "Test-id ledger for engine-split Phase 2b Batch R (readers onto the installed surface: Tasks R1 and R2), built against base 3372ccdec2 (origin/main). Ids are relative to each collection ROOT: the engine ones to packages/engine, the tools/matrix ones to tools/matrix, the apps/web ones to apps/web. Run: node scripts/lib/test-parity.mjs --before <web>=<base>/apps/web --before <matrix>=<base>/tools/matrix --before <engine>=<base>/packages/engine --after <web>=apps/web --after <matrix>=tools/matrix --after <engine>=packages/engine --ledger this-file, each report collected with `vitest run --isolate -t __parity_collect_only__` over the SEVEN reader files (apps/web: double-walkover-seating, public-player-matches, timeline, player-matches.test.tsx; tools/matrix: applicability, streams, scenarios) and the four engine files this batch touches (dossiers, corpora, rules-reference, publish-manifest). RESULT: the seven reader files hold the same tests before and after (web 183 -> 183, matrix 979 -> 979); the only changes are the three retitles and the thirteen new tests below.",
+ "entries": [
+  {
+   "id": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the published testkit barrel exports the rules parser, and its disk-reading closure is exactly the rules reference",
+   "fate": "rewritten",
+   "to": "test/rules-reference.test.ts › rules reference (ruling 75, spec §6) › the published testkit barrel exports the rules parser, and its disk-reading closure is exactly the rules reference and the corpora reader",
+   "reason": "2b R1: the testkit barrel gains a second disk reader (corpora.ts), so the closure pin names two files; the title said one. Same test, re-pinned on purpose."
+  },
+  {
+   "id": "__tests__/applicability.test.ts › DECIDERS — every key read is declared by the sport's configSchema › each decider reads only keys in <sport>.schema.json's configSchema.properties (reads recorded, not typed)",
+   "fate": "rewritten",
+   "to": "__tests__/applicability.test.ts › DECIDERS — every key read is declared by the sport's configSchema › each decider reads only keys in the sport's configSchema.properties (reads recorded, not typed)",
+   "reason": "2b R2: configSchema's keys are read off the module's exported configSchema (z.toJSONSchema, the schema-snapshot options), not off <sport>.schema.json in the engine tree; the title named the file. Same assertions over the same 5 sports."
+  },
+  {
+   "id": "__tests__/applicability.test.ts › M5's tie arm — a level result supportsDraws does not declare (I-1) › every engine source that emits a `kind: \"tie\"` outcome lives under a sport LEVEL_PROBES probes, and every probe has one",
+   "fate": "rewritten",
+   "to": "__tests__/applicability.test.ts › M5's tie arm — a level result supportsDraws does not declare (I-1) › every sport whose module declares a tie as reachable (reachableResultKinds) is a sport LEVEL_PROBES probes, and every probe has one",
+   "reason": "2b R2: the tie-capable sports are read from each module's reachableResultKinds over its declared configs and every stage kind (cricket only, as the source scan found), not from `kind: \"tie\"` in the engine's source text; the title named the scan. Same assertion."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › byeDeltas › equals the fixture file",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › byeDeltas › pins a bye delta for every shipped module",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › goldenCorpora › holds exactly one corpus per shipped module, in the directory the engine registers for it (every sport, none extra)",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › goldenCorpora › names each corpus by its sports/ directory and its module key, and that key is the corpus's own",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › goldenCorpora › reads the disk on each call: a caller that edits what it got does not change the next call's",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › goldenCorpora › returns every corpus on disk, in path order, each equal to its file",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › readGoldenCorpora (the walker, on scratch trees) › refuses a corpus file sitting directly under the sports directory (no sport to name it by)",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › readGoldenCorpora (the walker, on scratch trees) › refuses a corpus that is not a JSON object with a key",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › readGoldenCorpora (the walker, on scratch trees) › refuses a corpus whose own key is not its file name's",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › readGoldenCorpora (the walker, on scratch trees) › refuses a tree with no corpus: a sweep over nothing would pass for the wrong reason",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › readGoldenCorpora (the walker, on scratch trees) › walks sub-directories, takes only *.golden.json, and orders by path whatever order the walk finds them in",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "src/testkit/corpora.test.ts › the testkit barrel › hands a consumer exactly the two readers, not the directory walker behind them",
+   "fate": "added",
+   "reason": "2b R1: new file, the testkit's corpora and bye-deltas readers (and the internal walker's guards)."
+  },
+  {
+   "id": "test/publish-manifest.test.ts › publish manifest › copies the recorded corpora and the bye deltas to the same relative paths under dist, as the third and last build step",
+   "fate": "added",
+   "reason": "2b R1: build:dist gains a third step (scripts/copy-dist-data.mjs) that puts the corpora and bye deltas under dist/; this runs the step as declared in a scratch package."
+  }
+ ]
+}
