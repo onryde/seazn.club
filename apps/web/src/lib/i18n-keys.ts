@@ -7780,6 +7780,8 @@ export type DictionaryKey =
   | "stream.title"
   | "stream.url.label"
   | "stream.url.placeholder"
+  | "stream.youtube.link.ended"
+  | "stream.youtube.link.live"
   | "stream.youtube.refused.nothing"
   | "stream.youtube.refused.pickAnother"
   | "stream.youtube.refused.reconnect"

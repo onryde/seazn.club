@@ -106,6 +106,7 @@ describe("relay wire enums equal their declarations", () => {
     expect(Object.keys(S.StreamSessionCurrent.shape).sort()).toEqual([
       "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureHeld", "fixtureId",
       "health", "id", "ingest", "mode", "output", "overlay", "replayParts", "replayUrl", "restart", "startCause", "startedAt", "state", "target",
+      "youtubeVideoUrl",
     ]);
     expect(Object.keys(S).filter((k) => /^CaptureQr/.test(k))).toEqual([]);
   });
@@ -275,7 +276,7 @@ describe("relay request schemas refuse what they must", () => {
   it("StreamSessionCurrent is strict — a v1 `qr` riding along is refused", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "warming", desiredState: "live", failReason: null,
-      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null, replayParts: [],
+      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null,
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
       startCause: "organiser", restart: null, countdown: null,
     };

@@ -6123,6 +6123,8 @@
   "stream.youtube.refused.reconnect": "Reconnecter YouTube",
   "stream.youtube.refused.retry": "Réessayer",
   "stream.youtube.refused.pickAnother": "Utiliser une autre destination",
+  "stream.youtube.link.live": "En direct sur YouTube",
+  "stream.youtube.link.ended": "Sur YouTube",
   "stream.phone.loading": "Chargement de la diffusion depuis le téléphone…",
   "stream.phone.unavailable": "La diffusion depuis le téléphone est indisponible pour le moment. L'habillage pour OBS fonctionne toujours.",
   "stream.phone.switchedOff": "La diffusion est désactivée pour cette organisation. Contactez-nous pour la réactiver.",

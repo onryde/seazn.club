@@ -6123,6 +6123,8 @@
   "stream.youtube.refused.reconnect": "Reconectar YouTube",
   "stream.youtube.refused.retry": "Intentarlo de nuevo",
   "stream.youtube.refused.pickAnother": "Usar otro destino",
+  "stream.youtube.link.live": "En directo en YouTube",
+  "stream.youtube.link.ended": "En YouTube",
   "stream.phone.loading": "Cargando la transmisión desde el móvil…",
   "stream.phone.unavailable": "La transmisión desde el móvil no está disponible ahora mismo. El rótulo para OBS sigue funcionando.",
   "stream.phone.switchedOff": "La emisión está desactivada para esta organización. Contáctanos para volver a activarla.",

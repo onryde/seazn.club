@@ -86,6 +86,8 @@ import {
   restartLine,
   YOUTUBE_REFUSAL_FIX,
   youtubeRefusalOf,
+  youtubeLinkOf,
+  type YoutubeLink,
   type CreateFailureCode,
   type CreateErrorHolder,
   type PhoneTabState,
@@ -93,7 +95,7 @@ import {
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fmtNumber, fmtTime } from "@/lib/format";
-import { STREAMING_PAGE_HREF, YOUTUBE_REFUSAL_REMEDY, isYoutubeUrl, replayRows, type YoutubeRefusalCode } from "@/lib/youtube";
+import { STREAMING_PAGE_HREF, YOUTUBE_REFUSAL_REMEDY, isYoutubeUrl, linkIsOneOfParts, replayRows, type YoutubeRefusalCode } from "@/lib/youtube";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamMode, StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
@@ -1246,6 +1248,8 @@ export function PhoneTab({
         // I-1: off the RAW view, not `shown` — Start another / Try again dismiss the card, and the fixture's reuse window
         // is exactly what the next start is asking about. No session ever → nothing consumed → no window (W23).
         restart={view?.restart ?? null}
+        // Owner 2026-10-30: off the RAW view as well — the match's video stays linked at Ready after Start another.
+        youtube={youtubeLinkOf(view)}
         pickFailed={pickFailed}
         // n1: a pick is the organiser's own answer — the refusal that was about the previous choice (removed, held by
         // another match, or refused by YouTube — T12) goes with it. Any other refusal stays until the next attempt. (The hold needs no reset: a picked
@@ -1699,6 +1703,9 @@ export interface PhoneTabBodyProps {
   /** W23 (I-1): the RAW projection's restart allowance — null with no reuse window open. `free` is what admission would
    *  waive the credit for; at balance 0 it is what keeps Go live reachable instead of the forced chooser. */
   restart: StreamSessionCurrent["restart"];
+  /** Owner 2026-10-30: the LATEST session's video on YouTube (`youtubeLinkOf` over the RAW projection, so Start another keeps it at
+   *  Ready) — null with none: a pasted key, a failed broadcast, a disconnected channel, no session. The "On YouTube" card. */
+  youtube: YoutubeLink | null;
   onSelectTarget: (id: string) => void;
   /** YouTube Connect T12: a refusal's "Use another destination" — the panel clears the refusal and bumps `pickerOpenSignal`, which
    *  opens the picker's list and focuses it. */
@@ -2063,6 +2070,30 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
     </details>
   );
 
+  // Owner 2026-10-30: the match's video on YouTube — one more card where the Paired card is (Ready's right column, under it; after it
+  // in the waiting and live stacks; inside the ended and failed cards). Laid out as the Paired card's own row: what it is on the left,
+  // the link on the right, wrapping under it on a narrow card. The link is styled as "Manage destinations" and wears the external-link
+  // icon, not YouTube's: the spec's Branding names the only two places the logo appears (a channel row, Watch replay).
+  const youtubeCard = p.youtube ? (
+    <div data-testid="stream-youtube-link-card" data-live={p.youtube.live ? "true" : "false"} className="min-w-0 rounded-lg bg-white ring-1 ring-purple-100">
+      <div className="flex min-h-11 flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-1.5 text-sm">
+        <p data-testid="stream-youtube-link-status" className="min-w-0 font-medium text-slate-800">
+          {msg(p.youtube.live ? "stream.youtube.link.live" : "stream.youtube.link.ended")}
+        </p>
+        <a
+          data-testid="stream-youtube-link"
+          href={p.youtube.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`${LINK} inline-flex min-h-11 items-center gap-1 text-sm md:min-h-0`}
+        >
+          {msg("streaming.youtube.replay.open")}
+          <ExternalLink aria-hidden className="h-3.5 w-3.5" strokeWidth={1.8} />
+        </a>
+      </div>
+    </div>
+  ) : null;
+
   // PR-2 T10 (§7.1, Option A states 1–2): the switch under the picker — the whole row is the control (44 px), its caption
   // (the server's delay) only while on. Checked is the read model's `auto.enabled`, or the flip in flight.
   const autoOn = p.autoPending ?? p.phone?.auto?.enabled ?? false;
@@ -2362,7 +2393,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             {autoSwitch}
           </div>
           <div
-            className={`min-w-0 md:col-start-2 md:row-start-1 ${scoreBlock ? "" : "md:row-span-2"} ${ready === "no_phone" ? "" : "md:mt-6"}`}
+            className={`min-w-0 space-y-3 md:col-start-2 md:row-start-1 ${scoreBlock ? "" : "md:row-span-2"} ${ready === "no_phone" ? "" : "md:mt-6"}`}
           >
             {ready === "no_phone" ? (
               <div data-testid="stream-code-card" className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-purple-100">
@@ -2372,6 +2403,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             ) : (
               codeDisclosure
             )}
+            {/* Owner 2026-10-30: under the Paired (or code) card — the next child, so on a phone it stacks right after it. */}
+            {youtubeCard}
           </div>
           {scoreBlock && <div className="min-w-0 md:col-span-2 md:row-start-2">{scoreBlock}</div>}
           <div className={`min-w-0 space-y-4 md:col-start-1 ${scoreBlock ? "md:row-start-3" : "md:row-start-2"}`}>
@@ -2444,6 +2477,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             {msg("stream.phone.cancel")}
           </button>
           {!legacy && codeDisclosure}
+          {youtubeCard}
         </div>
       )}
 
@@ -2520,6 +2554,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             </div>
           </details>
           {!legacy && state === "live" && codeDisclosure}
+          {youtubeCard}
         </div>
       )}
 
@@ -2617,6 +2652,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               </div>
             );
           })()}
+          {/* Owner 2026-10-30: the match's video — until its broadcast completes and Watch replay above links it (the same video is
+              never linked twice: `linkIsOneOfParts`, the rule the replay row and the public page apply). */}
+          {p.youtube && !linkIsOneOfParts(p.youtube.url, p.view.replayParts) && youtubeCard}
           <div className="flex flex-col gap-2 md:flex-row">
             <button
               type="button"
@@ -2640,6 +2678,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             {/* m11: V410's fail_reason is a nullable text column with no CHECK — a row with none is not a machine crash. */}
             {msg(failReasonKey(p.view))}
           </p>
+          {youtubeCard}
           <button
             type="button"
             data-testid="stream-retry"

@@ -1896,6 +1896,10 @@ export const StreamSessionCurrent = z
      *  own). `private` is true for a broadcast that is PRIVATE on YouTube: the organiser keeps it here and the panel says so, the public
      *  match page never shows it (and its number counts every complete broadcast, so it can differ from the public page's). */
     replayParts: z.array(z.object({ partNo: z.number().int().min(1), url: z.string(), private: z.boolean() }).strict()),
+    /** Owner 2026-10-30: the watch URL of the video on YouTube THIS session streams into (server/youtube/parts.ts `sessionVideoUrl`) -
+     *  its YouTube Connect broadcast once YouTube gave it its id, in any state but `failed`. Null for a pasted key, before the id is
+     *  known, and once the channel is disconnected (the broadcast rows are purged). The panel's "On YouTube" card links it. */
+    youtubeVideoUrl: z.string().nullable(),
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
     /** W2a loop R, M2: the fixture is HELD (`needs_decision` — a level bracket result awaiting the organiser's settle).

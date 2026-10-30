@@ -695,7 +695,7 @@ test("Fixture panel - after a match: the replay row shows when it ran, Watch rep
         ok: true,
         data: {
           id: randomUUID(), fixtureId: r.fixtureId, mode: "passthrough", overlay: null, state: "completed", desiredState: "ending",
-          failReason: null, health: null, ingest: null, output: null, balance: 2, startedAt, endedAt, replayUrl: REPLAY, replayParts: [],
+          failReason: null, health: null, ingest: null, output: null, balance: 2, startedAt, endedAt, replayUrl: REPLAY, replayParts: [], youtubeVideoUrl: null,
           target: { id: randomUUID(), kind: "youtube", label: "Riverside FC" }, fixtureDecided: true, fixtureHeld: false,
           endReason: "stopped", creditUsed: true, startCause: "organiser", restart: null, countdown: null,
         },
@@ -769,7 +769,7 @@ test("Fixture panel - after a match: the replay parts (one; two; one plus the cl
         ok: true,
         data: {
           id: randomUUID(), fixtureId: r.fixtureId, mode: "passthrough", overlay: null, state: "completed", desiredState: "ending",
-          failReason: null, health: null, ingest: null, output: null, balance: 2, startedAt, endedAt, replayUrl: current.replayUrl, replayParts: current.parts,
+          failReason: null, health: null, ingest: null, output: null, balance: 2, startedAt, endedAt, replayUrl: current.replayUrl, replayParts: current.parts, youtubeVideoUrl: null,
           target: { id: randomUUID(), kind: "youtube", label: "Riverside FC" }, fixtureDecided: true, fixtureHeld: false,
           endReason: "stopped", creditUsed: true, startCause: "organiser", restart: null, countdown: null,
         },
