@@ -18,6 +18,7 @@
       "src/pad/index.ts",
       "src/pad/period.ts",
       "src/pad/setbased.ts",
+      "src/pad/small-sports.ts",
       "src/pad/spec-lookup.ts",
       "src/pad/tennis.ts",
       "src/sport/abandon-share.ts",

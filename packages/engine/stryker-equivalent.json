@@ -218,247 +218,247 @@
       "reason": "Without the typeof check a core.void with no string `voids` adds undefined or null to `voided`; the only read is `voided.has(e.id)`, and every ledger entry's `id` is a string, so no entry is ever skipped that the original would fold."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:550:55 StringLiteral → \"\"",
+      "mutant": "src/sports/boardgame/boardgame.ts:551:55 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "return doubleWalkoverCredit(sideMetrics(unplayed, \"home\", false), sideMetrics(unplayed, \"away\", false), [\"wins\", \"white\", \"black\"]);",
       "reason": "doubleWalkoverCredit reads only the KEYS of the two played ledgers (every value is zeroed); sideMetrics returns exactly {wins, white, black} for any side and flag, the same keys as the declared list, so the credit is identical."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:550:63 BooleanLiteral → true",
+      "mutant": "src/sports/boardgame/boardgame.ts:551:63 BooleanLiteral → true",
       "original": "false",
       "line": "return doubleWalkoverCredit(sideMetrics(unplayed, \"home\", false), sideMetrics(unplayed, \"away\", false), [\"wins\", \"white\", \"black\"]);",
       "reason": "The `won` flag only moves the played ledger's `wins` VALUE; doubleWalkoverCredit reads only the ledger's keys (always {wins, white, black}) and zeroes every one, so the credit is identical."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:550:93 StringLiteral → \"\"",
+      "mutant": "src/sports/boardgame/boardgame.ts:551:93 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "return doubleWalkoverCredit(sideMetrics(unplayed, \"home\", false), sideMetrics(unplayed, \"away\", false), [\"wins\", \"white\", \"black\"]);",
       "reason": "doubleWalkoverCredit reads only the KEYS of the two played ledgers (every value is zeroed); sideMetrics returns exactly {wins, white, black} for any side and flag, the same keys as the declared list, so the credit is identical."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:550:101 BooleanLiteral → true",
+      "mutant": "src/sports/boardgame/boardgame.ts:551:101 BooleanLiteral → true",
       "original": "false",
       "line": "return doubleWalkoverCredit(sideMetrics(unplayed, \"home\", false), sideMetrics(unplayed, \"away\", false), [\"wins\", \"white\", \"black\"]);",
       "reason": "The `won` flag only moves the played ledger's `wins` VALUE; doubleWalkoverCredit reads only the ledger's keys (always {wins, white, black}) and zeroes every one, so the credit is identical."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:550:109 ArrayDeclaration → []",
+      "mutant": "src/sports/boardgame/boardgame.ts:551:109 ArrayDeclaration → []",
       "original": "[\"wins\", \"white\", \"black\"]",
       "line": "return doubleWalkoverCredit(sideMetrics(unplayed, \"home\", false), sideMetrics(unplayed, \"away\", false), [\"wins\", \"white\", \"black\"]);",
       "reason": "The declared list is unioned with the played ledgers' keys, and sideMetrics already returns exactly wins, white, black in that order, so the key set, its order, the zeroed perSide and `excluded` are identical without it."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:863:21 MethodExpression → [...events]",
+      "mutant": "src/sports/boardgame/boardgame.ts:867:21 MethodExpression → [...events]",
       "original": "[...events].reverse()",
       "line": "const forfeit = [...events].reverse().find((event) => event.type === \"core.forfeit\");",
       "reason": "`events` is the void-resolved active ledger (stats.ts hands every fold `active`), and an admitted chess stream holds at most one active core.forfeit (a forfeit decides the fixture; the fold refuses a second, ALREADY_DECIDED), so the first and the last forfeit are the same event."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:864:20 ConditionalExpression → false",
+      "mutant": "src/sports/boardgame/boardgame.ts:868:20 ConditionalExpression → false",
       "original": "forfeit === undefined",
       "line": "const parsed = forfeit === undefined ? undefined : CoreForfeit.safeParse(forfeit.payload);",
       "reason": "This line runs only when forfeitStatsRole(events) is \"played\", and that role is set only by an active core.forfeit in the same list, so `forfeit` is never undefined here; the guard's other branch is unreachable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:865:9 ConditionalExpression → true",
+      "mutant": "src/sports/boardgame/boardgame.ts:869:9 ConditionalExpression → true",
       "original": "parsed?.success === true",
       "line": "if (parsed?.success === true) {",
       "reason": "forfeitStatsRole returns \"played\" only when the LAST active core.forfeit parsed (a non-parsing one resets the role to null), and this reads that same last forfeit, so `parsed.success` is always true here."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:865:9 OptionalChaining → parsed.success",
+      "mutant": "src/sports/boardgame/boardgame.ts:869:9 OptionalChaining → parsed.success",
       "original": "parsed?.success",
       "line": "if (parsed?.success === true) {",
       "reason": "`parsed` is undefined only when `forfeit` is, which cannot happen under forfeitStatsRole \"played\" (the role is set only by an active core.forfeit in the same list), so the optional chain never short-circuits."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1085:59 StringLiteral → \"\"",
+      "mutant": "src/sports/boardgame/boardgame.ts:1091:59 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = boardgameForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "boardgameForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1086:82 BooleanLiteral → true",
+      "mutant": "src/sports/boardgame/boardgame.ts:1092:82 BooleanLiteral → true",
       "original": "false",
       "line": "const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0, false), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });",
       "reason": "build's `won` flag only feeds build's own `metrics`, which this arm overrides with the credited metrics in the same object literal, so it is never observable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1086:140 BooleanLiteral → true",
+      "mutant": "src/sports/boardgame/boardgame.ts:1092:140 BooleanLiteral → true",
       "original": "false",
       "line": "const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0, false), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });",
       "reason": "The flag only moves the played ledger's `wins` value; creditedMetrics lays the double-walkover credit over it, and that credit carries every key the ledger has (wins, white, black) at 0, so the played value is never observable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:940:15 ConditionalExpression → false",
+      "mutant": "src/sports/boardgame/boardgame.ts:946:15 ConditionalExpression → false",
       "original": "payload.moves === undefined",
       "line": "...(payload.moves === undefined ? {} : { moves: payload.moves }),",
       "reason": "With no moves the mutant hands decideResult `extra.moves: undefined` instead of omitting the key; decideResult is the only reader and re-tests `extra.moves === undefined` before writing state, so the same state is built either way."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:941:15 ConditionalExpression → false",
+      "mutant": "src/sports/boardgame/boardgame.ts:947:15 ConditionalExpression → false",
       "original": "payload.winnerPerson === undefined",
       "line": "...(payload.winnerPerson === undefined ? {} : { winnerPerson: payload.winnerPerson }),",
       "reason": "With no winnerPerson the mutant hands decideResult `extra.winnerPerson: undefined` instead of omitting the key; decideResult is the only reader, tests `extra.winnerPerson !== undefined` for its draw guard and `=== undefined` before writing state, so it refuses and writes exactly as before."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1099:56 StringLiteral → \"\"",
+      "mutant": "src/sports/carrom/carrom.ts:1107:56 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = carromForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "carromForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:656:7 ConditionalExpression → default:",
+      "mutant": "src/sports/carrom/carrom.ts:661:7 ConditionalExpression → default:",
       "original": "default:",
       "line": "default:",
       "reason": "The default clause only holds a `break`, so removing it leaves an event type that matches no case doing the same thing (nothing). Ran carrom.mutation.test.ts with the clause removed: still green."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:880:7 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:888:7 ConditionalExpression → true",
       "original": "cfgParsed.success",
       "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
       "reason": "With an unparseable cfg `cfgParsed.data` is undefined, and every path that can decide a result (a board, an adjustment, a settle) reads `state.cfg` inside the try, throws, and is swallowed; forfeits are no personal result here (resultInStats), so nothing is credited either way. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:880:57 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:888:57 ConditionalExpression → true",
       "original": "home !== undefined",
       "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
       "reason": "The guard before it requires `ctx.entrants.length === 2`, so entrants[0] is always defined. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:880:79 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:888:79 ConditionalExpression → true",
       "original": "away !== undefined",
       "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
       "reason": "The guard before it requires `ctx.entrants.length === 2`, so entrants[1] is always defined. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:882:42 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/sports/carrom/carrom.ts:890:42 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "home: { entrantId: home.id, slots: [] },",
       "reason": "The synthetic lineup's slots are never read: carrom's init and apply use only entrantId (the comment above the fold says so). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:883:42 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/sports/carrom/carrom.ts:891:42 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "away: { entrantId: away.id, slots: [] },",
       "reason": "The synthetic lineup's slots are never read: carrom's init and apply use only entrantId (the comment above the fold says so). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:896:18 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:904:18 ConditionalExpression → true",
       "original": "outcome !== null",
       "line": "} else if (outcome !== null && (outcome.kind === \"win\" || outcome.kind === \"award\")) {",
       "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:900:18 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:908:18 ConditionalExpression → true",
       "original": "outcome !== null",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:900:18 LogicalOperator → outcome !== null || outcome.kind === \"draw\" || outcome.kind === \"no_result\"",
+      "mutant": "src/sports/carrom/carrom.ts:908:18 LogicalOperator → outcome !== null || outcome.kind === \"draw\" || outcome.kind === \"no_result\"",
       "original": "outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:900:39 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:908:39 ConditionalExpression → true",
       "original": "outcome.kind === \"draw\"",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "The kinds that reach this branch are draw and null (null fails `outcome !== null` first); a double walkover is excluded by resultInStats and no_result is never produced. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:900:66 ConditionalExpression → false",
+      "mutant": "src/sports/carrom/carrom.ts:908:66 ConditionalExpression → false",
       "original": "outcome.kind === \"no_result\"",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "carrom.outcome and outcomeOf never produce no_result (the module's outcomes are win, draw, award and double_walkover, plus the kernel's settle win/award), so this operand is false for every outcome that gets here. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:900:66 EqualityOperator → outcome.kind !== \"no_result\"",
+      "mutant": "src/sports/carrom/carrom.ts:908:66 EqualityOperator → outcome.kind !== \"no_result\"",
       "original": "outcome.kind === \"no_result\"",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "After `draw` is false the only outcome left that could differ is a double walkover, which resultInStats excludes before this branch; no_result is never produced. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:900:83 StringLiteral → \"\"",
+      "mutant": "src/sports/carrom/carrom.ts:908:83 StringLiteral → \"\"",
       "original": "\"no_result\"",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "no_result is never produced by carrom.outcome or outcomeOf, so what the literal reads never decides a branch. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:249:16 ConditionalExpression → false",
+      "mutant": "src/sports/carrom/carrom.ts:254:16 ConditionalExpression → false",
       "original": "state.outcome === null",
       "line": "const live = state.outcome === null;",
       "reason": "With live false, unitNumber gives max(started, max(1, completed)) against the original max(started, completed + 1) while outcome is null; there an open game exists (phase live) or nothing has started (pre), and an abandoned match has completed = started - 1 too, so completed + 1 = started (or 1 = 1) and both sides agree. Ran 372 prefixes (4 configs, with abandon and forfeits at 4 depths) with the mutant applied: position and breaker identical to the original; the same probe did detect the mutant live = true."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1019:33 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:1027:33 ConditionalExpression → true",
       "original": "current !== undefined",
       "line": "state.phase === \"live\" && current !== undefined",
       "reason": "Phase live always has an open game (core.start seeds one, bankGame opens the next in the same step), so current is defined whenever the first operand holds and the mutant never changes the result. Ran the same 372-prefix probe with the mutant applied: summaries identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:254:35 ArrowFunction → () => undefined",
+      "mutant": "src/sports/carrom/carrom.ts:259:35 ArrowFunction → () => undefined",
       "original": "(game) => game.winner !== null",
       "line": "completed: state.games.filter((game) => game.winner !== null).length,",
       "reason": "unitNumber takes max(started, currentUnit(completed, live)) and `completed` never exceeds `started` (games.length): live, the open game makes completed = started - 1, so completed + 1 = started and the mutant's 1 is not above it (pre: both are 1); decided or abandoned, max(1, completed) is already <= started (a walkover before play: 1 on both sides). The count can never move the position."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:254:45 ConditionalExpression → false",
+      "mutant": "src/sports/carrom/carrom.ts:259:45 ConditionalExpression → false",
       "original": "game.winner !== null",
       "line": "completed: state.games.filter((game) => game.winner !== null).length,",
       "reason": "unitNumber takes max(started, currentUnit(completed, live)) and `completed` never exceeds `started` (games.length): live, the open game makes completed = started - 1, so completed + 1 = started and the mutant's 1 is not above it (pre: both are 1); decided or abandoned, max(1, completed) is already <= started (a walkover before play: 1 on both sides). The count can never move the position."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:301:7 ConditionalExpression → false",
+      "mutant": "src/sports/carrom/carrom.ts:306:7 ConditionalExpression → false",
       "original": "game === undefined || game.winner !== null",
       "line": "if (game === undefined || game.winner !== null) {",
       "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:301:7 LogicalOperator → game === undefined && game.winner !== null",
+      "mutant": "src/sports/carrom/carrom.ts:306:7 LogicalOperator → game === undefined && game.winner !== null",
       "original": "game === undefined || game.winner !== null",
       "line": "if (game === undefined || game.winner !== null) {",
       "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:301:29 ConditionalExpression → false",
+      "mutant": "src/sports/carrom/carrom.ts:306:29 ConditionalExpression → false",
       "original": "game.winner !== null",
       "line": "if (game === undefined || game.winner !== null) {",
       "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:301:51 BlockStatement → {}",
+      "mutant": "src/sports/carrom/carrom.ts:306:51 BlockStatement → {}",
       "original": "{",
       "line": "if (game === undefined || game.winner !== null) {",
       "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:304:16 StringLiteral → \"\"",
+      "mutant": "src/sports/carrom/carrom.ts:309:16 StringLiteral → \"\"",
       "original": "\"no open game\"",
       "line": "wrongPhase(\"no open game\");",
       "reason": "openGame is called only from applyBoard and applyAdjust, each after its `phase !== \"live\"` refusal; phase becomes \"live\" at one place (core.start, which seeds one open game) and a later fold keeps it live only through bankGame, which opens the next game in the same step (a decided match goes to \"done\"), so a live state's last game is always open and this guard never fires. The message is never thrown."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:315:11 ArithmeticOperator → gameIndex - boardIndex",
+      "mutant": "src/sports/carrom/carrom.ts:320:11 ArithmeticOperator → gameIndex - boardIndex",
       "original": "gameIndex + boardIndex",
       "line": "return (gameIndex + boardIndex) % 2 === 0 ? firstBreak : opponent(firstBreak);",
       "reason": "Only the parity of the sum is read (`% 2 === 0`); gameIndex - boardIndex has the same parity as gameIndex + boardIndex, and a negative odd difference gives -1 (not 0) and a negative even one gives -0, which `=== 0` accepts, so the same side breaks for every pair."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:328:7 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:333:7 ConditionalExpression → true",
       "original": "leader !== null",
       "line": "if (leader !== null && game.score[leader] >= cfg.gameTo) return leader;",
       "reason": "With leader null (level score) the mutant evaluates `game.score[null] >= cfg.gameTo`, and `game.score[null]` is undefined, so the comparison is false (undefined >= n is false for every n); the line falls through exactly as the original's false does."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1021:41 ArithmeticOperator → state.games.length + 1",
+      "mutant": "src/sports/carrom/carrom.ts:1029:41 ArithmeticOperator → state.games.length + 1",
       "original": "state.games.length - 1",
       "line": "breakerOf(state.firstBreak, state.games.length - 1, current.boards.length)",
       "reason": "breakerOf reads gameIndex only through `(gameIndex + boardIndex) % 2`, and length + 1 differs from length - 1 by 2, so the parity, and the breaker the summary reports, is identical."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1243:12 EqualityOperator → adjust.delta <= 0",
+      "mutant": "src/sports/carrom/carrom.ts:1251:12 EqualityOperator → adjust.delta <= 0",
       "original": "adjust.delta < 0",
       "line": "(adjust.delta < 0 ? adjust.entrantId : opponentOf(adjust.entrantId));",
       "reason": "The branch is reached only for an adjust that parsed through CarromGameAdjust, whose delta refine rejects 0, so delta is never 0 here and `< 0` and `<= 0` agree."
@@ -524,55 +524,55 @@
       "reason": "With no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key)."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:294:72 ArrayDeclaration → []",
+      "mutant": "src/sports/generic/generic.ts:295:72 ArrayDeclaration → []",
       "original": "[\"for\", \"against\", \"diff\"]",
       "line": "if (by === \"both\") return doubleWalkoverCredit(played[0], played[1], [\"for\", \"against\", \"diff\"]);",
       "reason": "sideMetrics (and zeroMetrics) always return exactly {for, against, diff} in that order, so the union of the played ledgers' keys already is the declared list: same keys, same order, same zeroed perSide and excluded."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:756:57 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:762:57 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = genericForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "genericForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:756:69 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:762:69 StringLiteral → \"\"",
       "original": "\"both\"",
       "line": "const credit = genericForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "With by \"\" the credit is the walkover arm's: both records 0-0-0 over the same keys {for, against, diff}; laid over the played ledger that is exactly the double walkover's all-zero metrics (excluded only re-zeroes zeros)."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:758:72 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:764:72 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
       "reason": "The played ledger read for side \"\" is overwritten key for key: the double-walkover credit carries 0 for for, against and diff, the only keys generic's ledger has."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:758:89 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:764:89 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:759:72 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:765:72 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"away\"), credit, \"away\")),",
       "reason": "The played ledger read for side \"\" is overwritten key for key: the double-walkover credit carries 0 for for, against and diff, the only keys generic's ledger has."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:759:89 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:765:89 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"away\"), credit, \"away\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:295:7 ConditionalExpression → false",
+      "mutant": "src/sports/generic/generic.ts:296:7 ConditionalExpression → false",
       "original": "reason === \"bye\"",
       "line": "if (reason === \"bye\") return { perSide: played, excluded: [] };",
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:295:18 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:296:18 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (reason === \"bye\") return { perSide: played, excluded: [] };",
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
@@ -638,49 +638,49 @@
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1069:40 ConditionalExpression → true",
+      "mutant": "src/sports/boardgame/boardgame.ts:1075:40 ConditionalExpression → true",
       "original": "w === 1",
       "line": "...build(side, w, 0, l, pts, w === 1),",
       "reason": "build's `won` flag only feeds build's own `metrics`, which this arm overrides with the credited metrics in the same object literal, so it is never observable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1069:40 ConditionalExpression → false",
+      "mutant": "src/sports/boardgame/boardgame.ts:1075:40 ConditionalExpression → false",
       "original": "w === 1",
       "line": "...build(side, w, 0, l, pts, w === 1),",
       "reason": "build's `won` flag only feeds build's own `metrics`, which this arm overrides with the credited metrics in the same object literal, so it is never observable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1069:40 EqualityOperator → w !== 1",
+      "mutant": "src/sports/boardgame/boardgame.ts:1075:40 EqualityOperator → w !== 1",
       "original": "w === 1",
       "line": "...build(side, w, 0, l, pts, w === 1),",
       "reason": "build's `won` flag only feeds build's own `metrics`, which this arm overrides with the credited metrics in the same object literal, so it is never observable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1070:61 ConditionalExpression → false",
+      "mutant": "src/sports/boardgame/boardgame.ts:1076:61 ConditionalExpression → false",
       "original": "w === 1",
       "line": "metrics: creditedMetrics(sideMetrics(state, side, w === 1), credit, side),",
       "reason": "The flag only moves the played ledger's `wins` value; every chess award credit carries wins, white and black for both sides (creditFor over two sideMetrics of the unplayed state), and creditedMetrics lays it over the played ledger, so no played value is observable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1070:61 ConditionalExpression → true",
+      "mutant": "src/sports/boardgame/boardgame.ts:1076:61 ConditionalExpression → true",
       "original": "w === 1",
       "line": "metrics: creditedMetrics(sideMetrics(state, side, w === 1), credit, side),",
       "reason": "The flag only moves the played ledger's `wins` value; every chess award credit carries wins, white and black for both sides (creditFor over two sideMetrics of the unplayed state), and creditedMetrics lays it over the played ledger, so no played value is observable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:1070:61 EqualityOperator → w !== 1",
+      "mutant": "src/sports/boardgame/boardgame.ts:1076:61 EqualityOperator → w !== 1",
       "original": "w === 1",
       "line": "metrics: creditedMetrics(sideMetrics(state, side, w === 1), credit, side),",
       "reason": "The flag only moves the played ledger's `wins` value; every chess award credit carries wins, white and black for both sides (creditFor over two sideMetrics of the unplayed state), and creditedMetrics lays it over the played ledger, so no played value is observable."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:565:7 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:570:7 ConditionalExpression → true",
       "original": "reason !== \"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:565:18 StringLiteral → \"\"",
+      "mutant": "src/sports/carrom/carrom.ts:570:18 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
@@ -764,25 +764,25 @@
       "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:239:43 ConditionalExpression → false",
+      "mutant": "src/sports/generic/generic.ts:240:43 ConditionalExpression → false",
       "original": "outcome?.kind !== \"award\"",
       "line": "if (state.forfeitAward === undefined || outcome?.kind !== \"award\") return null;",
       "reason": "A generic state holds a forfeitAward only beside the award outcome written with it (the core.forfeit arm of apply sets both in one object, and every other event is refused or leaves the outcome alone once decided: sports/generic/generic.test.ts, 'a held stage award always sits beside an award outcome'), so `outcome?.kind !== \"award\"` is false whenever the first operand lets the line run; the check only narrows the type for awardReasonOf."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:239:43 OptionalChaining → outcome.kind",
+      "mutant": "src/sports/generic/generic.ts:240:43 OptionalChaining → outcome.kind",
       "original": "outcome?.kind",
       "line": "if (state.forfeitAward === undefined || outcome?.kind !== \"award\") return null;",
       "reason": "A generic state holds a forfeitAward only beside the award outcome written with it (sports/generic/generic.test.ts, 'a held stage award always sits beside an award outcome'), so whenever this line runs past `state.forfeitAward === undefined` the outcome is non-null and `outcome.kind` reads the same value as `outcome?.kind`; the null the `?.` guards never reaches it."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:241:7 ConditionalExpression → false",
+      "mutant": "src/sports/generic/generic.ts:242:7 ConditionalExpression → false",
       "original": "reason === \"bye\"",
       "line": "if (reason === \"bye\") return null;",
       "reason": "The condition is never true where it runs: awardedLine passes line 239 only with a held forfeitAward, which only generic's core.forfeit arm writes (generic.ts:672, `git grep -n forfeitAward packages/engine/src/sports/generic` names no other writer), and a core.forfeit's reason is a FORFEIT_REASON, never `bye` (CoreForfeit refuses it: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'); a bye is the system's award and is never folded through apply. Mutating it to `false` removes a branch nothing takes. It stays to narrow AwardReason to ForfeitReason for genericForfeitCredit."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:241:18 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:242:18 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (reason === \"bye\") return null;",
       "reason": "`reason === \"\"` is false for every reason that reaches this line, exactly as `reason === \"bye\"` is: a held forfeitAward comes only from a core.forfeit, whose reason is one of the four FORFEIT_REASONS (CoreForfeit refuses `bye`: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'), so neither form ever returns null here."
@@ -1754,7 +1754,7 @@
       "reason": "W2e T25 (liveRows, review M-2). Past the core.void check, dropping the string check only lets a void's missing voids (undefined, or null on a stored row) into the set, and ledger ids are strings, so voided.has(id) never matches it. An accepted core.void always names a target anyway: resolveVoids refuses one without."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:329:7 ConditionalExpression → false",
+      "mutant": "src/sports/boardgame/boardgame.ts:330:7 ConditionalExpression → false",
       "original": "method === undefined",
       "line": "if (method === undefined) return;",
       "reason": "W2e T25 (BG-RS-1; T10 review M4). Without the early return an absent method reaches the list reads: undefined is in neither DECISIVE_METHODS nor DRAWN_METHODS, so decisive and drawn are both false, contradicts is false for either winner, and the function returns without a throw, as the early return does."

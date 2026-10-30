@@ -74,3 +74,4 @@ export { badmintonPadRules, tabletennisPadRules, volleyballPadRules } from "./se
 export { tennisPadRules } from "./tennis.ts";
 
 // P4: carrom, boardgame, generic, POST_PHASES
+export { boardgamePadRules, carromPadRules, genericPadRules } from "./small-sports.ts";
