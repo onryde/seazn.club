@@ -430,7 +430,9 @@ const SHAPE_SEEDS: ListSeed[] = [
   at("stages.table_rules_pinned.crossGroup", "football", [], "an empty pinned cross-group order (accepted)"),
   at("divisions.tiebreakers", "football", ["points", "h2h_reapply", "lots"], "a modifier after a plain key"),
   at("stages.table_rules_pinned.tiebreakers", "hockey", ["points", "h2h_points", "h2h_reapply", "h2h_exclusion", "lots"], "two modifiers on one block"),
-  at("stages.config.tiebreakers", "football", ["h2h_reapply", "points", "lots"], "a modifier first"),
+  // Ends in a block key: `->` with index -1 reads the LAST entry, so a census asking "the entry before the first" by index
+  // would find a block and pass it.
+  at("stages.config.tiebreakers", "football", ["h2h_reapply", "points", "h2h_wins"], "a modifier first"),
   at("stages.config.tiebreakers", "football", ["points", "h2h_wins", "h2h_exclusion", "lots"], "a modifier after a block (accepted)"),
   at("divisions.tiebreakers", "football", null, "JSON null (inherits)"),
 ];
