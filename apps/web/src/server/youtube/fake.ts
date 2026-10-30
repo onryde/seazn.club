@@ -394,6 +394,12 @@ export class FakeYouTube implements YouTubePort {
     };
   }
 
+  /** A liveStream as the fake holds it (the title it was created with), with no token needed. `null` when absent or deleted. */
+  inspectStream(streamId: string): { channelId: string; title: string } | null {
+    const s = this.streams.get(streamId);
+    return s ? { channelId: s.channelId, title: s.title } : null;
+  }
+
   // ─── the port ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
   authorizeUrl(a: { state: string; codeChallenge: string; redirectUri: string }): string {
