@@ -60,6 +60,7 @@ import {
   TAKEOVER_NOTICE_MS,
   TARGET_REMOVED,
   composedSessionOpen,
+  youtubeLinkOf,
   type StreamSessionView,
 } from "@/lib/stream-session-view";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
@@ -75,6 +76,7 @@ import { STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "@/components/v2/refusal-focus";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
+import { ExternalLink } from "lucide-react";
 import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
 import { SEAZN_QR_ERROR_CORRECTION, SEAZN_QR_QUIET_MODULES, type SeaznQr } from "@/lib/seazn-qr";
 import { DictProvider } from "@/components/i18n/dict-provider";
@@ -669,7 +671,7 @@ const LEGACY = readModel({ legacy: true, phone: null, code: null });
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", overlay: null, state: "warming", desiredState: "live",
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
-  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [],
+  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null,
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
   startCause: "organiser", restart: null, countdown: null,
   ...over,
@@ -1030,7 +1032,7 @@ const SCORE_OFF: PhoneScore = {
 const BODY: PhoneTabBodyProps = {
   fixtureId: "f-1", view: null, balance: 0, targets: { status: "ok", list: [] }, busy: false, createError: null, checkoutError: null,
   selectedTargetId: null, phone: readModel(), code: { status: "loading" }, codeOpen: false, now: NOW, copied: false, showBuy: false,
-  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null, pickFailed: false,
+  planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null, youtube: null, pickFailed: false,
   phoneLostMinutes: 20, autoStopMinutes: 3, autoPending: null, autoFailed: false, takeoverDismissedAt: null, tz: "Europe/London",
   onToggleAuto: () => {}, onDismissTakeover: () => {},
   onSelectTarget: () => {}, onPickAnother: () => {}, pickerOpenSignal: 0, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
@@ -1069,6 +1071,9 @@ const endedChips = (tree: ReactElement[]): string[] => {
   if (!row) throw new Error("the ended card has no chip row");
   return walk(propsOf(row).children as ReactElement).filter((el) => el.type === "span").map((el) => String(attr(el, "data-testid")));
 };
+
+/** Owner 2026-10-30: a match's video on YouTube, as the server's `youtubeVideoUrl` carries it. */
+const YT_VIDEO = "https://www.youtube.com/watch?v=vvvvvvvvvvv";
 
 /** B3: the states that are the heading and the credits card ONLY — no stepper, no pill (idle, balance < 1). */
 const CREDITS_ONLY = new Set(["idle, balance 0 (the credits card)"]);
@@ -1109,6 +1114,9 @@ function bodyStates(): [string, ReactElement[]][] {
     ["live, automatic, Details data, a takeover", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } }), balance: 1, phone: readModel({ auto: { enabled: true, refusal: null, wontStart: "already_started", stopApplies: true }, lastTakeover: { at: "2026-09-14T11:55:00.000Z", model: null, elapsedMs: 300_000 }, phone: facts({ state: "publishing", mode: "automatic", appVersion: "1.4.0", beat: { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 245 } }) }) })],
     ["live, the battery low (amber)", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", ingest: { state: "connected", protocol: "srt" } }), balance: 1, phone: readModel({ phone: facts({ state: "publishing", health: "battery_low", beat: { battery: { percent: 14, charging: false, drainPctPerHour: 9 }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 12 } }) }) })],
     ["ending", body({ view: session({ state: "ending", startedAt: "2026-09-14T11:50:00Z" }), balance: 1 })],
+    // Owner 2026-10-30: the On YouTube card — at Ready under the Paired card (the latest session's video), and live after it.
+    ["ready, paired, on YouTube", body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", youtube: { url: YT_VIDEO, live: false } })],
+    ["live, on YouTube", body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z", youtubeVideoUrl: YT_VIDEO }), youtube: { url: YT_VIDEO, live: true }, balance: 1 })],
     ["ended", body({ view: session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", replayUrl: "https://www.youtube.com/watch?v=abc", endReason: "stopped", creditUsed: true }), balance: 1 })],
     ["failed", body({ view: session({ state: "failed", failReason: "no_credits" }), balance: 0 })],
   ];
@@ -5049,6 +5057,44 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(bodyOf(island).createError, "…and so is the refusal that was about it").toBeNull();
     });
   });
+
+  // Owner 2026-10-30 (the inert-seam rule): the server's `youtubeVideoUrl` travels through the container's OWN poll to the body - it
+  // appears without a reload once the broadcast exists, flips to "On YouTube" when the session ends, survives Start another (the
+  // RAW view's), and a second session on the same video reads it again (the read model names it; the container reads it once).
+  it("Owner 2026-10-30: the video link arrives on the POLL, flips when the session ends, stays after Start another, and a second session on the same video reads it again", async () => {
+    const VIDEO = "https://www.youtube.com/watch?v=vvvvvvvvvvv";
+    const s = serve({ current: session({ id: "s1", state: "warming", youtubeVideoUrl: null }), targets: TARGETS });
+    const island = track(await mount(s));
+    expect(bodyOf(island).youtube, "no video yet: no link").toBeNull();
+    expect(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(island))), "stream-youtube-link-card")).toBeUndefined();
+
+    s.current = session({ id: "s1", state: "warming", youtubeVideoUrl: VIDEO });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(bodyOf(island).youtube, "the poll brought it, no reload").toEqual({ url: VIDEO, live: true });
+    const live = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    expect(attr(byTestId(live, "stream-youtube-link")!, "href")).toBe(VIDEO);
+    expect(textAt(live, "stream-youtube-link-status")).toBe(m("stream.youtube.link.live"));
+
+    s.current = session({ id: "s1", state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped", youtubeVideoUrl: VIDEO });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(bodyOf(island).youtube, "a second read of the same session: ended").toEqual({ url: VIDEO, live: false });
+
+    bodyOf(island).onAgain();
+    expect(bodyOf(island).view, "premise: Start another returned the tab to Ready").toBeNull();
+    expect(bodyOf(island).youtube, "the RAW view's link survives the dismiss").toEqual({ url: VIDEO, live: false });
+    const ready = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    expect(byTestId(ready, "stream-ready"), "premise: Ready's grid").toBeDefined();
+    expect(textAt(ready, "stream-youtube-link-status")).toBe(m("stream.youtube.link.ended"));
+
+    // A second session (the phone's own start) on the SAME video: the read model names it, the container reads `current` once.
+    s.current = session({ id: "s2", state: "warming", youtubeVideoUrl: VIDEO });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    await settle();
+    expect(bodyOf(island).view?.id, "premise: the second session is shown").toBe("s2");
+    expect(bodyOf(island).youtube).toEqual({ url: VIDEO, live: true });
+  });
 });
 
 // ─── R2006 (owner ruling 2026-10-19, "Option C"): the score on the Phone tab ───────────────────────────────────────────
@@ -6256,5 +6302,152 @@ describe("T16: after a match - the replay parts", () => {
     expect(html).toContain(es["streaming.youtube.part"]!.replace("{n}", "1"));
     expect(html).toContain(es["streaming.youtube.part"]!.replace("{n}", "2"));
     expect(html).not.toContain(uiDict("en")["streaming.youtube.part"]!.replace("{n}", "2"));
+  });
+});
+
+// ─── Owner 2026-10-30: the organiser's match page links the match's video on YouTube ───────────────────────────────────────────
+// One more card where the Paired card is: at Ready in the right column under it (the LATEST session's video - a dismissed one too),
+// and in the waiting and live stacks after it. "Live on YouTube" while the session is starting or live, "On YouTube" once it ends; the
+// link reads "Open on YouTube" (the public replay's own key) and is styled exactly as "Manage destinations". No YouTube logo: the
+// spec (2026-10-27-youtube-connect-design.md, Branding) names the only two places the icon appears, and this is neither. The SERVER
+// decides whether there is a video (session-video-url.test.ts, through the real loader); the container hands the body the RAW view's
+// link (`youtubeLinkOf`), and the body draws it. Copy is read from the dictionaries, never typed here.
+describe("Owner 2026-10-30: the On YouTube card", () => {
+  const card = (tree: ReactElement[]) => byTestId(tree, "stream-youtube-link-card");
+  const statusOf = (tree: ReactElement[]) => textAt(tree, "stream-youtube-link-status");
+  const linkOf = (tree: ReactElement[]) => {
+    const el = byTestId(tree, "stream-youtube-link");
+    if (!el) throw new Error("no stream-youtube-link in the tree");
+    return el;
+  };
+  const READY_PAIRED = { view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" } as const;
+  const at = (tree: ReactElement[], id: string) => tree.indexOf(byTestId(tree, id)!);
+
+  it("EMPTY CASE FIRST: no video, no card - in every body state but the two that carry one (a pasted key, a failed broadcast, a purged channel all reach the body as null)", () => {
+    let without = 0;
+    let withCard = 0;
+    for (const [name, tree] of bodyStates()) {
+      const expected = name.includes("on YouTube") ? 1 : 0;
+      expect(allTestIds(tree, "stream-youtube-link-card").length, name).toBe(expected);
+      if (expected) withCard++;
+      else without++;
+    }
+    expect({ withCard }, "the two on-YouTube states").toEqual({ withCard: 2 });
+    expect(without, "anti-vacuity: the other states were read").toBeGreaterThanOrEqual(25);
+  });
+
+  it("the link: href is the server's url, a new tab with rel=noopener noreferrer, 'Open on YouTube' and the external-link icon, the SAME classes as Manage destinations, and no YouTube logo", () => {
+    const tree = body({ ...READY_PAIRED, youtube: { url: YT_VIDEO, live: false } });
+    const link = linkOf(tree);
+    expect(link.type).toBe("a");
+    expect(attr(link, "href")).toBe(YT_VIDEO);
+    expect(attr(link, "target")).toBe("_blank");
+    expect(attr(link, "rel")).toBe("noopener noreferrer");
+    expect(textOf(link).replace(/\s+/g, " ").trim()).toBe(m("streaming.youtube.replay.open"));
+    const inside = walk(propsOf(link).children as ReactElement[]);
+    expect(inside.filter((el) => el.type === ExternalLink).length, "the external-link icon").toBe(1);
+    expect(inside.filter((el) => el.type === YoutubeIcon).length, "no YouTube logo (spec Branding: only the channel row and Watch replay)").toBe(0);
+    expect(tree.filter((el) => el.type === YoutubeIcon).length, "nowhere in the card either").toBe(0);
+    const manage = byTestId(tree, "stream-manage-destinations")!;
+    expect(attr(link, "className"), "styled exactly as Manage destinations").toBe(attr(manage, "className"));
+  });
+
+  it("READY: the card is the right column's next child after the Paired card (so below md it stacks right after it), the column keeps min-w-0; with no phone it sits under the code card the same way", () => {
+    let checked = 0;
+    for (const [what, extra, first] of [
+      ["paired", {}, "stream-code-disclosure"],
+      ["no phone", { phone: readModel({ phone: null }), code: { status: "ok", text: CODE_TEXT, image: SYMBOL } as const }, "stream-code-card"],
+    ] as const) {
+      const tree = body({ ...READY_PAIRED, ...extra, youtube: { url: YT_VIDEO, live: false } });
+      // The INNERMOST div that holds both (the walk is pre-order, so the deepest match is the last).
+      const column = tree.filter((el) => {
+        const kids = walk(propsOf(el).children as ReactElement[]);
+        return el.type === "div" && kids.some((k) => attr(k, "data-testid") === first) && kids.some((k) => attr(k, "data-testid") === "stream-youtube-link-card");
+      }).at(-1);
+      expect(column, `${what}: one column holds both`).toBeDefined();
+      const cls = String(attr(column!, "className")).split(/\s+/);
+      expect(cls, `${what}: the right column`).toEqual(expect.arrayContaining(["min-w-0", "md:col-start-2", "md:row-start-1"]));
+      const direct = (propsOf(column!).children as ReactElement[]).flat().filter(Boolean) as ReactElement[];
+      const ids = direct.map((k) => attr(k, "data-testid"));
+      expect(ids.indexOf("stream-youtube-link-card"), `${what}: directly after it`).toBe(ids.indexOf(first) + 1);
+      expect(statusOf(tree), what).toBe(m("stream.youtube.link.ended"));
+      expect(String(attr(card(tree)!, "className")).split(/\s+/), `${what}: a house card, min-w-0`).toEqual(expect.arrayContaining(["min-w-0", "rounded-lg", "bg-white", "ring-1", "ring-purple-100"]));
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The positive pair: the same Ready with no video has the column and no card.
+    expect(card(body({ ...READY_PAIRED, youtube: null }))).toBeUndefined();
+  });
+
+  it("WAITING and LIVE: 'Live on YouTube', after the Paired card in the stack; ENDING: 'On YouTube' (Stop was pressed), at the end of the stack", () => {
+    let checked = 0;
+    for (const state of ["provisioning", "warming", "live"] as const) {
+      const view = session({ state, startedAt: state === "live" ? "2026-09-14T11:50:00Z" : null, youtubeVideoUrl: YT_VIDEO });
+      const tree = body({ view, youtube: youtubeLinkOf(view), balance: 1 });
+      expect(statusOf(tree), state).toBe(m("stream.youtube.link.live"));
+      expect(attr(linkOf(tree), "href"), state).toBe(YT_VIDEO);
+      expect(at(tree, "stream-youtube-link-card"), `${state}: after the Paired card`).toBeGreaterThan(at(tree, "stream-code-disclosure"));
+      expect(at(tree, "stream-code-disclosure"), `${state}: premise, the Paired card is drawn`).toBeGreaterThanOrEqual(0);
+      checked++;
+    }
+    const ending = session({ state: "ending", startedAt: "2026-09-14T11:50:00Z", youtubeVideoUrl: YT_VIDEO });
+    const tree = body({ view: ending, youtube: youtubeLinkOf(ending), balance: 1 });
+    expect(statusOf(tree)).toBe(m("stream.youtube.link.ended"));
+    expect(at(tree, "stream-youtube-link-card"), "after Details").toBeGreaterThan(at(tree, "stream-details"));
+    checked++;
+    expect(checked).toBe(4);
+    expect(m("stream.youtube.link.live"), "premise: the two lines differ").not.toBe(m("stream.youtube.link.ended"));
+  });
+
+  it("ENDED: 'On YouTube' in the summary card before Start another while the video is not yet a replay part; once it IS one, Watch replay links it and the card is not drawn a second time (never the same replay twice)", () => {
+    const ENDED = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" as const, youtubeVideoUrl: YT_VIDEO };
+    const gap = session({ ...ENDED, replayParts: [] });
+    const before = body({ view: gap, youtube: youtubeLinkOf(gap), balance: 1 });
+    expect(statusOf(before)).toBe(m("stream.youtube.link.ended"));
+    const summary = walk(propsOf(byTestId(before, "stream-ended")!).children as ReactElement[]);
+    const ids = summary.map((el) => attr(el, "data-testid"));
+    expect(ids, "inside the ended card").toContain("stream-youtube-link-card");
+    expect(ids.indexOf("stream-youtube-link-card"), "before Start another").toBeLessThan(ids.indexOf("stream-again"));
+
+    const done = session({ ...ENDED, replayUrl: YT_VIDEO, replayParts: [{ partNo: 1, url: YT_VIDEO, private: false }] });
+    const after = body({ view: done, youtube: youtubeLinkOf(done), balance: 1 });
+    expect(card(after), "the part already links it").toBeUndefined();
+    expect(allTestIds(after, "stream-replay").map((el) => attr(el, "href"))).toEqual([YT_VIDEO]);
+    // The positive pair: a part that is ANOTHER video leaves this one's card drawn.
+    const other = session({ ...ENDED, replayParts: [{ partNo: 1, url: "https://www.youtube.com/watch?v=ooooooooooo", private: false }] });
+    expect(statusOf(body({ view: other, youtube: youtubeLinkOf(other), balance: 1 }))).toBe(m("stream.youtube.link.ended"));
+  });
+
+  it("FAILED: a session that failed over a broadcast that did not is still the match's video - 'On YouTube' before Try again", () => {
+    const failed = session({ state: "failed", failReason: "machine_crash", startedAt: "2026-09-14T11:00:00Z", youtubeVideoUrl: YT_VIDEO });
+    const tree = body({ view: failed, youtube: youtubeLinkOf(failed), balance: 1 });
+    expect(statusOf(tree)).toBe(m("stream.youtube.link.ended"));
+    const ids = walk(propsOf(byTestId(tree, "stream-failed")!).children as ReactElement[]).map((el) => attr(el, "data-testid"));
+    expect(ids.indexOf("stream-youtube-link-card")).toBeGreaterThan(ids.indexOf("stream-fail-reason"));
+    expect(ids.indexOf("stream-youtube-link-card")).toBeLessThan(ids.indexOf("stream-retry"));
+  });
+
+  it("every locale (checked === 4): the two status lines and the link text are each locale's own dictionary words, translated", () => {
+    const en = uiDict("en");
+    let checked = 0;
+    for (const l of LOCALES) {
+      const d = uiDict(l);
+      for (const live of [true, false]) {
+        const html = renderToStaticMarkup(
+          <DictProvider dict={d} locale={l}>
+            <PhoneTabBody {...BODY} {...READY_PAIRED} targets={ok(TARGETS)} youtube={{ url: YT_VIDEO, live }} />
+          </DictProvider>,
+        );
+        const status = /data-testid="stream-youtube-link-status"[^>]*>(?:<[^>]*>)*([^<]+)</.exec(html)?.[1] ?? "";
+        const key = live ? "stream.youtube.link.live" : "stream.youtube.link.ended";
+        expect(d[key], `${l} ${key}`).toBeTypeOf("string");
+        expect(status, `${l} ${key}`).toBe(d[key]);
+        if (l !== "en") expect(d[key], `${l} ${key} is translated`).not.toBe(en[key]);
+        const link = /data-testid="stream-youtube-link"[^>]*>([^<]+)</.exec(html)?.[1] ?? "";
+        expect(link, `${l} link`).toBe(d["streaming.youtube.replay.open"]);
+      }
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

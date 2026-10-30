@@ -94,9 +94,24 @@ export interface VideoFacts {
   madeForKids: boolean | null;
 }
 
-/** The longest ONE port call may take: a driver bounds every request by it (google.ts's request timeout). The end step budgets with it:
- *  a call is started only while its slice has time left, so a pass overruns its slice by at most one call in flight. */
+/** One of the channel's own liveStreams as liveStreams.list(part=snippet, mine=true) describes it: its id, its title and the channel it
+ *  belongs to (`snippet.channelId`; `null` when YouTube did not say). Never its key: the key lives in the `cdn` part, which the list
+ *  never asks for. The disconnect reads it to find the Seazn-named keys no row of ours records (an orphan) and delete them. */
+export interface StreamListing {
+  id: string;
+  title: string;
+  channelId: string | null;
+}
+
+/** The longest ONE request to Google may take: a driver bounds every request by it (google.ts's request timeout). A port call is one
+ *  request, except `listStreams`, which is one per page and asks its caller's `room` before each, so it too runs past a budget by at
+ *  most one request in flight. The end step budgets with it: a call is started only while its slice has time left, so a pass overruns
+ *  its slice by at most one call in flight. */
 export const YOUTUBE_CALL_BOUND_MS = 10_000;
+
+/** `listStreams`' refusal when its caller's budget ran out between pages (`youtube_unavailable` with this reason): what was read so far
+ *  is NOT the channel's list, so it is never answered as one. */
+export const LIST_BUDGET_SPENT = "budgetSpent";
 
 export interface YouTubePort {
   readonly mode: "fake" | "live";
@@ -109,6 +124,10 @@ export interface YouTubePort {
   insertStream(at: string, a: { title: string }): Promise<{ streamId: string; ingest: { url: string; streamKey: string } }>;
   /** A stream that is already absent resolves. */
   deleteStream(at: string, streamId: string): Promise<void>;
+  /** Every liveStream of the token's channel (all pages): ids, titles, channel ids - never a key. One request per page, each bounded by
+   *  YOUTUBE_CALL_BOUND_MS; `room`, when given, is asked before EVERY page, and once it answers no the call is refused
+   *  (`youtube_unavailable` / LIST_BUDGET_SPENT) - never a partial list answered as the whole. */
+  listStreams(at: string, o?: { room?: () => boolean }): Promise<StreamListing[]>;
   insertBroadcast(
     at: string,
     a: { title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy; madeForKids: boolean },

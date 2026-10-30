@@ -76,4 +76,8 @@ A credit is spent when the stream **goes live**. If it goes live and the phone's
 
 The history shows 25 rows to a page; use **Older** and **Latest** to move through it. **Export** downloads the whole history as a CSV — one line per change, with the date, the kind of change, the change in credits, the balance after it, the match's fixture number, the match, and the competition. A side that is not decided yet appears as **TBD**.
 
+### Streaming junior matches on YouTube
+
+YouTube doesn't allow live streams that show children under 16 unless an adult is visibly with them, and it can take live streaming away from a channel that breaks this rule. When you connect YouTube on the **Streaming** page, the agreement you tick includes keeping an adult visibly present whenever players under 16 are on camera. Read YouTube's [child safety policy](https://support.google.com/youtube/answer/2801999) for the full rule.
+
 See also [Plans at a glance](/help/billing/plans) and [Billing groups](/help/billing/groups).

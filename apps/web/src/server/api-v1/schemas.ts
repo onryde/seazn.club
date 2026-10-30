@@ -1896,6 +1896,10 @@ export const StreamSessionCurrent = z
      *  own). `private` is true for a broadcast that is PRIVATE on YouTube: the organiser keeps it here and the panel says so, the public
      *  match page never shows it (and its number counts every complete broadcast, so it can differ from the public page's). */
     replayParts: z.array(z.object({ partNo: z.number().int().min(1), url: z.string(), private: z.boolean() }).strict()),
+    /** Owner 2026-10-30: the watch URL of the video on YouTube THIS session streams into (server/youtube/parts.ts `sessionVideoUrl`) -
+     *  its YouTube Connect broadcast once YouTube gave it its id, in any state but `failed`. Null for a pasted key, before the id is
+     *  known, and once the channel is disconnected (the broadcast rows are purged). The panel's "On YouTube" card links it. */
+    youtubeVideoUrl: z.string().nullable(),
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
     /** W2a loop R, M2: the fixture is HELD (`needs_decision` — a level bracket result awaiting the organiser's settle).
@@ -2193,11 +2197,14 @@ export type YoutubeConnectionSettings = z.infer<typeof YoutubeConnectionSettings
  *  channel runs on the same Google account, and revoking would drop it) or `not_confirmed` (the revoke was tried and Google or YouTube
  *  did not answer, or Seazn's saved token would not open so none could be sent - the person can remove Seazn under their Google account's
  *  third-party access). In every case Seazn's own copy was purged. `keysDeleted`: stream keys Seazn made on the channel that were deleted at YouTube.
- *  `purged`: the broadcast records removed, and the match stream links that pointed at their videos cleared. */
+ *  `keysLeft`: the stream keys Seazn made that are still on the channel because YouTube would not delete them (0: none left), or `null` when
+ *  Seazn could not read the channel's streams to confirm (no usable token, a revoked grant, YouTube not answering) - the organiser deletes
+ *  them in YouTube Studio. `purged`: the broadcast records removed, and the match stream links that pointed at their videos cleared. */
 export const YOUTUBE_REVOKE_OUTCOMES = ["revoked", "skipped_shared_account", "not_confirmed"] as const;
 export const YoutubeDisconnected = z.object({
   revokeOutcome: z.enum(YOUTUBE_REVOKE_OUTCOMES),
   keysDeleted: z.number().int(),
+  keysLeft: z.number().int().nullable(),
   purged: z.object({ broadcasts: z.number().int(), streamUrlsCleared: z.number().int() }),
 });
 export type YoutubeDisconnected = z.infer<typeof YoutubeDisconnected>;

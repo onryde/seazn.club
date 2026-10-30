@@ -58,7 +58,7 @@ import { CAMERA_LIVE_PHASE, PROGRAMME_PHASE_EVENT, latestLiveRung, recordEvent, 
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
-import { fixtureReplayParts } from "@/server/youtube/parts";
+import { fixtureReplayParts, sessionVideoUrl } from "@/server/youtube/parts";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
   lockOrg, neverLiveRefundStanding, refundConsumeForSession, restartAllowance, streamMonthlyRate, type StreamCreditBreakdown,
@@ -2650,6 +2650,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     endedAt: row.ended_at ? new Date(row.ended_at).toISOString() : null,
     replayUrl: fx?.stream_url ?? null,
     replayParts: await fixtureReplayParts(row.org_id, fixtureId),
+    youtubeVideoUrl: await sessionVideoUrl(row.org_id, row.id),
     target: { id: target!.id, kind: target!.kind, label: target!.label },
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     fixtureHeld: fx?.status === "needs_decision",

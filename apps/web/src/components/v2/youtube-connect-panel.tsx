@@ -15,7 +15,7 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
@@ -211,6 +211,8 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
       <PrivacyChoice value={privacy} onChange={setPrivacy} />
       <KidsChoice value={kids} onChange={setKids} />
       <p data-testid="youtube-settings-note" className="max-w-xl text-xs text-slate-600">{msg("streaming.youtube.settingsNote")}</p>
+      {/* YouTube's child-safety rule for live streams (an adult visibly present whenever players under 16 are on camera) is a clause
+          of the consent sentence itself, so it is what the organiser ticks (PO 2026-10-30, owner-requested; spec D16). */}
       <ConsentBox checked={consent} onChange={setConsent} withName />
       <div className="flex flex-wrap items-center gap-2 max-md:flex-col max-md:items-stretch">
         <button
@@ -269,32 +271,46 @@ export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
   );
 }
 
-/** What a disconnect did, as the page keeps it once the channel has left the list: its name and what became of the grant at Google. */
-export type DisconnectNews = { name: string; outcome: YoutubeDisconnected["revokeOutcome"] };
+/** What a disconnect did, as the page keeps it once the channel has left the list: its name, what became of the grant at Google, and the
+ *  stream keys Seazn made that are still on the channel (0: none; null: Seazn could not read the channel to confirm). */
+export type DisconnectNews = { name: string; outcome: YoutubeDisconnected["revokeOutcome"]; keysLeft: YoutubeDisconnected["keysLeft"] };
 
 /** What a disconnect said, once the channel has left the list: this is the PAGE's notice, because the row that asked is gone with the
  *  refresh. The button that asked left with the row, which would drop focus to the top of the page, so the notice takes focus as it
  *  attaches (refusal-focus.tsx: a callback ref, so a re-render does not steal it back); the page keys it by its news, so the next
  *  disconnect is a new element and focuses again. Dismissing it is local state (it is not a URL outcome like the landing banner). The sentence follows the revoke's outcome:
  *  the grant was revoked; it was left alone on purpose (another channel on the same Google account still runs on it); or Seazn could not
- *  confirm it - then the person is told where to remove Seazn themselves, a plain link to their Google account's third-party access. */
-export function YoutubeDisconnectedNotice({ name, outcome, onDismiss }: DisconnectNews & { onDismiss: () => void }) {
+ *  confirm it - then the person is told where to remove Seazn themselves, a plain link to their Google account's third-party access. When
+ *  stream keys Seazn made are still on the channel, or Seazn could not read the channel to check, the notice says that first instead. */
+export function YoutubeDisconnectedNotice({ name, outcome, keysLeft, onDismiss }: DisconnectNews & { onDismiss: () => void }) {
   const msg = useMsg();
-  const unconfirmed = outcome === "not_confirmed";
-  const sentence =
-    outcome === "revoked" ? msg("streaming.youtube.disconnect.done", { name })
+  const msgPlural = useMsgPlural();
+  const link = <a href={GOOGLE_THIRD_PARTY_ACCESS_URL} data-testid="youtube-disconnected-google-link" {...EXTERNAL} className={LINK}>{msg("streaming.youtube.disconnect.googleLink")}</a>;
+  // Seazn keys still on the channel (a count), or a channel Seazn could not read (null): the "deleted" sentences would be false, so the
+  // notice LEADS with what is left and where to delete it, and the grant's outcome follows as a sentence of its own - nothing to add for a
+  // revoke, why it stays for a shared account, the Google link for one nobody confirmed.
+  const keysOpen = keysLeft === null || keysLeft > 0;
+  const sentence = keysOpen ? (
+    <>
+      {keysLeft === null
+        ? msg("streaming.youtube.disconnect.keysUnchecked", { name })
+        : msgPlural("streaming.youtube.disconnect.keysLeft", keysLeft, { name })}
+      {outcome === "skipped_shared_account" && <> {msg("streaming.youtube.disconnect.keysTail.shared")}</>}
+      {outcome === "not_confirmed" && <> {withSlots(msg("streaming.youtube.disconnect.keysTail.unconfirmed"), { link })}</>}
+    </>
+  ) : outcome === "revoked" ? msg("streaming.youtube.disconnect.done", { name })
     : outcome === "skipped_shared_account" ? msg("streaming.youtube.disconnect.doneShared", { name })
-    : withSlots(msg("streaming.youtube.disconnect.doneUnconfirmed", { name }), {
-      link: <a href={GOOGLE_THIRD_PARTY_ACCESS_URL} data-testid="youtube-disconnected-google-link" {...EXTERNAL} className={LINK}>{msg("streaming.youtube.disconnect.googleLink")}</a>,
-    });
+    : withSlots(msg("streaming.youtube.disconnect.doneUnconfirmed", { name }), { link });
+  const alert = keysOpen || outcome === "not_confirmed";
   return (
     <div
       ref={focusRefusalBlock}
       tabIndex={-1}
       data-testid="youtube-disconnected"
       data-outcome={outcome}
-      role={unconfirmed ? "alert" : "status"}
-      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${REFUSAL_FOCUS_RING} ${unconfirmed ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}
+      data-keys-left={keysLeft === null ? "unknown" : keysLeft}
+      role={alert ? "alert" : "status"}
+      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${REFUSAL_FOCUS_RING} ${alert ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}
     >
       <p className="min-w-0 flex-1 break-words">{sentence}</p>
       <button type="button" data-testid="youtube-disconnected-dismiss" onClick={onDismiss} className="btn btn-ghost min-h-11 shrink-0 px-3 max-md:w-full">
@@ -503,8 +519,8 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
       setError(null);
       const done = await apiV1<YoutubeDisconnected>(`/api/v1/orgs/${orgId}/youtube-connections/${y.connectionId}`, { method: "DELETE" });
       // An answer that does not say what became of the grant is told as the cautious one: the person is pointed at Google, never
-      // assured of a revoke nobody confirmed.
-      onDisconnected?.({ name: y.channelTitle, outcome: done?.revokeOutcome ?? "not_confirmed" });
+      // assured of a revoke nobody confirmed. The same for the keys: no count is "not confirmed" (null), never a 0.
+      onDisconnected?.({ name: y.channelTitle, outcome: done?.revokeOutcome ?? "not_confirmed", keysLeft: typeof done?.keysLeft === "number" ? done.keysLeft : null });
       if (refreshAfter) router.refresh();
     } catch (err) {
       // Already disconnected elsewhere (404): the list is the news - re-read, or dropped by the page that keeps its own list. A match

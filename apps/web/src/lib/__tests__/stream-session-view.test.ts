@@ -36,7 +36,7 @@ import {
   type ReadyState, type StreamSessionView,
   TARGET_REMOVED, canGoLive, countdownKey, createErrorCode, createErrorHolder, createErrorIsNotFound, createErrorText, d3Warning,
   destinationWarning, durationLabel, elapsedLabel, healthChips, outputElapsedMs, phoneNoSignal, phoneStrip, phoneTabState,
-  readyStateOf, reconnectReasonOf, restartLine, failReasonKey,
+  readyStateOf, reconnectReasonOf, restartLine, failReasonKey, youtubeLinkOf,
   AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, AUTO_WONT_START_KEY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine, autoSwitchNote,
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
@@ -76,7 +76,7 @@ const NOW = new Date("2026-09-14T12:10:00Z");
 const view = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "live", desiredState: "live", failReason: null,
   health: null, ingest: { state: "connected", protocol: "srt" }, output: null, balance: 2,
-  startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null, replayParts: [],
+  startedAt: "2026-09-14T12:00:00Z", endedAt: null, replayUrl: null, replayParts: [], youtubeVideoUrl: null,
   target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: true, startCause: "organiser", restart: null, countdown: null, ...over,
 });
 
@@ -1793,5 +1793,52 @@ describe("YouTube Connect T12 — every YouTube Go live refusal reaches the pane
       checked++;
     }
     expect(checked).toBe(5);
+  });
+});
+
+// Owner 2026-10-30: the organiser's match page links the match's video on YouTube - one more card in the stream panel. The server
+// decides WHETHER there is a video (`youtubeVideoUrl`, server/youtube/parts.ts `sessionVideoUrl`, proven through the real loader in
+// session-video-url.test.ts); this decides how the card reads it. The live set is the brief's own words, typed here: "while the session
+// is live or starting" - every state before live, and live; ending, over and failed read "On YouTube".
+describe("youtubeLinkOf: the match page's link to the video on YouTube", () => {
+  const URL_A = "https://www.youtube.com/watch?v=aaaaaaaaaaa";
+
+  it("EMPTY CASE FIRST: no session, and a session with no video (a pasted key, a failed broadcast, a purged one), is no card", () => {
+    expect(youtubeLinkOf(null)).toBeNull();
+    let checked = 0;
+    for (const state of StreamSessionState.options) {
+      expect(youtubeLinkOf(view({ state, youtubeVideoUrl: null })), state).toBeNull();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every session state was read").toBe(7);
+  });
+
+  it("every session state: LIVE while the session is starting or live, not live once it is ending, over or failed - the url is the view's own", () => {
+    const LIVE = new Set(["requested", "provisioning", "warming", "live"]);
+    const NOT_LIVE = new Set(["ending", "completed", "failed"]);
+    let live = 0;
+    let notLive = 0;
+    for (const state of StreamSessionState.options) {
+      const got = youtubeLinkOf(view({ state, youtubeVideoUrl: URL_A }));
+      expect(got, state).toEqual({ url: URL_A, live: LIVE.has(state) });
+      if (LIVE.has(state)) live++;
+      else if (NOT_LIVE.has(state)) notLive++;
+    }
+    // A state added to the enum and named in neither set fails here instead of silently reading as one of the two.
+    expect({ live, notLive }, "every state is in exactly one of the brief's two sets").toEqual({ live: 4, notLive: 3 });
+  });
+
+  it("SEQUENCE: the same session read again after it ends flips live to not live and keeps the link; a second session on the same video reads it again", () => {
+    const first = youtubeLinkOf(view({ id: "s1", state: "live", youtubeVideoUrl: URL_A }));
+    const after = youtubeLinkOf(view({ id: "s1", state: "completed", youtubeVideoUrl: URL_A }));
+    expect(first).toEqual({ url: URL_A, live: true });
+    expect(after).toEqual({ url: URL_A, live: false });
+    expect(youtubeLinkOf(view({ id: "s2", state: "warming", youtubeVideoUrl: URL_A }))).toEqual({ url: URL_A, live: true });
+  });
+
+  it("a view from a server older than the field (no `youtubeVideoUrl` on the wire) is no card, never a link to `undefined`", () => {
+    const old: Record<string, unknown> = { ...view({ state: "live" }) };
+    delete old.youtubeVideoUrl;
+    expect(youtubeLinkOf(old as unknown as StreamSessionView)).toBeNull();
   });
 });
