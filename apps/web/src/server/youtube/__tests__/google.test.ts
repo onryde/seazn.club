@@ -121,7 +121,7 @@ describe("GoogleYouTube is a live YouTubePort", () => {
       expect(typeof (g as unknown as Record<string, unknown>)[m], m).toBe("function");
       checked++;
     }
-    expect(checked, "anti-vacuity: the declared methods").toBe(14);
+    expect(checked, "anti-vacuity: the declared methods").toBe(15);
   });
 });
 
@@ -460,6 +460,78 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
     // A 404 whose reason is not "this resource is gone" is not forgiven (a wrong URL would otherwise read as a clean delete).
     handler = () => apiError(404, "somethingNew");
     expect(((await rejection(driver().deleteBroadcast(AT, "bc1"))) as YouTubeError).code).toBe("youtube_unavailable");
+  });
+
+  // liveStreams.list (developers.google.com/youtube/v3/live/docs/liveStreams/list): `part` (snippet), `mine=true`, `maxResults` 0-50
+  // (default 5), `pageToken`; the response pages with `nextPageToken`; `snippet` carries `channelId` and `title`. The `cdn` part is where
+  // `ingestionInfo.streamName` - the stream KEY - lives, so the disconnect's sweep must never ask for it.
+  it("listStreams: GET liveStreams?part=snippet&mine=true&maxResults=50 - never the `cdn` part (the stream key) - mapped to id, title and channel id, paged by nextPageToken until Google stops sending one", async () => {
+    const pages: Record<string, unknown> = {
+      first: { nextPageToken: "PAGE-2", items: [{ id: "s1", snippet: { channelId: "UCchan", title: "Seazn stream key" } }, { id: "s2", snippet: { channelId: "UCchan", title: "TestYouTube" } }] },
+      "PAGE-2": { items: [{ id: "s3", snippet: { channelId: "UCchan", title: "Seazn Club · stream key 2" } }] },
+    };
+    handler = (req) => res(200, pages[new URL(req.url).searchParams.get("pageToken") ?? "first"]);
+    expect(await driver().listStreams(AT)).toEqual([
+      { id: "s1", title: "Seazn stream key", channelId: "UCchan" },
+      { id: "s2", title: "TestYouTube", channelId: "UCchan" },
+      { id: "s3", title: "Seazn Club · stream key 2", channelId: "UCchan" },
+    ]);
+    expect(sent, "two pages, two requests").toHaveLength(2);
+    let checked = 0;
+    for (const [i, r] of sent.entries()) {
+      const u = new URL(r.url);
+      expect([r.method, u.origin + u.pathname]).toEqual(["GET", "https://www.googleapis.com/youtube/v3/liveStreams"]);
+      expect(u.searchParams.get("part"), "snippet ONLY: the cdn part carries the stream key").toBe("snippet");
+      expect(u.searchParams.get("mine")).toBe("true");
+      expect(u.searchParams.get("maxResults"), "Google's page maximum").toBe("50");
+      expect(u.searchParams.get("pageToken")).toBe(i === 0 ? null : "PAGE-2");
+      expect(r.body, "a list takes no body").toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("listStreams: an empty channel (no `items` at all) is []; a stream with no snippet has an empty title and no channel; a key Google sends anyway never reaches the answer", async () => {
+    handler = () => res(200, { kind: "youtube#liveStreamListResponse", pageInfo: { totalResults: 0, resultsPerPage: 50 } });
+    expect(await driver().listStreams(AT)).toEqual([]);
+    handler = () => res(200, {
+      items: [
+        { id: "bare" },
+        { id: "keyed", snippet: { channelId: "UCchan", title: "k" }, cdn: { ingestionInfo: { ingestionAddress: "rtmp://a.rtmp.youtube.com/live2", streamName: "LEAKED-KEY-1234" } } },
+        { snippet: { title: "no id" } },
+      ],
+    });
+    const out = await driver().listStreams(AT);
+    expect(out).toEqual([{ id: "bare", title: "", channelId: null }, { id: "keyed", title: "k", channelId: "UCchan" }]);
+    expect(JSON.stringify(out), "the answer is ids and titles: never a key, never an ingest URL").not.toMatch(/LEAKED-KEY|rtmp:/);
+  });
+
+  it("listStreams: a refusal is thrown as its code; a page token Google repeats, and more pages than the cap, are refused rather than read as a whole list (the caller would delete from it)", async () => {
+    handler = () => apiError(401, "authError");
+    expect(((await rejection(driver().listStreams(AT))) as YouTubeError).code).toBe("youtube_reconnect_needed");
+    handler = () => res(503, {}, "unavailable");
+    expect(((await rejection(driver().listStreams(AT))) as YouTubeError).code).toBe("youtube_unavailable");
+
+    // the same token again would loop forever
+    sent = [];
+    handler = () => res(200, { nextPageToken: "SAME", items: [{ id: "s1", snippet: { title: "t" } }] });
+    const loop = (await rejection(driver().listStreams(AT))) as YouTubeError;
+    expect([loop.code, loop.reason]).toEqual(["youtube_unavailable", "malformedResponse"]);
+    expect(sent, "the first page, then the page it named, which named itself again").toHaveLength(2);
+
+    // every page names a new one: the driver stops at its cap (10 pages = 500 streams) and refuses
+    sent = [];
+    let n = 0;
+    handler = () => res(200, { nextPageToken: `P${++n}`, items: [] });
+    const capped = (await rejection(driver().listStreams(AT))) as YouTubeError;
+    expect([capped.code, capped.reason]).toEqual(["youtube_unavailable", "tooManyPages"]);
+    expect(sent, "the cap: 10 requests").toHaveLength(10);
+    // the positive pair: the 10th page ending the list is an answer
+    sent = [];
+    n = 0;
+    handler = () => res(200, ++n < 10 ? { nextPageToken: `P${n}`, items: [{ id: `s${n}`, snippet: { title: "t" } }] } : { items: [{ id: "last", snippet: { title: "t" } }] });
+    expect((await driver().listStreams(AT)).length, "nine pages of one, then the last").toBe(10);
+    expect(sent).toHaveLength(10);
   });
 
   it("existingVideos: GET videos?part=id&id=a,b,c; answers only ids it asked about; ids Google omits (deleted) are absent from the set", async () => {
@@ -891,6 +963,7 @@ const CALLS: Record<RequestMethod, (g: YouTubePort) => Promise<unknown>> = {
   liveEnabled: (g) => g.liveEnabled(AT),
   insertStream: (g) => g.insertStream(AT, { title: "k" }),
   deleteStream: (g) => g.deleteStream(AT, "strm1"),
+  listStreams: (g) => g.listStreams(AT),
   insertBroadcast: (g) => g.insertBroadcast(AT, { title: "t", description: "d", scheduledStart: new Date("2026-11-03T14:30:00Z"), privacy: "unlisted", madeForKids: false }),
   bind: (g) => g.bind(AT, "bc1", "strm1"),
   broadcastLife: (g) => g.broadcastLife(AT, "bc1"),
@@ -903,13 +976,13 @@ const CALLS: Record<RequestMethod, (g: YouTubePort) => Promise<unknown>> = {
 describe("secrets stay out of every URL and ride in the Authorization header or a POST body", () => {
   it("every request-making method: no URL holds the access token, refresh token, code, verifier or client secret; Data API calls carry `Authorization: Bearer <at>`", async () => {
     const methods = FAKE_YOUTUBE_METHODS.filter((m): m is RequestMethod => m !== "authorizeUrl");
-    expect(methods.length, "the port's 13 methods other than authorizeUrl").toBe(13);
+    expect(methods.length, "the port's 14 methods other than authorizeUrl").toBe(14);
     expect(Object.keys(CALLS).sort(), "the table covers exactly those").toEqual([...methods].sort());
     const g = driver();
     for (const m of methods) await CALLS[m](g);
 
-    // exchangeCode makes TWO requests (token, then tokeninfo): 13 methods, 14 requests.
-    expect(sent).toHaveLength(14);
+    // exchangeCode makes TWO requests (token, then tokeninfo): 14 methods, 15 requests.
+    expect(sent).toHaveLength(15);
     let checked = 0;
     let bearer = 0;
     let formBodies = 0;
@@ -937,8 +1010,8 @@ describe("secrets stay out of every URL and ride in the Authorization header or 
       }
       checked++;
     }
-    expect(checked, "anti-vacuity: every captured request was checked").toBe(14);
-    expect([bearer, formBodies], "10 Data API calls + 4 OAuth form calls").toEqual([10, 4]);
+    expect(checked, "anti-vacuity: every captured request was checked").toBe(15);
+    expect([bearer, formBodies], "11 Data API calls + 4 OAuth form calls").toEqual([11, 4]);
   });
 
   it("revoke and tokeninfo send the token in a form POST body, never the query string", async () => {
@@ -1075,6 +1148,19 @@ describe("mapGoogleError", () => {
         google: apiError(403, "invalidTransition"),
         call: (g) => g.complete(AT, "bc1"),
       },
+      {
+        // YouTube refusing to let a stream go (403 liveStreamDeletionNotAllowed: e.g. a broadcast still holds it) - the disconnect's retry
+        // and its "keys left" answer are driven by the fake's control for exactly this.
+        name: "delete a stream YouTube will not let go of",
+        fake: async () => {
+          const { f, at } = await mkFake();
+          const { streamId } = await f.insertStream(at, { title: "k" });
+          f.refuseStreamDelete(streamId);
+          return f.deleteStream(at, streamId);
+        },
+        google: apiError(403, "liveStreamDeletionNotAllowed"),
+        call: (g) => g.deleteStream(AT, "strm1"),
+      },
     ];
     let checked = 0;
     for (const row of rows) {
@@ -1132,11 +1218,11 @@ describe("failures are codes, whatever Google (or the network) said", () => {
       expect([m, b instanceof YouTubeError && b.code]).toEqual([m, "youtube_unavailable"]);
       checked++;
     }
-    expect(checked, "13 methods").toBe(13);
+    expect(checked, "14 methods").toBe(14);
   });
 
   it("a 200 whose body is not JSON is youtube_unavailable / malformedResponse for every method that reads the body", async () => {
-    const readers: RequestMethod[] = ["exchangeCode", "accessToken", "listMyChannels", "liveEnabled", "insertStream", "insertBroadcast", "broadcastLife", "existingVideos"];
+    const readers: RequestMethod[] = ["exchangeCode", "accessToken", "listMyChannels", "liveEnabled", "insertStream", "listStreams", "insertBroadcast", "broadcastLife", "existingVideos"];
     let checked = 0;
     for (const m of readers) {
       handler = () => res(200, undefined, `{"id": ${AT}`);
