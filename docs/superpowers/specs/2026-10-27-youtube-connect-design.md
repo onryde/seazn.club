@@ -365,7 +365,7 @@ reuses a claimed row, it creates a new one).
 Title: `<Home> v <Away> · <Division> · <Competition>`, trimmed to YouTube's title limit (builder verifies the limit;
 truncate the competition first). Description: the match line + the Seazn public match URL ("Live score and results:"),
 then a blank line and a "Powered by Seazn Club" line linking the site (`siteOrigin()` + `/`; owner request 2026-10-29),
-i.e. `<line> <matchUrl>\n\n<poweredBy> · <origin>/`; shown for every org, including ones with `dashboard.branding` (owner, 2026-10-29). Both in the org's default locale (`organizations.default_locale`).
+i.e. `<line> <matchUrl>\n\n<poweredBy> · <origin>` (no trailing slash, owner 2026-10-30); shown for every org, including ones with `dashboard.branding` (owner, 2026-10-29). Both in the org's default locale (`organizations.default_locale`).
 
 ### 6.6 The tick (D8, D9)
 
