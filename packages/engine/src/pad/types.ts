@@ -82,7 +82,8 @@ export interface SetBasedPadRules extends PadRulesBase {
   /** P3.1: the target of the set at `setIndex` (0-based), the deciding set's own included - the kernel's `setTarget`. */
   setTarget(cfg: unknown, setIndex: number): number;
   scoreBound(cfg: unknown): number;
-  /** (c) "golden point" / "setting" / null for the open game. `state` is the folded state (or a pre-fold `{}`). */
+  /** (c) "golden point" / "setting" / null for the open game, while the match is live (null once it is decided, a forfeit
+   *  or abandon included). `state` is the folded state (or a pre-fold `{}`). */
   deuceNote(state: unknown, cfg: unknown): "goldenPoint" | "setting" | null;
 }
 

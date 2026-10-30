@@ -200,10 +200,10 @@ const tileById = (tiles: readonly TileSpec[], id: string): TileSpec | undefined 
 const stripItem = (v: PadHostView, id: string) => buildScorebug(v, t).strip.find((item) => item.id === id);
 
 // ---------------------------------------------------------------------------
-// The engine facts this file restates — pinned EQUAL, never assumed
+// The engine facts this skin reads from `@seazn/engine/pad` — pinned EQUAL to the module's own
 // ---------------------------------------------------------------------------
 
-describe("the constants this skin restates cannot drift from the engine's own", () => {
+describe("the pad record this skin reads is the engine's own declaration", () => {
   const spec = tabletennis.padSpec!(ITTF_CFG);
 
   it("tabletennisPadRules.eventBands is padSpec's own `fidelity` map, entry for entry", () => {
@@ -227,9 +227,9 @@ describe("the constants this skin restates cannot drift from the engine's own", 
   });
 
   it("tabletennisPadRules.expediteReturns is the ITTF 2.15.2 threshold the REAL fold enforces, at the exact boundary", () => {
-    // Restated (the engine's own EXPEDITE_RETURNS is not exported from the
-    // barrel this skin is limited to) and pinned against a live fold rather
-    // than assumed: a rally crediting the SERVING side their Nth-return win
+    // The pad record's value (the kernel's EXPEDITE_RETURNS, which the skin
+    // now reads) pinned against a live fold rather than assumed: a rally
+    // crediting the SERVING side their Nth-return win
     // throws `EXPEDITE_WRONG_WINNER` at N=13 and NOT at N=12 — the threshold
     // itself, not merely "some number throws".
     const events = stream(expedite());

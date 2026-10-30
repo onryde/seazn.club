@@ -502,9 +502,9 @@ function setWinner(
 
 /** What the next point means at a set score (pad wave P3.1), read off `setWinner` itself so the pad's note and the fold
  *  cannot disagree. Level scores only; anything else is `null`.
- *   - `goldenPoint`: the next point wins the set whoever takes it (BWF 7.5's 29-all under the cap of 30; a win-by-one
+ *   - `goldenPoint`: the next point wins the set whoever takes it (BWF 7.4's 29-all under the cap of 30; a win-by-one
  *     cfg at target-1 all).
- *   - `setting`: from target-1 all onward a side needs `winBy` clear (BWF 7.4 "setting", ITTF 2.11.1 and FIVB 6.1.2
+ *   - `setting`: from target-1 all onward a side needs `winBy` clear (BWF 7.3 "setting", ITTF 2.11.1 and FIVB 6.1.2
  *     "deuce") - at every level score that follows, not only the first.
  *   - `null`: below target-1 all, or not level. */
 export function setDeuceNote(params: SetBasedParams, setIndex: number, home: number, away: number): "goldenPoint" | "setting" | null {
@@ -1944,14 +1944,16 @@ export const LIBERO_BAND: FidelityBand = ADMIN_RECORD_BAND;
  */
 function setBasedFidelity(preset: SetBasedPreset): Readonly<Record<string, FidelityBand>> {
   const key = preset.key;
-  return {
+  // Frozen: this one object is every cfg's `padSpec(cfg).fidelity` and the pad record's `eventBands`, so a write by any
+  // reader would reach all of them.
+  return Object.freeze({
     [`${key}.${preset.coarseEventType}`]: 0,
     [`${key}.timeout`]: ADMIN_RECORD_BAND,
     [`${key}.sanction`]: ADMIN_RECORD_BAND,
     [`${key}.sub`]: ADMIN_RECORD_BAND,
     [`${key}.expedite.start`]: ADMIN_RECORD_BAND,
     [`${key}.rally`]: 3,
-  } satisfies Record<string, FidelityBand>;
+  } satisfies Record<string, FidelityBand>);
 }
 
 // ---------------------------------------------------------------------------

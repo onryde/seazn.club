@@ -267,10 +267,10 @@ const stripItem = (v: PadHostView, id: string) => buildScorebug(v, t).strip.find
 const ctxOf = (v: PadHostView) => serveContextOf(v, v.state as Record<string, unknown>)!;
 
 // ---------------------------------------------------------------------------
-// The engine facts this file restates — pinned EQUAL, never assumed
+// The engine facts this skin reads from `@seazn/engine/pad` — pinned EQUAL to the module's own
 // ---------------------------------------------------------------------------
 
-describe("the constants this skin restates cannot drift from the engine's own", () => {
+describe("the pad record this skin reads is the engine's own declaration", () => {
   const spec = volleyball.padSpec!(VB_CFG);
 
   it("volleyballPadRules.eventBands is padSpec's own `fidelity` map, entry for entry", () => {

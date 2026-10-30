@@ -175,10 +175,10 @@ const tileById = (tiles: readonly TileSpec[], id: string): TileSpec | undefined 
 const stripItem = (v: PadHostView, id: string) => buildScorebug(v, t).strip.find((item) => item.id === id);
 
 // ---------------------------------------------------------------------------
-// The engine facts this file restates — pinned EQUAL, never assumed
+// The engine facts this skin reads from `@seazn/engine/pad` — pinned EQUAL to the module's own
 // ---------------------------------------------------------------------------
 
-describe("the constants this skin restates cannot drift from the engine's own", () => {
+describe("the pad record this skin reads is the engine's own declaration", () => {
   const spec = badminton.padSpec!(BWF_CFG);
 
   it("badmintonPadRules.eventBands is padSpec's own `fidelity` map, entry for entry", () => {

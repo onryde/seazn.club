@@ -101,6 +101,11 @@ describe("the declarations each record is (toBe)", () => {
       // Every registered event type has a band (the fidelity map's own contract), so the record hides nothing the fold takes.
       expect(Object.keys(c.rules.eventBands).sort(), c.key).toEqual(Object.keys(c.module.eventSchemas ?? {}).sort());
       expect(Object.keys(c.rules.eventBands), c.key).toHaveLength(6);
+      // One object shared by every cfg and the record, so it is frozen: a write by one reader cannot reach the others.
+      expect(Object.isFrozen(c.rules.eventBands), `${c.key} frozen`).toBe(true);
+      expect(() => {
+        (c.rules.eventBands as Record<string, number>)[`${c.key}.rally`] = 0;
+      }, `${c.key} write refused`).toThrow(TypeError);
     }
     // eslint-disable-next-line no-console -- the sweep reports what it checked; the count is asserted non-zero below
     console.info(`[pad setbased] fidelity maps checked: ${checked}`);
@@ -150,7 +155,7 @@ describe("cfg readers: read through the module's configSchema, never a fallback 
         const spec = padSpecOf(c.module, cfg);
         expect(c.rules.scoreBound(cfg), `${c.key} ${name} home`).toBe(padNumberBound(spec, summaryType(c.module), "home").max);
         expect(c.rules.scoreBound(cfg), `${c.key} ${name} away`).toBe(padNumberBound(spec, summaryType(c.module), "away").max);
-        // A capped game ends AT the cap (BWF 7.5: 30-29 wins), so the cap is also the most a game can show.
+        // A capped game ends AT the cap (BWF 7.4: 30-29 wins), so the cap is also the most a game can show.
         if (cfg.cap !== null) expect(c.rules.scoreBound(cfg), `${c.key} ${name} capped`).toBe(cfg.cap);
         checked++;
       }
@@ -218,9 +223,9 @@ describe("cfg readers: read through the module's configSchema, never a fallback 
 describe("deuceNote: what the next point means at a level score, read off the fold's own set-winner rule", () => {
   /**
    * The rule as the rulebooks state it, for a level score of n-all in a set to `target`, `winBy` clear, capped at `cap`:
-   *  - BWF 7.5 (and any cap): at cap-1 all the next point wins the game, a golden point;
+   *  - BWF 7.4 (and any cap): at cap-1 all the next point wins the game, a golden point;
    *  - a winBy of 1: at target-1 all the next point wins too;
-   *  - BWF 7.4, ITTF 2.11.1, FIVB 6.1.2: from target-1 all onward a side needs a two-point lead ("setting" / deuce), at every
+   *  - BWF 7.3, ITTF 2.11.1, FIVB 6.1.2: from target-1 all onward a side needs a two-point lead ("setting" / deuce), at every
    *    level score that follows, not only the first;
    *  - below target-1 all nothing is in play.
    */
@@ -318,6 +323,41 @@ describe("deuceNote: what the next point means at a level score, read off the fo
       const level = fold(c.module, cfg, levelAt(c.module, target - 1), false);
       expect(c.rules.deuceNote(level, cfg)).toBe(c.rules.deuceNote(level, cfg));
     }
+  });
+});
+
+describe("deuceNote once the match is decided at a tie (the after-a-withdrawal transition)", () => {
+  // A forfeit (retired, a disqualification) or an abandon ends the match with the open set still unclosed, so the set
+  // alone still reads a level score past target-1. A decided board has no next point: the note is null there, every sport.
+  const ENDINGS: readonly { label: string; event: ModuleEvent }[] = [
+    { label: "retired", event: { type: "core.forfeit", payload: { by: "A", reason: "retired" } } },
+    { label: "disqualified", event: { type: "core.forfeit", payload: { by: "A", reason: "disqualified" } } },
+    { label: "abandoned", event: { type: "core.abandon", payload: { reason: "weather" } } },
+  ];
+
+  it("is null after core.forfeit (retired, disqualified) and core.abandon at target-1 all and target+1 all, and live just before", () => {
+    let checked = 0;
+    for (const c of CASES) {
+      const cfg = c.module.configSchema.parse({});
+      const target = c.rules.setTarget(cfg, 0);
+      for (const n of [target - 1, target + 1]) {
+        const live = fold(c.module, cfg, levelAt(c.module, n), false);
+        // The positive pair: the same tie, still live, carries the note (so null below is the decision, not the score).
+        expect(live.phase, `${c.key} ${n}-all live`).toBe("live");
+        expect(c.rules.deuceNote(live, cfg), `${c.key} ${n}-all live`).toBe("setting");
+        for (const { label, event } of ENDINGS) {
+          const decided = fold(c.module, cfg, [...levelAt(c.module, n), event], false);
+          expect(decided.phase, `${c.key} ${n}-all ${label}`).not.toBe("live");
+          const open = decided.sets[decided.sets.length - 1];
+          expect(open !== undefined && !open.closed && open.home === n && open.away === n, `${c.key} ${n}-all ${label}: the set stays open and level`).toBe(true);
+          expect(c.rules.deuceNote(decided, cfg), `${c.key} ${n}-all ${label}`).toBeNull();
+          checked++;
+        }
+      }
+    }
+    // eslint-disable-next-line no-console -- the sweep reports what it checked; the count is asserted below
+    console.info(`[pad setbased] decided-at-a-tie boards checked: ${checked}`);
+    expect(checked).toBe(CASES.length * 2 * ENDINGS.length);
   });
 });
 

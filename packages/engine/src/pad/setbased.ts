@@ -34,6 +34,13 @@ function openSetOf(state: unknown): ReturnType<typeof openSet> {
   return openSet(state as Pick<SetBasedState, "sets">);
 }
 
+/** The folded state's phase (`pre|live|done|final|abandoned`), or null for a pre-fold `{}` or a non-object. */
+function phaseOf(state: unknown): string | null {
+  if (typeof state !== "object" || state === null) return null;
+  const phase = (state as { phase?: unknown }).phase;
+  return typeof phase === "string" ? phase : null;
+}
+
 /** The module's fidelity map: `padSpec(cfg).fidelity` is ONE object for every cfg (`setBasedFidelity`), read at the default. */
 function fidelityOf(module: SetBasedModule): Readonly<Record<string, FidelityBand>> {
   if (module.padSpec === undefined) throw new Error(`@seazn/engine/pad: ${module.key} declares no padSpec`);
@@ -49,8 +56,20 @@ function setBasedRules(module: SetBasedModule, sanctionLevels: readonly string[]
     setTo: (cfg) => resolve(cfg).setTo,
     setTarget: (cfg, setIndex) => setTarget(resolve(cfg), setIndex),
     scoreBound: (cfg) => summaryScoreBound(resolve(cfg)),
+    // WHEN the note shows is the rulebook's two-point endgame, read off the fold's own `setWinner` (setDeuceNote): a
+    // level score from target-1 all keeps needing a two-point lead at EVERY later tie, not only the first. BWF Law 7.3
+    // (20-all: two clear) and 7.4 (29-all: the 30th point wins, the golden point), DOMAIN.badminton.md "Setting" /
+    // "Golden point" rows; ITTF 2.11.1 (10-all: two clear), DOMAIN.tabletennis.md "Uncapped deuce endgame (12-10,
+    // 15-13, ...)"; FIVB 6.1.2 (24-all: play on to a two-point lead) and 6.3.2 (the deciding set, 14-all),
+    // DOMAIN.volleyball.md "Two-point margin with an uncapped endgame (32-30 is legal)". A win-by-one cfg reads golden
+    // point at target-1 all, because the next point wins. Pad wave P3.1 moved badminton and volleyball from "only at
+    // target-1 all" to this (table tennis already did it, the PR #678 fix); the owner rules on that visible change.
+    //
+    // Live only: a forfeit (retired, disqualified) or an abandon ends the match with the open set still unclosed, and a
+    // decided board has no next point to describe.
     deuceNote: (state, cfg) => {
       const resolved = resolve(cfg);
+      if (phaseOf(state) !== "live") return null;
       const open = openSetOf(state);
       return open === null ? null : setDeuceNote(resolved, open.index, open.set.home, open.set.away);
     },

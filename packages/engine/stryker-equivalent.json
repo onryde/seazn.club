@@ -596,19 +596,19 @@
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2760:60 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2762:60 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = setBasedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "setBasedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2498:9 ConditionalExpression → true",
+      "mutant": "src/sports/setbased/kernel.ts:2500:9 ConditionalExpression → true",
       "original": "reason !== \"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2498:20 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2500:20 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
@@ -728,7 +728,7 @@
       "reason": "Reached only for a draw_plus_bonus sport (a result sport short-circuits to {} first): with no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key; W2d Task 3, re-keyed in fix round 1 M-3)."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2512:27 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2514:27 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."
@@ -1736,13 +1736,13 @@
       "reason": "W2e T25 (X-SE-1). The fallback is read only by arbitraryEvent (kernel.ts:2463, the generator, ignored by ruling 109), and tennis, the kernel's one shipped preset, declares sanctionEnding (tennis.ts:71), so the fallback is never taken in product. No sanction level is spelled 'Stryker was here' either."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2315:76 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/sports/setbased/kernel.ts:2317:76 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const endLevels: readonly string[] = preset.sanctionEnding?.endLevels ?? [];",
       "reason": "W2e T25 (X-SE-1). The fallback is taken only by a preset without sanctionEnding (table tennis), and its readers compare a sanction level against it: SetBasedSanctionLevel is an enum (kernel.ts:236), so no level is ever 'Stryker was here' and the list matches nothing, as [] does."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2558:9 ConditionalExpression → false",
+      "mutant": "src/sports/setbased/kernel.ts:2560:9 ConditionalExpression → false",
       "original": "preset.sanctionEnding === undefined",
       "line": "...(preset.sanctionEnding === undefined ? {} : { sanctionEnding: preset.sanctionEnding }),",
       "reason": "W2e T25 (X-SE-1). An exactOptionalPropertyTypes spread: the mutant gives table tennis an own sanctionEnding key holding undefined instead of no key. Every reader reads module.sanctionEnding (core/sanction-ending.ts, both kernels), which is undefined either way; nothing tests the key's presence."

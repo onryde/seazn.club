@@ -25,7 +25,7 @@ import {
 } from "@seazn/engine/pad";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { entrantKindCap } from "@seazn/engine/sport";
-import { badminton, tabletennis, volleyball, type SetBasedCfg, type SetBasedModule } from "@seazn/engine/sports/setbased";
+import { badminton, tabletennis, volleyball, type SetBasedCfg, type SetBasedModule, type SetBasedState } from "@seazn/engine/sports/setbased";
 import { declaredCfgs, makeEnvelope } from "@seazn/engine/testkit";
 import { foldClient } from "../../../module-client";
 import type { GuidedSheetSpec, PadHostView, ScorebugSpec, TileSpec } from "../../types";
@@ -199,9 +199,20 @@ describe("each skin's sanction sheet and set-score sheet offer what padSpec(cfg)
     }
   });
 
-  it("the set-score fields' max is padSpec's bound, both fields, at every declared cfg (uncapped table tennis and volleyball included)", () => {
+  // Every declared badminton cfg is capped and every declared table tennis / volleyball cfg is uncapped, so each sport gets
+  // the OTHER branch too: `cap` is an organiser key for badminton and volleyball, and the schema allows it for table tennis.
+  const OTHER_BRANCH: Readonly<Record<Skin["key"], { name: string; cfg: SetBasedCfg }>> = {
+    badminton: { name: "uncapped", cfg: badminton.configSchema.parse({ cap: null }) },
+    tabletennis: { name: "capped 15", cfg: tabletennis.configSchema.parse({ cap: 15 }) },
+    volleyball: { name: "capped 30", cfg: volleyball.configSchema.parse({ cap: 30 }) },
+  };
+
+  it("the set-score fields' max is padSpec's bound, both fields, at every declared cfg plus one cfg on the other cap branch", () => {
     for (const skin of SKINS) {
-      for (const { name, cfg } of cfgsOf(skin.module)) {
+      const cfgs = [...cfgsOf(skin.module), OTHER_BRANCH[skin.key]];
+      // Both branches of the bound are met, so neither can be re-typed in a skin unseen.
+      expect(new Set(cfgs.map(({ cfg }) => cfg.cap === null)).size, skin.key).toBe(2);
+      for (const { name, cfg } of cfgs) {
         const spec = specOf(skin.module, cfg);
         const sheet = skin.sheets(view(skin, cfg))[skin.SET_SCORE_TILE_ID];
         for (const field of ["home", "away"] as const) {
@@ -267,9 +278,14 @@ describe("the context line: Best of N and the deuce note come from the pad recor
     let setting = 0;
     for (const { skin, label, cfg, index } of SWEEPS) {
       const before = setsBefore(skin, cfg, index);
-      const through = cfg.cap === null ? skin.rules.setTarget(cfg, index) + 3 : cfg.cap - 1;
+      const target = skin.rules.setTarget(cfg, index);
+      // The last level score the set can show: target-1 all under win-by-one (the next point ends it), cap-1 all under a cap,
+      // and a few ties past the target when uncapped.
+      const through = cfg.winBy <= 1 ? target - 1 : cfg.cap === null ? target + 3 : cfg.cap - 1;
       for (let n = 1; n <= through; n++) {
         const v = view(skin, cfg, [...before, ...levelAt(skin, n)]);
+        const set = (v.state as SetBasedState).sets[index];
+        expect(set !== undefined && !set.closed && set.home === n && set.away === n, `${skin.key} ${label} ${n}-all is a level open set`).toBe(true);
         const note = skin.rules.deuceNote(v.state, cfg);
         const context = skin.scorebug(v).context;
         expect(context.includes(skin.noteKey.goldenPoint), `${skin.key} ${label} ${n}-all golden`).toBe(note === "goldenPoint");
@@ -282,6 +298,32 @@ describe("the context line: Best of N and the deuce note come from the pad recor
     // Both wordings are reached, so the sweep cannot pass by never meeting one.
     expect(golden).toBeGreaterThan(0);
     expect(setting).toBeGreaterThan(0);
+  });
+
+  it("drops the note on a board decided at a tie (a retirement, a disqualification, an abandon), where the set still reads level", () => {
+    const endings: readonly ModuleEvent[] = [
+      { type: "core.forfeit", payload: { by: "A", reason: "retired" } },
+      { type: "core.forfeit", payload: { by: "A", reason: "disqualified" } },
+      { type: "core.abandon", payload: { reason: "weather" } },
+    ];
+    let checked = 0;
+    for (const skin of SKINS) {
+      const cfg = skin.module.configSchema.parse({});
+      const n = skin.rules.setTarget(cfg, 0) + 1;
+      // The positive pair: live at the same tie, the note is on the board.
+      expect(skin.scorebug(view(skin, cfg, levelAt(skin, n))).context, `${skin.key} ${n}-all live`).toContain(skin.noteKey.setting);
+      for (const ending of endings) {
+        const v = view(skin, cfg, [...levelAt(skin, n), ending]);
+        const set = (v.state as SetBasedState).sets[0];
+        expect(set !== undefined && !set.closed && set.home === n && set.away === n, `${skin.key} ${ending.type} leaves the set level`).toBe(true);
+        expect(skin.rules.deuceNote(v.state, cfg), `${skin.key} ${ending.type}`).toBeNull();
+        const context = skin.scorebug(v).context;
+        expect(context.includes(skin.noteKey.goldenPoint) || context.includes(skin.noteKey.setting), `${skin.key} ${ending.type}: ${context}`).toBe(false);
+        checked++;
+        fact();
+      }
+    }
+    expect(checked).toBe(SKINS.length * endings.length);
   });
 });
 
