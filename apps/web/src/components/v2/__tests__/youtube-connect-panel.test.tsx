@@ -26,7 +26,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { LOCALES, type Dict } from "@/lib/i18n-constants";
 import { messages, type MessageKey } from "@/lib/messages";
-import { GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
+import { GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_CONSENT_VERSION, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
 import { ROUTES } from "@/server/api-v1/openapi";
 import { v1 } from "@/server/api-v1/http";
 import { PickYoutubeChannel, StreamTargetKind, YOUTUBE_REVOKE_OUTCOMES, YoutubeConnectionSaved, YoutubeConnectionSettings, type StreamTarget } from "@/server/api-v1/schemas";
@@ -286,28 +286,80 @@ describe("the consent step", () => {
     expect(m("streaming.youtube.settingsNote")).toMatch(/already connected/i);
   });
 
-  it("PO 2026-10-30 (stg child-safety flag): the card warns about YouTube's under-16 live rule in EVERY locale, BEFORE the button that goes to Google", () => {
-    const KEY = "streaming.youtube.connect.minors";
-    // The owner's sentence, typed from the PO ruling — not read back from the code under test.
-    expect(m(KEY)).toBe(
-      "Streaming junior matches? YouTube doesn't allow live streams showing children under 16 unless an adult is visibly with them, and can take live streaming away from a channel that breaks this rule.",
-    );
+  // PO 2026-10-30, owner-requested (after stg's test stream was flagged under YouTube's child-safety policy): the under-16 rule is part of
+  // what the organiser TICKS, not a separate note beside the box. The clause per locale: English typed from the ruling, the other three the
+  // translations shipped with it. Each is checked against its dictionary AND against the label the checkbox sits in.
+  const MINORS_CLAUSE: Record<string, string> = {
+    en: "makes sure an adult is visibly present whenever players under 16 are on camera",
+    es: "se asegura de que un adulto esté visiblemente presente siempre que aparezcan en cámara jugadores menores de 16 años",
+    fr: "veille à ce qu’un adulte soit visiblement présent chaque fois que des joueurs de moins de 16 ans sont filmés",
+    nl: "ervoor zorgt dat er zichtbaar een volwassene aanwezig is wanneer spelers onder de 16 in beeld zijn",
+  };
+
+  it("PO 2026-10-30: YouTube's under-16 rule is a clause of the consent the organiser TICKS — inside the checkbox's label, after the rights clause, before Continue — in EVERY locale", () => {
+    expect(Object.keys(MINORS_CLAUSE).sort(), "a clause for every locale, and no other").toEqual([...LOCALES].sort());
     let checked = 0;
     for (const l of LOCALES) {
-      const sentence = localeDict(l)[KEY];
-      expect(typeof sentence === "string" && sentence.length > 0, `${l}: the dictionary carries the notice`).toBe(true);
-      // A locale that still reads the English sentence is an untranslated key, not a notice in that language.
-      if (l !== "en") expect(sentence, `${l}: translated, not the English`).not.toBe(m(KEY));
+      const clause = MINORS_CLAUSE[l]!;
+      const dict = localeDict(l);
+      const body = dict["streaming.youtube.consent.body"]!;
+      // Where the ruling puts it: after the rights clause (the sentence's one parenthesis, "(venue, players, music)") and before what
+      // Seazn will do (the sentence's one "Seazn").
+      expect(body, `${l}: the consent sentence carries the clause`).toContain(clause);
+      expect(body.indexOf(")"), `${l}: after the rights clause`).toBeLessThan(body.indexOf(clause));
+      expect(body.indexOf(clause), `${l}: before what Seazn will do`).toBeLessThan(body.indexOf("Seazn"));
       const html = inLocale(l, <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
-      expect(plain(html), `${l}: the card shows the notice`).toContain(sentence);
-      const at = html.indexOf(esc(sentence!));
+      // The <label> the consent checkbox sits in: the words a tap ticks, and what a screen reader reads as the box's name.
+      const box = html.indexOf('data-testid="youtube-consent"');
       const button = html.indexOf('data-testid="youtube-connect-submit"');
-      expect(at, `${l}: the notice is in the markup`).toBeGreaterThan(-1);
+      expect(box, `${l}: the checkbox is in the markup`).toBeGreaterThan(-1);
       expect(button, `${l}: the go-to-Google button is in the markup`).toBeGreaterThan(-1);
-      expect(at, `${l}: read before the button that sends the organiser to Google`).toBeLessThan(button);
+      const open = html.lastIndexOf("<label", box);
+      const close = html.indexOf("</label>", box);
+      expect(open, `${l}: the checkbox is inside a label`).toBeGreaterThan(-1);
+      const label = html.slice(open, close);
+      const filled = body.replace("{tos}", dict["streaming.youtube.consent.tos"]!).replace("{guidelines}", dict["streaming.youtube.consent.guidelines"]!);
+      expect(plain(label), `${l}: the label reads the dictionary's sentence, slots filled`).toBe(filled);
+      expect(label, `${l}: the clause is in the label`).toContain(esc(clause));
+      expect(close, `${l}: and that label closes before Continue to Google`).toBeLessThan(button);
       checked++;
     }
     expect(checked).toBe(4);
+    // English: the ruling's own words, in their place in the sentence.
+    expect(m("streaming.youtube.consent.body")).toContain(
+      "has the rights to stream this content (venue, players, music), makes sure an adult is visibly present whenever players under 16 are on camera, and agrees that Seazn will",
+    );
+  });
+
+  it("the separate under-16 note #1089 added is GONE: no key in any dictionary, nothing rendered beside the box — the rule is said once, in the consent", () => {
+    const OLD_KEY = "streaming.youtube.connect.minors";
+    // The #1089 sentence's opening, typed: a note that came back under another key is caught too.
+    const OLD_EN = "Streaming junior matches? YouTube doesn't allow live streams showing children under 16";
+    let checked = 0;
+    for (const l of LOCALES) {
+      expect(localeDict(l)[OLD_KEY], `${l}: the key is deleted`).toBeUndefined();
+      const html = inLocale(l, <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
+      expect(html, `${l}: no note element`).not.toContain('data-testid="youtube-minors-note"');
+      // The positive pair: the rule is still on the card, exactly once (in the consent), in this locale.
+      expect(plain(html).split(MINORS_CLAUSE[l]!).length - 1, `${l}: the clause, once`).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(plain(inLocale("en", <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />))).not.toContain(OLD_EN);
+  });
+
+  it("the consent wording and its version move TOGETHER: this is the English text YOUTUBE_CONSENT_VERSION 2 names (1 -> 2 when the under-16 clause joined, PO 2026-10-30)", () => {
+    // If this fails you changed the words a person ticks. Update the pin AND bump YOUTUBE_CONSENT_VERSION (lib/youtube.ts) in the SAME
+    // change: that is what makes every new connection record the text it ticked, and every older one read "Review updated terms" (spec
+    // §6.1.5 — Go live is never blocked by it). Never the pin alone.
+    expect(YOUTUBE_CONSENT_VERSION).toBe(2);
+    expect(m("streaming.youtube.consent.body")).toBe(
+      "I confirm this organisation will follow YouTube's {tos} and {guidelines}, has the rights to stream this content (venue, players, music), makes sure an adult is visibly present whenever players under 16 are on camera, and agrees that Seazn will create, title, start and end a YouTube live broadcast on this channel for each match we stream here.",
+    );
+    expect(m("streaming.youtube.consent.disclaimer")).toBe(
+      "YouTube alone decides whether this channel can stream; Seazn is not responsible if YouTube restricts or disables live streaming, removes a stream, issues a strike, or does not save a replay.",
+    );
+    expect(m("streaming.youtube.consent.bound")).toBe("By connecting you agree to be bound by the {tos}. See our {privacy}.");
   });
 
   it("the consent text: the spec's words, the ToS / Community Guidelines / Privacy Policy links (external ones noopener), and no unfilled {slot} in ANY locale", () => {

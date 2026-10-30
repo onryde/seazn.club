@@ -7846,7 +7846,6 @@ export type DictionaryKey =
   | "streaming.youtube.channelLink"
   | "streaming.youtube.channels"
   | "streaming.youtube.connect"
-  | "streaming.youtube.connect.minors"
   | "streaming.youtube.consent.body"
   | "streaming.youtube.consent.bound"
   | "streaming.youtube.consent.continue"

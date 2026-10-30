@@ -211,9 +211,8 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
       <PrivacyChoice value={privacy} onChange={setPrivacy} />
       <KidsChoice value={kids} onChange={setKids} />
       <p data-testid="youtube-settings-note" className="max-w-xl text-xs text-slate-600">{msg("streaming.youtube.settingsNote")}</p>
-      {/* YouTube's child-safety rule for live streams (PO 2026-10-30, after stg's test stream was flagged): said before the consent and
-          the button that goes to Google, because junior events are exactly the case it bites. */}
-      <p data-testid="youtube-minors-note" className="max-w-xl text-xs text-slate-600">{msg("streaming.youtube.connect.minors")}</p>
+      {/* YouTube's child-safety rule for live streams (an adult visibly present whenever players under 16 are on camera) is a clause
+          of the consent sentence itself, so it is what the organiser ticks (PO 2026-10-30, owner-requested; spec D16). */}
       <ConsentBox checked={consent} onChange={setConsent} withName />
       <div className="flex flex-wrap items-center gap-2 max-md:flex-col max-md:items-stretch">
         <button

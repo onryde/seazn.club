@@ -6,7 +6,9 @@
 //
 // So the PRODUCER is the real component, rendered; the browser's job (serialising a form) is done by `formFields` below, from the markup
 // alone; the CONSUMER is the real route, the real FakeYouTube behind the port, and real Postgres for the pending row. Expected values are
-// literals typed from the spec (§6.1: Unlisted and "not for kids" by default; consent version 1), never read back from the code under test.
+// literals typed from the spec (§6.1: Unlisted and "not for kids" by default), never read back from the code under test. The consent
+// version is the one exception: it is `YOUTUBE_CONSENT_VERSION`, the version of the text the form renders, so the pin moves when the
+// wording does (youtube-connect-panel.test.tsx pins the wording and the version together).
 // Skipped without DATABASE_URL like every DB suite here.
 //
 // Sport: not applicable — connecting a YouTube channel is sport-agnostic.
@@ -51,7 +53,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { sql } from "@/lib/db";
-import { YOUTUBE_SCOPE } from "@/lib/youtube";
+import { YOUTUBE_CONSENT_VERSION, YOUTUBE_SCOPE } from "@/lib/youtube";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
 import { FakeYouTube } from "@/server/youtube/fake";
@@ -152,14 +154,14 @@ const rowMarkup = (t: StreamTarget, orgId: string): string => renderToStaticMark
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => {
-  it("the form as shipped, ticked: the route sends the browser to Google (the fake hop) and records the consent with the DEFAULTS the spec names — Unlisted, not for kids, version 1, by this user", async () => {
+  it("the form as shipped, ticked: the route sends the browser to Google (the fake hop) and records the consent with the DEFAULTS the spec names — Unlisted, not for kids, the CURRENT consent version, by this user", async () => {
     const r = await rig();
     const html = renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />);
     const res = await post(formFields(html, { tick: ["consent"] }));
     expect(res.status).toBe(303);
     expect(new URL(res.headers.get("location")!).pathname).toBe("/api/youtube/connect/fake-authorize");
     const rows = await pendingRows(r.orgId);
-    expect(rows).toEqual([{ user_id: r.userId, connection_id: null, default_privacy: "unlisted", made_for_kids: false, consent_version: 1 }]);
+    expect(rows).toEqual([{ user_id: r.userId, connection_id: null, default_privacy: "unlisted", made_for_kids: false, consent_version: YOUTUBE_CONSENT_VERSION }]);
   });
 
   it("the form UNTICKED is refused by the route (400, no pending row): the disabled button is the courtesy, this is the guard — and it is the form's own serialisation that lacks consent", async () => {
@@ -201,7 +203,7 @@ describe.skipIf(!HAS_DB)("the Reconnect form -> POST /api/youtube/connect", () =
 
   it("a dead connection whose consent is CURRENT: the form as shipped (no consent field) reconnects it — the pending grant is bound to THAT connection (T7-R2)", async () => {
     const r = await rig();
-    const connectionId = await liveConnection(r, 1);
+    const connectionId = await liveConnection(r, YOUTUBE_CONSENT_VERSION);
     const fields = formFields(rowMarkup(dead(connectionId), r.orgId));
     expect(fields.has("consent"), "PREMISE: the reconnect form posts no consent").toBe(false);
     expect(fields.get("connectionId")).toBe(connectionId);

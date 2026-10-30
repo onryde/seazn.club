@@ -2,6 +2,7 @@
 // built with the callback's own producers (insertPending / storeGrant / sealPendingToken), and a connect through the real save.
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { YOUTUBE_CONSENT_VERSION } from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { insertPending, storeGrant } from "@/server/youtube/connect-flow";
 import { saveConnectionFromGrant } from "@/server/youtube/connections";
@@ -32,13 +33,14 @@ export interface GrantOpts {
   channels?: Ch[]; token?: string; connectionId?: string | null; privacy?: "unlisted" | "public" | "private"; madeForKids?: boolean;
   consentVersion?: number; consentAt?: Date; sealed?: boolean; startedMinutesAgo?: number; sub?: string | null; userId?: string;
 }
-/** A pending grant exactly as the OAuth callback leaves it for the save: the start's row, the grant's details, the token sealed. */
+/** A pending grant exactly as the OAuth callback leaves it for the save: the start's row, the grant's details, the token sealed.
+ *  Unless told otherwise the consent is on the CURRENT wording (`YOUTUBE_CONSENT_VERSION`), as the connect route stamps a fresh tick. */
 export async function grant(o: Org, g: GrantOpts = {}): Promise<{ id: string; token: string; channels: Ch[] }> {
   const channels = g.channels ?? [{ id: channelId(), title: "Solo United" }];
   const token = g.token ?? refreshToken();
   const { id } = await insertPending({
     state: randomUUID(), orgId: o.orgId, userId: g.userId ?? o.userId, connectionId: g.connectionId ?? null, privacy: g.privacy ?? "unlisted",
-    madeForKids: g.madeForKids ?? false, consentVersion: g.consentVersion ?? 1, now: new Date(Date.now() - (g.startedMinutesAgo ?? 0) * 60_000),
+    madeForKids: g.madeForKids ?? false, consentVersion: g.consentVersion ?? YOUTUBE_CONSENT_VERSION, now: new Date(Date.now() - (g.startedMinutesAgo ?? 0) * 60_000),
     ...(g.consentAt ? { consentAt: g.consentAt } : {}),
   });
   await sql.begin(async (tx) => {
