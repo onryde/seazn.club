@@ -52,7 +52,20 @@ export const BANNED: Readonly<Record<string, readonly string[]>> = {
   // football.tsx keeps CARD_TONES (presentation) and POST_PHASES (P4); the rest of its inventory is read from footballPadRules.
   "football.tsx": ["CARD_COLORS", "CARD_REASONS", "PENALTY_OUTCOMES", "PENALTY_OFFENCES", "EVENT_BAND", "PLAY_PHASES", "PLAY_PHASE_ONLY"],
   // P2: cricket
+  "cricket.tsx": [
+    "WICKET_KINDS",
+    "EXTRA_KINDS",
+    "FIELDER_ELIGIBLE_KINDS",
+    "VARIABLE_OUT_KINDS",
+    "FREE_HIT_WICKET_KINDS",
+    "BOWLER_CREDITED_KINDS",
+    "CLOSE_REASONS",
+  ],
   // P3: set-based sports + tennis (badminton, tabletennis, volleyball, tennis)
+  "badminton.tsx": ["SANCTION_LEVELS", "EVENT_BAND"],
+  "tabletennis.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "EXPEDITE_RETURNS_THRESHOLD", "EXPEDITE_SCORE_FLOOR"],
+  "volleyball.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "LIBERO_BAND", "ROTATION_CYCLE", "ROTATION_VALUES"],
+  "tennis.tsx": ["POINT_KINDS", "INTERRUPTION_KINDS", "SANCTION_LEVELS", "EVENT_BAND", "CALLS"],
   // P4: carrom, boardgame, generic, and POST_PHASES in every file that declares it
 };
 
@@ -61,8 +74,9 @@ export const BANNED: Readonly<Record<string, readonly string[]>> = {
  * has P1..P4 delete from the skins, taken from the plan's "Step 5" BANNED lists
  * (P1.x period-shared/hockey/icehockey/football; P2 cricket; P3 badminton/
  * tabletennis/volleyball/tennis; P4 carrom/boardgame/generic) plus `POST_PHASES`
- * in the nine files that declare it (P4.2). Typed from the plan, not from the
- * skins: all 47 are declared at 17948f93a8. Presentation constants the plan keeps
+ * in the nine files that declare it (P4.2), and volleyball's two rotation names
+ * (P3.1 review m2). Typed from the plan, not from the skins: all 49 are declared
+ * at 17948f93a8. Presentation constants the plan keeps
  * (`CARD_TONES`, `HOCKEY_CLASSES`, ...) are deliberately absent. A name the plan
  * later adds or drops is edited here and in `BANNED` together.
  */
@@ -97,16 +111,19 @@ export const RULE_CONSTANTS_AT_BASE: Readonly<Record<string, readonly string[]>>
     "EXPEDITE_SCORE_FLOOR",
     "POST_PHASES",
   ],
-  "volleyball.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "LIBERO_BAND", "POST_PHASES"],
+  // ROTATION_CYCLE / ROTATION_VALUES: not in the plan's Step 5 list; added by the P3.1 review (m2), since a value-equal copy
+  // of the cycle is invisible to every behavioural test and only this name guard can catch one growing back.
+  "volleyball.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "LIBERO_BAND", "ROTATION_CYCLE", "ROTATION_VALUES", "POST_PHASES"],
   "tennis.tsx": ["POINT_KINDS", "INTERRUPTION_KINDS", "SANCTION_LEVELS", "EVENT_BAND", "CALLS", "POST_PHASES"],
   "carrom.tsx": ["ADJUST_REASONS", "EVENT_BAND", "POST_PHASES"],
   "boardgame.tsx": ["EVENT_BAND", "BOARD_MAX", "POST_PHASES"],
   "generic.tsx": ["EVENT_BAND", "MAX_PLAUSIBLE_SCORE", "MAX_TALLY_STEP", "POST_PHASES"],
 };
 
-/** Pairs in `RULE_CONSTANTS_AT_BASE`: the plan's Step 5 lists (P1 9 + P2 7 + P3 14 + P4 7 = 37) + POST_PHASES in 9 files + 1 the plan
- *  missed: football's `PLAY_PHASE_ONLY` (the list of event types that are only legal in play, now `EVENT_PHASES` in the engine; P1.2 review). */
-const PLANNED_PAIRS = 47;
+/** Pairs in `RULE_CONSTANTS_AT_BASE`: the plan's Step 5 lists (P1 9 + P2 7 + P3 14 + P4 7 = 37) + POST_PHASES in 9 files,
+ *  + volleyball's ROTATION_CYCLE and ROTATION_VALUES (P3.1 review m2), + 1 the plan missed: football's `PLAY_PHASE_ONLY`
+ *  (the list of event types that are only legal in play, now `EVENT_PHASES` in the engine; P1.2 review). */
+const PLANNED_PAIRS = 49;
 
 /** Skin source files (`*.ts`/`*.tsx`, `__tests__` excluded) at 17948f93a8. Re-pin when a skin file is added. */
 const PINNED_SKIN_FILES = 13;

@@ -4,7 +4,15 @@
 // role (validation only — positions never touch scoring). The kernel owns all
 // set logic; this file is configuration.
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { makeSetBasedModule, samePointsMap, SET_RULE_KEYS, type PointsPair, type SetBasedParams } from "./kernel.ts";
+import {
+  makeSetBasedModule,
+  samePointsMap,
+  SET_RULE_KEYS,
+  type PointsPair,
+  type SetBasedParams,
+  type SetBasedSanctionLevel,
+  type SetBasedServeRotation,
+} from "./kernel.ts";
 
 // spec 04 §3.4 — FIVB league convention. "*" (clean 3-0/3-1) → 3:0; the 3-2
 // split is the only exception → 2:1. Total is 3 either way (declaredPointsSets).
@@ -32,6 +40,44 @@ const positions: PositionCatalog = {
   roles: [{ key: "libero", name: "Libero" }], // up to 2 per team → not unique
   lineup: { size: 6, benchMax: 8 },
 };
+
+/** S7/#427 — the FIVB ladder verbatim; the kernel enum IS volleyball's own vocabulary (DOMAIN.volleyball.md:38), so all four
+ *  steps are on the pad. The preset's `sanctionLevels`; exported for `@seazn/engine/pad` (pad wave P3.1), so the pad offers
+ *  this very array. */
+export const VOLLEYBALL_SANCTION_LEVELS: readonly SetBasedSanctionLevel[] = ["warning", "penalty", "expulsion", "disqualification"];
+
+// R5-1 — FIVB service.
+//  * 12.2.2: the team winning a rally serves the next one (side-out).
+//  * 7.1: sets 2-4 alternate the first service, and THE DECIDING SET IS
+//    TOSSED AFRESH — the one place the alternation stops. The reader reports
+//    `deciding-set-toss` at 0-0 of set five and recovers the moment the
+//    first rally of it is recorded, because side-out then answers for itself.
+//  * Beach 13.2 / 12.2: a pair keeps its service order through the set, so
+//    the declared `pairOrder` names the server for beach. Indoor sheets
+//    declare no pair order (and a six-long one is not a pair), so indoor
+//    names nobody: FIVB 7.6's court rotation is not folded here.
+//  * 19.3.2.4: a libero may not serve, so a libero is never NAMED even where
+//    the order would otherwise reach them. The side is still reported — the
+//    side is not in doubt.
+//  * 7.6.2: six positions, rotated one place each time the team takes the
+//    serve back. Reported only for a side with six players on court — and
+//    an ordinary indoor sheet does not persist a squad to count (six
+//    starters and their positions declare nothing the pre-wave lineup model
+//    could not hold), so `rotationImpliedBy` names the cfg fact that stands
+//    in for it: indoor has a bench and records substitutions, the beach
+//    pair has neither (FIVB Beach §7, the same fact `records` moved into
+//    cfg for in S6/#416). A declared squad still wins where there is one.
+// Exported for `@seazn/engine/pad` (pad wave P3.1): `as const` keeps `rotationCycle` a declared number, so the pad's
+// rotationCycle reads it with no fallback.
+export const VOLLEYBALL_SERVE = {
+  within: "rally-winner",
+  setStart: "alternate",
+  decidingSetTossed: true,
+  serverFromPairOrder: true,
+  rotationImpliedBy: "substitutions",
+  nonServingRoles: ["libero"],
+  rotationCycle: 6,
+} as const satisfies SetBasedServeRotation;
 
 export const volleyball = makeSetBasedModule({
   key: "volleyball",
@@ -118,44 +164,13 @@ export const volleyball = makeSetBasedModule({
     const fivb = samePointsMap(cfg.pointsMap, FIVB_POINTS) && Object.hasOwn(FIVB_TABLE, cfg.bestOf) ? FIVB_TABLE[cfg.bestOf] : undefined;
     return fivb === undefined ? fromMap : { ...fromMap, bySetScore: { ...fivb } };
   },
-  // S7/#427 — the FIVB ladder verbatim; the kernel enum IS volleyball's own
-  // vocabulary (DOMAIN.volleyball.md:38), so all four steps are on the pad.
-  sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
+  sanctionLevels: VOLLEYBALL_SANCTION_LEVELS, // S7/#427 — see VOLLEYBALL_SANCTION_LEVELS
   // W2e (spec 2026-10-28 §5.2; D12, D13; VB-SE-1) — an expulsion or a disqualification never ends a volleyball match by
   // itself (FIVB: the team plays on while it can field six). Right after one, the pad asks whether the team can still
   // field six; "no" is the incomplete-team ending (VB-RT-1, FIVB 6.4.3), core.forfeit{retired}, which a scorer may send
   // there and nowhere else (D13). No end level, so the write path refuses nothing after one.
   sanctionEnding: { eventType: "volleyball.sanction", endLevels: [], promptLevels: ["expulsion", "disqualification"] },
-  // R5-1 — FIVB service.
-  //  * 12.2.2: the team winning a rally serves the next one (side-out).
-  //  * 7.1: sets 2-4 alternate the first service, and THE DECIDING SET IS
-  //    TOSSED AFRESH — the one place the alternation stops. The reader reports
-  //    `deciding-set-toss` at 0-0 of set five and recovers the moment the
-  //    first rally of it is recorded, because side-out then answers for itself.
-  //  * Beach 13.2 / 12.2: a pair keeps its service order through the set, so
-  //    the declared `pairOrder` names the server for beach. Indoor sheets
-  //    declare no pair order (and a six-long one is not a pair), so indoor
-  //    names nobody: FIVB 7.6's court rotation is not folded here.
-  //  * 19.3.2.4: a libero may not serve, so a libero is never NAMED even where
-  //    the order would otherwise reach them. The side is still reported — the
-  //    side is not in doubt.
-  //  * 7.6.2: six positions, rotated one place each time the team takes the
-  //    serve back. Reported only for a side with six players on court — and
-  //    an ordinary indoor sheet does not persist a squad to count (six
-  //    starters and their positions declare nothing the pre-wave lineup model
-  //    could not hold), so `rotationImpliedBy` names the cfg fact that stands
-  //    in for it: indoor has a bench and records substitutions, the beach
-  //    pair has neither (FIVB Beach §7, the same fact `records` moved into
-  //    cfg for in S6/#416). A declared squad still wins where there is one.
-  serve: {
-    within: "rally-winner",
-    setStart: "alternate",
-    decidingSetTossed: true,
-    serverFromPairOrder: true,
-    rotationImpliedBy: "substitutions",
-    nonServingRoles: ["libero"],
-    rotationCycle: 6,
-  },
+  serve: VOLLEYBALL_SERVE, // R5-1 — FIVB service, see VOLLEYBALL_SERVE
   // Entrant shapes are declared per sport, not per variant: indoor is 6v6 teams
   // (the default), `beach` is 2v2 pairs. Both kinds stay open at the sport level
   // and a division narrows them via config.entrants when the organiser wants.

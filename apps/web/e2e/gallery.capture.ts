@@ -1454,7 +1454,7 @@ const SPORTS: GallerySport[] = [
     },
     // The wicket sheet again, on a DIFFERENT step than `scoreOne` completed
     // (kind -> "Run out", which asks "who's out" before it would ask
-    // "fielder" — VARIABLE_OUT_KINDS, v3/skins/cricket.tsx) — stopped before
+    // "fielder" — cricketPadRules.variableOutKinds, @seazn/engine/pad) — stopped before
     // picking a batter, so nothing submits. Two of the three home batters
     // remain not-out after `scoreOne`'s own dismissal (see the roster
     // comment above), so this sheet has real candidates to show.

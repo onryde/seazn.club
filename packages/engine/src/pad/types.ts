@@ -66,7 +66,9 @@ export interface CricketPadRules extends PadRulesBase {
   readonly fielderCreditedKinds: readonly string[];
   readonly freeHitDismissalKinds: readonly string[];
   readonly bowlerCreditedKinds: readonly string[];
-  /** (c) - Q1b. */
+  /** Members of fielderCreditedKinds whose fielder is optional (ruling 242: obstructed). */
+  readonly fielderOptionalKinds: readonly string[];
+  /** (c) - Q1b, ruling 242. */
   readonly variableOutKinds: readonly string[];
   readonly boundaryValues: readonly number[];
   readonly tossElections: readonly string[];
@@ -76,8 +78,12 @@ export interface CricketPadRules extends PadRulesBase {
   readonly reviewOutcomes: readonly string[];
   /** (c) Law 41: 5. */
   readonly penaltyRuns: number;
-  /** (c) Law 22: 1. */
+  /** (c) Law 22.6: 1. */
   readonly wideDefaultRuns: number;
+  /** (c) ICC playing conditions 21.15 (MCC Law 21.14): 1. */
+  readonly noBallDefaultRuns: number;
+  /** The cricket.* event types the fold accepts in a super over. */
+  readonly superOverEventTypes: readonly string[];
   ballsPerOver(cfg: unknown): number;
 }
 
@@ -86,21 +92,28 @@ export interface SetBasedPadRules extends PadRulesBase {
   readonly sanctionLevels: readonly string[];
   bestOf(cfg: unknown): number;
   setTo(cfg: unknown): number;
+  /** P3.1: the target of the set at `setIndex` (0-based), the deciding set's own included - the kernel's `setTarget`. */
+  setTarget(cfg: unknown, setIndex: number): number;
   scoreBound(cfg: unknown): number;
-  /** (c) "golden point" / "setting" / null for the open game. */
+  /** (c) "golden point" / "setting" / null for the open game, while the match is live (null once it is decided, a forfeit
+   *  or abandon included). `state` is the folded state (or a pre-fold `{}`). */
   deuceNote(state: unknown, cfg: unknown): "goldenPoint" | "setting" | null;
 }
 
 export interface BadmintonPadRules extends SetBasedPadRules {
   /** (c) ceil(target/2). */
   intervalMark(cfg: unknown, setIndex: number): number;
+  /** (c) P3.1: BWF 10.1/11.1, the service court for the serving side's score in the game (even: right). */
+  serviceCourt(servingSideScore: number): "right" | "left";
 }
 
 export interface TableTennisPadRules extends SetBasedPadRules {
   /** toBe-equal to the kernel's EXPEDITE_RETURNS. */
   readonly expediteReturns: number;
-  /** (c) 9. */
+  /** (c) 9. Advisory: the fold enforces no floor (ITTF 2.15.1's guard lives in the pad, DOMAIN.tabletennis.md). */
   readonly expediteScoreFloor: number;
+  /** P3.1: ITTF 2.15.2 as the fold applies it - whether a rally that reached `expediteReturns` may credit `winnerSide`. */
+  expediteReturnsCreditable(servingSide: "home" | "away", winnerSide: "home" | "away"): boolean;
 }
 
 export interface VolleyballPadRules extends SetBasedPadRules {
@@ -114,14 +127,25 @@ export interface TennisPadRules extends PadRulesBase {
   readonly pointKinds: readonly string[];
   readonly interruptionKinds: readonly string[];
   readonly sanctionLevels: readonly string[];
-  /** (c) 3600. */
+  /** 3600: the kernel's own plausibility sentinel for a break's duration (PLAUSIBLE_INTERRUPTION_SECONDS), never refused by the fold. */
   readonly interruptionMaxSeconds: number;
-  /** (c) ["0","15","30","40"]. */
+  /** ["0","15","30","40"]: the kernel's own POINT_CALLS (ITF Rule 5(a)), which its spoken game score reads. */
   readonly pointCalls: readonly string[];
-  /** (c). */
+  /** (c) ITF Rule 10: whether the changeover just had (after the last game, or the last tie-break point) changed ends. False with no
+   *  folded state, before the first game and once the match is over. */
   endsChanged(state: unknown): boolean;
   gamesFieldBound(cfg: unknown): number;
   tiebreakFieldBound(cfg: unknown): number;
+  /** P3.2: the cfg's own `bestOf`. */
+  bestOf(cfg: unknown): number;
+  /** P3.2: whether a `home`–`away` set score for the set about to be scored is its tie-break score, the one the fold banks only with
+   *  the tie-break's points (`tb`): never in an advantage set or a match tie-break decider. A pre-fold `{}` is the first set. */
+  setScoreTakesTiebreak(state: unknown, cfg: unknown, home: number, away: number): boolean;
+  /** P3.2: a tie-break or match tie-break is being played: the fold refuses a game award (GAME_AWARD_DURING_TIEBREAK), and serve
+   *  turns over by points. False with no folded state. */
+  breakerInForce(state: unknown): boolean;
+  /** P3.2: ITF Rule 5(b), whether the serve changes after a breaker's `pointsPlayed`-th point (the fold's own rotation). */
+  tiebreakServeRotatesAfter(pointsPlayed: number): boolean;
 }
 
 /** carrom (P4). */

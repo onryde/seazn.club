@@ -415,7 +415,7 @@ Branch `feat/pad-wave-p3`, off main after P0 (shares `src/pad/index.ts` and the 
 
 - [ ] **Step 1: Engine test.**
   - `pointKinds/interruptionKinds/sanctionLevels equal the schema enums`.
-  - `endsChanged`: walk a real set through the fold game by game, then a tiebreak point by point. It is true exactly after odd completed games and after each 6th tiebreak point in the second block. The expected values come from ITF Rule 10 written as the rule itself (odd total; floor(points/6) odd), and are asserted against the folded state at each step. Count the steps.
+  - `endsChanged`: walk a real set through the fold game by game, then a tiebreak point by point. It is true exactly after an odd number of games in the set, after every 6th point of a tie-break or match tie-break (points % 6 == 0, points > 0), and at the end of a set of an odd games total; never outside live play. The expected values come from ITF Rule 10 and Rule 5(b) written as the rule itself, and are asserted against the folded state at each step. Count the steps. (Amended 2026-10-30, owner ruling 244: the original "floor(points/6) odd" was the old skin's reading, lit through points 7 to 11; the correction is an accepted visible change against spec §3.5, rule TN-EN-1.)
   - `gamesFieldBound(cfg)` equals `setGamesBound` over `declaredCfgs`.
 - [ ] **Step 2: Web drift test.** It drives the point sheet (kinds), the interruption sheet (kinds and duration `max`), the sanction sheet, the games and tiebreak fields (`max`), the call display at each point score, and the ends-change hint. It reports facts compared, which must be at least 11.
 - [ ] **Steps 3–4:** Red, then implement.

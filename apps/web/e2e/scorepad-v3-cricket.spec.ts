@@ -256,8 +256,8 @@ test(
     await setContextPerson(page, "Bowler", `V3 Fielder ${TAG}`);
 
     // A caught dismissal via the guided sheet (G2's conditional steps):
-    // kind -> [no "who's out" step — caught is not in VARIABLE_OUT_KINDS] ->
-    // fielder [caught IS in FIELDER_ELIGIBLE_KINDS] -> completes. Credited to
+    // kind -> [no "who's out" step — caught is not in cricketPadRules.variableOutKinds] ->
+    // fielder [caught IS in cricketPadRules.fielderCreditedKinds] -> completes. Credited to
     // "V3 Bowler" — now fielding rather than bowling, a real, valid
     // fielding-side credit distinct from over 2's own (changed) bowler.
     await pad(page).getByRole("button", { name: "Wicket", exact: true }).click();
@@ -297,7 +297,7 @@ test(
     };
     expect(wicket.kind).toBe("caught");
     expect(wicket.fielder, "credited to a REAL fielding-side member").toBe(bowler);
-    expect(wicket.bowlerCredited, "caught is in BOWLER_CREDITED_KINDS").toBe(true);
+    expect(wicket.bowlerCredited, "caught is in cricketPadRules.bowlerCreditedKinds").toBe(true);
     expect(wicket.incoming, "the incoming step must reach the payload, not fall back to an omitted auto").toBe(
       incomingBatter,
     );
@@ -1664,7 +1664,7 @@ test(
     await expect(sheet.getByRole("button", { name: "Obstructing the field", exact: true })).toBeVisible();
     await expect(
       sheet.getByRole("button", { name: "Bowled", exact: true }),
-      "FREE_HIT_WICKET_KINDS must actually narrow the list, not just add a hint on top of all ten",
+      "cricketPadRules.freeHitDismissalKinds must actually narrow the list, not just add a hint on top of all ten",
     ).not.toBeVisible();
     await expect(sheet.getByRole("button", { name: "Caught", exact: true })).not.toBeVisible();
     await expect(sheet.getByText("Free hit — only Run out or Obstructing the field apply.")).toBeVisible();

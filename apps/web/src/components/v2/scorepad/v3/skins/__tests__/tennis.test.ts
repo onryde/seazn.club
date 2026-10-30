@@ -22,15 +22,12 @@ import type { ModuleEvent } from "@seazn/engine/sport";
 import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
 import { tennis } from "@seazn/engine/sports/tennis";
 import { serveContext } from "@seazn/engine/sports/nested";
+import { tennisPadRules } from "@seazn/engine/pad";
 import { foldClient } from "../../../module-client";
 import { answerStep, currentStep, initialSheetState } from "../../guided-sheet";
 import type { GuidedSheetSpec, PadHostView, TileSpec } from "../../types";
 import type { MessageKey } from "@/lib/messages";
 import {
-  EVENT_BAND,
-  INTERRUPTION_KINDS,
-  POINT_KINDS,
-  SANCTION_LEVELS,
   buildDock,
   buildScorebug,
   buildSheets,
@@ -759,7 +756,7 @@ describe("buildTiles — D-16 (set score withheld while the set is in progress)"
   });
 });
 
-describe("buildTiles — band + phase gating, per EVENT_BAND", () => {
+describe("buildTiles — band + phase gating, per the engine's fidelity map", () => {
   it("withholds every tile above the ACTIVE band", () => {
     const tiles = buildTiles(view({ band: 0 }));
     expect(tileById(tiles, sanctionSheetKey("home"))).toBeUndefined();
@@ -783,8 +780,8 @@ describe("buildTiles — band + phase gating, per EVENT_BAND", () => {
     expect(tiles.filter((tl) => tl.id !== "more")).toEqual([]);
   });
 
-  it("EVENT_BAND matches the engine's own fidelity map (kernel.ts:1553-1559)", () => {
-    expect(EVENT_BAND).toEqual({
+  it("the bands the skin gates on are the engine's own fidelity map", () => {
+    expect(tennisPadRules.eventBands).toEqual({
       "tennis.set_summary": 0,
       "tennis.sanction": 1,
       "tennis.interruption": 1,
@@ -970,11 +967,11 @@ describe("sanction sheets — per side, level tones, person narrowed to that sid
     expect(sheets[sanctionSheetKey("away")]).toBeDefined();
   });
 
-  it("offers all four SANCTION_LEVELS, in the engine's own ladder order", () => {
+  it("offers all four sanction levels, in the engine's own ladder order", () => {
     const step = buildSheets(view(), t)[sanctionSheetKey("home")]!.steps[0]!;
     expect(step.kind).toBe("choice");
-    expect((step as { options: { id: string }[] }).options.map((o) => o.id)).toEqual(SANCTION_LEVELS);
-    expect(SANCTION_LEVELS).toEqual(["warning", "point_penalty", "game_penalty", "default"]);
+    expect((step as { options: { id: string }[] }).options.map((o) => o.id)).toEqual(tennisPadRules.sanctionLevels);
+    expect(tennisPadRules.sanctionLevels).toEqual(["warning", "point_penalty", "game_penalty", "default"]);
   });
 
   it("R4-4: warning and default carry a tone; point_penalty/game_penalty carry none", () => {
@@ -1076,8 +1073,8 @@ describe("interruption sheet — R4-2, one generic tile, side is genuinely optio
     });
   });
 
-  it("INTERRUPTION_KINDS are the engine's own closed vocabulary", () => {
-    expect(INTERRUPTION_KINDS).toEqual(["medical", "toilet", "heat", "other"]);
+  it("the interruption kinds are the engine's own closed vocabulary", () => {
+    expect(tennisPadRules.interruptionKinds).toEqual(["medical", "toilet", "heat", "other"]);
   });
 });
 
@@ -1153,8 +1150,8 @@ describe("buildDock — legality by side, read from the PAYLOAD not the live vie
     expect(ace.mutate({ by: "H", server: "H" })).toEqual({ by: "H", server: "H", meta: { kind: "ace" } });
   });
 
-  it("POINT_KINDS is the engine's own closed vocabulary, in NestedPointMeta's own order", () => {
-    expect(POINT_KINDS).toEqual(["ace", "double_fault", "winner", "ue"]);
+  it("the point kinds are the engine's own closed vocabulary, in NestedPointMeta's own order", () => {
+    expect(tennisPadRules.pointKinds).toEqual(["ace", "double_fault", "winner", "ue"]);
   });
 
   it("resolves the serving side from PERSON membership in doubles, not from the tapped side alone", () => {

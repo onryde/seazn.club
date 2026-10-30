@@ -62,6 +62,7 @@
 //     event.
 "use client";
 import type { SquadState } from "@seazn/engine/core";
+import { tabletennisPadRules } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import {
   tabletennis as tabletennisModule,
@@ -112,20 +113,6 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 };
 
 
-/**
- * S7/#427 — the ITTF umpire's card ladder, in the order the sheet climbs it.
- * `setbased/tabletennis.ts`'s own `sanctionLevels` restated here so the
- * sheet's option order is a decision this file owns, and
- * `__tests__/tabletennis.test.ts` pins the two lists equal so they cannot
- * drift apart. ONLY TWO — the ITTF umpire has yellow and red, and no third:
- * `expulsion`/`disqualification` are the REFEREE removing a player, not a
- * card the umpire shows (DOMAIN.tabletennis.md, and
- * `reference_engine_domain_dossiers_miscite_laws.md`'s own caution about
- * trusting that file's LAW CITATIONS, not its factual claims about who holds
- * which card).
- */
-export const SANCTION_LEVELS: readonly string[] = ["warning", "penalty"];
-
 /** Same tone posture as badminton's ladder (`SANCTION_LEVEL_TONE`): a text
  *  ENUM, not a swatch, so `contrast.test.ts` holds it to the full 4.5:1 text
  *  floor. `penalty` fails through to `default` exactly as badminton's own
@@ -140,40 +127,15 @@ function toneFor(level: string): readonly SportTone[] {
 }
 
 /**
- * ITTF Law 2.15.2 — the receiver wins the point on their thirteenth good
- * return. The engine's own `EXPEDITE_RETURNS` constant (`setbased/kernel.ts`)
- * is NOT re-exported from the `@seazn/engine/sports/setbased` barrel this
- * file is limited to (`packages/engine/**` is DO-NOT-TOUCH for this task —
- * the reader is reviewed and merged; consume it, do not extend its exports).
- * Restated here, and pinned in `__tests__/tabletennis.test.ts` against a REAL
- * fold: a rally crediting the SERVING side their 13th-return win throws
- * `EXPEDITE_WRONG_WINNER` at this exact threshold and not one short of it —
- * the same "restate, then prove equal to the source of truth" posture
- * `SANCTION_LEVELS` already takes for a value this file
- * cannot import directly.
+ * Event type -> fidelity band: `setBasedPadSpec`'s own `fidelity` map, read
+ * from `@seazn/engine/pad` (pad wave P3.1), never a copy. The chassis filters
+ * tiles by the same map (`filterTilesByBand` reads `PadSpec.fidelity`); this
+ * file reads it so `buildTiles` can decline to DRAW an out-of-band tile in the
+ * first place, an earlier and separate decision from the chassis's safety
+ * filter.
  */
-export const EXPEDITE_RETURNS_THRESHOLD = 13;
-
-/**
- * Event type -> fidelity band, MIRRORING `setBasedPadSpec`'s own `fidelity`
- * map (setbased/kernel.ts) rather than inventing a second scale — badminton's
- * `EVENT_BAND` takes the identical posture. The chassis filters tiles by this
- * table's engine-side twin (`filterTilesByBand` reads `PadSpec.fidelity`);
- * this copy exists so `buildTiles` can decline to DRAW an out-of-band tile in
- * the first place, an earlier and separate decision from the chassis's
- * safety filter.
- */
-export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
-  [SUMMARY_TYPE]: 0,
-  [TIMEOUT_TYPE]: 1,
-  [SANCTION_TYPE]: 1,
-  [SUB_TYPE]: 1,
-  [EXPEDITE_TYPE]: 1,
-  [RALLY_TYPE]: 3,
-};
-
 function withinBand(eventType: string, band: FidelityBand): boolean {
-  const need = EVENT_BAND[eventType];
+  const need = tabletennisPadRules.eventBands[eventType];
   return need === undefined || need <= band;
 }
 
@@ -327,46 +289,25 @@ function gameInProgress(state: TableTennisStateShape): boolean {
 }
 
 /**
- * ITTF 2.15.1's own floor: 9 points, BOTH sides, in the game being played.
- *
- * Not derived from `setTo` — 9 is written into the law as a number, alongside
- * the ten minutes, and it does not scale with a shortened variant the way an
- * interval mark does. A hardbat-21 game reaching 9-9 is the same "both sides
- * are scoring freely, the system is not needed" judgement the law is making.
+ * The expedite floor, both sides, in the game being played: the engine's
+ * `expediteScoreFloor` (pad wave P3.1; ADVISORY, the fold enforces none). A
+ * fixed number, not derived from `setTo`, so a hardbat-21 game reaching 9-9 is
+ * held to the same floor.
  *
  * Reads the OPEN game only: expedite is declared during play, and a closed
  * game's final score says nothing about whether the current one is stuck.
  */
-const EXPEDITE_SCORE_FLOOR = 9;
-
 function bothReachedExpediteFloor(state: TableTennisStateShape): boolean {
   const open = openGame(state);
   if (open === null) return false;
-  return open.home >= EXPEDITE_SCORE_FLOOR && open.away >= EXPEDITE_SCORE_FLOOR;
+  const floor = tabletennisPadRules.expediteScoreFloor;
+  return open.home >= floor && open.away >= floor;
 }
 
 function gameNumber(state: TableTennisStateShape): number {
   const sets = state.sets ?? [];
   const open = openGame(state);
   return open === null ? sets.length + 1 : open.index + 1;
-}
-
-/** `setTarget` (kernel.ts) — the deciding game may run to `finalSetTo`. */
-function targetOf(cfg: TableTennisCfgShape, gameIndex: number): number {
-  const bestOf = cfg.bestOf ?? 5;
-  const setTo = cfg.setTo ?? 11;
-  return gameIndex === bestOf - 1 ? (cfg.finalSetTo ?? setTo) : setTo;
-}
-
-/** `summaryScoreBound` (kernel.ts) — the cfg-derived plausibility ceiling for
- *  the Set score sheet's two number fields. Table tennis ships with `cap:
- *  null` (uncapped — ITTF deuce runs indefinitely, 12-10, 15-13, …), so this
- *  reads the same margin-past-target fallback badminton's uncapped branch
- *  uses; a custom cfg that DOES set a cap is honoured, never assumed absent. */
-function scoreBound(cfg: TableTennisCfgShape): number {
-  const cap = cfg.cap;
-  if (typeof cap === "number") return cap;
-  return Math.max(cfg.setTo ?? 11, cfg.finalSetTo ?? 11) + 20;
 }
 
 // ---------------------------------------------------------------------------
@@ -502,16 +443,16 @@ function serveDrifted(view: PadHostView, state: TableTennisStateShape): boolean 
 // scorebug() — tapModel S.
 // ---------------------------------------------------------------------------
 
-/** "Best of 5 · Game 2", plus the endgame the ITTF has words for. `Deuce` is
- *  2.13.3's own clause — one short of the target on both sides — DERIVED
- *  from the game's own cfg-resolved target, never hardcoded at 10: the
- *  hardbat-21 variant (setTo/finalSetTo: 21) must accelerate at 20-all off
- *  the SAME code path, which is exactly what `targetOf` gives for free.
- *  Golden point mirrors badminton's own capped-endgame wording for a custom
- *  cfg that sets a cap — table tennis ships uncapped, but the schema
- *  genuinely allows one, and this reads it rather than assuming it absent. */
+/** "Best of 5 · Game 2", plus the endgame the ITTF has words for. WHEN each
+ *  note shows is the engine's `deuceNote` (pad wave P3.1, read off the
+ *  kernel's own `setWinner`, so the game's cfg-resolved target is used, never
+ *  10): `Deuce` (ITTF 2.13.3) at EVERY level score from target-1 up, since
+ *  win-by-two stays in force at each later tie (10-10, 11-11, ...; 20-all on
+ *  hardbat-21); `golden point` where the next rally ends the game whoever wins
+ *  it, which an uncapped table tennis cfg never reaches and a custom capped
+ *  one does. The wording is this file's. */
 function buildContext(state: TableTennisStateShape, cfg: TableTennisCfgShape, t: TFn): string {
-  const bestOf = cfg.bestOf ?? 5;
+  const bestOf = tabletennisPadRules.bestOf(cfg);
   // CLAMPED to `bestOf`. `gameNumber` is "closed games plus one", which is what makes
   // "Game 2" appear the instant game 1 banks — correct while a match is
   // live, and wrong the moment it ends: every game is then closed, so a
@@ -527,19 +468,12 @@ function buildContext(state: TableTennisStateShape, cfg: TableTennisCfgShape, t:
   const decided = POST_PHASES.has(readPhase(state));
   const game = decided ? Math.max(played, 1) : Math.min(gameNumber(state), bestOf);
   const base = t("pad.tabletennis.context.line", { bestOf, game });
-  const open = openGame(state);
-  if (open === null || open.home !== open.away) return base;
-  const cap = cfg.cap;
-  if (typeof cap === "number" && open.home === cap - 1) {
-    return `${base} · ${t("pad.tabletennis.context.goldenPoint")}`;
-  }
-  const target = targetOf(cfg, gameNumber(state) - 1);
-  // `>=`, not `===`. ITTF 2.13.3's win-by-two stays in force at EVERY
-  // subsequent tie, and the kernel agrees — `accelerateFromNow()` is a floor,
-  // not an equality. The exact test showed "Deuce" at 10-10 and then dropped
-  // it at 11-11, 12-12, 13-13, which is precisely where a scorer needs the
-  // reminder most. Found in review of PR #678.
-  if (open.home >= target - 1) return `${base} · ${t("pad.tabletennis.context.deuce")}`;
+  // Found in review of PR #678: an exact `=== target-1` showed "Deuce" at
+  // 10-10 and dropped it at 11-11, 12-12, 13-13, which is precisely where a
+  // scorer needs the reminder most. `deuceNote` keeps it at every later tie.
+  const note = tabletennisPadRules.deuceNote(state, cfg);
+  if (note === "goldenPoint") return `${base} · ${t("pad.tabletennis.context.goldenPoint")}`;
+  if (note === "setting") return `${base} · ${t("pad.tabletennis.context.deuce")}`;
   return base;
 }
 
@@ -565,7 +499,7 @@ function buildHalf(
 
   // Band 3 gate: `tabletennis.rally` IS a band-3 event, so below it a
   // tappable half would be a dead-end tap.
-  const tappable = resolvePhase(view) === "live" && view.band >= 3;
+  const tappable = resolvePhase(view) === "live" && withinBand(RALLY_TYPE, view.band);
   // R5-2 — SINGLES AUTO-SET, badminton's own precedent: a length-1 side has
   // nothing to choose, so its sole member IS whoever won the rally, stamped
   // INTO the tap. A pair is left for the dock's own question (`buildDock`).
@@ -962,7 +896,7 @@ export function refusedEventTypes(view: PadHostView): string[] {
 function setScoreSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const cfg = cfgOf(view);
-  const bound = scoreBound(cfg);
+  const bound = tabletennisPadRules.scoreBound(cfg);
   const open = openGame(state);
   return {
     event: SUMMARY_TYPE,
@@ -1001,7 +935,7 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
       id: "level",
       kind: "choice",
       title: "pad.tabletennis.sheet.sanction.level.title",
-      options: SANCTION_LEVELS.map((level) => ({
+      options: tabletennisPadRules.sanctionLevels.map((level) => ({
         id: level,
         label: vocabKey("level", level) ?? level,
         tone: toneFor(level),
@@ -1138,7 +1072,10 @@ function expediteOfferable(
 ): boolean {
   const serving = typeof payload?.serving === "string" ? payload.serving : undefined;
   if (serving === undefined || winner === null) return true;
-  return sideOfEntrant(state, serving) !== winner;
+  // An entrant id this state cannot place: the fold refuses that rally on its own (unknown entrant) whatever is answered
+  // here, so the question stays offered as it always was.
+  const servingSide = sideOfEntrant(state, serving);
+  return servingSide === null || tabletennisPadRules.expediteReturnsCreditable(servingSide, winner);
 }
 
 /** Whether the fold will actually be able to CHECK the answer — false when the
@@ -1151,7 +1088,7 @@ function expediteReturnChip(): DockChip {
   return {
     id: "expediteReturn",
     label: "pad.tabletennis.dock.rally.expedite.chip",
-    mutate: (payload) => ({ ...payload, returns: EXPEDITE_RETURNS_THRESHOLD }),
+    mutate: (payload) => ({ ...payload, returns: tabletennisPadRules.expediteReturns }),
   };
 }
 
@@ -1266,7 +1203,7 @@ export function tabletennisDetail(ctx: ActivityDetailContext): string | undefine
   switch (eventType) {
     case RALLY_TYPE: {
       const returns = payload.returns;
-      const wentToLimit = typeof returns === "number" && returns >= EXPEDITE_RETURNS_THRESHOLD;
+      const wentToLimit = typeof returns === "number" && returns >= tabletennisPadRules.expediteReturns;
       const expedite = wentToLimit ? t("pad.tabletennis.ribbon.expediteReturn") : undefined;
       // A person first where one is known, because that is what a scorer scans
       // for when correcting a misattribution. Where NOBODY was attributed —
