@@ -24,8 +24,10 @@
 // substitute for the other, and a reviewer must not read this scan as wider than
 // the list above.
 //
-// `BANNED` is EMPTY at P0 and each of P1..P4 appends its own entries as it
-// deletes the literals. An empty list must not make this file vacuous, so:
+// `BANNED` was EMPTY at P0 and each of P1..P4 appended its own entries as it
+// deleted the literals; at the close of P4.2 it holds every pair of the inventory
+// (asserted below: BANNED and the inventory are the same set, 49 pairs). An empty
+// list must not make this file vacuous, so:
 //   - the scanner is proven against the REAL skin sources: it must see a
 //     declaration in every skin file, using names read out of those files with
 //     plain string operations (not the scanner's own pattern);
@@ -46,11 +48,20 @@ import { fileURLToPath } from "node:url";
  */
 export const BANNED: Readonly<Record<string, readonly string[]>> = {
   // P1: period sports (period-shared, hockey, icehockey, football)
-  "period-shared.ts": ["SWAP_BAND"],
+  "period-shared.ts": ["SWAP_BAND", "POST_PHASES"],
   "hockey.tsx": ["HOCKEY_REASONS"],
   "icehockey.tsx": ["ICEHOCKEY_REASONS"],
-  // football.tsx keeps CARD_TONES (presentation) and POST_PHASES (P4); the rest of its inventory is read from footballPadRules.
-  "football.tsx": ["CARD_COLORS", "CARD_REASONS", "PENALTY_OUTCOMES", "PENALTY_OFFENCES", "EVENT_BAND", "PLAY_PHASES", "PLAY_PHASE_ONLY"],
+  // football.tsx keeps CARD_TONES (presentation); the rest of its inventory is read from footballPadRules, and POST_PHASES (P4.2) from the engine.
+  "football.tsx": [
+    "CARD_COLORS",
+    "CARD_REASONS",
+    "PENALTY_OUTCOMES",
+    "PENALTY_OFFENCES",
+    "EVENT_BAND",
+    "PLAY_PHASES",
+    "PLAY_PHASE_ONLY",
+    "POST_PHASES",
+  ],
   // P2: cricket
   "cricket.tsx": [
     "WICKET_KINDS",
@@ -62,11 +73,17 @@ export const BANNED: Readonly<Record<string, readonly string[]>> = {
     "CLOSE_REASONS",
   ],
   // P3: set-based sports + tennis (badminton, tabletennis, volleyball, tennis)
-  "badminton.tsx": ["SANCTION_LEVELS", "EVENT_BAND"],
-  "tabletennis.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "EXPEDITE_RETURNS_THRESHOLD", "EXPEDITE_SCORE_FLOOR"],
-  "volleyball.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "LIBERO_BAND", "ROTATION_CYCLE", "ROTATION_VALUES"],
-  "tennis.tsx": ["POINT_KINDS", "INTERRUPTION_KINDS", "SANCTION_LEVELS", "EVENT_BAND", "CALLS"],
-  // P4: carrom, boardgame, generic, and POST_PHASES in every file that declares it
+  "badminton.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "POST_PHASES"],
+  "tabletennis.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "EXPEDITE_RETURNS_THRESHOLD", "EXPEDITE_SCORE_FLOOR", "POST_PHASES"],
+  "volleyball.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "LIBERO_BAND", "ROTATION_CYCLE", "ROTATION_VALUES", "POST_PHASES"],
+  "tennis.tsx": ["POINT_KINDS", "INTERRUPTION_KINDS", "SANCTION_LEVELS", "EVENT_BAND", "CALLS", "POST_PHASES"],
+  // P4: carrom, boardgame, generic, and POST_PHASES in every file that declared it
+  // P4.1: carrom, boardgame, generic (read from carromPadRules / boardgamePadRules / genericPadRules).
+  // P4.2: POST_PHASES, read from the engine in all nine files that declared it (period-shared, football, badminton, tabletennis,
+  // volleyball, tennis above; carrom, boardgame, generic here). Cricket never had one.
+  "carrom.tsx": ["ADJUST_REASONS", "EVENT_BAND", "POST_PHASES"],
+  "boardgame.tsx": ["EVENT_BAND", "BOARD_MAX", "POST_PHASES"],
+  "generic.tsx": ["EVENT_BAND", "MAX_PLAUSIBLE_SCORE", "MAX_TALLY_STEP", "POST_PHASES"],
 };
 
 /**
@@ -124,6 +141,14 @@ export const RULE_CONSTANTS_AT_BASE: Readonly<Record<string, readonly string[]>>
  *  + volleyball's ROTATION_CYCLE and ROTATION_VALUES (P3.1 review m2), + 1 the plan missed: football's `PLAY_PHASE_ONLY`
  *  (the list of event types that are only legal in play, now `EVENT_PHASES` in the engine; P1.2 review). */
 const PLANNED_PAIRS = 49;
+
+/** Names `scanSkins(BANNED)` checks once P4.2 has closed the guard: every inventory pair, banned in its own file. Typed (recounted by
+ *  hand from the BANNED lists above: P1 10 + P2 7 + P3 16 + P4.1 7 + P4.2 9 = 49), not read from `BANNED`, so a name dropped from BANNED reds
+ *  here instead of shrinking the pin with it. */
+const NAMES_CHECKED_AT_CLOSE = 49;
+
+/** Distinct banned names, across the whole list. A name banned in one skin is banned in every skin. */
+const DISTINCT_BANNED_NAMES = 31;
 
 /** Skin source files (`*.ts`/`*.tsx`, `__tests__` excluded) at 17948f93a8. Re-pin when a skin file is added. */
 const PINNED_SKIN_FILES = 13;
@@ -214,6 +239,29 @@ function scanSkins(banned: NameMap): Scan {
     scan.namesChecked += new Set(names).size;
     const found = findDeclarations(text, names);
     if (found.length > 0) scan.violations.push({ file, names: found });
+  }
+  return scan;
+}
+
+interface TreeScan {
+  /** Skin files read. Zero is a failure. */
+  filesScanned: number;
+  /** Distinct banned names looked for in EACH of those files. Zero is a failure. */
+  namesLooked: number;
+  /** `file:NAME`: a banned name declared in a skin file, whichever file BANNED lists it under. */
+  violations: string[];
+}
+
+/**
+ * The whole-tree check (P0 batch review m3): `scanSkins` looks for a name only in the file BANNED lists it under, so
+ * `const EVENT_BAND = ...` pasted into a SIBLING skin walks past it. This looks for every banned name in every skin file.
+ */
+function scanWholeTree(banned: NameMap): TreeScan {
+  const names = [...new Set(Object.values(banned).flat())];
+  const scan: TreeScan = { filesScanned: 0, namesLooked: names.length, violations: [] };
+  for (const [file, text] of skinSources()) {
+    scan.filesScanned++;
+    for (const name of findDeclarations(text, names)) scan.violations.push(`${file}:${name}`);
   }
   return scan;
 }
@@ -453,8 +501,71 @@ describe("the literal guard", () => {
     expect(scan.scannedFiles, "scanned files").toBe(PINNED_SKIN_FILES);
     expect(scan.missingFiles, "BANNED keys that name no skin file").toEqual([]);
     expect(scan.emptyEntries, "BANNED entries with no names").toEqual([]);
-    // P0: BANNED is empty, so no name is checked. That is allowed only while it is empty.
-    expect(Object.keys(BANNED).length === 0 || scan.namesChecked > 0, "names checked").toBe(true);
+    // The exact count, not a floor: a name dropped from BANNED shrinks the scan and must red here, with the pin typed
+    // separately from the lists it counts (P0 batch review m1).
+    expect(scan.namesChecked, "names checked").toBe(NAMES_CHECKED_AT_CLOSE);
     expect(scan.violations).toEqual([]);
+  });
+
+  it("the inventory is closed: every planned pair is banned in its own file, and BANNED holds nothing else", () => {
+    const pairs = (m: NameMap) => Object.entries(m).flatMap(([file, names]) => [...new Set(names)].map((n) => `${file}:${n}`)).sort();
+    const inventory = pairs(RULE_CONSTANTS_AT_BASE);
+    const banned = pairs(BANNED);
+    console.info(`[no-rule-literals] inventory pairs: ${inventory.length}, banned pairs: ${banned.length}`);
+    expect(inventory.length, "inventory pairs").toBe(PLANNED_PAIRS);
+    // Equal as sets: nothing in the inventory is left un-banned (a constant that may still be declared), and BANNED names
+    // nothing the inventory does not. Both directions, so neither list can drift alone.
+    expect(inventory.filter((p) => !banned.includes(p)), "planned pairs not yet banned").toEqual([]);
+    expect(banned.filter((p) => !inventory.includes(p)), "banned pairs the inventory does not list").toEqual([]);
+    expect(banned.length, "banned pairs").toBe(PLANNED_PAIRS);
+  });
+
+  it("no banned name is declared in ANY skin file, whichever file BANNED lists it under", () => {
+    const tree = scanWholeTree(BANNED);
+    console.info(`[no-rule-literals] whole tree: ${tree.filesScanned} files x ${tree.namesLooked} distinct banned names`);
+    expect(tree.filesScanned, "skin files scanned").toBe(PINNED_SKIN_FILES);
+    expect(tree.namesLooked, "distinct banned names looked for in each file").toBe(DISTINCT_BANNED_NAMES);
+    expect(tree.violations).toEqual([]);
+  });
+
+  it("X-PH-1: nine skins read POST_PHASES from the engine, and none declares a Set literal of its own that opens with a terminal token", () => {
+    // The nine files that declared POST_PHASES at 17948f93a8 (plan Task P4.2). Cricket never had one, and hockey and icehockey
+    // reach it through period-shared.ts. Typed, not read from BANNED, so a skin dropped from BANNED reds here.
+    const NINE = ["badminton.tsx", "boardgame.tsx", "carrom.tsx", "football.tsx", "generic.tsx", "period-shared.ts", "tabletennis.tsx", "tennis.tsx", "volleyball.tsx"];
+    const banned = Object.entries(BANNED).filter(([, names]) => names.includes("POST_PHASES")).map(([file]) => file).sort();
+    expect(banned, "skin files that ban POST_PHASES").toEqual(NINE);
+    const importsEngineSet = /import\s*\{[^}]*\bPOST_PHASES\b[^}]*\}\s*from\s*"@seazn\/engine\/pad"/;
+    // A renamed copy (the name list above sees names only): a Set literal that OPENS with a terminal token. Narrow on purpose:
+    // it exempts period-shared's OWN_PHASE_TOKENS (opens with "pre"). A set that opens with another token, or an inline
+    // `phase === "done" || ...` chain, is the drift tests' job, as the header says.
+    const ownCopy = /new Set(?:<[^>]*>)?\(\s*\[\s*"(?:done|final|abandoned)"/;
+    let reads = 0;
+    for (const file of NINE) {
+      const text = skinByBasename().get(file)!;
+      expect(text, `${file}: no import of POST_PHASES from @seazn/engine/pad`).toMatch(importsEngineSet);
+      expect(text.match(/\bPOST_PHASES\.has\(/g)?.length ?? 0, `${file}: POST_PHASES is imported but never read`).toBeGreaterThan(0);
+      reads++;
+    }
+    let scanned = 0;
+    for (const [file, text] of skinSources()) {
+      expect(text, `${file}: a Set of terminal phase tokens declared in the skin`).not.toMatch(ownCopy);
+      scanned++;
+    }
+    console.info(`[no-rule-literals] POST_PHASES readers: ${reads}, files scanned for an own copy: ${scanned}`);
+    expect(reads).toBe(9);
+    expect(scanned).toBe(PINNED_SKIN_FILES);
+  });
+
+  it("the whole-tree check sees a name declared in a sibling skin that the per-file scan misses", () => {
+    // `hockey.tsx`'s first const, "banned" under cricket.tsx where it is not declared: the per-file scan finds nothing at all
+    // (cricket declares no such name), the whole-tree check names the file that does declare it.
+    const declaredInHockey = firstConstName(skinSources().get("hockey.tsx")!)!;
+    expect(findDeclarations(skinSources().get("cricket.tsx")!, [declaredInHockey]), "premise: cricket.tsx declares it too").toEqual([]);
+    const probe: NameMap = { "cricket.tsx": [declaredInHockey] };
+    expect(scanSkins(probe).violations, "the per-file scan").toEqual([]);
+    const tree = scanWholeTree(probe);
+    expect(tree.violations).toEqual([`hockey.tsx:${declaredInHockey}`]);
+    expect(tree.filesScanned).toBe(PINNED_SKIN_FILES);
+    expect(tree.namesLooked).toBe(1);
   });
 });

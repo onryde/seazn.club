@@ -11,6 +11,7 @@
 // scorer decides (coincidentals, delayed penalties → core.note for context).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import {
   forfeitOf,
   isStrictFold,
@@ -1564,7 +1565,7 @@ function applyShot(
  *  included (ruling 102 Q5). */
 function periodForfeitPhase(state: PeriodState): ForfeitPhase {
   if (state.phase === "pre") return "pre";
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") return "over";
+  if (POST_PHASES.has(state.phase)) return "over";
   return "play";
 }
 
@@ -1572,7 +1573,7 @@ function periodForfeitPhase(state: PeriodState): ForfeitPhase {
 // absent. The PLAYED goals stay in state; the table's credit is `forfeitCredit`'s (W2b Task 4), read by
 // `standingsDelta` — overwriting `goals` here made a retirement's real margin unreadable (F-16).
 function applyForfeit(state: PeriodState, by: string, reason: ForfeitReason, forfeitAward?: ForfeitAward): PeriodState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   if (by === "both") return { ...sweepEndOfMatch(state), phase: "done", outcome: { kind: "double_walkover" } };
@@ -1600,7 +1601,7 @@ function lastRegulationPeriodNotStarted(state: PeriodState): boolean {
 }
 
 function applyAbandon(state: PeriodState): PeriodState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   const { abandonPolicy } = state.cfg;

@@ -3,6 +3,7 @@
 // two official tiebreaker presets (fifa2026 H2H-first / classic GD-first).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import {
   isStrictFold,
   resolveVoids,
@@ -1784,7 +1785,7 @@ function applyShootoutKick(
 // absent. The PLAYED goals stay in state: what the table credits (FB-WO-1's 3-0, FB-RT-1's max of awarded and real)
 // is `forfeitCredit`'s, read by `standingsDelta` — overwriting `goals` here made a 0-5 retirement read 0-3 (F-16).
 function applyForfeit(state: FootballState, by: string, reason: ForfeitReason, forfeitAward?: ForfeitAward): FootballState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   if (by === "both") {
@@ -1801,7 +1802,7 @@ function applyForfeit(state: FootballState, by: string, reason: ForfeitReason, f
 }
 
 function applyAbandon(state: FootballState): FootballState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   if (state.cfg.abandonPolicy === "replay") {

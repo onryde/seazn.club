@@ -16,6 +16,7 @@ import type { EventEnvelope, Lineup, LineupPair } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
+import { genericPadRules } from "@seazn/engine/pad";
 import { generic, padSpec as genericPadSpec } from "@seazn/engine/sports/generic";
 import uiEn from "@/dictionaries/en/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
@@ -27,9 +28,6 @@ import { MORE_SHEET_KEY, assertScorebugSpec, type PadHostView, type TileSpec } f
 import {
   CORRECTION_TILE_ID,
   DRAW_TILE_ID,
-  EVENT_BAND,
-  MAX_PLAUSIBLE_SCORE,
-  MAX_TALLY_STEP,
   MORE_TILE_ID,
   RESULT_HINT_KEY,
   RESULT_TYPE,
@@ -46,6 +44,12 @@ import {
   resolvePhase,
   type TFn,
 } from "../generic";
+
+// P4.1: the skin declares neither the band map nor the two field bounds any more; it reads `genericPadRules`. These aliases keep the
+// tests below pinning the RECORD against the real `padSpec` (the record is what the skin now offers from).
+const EVENT_BAND = genericPadRules.eventBands;
+const MAX_PLAUSIBLE_SCORE = genericPadRules.maxPlausibleScore;
+const MAX_TALLY_STEP = genericPadRules.maxTallyStep;
 
 // ---------------------------------------------------------------------------
 // Fixtures — the fold, and nothing but the fold
@@ -886,14 +890,14 @@ describe("registry", () => {
   });
 });
 
-describe("the engine surface this skin restates", () => {
-  it("EVENT_BAND is the module's own fidelity map, not a second scale", () => {
+describe("the engine surface this skin reads", () => {
+  it("the pad rules' eventBands are the module's own fidelity map, not a second scale", () => {
     for (const cfg of [SCORE_CFG, WIN_LOSS_CFG]) {
       expect(EVENT_BAND).toEqual(genericPadSpec(cfg as never).fidelity);
     }
   });
 
-  it("MAX_TALLY_STEP and MAX_PLAUSIBLE_SCORE are the engine's own field bounds", () => {
+  it("the pad rules' maxTallyStep and maxPlausibleScore are the engine's own field bounds", () => {
     const fields = genericPadSpec(SCORE_CFG as never).panels
       .flatMap((panel) => panel.actions)
       .flatMap((action) => action.fields);

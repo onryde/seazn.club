@@ -150,21 +150,34 @@ export interface TennisPadRules extends PadRulesBase {
 
 /** carrom (P4). */
 export interface CarromPadRules extends PadRulesBase {
+  /** CA-AD-2: the reasons the pad offers an umpire adjustment (the schema keeps `reason` free text). */
   readonly adjustReasons: readonly string[];
+  /** CA-CN-1: the most coins the winner's opponent has left on a board (nine a side). */
   readonly opponentCoinsMax: number;
+  /** CA-FM-1: the cfg's games per match, read through carrom's own schema. */
   bestOf(cfg: unknown): number;
+  /** CA-FM-1: the cfg's points a game is played to; the bound of an umpire adjustment (CA-AD-1). */
   gameTo(cfg: unknown): number;
 }
 
 /** boardgame (P4). */
 export interface BoardgamePadRules extends PadRulesBase {
+  /** BG-PA-1: the pad's bound on the pairing card's board number (a plausibility bound; the fold takes any positive integer). */
   readonly boardMax: number;
+  /** BG-TS-1: the mini-match scores a rapid or blitz tie-break offers, `null` for none. The schema takes any CHESS_SCORE; this is the offer.
+   *  It has a second role: the list `boardgame.arbitraryEvent` draws from, so its ORDER is a seeded stream the pad does not need (it
+   *  compares the set) and a reorder would rewrite. */
   readonly tiebreakScores: readonly (string | null)[];
+  /** BG-KO-2: the one tie-break rung that records who had Black and the result (the fold's `BoardgameArmageddon` branch); every other rung
+   *  records a winner. Added by P4.1. */
+  readonly armageddonRung: string;
 }
 
 /** generic (P4). */
 export interface GenericPadRules extends PadRulesBase {
+  /** GN-SC-1: the pad's bound on a typed final score (a plausibility bound; the fold takes any non-negative integer). */
   readonly maxPlausibleScore: number;
+  /** GN-SC-2: the pad's bound on one tally press (the fold takes any non-zero integer). */
   readonly maxTallyStep: number;
 }
 

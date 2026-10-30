@@ -74,3 +74,7 @@ export { badmintonPadRules, tabletennisPadRules, volleyballPadRules } from "./se
 export { tennisPadRules } from "./tennis.ts";
 
 // P4: carrom, boardgame, generic, POST_PHASES
+export { boardgamePadRules, carromPadRules, genericPadRules } from "./small-sports.ts";
+
+// P4.2 (X-PH-1): the phases in which a match is over, the one set the fold and every skin read.
+export { POST_PHASES } from "../core/phase-tokens.ts";

@@ -35,7 +35,7 @@
 //                UI concept here, never by widening `PadPhase`.
 
 import { AttemptOutcome, onFieldPersons, playingSquad } from "@seazn/engine/core";
-import type { PeriodPadRules } from "@seazn/engine/pad";
+import { POST_PHASES, type PeriodPadRules } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -318,16 +318,13 @@ function benchOf(view: PadHostView, side: Side): readonly string[] {
 // Phase — the three-value UI concept, and the shootout/overtime facts R7 needs
 // ---------------------------------------------------------------------------
 
-/**
- * The phases in which the MATCH IS OVER. Everything else the kernel can put in
- * `state.phase` comes out of `playPhases(cfg)` (kernel.ts:677-683) — `"pre"`,
- * the scoring phases, and `"SHOOTOUT"` — so classification needs no copy of
- * `periodLabels`/`otLabels` and follows a cfg that renames every marker.
- * `__tests__/period-pair.test.ts` sweeps every phase both kernels can reach and
- * fails if this set ever stops being total.
- */
-const POST_PHASES: ReadonlySet<string> = new Set(["done", "final", "abandoned"]);
-
+// The phases in which the MATCH IS OVER are `POST_PHASES` (`@seazn/engine/pad`).
+// Everything else the kernel can put in `state.phase` comes out of
+// `playPhases(cfg)` (kernel.ts:677-683) — `"pre"`, the scoring phases, and
+// `"SHOOTOUT"` — so classification needs no copy of `periodLabels`/`otLabels`
+// and follows a cfg that renames every marker.
+// `__tests__/period-pair.test.ts` sweeps every phase both kernels can reach and
+// fails if the engine's set ever stops covering them.
 export const SHOOTOUT_PHASE = "SHOOTOUT";
 
 /** A phase in which play is running — the kernel's own `isPlayPhase`, reached

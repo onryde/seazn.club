@@ -148,7 +148,7 @@ export function foldedPhases(module: AnySportModule): FoldedPhase[] {
     // `done` was the only terminal phase produced here, so the two others the
     // kernel can reach — `final` (kernel.ts:2408, a decided fixture whose
     // ledger has been locked) and `abandoned` (kernel.ts:1416, a `replay`
-    // abandonment) — were named in the skin's `POST_PHASES` and asserted
+    // abandonment) — were named in the skin's `POST_PHASES` (now the engine's) and asserted
     // NOWHERE. Deleting either from that set survived the whole suite, and the
     // failure it hid is not cosmetic: `resolvePhase` would return "live" on an
     // abandoned fixture, `buildClock` would declare a clock counting within a

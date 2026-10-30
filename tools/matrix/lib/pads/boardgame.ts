@@ -1,11 +1,11 @@
 // boardgame: the result event is all the matrix generator emits
-// (streams/boardgame.ts). The pad is tap model S (boardgame.tsx:595): the
+// (streams/boardgame.ts). The pad is tap model S (boardgame.tsx `tapModel`): the
 // references into boardgame.tsx:
 //  - a decisive result is the winner's scorebug half, which HOLDS
-//    `{winner}`; the dock then offers DECISIVE_METHODS (:147) as chips;
-//  - a draw is the `draw` tile (DRAW_TILE_ID, :381), which HOLDS
-//    `{winner: null}` (:403) with DRAWN_METHODS (:155) as chips;
-//  - a chip is `method:<method>` (:509) and only rewrites the held `method`.
+//    `{winner}`; the dock then offers DECISIVE_METHODS as chips;
+//  - a draw is the `draw` tile (DRAW_TILE_ID), which HOLDS
+//    `{winner: null}` with DRAWN_METHODS as chips;
+//  - a chip is `method:<method>` (`methodChip`) and only rewrites the held `method`.
 // Step 0 (2026-09-30, 320, the builder default `blitz`) saw the halves turn
 // into buttons only after Start, the half and the draw tile each HOLD
 // (send-now present), the chip keep the dock open, and the release write one
@@ -29,7 +29,7 @@ import { ARMAGEDDON_RESULTS, TIEBREAK_RUNGS, effectiveRungs, type TiebreakRung }
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
-/** boardgame.tsx:109 RESULT_TYPE, an event the engine's boardgame module declares (pinned). */
+/** boardgame.tsx `RESULT_TYPE`, an event the engine's boardgame module declares (pinned). */
 export const BOARDGAME_RESULT = "boardgame.result";
 /** The engine's tie-break event (boardgame.eventSchemas; pinned). */
 export const BOARDGAME_TIEBREAK = "boardgame.tiebreak";
@@ -43,9 +43,9 @@ export const ARMAGEDDON = "armageddon";
  *  `result-<result>` (text-pinned in pad-adapters.test.ts). */
 export const BLACK_OPTION_PREFIX = "black-";
 export const RESULT_OPTION_PREFIX = "result-";
-/** boardgame.tsx:381 DRAW_TILE_ID (text-pinned). */
+/** boardgame.tsx `DRAW_TILE_ID` (text-pinned). */
 export const BOARDGAME_DRAW_TILE = "draw";
-/** boardgame.tsx:509 methodChip's id (text-pinned). */
+/** boardgame.tsx `methodChip`'s id (text-pinned). */
 export const methodChipId = (method: string): string => `method:${method}`;
 
 function resultSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[] {

@@ -12,6 +12,7 @@
 // the same set ledger the rally path banks (mirrors setbased summary mode).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import {
   forfeitOf,
   isStrictFold,
@@ -1491,7 +1492,7 @@ function applySetSummary(
 // ---------------------------------------------------------------------------
 
 function applyForfeit(state: NestedState, by: string, reason: ForfeitReason): NestedState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
@@ -1511,7 +1512,7 @@ function applyForfeit(state: NestedState, by: string, reason: ForfeitReason): Ne
 const FORFEIT_PHASE: Record<NestedState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
 
 function applyAbandon(state: NestedState): NestedState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   return { ...state, phase: "abandoned", replayFlagged: true };
