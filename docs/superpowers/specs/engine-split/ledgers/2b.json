@@ -1,0 +1,417 @@
+{
+  "batch": "2b",
+  "note": "Test-id ledger for engine-split Phase 2b Task E1: the import commit of onryde/seazn.club.engine (0e77252 in the local clone, not pushed), built from tag engine-split-base = 5a67fbf37d25675c683bbc91785bba5bacd93714. Ids are relative to each collection ROOT. BEFORE (the tag): packages/engine (the whole engine suite), apps/web, tools/matrix and the repo root (scripts/__tests__). AFTER: the clone root. Every report collected with `vitest run --isolate -t __parity_collect_only__ --reporter=json`: the engine suite whole on both sides; at the tag, apps/web over src/server/engine-db/__tests__/{append-event,outcome-readers}.test.ts (DATABASE_URL empty), tools/matrix over __tests__/{ci-wiring,matrix-workflow}.test.ts, the root (packages/engine/node_modules/.bin/vitest) over scripts/__tests__/{main-module,engine-canary-workflow}.test.ts. The three app-side reports are FILTERED to the ids this ledger accounts for (web 3 of 23, matrix 57 of 185, root 9 of 13): the tests left in those files stay in onryde/seazn.club, and their fate (kept, or edited where a clause names a moved workflow) is Batch A Task A3 parity, not this ledger. The after side was collected in a detached worktree of the clone at the import commit with the tag own .github/workflows/{ci,mutation,matrix-truth}.yml placed untracked, because test/ci-wiring.test.ts, test/matrix-workflow.test.ts and the engine own test/stryker-outputs-ignored.test.ts read them at module scope; the engine repository workflows are Tasks E2/E3, and matrix-truth.yml never exists there. Run: node scripts/lib/test-parity.mjs --before <engine>=<tag>/packages/engine --before <web.filtered>=<tag>/apps/web --before <matrix.filtered>=<tag>/tools/matrix --before <root.filtered>=<tag> --after <clone>=<clone> --ledger this-file. RESULT: engine 8019 -> 8081, no engine id lost; +61 moved (row 4 K7 1, row 6 2, rows 18+29 11, row 17 46, row 15 FB-10 1), +1 added (tie declaration parity), 8 retired (row 13).",
+  "entries": [
+    {
+      "id": "src/server/engine-db/__tests__/append-event.test.ts › no logger outside the sanctioned funnel (R3.5 Task K, K6/K7) › K7: no sport module imports a logger (packages/engine is zero-effectful-deps by declaration)",
+      "fate": "moved",
+      "to": "test/append-event.test.ts › no logger outside the sanctioned funnel (R3.5 Task K, K6/K7) › K7: no sport module imports a logger (packages/engine is zero-effectful-deps by declaration)",
+      "reason": "2b E1: reverse inventory row 4 (K7), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › Stryker floor CI wiring (W1d Task 15, D14) › the Stryker floor gate runs in the gates job, exactly once, and nothing can make it conditional or advisory (W1d D14)",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › Stryker floor CI wiring (W1d Task 15, D14) › the Stryker floor gate runs in the gates job, exactly once, and nothing can make it conditional or advisory (W1d D14)",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › Stryker floor CI wiring (W1d Task 15, D14) › the engine's package script runs the CLI under strip-types, and the CLI exists",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › Stryker floor CI wiring (W1d Task 15, D14) › the engine's package script runs the CLI under strip-types, and the CLI exists",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › Stryker floor CI wiring (W1d Task 15, D14) › the step's command as ci.yml spells it, run the way CI runs it, reaches the CLI with its flag and passes on this tree",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › Stryker floor CI wiring (W1d Task 15, D14) › the step's command as ci.yml spells it, run the way CI runs it, reaches the CLI with its flag and passes on this tree",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › gates the step on a paths-filter step that exists, with the engine's two globs (a typo'd id skips the step for ever, and a skipped step is a green job)",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › gates the step on a paths-filter step that exists, with the engine's two globs (a typo'd id skips the step for ever, and a skipped step is a green job)",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › installs with the pinned pnpm and Node 26 before it runs, frozen",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › installs with the pinned pnpm and Node 26 before it runs, frozen",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › reads the jobs it asserts about (never an empty set), and the engine-pack job is one of them",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › reads the jobs it asserts about (never an empty set), and the engine-pack job is one of them",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › runs the proof exactly once, as the command the engine's package script also runs, with nothing that could make it advisory",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › engine-pack CI wiring (engine-split Task 1b-3, D14) › runs the proof exactly once, as the command the engine's package script also runs, with nothing that could make it advisory",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › compares against HEAD^1 and the job's checkout is the full-history one that makes HEAD^1 exist",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › compares against HEAD^1 and the job's checkout is the full-history one that makes HEAD^1 exist",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › the engine's package script runs the guard under strip-types, and the guard exists",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › the engine's package script runs the guard under strip-types, and the guard exists",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › the guard runs in the gates job, exactly once, after the floor gate, and nothing can make it conditional or advisory",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › the guard runs in the gates job, exactly once, after the floor gate, and nothing can make it conditional or advisory",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › the step's command as ci.yml spells it, run the way CI runs it, reaches the guard and passes on this tree",
+      "fate": "moved",
+      "to": "test/ci-wiring.test.ts › fold-epoch guard CI wiring (engine-split Task 1e-2, D15, D26) › the step's command as ci.yml spells it, run the way CI runs it, reaches the guard and passes on this tree",
+      "reason": "2b E1: reverse inventory rows 18 (floor + engine-pack halves) and 29 (fold-epoch guard), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "scripts/__tests__/main-module.test.ts › isMainModule — the entry-script check the matrix CLIs and the repo gates share › final batch FB-10: the engine boundary gate (scripts/engine-boundary.ts) started through a symlinked path runs its scan — never a silent 0",
+      "fate": "moved",
+      "to": "test/main-module.test.ts › isMainModule — the entry-script check the matrix CLIs and the repo gates share › final batch FB-10: the engine boundary gate (scripts/engine-boundary.ts) started through a symlinked path runs its scan — never a silent 0",
+      "reason": "2b E1: reverse inventory row 15 (FB-10), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › both workflows run on the switchable runner (ruling 68, D24) › every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › both workflows run on the switchable runner (ruling 68, D24) › every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › mutation.yml's guard is the first step of every job, with matrix-truth's script in every line but the refusal's wording (the identical-script claim for the second workflow)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › mutation.yml's guard is the first step of every job, with matrix-truth's script in every line but the refusal's wording (the identical-script claim for the second workflow)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys, in declaration order (m2)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the dispatch `group` choices are `all` plus exactly STRYKER_GROUPS's keys, in declaration order (m2)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the fan-out figures this file quotes (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the fan-out figures this file quotes (legs, hours each, a dispatch's wall at the org's slots, at 12, at 8) are the ones the measured walls give (T20 review M1)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the mutate job does not cancel its siblings, takes its timeout from the matrix, and saves its evidence even when Stryker exits non-zero (R5-I1)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the mutate job does not cancel its siblings, takes its timeout from the matrix, and saves its evidence even when Stryker exits non-zero (R5-I1)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the mutate job runs at most 12 legs at a time, next to fail-fast: false: the leg fan-out cannot take every hosted slot of the org (T20-FIX1, I1)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › the mutate job runs at most 12 legs at a time, next to fail-fast: false: the leg fan-out cannot take every hosted slot of the org (T20-FIX1, I1)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the Stryker step keeps Stryker's own exit and writes it down (D8: a killed command reads as 0 otherwise) › a failing run: the step exits with Stryker's code, reports/mutation/exit.txt says so (the directory is made even if Stryker died before writing one), and EXIT= is printed",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the Stryker step keeps Stryker's own exit and writes it down (D8: a killed command reads as 0 otherwise) › a failing run: the step exits with Stryker's code, reports/mutation/exit.txt says so (the directory is made even if Stryker died before writing one), and EXIT= is printed",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the Stryker step keeps Stryker's own exit and writes it down (D8: a killed command reads as 0 otherwise) › it runs `pnpm mutation` in packages/engine with STRYKER_GROUP from the job's GROUP",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the Stryker step keeps Stryker's own exit and writes it down (D8: a killed command reads as 0 otherwise) › it runs `pnpm mutation` in packages/engine with STRYKER_GROUP from the job's GROUP",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › PR-A's state (the committed floor file is empty): it prints `no floor yet: PR-B sets it` for each family and passes, for the legs' real reports",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › PR-A's state (the committed floor file is empty): it prints `no floor yet: PR-B sets it` for each family and passes, for the legs' real reports",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › a dispatch of ONE leg of a family does not judge the family (it is not the sum of its legs) and still passes; every leg of a family is judged",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › a dispatch of ONE leg of a family does not judge the family (it is not the sum of its legs) and still passes; every leg of a family is judged",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › a planned leg that left no report is a failure even while no floor exists (a leg that died is never a skip), and the other families are still judged",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › a planned leg that left no report is a failure even while no floor exists (a leg that died is never a skip), and the other families are still judged",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › against the real plan, for every dispatch group and the weekly, the PR and main's push: floors runs exactly when the plan holds a leg with a floor, LEGS is those legs, and the probe is never in it (N1)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › against the real plan, for every dispatch group and the weekly, the PR and main's push: floors runs exactly when the plan holds a leg with a floor, LEGS is those legs, and the probe is never in it (N1)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › an empty LEGS (the expression evaluating to nothing) is a refusal, never a pass over zero families",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › an empty LEGS (the expression evaluating to nothing) is a refusal, never a pass over zero families",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › once PR-B commits floors: a family with no entry is a failure, met floors pass and a missed one fails",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › once PR-B commits floors: a family with no entry is a failure, met floors pass and a missed one fails",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › the floors job reads the legs' artifacts from floors-in, judges them with --check-all over the legs the plan scheduled, and the step can be neither conditional nor advisory",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › the floors job reads the legs' artifacts from floors-in, judges them with --check-all over the legs the plan scheduled, and the step can be neither conditional nor advisory",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › the survivors step writes SURVIVORS.md next to the group's report, listing the one survivor",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › the survivors step writes SURVIVORS.md next to the group's report, listing the one survivor",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › what the skip prevents: a probe-only dispatch's LEGS is `probe`, and the real CLI refuses it (exit 2, names the probe), so a floors job that ran would go red on a documented option",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the floors job judges each family on all its legs, run through the real engine CLI › what the skip prevents: a probe-only dispatch's LEGS is `probe`, and the real CLI refuses it (exit 2, names the probe), so a floors job that ran would go red on a documented option",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › a leg that is cut again never restores the file another cut wrote, and one that is not still restores its own (each group, the cut the plan step gives it)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › a leg that is cut again never restores the file another cut wrote, and one that is not still restores its own (each group, the cut the plan step gives it)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › a runner edit starts every leg cold once: a file saved under another runner fingerprint, or under the key before the runner was in it, is never restored, and a file this runner saved still is (each group, its own cut)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › a runner edit starts every leg cold once: a file saved under another runner fingerprint, or under the key before the runner was in it, is never restored, and a file this runner saved still is (each group, its own cut)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › every `matrix.<field>` the mutate job reads is a field the plan step really emits (the seam: producer and consumer meet in the real output)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › every `matrix.<field>` the mutate job reads is a field the plan step really emits (the seam: producer and consumer meet in the real output)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › no group's restore prefix is a prefix of another group's cache key (derived from the real group names, each with the cut the plan step gives it)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › no group's restore prefix is a prefix of another group's cache key (derived from the real group names, each with the cut the plan step gives it)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the cached path is the group's own incremental file, the one stryker.config.mjs writes",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the cached path is the group's own incremental file, the one stryker.config.mjs writes",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the check before the save is the engine's own selection check on the incremental file, `if: always()`, a red step when it refuses, and the save runs only on its success (evaluated, not just read)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the check before the save is the engine's own selection check on the incremental file, `if: always()`, a red step when it refuses, and the save runs only on its success (evaluated, not just read)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the check step run for real: a file inside the leg's ranges is exit 0, one with a mutant past them (the first re-run's poisoned file), a missing file and an empty one are exit 2 and the step is red",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the check step run for real: a file inside the leg's ranges is exit 0, one with a mutant past them (the first re-run's poisoned file), a missing file and an empty one are exit 2 and the step is red",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the cut and the runner's fingerprint are in the key, the restore key and the save key, and the restore key has no shorter fallback that would reach another cut's or another runner's file",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the cut and the runner's fingerprint are in the key, the restore key and the save key, and the restore key has no shorter fallback that would reach another cut's or another runner's file",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the file is SAVED by its own step, after Stryker and the check, `if: always()` and only when the check passed, under the key the restore looks for (a red Stryker run must not lose it; a refused file must not be kept)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the file is SAVED by its own step, after Stryker and the check, `if: always()` and only when the check passed, under the key the restore looks for (a red Stryker run must not lose it; a refused file must not be kept)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the premise: a restore key that stopped at the group's name WOULD collide on the real names, `sports-cricket-1` reaching `sports-cricket-10` (so the '@' is doing work, not decoration)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the premise: a restore key that stopped at the group's name WOULD collide on the real names, `sports-cricket-1` reaching `sports-cricket-10` (so the '@' is doing work, not decoration)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the premise: a restore key that stopped at the group's name and its '@' (the shape before the fix) WOULD reach a file another cut wrote (so the cut in the prefix is doing work)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the premise: a restore key that stopped at the group's name and its '@' (the shape before the fix) WOULD reach a file another cut wrote (so the cut in the prefix is doing work)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the warm-up's point: the key main's push run saves the probe under is one a PR probe's restore key reaches (the same group, cut and runner from the real plan step; only the sha differs)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the warm-up's point: the key main's push run saves the probe under is one a PR probe's restore key reaches (the same group, cut and runner from the real plan step; only the sha differs)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the workflow hashes ONE thing itself, the test runner, in the three keys only, and it is the runner the engine's Stryker config loads; the cut's fingerprint still comes from the plan step, never from inline shell over source",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the incremental cache is keyed so no group can restore another's file, and no cut another cut's › the workflow hashes ONE thing itself, the test runner, in the three keys only, and it is the runner the engine's Stryker config loads; the cut's fingerprint still comes from the plan step, never from inline shell over source",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=pull_request GROUP='' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"probe\"]",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=pull_request GROUP='' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"probe\"]",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=schedule GROUP='' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"competition-1\",\"competition-2\",\"competition-3\",\"competition-4\",\"competition-5\",\"competition-6\",\"competition-7\",\"core-1\",\"core-2\",\"core-3\",\"modules-1\",\"modules-2\",\"modules-3\",\"modules-4\",\"modules-5\",\"modules-6\",\"modules-7\",\"draws-1\",\"draws-2\",\"draws-3\",\"draws-4\",\"sports-cricket-1\",\"sports-cricket-2\",\"sports-cricket-3\",\"sports-cricket-4\",\"sports-cricket-5\",\"sports-cricket-6\",\"sports-cricket-7\",\"sports-cricket-8\",\"sports-cricket-9\",\"sports-cricket-10\",\"sports-cricket-11\",\"sports-cricket-12\",\"sports-cricket-13\",\"sports-cricket-14\",\"sports-cricket-15\",\"sports-cricket-16\",\"sports-football-1\",\"sports-football-2\",\"sports-football-3\",\"sports-football-4\",\"sports-football-5\",\"sports-football-6\",\"sports-football-7\",\"sports-football-8\",\"sports-football-9\",\"sports-period-1\",\"sports-period-2\",\"sports-period-3\",\"sports-period-4\",\"sports-period-5\",\"sports-period-6\",\"sports-period-7\",\"sports-period-8\",\"sports-period-9\",\"sports-period-10\",\"sports-period-11\",\"sports-period-12\",\"sports-period-13\",\"sports-period-14\",\"sports-setbased-1\",\"sports-setbased-2\",\"sports-setbased-3\",\"sports-setbased-4\",\"sports-setbased-5\",\"sports-setbased-6\",\"sports-nested-1\",\"sports-nested-2\",\"sports-nested-3\",\"sports-nested-4\",\"sports-nested-5\",\"sports-nested-6\",\"sports-nested-7\",\"sports-nested-8\",\"sports-other-1\",\"sports-other-2\",\"sports-other-3\",\"sports-other-4\",\"sports-other-5\",\"sports-other-6\",\"sports-other-7\"]",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=schedule GROUP='' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"competition-1\",\"competition-2\",\"competition-3\",\"competition-4\",\"competition-5\",\"competition-6\",\"competition-7\",\"core-1\",\"core-2\",\"core-3\",\"modules-1\",\"modules-2\",\"modules-3\",\"modules-4\",\"modules-5\",\"modules-6\",\"modules-7\",\"draws-1\",\"draws-2\",\"draws-3\",\"draws-4\",\"sports-cricket-1\",\"sports-cricket-2\",\"sports-cricket-3\",\"sports-cricket-4\",\"sports-cricket-5\",\"sports-cricket-6\",\"sports-cricket-7\",\"sports-cricket-8\",\"sports-cricket-9\",\"sports-cricket-10\",\"sports-cricket-11\",\"sports-cricket-12\",\"sports-cricket-13\",\"sports-cricket-14\",\"sports-cricket-15\",\"sports-cricket-16\",\"sports-football-1\",\"sports-football-2\",\"sports-football-3\",\"sports-football-4\",\"sports-football-5\",\"sports-football-6\",\"sports-football-7\",\"sports-football-8\",\"sports-football-9\",\"sports-period-1\",\"sports-period-2\",\"sports-period-3\",\"sports-period-4\",\"sports-period-5\",\"sports-period-6\",\"sports-period-7\",\"sports-period-8\",\"sports-period-9\",\"sports-period-10\",\"sports-period-11\",\"sports-period-12\",\"sports-period-13\",\"sports-period-14\",\"sports-setbased-1\",\"sports-setbased-2\",\"sports-setbased-3\",\"sports-setbased-4\",\"sports-setbased-5\",\"sports-setbased-6\",\"sports-nested-1\",\"sports-nested-2\",\"sports-nested-3\",\"sports-nested-4\",\"sports-nested-5\",\"sports-nested-6\",\"sports-nested-7\",\"sports-nested-8\",\"sports-other-1\",\"sports-other-2\",\"sports-other-3\",\"sports-other-4\",\"sports-other-5\",\"sports-other-6\",\"sports-other-7\"]",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=workflow_dispatch GROUP='all' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"competition-1\",\"competition-2\",\"competition-3\",\"competition-4\",\"competition-5\",\"competition-6\",\"competition-7\",\"core-1\",\"core-2\",\"core-3\",\"modules-1\",\"modules-2\",\"modules-3\",\"modules-4\",\"modules-5\",\"modules-6\",\"modules-7\",\"draws-1\",\"draws-2\",\"draws-3\",\"draws-4\",\"sports-cricket-1\",\"sports-cricket-2\",\"sports-cricket-3\",\"sports-cricket-4\",\"sports-cricket-5\",\"sports-cricket-6\",\"sports-cricket-7\",\"sports-cricket-8\",\"sports-cricket-9\",\"sports-cricket-10\",\"sports-cricket-11\",\"sports-cricket-12\",\"sports-cricket-13\",\"sports-cricket-14\",\"sports-cricket-15\",\"sports-cricket-16\",\"sports-football-1\",\"sports-football-2\",\"sports-football-3\",\"sports-football-4\",\"sports-football-5\",\"sports-football-6\",\"sports-football-7\",\"sports-football-8\",\"sports-football-9\",\"sports-period-1\",\"sports-period-2\",\"sports-period-3\",\"sports-period-4\",\"sports-period-5\",\"sports-period-6\",\"sports-period-7\",\"sports-period-8\",\"sports-period-9\",\"sports-period-10\",\"sports-period-11\",\"sports-period-12\",\"sports-period-13\",\"sports-period-14\",\"sports-setbased-1\",\"sports-setbased-2\",\"sports-setbased-3\",\"sports-setbased-4\",\"sports-setbased-5\",\"sports-setbased-6\",\"sports-nested-1\",\"sports-nested-2\",\"sports-nested-3\",\"sports-nested-4\",\"sports-nested-5\",\"sports-nested-6\",\"sports-nested-7\",\"sports-nested-8\",\"sports-other-1\",\"sports-other-2\",\"sports-other-3\",\"sports-other-4\",\"sports-other-5\",\"sports-other-6\",\"sports-other-7\"]",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=workflow_dispatch GROUP='all' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"competition-1\",\"competition-2\",\"competition-3\",\"competition-4\",\"competition-5\",\"competition-6\",\"competition-7\",\"core-1\",\"core-2\",\"core-3\",\"modules-1\",\"modules-2\",\"modules-3\",\"modules-4\",\"modules-5\",\"modules-6\",\"modules-7\",\"draws-1\",\"draws-2\",\"draws-3\",\"draws-4\",\"sports-cricket-1\",\"sports-cricket-2\",\"sports-cricket-3\",\"sports-cricket-4\",\"sports-cricket-5\",\"sports-cricket-6\",\"sports-cricket-7\",\"sports-cricket-8\",\"sports-cricket-9\",\"sports-cricket-10\",\"sports-cricket-11\",\"sports-cricket-12\",\"sports-cricket-13\",\"sports-cricket-14\",\"sports-cricket-15\",\"sports-cricket-16\",\"sports-football-1\",\"sports-football-2\",\"sports-football-3\",\"sports-football-4\",\"sports-football-5\",\"sports-football-6\",\"sports-football-7\",\"sports-football-8\",\"sports-football-9\",\"sports-period-1\",\"sports-period-2\",\"sports-period-3\",\"sports-period-4\",\"sports-period-5\",\"sports-period-6\",\"sports-period-7\",\"sports-period-8\",\"sports-period-9\",\"sports-period-10\",\"sports-period-11\",\"sports-period-12\",\"sports-period-13\",\"sports-period-14\",\"sports-setbased-1\",\"sports-setbased-2\",\"sports-setbased-3\",\"sports-setbased-4\",\"sports-setbased-5\",\"sports-setbased-6\",\"sports-nested-1\",\"sports-nested-2\",\"sports-nested-3\",\"sports-nested-4\",\"sports-nested-5\",\"sports-nested-6\",\"sports-nested-7\",\"sports-nested-8\",\"sports-other-1\",\"sports-other-2\",\"sports-other-3\",\"sports-other-4\",\"sports-other-5\",\"sports-other-6\",\"sports-other-7\"]",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=workflow_dispatch GROUP='draws-3' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"draws-3\"]",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=workflow_dispatch GROUP='draws-3' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"draws-3\"]",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=workflow_dispatch GROUP='probe' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"probe\"]",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › EVENT=workflow_dispatch GROUP='probe' appends exactly one `matrix=<json>` line to $GITHUB_OUTPUT with [\"probe\"]",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › a dispatch of an unknown group fails the step and appends nothing (the matrix is never empty-and-green)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: the plan step derives the matrix through the real script, per event › a dispatch of an unknown group fails the step and appends nothing (the matrix is never empty-and-green)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › a push to a pull request cancels the run it supersedes and nothing else is ever cancelled: one top-level `concurrency:` whose group is the PR's number for a PR and the run's own id otherwise",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › a push to a pull request cancels the run it supersedes and nothing else is ever cancelled: one top-level `concurrency:` whose group is the PR's number for a PR and the run's own id otherwise",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › a recorded data file never triggers the probe, stryker-equivalent.json and stryker-floor.json above all: each exists, nothing on the probe's path names it, and neither trigger takes it",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › a recorded data file never triggers the probe, stryker-equivalent.json and stryker-floor.json above all: each exists, nothing on the probe's path names it, and neither trigger takes it",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › every other Stryker file of the engine is in the trigger, and the vitest config the runner is handed (T20-FIX1, M3)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › every other Stryker file of the engine is in the trigger, and the vitest config the runner is handed (T20-FIX1, M3)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › plan and mutate spell the fork condition in their own `if:` (plan the weekly gate beside it), and floors runs only when the plan holds a leg with a floor: each evaluated over every event, with the matrix the plan step really writes (10 cases x 3 jobs = 30 evaluations)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › plan and mutate spell the fork condition in their own `if:` (plan the weekly gate beside it), and floors runs only when the plan holds a leg with a floor: each evaluated over every event, with the matrix the plan step really writes (10 cases x 3 jobs = 30 evaluations)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › schedule + workflow_dispatch + its own pull_request paths + a push to main on the SAME paths, and no workflow_call, no pull_request_target",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › schedule + workflow_dispatch + its own pull_request paths + a push to main on the SAME paths, and no workflow_call, no pull_request_target",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › the exposure surface is read-only and secret-free: ONE workflow-level permissions block, contents read, and no secrets anywhere",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › the exposure surface is read-only and secret-free: ONE workflow-level permissions block, contents read, and no secrets anywhere",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › the one upload overwrites its own artifact (a re-run must not 409), is named per group, and is rooted at packages/engine/ (PF-5: a download holds reports/mutation/<group>.json)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › the one upload overwrites its own artifact (a re-run must not 409), is named per group, and is rooted at packages/engine/ (PF-5: a download holds reports/mutation/<group>.json)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › the probe runs on every file its run and its plan reach: the code from the Stryker config and the plan's script, and the data that code names, each derived from the code (a dropped stryker.config.mjs is red here)",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › the probe runs on every file its run and its plan reach: the code from the Stryker config and the plan's script, and the data that code names, each derived from the code (a dropped stryker.config.mjs is red here)",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › the three jobs are plan, mutate and floors; mutate needs plan, floors needs both, and plan and floors have the 15-minute timeout",
+      "fate": "moved",
+      "to": "test/matrix-workflow.test.ts › mutation.yml: triggers, the weekly gate and the fork gate (T9 conventions: T9-FORK, m1, m2, m3) › the three jobs are plan, mutate and floors; mutate needs plan, floors needs both, and plan and floors have the 15-minute timeout",
+      "reason": "2b E1: reverse inventory row 17 (mutation.yml), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "src/server/engine-db/__tests__/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › golden.ts's allowance holds: every corpus stream that carries core.settle is recorded by the format-2 recorder or a later one, and ends on a settled win (the reason is a guard, not a comment)",
+      "fate": "moved",
+      "to": "test/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › golden.ts's allowance holds: every corpus stream that carries core.settle is recorded by the format-2 recorder or a later one, and ends on a settled win (the reason is a guard, not a comment)",
+      "reason": "2b E1: reverse inventory row 6 (engine half), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "src/server/engine-db/__tests__/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › the settle scan has teeth: each way a settle stream can be wrong is reported, a struck-only settle is skipped, and a good stream is clean",
+      "fate": "moved",
+      "to": "test/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › the settle scan has teeth: each way a settle stream can be wrong is reported, a struck-only settle is skipped, and a good stream is clean",
+      "reason": "2b E1: reverse inventory row 6 (engine half), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
+    },
+    {
+      "id": "test/tie-declaration-parity.test.ts › a sport whose fold writes a tie declares it reachable (engine-split 2b-readers review m1) › the sports whose source writes `kind: \"tie\"` are exactly the sports whose module declares a reachable tie",
+      "fate": "added",
+      "reason": "2b E1 step 2 (2b-readers review m1): the source scan for `kind: \"tie\"` the matrix readers dropped in Batch R, kept here and held equal to each module's reachableResultKinds declaration; mutation-checked (cricket's tie removed from its declaration reds it)"
+    },
+    {
+      "id": "scripts/__tests__/engine-canary-workflow.test.ts › engine-canary.yml (engine-split Task 1b-4, D16) › every pin holds on the real workflow, and each pin judged something",
+      "fate": "retired",
+      "reason": "2b E1: reverse inventory row 13, retired with engine-canary.yml (plan false premise 10): canaries were the Phase 1 channel, PR snapshots and releases replace them in the engine repository, and the workflow's proof job is ci.yml's engine-pack, so the workflow this test pins is not carried over. The engine's own canary tests (test/canary.test.ts beside pack-proof/canary*.mjs) are imported byte-identical"
+    },
+    {
+      "id": "scripts/__tests__/engine-canary-workflow.test.ts › engine-canary.yml (engine-split Task 1b-4, D16) › every pin is held to a failing input: each mutant changes the text and is named by its pin",
+      "fate": "retired",
+      "reason": "2b E1: reverse inventory row 13, retired with engine-canary.yml (plan false premise 10): canaries were the Phase 1 channel, PR snapshots and releases replace them in the engine repository, and the workflow's proof job is ci.yml's engine-pack, so the workflow this test pins is not carried over. The engine's own canary tests (test/canary.test.ts beside pack-proof/canary*.mjs) are imported byte-identical"
+    },
+    {
+      "id": "scripts/__tests__/engine-canary-workflow.test.ts › engine-canary.yml (engine-split Task 1b-4, D16) › never changes the committed version: package.json carries a plain release version, not a canary (the version is set on the runner only)",
+      "fate": "retired",
+      "reason": "2b E1: reverse inventory row 13, retired with engine-canary.yml (plan false premise 10): canaries were the Phase 1 channel, PR snapshots and releases replace them in the engine repository, and the workflow's proof job is ci.yml's engine-pack, so the workflow this test pins is not carried over. The engine's own canary tests (test/canary.test.ts beside pack-proof/canary*.mjs) are imported byte-identical"
+    },
+    {
+      "id": "scripts/__tests__/engine-canary-workflow.test.ts › engine-canary.yml (engine-split Task 1b-4, D16) › parses into the jobs and steps the pins judge (never an empty set)",
+      "fate": "retired",
+      "reason": "2b E1: reverse inventory row 13, retired with engine-canary.yml (plan false premise 10): canaries were the Phase 1 channel, PR snapshots and releases replace them in the engine repository, and the workflow's proof job is ci.yml's engine-pack, so the workflow this test pins is not carried over. The engine's own canary tests (test/canary.test.ts beside pack-proof/canary*.mjs) are imported byte-identical"
+    },
+    {
+      "id": "scripts/__tests__/engine-canary-workflow.test.ts › engine-canary.yml (engine-split Task 1b-4, D16) › runs the pack proof in the same way as ci.yml's engine-pack job and the engine's own pack:proof script",
+      "fate": "retired",
+      "reason": "2b E1: reverse inventory row 13, retired with engine-canary.yml (plan false premise 10): canaries were the Phase 1 channel, PR snapshots and releases replace them in the engine repository, and the workflow's proof job is ci.yml's engine-pack, so the workflow this test pins is not carried over. The engine's own canary tests (test/canary.test.ts beside pack-proof/canary*.mjs) are imported byte-identical"
+    },
+    {
+      "id": "scripts/__tests__/engine-canary-workflow.test.ts › engine-canary.yml (engine-split Task 1b-4, D16) › the derive step, run for real (bash -e, as GitHub runs a step) › a second run on a LATER run number of the SAME commit gets a different, higher version",
+      "fate": "retired",
+      "reason": "2b E1: reverse inventory row 13, retired with engine-canary.yml (plan false premise 10): canaries were the Phase 1 channel, PR snapshots and releases replace them in the engine repository, and the workflow's proof job is ci.yml's engine-pack, so the workflow this test pins is not carried over. The engine's own canary tests (test/canary.test.ts beside pack-proof/canary*.mjs) are imported byte-identical"
+    },
+    {
+      "id": "scripts/__tests__/engine-canary-workflow.test.ts › engine-canary.yml (engine-split Task 1b-4, D16) › the derive step, run for real (bash -e, as GitHub runs a step) › fails the step, and writes no `version=` line, when the script cannot derive a version",
+      "fate": "retired",
+      "reason": "2b E1: reverse inventory row 13, retired with engine-canary.yml (plan false premise 10): canaries were the Phase 1 channel, PR snapshots and releases replace them in the engine repository, and the workflow's proof job is ci.yml's engine-pack, so the workflow this test pins is not carried over. The engine's own canary tests (test/canary.test.ts beside pack-proof/canary*.mjs) are imported byte-identical"
+    },
+    {
+      "id": "scripts/__tests__/engine-canary-workflow.test.ts › engine-canary.yml (engine-split Task 1b-4, D16) › the derive step, run for real (bash -e, as GitHub runs a step) › writes exactly one `version=<canary>` line from the run number and the commit sha",
+      "fate": "retired",
+      "reason": "2b E1: reverse inventory row 13, retired with engine-canary.yml (plan false premise 10): canaries were the Phase 1 channel, PR snapshots and releases replace them in the engine repository, and the workflow's proof job is ci.yml's engine-pack, so the workflow this test pins is not carried over. The engine's own canary tests (test/canary.test.ts beside pack-proof/canary*.mjs) are imported byte-identical"
+    }
+  ]
+}
