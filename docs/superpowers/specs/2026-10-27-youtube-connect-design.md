@@ -411,7 +411,8 @@ tick after reconnect. The destination row shows "Reconnect needed" with the reas
      still winding down) is tried **once more**, after its broadcast reads `complete` (`broadcastLife`, a few reads apart),
      inside the same 30 s budget;
   2. the channel's own streams are listed (`liveStreams.list`, `part=snippet`, `mine=true`, 50 a page: ids and titles only,
-     never `cdn`, so no stream key is ever fetched) and every stream **whose whole title is a name Seazn gives its keys**,
+     never `cdn`, so no stream key is ever fetched; the budget is asked before EVERY page, and a listing it cuts short is
+     unread, never a partial list) and every stream **whose whole title is a name Seazn gives its keys**,
      on that channel, is deleted, so a key that no row of ours records (an orphan) goes as well. The names are the union of
      `streaming.youtube.streamKeyTitle` in every locale (`{n}` = digits) and `POOLED_KEY_TITLES_SHIPPED`
      (`server/youtube/pooled-key-title.ts`): every name ever shipped per locale, append-only, from "Seazn stream key"

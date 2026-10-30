@@ -995,6 +995,19 @@ describe("listStreams and a refused stream delete (the disconnect's clean-up)", 
     expect(((await rejection(f.listStreams(atA))) as YouTubeError).code).toBe("youtube_reconnect_needed");
   });
 
+  it("listStreams asks the caller's room before its one page, as the driver does before each: no room is the driver's budgetSpent refusal with no call made; room is the list", async () => {
+    const f = new FakeYouTube();
+    const at = await f.accessToken("1//rt-list-room");
+    await f.insertStream(at, { title: "Seazn stream key" });
+    const before = f.calls.length;
+    const cut = (await rejection(f.listStreams(at, { room: () => false }))) as YouTubeError;
+    expect([cut.code, cut.reason]).toEqual(["youtube_unavailable", "budgetSpent"]);
+    expect(f.calls.length - before, "no call reached YouTube").toBe(0);
+    let asks = 0;
+    expect(await f.listStreams(at, { room: () => (++asks, true) })).toHaveLength(1);
+    expect(asks, "asked once, before its one page").toBe(1);
+  });
+
   it("refuseStreamDelete ONCE: the next delete of that stream is youtube_unavailable / liveStreamDeletionNotAllowed and leaves it; the one after deletes it; other streams are untouched", async () => {
     const { f, at } = await rig();
     const held = await f.insertStream(at, { title: "held" });

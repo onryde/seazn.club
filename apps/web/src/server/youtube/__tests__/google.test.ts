@@ -506,6 +506,33 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
     expect(JSON.stringify(out), "the answer is ids and titles: never a key, never an ingest URL").not.toMatch(/LEAKED-KEY|rtmp:/);
   });
 
+  it("listStreams asks its caller's ROOM before EVERY page: a budget that runs out after page 1 is refused (budgetSpent) with page 2 never fetched - never the partial list; no room at all fetches nothing; room throughout reads every page (anti-vacuity: the asks counted)", async () => {
+    const pages: Record<string, unknown> = {
+      first: { nextPageToken: "PAGE-2", items: [{ id: "s1", snippet: { channelId: "UCchan", title: "Seazn stream key" } }] },
+      "PAGE-2": { nextPageToken: "PAGE-3", items: [{ id: "s2", snippet: { channelId: "UCchan", title: "Seazn stream key" } }] },
+      "PAGE-3": { items: [{ id: "s3", snippet: { channelId: "UCchan", title: "Seazn stream key" } }] },
+    };
+    handler = (req) => res(200, pages[new URL(req.url).searchParams.get("pageToken") ?? "first"]);
+
+    // room for page 1 only: the clock passes the budget while page 1 is in flight
+    let asks = 0;
+    const cut = (await rejection(driver().listStreams(AT, { room: () => ++asks === 1 }))) as YouTubeError;
+    expect([cut.code, cut.reason], "refused - the caller must not read one page as the channel's list").toEqual(["youtube_unavailable", "budgetSpent"]);
+    expect(sent.length, "page 1 only: page 2 was never asked for").toBe(1);
+    expect(asks, "asked before page 1, and again before page 2").toBe(2);
+
+    // no room at all: nothing is fetched
+    sent = [];
+    const none = (await rejection(driver().listStreams(AT, { room: () => false }))) as YouTubeError;
+    expect([none.code, none.reason, sent.length]).toEqual(["youtube_unavailable", "budgetSpent", 0]);
+
+    // the pair: room throughout, every page read, asked once per page
+    sent = [];
+    asks = 0;
+    expect((await driver().listStreams(AT, { room: () => (++asks, true) })).map((x) => x.id)).toEqual(["s1", "s2", "s3"]);
+    expect([sent.length, asks]).toEqual([3, 3]);
+  });
+
   it("listStreams: a refusal is thrown as its code; a page token Google repeats, and more pages than the cap, are refused rather than read as a whole list (the caller would delete from it)", async () => {
     handler = () => apiError(401, "authError");
     expect(((await rejection(driver().listStreams(AT))) as YouTubeError).code).toBe("youtube_reconnect_needed");

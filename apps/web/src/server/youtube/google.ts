@@ -16,7 +16,7 @@ import "server-only";
 import { GOOGLE_AUTH_URL, GOOGLE_TOKEN_URL, googleConfigured } from "@/lib/oauth";
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
+  LIST_BUDGET_SPENT, YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
 const API = "https://www.googleapis.com/youtube/v3";
@@ -310,12 +310,14 @@ export class GoogleYouTube implements YouTubePort {
   /** liveStreams.list(part=snippet, mine=true), …/live/docs/liveStreams/list: the channel's own streams, 50 a page, following
    *  `nextPageToken`. `part` is `snippet` ALONE and never `cdn`: the `cdn` part carries `ingestionInfo.streamName`, the stream key,
    *  which this call must never fetch - and only id, title and channel id are read from whatever comes back. A page token that
-   *  repeats (a loop) and a list longer than MAX_STREAM_PAGES are refused, never answered with a partial list. */
-  async listStreams(at: string): Promise<StreamListing[]> {
+   *  repeats (a loop), a list longer than MAX_STREAM_PAGES and a caller's budget that runs out between pages (`room`, asked before
+   *  every page) are refused, never answered with a partial list. */
+  async listStreams(at: string, o: { room?: () => boolean } = {}): Promise<StreamListing[]> {
     const out: StreamListing[] = [];
     const seen = new Set<string>();
     let pageToken: string | null = null;
     for (let page = 0; page < MAX_STREAM_PAGES; page++) {
+      if (o.room && !o.room()) throw new YouTubeError("youtube_unavailable", LIST_BUDGET_SPENT);
       const query: Record<string, string> = { part: "snippet", mine: "true", maxResults: String(STREAMS_PER_PAGE) };
       if (pageToken !== null) query.pageToken = pageToken;
       const body = parseBody(await api(at, "GET", "liveStreams", { query }));

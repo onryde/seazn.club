@@ -61,6 +61,7 @@ import { disconnectYoutube } from "../disconnect";
 import { FINISHED_STATUSES, YOUTUBE_FINISHED_END_MINUTES, YOUTUBE_GRACE_MINUTES } from "../end-rule";
 import { endDueBroadcasts, type EndStepHooks, type YoutubeEndResult } from "../end-step";
 import { FakeYouTube } from "../fake";
+import { GoogleYouTube } from "../google";
 import type { YouTubePort } from "../port";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { YoutubeDisconnectedNotice } from "@/components/v2/youtube-connect-panel";
@@ -1232,6 +1233,41 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
       .replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
     expect(text).toContain("Riverside FC is disconnected, but Seazn couldn't delete 2 stream keys from YouTube.");
     expect(text).not.toContain("Seazn deleted what it stored");
+  });
+
+  it("the budget runs out BETWEEN PAGES of the channel's listing (the REAL Google driver paging, over a stubbed fetch): page 1 is not the list - keysLeft null, nothing deleted from it, page 2 never asked for, one budget report counting the listing, and the revoke still made after", async () => {
+    const w = await world();
+    const seazn = await orphan(w, NAME_BEFORE_SLOTS);   // a Seazn key really on the channel, which page 1 names
+    // Google's answer in two pages; the wall clock passes the budget while page 1 is in flight
+    let pagesServed = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const u = new URL(String(input));
+      if (u.pathname !== "/youtube/v3/liveStreams") throw new Error(`unexpected request ${u.pathname}`);
+      pagesServed++;
+      const body = u.searchParams.get("pageToken") === null
+        ? { nextPageToken: "PAGE-2", items: [{ id: seazn, snippet: { channelId: w.channel.id, title: NAME_BEFORE_SLOTS } }] }
+        : { items: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+    try {
+      const f = w.fake;
+      const paged = Object.create(f) as FakeYouTube;
+      paged.listStreams = (_at, o) => new GoogleYouTube().listStreams("ya29.stub-access", o);
+      const from = f.calls.length;
+
+      const out = await disconnectYoutube(w.auth, w.orgId, w.connectionId, paged, {
+        now: () => new Date(w.now()), wallClock: () => (pagesServed > 0 ? 10 * MIN : 0), sleep: async () => {},
+      });
+      expect(pagesServed, "page 1 was read; page 2 was never asked for").toBe(1);
+      expect(out, "not confirmed: a page is not the channel's list").toEqual({ revokeOutcome: "revoked", keysDeleted: 0, keysLeft: null, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
+      expect(methods(f, from), "no delete from the partial page, then the revoke").toEqual(["accessToken", "revoke"]);
+      expect(f.inspectStream(seazn), "the Seazn key page 1 named is still on the channel").not.toBeNull();
+      const reports = disconnectReports();
+      expect(reports.length, "one report: the budget's, not a 'listStreams was refused'").toBe(1);
+      expect(reports[0]![1]).toMatchObject({ route: "youtube.disconnect.budget", extra: { skipped: 1 } });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("only THIS channel's streams are swept: a Seazn-named stream a listing says belongs to another channel, or to no channel it names, is never deleted (the token of an account that manages several channels)", async () => {

@@ -28,7 +28,8 @@ import "server-only";
 //   - each live pooled key's stream -> deleteStream; one that fails (anything but not-found, which the driver already resolves: e.g.
 //     YouTube's 403 `liveStreamDeletionNotAllowed` while a broadcast still holds the key, or a timeout) is tried ONCE more, after the
 //     open broadcast that held it reads finished (`broadcastLife`: complete, revoked or absent - a few reads, a short wait between);
-//   - the channel's OWN streams are read (`listStreams`: ids and titles, never a key) and every one Seazn named (pooled-key-title.ts) on
+//   - the channel's OWN streams are read (`listStreams`: ids and titles, never a key; the budget is asked before every page, and a
+//     listing it cuts short is unread - keysLeft null - never a partial list) and every one Seazn named (pooled-key-title.ts) on
 //     THIS channel is deleted - a key no row of ours records (an orphan: made at YouTube, lost before it was pooled) included. A stream
 //     Seazn did not name is never touched (stg 2026-10-30: Disconnect said "deleted" while Studio still listed a Seazn key);
 //   - the Google revoke - AFTER the above (revoking kills the access tokens they use) - unless another NON-revoked connection reports the
@@ -53,7 +54,7 @@ import { accountIsShared, purgeConnectionData } from "./daily";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts } from "./end-rule";
 import { OPEN_STATES } from "./end-step";
 import { isPooledKeyTitle } from "./pooled-key-title";
-import { YouTubeError, isDeadGrantRefusal, type YouTubePort } from "./port";
+import { LIST_BUDGET_SPENT, YouTubeError, isDeadGrantRefusal, type YouTubePort } from "./port";
 import { YoutubeTokenUnreadableError, openToken, revokeConnection } from "./token-store";
 
 /** The machine code of the refusal while a match is using the channel (the Streaming page maps it to its own sentence). */
@@ -93,7 +94,8 @@ async function attempt<T>(call: () => Promise<T>, c: Ctx, step: string): Promise
     return { ok: true, value: await call() };
   } catch (err) {
     if (err instanceof YouTubeError) {
-      if (!isDeadGrantRefusal(err)) {
+      // a listing cut short by OUR budget is not YouTube refusing: the caller counts it in the one budget report instead
+      if (!isDeadGrantRefusal(err) && err.reason !== LIST_BUDGET_SPENT) {
         captureError(new Error(`youtube disconnect: ${step} was refused (${err.code})`), { orgId: c.orgId, route: "youtube.disconnect.port", extra: { connectionId: c.connectionId, step } });
       }
     } else {
@@ -168,8 +170,9 @@ async function deleteKeys(
   }
 
   if (!room()) return { deleted: deleted.size, left: null, skipped: skipped + 1 };
-  const listed = await attempt(() => port.listStreams(at), c, "listStreams");
-  if (!listed.ok) return { deleted: deleted.size, left: null, skipped };
+  // `room` is asked before EVERY page: a listing the budget cut short is unread (null), never a partial list deleted from as the whole
+  const listed = await attempt(() => port.listStreams(at, { room }), c, "listStreams");
+  if (!listed.ok) return { deleted: deleted.size, left: null, skipped: room() ? skipped : skipped + 1 };
   let left = 0;
   for (const s of listed.value) {
     if (deleted.has(s.id)) continue;                        // gone already (a listing that lags the delete)

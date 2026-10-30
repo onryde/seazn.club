@@ -39,7 +39,7 @@ import { createHash } from "node:crypto";
 // What it does not model: a daily stream-creation cap (unpublished) and a stream's own title rules.
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
+  LIST_BUDGET_SPENT, YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
 // Google's limits — "10 active streams allowed per channel and 3 active streams per stream key" — are the fake's OWN literals
@@ -497,8 +497,10 @@ export class FakeYouTube implements YouTubePort {
   }
 
   /** The token's channel's streams, in the order they were made: id, title, channel. Never a key or an ingest URL (liveStreams.list
-   *  with part=snippet has neither). Another channel's streams are not listed. */
-  async listStreams(at: string): Promise<StreamListing[]> {
+   *  with part=snippet has neither). Another channel's streams are not listed. The fake answers in ONE page, and asks `room` before
+   *  it as the driver asks before each: no room, the driver's refusal and no call made. */
+  async listStreams(at: string, o: { room?: () => boolean } = {}): Promise<StreamListing[]> {
+    if (o.room && !o.room()) throw new YouTubeError("youtube_unavailable", LIST_BUDGET_SPENT);
     this.enter("listStreams", this.channelOfAccess(at));
     const who = this.who(at);
     return [...this.streams.values()].filter((st) => st.channelId === who.channelId).map((st) => ({ id: st.id, title: st.title, channelId: st.channelId }));
