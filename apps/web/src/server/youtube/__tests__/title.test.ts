@@ -117,11 +117,29 @@ describe("broadcastTitle (spec §6.5, plan P11)", () => {
 });
 
 describe("broadcastDescription (spec §6.5)", () => {
-  it("one line, then the public match URL; '<' and '>' are removed from both", () => {
-    const url = "https://seazn.club/shared/club/cup/open/fixtures/abc";
-    expect(broadcastDescription({ line: "Live score and results:", matchUrl: url })).toBe(`Live score and results: ${url}`);
-    const d = broadcastDescription({ line: "Score <live> & results:", matchUrl: `${url}?x=<y>` });
+  const url = "https://seazn.club/shared/club/cup/open/fixtures/abc";
+  const site = "https://seazn.club/";
+  const base = { line: "Live score and results:", matchUrl: url, poweredBy: "Powered by Seazn Club", siteUrl: site };
+
+  it("two paragraphs: the line + the public match URL, a blank line, then 'Powered by …' · the site", () => {
+    expect(broadcastDescription(base)).toBe(`Live score and results: ${url}\n\nPowered by Seazn Club · ${site}`);
+  });
+
+  it("'<' and '>' are removed from every part (line, match URL, powered-by words, site URL)", () => {
+    const d = broadcastDescription({
+      line: "Score <live> & results:",
+      matchUrl: `${url}?x=<y>`,
+      poweredBy: "Powered <by> Seazn Club",
+      siteUrl: "https://<seazn>.club/",
+    });
     expect(d).not.toMatch(/[<>]/);
-    expect(d).toBe(`Score live & results: ${url}?x=y`);
+    expect(d).toBe(`Score live & results: ${url}?x=y\n\nPowered by Seazn Club · https://seazn.club/`);
+  });
+
+  it("the powered-by paragraph is present and last (exactly two paragraphs)", () => {
+    const d = broadcastDescription(base);
+    const paragraphs = d.split("\n\n");
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[1]).toBe(`${base.poweredBy} · ${site}`);
   });
 });

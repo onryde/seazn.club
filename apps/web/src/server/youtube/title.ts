@@ -1,11 +1,11 @@
 // server/youtube/title.ts — a YouTube broadcast's title and description (spec §6.5, plan P11). Pure: the words (`vs`, `tbd`,
-// the description's line) arrive already in the org's default locale; prepare.ts looks them up.
+// the description's line and powered-by words) arrive already in the org's default locale; prepare.ts looks them up.
 //
 // YouTube's rules (developers.google.com/youtube/v3/live/docs/liveBroadcasts/insert, re-read 2026-10-28 for T10):
 //   - snippet.title: "must be between 1 and 100 characters long" (`invalidTitle`); the videos resource's title — a broadcast
 //     is one video — may hold any UTF-8 character "except < and >". Counted in CODE POINTS (Array.from), as the fake and
 //     the live driver count it, so an emoji is one character and a cut never splits a surrogate pair.
-//   - snippet.description: up to 5000 characters, and the same "< and >" rule. One line plus a URL is far inside that.
+//   - snippet.description: up to 5000 bytes, and the same "< and >" rule. Two short paragraphs and two URLs are far inside that.
 // Shape: `<Home> v <Away> · <Division> · <Competition>`. Over the limit, the COMPETITION gives way first (cut with an ellipsis,
 // or dropped when too little of it would show), then the division, and only then the match itself.
 
@@ -58,7 +58,9 @@ export function broadcastTitle(a: {
   return fit(match, TITLE_MAX_CHARS) ?? chars(match).slice(0, TITLE_MAX_CHARS).join("");
 }
 
-/** One line, then the public match URL, both without `<` or `>`. */
-export function broadcastDescription(a: { line: string; matchUrl: string }): string {
-  return `${clean(a.line)} ${a.matchUrl.replace(/[<>]/g, "")}`;
+/** Two paragraphs, every part without `<` or `>`: the line and the public match URL, a blank line, then "Powered by Seazn Club"
+ *  and the site's own link (owner request 2026-10-29). Every org gets both, `dashboard.branding` orgs included (owner, 2026-10-29). */
+export function broadcastDescription(a: { line: string; matchUrl: string; poweredBy: string; siteUrl: string }): string {
+  const url = (u: string): string => u.replace(/[<>]/g, "");
+  return `${clean(a.line)} ${url(a.matchUrl)}\n\n${clean(a.poweredBy)} · ${url(a.siteUrl)}`;
 }

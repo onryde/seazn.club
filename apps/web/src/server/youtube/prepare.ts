@@ -35,7 +35,7 @@ import "server-only";
 // owner, secret-columns.ts; this file never names a sealed column.
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { toLocale } from "@/lib/i18n-constants";
+import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import { routes } from "@/lib/routes";
 import { captureError } from "@/lib/sentry";
@@ -62,8 +62,6 @@ export const YOUTUBE_RESERVATION_MINUTES = 2;
 /** "10 active streams allowed per channel" (support.google.com/youtube/answer/2474026, spec §3.1): lib/youtube.ts owns the number
  *  (the panel's refusal copy names it too); V479's slot check (1..10) is the database's floor under the same number. */
 const MAX_LIVE_KEYS_PER_CHANNEL = YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL;
-/** A pooled liveStream's title: liveStreams snippet.title is 1–128 characters. Not shown to viewers. */
-const STREAM_TITLE = "Seazn stream key";
 
 /** The fixture's open states (V479 `youtube_broadcasts_one_open_per_fixture`). `ending` is not one: a claimed row is gone. */
 const OPEN_ON_FIXTURE = ["created", "bound", "reserved", "live"] as const;
@@ -262,7 +260,7 @@ interface FixtureWords {
 }
 
 /** The title and description, in the org's default locale (spec §6.5, R4). */
-async function textsFor(ctx: Ctx): Promise<{ title: string; description: string }> {
+async function textsFor(ctx: Ctx): Promise<{ title: string; description: string; locale: Locale }> {
   const [f] = await sql<FixtureWords[]>`
     select he.display_name as home, ae.display_name as away, d.name as division, c.name as competition, o.default_locale,
            o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug
@@ -276,6 +274,7 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string 
   if (!f) throw new HttpError(404, "fixture not found");
   const locale = toLocale(f.default_locale);
   return {
+    locale,
     title: broadcastTitle({
       home: f.home, away: f.away, division: f.division, competition: f.competition,
       vs: msgFor(locale, "schedule.vs"), tbd: msgFor(locale, "schedule.tbd"),
@@ -283,6 +282,8 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string 
     description: broadcastDescription({
       line: msgFor(locale, "streaming.youtube.broadcast.descriptionLine"),
       matchUrl: `${siteOrigin()}${routes.sharedFixture(f.org_slug, f.comp_slug, f.div_slug, ctx.fixtureId)}`,
+      poweredBy: msgFor(locale, "streaming.youtube.broadcast.poweredBy"),
+      siteUrl: `${siteOrigin()}/`,
     }),
   };
 }
@@ -357,7 +358,7 @@ async function pickAndInsert(ctx: Ctx, title: string): Promise<Pick> {
 
 /** Steps 3–4 for a new broadcast. `reread`: a 23505 on the fixture's one-open index takes step 2 again (R3), once. */
 async function createNew(ctx: Ctx, reread: boolean): Promise<Prepared> {
-  const { title, description } = await textsFor(ctx);   // the row's title is NOT NULL: computed before the transaction
+  const { title, description, locale } = await textsFor(ctx);   // the row's title is NOT NULL: computed before the transaction
   const pick = await pickAndInsert(ctx, title);
   if (pick.kind === "busy") throw youtubeRefusal("youtube_channel_busy", ctx.connectionId);
   if (pick.kind === "fixture_taken") {
@@ -372,7 +373,7 @@ async function createNew(ctx: Ctx, reread: boolean): Promise<Prepared> {
   let ytId: string | null = null;
   let keyId: string | null = pick.keyId;
   try {
-    keyId ??= await growPool(ctx, rowId);
+    keyId ??= await growPool(ctx, rowId, locale);
     const [key] = await sql<{ live_stream_id: string }[]>`
       select live_stream_id from youtube_stream_keys where id = ${keyId} and org_id = ${ctx.orgId}`;
     if (!key) throw new Error(`youtube stream key ${keyId} not found`);
@@ -428,24 +429,40 @@ async function retireKey(ctx: Ctx, keyId: string): Promise<void> {
   }
 }
 
+/** The lowest pool slot of this connection with no live (unretired) key in it, or null when all MAX_LIVE_KEYS_PER_CHANNEL are taken. */
+async function lowestFreeSlot(exec: Tx | typeof sql, ctx: Ctx): Promise<number | null> {
+  const [free] = await exec<{ slot: number }[]>`
+    select s::int as slot from generate_series(1, ${MAX_LIVE_KEYS_PER_CHANNEL}::int) s
+     where not exists (select 1 from youtube_stream_keys k
+                        where k.connection_id = ${ctx.connectionId} and k.retired_at is null and k.slot = s)
+     order by s limit 1`;
+  return free?.slot ?? null;
+}
+
 /** A keyless row's key: a new liveStream, pooled at the lowest free slot. A lost slot (another admission pooled the last one
- *  first) deletes this liveStream and retries the pick once (P3). */
-async function growPool(ctx: Ctx, rowId: string): Promise<string> {
+ *  first) deletes this liveStream and retries the pick once (P3).
+ *
+ *  The liveStream is named by its POOL SLOT ("Seazn Club · stream key 2", in the org's default locale; owner 2026-10-29) so
+ *  Studio's key list tells a club's courts apart — never by the match, because the key is reused by later matches. The slot is
+ *  only settled inside the transaction below, after the liveStream exists, so the name takes the lowest free slot READ just
+ *  before (no lock). If a concurrent admission takes that slot first the stream is pooled at a later slot than its name says: accepted,
+ *  never repaired with a liveStreams.update. No free slot at that read (the pick saw room, a racer filled it) names it for the
+ *  top slot: the transaction then finds none either and the stream is deleted unpooled, as before. */
+async function growPool(ctx: Ctx, rowId: string, locale: Locale): Promise<string> {
   for (let attempt = 1; ; attempt++) {
-    const stream = await viaPort(() => ctx.port.insertStream(ctx.at, { title: STREAM_TITLE }));
+    const expected = (await lowestFreeSlot(sql, ctx)) ?? MAX_LIVE_KEYS_PER_CHANNEL;
+    const stream = await viaPort(() => ctx.port.insertStream(ctx.at, {
+      title: msgFor(locale, "streaming.youtube.streamKeyTitle", { n: expected }),
+    }));
     let pooled: string | null;
     try {
       pooled = await sql.begin(async (tx) => {
         await lockConnection(tx, ctx);
-        const [free] = await tx<{ slot: number }[]>`
-          select s::int as slot from generate_series(1, ${MAX_LIVE_KEYS_PER_CHANNEL}::int) s
-           where not exists (select 1 from youtube_stream_keys k
-                              where k.connection_id = ${ctx.connectionId} and k.retired_at is null and k.slot = s)
-           order by s limit 1`;
-        if (!free) return null;
+        const free = await lowestFreeSlot(tx, ctx);
+        if (free === null) return null;
         const key = await tx
           .savepoint((sp) => insertPooledKey(sp, {
-            orgId: ctx.orgId, connectionId: ctx.connectionId, slot: free.slot, liveStreamId: stream.streamId, ingest: stream.ingest,
+            orgId: ctx.orgId, connectionId: ctx.connectionId, slot: free, liveStreamId: stream.streamId, ingest: stream.ingest,
           }))
           .catch((err: unknown) => {
             if (isUniqueOn(err, ONE_LIVE_SLOT)) return null;

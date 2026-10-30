@@ -698,6 +698,10 @@ describe("a connected channel's row", () => {
     }
     expect(checked, "every cell of the matrix").toBe(MATRIX.length);
     expect(neutralLines, "both neutral cases ran").toHaveLength(2);
+    // stg run 2026-10-29: "Seazn hasn't confirmed …" read as a fault on a channel that had just connected. The line says WHEN the check
+    // happens (the next Go live), not that something is missing.
+    expect(m("streaming.youtube.statusLine.unknown"), "names the moment of the check").toMatch(/next time you go live/i);
+    expect(m("streaming.youtube.statusLine.unknown"), "does not read as a fault").not.toMatch(/hasn't|not been|cannot|can't/i);
     // The positive pair: an ENABLED channel does say it can go live (a neutral that said nothing of the kind would pass the above).
     expect(plain(rowHtml(channel()))).toContain(m("streaming.youtube.statusLine.connected"));
   });
