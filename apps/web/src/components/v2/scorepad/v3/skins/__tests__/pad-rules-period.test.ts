@@ -128,6 +128,19 @@ describe("the skins hold the engine's records, not copies", () => {
     expect(facts).toBeGreaterThanOrEqual(4);
   });
 
+  it("P1.1 m5: eventTypesOf's eight names are exactly the module's own event types: a naming template, pinned to eventSchemas", () => {
+    // eventTypesOf types `${key}.<suffix>` rather than reading the engine, so this is its pin: a kernel event added, dropped or
+    // renamed reds here, not only in a sweep that happens to tile it.
+    let checked = 0;
+    for (const sport of SPORTS) {
+      const named = Object.values(eventTypesOf(sport.spec));
+      expect(new Set(named).size, `${sport.key}: eight distinct names`).toBe(named.length);
+      expect([...named].sort(), sport.key).toEqual(Object.keys(sport.module.eventSchemas ?? {}).sort());
+      checked += named.length;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
   it("the tone maps are keyed by the engine's class catalogue, key for key and in its order", () => {
     for (const sport of SPORTS) {
       expect(Object.keys(sport.tones), sport.key).toEqual([...sport.rules.suspensionClassKeys]);

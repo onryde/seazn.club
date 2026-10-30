@@ -127,6 +127,23 @@ function reachedStates(sport: Sport, cfg: PeriodCfg): PhaseState[] {
     state = at(`level+${step}`, level);
   }
   const home = state.entrants.home;
+  // A level match that went to a shoot-out, decided there: home scores every attempt, away misses every one, each taken by
+  // whichever side the fold says is next. A decided state that still HOLDS its shoot-out record, the one where an attempt
+  // must be refused on the phase alone.
+  if (state.phase === "SHOOTOUT") {
+    const kicks = [...level];
+    for (let attempt = 0; attempt < 40 && state.phase === "SHOOTOUT"; attempt++) {
+      const taken = [
+        { by: home, scored: true },
+        { by: state.entrants.away, scored: false },
+      ].find((payload) => verdictOf(sport, state, `${sport.key}.shootout.attempt`, payload) === "accepted");
+      if (taken === undefined) throw new Error(`${sport.key}: neither side may take the next attempt`);
+      kicks.push({ type: `${sport.key}.shootout.attempt`, payload: taken });
+      state = fold(sport, cfg, kicks);
+    }
+    if (state.phase !== "done" || state.shootout === null) throw new Error(`${sport.key}: the shoot-out did not decide (${state.phase})`);
+    at("shoot-out decided", kicks);
+  }
   const decided: ModuleEvent[] = [START, { type: `${sport.key}.goal`, payload: { by: home, kind: "fg" } }];
   state = fold(sport, cfg, decided);
   for (let step = 0; step < 16; step++) {
@@ -348,6 +365,23 @@ describe("assistsMax is the cap the goal schema enforces", () => {
     expect(verdictOf(field, fieldState, "hockey.goal", { by: fieldState.entrants.home, kind: "fg", assists: people(1) })).toBe("INVALID_EVENT");
     expect(hockeyPadRules.assistsMax).toBe(icehockeyPadRules.assistsMax);
   });
+
+  it("the cap is the rulebook's two (icehockey/DOMAIN.md, the assists row: A1 then A2), and the real fold takes two and refuses three", () => {
+    // Typed from the rule row, not read off the constant: a cap that moved to three would pass the relative test above.
+    expect(icehockeyPadRules.assistsMax).toBe(2);
+    expect(hockeyPadRules.assistsMax).toBe(2);
+    const ice = SPORTS[1]!;
+    let checked = 0;
+    for (const { name, cfg } of cfgsOf(ice)) {
+      if (!cfg.assists) continue;
+      const state = fold(ice, cfg, [START]);
+      const assists = (n: number) => Array.from({ length: n }, (_, i) => `a${i}`);
+      expect(verdictOf(ice, state, "icehockey.goal", { by: state.entrants.home, assists: assists(2) }), `${name}: A1 and A2`).toBe("accepted");
+      expect(verdictOf(ice, state, "icehockey.goal", { by: state.entrants.home, assists: assists(3) }), `${name}: a third`).toBe("INVALID_EVENT");
+      checked++;
+    }
+    expect(checked, "an ice hockey cfg that records assists").toBeGreaterThan(0);
+  });
 });
 
 describe("goalKinds(cfg) is exactly the kinds the fold accepts", () => {
@@ -431,12 +465,14 @@ describe("eventAllowedInPhase: the phase table the fold's WRONG_PHASE guards rea
   it("over every phase a real fold of every declared cfg reaches, the fold refuses WRONG_PHASE exactly when the record says no", () => {
     let pairs = 0;
     let refusals = 0;
+    let decidedWithShootout = 0;
     for (const sport of SPORTS) {
       const seen = new Set<string>();
       for (const { name, cfg } of cfgsOf(sport)) {
         const spec = specOf(sport, cfg);
         for (const { label, state } of reachedStates(sport, cfg)) {
           seen.add(state.phase);
+          if (state.phase === "done" && state.shootout !== null) decidedWithShootout++;
           for (const type of Object.keys(sport.module.eventSchemas ?? {})) {
             const payload = probeOf(sport, spec, type, state);
             if (payload === null) continue;
@@ -453,9 +489,32 @@ describe("eventAllowedInPhase: the phase table the fold's WRONG_PHASE guards rea
       expect([...seen].filter((p) => playPhases(sport.module.configSchema.parse({})).includes(p) && p !== "pre" && p !== "SHOOTOUT").length, `${sport.key}: a play phase`).toBeGreaterThan(0);
     }
     // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
-    console.info(`[pad/period] eventAllowedInPhase vs the fold: ${pairs} (cfg, phase, type) triples, ${refusals} refused`);
+    console.info(`[pad/period] eventAllowedInPhase vs the fold: ${pairs} (cfg, phase, type) triples, ${refusals} refused, ${decidedWithShootout} shoot-out-decided states`);
     expect(pairs).toBeGreaterThan(0);
     expect(refusals).toBeGreaterThan(0);
+    // A decided match that still holds its shoot-out record: the state where only the phase refuses an attempt.
+    expect(decidedWithShootout, "a shoot-out was decided in some declared cfg").toBeGreaterThan(0);
+  });
+
+  it("a SHOOTOUT state that holds no shoot-out record is refused WRONG_PHASE, never read (every route into SHOOTOUT seeds one)", () => {
+    // Unreachable through a fold: resolveEnd seeds `{ kicks: [] }` as it enters SHOOTOUT. The guard owes a test that reaches it.
+    let checked = 0;
+    for (const sport of SPORTS) {
+      for (const { name, cfg } of cfgsOf(sport)) {
+        if (cfg.shootout === null) continue;
+        const reached = reachedStates(sport, cfg).find(({ state }) => state.phase === "SHOOTOUT");
+        expect(reached, `${sport.key}/${name} reaches SHOOTOUT`).toBeDefined();
+        expect(reached!.state.shootout, `${sport.key}/${name}: the fold seeds the record`).toEqual({ kicks: [] });
+        const bare: PeriodState = { ...reached!.state, shootout: null };
+        const payload = { by: bare.entrants.home, scored: true };
+        expect(sport.rules.eventAllowedInPhase(`${sport.key}.shootout.attempt`, "SHOOTOUT", cfg), `${sport.key}/${name}`).toBe(true);
+        expect(verdictOf(sport, bare, `${sport.key}.shootout.attempt`, payload), `${sport.key}/${name}`).toBe("WRONG_PHASE");
+        // ...and the very same attempt is not refused on the phase once the record is there.
+        expect(verdictOf(sport, reached!.state, `${sport.key}.shootout.attempt`, payload), `${sport.key}/${name}`).not.toBe("WRONG_PHASE");
+        checked++;
+      }
+    }
+    expect(checked, "a declared cfg with a shoot-out").toBeGreaterThan(0);
   });
 
   it("a phase token one cfg has and another lacks: the record answers per cfg, and the fold agrees in the state that token names", () => {

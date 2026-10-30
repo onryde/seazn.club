@@ -315,6 +315,47 @@ describe("X-SR-7 the pad follows a correction", () => {
     expect(pad.current.rulesChanged, "no line to say: the banner says the format changed, without one").toEqual({ formatLine: null, rulesVersion: 4 });
   });
 
+  it("P1.1 m2: the reloaded cfg is read through the sport's own schema, as the mount's is: a partial cfg folds with its defaults in", async () => {
+    // GET /rules answers the raw stored cfg (`resolveFixtureCfg`), while the mount's cfg was parsed (`resolveScorePadBootstrap`).
+    const raw = { bestOf: 5 };
+    const t = scripted({
+      appends: [rulesChangedRefusal(1)],
+      rules: async () => ({ cfg: raw, rules_version: 1, format_line: null }),
+    });
+    const pad = mount(params({ rulesVersion: 0, transport: t.transport }));
+    await pad.current.submit("badminton.game.summary", GAME);
+    await settle();
+    expect(t.rulesCalls).toEqual(["fx-1"]);
+    expect(pad.current.cfg, "the schema's reading of the raw cfg, defaults in").toEqual(badminton.configSchema.parse(raw));
+    expect(pad.current.cfg, "premise: the raw read lacks the defaults").not.toEqual(raw);
+    expect(foldedBestOf(pad.current)).toBe(5);
+  });
+
+  it("P1.1 m2: a reloaded cfg the sport's schema refuses is a failed read: the pad keeps its rules and version, and the next refusal asks again", async () => {
+    const reads: FixtureRulesResult[] = [
+      { cfg: { ...BADMINTON.variants.short, bestOf: 4 }, rules_version: 1, format_line: "Best of 4" },
+      { cfg: CFG5, rules_version: 1, format_line: "Best of 5" },
+    ];
+    expect(badminton.configSchema.safeParse(reads[0]!.cfg).success, "premise: the schema refuses the first read").toBe(false);
+    const t = scripted({
+      appends: [rulesChangedRefusal(1), rulesChangedRefusal(1)],
+      rules: async () => reads.shift()!,
+    });
+    const pad = mount(params({ rulesVersion: 0, transport: t.transport }));
+    await pad.current.submit("badminton.game.summary", GAME);
+    await settle();
+    expect(t.rulesCalls, "the read was made").toEqual(["fx-1"]);
+    expect(pad.current.cfg, "kept: the refused cfg never reached the pad").toEqual(CFG3);
+    expect(pad.current.rulesChanged, "nothing to announce").toBeNull();
+    // The second call: refused again at the same version, which the pad does NOT already know, so it reads again.
+    await pad.current.submit("badminton.game.summary", { home: 11, away: 6 });
+    await settle();
+    expect(t.appendCalls[1]!.rules_version, "still the version it folds under").toBe(0);
+    expect(t.rulesCalls, "asked again").toEqual(["fx-1", "fx-1"]);
+    expect(pad.current.cfg).toEqual(CFG5);
+    expect(pad.current.rulesChanged).toEqual({ formatLine: "Best of 5", rulesVersion: 1 });
+  });
+
   it("the negative pair: any other refusal reloads nothing, and the pad keeps its rules", async () => {
     const t = scripted({ appends: [{ kind: "rejected", code: "UNDO_NOOP", message: "nothing to undo" }] });
     const pad = mount(params({ rulesVersion: 0, transport: t.transport }));

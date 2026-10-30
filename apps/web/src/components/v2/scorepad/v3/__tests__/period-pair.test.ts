@@ -579,6 +579,8 @@ describe("the skin's restatements of engine data are pinned to the engine", () =
     const cfg = periodCfg(sport.module);
     const spec = (sport.module.padSpec as (c: unknown) => PadSpec)(cfg);
 
+    // Since P1.1 an identity check: `bandsOf` returns the engine record's `eventBands`, which IS `padSpec(cfg).fidelity`.
+    // Kept as a cheap wiring tripwire; the real pin is packages/engine/src/pad/period.test.ts (eventBands vs padSpec).
     it(`${sport.key}: every fidelity band matches padSpec(cfg).fidelity`, () => {
       const declared = bandsOf(sport.spec);
       for (const [type, band] of Object.entries(declared)) {
@@ -589,6 +591,8 @@ describe("the skin's restatements of engine data are pinned to the engine", () =
       expect(Object.keys(spec.fidelity).sort()).toEqual(Object.keys(declared).sort());
     });
 
+    // Since P1.1 an identity check: the skin's reasons are the record's `suspensionReasons`, the preset list padSpec's enum is
+    // built from. Kept as a wiring tripwire; the real pin is packages/engine/src/pad/period.test.ts (reasons vs padSpec).
     it(`${sport.key}: the offence list matches the preset's own suspensionReasons enum`, () => {
       const values = reasonEnumOf(spec);
       expect(values, "padSpec no longer publishes a reason enum").not.toBeNull();

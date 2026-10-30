@@ -1112,15 +1112,18 @@ function releaseForGoal(state: PeriodState, conceding: Side, at: GameTime): Peri
 }
 
 // The one `to` value the next period.advance may carry from this phase; "FT"
-// closes the final regulation/OT period and resolves the result.
+// closes the final regulation/OT period and resolves the result. Null exactly
+// where EVENT_PHASES refuses an advance, read first, so the fold's guard, the
+// summary's `nextAdvance` and the pad's record answer from the one table.
 export function expectedAdvance(state: PeriodState): string | null {
+  if (!periodEventAllowedInPhase("period.advance", state.phase, state.cfg)) return null;
   const regs = periodLabels(state.cfg);
-  const ots = otLabels(state.cfg);
   const regIndex = regs.indexOf(state.phase);
   if (regIndex >= 0) return regIndex < regs.length - 1 ? (regs[regIndex + 1] as string) : "FT";
+  // Not a regulation label, so an overtime one: the table's "play" class is exactly the two lists (`scoringPhases`).
+  const ots = otLabels(state.cfg);
   const otIndex = ots.indexOf(state.phase);
-  if (otIndex >= 0) return otIndex < ots.length - 1 ? (ots[otIndex + 1] as string) : "FT";
-  return null;
+  return otIndex < ots.length - 1 ? (ots[otIndex + 1] as string) : "FT";
 }
 
 function pushPeriod(state: PeriodState, phase: string): PeriodState {
@@ -1269,10 +1272,9 @@ function applyAdvance(
   payload: z.infer<typeof PeriodAdvance>,
   strict: boolean,
 ): PeriodState {
+  // Null exactly where EVENT_PHASES refuses an advance: `expectedAdvance` reads the table first.
   const expected = expectedAdvance(state);
-  // `expected` is non-null in exactly the phases EVENT_PHASES allows an advance in (both are this cfg's scoring phases); the second
-  // test narrows it.
-  if (!periodEventAllowedInPhase("period.advance", state.phase, state.cfg) || expected === null) {
+  if (expected === null) {
     wrongPhase(`period advance not allowed in phase "${state.phase}"`);
   }
   // STRICT ONLY (§3.3 seam). `expected` is computed from `periods.count` and
@@ -1444,12 +1446,14 @@ function applyShootoutAttempt(
   order: ShootoutOrder,
   strict: boolean,
 ): PeriodState {
-  // EVENT_PHASES' row carries the phase and `cfg.shootout`; the last two tests narrow (a SHOOTOUT phase always holds its record).
-  if (!periodEventAllowedInPhase("shootout.attempt", state.phase, state.cfg) || state.shootout === null || state.cfg.shootout === null) {
+  // EVENT_PHASES' row (the phase, and a cfg that has a shoot-out) yields the shoot-out cfg; the kicks are the state's own record,
+  // which every route into "SHOOTOUT" seeds (`resolveEnd`) — a SHOOTOUT state without one is refused, never read.
+  const shootoutCfg = periodEventAllowedInPhase("shootout.attempt", state.phase, state.cfg) ? state.cfg.shootout : null;
+  if (shootoutCfg === null || state.shootout === null) {
     wrongPhase(`shootout attempt in phase "${state.phase}"`);
   }
   const side = sideOf(state, payload.by);
-  const expected = expectedKicker(state.shootout.kicks, order, state.cfg.shootout.attempts);
+  const expected = expectedKicker(state.shootout.kicks, order, shootoutCfg.attempts);
   // STRICT ONLY (§3.3 seam), W2e (RB2B-10): the order after the first `attempts` pairs is now the federation's (FIH
   // alternates the opener per series, the IIHF's tie-break is opened by the side that shot second). A shoot-out stored
   // before W2e holds the old order, the first side leading every pair, and must refold to the result it recorded.
@@ -1469,7 +1473,7 @@ function applyShootoutAttempt(
     ...(payload.void === undefined ? {} : { void: payload.void }),
   };
   const kicks = [...state.shootout.kicks, kick];
-  const winnerSide = shootoutDecision(kicks, state.cfg.shootout.attempts);
+  const winnerSide = shootoutDecision(kicks, shootoutCfg.attempts);
   if (winnerSide === null) return { ...state, shootout: { kicks } };
   return { ...decideWin(state, winnerSide, "shootout"), shootout: { kicks } };
 }

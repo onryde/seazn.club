@@ -12,6 +12,9 @@ export type { PadFieldScope } from "./spec-lookup.ts";
 // apart) and the merges do not touch one another's lines.
 
 // P1: period + football
+// Load-time work in a record runs at import of THIS barrel, which every v3 skin imports: hockey/icehockey parse their default and
+// every declared variant cfg when built, so one variant its schema refused would throw for every sport's pad. The declared-cfg
+// sweeps in period.test.ts are the guard; a later record doing load-time work owes the same sweep, or a lazy build.
 export { hockeyPadRules, icehockeyPadRules } from "./period.ts";
 
 // P2: cricket
