@@ -33,9 +33,14 @@ import { createHash } from "node:crypto";
 //   * Errors carry a CODE and at most Google's reason token (port.ts) — never an argument, a token or a key. `calls` records
 //     method names and times only.
 //
+//   * A stream YouTube will not let go of (`refuseStreamDelete`): Google's 403 `liveStreamDeletionNotAllowed` on liveStreams.delete,
+//     once, a number of times or always, for ONE stream - how a test drives the disconnect's retry and its "keys left" answer.
+//
 // What it does not model: a daily stream-creation cap (unpublished) and a stream's own title rules.
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
-import { YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort } from "./port";
+import {
+  LIST_BUDGET_SPENT, YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
+} from "./port";
 
 // Google's limits — "10 active streams allowed per channel and 3 active streams per stream key" — are the fake's OWN literals
 // (https://support.google.com/youtube/answer/2474026). The tests type them again from the same page rather than import them.
@@ -68,7 +73,7 @@ type PortMethod = Exclude<keyof YouTubePort, "mode">;
 // A Record, not an array: tsc refuses a port method added to the interface and forgotten here.
 const PORT_METHODS: Record<PortMethod, true> = {
   authorizeUrl: true, exchangeCode: true, accessToken: true, listMyChannels: true, liveEnabled: true, insertStream: true,
-  deleteStream: true, insertBroadcast: true, bind: true, broadcastLife: true, complete: true, deleteBroadcast: true,
+  deleteStream: true, listStreams: true, insertBroadcast: true, bind: true, broadcastLife: true, complete: true, deleteBroadcast: true,
   existingVideos: true, revoke: true,
 };
 /** Every method of the port (not `mode`), in one place for the control route's schema and for sweeps. */
@@ -106,6 +111,9 @@ export interface BroadcastView {
   streamId: string | null; life: BroadcastLife; actualStartAt: Date | null; actualEndAt: Date | null;
 }
 
+/** Google's reason for a liveStreams.delete it will not do (403; the live driver maps it to `youtube_unavailable`). */
+const STREAM_DELETION_NOT_ALLOWED = "liveStreamDeletionNotAllowed";
+
 /** A broadcast YouTube would still count against a stream key (3 per key) — not finished, not revoked. */
 const isOpen = (b: Broadcast): boolean => b.life !== "complete" && b.life !== "revoked";
 
@@ -137,6 +145,8 @@ export class FakeYouTube implements YouTubePort {
   private handleOf = new Map<string, string>();
   private tokenOf = new Map<string, string>();
   private injected = new Map<PortMethod, Injection[]>();
+  /** stream id → how many more deletes of it YouTube refuses (`Infinity`: every one). */
+  private deleteRefusals = new Map<string, number>();
   /** OAuth state → what `authorizeUrl` was asked for. */
   private pending = new Map<string, Pending>();
   private codes = new Map<string, { challenge: string; redirectUri: string; scope: string; channels: Channel[] | null; sub: string | null | undefined; used: boolean }>();
@@ -157,6 +167,18 @@ export class FakeYouTube implements YouTubePort {
     const queue = this.injected.get(method as PortMethod) ?? [];
     queue.push({ code, reason, channelId: scope?.channelId });
     this.injected.set(method as PortMethod, queue);
+  }
+
+  /** YouTube will not delete this stream (Google's 403 `liveStreamDeletionNotAllowed`, e.g. while a broadcast still holds it): its next
+   *  `times` deletes (default 1; `"always"`: every one) are refused `youtube_unavailable` / `liveStreamDeletionNotAllowed` and leave it
+   *  in place, then deletes work again. Only a delete by its OWN channel's token is refused (to another channel the stream is absent:
+   *  that delete resolves and spends nothing). A stream the fake does not have is refused here (`youtube_not_found`), and so is a count
+   *  that is not a positive whole number: a typo must not be a refusal that never fires. */
+  refuseStreamDelete(streamId: string, o: { times?: number | "always" } = {}): void {
+    this.stream(streamId);
+    const times = o.times ?? 1;
+    if (times !== "always" && !(Number.isInteger(times) && times > 0)) throw new Error("refuseStreamDelete: times is a positive whole number or \"always\"");
+    this.deleteRefusals.set(streamId, times === "always" ? Infinity : times);
   }
 
   /** The refresh token is dead for good: the next `accessToken` is `youtube_reconnect_needed`, and so is every access token
@@ -313,6 +335,7 @@ export class FakeYouTube implements YouTubePort {
     this.handleOf = new Map();
     this.tokenOf = new Map();
     this.injected = new Map();
+    this.deleteRefusals = new Map();
     this.pending = new Map();
     this.codes = new Map();
     this.calls.length = 0;
@@ -462,7 +485,25 @@ export class FakeYouTube implements YouTubePort {
     this.enter("deleteStream", this.channelOfAccess(at));
     const who = this.who(at);
     // Another channel's stream is absent to this token: the delete resolves and removes nothing.
-    if (this.streams.get(streamId)?.channelId === who.channelId) this.streams.delete(streamId);
+    if (this.streams.get(streamId)?.channelId !== who.channelId) return;
+    const refusals = this.deleteRefusals.get(streamId) ?? 0;
+    if (refusals > 0) {
+      if (refusals === 1) this.deleteRefusals.delete(streamId);
+      else this.deleteRefusals.set(streamId, refusals - 1);   // Infinity - 1 is Infinity: "always" stays
+      throw new YouTubeError("youtube_unavailable", STREAM_DELETION_NOT_ALLOWED);
+    }
+    this.streams.delete(streamId);
+    this.deleteRefusals.delete(streamId);
+  }
+
+  /** The token's channel's streams, in the order they were made: id, title, channel. Never a key or an ingest URL (liveStreams.list
+   *  with part=snippet has neither). Another channel's streams are not listed. The fake answers in ONE page, and asks `room` before
+   *  it as the driver asks before each: no room, the driver's refusal and no call made. */
+  async listStreams(at: string, o: { room?: () => boolean } = {}): Promise<StreamListing[]> {
+    if (o.room && !o.room()) throw new YouTubeError("youtube_unavailable", LIST_BUDGET_SPENT);
+    this.enter("listStreams", this.channelOfAccess(at));
+    const who = this.who(at);
+    return [...this.streams.values()].filter((st) => st.channelId === who.channelId).map((st) => ({ id: st.id, title: st.title, channelId: st.channelId }));
   }
 
   async insertBroadcast(

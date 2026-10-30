@@ -2197,11 +2197,14 @@ export type YoutubeConnectionSettings = z.infer<typeof YoutubeConnectionSettings
  *  channel runs on the same Google account, and revoking would drop it) or `not_confirmed` (the revoke was tried and Google or YouTube
  *  did not answer, or Seazn's saved token would not open so none could be sent - the person can remove Seazn under their Google account's
  *  third-party access). In every case Seazn's own copy was purged. `keysDeleted`: stream keys Seazn made on the channel that were deleted at YouTube.
- *  `purged`: the broadcast records removed, and the match stream links that pointed at their videos cleared. */
+ *  `keysLeft`: the stream keys Seazn made that are still on the channel because YouTube would not delete them (0: none left), or `null` when
+ *  Seazn could not read the channel's streams to confirm (no usable token, a revoked grant, YouTube not answering) - the organiser deletes
+ *  them in YouTube Studio. `purged`: the broadcast records removed, and the match stream links that pointed at their videos cleared. */
 export const YOUTUBE_REVOKE_OUTCOMES = ["revoked", "skipped_shared_account", "not_confirmed"] as const;
 export const YoutubeDisconnected = z.object({
   revokeOutcome: z.enum(YOUTUBE_REVOKE_OUTCOMES),
   keysDeleted: z.number().int(),
+  keysLeft: z.number().int().nullable(),
   purged: z.object({ broadcasts: z.number().int(), streamUrlsCleared: z.number().int() }),
 });
 export type YoutubeDisconnected = z.infer<typeof YoutubeDisconnected>;

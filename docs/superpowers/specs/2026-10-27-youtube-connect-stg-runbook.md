@@ -160,12 +160,17 @@ Only after the agent has finished S0–S4. Disconnect is refused while a match i
 2. **Expect** "`<channel>` is disconnected. Seazn deleted what it stored from YouTube for this channel." Two other
    sentences are possible and are findings to record: the one that says Seazn's access to the Google account **stays**
    (another connected channel uses the same Google account), and the one that says Seazn **couldn't confirm** Google
-   removed its access.
+   removed its access. Since the 2026-10-30 fix the lead sentence can also say "`<channel>` is disconnected, but Seazn
+   **couldn't delete N stream key(s)** from YouTube" or that Seazn **couldn't check** it deleted every key: either is a
+   finding — record it with its count, and check step 4 against it.
 3. Verify at Google: reload the third-party access page. **Record** what it lists for Seazn now (gone entirely, or only
    its YouTube access gone, or still listed), against the two snapshots from steps 1 and 2.
 4. Verify in YouTube Studio: the stream keys Seazn created (named **Seazn Club · stream key 1**, **… 2**, … by pool slot, in the
    organisation's default locale) are gone from the stream-key
-   list. **The two videos stay** ("Videos already on YouTube stay there.", says the Disconnect dialog).
+   list, and so is any older one named **Seazn stream key** (the name before 2026-10-29: a Disconnect now deletes every
+   stream named as Seazn names its keys, whether or not Seazn still records it). A club's own key stays. **A Seazn key
+   still listed while step 2 said "Seazn deleted what it stored" is a FAIL**; one still listed after the "couldn't
+   delete" sentence is the notice telling the truth: delete it by hand and record it. **The two videos stay** ("Videos already on YouTube stay there.", says the Disconnect dialog).
 5. Verify on the match page: the replay player and the stream link are gone.
 
 *Agent runs S5.*

@@ -499,7 +499,7 @@ describe("failNext", () => {
     expect(f.calls.map((c) => c.method)).toEqual(["accessToken", "insertStream", "insertBroadcast"]);
   });
 
-  it("every one of the port's 14 methods can be failed, and each failure is single-shot", async () => {
+  it("every one of the port's 15 methods can be failed, and each failure is single-shot", async () => {
     const f = new FakeYouTube();
     const at = await f.accessToken("1//rt-sweep");
     const { streamId } = await f.insertStream(at, { title: "k" });
@@ -512,6 +512,7 @@ describe("failNext", () => {
       liveEnabled: () => f.liveEnabled(at),
       insertStream: () => f.insertStream(at, { title: "k" }),
       deleteStream: () => f.deleteStream(at, streamId),
+      listStreams: () => f.listStreams(at),
       insertBroadcast: () => f.insertBroadcast(at, bcast()),
       bind: () => f.bind(at, broadcastId, streamId),
       broadcastLife: () => f.broadcastLife(at, broadcastId),
@@ -528,7 +529,7 @@ describe("failNext", () => {
       expect((err as YouTubeError).code, method).toBe("youtube_limit_reached");
       checked++;
     }
-    expect(checked, "all 14 methods swept").toBe(14);
+    expect(checked, "all 15 methods swept").toBe(15);
     // Single-shot, proven on the same sweep: a SECOND call of each method is not the injected refusal. Some of these still
     // refuse for their own reasons (the stream was deleted above, so bind says not_found) — never with the injected code.
     let second = 0;
@@ -538,7 +539,7 @@ describe("failNext", () => {
       else expect((err as Error).message, `${method}: the second call went through`).toBe("resolved");
       second++;
     }
-    expect(second, "all 14 methods re-called").toBe(14);
+    expect(second, "all 15 methods re-called").toBe(15);
   });
 
   it("a method name that is not on the port is refused at injection (a typo must not become a failure that never fires)", () => {
@@ -964,6 +965,96 @@ describe("channels belong to grants: a token cannot reach another channel's reso
     const next = await grant(f);
     expect(f.channelOf(next.refreshToken), "the pin was spent: the next grant is fresh").not.toBe(f.channelOf("1//rt-a"));
     expect(f.channelOf((await grant(f)).refreshToken), "and so is the one after").not.toBe(f.channelOf(next.refreshToken));
+  });
+});
+
+// The disconnect's clean-up (fix: YouTube Disconnect left stream keys on the channel, 2026-10-30) reads the channel's own streams and
+// deletes the Seazn-named ones, and must be told apart from a delete YouTube refuses. Google's refusal for a stream it will not let go
+// of is 403 `liveStreamDeletionNotAllowed` (liveStreams.delete page), which the live driver maps to youtube_unavailable (google.test.ts
+// pins the parity).
+describe("listStreams and a refused stream delete (the disconnect's clean-up)", () => {
+  it("listStreams: the caller's channel's streams - id, title and channel - and nothing of another channel's; a deleted one is gone; an empty channel is []", async () => {
+    const f = new FakeYouTube();
+    const atA = await f.accessToken("1//rt-list-a");
+    const atB = await f.accessToken("1//rt-list-b");
+    const chA = f.channelOf("1//rt-list-a");
+    expect(await f.listStreams(atA), "the empty case first").toEqual([]);
+    const one = await f.insertStream(atA, { title: "Seazn stream key" });
+    const two = await f.insertStream(atA, { title: "TestYouTube" });
+    await f.insertStream(atB, { title: "B's own" });
+    expect(await f.listStreams(atA)).toEqual([
+      { id: one.streamId, title: "Seazn stream key", channelId: chA },
+      { id: two.streamId, title: "TestYouTube", channelId: chA },
+    ]);
+    await f.deleteStream(atA, one.streamId);
+    expect((await f.listStreams(atA)).map((s) => s.id), "a deleted stream is not listed").toEqual([two.streamId]);
+    expect((await f.listStreams(atB)).map((s) => s.title), "B sees only B's").toEqual(["B's own"]);
+    expect(JSON.stringify(await f.listStreams(atA)), "no key and no ingest URL in a listing").not.toMatch(/fakekey|rtmp:/);
+    // a dead token cannot list, like every Data API call
+    f.killToken("1//rt-list-a");
+    expect(((await rejection(f.listStreams(atA))) as YouTubeError).code).toBe("youtube_reconnect_needed");
+  });
+
+  it("listStreams asks the caller's room before its one page, as the driver does before each: no room is the driver's budgetSpent refusal with no call made; room is the list", async () => {
+    const f = new FakeYouTube();
+    const at = await f.accessToken("1//rt-list-room");
+    await f.insertStream(at, { title: "Seazn stream key" });
+    const before = f.calls.length;
+    const cut = (await rejection(f.listStreams(at, { room: () => false }))) as YouTubeError;
+    expect([cut.code, cut.reason]).toEqual(["youtube_unavailable", "budgetSpent"]);
+    expect(f.calls.length - before, "no call reached YouTube").toBe(0);
+    let asks = 0;
+    expect(await f.listStreams(at, { room: () => (++asks, true) })).toHaveLength(1);
+    expect(asks, "asked once, before its one page").toBe(1);
+  });
+
+  it("refuseStreamDelete ONCE: the next delete of that stream is youtube_unavailable / liveStreamDeletionNotAllowed and leaves it; the one after deletes it; other streams are untouched", async () => {
+    const { f, at } = await rig();
+    const held = await f.insertStream(at, { title: "held" });
+    const free = await f.insertStream(at, { title: "free" });
+    f.refuseStreamDelete(held.streamId);
+    const err = (await rejection(f.deleteStream(at, held.streamId))) as YouTubeError;
+    expect([err.code, err.reason]).toEqual(["youtube_unavailable", "liveStreamDeletionNotAllowed"]);
+    expect(f.inspectStream(held.streamId), "refused: still there").not.toBeNull();
+    await f.deleteStream(at, free.streamId);
+    expect(f.inspectStream(free.streamId), "another stream deletes as before").toBeNull();
+    await expect(f.deleteStream(at, held.streamId), "the refusal was spent").resolves.toBeUndefined();
+    expect(f.inspectStream(held.streamId)).toBeNull();
+  });
+
+  it("refuseStreamDelete ALWAYS refuses every delete of that stream (counted); `times` refuses exactly that many; another channel's token neither sees nor spends it", async () => {
+    const f = new FakeYouTube();
+    const at = await f.accessToken("1//rt-refuse");
+    const other = await f.accessToken("1//rt-refuse-other");
+    const always = await f.insertStream(at, { title: "always" });
+    const twice = await f.insertStream(at, { title: "twice" });
+    f.refuseStreamDelete(always.streamId, { times: "always" });
+    f.refuseStreamDelete(twice.streamId, { times: 2 });
+    let refused = 0;
+    for (let i = 0; i < 4; i++) {
+      expect(((await rejection(f.deleteStream(at, always.streamId))) as YouTubeError).reason, `always: try ${i + 1}`).toBe("liveStreamDeletionNotAllowed");
+      refused++;
+    }
+    expect(refused).toBe(4);
+    expect(f.inspectStream(always.streamId)).not.toBeNull();
+    // another channel's token: the stream is absent to it - the delete resolves, removes nothing and spends nothing
+    await expect(f.deleteStream(other, twice.streamId)).resolves.toBeUndefined();
+    for (let i = 0; i < 2; i++) await expect(f.deleteStream(at, twice.streamId), `twice: refusal ${i + 1}`).rejects.toBeInstanceOf(YouTubeError);
+    await expect(f.deleteStream(at, twice.streamId), "the third goes through").resolves.toBeUndefined();
+    expect(f.inspectStream(twice.streamId)).toBeNull();
+  });
+
+  it("refuseStreamDelete on a stream the fake does not have is refused at once (a typo must not become a refusal that never fires); a bad count too; reset clears a pending refusal", async () => {
+    const { f, at } = await rig();
+    expect(() => f.refuseStreamDelete("fakestream-nope")).toThrow(YouTubeError);
+    const s = await f.insertStream(at, { title: "k" });
+    expect(() => f.refuseStreamDelete(s.streamId, { times: 0 })).toThrow();
+    expect(() => f.refuseStreamDelete(s.streamId, { times: 1.5 })).toThrow();
+    f.refuseStreamDelete(s.streamId, { times: "always" });
+    f.reset();
+    const at2 = await f.accessToken("1//rt-main");
+    const s2 = await f.insertStream(at2, { title: "k" });
+    await expect(f.deleteStream(at2, s2.streamId), "nothing refuses after a reset").resolves.toBeUndefined();
   });
 });
 

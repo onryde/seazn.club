@@ -233,14 +233,14 @@ describe.skipIf(!HAS_DB)("the Reconnect form -> POST /api/youtube/connect", () =
 // handler); the panel is the real one. A notice built from a fixture on both ends would prove the fixture.
 
 const enDict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8")) as Record<string, string>;
-const noticeText = (name: string, outcome: "revoked" | "skipped_shared_account" | "not_confirmed"): string =>
-  renderToStaticMarkup(<DictProvider dict={enDict as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name={name} outcome={outcome} onDismiss={() => {}} /></DictProvider>)
+const noticeText = (name: string, outcome: "revoked" | "skipped_shared_account" | "not_confirmed", keysLeft: number | null): string =>
+  renderToStaticMarkup(<DictProvider dict={enDict as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name={name} outcome={outcome} keysLeft={keysLeft} onDismiss={() => {}} /></DictProvider>)
     .replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
 
 describe.skipIf(!HAS_DB)("the Disconnect row -> DELETE /api/v1/orgs/:id/youtube-connections/:id -> the notice", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("each of the three outcomes - revoked, left alone because another channel uses the Google account, and tried-and-not-confirmed - reaches the rendered notice as its own sentence, and a damaged saved token is the third, not the second (anti-vacuity: 3 outcomes + 1)", async () => {
+  it("each of the three outcomes - revoked, left alone because another channel uses the Google account, and tried-and-not-confirmed - reaches the rendered notice as its own sentence, and a damaged saved token is the third, not the second; a key YouTube will not delete, and a channel that cannot be read, reach it as 'keys left' (anti-vacuity: 3 outcomes + 1 + 2 keys-left)", async () => {
     setYoutubeDriverForTest(rigFake);
     vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
       const hit = /^\/api\/v1\/orgs\/([^/]+)\/youtube-connections\/([^/]+)$/.exec(url);
@@ -248,21 +248,32 @@ describe.skipIf(!HAS_DB)("the Disconnect row -> DELETE /api/v1/orgs/:id/youtube-
       return DISCONNECT(new Request(`http://localhost${url}`, { method: "DELETE", headers: init.headers }), { params: Promise.resolve({ id: hit[1]!, connectionId: hit[2]! }) });
     });
     const seen: string[] = [];
-    const scenarios: { name: string; want: "revoked" | "skipped_shared_account" | "not_confirmed"; setup: (c: { token: string; channel: { id: string }; connectionId: string }, sub: string) => Promise<void> }[] = [
-      { name: "plain", want: "revoked", setup: async () => {} },
+    type Want = "revoked" | "skipped_shared_account" | "not_confirmed";
+    const scenarios: { name: string; want: Want; keysLeft: number | null; setup: (c: { token: string; channel: { id: string }; connectionId: string }, sub: string) => Promise<void> }[] = [
+      { name: "plain", want: "revoked", keysLeft: 0, setup: async () => {} },
       {
-        name: "shared Google account", want: "skipped_shared_account",
+        name: "shared Google account", want: "skipped_shared_account", keysLeft: 0,
         setup: async (_c, sub) => {
           const other = await rigOrg();
           const b = await connect(other, { sub });
           rigFake.seedGrant({ refreshToken: b.token, channelId: b.channel.id, channelTitle: b.channel.title });
         },
       },
-      { name: "Google did not answer", want: "not_confirmed", setup: async (c) => { rigFake.failNext("revoke", "youtube_unavailable", "backendError", { channelId: c.channel.id }); } },
+      { name: "Google did not answer", want: "not_confirmed", keysLeft: 0, setup: async (c) => { rigFake.failNext("revoke", "youtube_unavailable", "backendError", { channelId: c.channel.id }); } },
       {
-        name: "damaged saved token", want: "not_confirmed",
+        // a damaged token can ask YouTube nothing: the channel is not read, so the keys are "not confirmed" as well
+        name: "damaged saved token", want: "not_confirmed", keysLeft: null,
         setup: async (c) => { await sql`update org_youtube_connections set refresh_token_enc = decode('deadbeef', 'hex') where id = ${c.connectionId}`; },
       },
+      {
+        // a Seazn key on the channel (the name every key had before 79a208d8b0) that YouTube will not let go of
+        name: "a key YouTube will not delete", want: "revoked", keysLeft: 1,
+        setup: async (c) => {
+          const { streamId } = await rigFake.insertStream(await rigFake.accessToken(c.token), { title: "Seazn stream key" });
+          rigFake.refuseStreamDelete(streamId, { times: "always" });
+        },
+      },
+      { name: "the channel cannot be read", want: "revoked", keysLeft: null, setup: async (c) => { rigFake.failNext("listStreams", "youtube_unavailable", "backendError", { channelId: c.channel.id }); } },
     ];
     for (const sc of scenarios) {
       const o = await rigOrg();
@@ -289,14 +300,20 @@ describe.skipIf(!HAS_DB)("the Disconnect row -> DELETE /api/v1/orgs/:id/youtube-
       const notice = panel.tree().find((el) => el.type === YoutubeDisconnectedNotice);
       expect(notice, `${sc.name}: the page shows a notice`).toBeDefined();
       expect(propsOf(notice!).outcome, sc.name).toBe(sc.want);
+      expect(propsOf(notice!).keysLeft, `${sc.name}: the keys left, as the route answered them`).toBe(sc.keysLeft);
       expect(propsOf(notice!).name, sc.name).toBe(c.channel.title);
-      expect(noticeText(c.channel.title, propsOf(notice!).outcome as never), sc.name).toContain(
-        sc.want === "revoked" ? `${c.channel.title} is disconnected. Seazn deleted what it stored from YouTube for this channel.`
+      const text = noticeText(c.channel.title, propsOf(notice!).outcome as never, propsOf(notice!).keysLeft as never);
+      expect(text, sc.name).toContain(
+        sc.keysLeft === 1 ? `${c.channel.title} is disconnected, but Seazn couldn't delete 1 stream key from YouTube.`
+        : sc.keysLeft === null ? `${c.channel.title} is disconnected, but Seazn couldn't check that it deleted every stream key it created on YouTube.`
+        : sc.want === "revoked" ? `${c.channel.title} is disconnected. Seazn deleted what it stored from YouTube for this channel.`
         : sc.want === "skipped_shared_account" ? "another channel on the same Google account is still connected"
         : "couldn't confirm that Google removed Seazn's access");
+      if (sc.want === "not_confirmed") expect(text, `${sc.name}: the revoke's own sentence stands beside the keys'`).toContain("couldn't confirm that Google removed Seazn's access");
+      if (sc.keysLeft !== 0) expect(text, `${sc.name}: never "deleted" while a key may be left`).not.toContain("Seazn deleted what it stored");
       seen.push(`${sc.name}=${String(propsOf(notice!).outcome)}`);
     }
-    expect(seen, "all four scenarios ran").toHaveLength(4);
+    expect(seen, "all six scenarios ran").toHaveLength(6);
     expect(new Set(seen.map((x) => x.split("=")[1])), "and the three outcomes were all produced by the real route").toEqual(new Set(["revoked", "skipped_shared_account", "not_confirmed"]));
   });
 });
