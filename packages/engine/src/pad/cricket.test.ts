@@ -152,6 +152,25 @@ describe("P2.1 premise (Q1b): which batter the fold accepts as `out`", () => {
     }
     expect(folded).toBe(4);
   });
+
+  it("CK-RH-2 a retired-out batter written on the wicket sheet's path (cricket.ball, wicket mode retired) counts a legal dot ball, while the Retire sheet's out (cricket.retire) records no delivery (ruling 246, a known deviation: Law 25.4.1 retires on a dead ball, so the rulebook's count is 0; owed work O-13 reds the first half of this pin on purpose)", () => {
+    // The control: one plain dot ball is one legal ball. Both retired-out paths are measured against it, for either batter.
+    const dotBall = openInnings(fold(T20, [["core.start"], delivery()]));
+    expect(dotBall.legalBalls, "control: a plain dot ball is one legal ball").toBe(1);
+    let measured = 0;
+    for (const out of [STRIKER, NON_STRIKER]) {
+      // The wicket sheet's Retired: the retirement rides a cricket.ball, so the delivery it rides on is counted (today's behaviour).
+      const onBall = openInnings(fold(T20, [["core.start"], delivery({ wicket: wicketOf("retired", out) })]));
+      expect(onBall.wickets, `retired on a ball, ${out}: a wicket`).toBe(1);
+      expect(onBall.legalBalls, `retired on a ball, ${out}: counts the dot ball it rides on`).toBe(dotBall.legalBalls);
+      // The Retire sheet's out: cricket.retire is no delivery, so it adds no ball to the one already bowled.
+      const retire = openInnings(fold(T20, [["core.start"], delivery(), ["cricket.retire", { person: out, reason: "out" }]]));
+      expect(retire.wickets, `cricket.retire out, ${out}: a wicket`).toBe(1);
+      expect(retire.legalBalls, `cricket.retire out, ${out}: adds no ball`).toBe(dotBall.legalBalls);
+      measured += 2;
+    }
+    expect(measured).toBe(4);
+  });
 });
 
 // ---------------------------------------------------------------------------
