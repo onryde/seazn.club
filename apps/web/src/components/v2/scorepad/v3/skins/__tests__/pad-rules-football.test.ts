@@ -175,7 +175,7 @@ describe("the tiles follow the engine's bands", () => {
 /** Every football.period marker the fold has an arm for (Law 7 half-time/full-time, mini-soccer quarters, extra time), typed here, not read from the record. */
 const ALL_PERIOD_MARKERS = ["QT", "HT", "3QT", "FT", "ET_HT", "ET_FT"];
 
-describe("the phase gate: what the More sheet is told to hide is exactly what the fold refuses", () => {
+describe("FB-PH-1: the phase gate: what the More sheet is told to hide is exactly what the fold refuses", () => {
   it("refusedEventTypes equals the fold's WRONG_PHASE set, in every folded phase, for every cfg shape", () => {
     const phases = foldedPhases();
     expect(phases.length).toBeGreaterThanOrEqual(12);
@@ -204,7 +204,7 @@ describe("the phase gate: what the More sheet is told to hide is exactly what th
   });
 });
 
-describe("the period sheet: options are the cfg's markers, blocked is exactly what the fold refuses in this phase", () => {
+describe("FB-PH-2: the period sheet: options are the cfg's markers, blocked is exactly what the fold refuses in this phase", () => {
   it("in every folded phase", () => {
     let blockedTotal = 0;
     let openTotal = 0;
@@ -226,7 +226,7 @@ describe("the period sheet: options are the cfg's markers, blocked is exactly wh
   });
 });
 
-describe("the substitution window cap the sub slot refuses on is the one the fold enforces", () => {
+describe("FB-SU-2: the substitution window cap the sub slot refuses on is the one the fold enforces", () => {
   // Rolling subs, so the same two players swap back and forth. After `used` stamped windows a clock publish moves `asOf` to a LATER
   // stamp, which is the stamp the skin would send: a new window, so the cap decides.
   function afterWindows(cfg: FootballCfg, used: number): FootballState {
@@ -267,7 +267,7 @@ describe("the substitution window cap the sub slot refuses on is the one the fol
   });
 });
 
-describe("the re-entry block: a substituted-off player is blocked exactly when the fold would refuse his return", () => {
+describe("FB-SU-1: the re-entry block: a substituted-off player is blocked exactly when the fold would refuse his return", () => {
   it("for 11-a-side, rolling subs and every shipped variant", () => {
     const cfgs = [{ variant: "11-a-side (default)", cfg: footballCfg() }, { variant: "rollingSubs", cfg: footballCfg({ rollingSubs: true }) }, ...shippedVariantCfgs()];
     const verdicts = new Set<boolean>();
@@ -289,7 +289,7 @@ describe("the re-entry block: a substituted-off player is blocked exactly when t
   });
 });
 
-describe("second-yellow eligibility: the card colours the skin offers, and its dock's person chips, are the ones the fold accepts", () => {
+describe("FB-CD-1: second-yellow eligibility: the card colours the skin offers, and its dock's person chips, are the ones the fold accepts", () => {
   it("before any card, after a yellow, and after a red", () => {
     const cfg = footballCfg();
     const start = live(cfg);
@@ -321,7 +321,7 @@ describe("second-yellow eligibility: the card colours the skin offers, and its d
   });
 });
 
-describe("the team size the context line states", () => {
+describe("FB-TS-1: the team size the context line states", () => {
   it("an absent teamSize states the engine's default; a declared one states its own", () => {
     const stated = (cfg: FootballCfg) => buildScorebug(viewFor(cfg, live(cfg)), t).context;
     expect(stated(footballCfg())).toContain(`"size":${rules.teamSizeDefault}`);

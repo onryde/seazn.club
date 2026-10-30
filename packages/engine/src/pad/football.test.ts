@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import { foldMatch, type EventEnvelope } from "../core/events.ts";
 import type { LineupPair } from "../core/types.ts";
-import { resolvePositions } from "../sport/catalog.ts";
+import { resolvePositions, validateLineup } from "../sport/catalog.ts";
 import { padEnumValues } from "./index.ts";
 import {
   CardColor,
@@ -209,12 +209,12 @@ describe("footballPadRules: the vocabularies are the engine's own", () => {
     expect(footballPadRules.eventBands).toEqual(S6_BANDS);
   });
 
-  it("playPhases is the fold's PLAY_PHASES (toBe), and is the rulebook's in-play set", () => {
+  it("FB-PH-1: playPhases is the fold's PLAY_PHASES (toBe), and is the rulebook's in-play set", () => {
     expect(footballPadRules.playPhases).toBe(PLAY_PHASES);
     expect([...footballPadRules.playPhases].sort()).toEqual([...IN_PLAY].sort());
   });
 
-  it("teamSizeDefault is the schema's own teamSize maximum, and the size an absent teamSize fields", () => {
+  it("FB-TS-1: teamSizeDefault is the schema's own teamSize maximum, and the size an absent teamSize fields", () => {
     const schemaMax = FootballCfg.shape.teamSize.unwrap().maxValue;
     expect(schemaMax).not.toBeNull();
     expect(footballPadRules.teamSizeDefault).toBe(schemaMax);
@@ -224,11 +224,18 @@ describe("footballPadRules: the vocabularies are the engine's own", () => {
     // the case where the right answer differs from the default: a 7-a-side cfg fields 7, not the default
     expect(resolvePositions(football, cfgOf({ teamSize: 7 })).lineup.size).toBe(7);
     expect(footballPadRules.teamSizeDefault).not.toBe(7);
+    // and a starting lineup of the other size is a lineup issue, both ways round (the rule the size is for)
+    const full = lineupFromCatalog(resolvePositions(football, cfgOf()), "H");
+    const sevenASide = lineupFromCatalog(resolvePositions(football, cfgOf({ teamSize: 7 })), "H");
+    expect(validateLineup(resolvePositions(football, cfgOf()), full)).toEqual([]);
+    expect(validateLineup(resolvePositions(football, cfgOf({ teamSize: 7 })), sevenASide)).toEqual([]);
+    expect(validateLineup(resolvePositions(football, cfgOf({ teamSize: 7 })), full).map((issue) => issue.kind)).toContain("starting_size");
+    expect(validateLineup(resolvePositions(football, cfgOf()), sevenASide).map((issue) => issue.kind)).toContain("starting_size");
   });
 });
 
 describe("footballPadRules.eventAllowedInPhase", () => {
-  it("classifies every football event type: EVENT_PHASES has an entry for each, and football.period is the one cfg-dependent type", () => {
+  it("FB-PH-1: classifies every football event type: EVENT_PHASES has an entry for each, and football.period is the one cfg-dependent type", () => {
     const types = Object.keys(FOOTBALL_EVENT_SCHEMAS);
     expect(types.length).toBeGreaterThanOrEqual(10);
     const unclassified = types.filter((type) => type !== "football.period" && !Object.hasOwn(EVENT_PHASES, type));
@@ -237,7 +244,7 @@ describe("footballPadRules.eventAllowedInPhase", () => {
     expect(Object.hasOwn(EVENT_PHASES, "football.period")).toBe(false);
   });
 
-  it("agrees with the rulebook for every non-period type in every phase", () => {
+  it("FB-PH-1: agrees with the rulebook for every non-period type in every phase", () => {
     let compared = 0;
     for (const [type, phases] of Object.entries(RULEBOOK)) {
       for (const phase of ALL_PHASES) {
@@ -249,7 +256,7 @@ describe("footballPadRules.eventAllowedInPhase", () => {
     expect(Object.keys(RULEBOOK).sort()).toEqual(Object.keys(FOOTBALL_EVENT_SCHEMAS).filter((type) => type !== "football.period").sort());
   });
 
-  it("agrees with the rulebook for football.period: one marker per in-play phase, per mode, and none anywhere else", () => {
+  it("FB-PH-2: agrees with the rulebook for football.period: one marker per in-play phase, per mode, and none anywhere else", () => {
     let compared = 0;
     for (const [mode, cfg] of [["halves", cfgOf({ extraTime: { enabled: true, halfMinutes: 15 } })], ["quarters", cfgOf({ halves: 4, extraTime: { enabled: true, halfMinutes: 15 } })]] as const) {
       for (const phase of ALL_PHASES) {
@@ -262,7 +269,7 @@ describe("footballPadRules.eventAllowedInPhase", () => {
     expect(compared).toBe(2 * ALL_PHASES.length);
   });
 
-  it("agrees with the REAL fold, event type by event type, in every folded phase", () => {
+  it("FB-PH-1: agrees with the REAL fold, event type by event type, in every folded phase", () => {
     let compared = 0;
     let refusedByPhase = 0;
     let accepted = 0;
@@ -284,7 +291,7 @@ describe("footballPadRules.eventAllowedInPhase", () => {
     expect(accepted).toBeGreaterThan(20);
   });
 
-  it("agrees with the REAL fold for football.period, marker by marker: legalPeriodMarkers is exactly what applyPeriod accepts under this cfg", () => {
+  it("FB-PH-2: agrees with the REAL fold for football.period, marker by marker: legalPeriodMarkers is exactly what applyPeriod accepts under this cfg", () => {
     let compared = 0;
     let legalSeen = 0;
     for (const { label, cfg, steps } of REACH) {
@@ -317,7 +324,7 @@ describe("footballPadRules.eventAllowedInPhase", () => {
 });
 
 describe("footballPadRules.periodMarkers", () => {
-  it("is the marker enum padSpec offers for football.period, for every cfg football declares and for ET on and off", () => {
+  it("FB-PH-2: is the marker enum padSpec offers for football.period, for every cfg football declares and for ET on and off", () => {
     const cfgs = [
       ...declaredCfgs(football).map(({ name, cfg }) => ({ name, cfg })),
       { name: "halves + extra time", cfg: cfgOf({ extraTime: { enabled: true, halfMinutes: 15 } }) },
@@ -366,7 +373,7 @@ describe("footballPadRules.periodMarkers", () => {
   });
 });
 
-describe("extra time is unreachable without the flag (the assumption behind offering ET_HT / ET_FT only when extraTime.enabled)", () => {
+describe("FB-ET-1: extra time is unreachable without the flag (the assumption behind offering ET_HT / ET_FT only when extraTime.enabled)", () => {
   // applyPeriod accepts ET_HT in ET_H1 and ET_FT in ET_H2 WITHOUT testing cfg.extraTime.enabled, and periodMarkers offers them only WITH it. The
   // two agree only while no cfg lacking the flag can ever be in an extra-time phase. That is a property of the fold (resolveFullTime is the one
   // way in), so it is checked on the fold: every state reachable from kick-off by the events a scorer can send, breadth-first, deduplicated.
@@ -467,7 +474,7 @@ describe("extra time is unreachable without the flag (the assumption behind offe
   });
 });
 
-describe("footballPadRules.subWindowsCap", () => {
+describe("FB-SU-2: footballPadRules.subWindowsCap", () => {
   // A window is the set of substitutions sharing one stamp. The cap is what the fold enforces: it accepts exactly `cap` windows and
   // refuses the next with SUB_WINDOW_EXCEEDED. Rolling subs, so the same two players can swap back and forth in the fold.
   function windowsAccepted(cfg: FootballCfg, attempts: number): { accepted: number; refusal: unknown } {
@@ -509,7 +516,7 @@ describe("footballPadRules.subWindowsCap", () => {
   });
 });
 
-describe("footballPadRules.reentryAllowed", () => {
+describe("FB-SU-1: footballPadRules.reentryAllowed", () => {
   // The kernel refuses a return when football's lineupPolicy says reentry is "none". Drive it: X comes off for B, then B tries to go off for X.
   function returnVerdict(cfg: FootballCfg): "returned" | "refused" {
     let state = foldSteps(cfg, [["core.start"]]);
