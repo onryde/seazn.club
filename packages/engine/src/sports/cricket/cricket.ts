@@ -3146,7 +3146,7 @@ function ballBaseFields(cfg: CricketCfg): PadField[] {
  *  other type is refused WRONG_PHASE by its own handler's guard (`state.phase !== "live"`, `requireOpenInnings`, the toss's
  *  "pre", the interruption's and the revise's "pre"/"live"). The handlers do not read this set: pad/cricket.test.ts folds
  *  every type in a real super over and holds the set equal to what they accept. Refusing a review (and a retirement) here
- *  departs from the ICC playing conditions, Appendix F ¶12 and its preamble: rules row CK-SO-3, open, owed O-12. */
+ *  departs from the ICC playing conditions, Appendix F ¶12 and its preamble: a known deviation, ruling 245 (CK-SO-3, O-12). */
 export const SUPER_OVER_EVENT_TYPES: ReadonlySet<string> = new Set(["cricket.superover.ball", "cricket.player.line"]);
 
 // S6 owner ruling (`_INDEX.md`, "OWNER RULING: redesign the fidelity

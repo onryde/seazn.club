@@ -124,7 +124,7 @@ describe("the wicket sheet offers the engine's modes", () => {
     same(offered, cricketPadRules.wicketKinds.filter((k) => offered.includes(k)), "free-hit options keep the engine's order");
   });
 
-  it("CK-WK-2 CK-WK-3 asks who is out exactly for variableOutKinds and the fielder exactly for fielderCreditedKinds (optional exactly for fielderOptionalKinds), and every payload folds", () => {
+  it("CK-WK-2 CK-WK-3 CK-WK-5 asks who is out exactly for variableOutKinds and the fielder exactly for fielderCreditedKinds (optional exactly for fielderOptionalKinds), and every payload folds", () => {
     same([...cricketPadRules.variableOutKinds].sort(), LAWS_EITHER_BATTER, "either-batter modes are the Laws'");
     same([...cricketPadRules.fielderOptionalKinds].sort(), LAWS_NO_FIELDER_NAMED, "optional-fielder modes are the Laws'");
     const asked = new Map<string, string[]>();
@@ -317,7 +317,7 @@ describe("CK-SO-3 in a super over the pad offers only what the fold accepts (rev
 });
 
 describe("the tiles, dock and option sheets offer the engine's sets", () => {
-  it("one extra tile per engine extra kind; the wide records wideDefaultRuns and the penalty penaltyRuns, both as the fold scores them", () => {
+  it("CK-EX-1 CK-EX-2 CK-PR-2 one extra tile per engine extra kind; the wide records wideDefaultRuns and the penalty penaltyRuns, both as the fold scores them", () => {
     const tiles = buildTiles(viewOf(T20, START), t);
     const extraTiles = tiles.filter((tile) => {
       const action = tile.action;
@@ -338,7 +338,7 @@ describe("the tiles, dock and option sheets offer the engine's sets", () => {
     same(penalty.runs, cricketPadRules.penaltyRuns, "a penalty tile, folded");
   });
 
-  it("a run tile and a no ball's bat-run chip carry `boundary` exactly for the engine's boundary values", () => {
+  it("CK-BD-1 a run tile and a no ball's bat-run chip carry `boundary` exactly for the engine's boundary values", () => {
     const tiles = buildTiles(viewOf(T20, START), t).filter((tile) => /^run\d+$/.test(tile.id));
     expect(tiles.length).toBeGreaterThan(0);
     for (const tile of tiles) {

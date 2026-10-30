@@ -38,7 +38,7 @@ Schema-path prefixes: `Ev.` = an event payload branch, `Cfg.` = config,
 | Colours disabled (go, draughts, generic 1-v-1) | all | — (config) | `Cfg.colors` | modelled | a pairing card naming White under `colors: false` is refused (`INVALID_EVENT`) |
 | A forfeited game is excluded from colour history | all | entrant | `State.forfeited` → `metrics.white`/`black` | modelled | |
 | Who actually sat at the board (team-match board order) | all | person: `homePerson`, `awayPerson` | `Ev.BoardgamePairing.{homePerson,awayPerson}` → `State.players` → `summary.detail.players` | extended | the entrant is the club in a team event; the player is what a stat model needs |
-| Board number within a team match | all | entrant | `Ev.BoardgamePairing.board` → `State.board` | extended | the schema takes any positive whole number; the pad's entry is bounded at 200 (BG-PA-1) |
+| Board number within a team match | all | entrant | `Ev.BoardgamePairing.board` → `State.board` | extended | the schema takes any positive whole number; the pad's entry is bounded at 200, a house limit the fold does not enforce (ruling 248, BG-PA-1) |
 | Move number the game finished on (Art. 8.1) | all | entrant | `Ev.BoardgameResult.moves` → `State.moves` → `summary.detail.moves` | extended | the game *length*, which is what a scoresheet's last written move number gives you. **This is also boardgame's answer to W4a T6b's cross-sport position axis, and the reason the module declares no `SportModule.position`.** Boardgame's position IS the move index, it has no phases, and its single terminal event means there is nothing to project at a mid-match prefix: `State.moves` is absent until the result card arrives. Declaring a position anyway — "Move 1" — would be the fabricated second source of truth the axis exists to refuse, so `matchPositionOf` returns `null` and the caller orders and labels by `seq`. Per-ply positions would need the per-ply ledger the row below rules out as wrong fidelity |
 | The moves themselves (algebraic movetext / PGN) | all | person | — | deferred | **wrong fidelity for our scoring tiers.** A per-ply ledger turns the engine into a chess implementation (legality, FEN, per-ply clocks) and no declared tier asks for it. PGN stays a document attached via `core.note` until there is a product decision on blob storage in the ledger |
 | The player who won the board | all | person: `winnerPerson` | `Ev.BoardgameResult.winnerPerson` → `State.winnerPerson` | extended | refused on a drawn game — a draw credits *both* players |
@@ -147,3 +147,8 @@ Recorded, not acted on:
    but `games` (fed by the pairing card, independent of the result) still
    counts it as played. No golden or schema-snapshot movement: `playerStats`
    is a read-side projection, never recorded in a corpus.
+10. **A tie-break score that contradicts the named winner is stored** (ruling 247, rules row BG-TS-1, `deviation`).
+    `boardgame.tiebreak` checks only the written shape of the mini-match score, so a loser-ahead score such as ½–1½ beside
+    a named winner folds. A level score (½–½, 1–1) with a named winner stays allowed, because a further tie-break decided
+    it. The pad offers only no score, 1½–½ or 2–0, so only an API write reaches it. The fix is a fold change with a
+    boardgame `FOLD_EPOCH` bump, after the pad wave (owed-work O-14).

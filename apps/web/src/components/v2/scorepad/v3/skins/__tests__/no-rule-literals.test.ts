@@ -528,19 +528,23 @@ describe("the literal guard", () => {
     expect(tree.violations).toEqual([]);
   });
 
-  it("X-PH-1: nine skins read POST_PHASES from the engine, and none declares a Set literal of its own that opens with a terminal token", () => {
-    // The nine files that declared POST_PHASES at 17948f93a8 (plan Task P4.2). Cricket never had one, and hockey and icehockey
-    // reach it through period-shared.ts. Typed, not read from BANNED, so a skin dropped from BANNED reds here.
+  it("X-PH-1: ten skins read POST_PHASES from the engine, and none declares a Set literal of its own that opens with a terminal token", () => {
+    // The nine files that declared POST_PHASES at 17948f93a8 (plan Task P4.2). Typed, not read from BANNED, so a skin dropped
+    // from BANNED reds here. Hockey and icehockey reach it through period-shared.ts.
     const NINE = ["badminton.tsx", "boardgame.tsx", "carrom.tsx", "football.tsx", "generic.tsx", "period-shared.ts", "tabletennis.tsx", "tennis.tsx", "volleyball.tsx"];
     const banned = Object.entries(BANNED).filter(([, names]) => names.includes("POST_PHASES")).map(([file]) => file).sort();
     expect(banned, "skin files that ban POST_PHASES").toEqual(NINE);
+    // The tenth reader: cricket.tsx never DECLARED a post set (so it is not in BANNED) but its `resolvePhase` tested `done || final`
+    // inline, and now reads the engine set too (pad wave close; equivalent only because cricket's union has no `abandoned`, which
+    // __tests__/cricket.test.ts guards).
+    const READERS = [...NINE, "cricket.tsx"].sort();
     const importsEngineSet = /import\s*\{[^}]*\bPOST_PHASES\b[^}]*\}\s*from\s*"@seazn\/engine\/pad"/;
     // A renamed copy (the name list above sees names only): a Set literal that OPENS with a terminal token. Narrow on purpose:
-    // it exempts period-shared's OWN_PHASE_TOKENS (opens with "pre"). A set that opens with another token, or an inline
-    // `phase === "done" || ...` chain, is the drift tests' job, as the header says.
+    // it exempts period-shared's OWN_PHASE_TOKENS (opens with "pre"), which is pinned separately below. A set that opens with
+    // another token, or an inline `phase === "done" || ...` chain, is the drift tests' job, as the header says.
     const ownCopy = /new Set(?:<[^>]*>)?\(\s*\[\s*"(?:done|final|abandoned)"/;
     let reads = 0;
-    for (const file of NINE) {
+    for (const file of READERS) {
       const text = skinByBasename().get(file)!;
       expect(text, `${file}: no import of POST_PHASES from @seazn/engine/pad`).toMatch(importsEngineSet);
       expect(text.match(/\bPOST_PHASES\.has\(/g)?.length ?? 0, `${file}: POST_PHASES is imported but never read`).toBeGreaterThan(0);
@@ -551,8 +555,13 @@ describe("the literal guard", () => {
       expect(text, `${file}: a Set of terminal phase tokens declared in the skin`).not.toMatch(ownCopy);
       scanned++;
     }
+    // OWN_PHASE_TOKENS opens with "pre", so `ownCopy` cannot see it: it must SPREAD the engine set and spell no terminal token itself.
+    const ownTokens = /const OWN_PHASE_TOKENS\b[^=]*=\s*new Set\(([^;]*)\);/.exec(skinByBasename().get("period-shared.ts")!);
+    expect(ownTokens, "period-shared.ts declares OWN_PHASE_TOKENS as a Set literal").not.toBeNull();
+    expect(ownTokens![1], "OWN_PHASE_TOKENS spreads the engine's POST_PHASES").toMatch(/\.\.\.POST_PHASES\b/);
+    expect(ownTokens![1], "OWN_PHASE_TOKENS spells no terminal token itself").not.toMatch(/"(?:done|final|abandoned)"/);
     console.info(`[no-rule-literals] POST_PHASES readers: ${reads}, files scanned for an own copy: ${scanned}`);
-    expect(reads).toBe(9);
+    expect(reads).toBe(10);
     expect(scanned).toBe(PINNED_SKIN_FILES);
   });
 

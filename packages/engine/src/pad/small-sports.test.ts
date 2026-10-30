@@ -297,7 +297,7 @@ describe("boardgamePadRules", () => {
     expect(draws.length, "one draw per offered score").toBe(boardgamePadRules.tiebreakScores.length);
   });
 
-  it("BG-TS-1 (open question, pending an owner ruling): every score offered folds, and the fold's laxness is PINNED, not ruled - it takes any CHESS_SCORE shape, 3–1, ½–½, 1–1 and a loser-first ½–1½ included; only a hyphen is refused (counted)", () => {
+  it("BG-TS-1 (deviation, ruling 247; owed O-14): every score offered folds, and the fold's laxness is PINNED until O-14 - it takes any CHESS_SCORE shape, 3–1, ½–½, 1–1 and a loser-ahead ½–1½ included (the ruling refuses only the last); only a hyphen is refused (counted)", () => {
     let folded = 0;
     for (const rung of BoardgameRungTiebreak.shape.rung.options) {
       for (const score of boardgamePadRules.tiebreakScores) {
@@ -312,8 +312,8 @@ describe("boardgamePadRules", () => {
     expect(folded).toBe(2 * boardgamePadRules.tiebreakScores.length);
     expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "rapid", winner: BH, score: "3–1" })]).tiebreak).toEqual({ rung: "rapid", score: "3–1" });
     expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "blitz", winner: BH, score: "½–½" })]).tiebreak, "a half either side is a score").toEqual({ rung: "blitz", score: "½–½" });
-    // the same shape-only check also takes a level score with a named winner, and a score written from the LOSER's side: the row asks
-    // whether those should be refused (an owner question), so this pins today's behaviour and moves with that ruling
+    // the same shape-only check also takes a level score with a named winner (ruling 247: stays allowed, a further tie-break decided it)
+    // and a score with the LOSER ahead (ruling 247: should be refused); this pins today's behaviour and the loser-ahead half moves with O-14
     expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "blitz", winner: BH, score: "1–1" })]).tiebreak, "a level score with a named winner").toEqual({ rung: "blitz", score: "1–1" });
     expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "rapid", winner: BH, score: "½–1½" })]).tiebreak, "a loser-first score").toEqual({ rung: "rapid", score: "½–1½" });
     expect(refusal(() => boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "rapid", winner: BH, score: "2-0" })]))?.code, "a hyphen is not an en dash").toBe("INVALID_EVENT");

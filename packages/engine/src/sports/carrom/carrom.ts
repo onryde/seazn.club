@@ -1320,7 +1320,7 @@ export const carrom: SportModule<CarromCfg, CarromEv, CarromState> = {
     const loser = winner === state.entrants.home ? state.entrants.away : state.entrants.home;
     const queenRoll = rng();
     const queenTo = queenRoll < 0.55 ? winner : queenRoll < 0.75 ? loser : null;
-    const opponentCoinsLeft = 1 + Math.floor(rng() * 9); // 1..9
+    const opponentCoinsLeft = 1 + Math.floor(rng() * OPPONENT_COINS_MAX); // 1..OPPONENT_COINS_MAX (the schema's bound)
     // W4 — the individual acts: the striker who broke, and (only when a side
     // covered her) the player who took the queen.
     const gameIndex = Math.max(0, state.games.length - 1);

@@ -90,7 +90,7 @@ import type { EventEnvelope } from "@seazn/engine/core";
 import { activeInnings, chaseTarget as engineChaseTarget, cricket as cricketModule, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
 // Pad wave P2: every closed rule set this skin offers (dismissal modes, extras, who is credited, the free hit, toss/retire/
 // review/close options, the penalty and wide runs, balls per over) is the engine's own declaration, read here and never copied.
-import { cricketPadRules } from "@seazn/engine/pad";
+import { cricketPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -1211,7 +1211,7 @@ export function variantCode(cfg: CricketCfgShape): string | null {
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = asState(view.state).phase;
   if (phase === "pre") return "pre";
-  if (phase === "done" || phase === "final") return "post";
+  if (phase !== undefined && POST_PHASES.has(phase)) return "post"; // = done || final ONLY: cricket's union has no `abandoned` (X-PH-1, cricket.test.ts)
   return "live"; // live | super_over | (defensive) undefined
 }
 

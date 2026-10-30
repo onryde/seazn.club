@@ -1,8 +1,9 @@
 // badminton: the setScore tile authors the coarse game summary that the matrix
-// generator emits (streams/setbased.ts). The references into badminton.tsx:
-//  - :909 is SET_SCORE_TILE_ID;
-//  - :950 offers the tile while no game is in progress;
-//  - :1037-1060 is setScoreSheet, two number steps, home then away, each
+// generator emits (streams/setbased.ts). The references into badminton.tsx,
+// by symbol (line numbers go stale on every skin edit):
+//  - SET_SCORE_TILE_ID is the tile's id;
+//  - `buildTiles` offers the tile while no game is in progress;
+//  - `setScoreSheet` is its sheet, two number steps, home then away, each
 //    prefilled from the open game (0 on a fresh one).
 // Step 0 (2026-09-30, 320 and 1280) saw one tap route write one
 // `badminton.game.summary {home, away}` row at once, with no hold and no extra
@@ -10,9 +11,9 @@
 import { START_MATCH_TESTID, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
-/** badminton.tsx:909 (text-pinned in pad-adapters.test.ts). */
+/** badminton.tsx SET_SCORE_TILE_ID (text-pinned in pad-adapters.test.ts). */
 export const BADMINTON_SET_SCORE_TILE = "setScore";
-/** `badminton.${coarseEventType}`: badminton.tsx:109, the engine's setbased/badminton.ts:58 (pinned). */
+/** `badminton.${coarseEventType}`: badminton.tsx SUMMARY_TYPE, the engine's setbased/badminton.ts `coarseEventType` (pinned). */
 export const BADMINTON_SUMMARY = "badminton.game.summary";
 
 function summarySteps(payload: unknown): readonly TapStep[] {
