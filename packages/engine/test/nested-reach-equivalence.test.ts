@@ -188,7 +188,11 @@ describe("premises the nested-kernel equivalence rows lean on", () => {
 // kernel.ts:973 and :966 — reachableLiveGames, the exported function, against its one-token copies.
 // ---------------------------------------------------------------------------
 
-describe("kernel.ts:973 — reachableLiveGames' fromBefore mutants answer what the engine answers, over 48,600 cells", () => {
+/** The full-table sweeps below take up to ~3.3 s each uninstrumented; under Stryker's instrumented dry run they passed the
+ *  5 s default and aborted the sports-nested-2 leg (mutation session, run 40984031307). */
+const SWEEP_TIMEOUT_MS = 60_000;
+
+describe("kernel.ts:973 — reachableLiveGames' fromBefore mutants answer what the engine answers, over 48,600 cells", { timeout: SWEEP_TIMEOUT_MS }, () => {
   const GAMES_TO = range(1, 8);
   const WIN_BY = range(1, 3);
   const TIEBREAK_AT: Array<number | null> = [null, ...range(1, 8)];
@@ -463,7 +467,7 @@ const TB_MUTANTS: Record<string, TbVariant> = {
 // Positive control: the function's whole point (a deciding point at a margin of one) removed.
 const TB_CONTROL: TbVariant = { low: Math.min, zeroShortcut: true, alwaysLive: true };
 
-describe("kernel.ts:921 and :922 — reachableLiveTbScore's mutants over 15,876 tie-break cells", () => {
+describe("kernel.ts:921 and :922 — reachableLiveTbScore's mutants over 15,876 tie-break cells", { timeout: SWEEP_TIMEOUT_MS }, () => {
   const TO = range(1, 12);
   const WIN_BY = range(1, 3);
   const SIDE = range(0, 20);
