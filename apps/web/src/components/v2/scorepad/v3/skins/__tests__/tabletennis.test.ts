@@ -692,7 +692,7 @@ describe("refusedEventTypes()", () => {
     expect(refusedEventTypes(view({ events: stream(summary(11, 7)) }))).not.toContain(SUMMARY_TYPE);
   });
 
-  it("does NOT refuse timeout or expedite for the DEFAULT ITTF cfg — the opposite of badminton", () => {
+  it("TT-RO-1 does NOT refuse timeout or expedite for the DEFAULT ITTF cfg — the opposite of badminton", () => {
     // `records` defaults timeouts/sanctions/expedite ON for this sport;
     // asserting the negative here is the load-bearing half — a refusal
     // list copied from badminton's own (all-refused) shape would fail

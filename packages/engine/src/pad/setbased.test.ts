@@ -77,7 +77,7 @@ function setsBefore(module: SetBasedModule, cfg: SetBasedCfg, index: number): Mo
 }
 
 describe("the declarations each record is (toBe)", () => {
-  it("sanctionLevels is the sport file's own exported ladder, and the very array padSpec offers, for every declared cfg", () => {
+  it("BD-SN-1 VB-SN-1 sanctionLevels is the sport file's own exported ladder, and the very array padSpec offers, for every declared cfg", () => {
     let checked = 0;
     for (const c of CASES) {
       expect(c.rules.sanctionLevels, c.key).toBe(c.sanctionLevels);
@@ -112,7 +112,7 @@ describe("the declarations each record is (toBe)", () => {
     expect(checked).toBeGreaterThanOrEqual(2 * CASES.length);
   });
 
-  it("volleyball's serve rotation is the exported declaration, and rotationCycle reads it for every declared cfg (FIVB 7.6.2: six)", () => {
+  it("VB-RC-1 volleyball's serve rotation is the exported declaration, and rotationCycle reads it for every declared cfg (FIVB 7.6.2: six)", () => {
     expect(volleyball.serveRotation).toBe(VOLLEYBALL_SERVE);
     let checked = 0;
     for (const { name, cfg } of cfgsOf(volleyball)) {
@@ -124,7 +124,7 @@ describe("the declarations each record is (toBe)", () => {
     expect(volleyballPadRules.rotationCycle({})).toBe(6);
   });
 
-  it("table tennis's expediteReturns is the kernel's EXPEDITE_RETURNS, the threshold the fold enforces at the exact boundary", () => {
+  it("TT-EX-1 table tennis's expediteReturns is the kernel's EXPEDITE_RETURNS, the threshold the fold enforces at the exact boundary", () => {
     expect(tabletennisPadRules.expediteReturns).toBe(EXPEDITE_RETURNS);
     const cfg = tabletennis.configSchema.parse({});
     const expedite: ModuleEvent = { type: "tabletennis.expedite.start", payload: {} };
@@ -136,7 +136,7 @@ describe("the declarations each record is (toBe)", () => {
     expect(fold(tabletennis, cfg, at(tabletennisPadRules.expediteReturns - 1)).sets[0]).toEqual({ home: 1, away: 0, closed: false });
   });
 
-  it("volleyball's liberoBand is the kernel's LIBERO_BAND, the administrative tier padSpec gives the scoresheet sub tally", () => {
+  it("VB-LB-1 volleyball's liberoBand is the kernel's LIBERO_BAND, the administrative tier padSpec gives the scoresheet sub tally", () => {
     expect(volleyballPadRules.liberoBand).toBe(LIBERO_BAND);
     let checked = 0;
     for (const { name, cfg } of cfgsOf(volleyball)) {
@@ -148,7 +148,7 @@ describe("the declarations each record is (toBe)", () => {
 });
 
 describe("cfg readers: read through the module's configSchema, never a fallback typed here", () => {
-  it("scoreBound(cfg) is the padSpec set-score bound, both fields, over every declared cfg", () => {
+  it("BD-SC-2 TT-SC-2 VB-SC-2 scoreBound(cfg) is the padSpec set-score bound, both fields, over every declared cfg", () => {
     let checked = 0;
     for (const c of CASES) {
       for (const { name, cfg } of cfgsOf(c.module)) {
@@ -211,16 +211,42 @@ describe("cfg readers: read through the module's configSchema, never a fallback 
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("setTarget reads the deciding set's own target: FIVB indoor 25 then 15, beach 21 then 15", () => {
-    // FIVB 6.1.2 and 6.1.3 (indoor), Beach 7.1: the deciding set is played to 15.
+  it("VB-FM-1 setTarget reads the deciding set's own target: FIVB indoor 25 then 15, beach 21 then 15", () => {
+    // FIVB 6.1.2 and 6.3.2 (indoor: sets to 25, the deciding fifth to 15, two clear); the beach rules' set clause (21, the
+    // deciding third to 15), not re-read in P3.1. DOMAIN.volleyball.md's format rows say the same.
     const indoor = volleyball.configSchema.parse(volleyball.variants.indoor);
     const beach = volleyball.configSchema.parse(volleyball.variants.beach);
+    expect(volleyballPadRules.bestOf(indoor)).toBe(5);
+    expect(volleyballPadRules.bestOf(beach)).toBe(3);
     expect([0, 1, 2, 3, 4].map((i) => volleyballPadRules.setTarget(indoor, i))).toEqual([25, 25, 25, 25, 15]);
     expect([0, 1, 2].map((i) => volleyballPadRules.setTarget(beach, i))).toEqual([21, 21, 15]);
+    // Two clear and no cap, witnessed by the real fold: 25-24 is still open, 26-24 closes it, and so does 31-29.
+    expect(indoor.cap).toBeNull();
+    const at = (events: readonly ModuleEvent[]) => fold(volleyball, indoor, events, false).sets[0];
+    expect(at([...levelAt(volleyball, 24), rally(volleyball, "H")])).toMatchObject({ home: 25, away: 24, closed: false });
+    expect(at([...levelAt(volleyball, 24), rally(volleyball, "H"), rally(volleyball, "H")])).toMatchObject({ home: 26, away: 24, closed: true });
+    expect(at([...levelAt(volleyball, 29), rally(volleyball, "H"), rally(volleyball, "H")])).toMatchObject({ home: 31, away: 29, closed: true });
+  });
+
+  it("TT-FM-1 a table tennis game is to 11 with two clear and no cap; a match is best of 5, bo7 best of 7, hardbat-21 games to 21", () => {
+    // ITTF 2.11.1 (a game) and 2.12.1 (a match is the best of an odd number of games), not re-read in P3.1; DOMAIN.tabletennis.md's
+    // format rows say the same.
+    const at = (variant: string) => tabletennis.configSchema.parse(tabletennis.variants[variant]!);
+    expect([tabletennisPadRules.bestOf(at("bo5")), tabletennisPadRules.setTo(at("bo5"))]).toEqual([5, 11]);
+    expect([tabletennisPadRules.bestOf(at("bo7")), tabletennisPadRules.setTo(at("bo7"))]).toEqual([7, 11]);
+    expect(tabletennisPadRules.setTo(at("hardbat-21"))).toBe(21);
+    // The schema default is the bo5 format.
+    expect([tabletennisPadRules.bestOf({}), tabletennisPadRules.setTo({})]).toEqual([5, 11]);
+    const cfg = at("bo5");
+    expect(cfg.cap).toBeNull();
+    const game = (events: readonly ModuleEvent[]) => fold(tabletennis, cfg, events, false).sets[0];
+    expect(game([...levelAt(tabletennis, 10), rally(tabletennis, "H")])).toMatchObject({ home: 11, away: 10, closed: false });
+    expect(game([...levelAt(tabletennis, 10), rally(tabletennis, "H"), rally(tabletennis, "H")])).toMatchObject({ home: 12, away: 10, closed: true });
+    expect(game([...levelAt(tabletennis, 20), rally(tabletennis, "H"), rally(tabletennis, "H")])).toMatchObject({ home: 22, away: 20, closed: true });
   });
 });
 
-describe("deuceNote: what the next point means at a level score, read off the fold's own set-winner rule", () => {
+describe("BD-SC-1 TT-SC-1 VB-SC-1 deuceNote: what the next point means at a level score, read off the fold's own set-winner rule", () => {
   /**
    * The rule as the rulebooks state it, for a level score of n-all in a set to `target`, `winBy` clear, capped at `cap`:
    *  - BWF 7.4 (and any cap): at cap-1 all the next point wins the game, a golden point;
@@ -326,7 +352,7 @@ describe("deuceNote: what the next point means at a level score, read off the fo
   });
 });
 
-describe("deuceNote once the match is decided at a tie (the after-a-withdrawal transition)", () => {
+describe("BD-SC-1 TT-SC-1 VB-SC-1 deuceNote once the match is decided at a tie (the after-a-withdrawal transition)", () => {
   // A forfeit (retired, a disqualification) or an abandon ends the match with the open set still unclosed, so the set
   // alone still reads a level score past target-1. A decided board has no next point: the note is null there, every sport.
   const ENDINGS: readonly { label: string; event: ModuleEvent }[] = [
@@ -362,7 +388,7 @@ describe("deuceNote once the match is decided at a tie (the after-a-withdrawal t
 });
 
 describe("badminton: the interval mark and the service court (BWF rules the fold does not hold)", () => {
-  it("intervalMark is half the game's target rounded up: 11 at 21 (BWF 16.2), 8 at 15 (the 3x15 law), 6 at 11; the deciding game's own", () => {
+  it("BD-IN-1 intervalMark is half the game's target rounded up: 11 at 21 (BWF 16.2), 8 at 15 (the 3x15 law), 6 at 11; the deciding game's own", () => {
     const at = (variant: Partial<SetBasedCfg>, index = 0) => badmintonPadRules.intervalMark(badminton.configSchema.parse(variant), index);
     expect(at(badminton.variants.bwf!)).toBe(11);
     // The case the old constant 11 gets wrong.
@@ -374,7 +400,7 @@ describe("badminton: the interval mark and the service court (BWF rules the fold
     expect([0, 1, 2].map((i) => at(decider, i))).toEqual([11, 11, 8]);
   });
 
-  it("serviceCourt is the right court on an even score (0 included) and the left on an odd one (BWF 10.1, 11.1)", () => {
+  it("BD-CT-1 serviceCourt is the right court on an even score (0 included) and the left on an odd one (BWF 10.1, 11.1)", () => {
     let checked = 0;
     for (let score = 0; score <= 30; score++) {
       expect(badmintonPadRules.serviceCourt(score), `server on ${score}`).toBe(score % 2 === 0 ? "right" : "left");
@@ -384,7 +410,7 @@ describe("badminton: the interval mark and the service court (BWF rules the fold
     expect(badmintonPadRules.serviceCourt(0)).toBe("right");
   });
 
-  it("serviceCourt refuses a score no game holds rather than naming a court for it", () => {
+  it("BD-CT-1 serviceCourt refuses a score no game holds rather than naming a court for it", () => {
     for (const bad of [-1, 1.5, Number.NaN]) expect(() => badmintonPadRules.serviceCourt(bad), String(bad)).toThrow(RangeError);
   });
 });
@@ -393,7 +419,7 @@ describe("table tennis: expedite (ITTF 2.15)", () => {
   const cfg = tabletennis.configSchema.parse({});
   const EXPEDITE: ModuleEvent = { type: "tabletennis.expedite.start", payload: {} };
 
-  it("expediteScoreFloor is ADVISORY: the pad's guard (ITTF 2.15.1, DOMAIN.tabletennis.md), the fold takes expedite at 8-all and at 9-all", () => {
+  it("TT-EX-2 expediteScoreFloor is ADVISORY: the pad's guard (ITTF 2.15.1, DOMAIN.tabletennis.md), the fold takes expedite at 8-all and at 9-all", () => {
     // DOMAIN.tabletennis.md: the "unless both have reached 9" guard lives in the pad; the engine owns no clock and no floor.
     expect(tabletennisPadRules.expediteScoreFloor).toBe(9);
     const floor = tabletennisPadRules.expediteScoreFloor;
@@ -403,7 +429,7 @@ describe("table tennis: expedite (ITTF 2.15)", () => {
     }
   });
 
-  it("expediteReturnsCreditable agrees with the fold for every serving side and winner: only the receiver takes a 13-return rally", () => {
+  it("TT-EX-1 expediteReturnsCreditable agrees with the fold for every serving side and winner: only the receiver takes a 13-return rally", () => {
     let checked = 0;
     for (const serving of ["home", "away"] as const) {
       for (const winner of ["home", "away"] as const) {

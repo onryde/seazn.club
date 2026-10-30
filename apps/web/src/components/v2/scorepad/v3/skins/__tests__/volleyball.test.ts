@@ -881,11 +881,11 @@ describe("refusedEventTypes()", () => {
     expect(refusedEventTypes(view({ events: stream(summary(25, 15)) }))).not.toContain(SUMMARY_TYPE);
   });
 
-  it("refuses expedite for every shipped volleyball config — FIVB has no ITTF-style system", () => {
+  it("VB-RO-2 refuses expedite for every shipped volleyball config — FIVB has no ITTF-style system", () => {
     expect(refusedEventTypes(view())).toContain(EXPEDITE_TYPE);
   });
 
-  it("does NOT refuse timeout/sub when this fixture's own cfg says it records them (indoor default), and DOES for beach's own substitutions flag", () => {
+  it("VB-RO-2 does NOT refuse timeout/sub when this fixture's own cfg says it records them (indoor default), and DOES for beach's own substitutions flag", () => {
     const refusedIndoor = refusedEventTypes(view());
     expect(refusedIndoor).not.toContain(TIMEOUT_TYPE);
     expect(refusedIndoor).not.toContain(SUB_TYPE);

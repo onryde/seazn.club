@@ -183,7 +183,7 @@ const fact = (): void => {
 };
 
 describe("each skin's sanction sheet and set-score sheet offer what padSpec(cfg) declares", () => {
-  it("the sanction level options are padSpec's enum, in its order, per side, at every declared cfg", () => {
+  it("BD-SN-1 VB-SN-1 the sanction level options are padSpec's enum, in its order, per side, at every declared cfg", () => {
     for (const skin of SKINS) {
       for (const { name, cfg } of cfgsOf(skin.module)) {
         const declared = padEnumValues(specOf(skin.module, cfg), skin.SANCTION_TYPE, "level");
@@ -207,7 +207,7 @@ describe("each skin's sanction sheet and set-score sheet offer what padSpec(cfg)
     volleyball: { name: "capped 30", cfg: volleyball.configSchema.parse({ cap: 30 }) },
   };
 
-  it("the set-score fields' max is padSpec's bound, both fields, at every declared cfg plus one cfg on the other cap branch", () => {
+  it("BD-SC-2 TT-SC-2 VB-SC-2 the set-score fields' max is padSpec's bound, both fields, at every declared cfg plus one cfg on the other cap branch", () => {
     for (const skin of SKINS) {
       const cfgs = [...cfgsOf(skin.module), OTHER_BRANCH[skin.key]];
       // Both branches of the bound are met, so neither can be re-typed in a skin unseen.
@@ -249,7 +249,7 @@ describe("the tiles a band shows follow padSpec's fidelity map", () => {
   });
 });
 
-describe("the context line: Best of N and the deuce note come from the pad record, over real folds", () => {
+describe("BD-SC-1 TT-SC-1 VB-SC-1 the context line: Best of N and the deuce note come from the pad record, over real folds", () => {
   it("names the cfg's own bestOf at every declared cfg", () => {
     for (const skin of SKINS) {
       for (const { name, cfg } of cfgsOf(skin.module)) {
@@ -331,7 +331,7 @@ describe("badminton's strip: the interval mark and the service court", () => {
   const skin = SKINS[0]!;
   const strip = (v: PadHostView, id: string) => skin.scorebug(v).strip.find((item) => item.id === id);
 
-  it("announces the interval ahead at the engine's mark for the game about to be played, deciding game included", () => {
+  it("BD-IN-1 announces the interval ahead at the engine's mark for the game about to be played, deciding game included", () => {
     const cases: readonly { label: string; cfg: SetBasedCfg; index: number }[] = [
       { label: "bwf", cfg: badminton.configSchema.parse(badminton.variants.bwf), index: 0 },
       { label: "bwf-3x15", cfg: badminton.configSchema.parse(badminton.variants["bwf-3x15"]), index: 0 },
@@ -345,7 +345,7 @@ describe("badminton's strip: the interval mark and the service court", () => {
     }
   });
 
-  it("names the service court the engine names for the serving side's score, both sides serving", () => {
+  it("BD-CT-1 names the service court the engine names for the serving side's score, both sides serving", () => {
     const cfg = badminton.configSchema.parse({});
     const courtKey = { right: "pad.badminton.scorebug.strip.court.right", left: "pad.badminton.scorebug.strip.court.left" } as const;
     let checked = 0;
@@ -368,7 +368,7 @@ describe("table tennis: the expedite tile and the 13-return question", () => {
   const skin = SKINS[1]!;
   const EXPEDITE: ModuleEvent = { type: tt.EXPEDITE_TYPE, payload: {} };
 
-  it("offers Start expedite until both reach the engine's floor, and refuses it in the More sheet exactly when the tile is gone", () => {
+  it("TT-EX-2 offers Start expedite until both reach the engine's floor, and refuses it in the More sheet exactly when the tile is gone", () => {
     const floor = tabletennisPadRules.expediteScoreFloor;
     const cfgs = cfgsOf(tabletennis).filter(({ cfg }) => cfg.records.expedite);
     expect(cfgs.length).toBeGreaterThanOrEqual(2);
@@ -391,7 +391,7 @@ describe("table tennis: the expedite tile and the 13-return question", () => {
     }
   });
 
-  it("asks the 13-return question exactly for the rallies the fold accepts at the engine's threshold, and stamps that threshold", () => {
+  it("TT-EX-1 asks the 13-return question exactly for the rallies the fold accepts at the engine's threshold, and stamps that threshold", () => {
     const cfg = tabletennis.configSchema.parse({});
     const ids = { home: "H", away: "A" } as const;
     const v = view(skin, cfg, [EXPEDITE]);
@@ -420,7 +420,7 @@ describe("table tennis: the expedite tile and the 13-return question", () => {
 describe("volleyball: the libero band and the rotation cycle", () => {
   const skin = SKINS[2]!;
 
-  it("offers the libero swap from the engine's liberoBand up, and not below it", () => {
+  it("VB-LB-1 offers the libero swap from the engine's liberoBand up, and not below it", () => {
     const cfg = volleyball.configSchema.parse(volleyball.variants.indoor);
     for (const band of [0, 1, 2, 3] as const) {
       const v = view(skin, cfg, [], band);
@@ -432,7 +432,7 @@ describe("volleyball: the libero band and the rotation cycle", () => {
     }
   });
 
-  it("asks a side to field the engine's rotation cycle indoors and a pair on the beach", () => {
+  it("VB-RC-1 asks a side to field the engine's rotation cycle indoors and a pair on the beach", () => {
     for (const { name, cfg } of cfgsOf(volleyball)) {
       const expected = cfg.records.substitutions ? volleyball.serveRotation.rotationCycle : entrantKindCap("pair");
       expect(vb.playersToField(view(skin, cfg)), name).toBe(expected);
@@ -440,7 +440,7 @@ describe("volleyball: the libero band and the rotation cycle", () => {
     }
   });
 
-  it("reserves every rotation number 1..cycle for the strip's rotation slot", () => {
+  it("VB-RC-1 reserves every rotation number 1..cycle for the strip's rotation slot", () => {
     const cfg = volleyball.configSchema.parse(volleyball.variants.indoor);
     const cycle = volleyball.serveRotation.rotationCycle!;
     const item = skin.scorebug(view(skin, cfg, [rally(skin, "H"), rally(skin, "A")])).strip.find((entry) => entry.label === "pad.volleyball.scorebug.strip.rotation");

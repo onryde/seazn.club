@@ -678,7 +678,7 @@ describe("refusedEventTypes()", () => {
     expect(refusedEventTypes(view({ events: stream(summary(21, 15)) }))).not.toContain(SUMMARY_TYPE);
   });
 
-  it("refuses timeout / sub / expedite for every shipped BWF config", () => {
+  it("BD-RO-1 refuses timeout / sub / expedite for every shipped BWF config", () => {
     // BWF has no timeouts and no substitutions; expedite is an ITTF system.
     // All three are REGISTERED types (the kernel union needs them for
     // bijection) whose fold refuses them outright.

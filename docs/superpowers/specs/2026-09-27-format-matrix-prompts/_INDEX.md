@@ -1919,6 +1919,15 @@ Elsewhere the text is the controller's record.
      `18155d5ca0`, with the two `stryker-sizing` tests red (owned by the mutation session's `chore/w2e-stryker-measure`):
      the owner's explicit go over a known red. "Rebase when possible" → lane W is rebased onto main (linear), gated on an
      empty tree diff against its pre-rebase tip.
+243. **The set-based deuce/setting note follows the rulebook** (2026-10-30, owner "apply rec", pad wave P3.1, review I2;
+     242 is the cricket batch's). The note is the engine's `deuceNote` (`packages/engine/src/pad/setbased.ts`, read off
+     the kernel's own `setWinner`): badminton shows Setting at every tie from target−1 up to the cap, where Golden point
+     shows (BWF 7.3, 7.4); volleyball shows Deuce at every tie from 24-all, or 14-all in the deciding set (FIVB 6.1.2);
+     a `winBy: 1` cfg shows Golden point at target−1 all; table tennis is unchanged (Deuce at every tie from 10-all, the
+     PR #678 fix); the note never shows outside live play (a forfeit or abandon at a tie leaves none, review I1). An
+     accepted visible change against the pad-wave spec §3.5 ("no behaviour change"). The table-tennis expedite floor of 9
+     stays advisory and as is: the fold enforces none, and whether the current ITTF text reads "both have reached 9" or
+     "18 points scored" stays an open question (review m4). Rows signed: BD-SC-1, TT-SC-1, VB-SC-1, TT-EX-2.
 
 ## Recommendations (mine — not rulings)
 
