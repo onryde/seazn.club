@@ -1566,7 +1566,7 @@ const TIEBREAK_POINTS_PER_END = 6;
  *
  * So, while play is live: inside a breaker under way, after every sixth point; otherwise after an odd game of the current set;
  * and before a set's first game (none of it played yet) after a set of an odd total. Never before the first game of the match,
- * and never once it is over (no changeover follows the last game).
+ * and never once it is over (no changeover follows the last game). Rule TN-EN-1, owner ruling 244 (2026-10-30).
  */
 export function endsChanged(state: Pick<NestedState, "phase" | "sets" | "games" | "points">): boolean {
   if (state.phase !== "live") return false;
@@ -1747,13 +1747,14 @@ export const PLAUSIBLE_INTERRUPTION_SECONDS = 3600;
  */
 function nestedFidelity(preset: NestedPreset): PadSpec["fidelity"] {
   const key = preset.key;
-  return {
+  // frozen: one object reaches every cfg's padSpec and the pad record, so an in-place edit by any reader would leak into all
+  return Object.freeze({
     [`${key}.set_summary`]: 0,
     [`${key}.sanction`]: 1,
     [`${key}.interruption`]: 1,
     [`${key}.point`]: 3,
     [`${key}.game.award`]: 3,
-  } satisfies Record<string, FidelityBand>;
+  } satisfies Record<string, FidelityBand>);
 }
 
 function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg, fidelity: PadSpec["fidelity"]): PadSpec {

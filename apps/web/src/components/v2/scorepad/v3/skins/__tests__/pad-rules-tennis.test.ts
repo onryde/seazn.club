@@ -104,7 +104,7 @@ const optionIds = (step: GuidedSheetStep): string[] => {
 };
 const maxOf = (step: GuidedSheetStep): number | undefined => (step.kind === "number" ? step.max : undefined);
 
-describe("the sheets offer what the engine's padSpec declares, for every cfg", () => {
+describe("TN-PT-1 TN-SE-3 TN-RO-1 TN-RO-2 TN-SS-4 TN-CF-2 the sheets offer what the engine's padSpec declares, for every cfg", () => {
   it("sanction levels (both sides, ladder order), interruption kinds and duration bound, set-score bounds, best-of (counted)", () => {
     const bestOfs = new Set<number>();
     for (const { name, cfg } of cfgs()) {
@@ -147,6 +147,8 @@ describe("the sheets offer what the engine's padSpec declares, for every cfg", (
     // an ace is the server's point and a double fault the receiver's: neither side is offered both
     expect(byServer.filter((k) => !byReceiver.includes(k)).length).toBeGreaterThan(0);
     expect(byReceiver.filter((k) => !byServer.includes(k)).length).toBeGreaterThan(0);
+    // with the server unknown, only the kinds neither end of the serve restricts: those both sides are offered, in order
+    expect(unknownServer).toEqual(declared.filter((kind) => byServer.includes(kind) && byReceiver.includes(kind)));
     count("point kinds", 3);
   });
 });
@@ -177,7 +179,7 @@ describe("the tiles follow the engine's fidelity map, band by band", () => {
   });
 });
 
-describe("the scorebug's calls are the fold's own spoken game score", () => {
+describe("TN-SC-1 the scorebug's calls are the fold's own spoken game score", () => {
   it("at every standard game score, deuce and both advantages included (counted)", () => {
     const cfg = tennis.configSchema.parse({});
     const seen: string[][] = [];
@@ -202,7 +204,7 @@ describe("the scorebug's calls are the fold's own spoken game score", () => {
   });
 });
 
-describe("the ends-change cue is the engine's ITF Rule 10 reading", () => {
+describe("TN-EN-1 the ends-change cue is the engine's ITF Rule 10 reading", () => {
   const cfg = tennis.configSchema.parse({});
   const mtb10 = tennis.configSchema.parse(tennis.variants["doubles-noad-mtb10"]);
   const game = (side: Side): ModuleEvent[] => Array<ModuleEvent>(4).fill(point(side));
@@ -237,13 +239,16 @@ describe("the ends-change cue is the engine's ITF Rule 10 reading", () => {
     expect(cue(mtb10, [start, summary(6, 0), summary(3, 6)])).toBe(true);
     expect(cue(mtb10, [start, summary(6, 0), summary(3, 6), ...breakerPoints(6)])).toBe(true);
     expect(cue(mtb10, [start, summary(6, 0), summary(3, 6), ...breakerPoints(7)])).toBe(false);
-    // no cue once the match is over
+    // no cue once the match is over, nor once it is retired mid-set at 2-1 (where live play would show one)
     expect(cue(cfg, [start, summary(6, 4), summary(6, 3)])).toBe(false);
-    count("ends cue", 9);
+    const twoOne = [start, ...game("home"), ...game("away"), ...game("home")];
+    expect(cue(cfg, twoOne)).toBe(true);
+    expect(cue(cfg, [...twoOne, { type: "core.forfeit", payload: { by: A, reason: "retired" } }])).toBe(false);
+    count("ends cue", 11);
   });
 });
 
-describe("the set-score sheet asks for the tie-break's points exactly when the strict fold refuses the score without them", () => {
+describe("TN-SS-3 the set-score sheet asks for the tie-break's points exactly when the strict fold refuses the score without them", () => {
   it("first set and deciding set, every cfg, every score to the field bound (counted)", () => {
     let cells = 0;
     let asked = 0;
@@ -276,7 +281,7 @@ describe("the set-score sheet asks for the tie-break's points exactly when the s
   });
 });
 
-describe("game award: the tiles and the More sheet withhold it exactly when the strict fold refuses it", () => {
+describe("TN-SE-2 game award: the tiles and the More sheet withhold it exactly when the strict fold refuses it", () => {
   it("in a standard game, a tie-break and a match tie-break (counted, both answers seen)", () => {
     const cfg = tennis.configSchema.parse({});
     const mtb10 = tennis.configSchema.parse(tennis.variants["doubles-noad-mtb10"]);
@@ -304,7 +309,7 @@ describe("game award: the tiles and the More sheet withhold it exactly when the 
   });
 });
 
-describe("the rosterless dock reads the tie-break server the fold served, after the serve has turned over", () => {
+describe("TN-SV-1 the rosterless dock reads the tie-break server the fold served, after the serve has turned over", () => {
   it("after every tie-break point, an ace is offered exactly to the side that served it (counted)", () => {
     const cfg = tennis.configSchema.parse({});
     const twelveGames = Array.from({ length: 12 }, (_, i) => Array<ModuleEvent>(4).fill(point(i % 2 === 0 ? "home" : "away"))).flat();

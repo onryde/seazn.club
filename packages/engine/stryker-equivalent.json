@@ -578,7 +578,7 @@
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2459:58 StringLiteral → \"\"",
+      "mutant": "src/sports/nested/kernel.ts:2460:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = nestedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "nestedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
@@ -1730,7 +1730,7 @@
       "reason": "W2e T25 (reachableLiveGames walk). Adds only y = 0: at 0–0 the index is -1 (undefined, not 1); at h–0 it reads the row above's last cell, which can only add 'stepped-into' to a y = 0 cell, and a y = 0 cell is reached iff it is live anyway (every h'–0 below a live h–0 is live; tiebreakAt is positive)."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2171:76 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/sports/nested/kernel.ts:2172:76 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const endLevels: readonly string[] = preset.sanctionEnding?.endLevels ?? [];",
       "reason": "W2e T25 (X-SE-1). The fallback is read only by arbitraryEvent (kernel.ts:2463, the generator, ignored by ruling 109), and tennis, the kernel's one shipped preset, declares sanctionEnding (tennis.ts:71), so the fallback is never taken in product. No sanction level is spelled 'Stryker was here' either."
@@ -1826,7 +1826,7 @@
       "reason": "W2e T25 (reachableLiveGames, SC-S1). A fraction past the guard answers false anyway: Uint8Array truncates its length (no throw); the walk writes only whole cells, and the read index h*(a+1)+a is either fractional (undefined) or lands on a row past h that was never written (0). A differential over 0-10 in quarters on 56 rule shapes (94,136 cells) found 0 differences and 0 throws; its control differs."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2503:9 ConditionalExpression → false",
+      "mutant": "src/sports/nested/kernel.ts:2504:9 ConditionalExpression → false",
       "original": "preset.sanctionEnding === undefined",
       "line": "...(preset.sanctionEnding === undefined ? {} : { sanctionEnding: preset.sanctionEnding }),",
       "reason": "W2e T25 (X-SE-1). An exactOptionalPropertyTypes spread. Tennis, the kernel's one shipped preset, declares sanctionEnding (tennis.ts:71), so its module is unchanged. For a preset without one, the mutant gives an own key holding undefined, and every reader reads module.sanctionEnding, which is undefined either way."

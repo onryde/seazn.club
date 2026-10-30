@@ -62,7 +62,7 @@
 //     player is carried on the scorebug's own `WhoLine`, not a strip pick.
 //   - a Fault tile, a Let tile, a Retire tile (R4-1, R4-2): tennis declares
 //     five event types only (`point`/`set_summary`/`sanction`/
-//     `interruption`/`game.award`, `kernel.ts:1766-1772`) — no fault/let
+//     `interruption`/`game.award`, the kernel's `eventSchemas`) — no fault/let
 //     event exists to dispatch, and §9.4 bars a new one. Forfeit/Abandon
 //     already have a home in `fixture-console.tsx`'s console chrome; a Retire
 //     tile here would be a second entry point to that same capability, the
@@ -137,9 +137,12 @@ function withinBand(eventType: string, band: FidelityBand): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// State/cfg readers. `PadHostView.state`/`.cfg` are `unknown` by contract;
-// every reader degrades cleanly from `{}`, never throws — the same posture
-// every v3 skin's own readers take.
+// State/cfg readers. `PadHostView.state`/`.cfg` are `unknown` by contract.
+// Every STATE reader degrades cleanly from `{}`, never throws — the same
+// posture every v3 skin's own readers take. The CFG is read only through
+// `tennisPadRules`, which parses it with tennis's own configSchema: `{}` reads
+// as the schema defaults, and a cfg the schema refuses throws (every writer
+// validates the cfg it stores, so a pad never receives one — pad wave P3.2).
 // ---------------------------------------------------------------------------
 
 interface TennisClosedSet {
@@ -172,7 +175,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function asState(state: unknown): TennisStateShape {
   return asRecord(state) as TennisStateShape;
 }
-/** `NestedState.phase`'s default (`kernel.ts:1933`'s own `init`). */
+/** `NestedState.phase`'s default (the kernel's own `init`). */
 function readPhase(state: TennisStateShape): string {
   return typeof state.phase === "string" && state.phase.length > 0 ? state.phase : "pre";
 }
@@ -206,8 +209,8 @@ function vocabText(field: string, value: unknown, t: TFn): string | undefined {
 
 // ---------------------------------------------------------------------------
 // phase() — build spec §2. `NestedState.phase` is `pre|live|done|final|
-// abandoned` (`kernel.ts:393`); the kernel already collapses the last three
-// pairwise at `:1143`/`:1155` — mirror that, never give a sub-phase its own
+// abandoned` (the kernel's `NestedState`); the kernel already treats the last three alike
+// in `applyForfeit`/`applyAbandon`'s match-over guard — mirror that, never give a sub-phase its own
 // `PadPhase` slot.
 // ---------------------------------------------------------------------------
 
@@ -226,8 +229,8 @@ export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
 // (`tennisPadRules.setScoreTakesTiebreak`, pad wave P3.2).
 // ---------------------------------------------------------------------------
 
-/** `setInProgress` (`kernel.ts:1107-1111`) — D-16's gate. Scoped to the
- *  CURRENT set only: `bankSet` (`kernel.ts:753-789`) resets both
+/** `setInProgress` (the kernel's, module-private) — D-16's gate. Scoped to the
+ *  CURRENT set only: the kernel's `bankSet` resets both
  *  `state.games` and `state.points` the moment a set closes, so this can
  *  never read a past set as "in progress". */
 function setInProgressOf(state: TennisStateShape): boolean {
@@ -262,7 +265,7 @@ interface ServeContext {
  * Adapts `PadHostView`'s split shape into `serveContext`'s real input, then
  * delegates outright — no recomputation. `.state` and `.squads` are separate
  * fields on `PadHostView`, where `NestedState.squads` is one of `.state`'s
- * own properties (`kernel.ts:426`), so this builds the one object the real
+ * own properties (`NestedState.squads`), so this builds the one object the real
  * function expects rather than casting `view.state` wholesale.
  *
  * Every field `serveContext`'s call graph actually reads — `serving`,
@@ -291,7 +294,7 @@ interface ServeContext {
  * themselves — the four fields this function actually constructs — would
  * have shown up as a runtime crash on render, not a red build. The
  * `Pick<...>`-typed local restores that check for exactly those four fields,
- * verified against `NestedState`'s real shape (`kernel.ts:390-427`) — drop
+ * verified against `NestedState`'s real shape (the kernel's `NestedState`) — drop
  * `away` from the `games` literal below by hand and `tsc --noEmit` reds on
  * this exact line; do the same with the old `as unknown as NestedState` and
  * it stays silent, a runtime crash away from being noticed. `NestedState`
@@ -596,9 +599,8 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   // is the whole payload bar an uncollectable free-text `reason` (no text
   // step exists, per build spec §5's identical ruling for the sanction's own
   // `reason`). NOT while a tie-break/match-tie-break is in force — the
-  // breaker itself IS the deciding game (`applyGameAward`, `kernel.ts:
-  // 1081-1101`; mirrored here via `state.points.kind`, the SAME condition the
-  // engine's own gate reads, `kernel.ts:1526-1532`).
+  // breaker itself IS the deciding game (`applyGameAward`'s GAME_AWARD_DURING_TIEBREAK guard, read through
+  // `tennisPadRules.breakerInForce`, the SAME predicate that guard reads; `gameAwardRefused` below).
   if (offerable(GAME_AWARD_TYPE) && !gameAwardRefused(state)) {
     for (const side of SIDES) {
       tiles.push({
@@ -785,8 +787,8 @@ function setScoreSheet(view: PadHostView): GuidedSheetSpec {
  *  defers the person to the dock) — build spec §5's own instruction.
  *  `NestedSanction.reason` is free text and there is no text step, so it is
  *  not collected from the pad; `by` names the OFFENDER (the engine's own
- *  convention — `game.award.winner` is the opposite party, `kernel.ts:
- *  336-343`).
+ *  convention — `game.award.winner` is the opposite party, the kernel's
+ *  `NestedGameAward`).
  *
  *  Defect 2 fix (code review, 2026-08-25): `NestedSanction.person` is
  *  OPTIONAL by the engine's own schema ("absent = the pair/team, not a named
@@ -956,13 +958,13 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
  * own `players.length > 0` fallback and `v6-sports.spec.ts`'s comment both
  * acknowledge this is a common, legitimate state) can never name a SERVER
  * PERSON, so `payload.server` below is always absent there — but the serving
- * SIDE is not similarly unknowable: `serveContext.side` (`kernel.ts:511-518`)
+ * SIDE is not similarly unknowable: `serveContext.side` (the kernel's `serveContext`)
  * is `state.serving` directly, entirely independent of roster, and side is
  * all the ace-vs-double-fault legality rule needs (an ace is won BY the
  * serving side, a double fault by the receiving one). `buildHalf` has no
  * wire-safe way to carry that side fact forward for `buildDock` to read back
  * — `NestedPoint` is a `z.strictObject` (`by`/`server`/`scorer`/`meta` only,
- * kernel.ts:223-228) parsed the instant the optimistic fold applies the tap,
+ * the kernel's `NestedPoint`) parsed the instant the optimistic fold applies the tap,
  * so a new field would throw right there, before this dock ever renders —
  * so this fix lives entirely on the READ side, re-deriving the SIDE ONLY
  * (never a person) fresh off `view.state`.
@@ -977,7 +979,7 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
  * boundaries, not one, and each needs its own treatment.
  *
  * ONE — the game/set boundary, which is unrecoverable and stays withheld.
- * `winGame`/`bankSet` (kernel.ts:791-825/752-789) rotate `state.serving` AND
+ * the kernel's `winGame`/`bankSet` rotate `state.serving` AND
  * reset `state.points` to a fresh (0, 0) TOGETHER on every exit path of both
  * functions (checked exhaustively) — so a (0, 0) readout immediately after a
  * point was just applied can only mean THIS point closed the game, and
@@ -989,7 +991,7 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
  *
  * TWO — the tie-break's PER-POINT handoff, which is exactly recoverable and
  * so is corrected rather than withheld. Inside a breaker `state.serving`
- * rotates mid-"game", after every ODD point (`applyTbPoint`, kernel.ts:993),
+ * rotates mid-"game", after every ODD point (`applyTbPoint`, via `tiebreakServeRotatesAfter`),
  * and the (0, 0) guard above cannot see it because a breaker at 5-3 is not
  * at (0, 0). Reading `ctx.side` raw there names the NEXT point's server, so
  * `buildDock` offered `double_fault` where `ace` is correct, and the reverse,
@@ -1131,7 +1133,7 @@ export function buildDock(
 // ---------------------------------------------------------------------------
 // activityDetail() — the ribbon's varying half. Five keys for five event
 // types (`pad.tennis.ribbon.*`) — the brief said four; the engine declares
-// five (`kernel.ts:1766-1772`), and this skin's ribbon coverage is complete.
+// five (the kernel's `eventSchemas`), and this skin's ribbon coverage is complete.
 // ---------------------------------------------------------------------------
 
 function join(parts: (string | undefined)[]): string | undefined {

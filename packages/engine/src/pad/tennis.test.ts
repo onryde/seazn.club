@@ -76,7 +76,7 @@ function cfgsUnderTest(): { name: string; cfg: NestedCfg }[] {
   ];
 }
 
-describe("tennisPadRules: the vocabularies are the fold's own enums", () => {
+describe("TN-PT-1 TN-SE-3 TN-RO-1 tennisPadRules: the vocabularies are the fold's own enums", () => {
   it("pointKinds, interruptionKinds and sanctionLevels are the zod enums the event schemas parse with", () => {
     expect(tennisPadRules.pointKinds).toBe(NestedPointKind.options);
     expect(tennisPadRules.interruptionKinds).toBe(NestedInterruptionKind.options);
@@ -119,11 +119,13 @@ describe("tennisPadRules.eventBands", () => {
     }
     expect(Object.keys(tennisPadRules.eventBands).sort()).toEqual(Object.keys(tennis.eventSchemas ?? {}).sort());
     expect(Object.keys(tennisPadRules.eventBands)).toHaveLength(5);
+    // one object for every cfg and the record, so nobody may write to it
+    expect(Object.isFrozen(tennisPadRules.eventBands)).toBe(true);
     expect(cfgs).toBeGreaterThanOrEqual(2);
   });
 });
 
-describe("tennisPadRules.interruptionMaxSeconds", () => {
+describe("TN-RO-1 TN-RO-2 tennisPadRules.interruptionMaxSeconds", () => {
   it("is the kernel's plausibility sentinel, the bound of the padSpec duration field for every cfg", () => {
     expect(tennisPadRules.interruptionMaxSeconds).toBe(PLAUSIBLE_INTERRUPTION_SECONDS);
     // one hour: no ITF rule sets it (the allowances themselves are recorded, never refused), so it is pinned as the kernel's
@@ -145,7 +147,7 @@ describe("tennisPadRules.interruptionMaxSeconds", () => {
   });
 });
 
-describe("tennisPadRules.pointCalls", () => {
+describe("TN-SC-1 tennisPadRules.pointCalls", () => {
   it("is ITF Rule 5(a)'s count of a standard game: no point, 15, 30, 40", () => {
     expect(tennisPadRules.pointCalls).toBe(POINT_CALLS);
     expect(tennisPadRules.pointCalls).toEqual(["0", "15", "30", "40"]);
@@ -167,7 +169,7 @@ describe("tennisPadRules.pointCalls", () => {
   });
 });
 
-describe("tennisPadRules.gamesFieldBound / tiebreakFieldBound", () => {
+describe("TN-SS-4 tennisPadRules.gamesFieldBound / tiebreakFieldBound", () => {
   it("are the padSpec set-score bounds, a function of the cfg (counted, and not one constant)", () => {
     const games = new Set<number>();
     const tb = new Set<number>();
@@ -223,7 +225,7 @@ describe("tennisPadRules.gamesFieldBound / tiebreakFieldBound", () => {
   });
 });
 
-describe("tennisPadRules.bestOf", () => {
+describe("TN-CF-2 tennisPadRules.bestOf", () => {
   it("is the cfg's own bestOf: the variant's declaration where it makes one, the schema default otherwise (counted)", () => {
     const variants = tennis.variants;
     const schemaDefault = parse({}).bestOf;
@@ -251,7 +253,7 @@ function toDecider(cfg: NestedCfg): ModuleEvent[] {
   return out;
 }
 
-describe("tennisPadRules.setScoreTakesTiebreak: exactly the set scores the strict fold refuses without their tie-break points", () => {
+describe("TN-SS-3 tennisPadRules.setScoreTakesTiebreak: exactly the set scores the strict fold refuses without their tie-break points", () => {
   it("first set and deciding set, every cfg, every score up to the field bound (counted)", () => {
     let cells = 0;
     let takes = 0;
@@ -526,7 +528,7 @@ function statesOf(walk: Walk): NestedState[] {
   return states;
 }
 
-describe("tennisPadRules.endsChanged: ITF Rule 10, step by step through real play", () => {
+describe("TN-EN-1 tennisPadRules.endsChanged: ITF Rule 10, step by step through real play", () => {
   it("matches the rule's text after every beat of every walk (counted, both answers seen)", () => {
     let steps = 0;
     let trues = 0;
@@ -578,13 +580,24 @@ describe("tennisPadRules.endsChanged: ITF Rule 10, step by step through real pla
     const decided = fold(tour, [start, summary(6, 4), summary(6, 3)]);
     expect(decided.phase).toBe("done");
     expect(tennisPadRules.endsChanged(decided)).toBe(false);
+    // retired or abandoned mid-set at 2-1, an odd game total: live, the ends had changed; once it ends no changeover follows
+    const twoOne = [start, ...Array<ModuleEvent>(4).fill(point("home")), ...Array<ModuleEvent>(4).fill(point("away")), ...Array<ModuleEvent>(4).fill(point("home"))];
+    const live = fold(tour, twoOne);
+    expect([live.phase, live.games], "premise: live at 2-1").toEqual(["live", { home: 2, away: 1 }]);
+    expect(tennisPadRules.endsChanged(live)).toBe(true);
+    const retired = fold(tour, [...twoOne, { type: "core.forfeit", payload: { by: A, reason: "retired" } }]);
+    expect(retired.phase).toBe("done");
+    expect(tennisPadRules.endsChanged(retired)).toBe(false);
+    const abandoned = fold(tour, [...twoOne, { type: "core.abandon", payload: { reason: "rain" } }]);
+    expect(abandoned.phase).toBe("abandoned");
+    expect(tennisPadRules.endsChanged(abandoned)).toBe(false);
     expect(tennisPadRules.endsChanged({})).toBe(false);
     expect(tennisPadRules.endsChanged(null)).toBe(false);
     expect(tennisPadRules.endsChanged({ phase: "live", games: { home: 1, away: 0 } })).toBe(false);
   });
 });
 
-describe("tennisPadRules.tiebreakServeRotatesAfter: ITF Rule 5(b), through the fold's own serve", () => {
+describe("TN-SV-1 tennisPadRules.tiebreakServeRotatesAfter: ITF Rule 5(b), through the fold's own serve", () => {
   it("rotates after the 1st point and every second point after it, as the fold's serving does (counted)", () => {
     let compared = 0;
     for (const walk of walks()) {
@@ -616,7 +629,7 @@ describe("tennisPadRules.tiebreakServeRotatesAfter: ITF Rule 5(b), through the f
   });
 });
 
-describe("tennisPadRules.breakerInForce: exactly when the strict fold refuses a game award", () => {
+describe("TN-SE-2 tennisPadRules.breakerInForce: exactly when the strict fold refuses a game award", () => {
   it("at every live step of every walk (counted, both answers seen)", () => {
     let compared = 0;
     let inForce = 0;
