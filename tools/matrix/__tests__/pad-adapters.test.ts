@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
-import { hockeyPadRules, icehockeyPadRules } from "@seazn/engine/pad";
+import { carromPadRules, hockeyPadRules, icehockeyPadRules } from "@seazn/engine/pad";
 import { writeConfigIssues } from "@seazn/engine/sport";
 import { ARMAGEDDON_RESULTS, BoardgameMethod, DECISIVE_METHODS, DRAWN_METHODS, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
@@ -2382,12 +2382,16 @@ describe("carrom", () => {
     expect(() => carromPad.stepsFor({ type: "carrom.adjust", payload: {} }, ctxOf(r))).toThrow(/carrom\.adjust/);
   });
 
-  it("M-8: carrom's coin bound is the skin's — read from carrom.tsx as text, every coins field carries one `max`, the adapter accepts it and refuses one more", () => {
-    // Both board sheets (the plain board and the queen board) ask the opponent's coins as a number step with a max.
-    const maxes = [...skin.matchAll(/id: "coins",[^}]*?\bmax:\s*(\d+)/g)].map((m) => Number(m[1]));
-    expect(maxes.length, "carrom.tsx no longer has the coins number step(s)").toBeGreaterThanOrEqual(2);
-    expect(new Set(maxes).size, `the skin's coins fields disagree: ${maxes.join(", ")}`).toBe(1);
-    const max = maxes[0]!;
+  it("M-8: carrom's coin bound is the skin's — carrom.tsx reads every coins field's `max` from carromPadRules.opponentCoinsMax, the adapter holds the engine's value, accepts it and refuses one more", () => {
+    // Pad wave P4.1: the skin no longer types the bound (it was `max: 9` inline, twice); both board sheets (the plain board and
+    // the queen board) ask the opponent's coins as a number step whose `max` is the engine's record. Read as text so a step that
+    // goes back to a literal, or to any other source, reds here.
+    expect(skin).toMatch(/import \{ carromPadRules \} from "@seazn\/engine\/pad";/);
+    const sources = [...skin.matchAll(/id: "coins",[^}]*?\bmax:\s*([^\s,}]+)/g)].map((m) => m[1]);
+    expect(sources.length, "carrom.tsx no longer has the coins number step(s)").toBeGreaterThanOrEqual(2);
+    expect(sources, "every coins field takes its max from the engine's record").toEqual(sources.map(() => "carromPadRules.opponentCoinsMax"));
+    const max = carromPadRules.opponentCoinsMax;
+    expect(max, "nine coins a side (ICF Laws of Carrom 52(b)(ii), 53(a); rule row CA-CN-1), typed from the row").toBe(9);
     expect(CARROM_COIN_MAX).toBe(max);
     const { r } = summariesOf("carrom", CARROM_BOARD, "home");
     const board = (coins: number) => ({ type: CARROM_BOARD, payload: { winner: HOME, opponentCoinsLeft: coins, queenTo: null } });

@@ -84,6 +84,7 @@
 //     `padSpec` alone.
 "use client";
 import { deciderPending, resolveVoids, type Settlement, type SettleMethod, type SquadState } from "@seazn/engine/core";
+import { boardgamePadRules } from "@seazn/engine/pad";
 import {
   ARMAGEDDON_RESULTS,
   boardgame,
@@ -130,21 +131,12 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 };
 
 /**
- * Event type -> fidelity band, MIRRORING `padSpec`'s own `fidelity` map
- * (boardgame.ts) rather than inventing a second scale — every converted skin
- * takes this posture, and `__tests__/boardgame.test.ts` pins this table EQUAL
- * to the module's own. The result is band 0 (a board game ships its terminal
- * record free at every band); the pairing card is band 1, so a band-0 fixture
- * never sees an offer it cannot afford.
+ * Event type -> fidelity band: `boardgamePadRules.eventBands`, the very map `padSpec(cfg).fidelity` returns (pad wave P4.1),
+ * so there is no second scale to keep equal. The result is band 0 (a board game ships its terminal record free at every
+ * band); the pairing card is band 1, so a band-0 fixture never sees an offer it cannot afford.
  */
-export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
-  [RESULT_TYPE]: 0,
-  [PAIRING_TYPE]: 1,
-  [TIEBREAK_TYPE]: 0, // W2a BG-KO-1 — the module's own band (ruling D-C4)
-};
-
 function withinBand(eventType: string, band: FidelityBand): boolean {
-  const need = EVENT_BAND[eventType];
+  const need = boardgamePadRules.eventBands[eventType];
   return need === undefined || need <= band;
 }
 
@@ -166,12 +158,11 @@ function withinBand(eventType: string, band: FidelityBand): boolean {
 export const DECISIVE_METHODS: readonly string[] = ENGINE_DECISIVE_METHODS;
 export const DRAWN_METHODS: readonly string[] = ENGINE_DRAWN_METHODS;
 
-/** `boardgame.ts`'s own field sentinel (`BOARD_MAX`), restated because
- *  `boardgame.ts` keeps it module-private (unlike the two method lists above, which it exports) — pinned
- *  equal to `padSpec(cfg)`'s real field bound in the test file. (`MOVES_MAX`
- *  does not live here any more: the move count was a guided-sheet step, and
- *  tapModel S's dock is chips only — see `buildDock`'s own doc.) */
-export const BOARD_MAX = 200;
+/** The tie-break rung that records who had Black and the result rather than a winner (BG-KO-2): the engine's own literal,
+ *  `boardgamePadRules.armageddonRung`. The board-number bound is `boardgamePadRules.boardMax` (BG-PA-1). (`MOVES_MAX` does
+ *  not live here any more: the move count was a guided-sheet step, and tapModel S's dock is chips only — see
+ *  `buildDock`'s own doc.) */
+const ARMAGEDDON_RUNG: string = boardgamePadRules.armageddonRung;
 
 // ---------------------------------------------------------------------------
 // The folded state, as this file reads it. A STRUCTURAL view of
@@ -495,7 +486,7 @@ function pairingSheet(view: PadHostView): GuidedSheetSpec {
       title: "pad.boardgame.sheet.pairing.board.title",
       initial: state.board ?? 1,
       min: 1,
-      max: BOARD_MAX,
+      max: boardgamePadRules.boardMax,
     },
   ];
   if (colorsOn(cfg)) {
@@ -519,7 +510,8 @@ function pairingSheet(view: PadHostView): GuidedSheetSpec {
 }
 
 /** D6 — the optional mini-match score, written from the WINNER's side (the engine validates any `CHESS_SCORE`). Ids
- *  are the score itself; "none" sends no score. */
+ *  are the score itself; "none" sends no score. The ORDER is this file's presentation (none, clean, narrow); WHICH scores are
+ *  offered is `boardgamePadRules.tiebreakScores` (BG-KO-4, `null` = none), compared as a set in `__tests__/pad-rules-small.test.ts`. */
 const SCORES = ["none", "2–0", "1½–½"] as const;
 const SCORE_LABEL: Record<(typeof SCORES)[number], MessageKey> = {
   none: "pad.boardgame.tiebreak.score.none",
@@ -647,7 +639,7 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       id: "winner",
       kind: "choice",
       title: "pad.boardgame.tiebreak.winner.title",
-      ...gate((rung) => rung !== "armageddon"),
+      ...gate((rung) => rung !== ARMAGEDDON_RUNG),
       layout: "rows",
       context: roundLine,
       options: sideOptions((side) => side),
@@ -656,7 +648,7 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       id: "score",
       kind: "choice",
       title: "pad.boardgame.tiebreak.score.title",
-      ...gate((rung) => rung !== "armageddon"),
+      ...gate((rung) => rung !== ARMAGEDDON_RUNG),
       context: roundLine,
       options: SCORES.map((score) => ({ id: score, label: SCORE_LABEL[score] })),
     },
@@ -666,7 +658,7 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       id: "black",
       kind: "choice",
       title: "pad.boardgame.tiebreak.black.title",
-      ...gate((rung) => rung === "armageddon"),
+      ...gate((rung) => rung === ARMAGEDDON_RUNG),
       layout: "rows",
       context: roundLine,
       options: sideOptions((side) => `${BLACK_OPTION_PREFIX}${side}`),
@@ -676,7 +668,7 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       kind: "choice",
       title: "pad.boardgame.tiebreak.result.title",
       hintKey: "pad.boardgame.tiebreak.armageddonHint",
-      ...gate((rung) => rung === "armageddon"),
+      ...gate((rung) => rung === ARMAGEDDON_RUNG),
       layout: "rows",
       context: (a) => [...roundLine(a), ...colourLines(a)],
       // The engine's own three results, in its order; the Draw's label carries its consequence ("Drawn — Black advances"), and
@@ -691,7 +683,7 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
       id: "confirm",
       kind: "confirm",
       title: "pad.boardgame.tiebreak.confirm.title",
-      ...gate((rung) => rung === "armageddon"),
+      ...gate((rung) => rung === ARMAGEDDON_RUNG),
       context: (a) => [...roundLine(a), ...colourLines(a)],
       summary: (a) => {
         const black = blackSideOf(a, rungOf(a));
@@ -708,10 +700,10 @@ function tiebreakSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
   return {
     event: TIEBREAK_TYPE,
     // A one-rung sheet is built for that rung alone (no pick, no `when`); a several-rung sheet keeps both branches, gated on the pick.
-    steps: only === undefined ? [rungStep, ...timedSteps, ...armageddonSteps] : only === "armageddon" ? armageddonSteps : timedSteps,
+    steps: only === undefined ? [rungStep, ...timedSteps, ...armageddonSteps] : only === ARMAGEDDON_RUNG ? armageddonSteps : timedSteps,
     buildPayload: (a) => {
       const rung = rungOf(a);
-      if (rung === "armageddon") return { rung, black: entrantOf(state, blackSideOf(a, rung)), result: armageddonResultOf(a, rung) };
+      if (rung === ARMAGEDDON_RUNG) return { rung, black: entrantOf(state, blackSideOf(a, rung)), result: armageddonResultOf(a, rung) };
       const score = a.score;
       return {
         rung,

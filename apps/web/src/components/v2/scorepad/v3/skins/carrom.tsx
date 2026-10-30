@@ -33,10 +33,10 @@
 // excludes all three from it, and a tile that opened an empty form would be
 // worse than no tile at all.
 //
-// `ADJUST_REASONS` below MIRRORS carrom.ts's own private (unexported)
-// constant of the identical name (`carrom.ts:582`) — pinned against the real
-// module in `__tests__/carrom.test.ts`, the same "mirror it, pin it" pattern
-// football's `CARD_REASONS`/hockey's `HOCKEY_REASONS` already establish.
+// The adjustment reasons, the nine-coin bound, the games per match, the points a game is
+// played to and the fidelity bands are NOT typed in this file any more (pad wave P4.1): they
+// are read from `carromPadRules` (`@seazn/engine/pad`), the very objects `carrom.ts`'s
+// schema and `padSpec` read — pinned by `__tests__/pad-rules-small.test.ts`.
 //
 // R7-10: carrom's `icf`/`club-29` variants shift cfg numbers only (`gameTo`,
 // `queenPoints`, `queenCapAt`) — no event-surface or pad effect, so this file
@@ -57,6 +57,7 @@
 //     so there is no generic More sheet for this method to narrow — it exists
 //     only to keep that sheet honest, and carrom never opens one.
 "use client";
+import { carromPadRules } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -77,15 +78,6 @@ import type {
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 export type Side = "home" | "away";
 
-/**
- * Mirrors carrom.ts's own private `ADJUST_REASONS` (`carrom.ts:582`) — the
- * pad-only enum `padSpec`'s `adjustCredit`/`adjustDeduct` actions declare for
- * `reason` (the schema's own `CarromGameAdjust.reason` stays free text; see
- * that file's comment on why some enum is unavoidable here). Pinned against
- * the real module by `__tests__/carrom.test.ts`.
- */
-export const ADJUST_REASONS = ["due_coins", "foul", "other"] as const;
-
 // ---------------------------------------------------------------------------
 // State/cfg/summary readers. `PadHostView.state`/`.cfg`/`.summary` are
 // `unknown` by contract; every reader degrades cleanly from `{}`, never
@@ -103,14 +95,6 @@ interface CarromStateShape {
   games?: CarromGameShape[];
   gamesWon?: { home?: number; away?: number };
   gamesDrawn?: number;
-}
-
-interface CarromCfgShape {
-  gameTo?: number;
-  maxBoards?: number;
-  bestOf?: number;
-  queenPoints?: number;
-  queenCapAt?: number;
 }
 
 /** One entry of `summary().detail.games[].boards[]` (carrom.ts's own
@@ -143,8 +127,9 @@ function asState(state: unknown): CarromStateShape {
   return asRecord(state) as CarromStateShape;
 }
 
-function asCfg(cfg: unknown): CarromCfgShape {
-  return asRecord(cfg) as CarromCfgShape;
+/** The cfg as a record: a non-object degrades to `{}`, which `carromPadRules` reads as the schema's defaults. */
+function asCfg(cfg: unknown): Record<string, unknown> {
+  return asRecord(cfg);
 }
 
 function asSummary(summary: unknown): CarromSummaryShape {
@@ -288,9 +273,10 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   // The context band states the FORMAT — the one thing icf vs club-29 (or a
   // house cfg) actually changes, per R7-10. Always non-empty: the band
   // renders unconditionally (scorebug.tsx).
+  const bestOf = carromPadRules.bestOf(cfg);
   const context = t("pad.carrom.context.format", {
-    bestOf: cfg.bestOf ?? 3,
-    gameTo: cfg.gameTo ?? 25,
+    bestOf,
+    gameTo: carromPadRules.gameTo(cfg),
   });
 
   // ONE strip item — which game of the series this is. OMITTED before
@@ -302,7 +288,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     strip.push({
       id: "game",
       label: t("pad.carrom.header.game"),
-      value: `${games.length}/${cfg.bestOf ?? 3}`,
+      value: `${games.length}/${bestOf}`,
       tone: "led",
     });
   }
@@ -336,22 +322,13 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
 // ---------------------------------------------------------------------------
 
 /**
- * One band per event type — `padSpec(cfg).fidelity` verbatim, pinned against
- * the real module in `__tests__/carrom.test.ts`. Read by `buildTiles` for the
- * reason football's own `EVENT_BAND` doc states: the chassis's
- * `filterTilesByBand` (pad-host.tsx) filters on the bands the org is
- * ENTITLED to, while this gate is the ACTIVE band the org is scoring AT right
- * now — an org entitled to band 1 but currently scoring at band 0 must not be
- * shown a Toss/Adjustment tile that would throw on tap.
+ * One band per event type — `carromPadRules.eventBands`, the very map `padSpec(cfg).fidelity` returns. Read by `buildTiles`
+ * for the reason football's own band gate states: the chassis's `filterTilesByBand` (pad-host.tsx) filters on the bands the
+ * org is ENTITLED to, while this gate is the ACTIVE band the org is scoring AT right now — an org entitled to band 1 but
+ * currently scoring at band 0 must not be shown a Toss/Adjustment tile that would throw on tap.
  */
-export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
-  "carrom.board.summary": 0,
-  "carrom.toss": 1,
-  "carrom.game.adjust": 1,
-};
-
 function offerable(eventType: string, band: FidelityBand): boolean {
-  const declared = EVENT_BAND[eventType];
+  const declared = carromPadRules.eventBands[eventType];
   return declared === undefined || declared <= band;
 }
 
@@ -458,7 +435,7 @@ function tossSheet(state: CarromStateShape): GuidedSheetSpec {
 /** Board (no queen). `winner` and `opponentCoinsLeft` are BOTH required on
  *  `CarromBoardSummary`, so this sheet asks both; `queenTo` is simply never
  *  asked here, which reads exactly like an explicit `null` to the fold
- *  (carrom.ts's own schema comment). `9` is Law 52(b)(ii)'s own fixed bound,
+ *  (carrom.ts's own schema comment). The `max` is Law 52(b)(ii)'s own fixed bound (`carromPadRules.opponentCoinsMax`),
  *  not cfg-derived — the same note carrom.ts's padSpec carries at this
  *  field. */
 function boardSheet(state: CarromStateShape): GuidedSheetSpec {
@@ -466,7 +443,7 @@ function boardSheet(state: CarromStateShape): GuidedSheetSpec {
     event: "carrom.board.summary",
     steps: [
       { id: "winner", kind: "choice", title: "pad.carrom.sheet.board.winner.title", options: sideOptions() },
-      { id: "coins", kind: "number", title: "pad.carrom.sheet.board.coins.title", initial: 0, min: 0, max: 9 },
+      { id: "coins", kind: "number", title: "pad.carrom.sheet.board.coins.title", initial: 0, min: 0, max: carromPadRules.opponentCoinsMax },
     ],
     buildPayload: (answers) => ({
       winner: entrantOf(state, sideAnswer(answers.winner)),
@@ -493,7 +470,7 @@ function boardQueenSheet(state: CarromStateShape): GuidedSheetSpec {
         title: "pad.carrom.sheet.boardQueen.queenTo.title",
         options: sideOptions(),
       },
-      { id: "coins", kind: "number", title: "pad.carrom.sheet.board.coins.title", initial: 0, min: 0, max: 9 },
+      { id: "coins", kind: "number", title: "pad.carrom.sheet.board.coins.title", initial: 0, min: 0, max: carromPadRules.opponentCoinsMax },
     ],
     buildPayload: (answers) => ({
       winner: entrantOf(state, sideAnswer(answers.winner)),
@@ -520,13 +497,13 @@ function boardQueenSheet(state: CarromStateShape): GuidedSheetSpec {
  *  A DEDUCTION is bounded again by the side it is taken from (W2e T33a): an open game's score is below `gameTo`, so a
  *  `-gameTo` chip always failed the strict "below zero" rule. The sheet therefore offers only a side with points to lose,
  *  and asks that side's own number, down to its current score and no further (one number step per side, shown by `when`). */
-function adjustSheet(state: CarromStateShape, cfg: CarromCfgShape, mode: "credit" | "deduct"): GuidedSheetSpec {
-  const gameTo = cfg.gameTo ?? 25;
+function adjustSheet(state: CarromStateShape, cfg: unknown, mode: "credit" | "deduct"): GuidedSheetSpec {
+  const gameTo = carromPadRules.gameTo(cfg);
   const reasonStep: GuidedSheetStep = {
     id: "reason",
     kind: "choice",
     title: "pad.carrom.sheet.adjust.reason.title",
-    options: ADJUST_REASONS.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
+    options: carromPadRules.adjustReasons.map((reason) => ({ id: reason, label: vocabKey("reason", reason) ?? reason })),
   };
   if (mode === "credit") {
     return {

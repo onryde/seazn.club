@@ -67,6 +67,10 @@ export const BANNED: Readonly<Record<string, readonly string[]>> = {
   "volleyball.tsx": ["SANCTION_LEVELS", "EVENT_BAND", "LIBERO_BAND", "ROTATION_CYCLE", "ROTATION_VALUES"],
   "tennis.tsx": ["POINT_KINDS", "INTERRUPTION_KINDS", "SANCTION_LEVELS", "EVENT_BAND", "CALLS"],
   // P4: carrom, boardgame, generic, and POST_PHASES in every file that declares it
+  // P4.1: carrom, boardgame, generic (read from carromPadRules / boardgamePadRules / genericPadRules). POST_PHASES is P4.2's.
+  "carrom.tsx": ["ADJUST_REASONS", "EVENT_BAND"],
+  "boardgame.tsx": ["EVENT_BAND", "BOARD_MAX"],
+  "generic.tsx": ["EVENT_BAND", "MAX_PLAUSIBLE_SCORE", "MAX_TALLY_STEP"],
 };
 
 /**

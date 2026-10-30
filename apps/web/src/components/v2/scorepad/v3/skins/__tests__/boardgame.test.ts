@@ -28,6 +28,7 @@ import type { EventEnvelope, Lineup, LineupPair } from "@seazn/engine/core";
 import { EngineError, initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
+import { boardgamePadRules } from "@seazn/engine/pad";
 import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import uiEn from "@/dictionaries/en/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
@@ -37,11 +38,9 @@ import { resolvePad } from "../../registry";
 import { ribbonKeyFor } from "../../ribbon";
 import { assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
 import {
-  BOARD_MAX,
   DECISIVE_METHODS,
   DRAWN_METHODS,
   DRAW_TILE_ID,
-  EVENT_BAND,
   PAIRING_TILE_ID,
   TIEBREAK_TILE_ID,
   TIEBREAK_TYPE,
@@ -57,6 +56,11 @@ import {
   resolvePhase,
   type TFn,
 } from "../boardgame";
+
+// P4.1: the skin declares neither the board bound nor the band map any more; it reads `boardgamePadRules`. These aliases keep the tests
+// below pinning the RECORD against the real `padSpec` (the record is what the skin now offers from).
+const BOARD_MAX = boardgamePadRules.boardMax;
+const EVENT_BAND = boardgamePadRules.eventBands;
 
 // ---------------------------------------------------------------------------
 // Fixtures — the fold, and nothing but the fold
@@ -765,8 +769,8 @@ describe("registry", () => {
   });
 });
 
-describe("the engine surface this skin restates", () => {
-  it("EVENT_BAND is the module's own fidelity map, not a second scale", () => {
+describe("the engine surface this skin reads", () => {
+  it("the pad rules' eventBands are the module's own fidelity map, not a second scale", () => {
     expect(EVENT_BAND).toEqual(realPadSpec(DEFAULT_CFG).fidelity);
     expect(EVENT_BAND).toEqual(realPadSpec(NO_COLORS_CFG).fidelity);
   });
@@ -806,7 +810,7 @@ describe("the engine surface this skin restates", () => {
   // MOVES_MAX no longer lives in boardgame.tsx: `moves` was a guided-sheet
   // step, and tapModel S's dock is chips only (`buildDock`'s own header) —
   // the move count is not reachable from this grammar any more.
-  it("BOARD_MAX is the engine's own field bound", () => {
+  it("the pad rules' boardMax is the engine's own field bound", () => {
     const spec = realPadSpec(DEFAULT_CFG);
     const actions = spec.panels.flatMap((panel) => panel.actions);
     const board = actions.flatMap((a) => a.fields).find((f) => f.path === "board") as { max?: number } | undefined;

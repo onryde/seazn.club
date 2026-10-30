@@ -48,6 +48,7 @@ import { resolvePayloadRefs } from "../simulate.ts";
 import type { LedgerTransport } from "../ledger.ts";
 import type { RawResult, Session } from "../http.ts";
 import { FORFEIT_REASONS } from "@seazn/engine/core";
+import { genericPadRules } from "@seazn/engine/pad";
 import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../../apps/web/src/lib/forfeit-phase-refusal.ts";
 import {
   DOCK_AMOUNTS,
@@ -66,7 +67,6 @@ import {
 import { HUMAN_FASTEST_REPEAT_MS } from "../../../../apps/web/src/components/v2/scorepad/use-pad-pipeline.ts";
 import {
   DOCK_AMOUNTS as REAL_DOCK_AMOUNTS,
-  MAX_PLAUSIBLE_SCORE as REAL_MAX_PLAUSIBLE_SCORE,
   RESULT_TYPE as REAL_RESULT_TYPE,
   resultModeOf as realResultModeOf,
   SCORE_ENTRY_TILE_ID as REAL_SCORE_ENTRY_TILE_ID,
@@ -1101,7 +1101,8 @@ describe("genericAdapter mirrors generic.tsx", () => {
   it("SCORE_ENTRY_TILE_ID/DOCK_AMOUNTS/MAX_PLAUSIBLE_SCORE equal the real module's", () => {
     expect(SCORE_ENTRY_TILE_ID).toBe(REAL_SCORE_ENTRY_TILE_ID);
     expect([...DOCK_AMOUNTS]).toEqual([...REAL_DOCK_AMOUNTS]);
-    expect(MAX_PLAUSIBLE_SCORE).toBe(REAL_MAX_PLAUSIBLE_SCORE);
+    // P4.1: the pad's ceiling is the engine's `genericPadRules.maxPlausibleScore` (generic.tsx declares none any more)
+    expect(MAX_PLAUSIBLE_SCORE).toBe(genericPadRules.maxPlausibleScore);
   });
 
   it("R59(a): a typed final score goes in through the score-entry sheet — HOME's number first, each confirmed", () => {

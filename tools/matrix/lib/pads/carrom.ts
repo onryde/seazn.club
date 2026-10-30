@@ -1,10 +1,11 @@
 // carrom: board summaries are all the matrix generator emits
 // (streams/carrom.ts). The references into carrom.tsx:
-//  - :368-378 the `board` tile (live), which opens the "board" sheet (:531);
-//  - :446-458 boardSheet: the winner as a choice over sideOptions (ids
-//    `home` / `away`, :206-208), then the opponent's coins left as a number
-//    (0..9), building `{winner, opponentCoinsLeft}`. `queenTo` is never asked
-//    (:440-446: "which reads exactly like an explicit `null` to the fold");
+//  - :362-369 the `board` tile (live), which opens the "board" sheet (:558);
+//  - :441-453 boardSheet: the winner as a choice over sideOptions (ids
+//    `home` / `away`, :192-194), then the opponent's coins left as a number
+//    (0..9, `max: carromPadRules.opponentCoinsMax` since pad wave P4.1),
+//    building `{winner, opponentCoinsLeft}`. `queenTo` is never asked
+//    (:435-438: "which reads exactly like an explicit `null` to the fold");
 //    a queen board is the other tile, `boardQueen`.
 // Step 0 (2026-09-30, 320, the builder default `club-29`) saw each board write
 // one `carrom.board.summary {opponentCoinsLeft, winner}` row at once, with no
@@ -15,12 +16,11 @@ import type { MatrixPadAdapter } from "./types.ts";
 
 /** The engine's carrom event type (carrom.eventSchemas; pinned). */
 export const CARROM_BOARD = "carrom.board.summary";
-/** carrom.tsx:373 (text-pinned in pad-adapters.test.ts). */
+/** carrom.tsx:363 (text-pinned in pad-adapters.test.ts). */
 export const CARROM_BOARD_TILE = "board";
-/** The most coins the board sheet's number step takes: its `max: 9`
- *  (carrom.tsx:452, and the queen board's :479). pad-adapters.test.ts reads
- *  the skin as text and holds this equal to it — a skin that moves its bound
- *  moves that test, never a guess here. */
+/** The most coins the board sheet's number step takes: its `max`, which the skin reads from `carromPadRules.opponentCoinsMax`
+ *  (carrom.tsx:446, and the queen board's :473; pad wave P4.1). pad-adapters.test.ts reads the skin as text, holds that wiring,
+ *  and holds this equal to the engine's record — an engine that moves its bound moves that test, never a guess here. */
 export const CARROM_COIN_MAX = 9;
 
 function boardSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[] {
@@ -52,6 +52,6 @@ export const carromPad: MatrixPadAdapter = {
   },
   // Step 0: every row's keys were exactly opponentCoinsLeft and winner.
   tolerableExtraKeys: () => [],
-  // carrom.tsx:440-446 — the board sheet never asks queenTo, which the fold reads as null.
+  // carrom.tsx:435-438 — the board sheet never asks queenTo, which the fold reads as null.
   nullAsAbsentKeys: (eventType) => (eventType === CARROM_BOARD ? ["queenTo"] : []),
 };
