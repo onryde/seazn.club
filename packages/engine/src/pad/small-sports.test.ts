@@ -8,6 +8,10 @@
 //      positive or non-negative integer), and the tests below say so by feeding the fold the value one past the bound.
 //   3. RULEBOOK - the values typed here come from the rule rows (packages/engine/rules/{carrom,boardgame,generic}.md), never from
 //      the constant under test, so a changed constant reds even though padSpec, the record and the skin would all follow it.
+//      Two kinds of anchor, and only the first is a Laws anchor: 9 coins left (ICF Laws 52(b)(ii), 53(a)) and the 3/25/29 bestOf and
+//      gameTo values are the rulebook's. The 200 board / 500 final score / 50 tally press are the PAD's plausibility bounds (BG-PA-1,
+//      GN-SC-1, GN-SC-2), recorded in the rows FROM the constants: they are change-detectors - a changed bound reds here until the
+//      owner signs or changes the row - and the rows stay open owner questions, not rulebook facts.
 // Every sweep reports how many items it compared and fails on zero.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
@@ -43,8 +47,10 @@ import {
   generic,
   type GenericCfg,
 } from "../sports/generic/generic.ts";
+import { builtinModules } from "../sports/index.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
+import * as pad from "./index.ts";
 import { boardgamePadRules, carromPadRules, genericPadRules, padEnumValues, padNumberBound } from "./index.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -235,9 +241,9 @@ describe("boardgamePadRules", () => {
     expect(cfgs).toBeGreaterThanOrEqual(3);
   });
 
-  it("BG-PA-1: boardMax is the module's BOARD_MAX, the padSpec bound of the pairing card's board field for every cfg, and 200 as the row states it (counted)", () => {
+  it("BG-PA-1: boardMax is the module's BOARD_MAX, the padSpec bound of the pairing card's board field for every cfg, and 200 (a change-detector: the row records the code's bound, it is not a Laws anchor) (counted)", () => {
     expect(boardgamePadRules.boardMax).toBe(BOARD_MAX);
-    // the row: the pad bounds a board number at 200 (a generous plausibility bound, not a chess rule) - typed from the row
+    // the row records the pad's 200 (a generous plausibility bound, not a chess rule) - a change-detector typed here, pending the owner
     expect(boardgamePadRules.boardMax).toBe(200);
     let compared = 0;
     for (const { name, cfg } of [...boardgameCfgs(), { name: "a bracket with a tie-break", cfg: koCfg() }]) {
@@ -266,7 +272,32 @@ describe("boardgamePadRules", () => {
     expect(boardgamePadRules.tiebreakScores).toHaveLength(3);
   });
 
-  it("BG-KO-4: every score offered is one the strict fold takes on a rapid and a blitz tie-break and stores; the schema is wider than the offer (3–1 is taken, 2-0 is not) (counted)", () => {
+  it("BG-KO-4: TIEBREAK_SCORES is also the generator's draw list, so its ORDER is a seeded stream - a draw of 0 / 0.5 / 0.99 yields none / 1½–½ / 2–0, as it did before the record existed (counted)", () => {
+    // Reordering the list would rewrite every seeded tie-break stream; the pad only needs the SET. The expected order is the generator's
+    // own, from before P4.1 (`[null, "1½–½", "2–0"]`), typed here rather than read from the constant.
+    const state = boardFold(koCfg(["rapid"]), drawnGame);
+    expect(state.phase, "premise: a drawn bracket game is in its tie-break").toBe("tiebreak");
+    const draws: readonly [roll: number, score: string | undefined][] = [
+      [0, undefined],
+      [0.5, "1½–½"],
+      [0.99, "2–0"],
+    ];
+    let drawn = 0;
+    for (const [roll, score] of draws) {
+      const script = [0, 0, roll]; // the rung, the side, then the score
+      const event = boardgame.arbitraryEvent!(state, () => script.shift() ?? 0);
+      expect(event?.type, `roll ${roll}`).toBe("boardgame.tiebreak");
+      const payload = event?.payload as Record<string, unknown>;
+      expect(payload.score, `roll ${roll}`).toBe(score);
+      expect("score" in payload, `roll ${roll}: no score is no key`).toBe(score !== undefined);
+      drawn++;
+    }
+    report(`boardgame tie-break generator draws pinned: ${drawn}`);
+    expect(drawn).toBe(draws.length);
+    expect(draws.length, "one draw per offered score").toBe(boardgamePadRules.tiebreakScores.length);
+  });
+
+  it("BG-KO-4 (open question, pending an owner ruling): every score offered folds, and the fold's laxness is PINNED, not ruled - it takes any CHESS_SCORE shape, 3–1, ½–½, 1–1 and a loser-first ½–1½ included; only a hyphen is refused (counted)", () => {
     let folded = 0;
     for (const rung of BoardgameRungTiebreak.shape.rung.options) {
       for (const score of boardgamePadRules.tiebreakScores) {
@@ -281,6 +312,10 @@ describe("boardgamePadRules", () => {
     expect(folded).toBe(2 * boardgamePadRules.tiebreakScores.length);
     expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "rapid", winner: BH, score: "3–1" })]).tiebreak).toEqual({ rung: "rapid", score: "3–1" });
     expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "blitz", winner: BH, score: "½–½" })]).tiebreak, "a half either side is a score").toEqual({ rung: "blitz", score: "½–½" });
+    // the same shape-only check also takes a level score with a named winner, and a score written from the LOSER's side: the row asks
+    // whether those should be refused (an owner question), so this pins today's behaviour and moves with that ruling
+    expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "blitz", winner: BH, score: "1–1" })]).tiebreak, "a level score with a named winner").toEqual({ rung: "blitz", score: "1–1" });
+    expect(boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "rapid", winner: BH, score: "½–1½" })]).tiebreak, "a loser-first score").toEqual({ rung: "rapid", score: "½–1½" });
     expect(refusal(() => boardFold(koCfg(), [...drawnGame, tiebreak({ rung: "rapid", winner: BH, score: "2-0" })]))?.code, "a hyphen is not an en dash").toBe("INVALID_EVENT");
     report(`boardgame tie-break scores folded: ${folded}`);
     expect(folded).toBeGreaterThan(0);
@@ -350,9 +385,9 @@ describe("genericPadRules", () => {
     expect(cfgs).toBeGreaterThanOrEqual(2);
   });
 
-  it("GN-SC-1: maxPlausibleScore is the module's MAX_PLAUSIBLE_SCORE, the padSpec bound of both final-score fields of every score-mode cfg, and 500 as the row states it (counted)", () => {
+  it("GN-SC-1: maxPlausibleScore is the module's MAX_PLAUSIBLE_SCORE, the padSpec bound of both final-score fields of every score-mode cfg, and 500 (a change-detector: the row records the code's bound, it is not a Laws anchor) (counted)", () => {
     expect(genericPadRules.maxPlausibleScore).toBe(MAX_PLAUSIBLE_SCORE);
-    // the row: the pad bounds a typed final score at 500 (a generous plausibility bound for a sport the product does not model)
+    // the row records the pad's 500 (a generous plausibility bound for a sport the product does not model) - a change-detector typed here, pending the owner
     expect(genericPadRules.maxPlausibleScore).toBe(500);
     let compared = 0;
     for (const { name, cfg } of scoreCfgs()) {
@@ -374,9 +409,9 @@ describe("genericPadRules", () => {
     expect(refusal(() => genericFold(cfg, [start, finalScore(-1, 3)]))?.code).toBe("INVALID_EVENT");
   });
 
-  it("GN-SC-2: maxTallyStep is the module's MAX_TALLY_STEP, the padSpec bound of one press (add 1..step, correct -step..-1) for every cfg, and 50 as the row states it (counted)", () => {
+  it("GN-SC-2: maxTallyStep is the module's MAX_TALLY_STEP, the padSpec bound of one press (add 1..step, correct -step..-1) for every cfg, and 50 (a change-detector: the row records the code's bound, it is not a Laws anchor) (counted)", () => {
     expect(genericPadRules.maxTallyStep).toBe(MAX_TALLY_STEP);
-    // the row: one tally press moves the tally by at most 50 on the pad - typed from the row
+    // the row records the pad's 50 per press - a change-detector typed here, pending the owner
     expect(genericPadRules.maxTallyStep).toBe(50);
     let compared = 0;
     for (const { name, cfg } of genericCfgs()) {
@@ -402,25 +437,35 @@ describe("genericPadRules", () => {
   });
 });
 
-describe("the three records together", () => {
-  it("each is a frozen record keyed to a registered sport with a padSpec, and each owns at least one event band (counted)", () => {
-    const records = [
-      ["carrom", carromPadRules, carrom],
-      ["boardgame", boardgamePadRules, boardgame],
-      ["generic", genericPadRules, generic],
-    ] as const;
-    let checked = 0;
-    for (const [key, rules, module] of records) {
-      expect(module.key, key).toBe(key);
-      expect(module.padSpec, key).toBeDefined();
-      expect(Object.isFrozen(rules), key).toBe(true);
-      expect(Object.keys(rules.eventBands).length, key).toBeGreaterThan(0);
-      for (const type of Object.keys(rules.eventBands)) {
-        expect(Object.keys(module.eventSchemas ?? {}), `${key} ${type}`).toContain(type);
-        checked++;
+describe("every sport's pad record (the registry sweep)", () => {
+  it("each registered sport exports a frozen <sport>PadRules whose frozen eventBands is, for every declared cfg, the very fidelity map its padSpec returns, banding only registered event types (counted)", () => {
+    const records = pad as unknown as Readonly<Record<string, { eventBands?: Readonly<Record<string, number>> } | undefined>>;
+    let sports = 0;
+    let cfgs = 0;
+    let bands = 0;
+    for (const module of builtinModules) {
+      const rules = records[`${module.key}PadRules`];
+      expect(rules, `${module.key}PadRules is exported by ./index.ts`).toBeDefined();
+      expect(Object.isFrozen(rules), `${module.key}: the record is frozen`).toBe(true);
+      const eventBands = rules!.eventBands;
+      expect(eventBands, `${module.key}: the record carries eventBands`).toBeDefined();
+      expect(Object.isFrozen(eventBands), `${module.key}: eventBands is frozen`).toBe(true);
+      expect(Object.keys(eventBands!).length, `${module.key}: bands at least one event type`).toBeGreaterThan(0);
+      for (const [type, band] of Object.entries(eventBands!)) {
+        expect(Object.keys(module.eventSchemas ?? {}), `${module.key} ${type}`).toContain(type);
+        expect([0, 1, 2, 3], `${module.key} ${type}: the fidelity scale is closed at 0-3`).toContain(band);
+        bands++;
       }
+      for (const { name, cfg } of declaredCfgs(module)) {
+        expect(specOf(module, cfg).fidelity, `${module.key} ${name}`).toBe(eventBands);
+        cfgs++;
+      }
+      sports++;
     }
-    report(`event bands checked against the registered event types: ${checked}`);
-    expect(checked).toBe(3 + 3 + 2);
+    report(`pad records swept: ${sports} sports, ${cfgs} declared cfgs, ${bands} banded event types`);
+    expect(sports, "every registered sport").toBe(builtinModules.length);
+    expect(Object.keys(records).filter((key) => key.endsWith("PadRules")).length, "no <sport>PadRules without a registered sport").toBe(sports);
+    expect(cfgs, "at least one cfg per sport").toBeGreaterThanOrEqual(sports);
+    expect(bands).toBeGreaterThan(0);
   });
 });

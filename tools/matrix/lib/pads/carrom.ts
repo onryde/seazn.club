@@ -1,11 +1,11 @@
 // carrom: board summaries are all the matrix generator emits
 // (streams/carrom.ts). The references into carrom.tsx:
-//  - :359-366 the `board` tile (live), which opens the "board" sheet (:555);
-//  - :438-450 boardSheet: the winner as a choice over sideOptions (ids
-//    `home` / `away`, :189-191), then the opponent's coins left as a number
+//  - the `board` tile in `buildTiles` (live), which opens the "board" sheet (`buildSheets`);
+//  - `boardSheet`: the winner as a choice over `sideOptions` (ids
+//    `home` / `away`), then the opponent's coins left as a number
 //    (0..9, `max: carromPadRules.opponentCoinsMax` since pad wave P4.1),
 //    building `{winner, opponentCoinsLeft}`. `queenTo` is never asked
-//    (:432-435: "which reads exactly like an explicit `null` to the fold");
+//    (`boardSheet`'s doc: "which reads exactly like an explicit `null` to the fold");
 //    a queen board is the other tile, `boardQueen`.
 // Step 0 (2026-09-30, 320, the builder default `club-29`) saw each board write
 // one `carrom.board.summary {opponentCoinsLeft, winner}` row at once, with no
@@ -16,10 +16,10 @@ import type { MatrixPadAdapter } from "./types.ts";
 
 /** The engine's carrom event type (carrom.eventSchemas; pinned). */
 export const CARROM_BOARD = "carrom.board.summary";
-/** carrom.tsx:360 (text-pinned in pad-adapters.test.ts). */
+/** carrom.tsx `buildTiles`' board tile id (text-pinned in pad-adapters.test.ts). */
 export const CARROM_BOARD_TILE = "board";
 /** The most coins the board sheet's number step takes: its `max`, which the skin reads from `carromPadRules.opponentCoinsMax`
- *  (carrom.tsx:443, and the queen board's :470; pad wave P4.1). pad-adapters.test.ts reads the skin as text, holds that wiring,
+ *  (carrom.tsx `boardSheet` and `boardQueenSheet`; pad wave P4.1). pad-adapters.test.ts reads the skin as text, holds that wiring,
  *  and holds this equal to the engine's record — an engine that moves its bound moves that test, never a guess here. */
 export const CARROM_COIN_MAX = 9;
 
@@ -52,6 +52,6 @@ export const carromPad: MatrixPadAdapter = {
   },
   // Step 0: every row's keys were exactly opponentCoinsLeft and winner.
   tolerableExtraKeys: () => [],
-  // carrom.tsx:432-435 — the board sheet never asks queenTo, which the fold reads as null.
+  // carrom.tsx `boardSheet` — the board sheet never asks queenTo, which the fold reads as null.
   nullAsAbsentKeys: (eventType) => (eventType === CARROM_BOARD ? ["queenTo"] : []),
 };

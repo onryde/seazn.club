@@ -6,7 +6,10 @@
 // Where an expected value could come from the engine's declaration it does; where the declaration is what a mutation would change, the
 // value is ALSO typed here from the rule rows (packages/engine/rules/{carrom,boardgame,generic}.md - CA-AD-2, CA-CN-1, CA-FM-1, BG-PA-1,
 // BG-KO-2, BG-KO-4, GN-SC-1, GN-SC-2), so that editing the engine's constant reds here even though the record, padSpec and the skin would
-// all follow it. Every comparison counts; the last test requires the total.
+// all follow it. Only some of those anchors are the rulebook's: 9 coins left (CA-CN-1) and the 3/25/29 bestOf and gameTo values are
+// Laws anchors. The 200 board / 500 final score / 50 tally press (BG-PA-1, GN-SC-1, GN-SC-2) are the pad's plausibility bounds, written
+// into the rows FROM the constants, so here they are change-detectors, and the rows are open owner questions. Every comparison counts;
+// the last test requires the total.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { foldMatch, type EventEnvelope } from "@seazn/engine/core";
@@ -76,7 +79,7 @@ const carromView = (cfg: unknown, events: readonly { type: string; payload: unkn
 
 describe("carrom skin reads carromPadRules", () => {
   it("CA-AD-2: both adjustment sheets offer exactly the three reasons the rule row names, at both cfgs", () => {
-    const rows = ["due_coins", "foul", "other"]; // CA-AD-2, typed from the row
+    const rows = ["due_coins", "foul", "other"]; // CA-AD-2, typed from the row (the product's vocabulary: the pad can send one of these three)
     expect([...carromPadRules.adjustReasons]).toEqual(rows);
     for (const cfg of [ICF, CLUB29]) {
       // the deduction sheet needs a side with points, so the open game holds a board
@@ -205,6 +208,10 @@ describe("chess skin reads boardgamePadRules", () => {
     expect(new Set(boardgamePadRules.tiebreakScores)).toEqual(typed);
     for (const rungs of [["rapid"], ["blitz"], ["rapid", "blitz", "armageddon"]]) {
       const sheet = tiebreakSheet(rungs);
+      // the display ORDER, typed from the W2a plan (D6, docs/superpowers/plans/2026-10-08-format-matrix-w2a.md:131): "No score", "2–0",
+      // "1½–½" - not read from the record, whose order is the generator's draw order (null, 1½–½, 2–0) and differs
+      expect(choiceStep(sheet, "score").options.map((o) => o.id), `${rungs.join()}: the score chips in display order`).toEqual(["none", "2–0", "1½–½"]);
+      count();
       const offered = choiceStep(sheet, "score").options.map((o) => (o.id === "none" ? null : o.id));
       expect(new Set(offered), rungs.join()).toEqual(typed);
       expect(offered, "no score is offered twice").toHaveLength(typed.size);
@@ -274,7 +281,7 @@ describe("generic skin reads genericPadRules", () => {
   });
 
   it("GN-SC-2: the correction card is capped at 50 whatever the tally holds (a tally of 60 offers 50), and below that at what the tally holds - the empty tally offers none", () => {
-    expect(genericPadRules.maxTallyStep).toBe(50); // GN-SC-2, typed from the row
+    expect(genericPadRules.maxTallyStep).toBe(50); // GN-SC-2: a change-detector (the row records the code's bound), not a Laws anchor
     const ceilingAt = (events: readonly { type: string; payload: unknown }[]): number | undefined => {
       const sheet = genericSheets(genericView(SCORE_CFG, events), echo)[CORRECTION_TILE_ID];
       return sheet === undefined ? undefined : numberStep(sheet, "points").max;
@@ -319,6 +326,9 @@ describe("the skins take their bounds from the records, not a typed number (sour
     const wiring: readonly [file: string, member: RegExp, times: number][] = [
       ["carrom.tsx", /\bmax: carromPadRules\.opponentCoinsMax\b/g, 2],
       ["carrom.tsx", /const gameTo = carromPadRules\.gameTo\(cfg\);/g, 1],
+      // the scorebug's two reads, each on its own: a revert of either to a typed number would otherwise hide behind the other
+      ["carrom.tsx", /carromPadRules\.bestOf\(cfg\)/g, 1],
+      ["carrom.tsx", /gameTo: carromPadRules\.gameTo\(cfg\)/g, 1],
       ["carrom.tsx", /carromPadRules\.adjustReasons\.map\(/g, 1],
       ["boardgame.tsx", /\bmax: boardgamePadRules\.boardMax\b/g, 1],
       ["generic.tsx", /\bmax: genericPadRules\.maxPlausibleScore\b/g, 2],

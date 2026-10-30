@@ -126,8 +126,8 @@ export type TapStep =
   | { readonly kind: "chip"; readonly chipId: string }
   /** A dock chip tapped ONLY IF the open dock offers it. The generic pad
    *  offers a person chip only for a side with more than one on-field player
-   *  and stamps a sole player into the tap itself (generic.tsx:324-327,
-   *  :702-705); the driver cannot see squads, so it waits for the dock to be
+   *  and stamps a sole player into the tap itself (generic.tsx `soleScorer`,
+   *  `buildDock`); the driver cannot see squads, so it waits for the dock to be
    *  open (`pad-send-now`) and taps the chip if it is there. Skipping is never
    *  a pass on its own: the row is still compared exactly (R50(d)). */
   | { readonly kind: "offeredChip"; readonly chipId: string }
@@ -489,7 +489,7 @@ interface PayloadComparison {
 /** A tolerated extra key still opens at ONE derived shape, never any value:
  *  every entry in `TapAdapter.tolerableExtraKeys` names a person id the pad
  *  itself stamps, and the pad's own "named" check
- *  (`generic.tsx:701`, `typeof payload?.person === "string" && payload.person
+ *  (generic.tsx `buildDock`, `typeof payload?.person === "string" && payload.person
  *  .length > 0`) treats a person as present only for a non-empty string. A
  *  numeric, empty, or object value at a tolerated key is not a plausible id
  *  the pad could have stamped, so it must red rather than pass as a silent

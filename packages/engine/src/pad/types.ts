@@ -164,7 +164,9 @@ export interface CarromPadRules extends PadRulesBase {
 export interface BoardgamePadRules extends PadRulesBase {
   /** BG-PA-1: the pad's bound on the pairing card's board number (a plausibility bound; the fold takes any positive integer). */
   readonly boardMax: number;
-  /** BG-KO-4: the mini-match scores a rapid or blitz tie-break offers, `null` for none. The schema takes any CHESS_SCORE; this is the offer. */
+  /** BG-KO-4: the mini-match scores a rapid or blitz tie-break offers, `null` for none. The schema takes any CHESS_SCORE; this is the offer.
+   *  It has a second role: the list `boardgame.arbitraryEvent` draws from, so its ORDER is a seeded stream the pad does not need (it
+   *  compares the set) and a reorder would rewrite. */
   readonly tiebreakScores: readonly (string | null)[];
   /** BG-KO-2: the one tie-break rung that records who had Black and the result (the fold's `BoardgameArmageddon` branch); every other rung
    *  records a winner. Added by P4.1. */

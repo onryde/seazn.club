@@ -878,8 +878,8 @@ function foldBoardgameStats(
 // W2a — the generator's tie-break draws: one uniform pick per choice (`rng` is
 // uniform in [0, 1), so the index is always in range). `null` = no score.
 const SIDES = ["home", "away"] as const;
-// BG-KO-4: the mini-match scores the tie-break offers (and the generator draws): none, the narrow win and the clean one. The schema
-// takes any CHESS_SCORE, so this is the offer, not a refusal. The ORDER is the generator's draw order - never reorder it.
+// BG-KO-4: the mini-match scores the tie-break offers (the pad's offer) AND the generator's draw list: none, the narrow win, the clean one.
+// The schema takes any CHESS_SCORE, so this is the offer, not a refusal. Reordering rewrites seeded streams (pinned in pad/small-sports.test.ts).
 export const TIEBREAK_SCORES = Object.freeze([null, "1½–½", "2–0"] as const);
 function pickFrom<T>(rng: Rng, items: readonly T[]): T {
   return items[Math.floor(rng() * items.length)] as T;

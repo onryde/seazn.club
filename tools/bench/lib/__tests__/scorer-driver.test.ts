@@ -559,7 +559,7 @@ describe("playMatchByTaps — payload equality, exact in both directions (I2, m3
   });
 
   // NB2 — the allowlist tolerates `person` by NAME only; any value used to
-  // pass as an observation. The pad's own "named" check (generic.tsx:701,
+  // pass as an observation. The pad's own "named" check (generic.tsx `buildDock`,
   // `typeof payload?.person === "string" && payload.person.length > 0`) is
   // what a plausible person id opens at — pinned here, not typed into the
   // test as a table.
@@ -836,7 +836,7 @@ describe("TAP_PACING_MS", () => {
 // equivalent operands) — this regex proves ONE specific line's text, not
 // "whatever `buildDock` currently decides is a named person."
 // ---------------------------------------------------------------------------
-describe("the tolerated person value is pinned to the product's own \"named\" check (generic.tsx:701)", () => {
+describe("the tolerated person value is pinned to the product's own \"named\" check (generic.tsx `buildDock`)", () => {
   let namedExpr: string | undefined;
 
   beforeAll(() => {
@@ -889,9 +889,9 @@ describe("the tolerated person value is pinned to the product's own \"named\" ch
 
 // ---------------------------------------------------------------------------
 // T13 (carried item 4) — the tolerated extra-KEY NAME was hardcoded
-// ("person", `GENERIC_TOLERATED_EXTRA_KEYS` in drivers/adapters/generic.ts:212)
+// ("person", `GENERIC_TOLERATED_EXTRA_KEYS` in drivers/adapters/generic.ts)
 // with nothing pinning it against the product's own stamp site
-// (generic.tsx:327's `...(soleScorer !== undefined ? { person: soleScorer } :
+// (generic.tsx `buildHalf`'s `...(soleScorer !== undefined ? { person: soleScorer } :
 // {})`). The describe block above pins the tolerated VALUE (what counts as
 // "named") to generic.tsx's source text; the KEY NAME itself was not — a
 // rename there (say, to "scorerId") would still be caught on a LIVE run
@@ -900,7 +900,7 @@ describe("the tolerated person value is pinned to the product's own \"named\" ch
 // generic.tsx's own stamp line, extract the key it uses, derive rather than
 // hand-type, so a drift between the two files shows up here too.
 // ---------------------------------------------------------------------------
-describe("the tolerated extra key NAME is pinned to generic.tsx's own sole-scorer stamp (generic.tsx:327)", () => {
+describe("the tolerated extra key NAME is pinned to generic.tsx's own sole-scorer stamp (generic.tsx `buildHalf`)", () => {
   let stampedKey: string | undefined;
 
   beforeAll(() => {

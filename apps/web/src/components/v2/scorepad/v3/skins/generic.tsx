@@ -417,7 +417,7 @@ export const MORE_TILE_ID = "more";
 // The field bounds are `genericPadRules.maxPlausibleScore` (a final `p1Score`/`p2Score`, GN-SC-1) and
 // `genericPadRules.maxTallyStep` (a single `generic.score` press, GN-SC-2, which is what caps a correction). Both are the PAD's
 // bounds, the very values `padSpec(cfg)` carries: the fold itself takes any non-negative final score and any non-zero press
-// (`__tests__/pad-rules-small.test.ts` feeds it one past each).
+// (`packages/engine/src/pad/small-sports.test.ts` feeds it one past each).
 
 /** `applyResult`'s settle branch, mirrored: a result card with no scores
  *  settles FROM the tally, and a level tally settles only where the division
