@@ -4,7 +4,7 @@
 // Disciplines (MS/WS/MD/WD/XD) are entrant-kind + eligibility combinations, NOT
 // module variants — one module serves all five, so there are no positions.
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { makeSetBasedModule, SET_RULE_KEYS } from "./kernel.ts";
+import { makeSetBasedModule, SET_RULE_KEYS, type SetBasedSanctionLevel } from "./kernel.ts";
 
 // badminton.md §7 — no positions; singles vs doubles is the entrant kind
 // (doc 02 §2), which the module never inspects (scoring reads only wonBy). One
@@ -13,6 +13,12 @@ const positions: PositionCatalog = {
   groups: [],
   lineup: { size: 1, benchMax: 1 },
 };
+
+/** S7/#427 — BWF has THREE umpire cards and the black one is the reason this list is per sport at all: yellow = `warning`,
+ *  red = `penalty`, BLACK = `disqualification` (DOMAIN.badminton.md:35). `expulsion` is the referee removing a player from
+ *  the match, which a badminton umpire's sheet does record, so all four stay reachable here. The preset's
+ *  `sanctionLevels`; exported for `@seazn/engine/pad` (pad wave P3.1), so the pad offers this very array. */
+export const BADMINTON_SANCTION_LEVELS: readonly SetBasedSanctionLevel[] = ["warning", "penalty", "expulsion", "disqualification"];
 
 export const badminton = makeSetBasedModule({
   key: "badminton",
@@ -68,12 +74,7 @@ export const badminton = makeSetBasedModule({
   primaryTableKey: "wins", // W2d (D11): BWF 16.2.1 — the number of matches won comes first.
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",
-  // S7/#427 — BWF has THREE umpire cards and the black one is the reason this
-  // list is per sport at all: yellow = `warning`, red = `penalty`, BLACK =
-  // `disqualification` (DOMAIN.badminton.md:35). `expulsion` is the referee
-  // removing a player from the match, which a badminton umpire's sheet does
-  // record, so all four stay reachable here.
-  sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
+  sanctionLevels: BADMINTON_SANCTION_LEVELS, // S7/#427 — see BADMINTON_SANCTION_LEVELS
   // W2e (spec 2026-10-28 §5.2; D3 (1); BD-SE-1, X-SE-1) — the black card ENDS the match: the next event is its ending,
   // core.forfeit{disqualified} against the carded side (X-RT-1's credit), and until it is recorded the write path takes
   // no other event but an abandon. Badminton asks no "can the side play on?" question (no prompt level).

@@ -95,7 +95,7 @@ describe("REGRESSION — beach volleyball must refuse volleyball.sub (indoor kee
     expect(state.subs?.home).toBe(1);
   });
 
-  it("beach REFUSES a substitution with INVALID_EVENT, naming the sport", () => {
+  it("VB-RO-2 beach REFUSES a substitution with INVALID_EVENT, naming the sport", () => {
     const cfg = volleyball.configSchema.parse(volleyball.variants.beach);
     expect(codeOf(() => foldVolleyball(cfg, [start, sub("H")]))).toBe("INVALID_EVENT");
     let message = "";

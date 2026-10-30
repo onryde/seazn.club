@@ -62,5 +62,7 @@ export const cricketPadRules: CricketPadRules = Object.freeze({
 });
 
 // P3: set-based + tennis
+export { badmintonPadRules, tabletennisPadRules, volleyballPadRules } from "./setbased.ts";
+export { tennisPadRules } from "./tennis.ts";
 
 // P4: carrom, boardgame, generic, POST_PHASES

@@ -578,7 +578,7 @@
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2396:58 StringLiteral → \"\"",
+      "mutant": "src/sports/nested/kernel.ts:2460:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = nestedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "nestedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
@@ -596,19 +596,19 @@
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2694:60 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2762:60 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = setBasedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "setBasedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2432:9 ConditionalExpression → true",
+      "mutant": "src/sports/setbased/kernel.ts:2500:9 ConditionalExpression → true",
       "original": "reason !== \"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2432:20 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2500:20 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
@@ -728,7 +728,7 @@
       "reason": "Reached only for a draw_plus_bonus sport (a result sport short-circuits to {} first): with no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key; W2d Task 3, re-keyed in fix round 1 M-3)."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2446:27 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2514:27 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."
@@ -1628,31 +1628,31 @@
       "reason": "The branch runs only when the delivery closed an over, and finishDelivery sets prevOverBowler = currentBowler in that same step with currentBowler non-null, so overBowler is never null; the left operand is always true. The whole-condition `true` variant shares this key and is killed by the maiden counts in scorecard.mutation.test.ts. Probed: with a throw planted on the null case, the 298 scoped tests (src/sports/cricket/__tests__ plus cricket.test.ts, including non-strict reads that name a bowler who does not own the over, retire-out, all-out, super-over and coarse ledgers) never reached it."
     },
     {
-      "mutant": "src/sports/setbased/badminton.ts:61:21 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/badminton.ts:67:21 StringLiteral → \"\"",
       "original": "\"Game\"",
       "line": "unitLabel: { one: \"Game\", many: \"Games\" },",
       "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
     },
     {
-      "mutant": "src/sports/setbased/tabletennis.ts:63:21 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/tabletennis.ts:69:21 StringLiteral → \"\"",
       "original": "\"Game\"",
       "line": "unitLabel: { one: \"Game\", many: \"Games\" },",
       "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
     },
     {
-      "mutant": "src/sports/setbased/volleyball.ts:108:21 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/volleyball.ts:154:21 StringLiteral → \"\"",
       "original": "\"Set\"",
       "line": "unitLabel: { one: \"Set\", many: \"Sets\" },",
       "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
     },
     {
-      "mutant": "src/sports/setbased/tabletennis.ts:99:15 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/tabletennis.ts:100:15 StringLiteral → \"\"",
       "original": "\"alternate\"",
       "line": "setStart: \"alternate\",",
       "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
     },
     {
-      "mutant": "src/sports/setbased/volleyball.ts:152:15 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/volleyball.ts:74:13 StringLiteral → \"\"",
       "original": "\"alternate\"",
       "line": "setStart: \"alternate\",",
       "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
@@ -1688,61 +1688,61 @@
       "reason": "W2e T25 (nrrCredits, T8). A chase's ballsLimit is null only in a timeless match, where it equals cfg.ballsPerInnings (both null) and targetSource stays null (a revise and a DLS target both need limited overs), so `revised` is false and the first operand already returns: the second operand is TypeScript narrowing for `balls: chase.ballsLimit`."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:973:27 LogicalOperator → x === 0 || y === 0",
+      "mutant": "src/sports/nested/kernel.ts:988:27 LogicalOperator → x === 0 || y === 0",
       "original": "x === 0 && y === 0",
       "line": "const fromBefore = (x === 0 && y === 0) || (x > 0 && reached[(x - 1) * width + y] === 1) || (y > 0 && reached[x * width + y - 1] === 1);",
       "reason": "W2e T25 (reachableLiveGames walk). Only changes axis cells (x or y is 0), and an axis cell is reached iff it is live: a lead of h–0 shrinks toward 0–0, so if h–0 is live every h'–0 below it is (no winner, and the tie-break cell t–t is off the axis because the schema makes tiebreakAt positive). The table is identical."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:973:27 ConditionalExpression → true",
+      "mutant": "src/sports/nested/kernel.ts:988:27 ConditionalExpression → true",
       "original": "x === 0",
       "line": "const fromBefore = (x === 0 && y === 0) || (x > 0 && reached[(x - 1) * width + y] === 1) || (y > 0 && reached[x * width + y - 1] === 1);",
       "reason": "W2e T25 (reachableLiveGames walk). Makes every y = 0 cell count as stepped-into, and a y = 0 cell is reached iff it is live anyway: if h–0 is live so is every h'–0 below it (smaller lead, and tiebreakAt is positive, so the tie-break cell is off this axis). The table is identical."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:973:38 ConditionalExpression → true",
+      "mutant": "src/sports/nested/kernel.ts:988:38 ConditionalExpression → true",
       "original": "y === 0",
       "line": "const fromBefore = (x === 0 && y === 0) || (x > 0 && reached[(x - 1) * width + y] === 1) || (y > 0 && reached[x * width + y - 1] === 1);",
       "reason": "W2e T25 (reachableLiveGames walk). Makes every x = 0 cell count as stepped-into, and an x = 0 cell is reached iff it is live anyway: if 0–a is live so is every 0–a' below it (smaller lead, and tiebreakAt is positive, so the tie-break cell is off this axis). The table is identical."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:973:51 EqualityOperator → x >= 0",
+      "mutant": "src/sports/nested/kernel.ts:988:51 EqualityOperator → x >= 0",
       "original": "x > 0",
       "line": "const fromBefore = (x === 0 && y === 0) || (x > 0 && reached[(x - 1) * width + y] === 1) || (y > 0 && reached[x * width + y - 1] === 1);",
       "reason": "W2e T25 (reachableLiveGames walk). Adds only x = 0, where the read is reached[y - width] with y < width: a negative Uint8Array index reads undefined, which is not 1, so the disjunct stays false. The table is identical."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:973:51 ConditionalExpression → true",
+      "mutant": "src/sports/nested/kernel.ts:988:51 ConditionalExpression → true",
       "original": "x > 0",
       "line": "const fromBefore = (x === 0 && y === 0) || (x > 0 && reached[(x - 1) * width + y] === 1) || (y > 0 && reached[x * width + y - 1] === 1);",
       "reason": "W2e T25 (reachableLiveGames walk). Matters only at x = 0, where the read is reached[y - width] with y < width: a negative Uint8Array index reads undefined, which is not 1, so the disjunct stays false. The table is identical."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:973:100 ConditionalExpression → true",
+      "mutant": "src/sports/nested/kernel.ts:988:100 ConditionalExpression → true",
       "original": "y > 0",
       "line": "const fromBefore = (x === 0 && y === 0) || (x > 0 && reached[(x - 1) * width + y] === 1) || (y > 0 && reached[x * width + y - 1] === 1);",
       "reason": "W2e T25 (reachableLiveGames walk). Matters only at y = 0: at 0–0 the index is -1 (undefined, not 1); at h–0 it reads the row above's last cell, which can only add 'stepped-into' to a y = 0 cell, and a y = 0 cell is reached iff it is live anyway (every h'–0 below a live h–0 is live; tiebreakAt is positive)."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:973:100 EqualityOperator → y >= 0",
+      "mutant": "src/sports/nested/kernel.ts:988:100 EqualityOperator → y >= 0",
       "original": "y > 0",
       "line": "const fromBefore = (x === 0 && y === 0) || (x > 0 && reached[(x - 1) * width + y] === 1) || (y > 0 && reached[x * width + y - 1] === 1);",
       "reason": "W2e T25 (reachableLiveGames walk). Adds only y = 0: at 0–0 the index is -1 (undefined, not 1); at h–0 it reads the row above's last cell, which can only add 'stepped-into' to a y = 0 cell, and a y = 0 cell is reached iff it is live anyway (every h'–0 below a live h–0 is live; tiebreakAt is positive)."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2110:76 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/sports/nested/kernel.ts:2172:76 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const endLevels: readonly string[] = preset.sanctionEnding?.endLevels ?? [];",
       "reason": "W2e T25 (X-SE-1). The fallback is read only by arbitraryEvent (kernel.ts:2463, the generator, ignored by ruling 109), and tennis, the kernel's one shipped preset, declares sanctionEnding (tennis.ts:71), so the fallback is never taken in product. No sanction level is spelled 'Stryker was here' either."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2251:76 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/sports/setbased/kernel.ts:2317:76 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const endLevels: readonly string[] = preset.sanctionEnding?.endLevels ?? [];",
       "reason": "W2e T25 (X-SE-1). The fallback is taken only by a preset without sanctionEnding (table tennis), and its readers compare a sanction level against it: SetBasedSanctionLevel is an enum (kernel.ts:236), so no level is ever 'Stryker was here' and the list matches nothing, as [] does."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2492:9 ConditionalExpression → false",
+      "mutant": "src/sports/setbased/kernel.ts:2560:9 ConditionalExpression → false",
       "original": "preset.sanctionEnding === undefined",
       "line": "...(preset.sanctionEnding === undefined ? {} : { sanctionEnding: preset.sanctionEnding }),",
       "reason": "W2e T25 (X-SE-1). An exactOptionalPropertyTypes spread: the mutant gives table tennis an own sanctionEnding key holding undefined instead of no key. Every reader reads module.sanctionEnding (core/sanction-ending.ts, both kernels), which is undefined either way; nothing tests the key's presence."
@@ -1808,25 +1808,25 @@
       "reason": "W2e T25 (nrrCredits, CK-RR-1). Lets a two-innings match with a second innings past the guard, where it is credited as played anyway. A two-innings match takes no revise (cricket.ts:1103, refused on replay too) and gets no DLS target (maybeComputeDlsTarget, cricket.ts:1074, gates on one innings), so r1, r2 and targetSource stay null and ballsLimit stays the quota, and neither the par branch nor the revised branch can apply."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:921:14 MethodExpression → Math.max(h, a)",
+      "mutant": "src/sports/nested/kernel.ts:936:14 MethodExpression → Math.max(h, a)",
       "original": "Math.min(h, a)",
       "line": "const lo = Math.min(h, a);",
       "reason": "W2e T25 (reachableLiveTbScore, TN-SS-2). Reached only for a live score, past the tbWinner line. A live score is level (so max equals min) or has a leader below the target, and then (hi, hi-1) and (lo, lo-1) are both undecided. A differential over to 1-12, winBy 1-3 and 0-20 a side (15,876 cells) found 0 differences; its control differs on 174."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:922:10 ConditionalExpression → false",
+      "mutant": "src/sports/nested/kernel.ts:937:10 ConditionalExpression → false",
       "original": "lo === 0",
       "line": "return lo === 0 || tbWinner(lo, lo - 1, to, winBy) === null;",
       "reason": "W2e T25 (reachableLiveTbScore, TN-SS-2). With lo 0 the next operand reads tbWinner(0, -1, to, winBy), whose leader holds 0 games, below every target (the schema makes it positive), so it is null and the answer is true either way. The same 15,876-cell differential found 0 differences."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:966:7 LogicalOperator → !Number.isInteger(h) && !Number.isInteger(a)",
+      "mutant": "src/sports/nested/kernel.ts:981:7 LogicalOperator → !Number.isInteger(h) && !Number.isInteger(a)",
       "original": "!Number.isInteger(h) || !Number.isInteger(a)",
       "line": "if (!Number.isInteger(h) || !Number.isInteger(a) || h < 0 || a < 0 || h >= bound || a >= bound) return false;",
       "reason": "W2e T25 (reachableLiveGames, SC-S1). A fraction past the guard answers false anyway: Uint8Array truncates its length (no throw); the walk writes only whole cells, and the read index h*(a+1)+a is either fractional (undefined) or lands on a row past h that was never written (0). A differential over 0-10 in quarters on 56 rule shapes (94,136 cells) found 0 differences and 0 throws; its control differs."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2440:9 ConditionalExpression → false",
+      "mutant": "src/sports/nested/kernel.ts:2504:9 ConditionalExpression → false",
       "original": "preset.sanctionEnding === undefined",
       "line": "...(preset.sanctionEnding === undefined ? {} : { sanctionEnding: preset.sanctionEnding }),",
       "reason": "W2e T25 (X-SE-1). An exactOptionalPropertyTypes spread. Tennis, the kernel's one shipped preset, declares sanctionEnding (tennis.ts:71), so its module is unchanged. For a preset without one, the mutant gives an own key holding undefined, and every reader reads module.sanctionEnding, which is undefined either way."

@@ -30,16 +30,15 @@ import type { EventEnvelope, Lineup, LineupPair, LineupPolicy, SquadMember } fro
 import { initSquads, memberOf, onFieldPersons, reduceLineupEvent } from "@seazn/engine/core";
 import { entrantKindCap, type FidelityBand, type ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
+import { volleyballPadRules } from "@seazn/engine/pad";
 import { volleyball } from "@seazn/engine/sports/setbased";
 import { foldClient } from "../../../module-client";
 import { assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
 import { dedicatedEventTypes, moreActions, squadStateOf } from "../../pad-host";
 import {
-  EVENT_BAND,
   EXPEDITE_TYPE,
   LIBERO_TYPE,
   RALLY_TYPE,
-  SANCTION_LEVELS,
   SANCTION_TYPE,
   SERVE_ANCHOR_TILE_ID,
   SET_SCORE_TILE_ID,
@@ -268,14 +267,14 @@ const stripItem = (v: PadHostView, id: string) => buildScorebug(v, t).strip.find
 const ctxOf = (v: PadHostView) => serveContextOf(v, v.state as Record<string, unknown>)!;
 
 // ---------------------------------------------------------------------------
-// The engine facts this file restates — pinned EQUAL, never assumed
+// The engine facts this skin reads from `@seazn/engine/pad` — pinned EQUAL to the module's own
 // ---------------------------------------------------------------------------
 
-describe("the constants this skin restates cannot drift from the engine's own", () => {
+describe("the pad record this skin reads is the engine's own declaration", () => {
   const spec = volleyball.padSpec!(VB_CFG);
 
-  it("EVENT_BAND is padSpec's own `fidelity` map, entry for entry", () => {
-    expect(EVENT_BAND).toEqual(spec.fidelity);
+  it("volleyballPadRules.eventBands is padSpec's own `fidelity` map, entry for entry", () => {
+    expect(volleyballPadRules.eventBands).toEqual(spec.fidelity);
   });
 
   it("LIBERO_TYPE (core.lineup.replacement) carries no padSpec.fidelity entry for any sport — the band filter fails OPEN for it by design", () => {
@@ -283,10 +282,10 @@ describe("the constants this skin restates cannot drift from the engine's own", 
   });
 
 
-  it("SANCTION_LEVELS is the ladder padSpec itself offers, in padSpec's own order", () => {
+  it("volleyballPadRules.sanctionLevels is the ladder padSpec itself offers, in padSpec's own order", () => {
     const action = spec.panels.flatMap((panel) => panel.actions).find((entry) => entry.type === SANCTION_TYPE)!;
     const level = action.fields.find((field) => field.path === "level") as { values: readonly string[] };
-    expect(SANCTION_LEVELS).toEqual([...level.values]);
+    expect(volleyballPadRules.sanctionLevels).toEqual([...level.values]);
   });
 
   it("SUMMARY_TYPE is the FULLY QUALIFIED coarse type — volleyball's OWN 'set.summary', never badminton's 'game.summary'", () => {
@@ -882,11 +881,11 @@ describe("refusedEventTypes()", () => {
     expect(refusedEventTypes(view({ events: stream(summary(25, 15)) }))).not.toContain(SUMMARY_TYPE);
   });
 
-  it("refuses expedite for every shipped volleyball config — FIVB has no ITTF-style system", () => {
+  it("VB-RO-2 refuses expedite for every shipped volleyball config — FIVB has no ITTF-style system", () => {
     expect(refusedEventTypes(view())).toContain(EXPEDITE_TYPE);
   });
 
-  it("does NOT refuse timeout/sub when this fixture's own cfg says it records them (indoor default), and DOES for beach's own substitutions flag", () => {
+  it("VB-RO-2 does NOT refuse timeout/sub when this fixture's own cfg says it records them (indoor default), and DOES for beach's own substitutions flag", () => {
     const refusedIndoor = refusedEventTypes(view());
     expect(refusedIndoor).not.toContain(TIMEOUT_TYPE);
     expect(refusedIndoor).not.toContain(SUB_TYPE);
@@ -961,7 +960,7 @@ describe("sheets()", () => {
   it("the sanction ladder is FIVB's own four steps, warning toned caution, everything else dismissal", () => {
     const sheet = buildSheets(view(), t)[sanctionSheetKey("home")]!;
     const level = sheet.steps[0] as { kind: "choice"; options: { id: string; tone?: readonly string[] }[] };
-    expect(level.options.map((o) => o.id)).toEqual(SANCTION_LEVELS);
+    expect(level.options.map((o) => o.id)).toEqual(volleyballPadRules.sanctionLevels);
     expect(level.options.find((o) => o.id === "warning")!.tone).toEqual(["caution"]);
     for (const id of ["penalty", "expulsion", "disqualification"]) {
       expect(level.options.find((o) => o.id === id)!.tone).toEqual(["dismissal"]);
