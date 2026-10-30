@@ -78,11 +78,13 @@
 8. **Reverse-inventory rows 5, 7, 8, 9, 22, 23 are not done:** the testkit exports no golden corpora or `__fixtures__`, and `applicability.test.ts:43-49` still reads `packages/engine/src/sports`. Batch R does them before the tag; they need an engine change (a testkit export), which reverses D32f ("golden corpora do not ship") for the testkit only. See Deviation b.
 9. **Amendment §6.1 lists the freeze notice AFTER the baseline Stryker run.** The freeze must start at the tag, or engine PRs merged during the ~11 h baseline are missing from the import. O1 sends the notice at the tag. See Deviation a.
 10. **`engine-canary.yml` (reverse-inventory row 13, fate M) has nothing to do in the engine repo:** canaries were the Phase 1 channel; PR snapshots and releases replace them, and its `proof` job is `ci.yml`'s engine-pack. It is retired, not moved (ledger fate `retired`).
+11. **The plan never mentions the fold-epoch guard (found by the Batch R close review, I2).** `ci.yml:132` runs `pnpm --filter @onryde/seazn-engine --fail-if-no-match fold-epoch:check --against HEAD^1` in `gates`, and the "fold-epoch guard CI wiring" describe (`tools/matrix/__tests__/ci-wiring.test.ts:572-639`, 4 tests, added in 1e-2 after the 1d inventory) reads `packages/engine/package.json` (:573), `scripts/fold-epoch-guard.ts` (:612), the corpora directory (:624) and `src/stats/stats.ts` (:632). Unplanned, the cutover's `gates` job reds (`--fail-if-no-match` finds no workspace project), the ci-wiring file reds, and the engine repo ships with no D15/D26 check that a golden-stream change carries an epoch bump. It is a `HEAD^1` gate too, so false premise 2's absent-baseline case applies. Task E1 moves the describe, E2 adds the guard to `gates`, A2 deletes `ci.yml:132` (reverse-inventory row 29).
+12. **The 1d reverse inventory was not complete (found by the Batch R close review, I1 and I3).** Four readers were added after it or missed by its patterns: `w2e-retirement.test.ts` (row 28, W2e, 2026-10-29; fixed in Batch R), the fold-epoch describe above (row 29), `scripts/__tests__/prod-release-epoch-workflow.test.ts` (row 30: module-scope `readdirSync(packages/engine/src/sports)` at :215, so all 30 collected tests fail to collect at the move) and `tools/matrix/__tests__/lint-warnings-gate.test.ts` (row 31: `EXPECTED` :53 and `PROBE_FILE` :172 pin `packages/engine` as a lint workspace). Rows 30 and 31 import no `@seazn/engine`, so A3 step 2's `git grep -l '@seazn/engine'` list would have missed them and their retirement or rewrite would have been unledgered, a hole in D23 parity. Both are now in A3's file list and parity list.
 
 ## Deviations from the spec (for owner review)
 
 - **a. Freeze ~1 day, with both Stryker runs in parallel.** The baseline full run (monorepo, on the tag) and the cold run (engine repo, on the import commit) are the same tree, so they start together at O3/O6 instead of back to back. Sequential would make the freeze ~2 days. If the free runner pool queues them, the result is no slower than sequential.
-- **b. The testkit ships the golden corpora and the bye-deltas fixture** (`@seazn/engine/testkit`, test-only, not a phone subpath), so the four app suites that read them (reverse-inventory rows 5, 7, 8, 9) keep their tests. Reverses D32f for the testkit. The alternative, retiring those 18 tests, loses public-site coverage.
+- **b. The testkit ships the golden corpora and the bye-deltas fixture** (`@seazn/engine/testkit`, test-only, not a phone subpath; under `dist/sports/**` and `dist/sport/__fixtures__/`, layout preserved; the tarball grows 2,395,786 → 2,626,388 B, +9.6%), so the four app suites that read them (reverse-inventory rows 5, 7, 8, 9) keep their tests. Reverses D32f for the testkit. The alternative, retiring those 18 tests, loses public-site coverage.
 - **c. No temporary "freeze" CI check.** The freeze is the AGENTS.md dated line plus messages to the live sessions (O1); every merge already needs an owner go. A CI check would also fail the cutover PR itself.
 - **d. The epoch report moves to the engine release** (false premise 6), not to the app's prod deploy.
 
@@ -96,7 +98,7 @@ Scoped vitest from the package dir, `DATABASE_URL=` empty for DB-free files.
 
 **Files:**
 - Create: `packages/engine/src/testkit/corpora.ts`
-- Modify: `packages/engine/src/testkit/index.ts`; `packages/engine/package.json` (`files` gains the corpora under `dist/testkit/corpora/`; `build:dist` copies them); `packages/engine/test/publish-manifest.test.ts` (the pin)
+- Modify: `packages/engine/src/testkit/index.ts`; `packages/engine/package.json` (`build:dist` gains a third step, `scripts/copy-dist-data.mjs`, that copies the corpora to `dist/sports/**/<key>.golden.json` and the fixture to `dist/sport/__fixtures__/bye-deltas.json`, the SAME relative paths as under `src/`, so one `../sports` URL is right from both; `files` already carries `dist`, so it does not change. **As built in Batch R, not the `dist/testkit/corpora/` first written here**); `packages/engine/test/publish-manifest.test.ts` (the pin)
 - Modify (readers): `apps/web/src/server/engine-db/__tests__/double-walkover-seating.test.ts:420`, `apps/web/src/server/public-site/__tests__/public-player-matches.test.ts:2059-2062`, `apps/web/src/server/public-site/__tests__/timeline.test.ts:119,143-147`, `apps/web/src/components/public-site/__tests__/player-matches.test.tsx:330-336`
 
 **Interfaces:**
@@ -121,7 +123,7 @@ Four types: unit (corpora tests); regression (the four reader files, counts unch
 
 ### Batch R close
 
-Opus review → `reviews/2b-readers.md`. PR with the Matrix-rows line; CI green; **OWNER GO** to merge.
+Opus review → `reviews/2b-readers.md` (verdict NEEDS FIXES at `a73b34e260`; the fixes, with what each did, are appended to that file). PR with the Matrix-rows line and "smoke and e2e n/a (test-only surface)"; CI green; **OWNER GO** to merge. Batch R lands before the tag, so its parity ledger is its own, `ledgers/2b-readers.json` (the Global Constraints' `ledgers/2b.json` starts at the tag, A3); say so in the PR body. The review's I1 (`w2e-retirement.test.ts`, reverse-inventory row 28) is a Batch R reader and was fixed here.
 
 ---
 
@@ -160,7 +162,8 @@ Opus review → `reviews/2b-readers.md`. PR with the Matrix-rows line; CI green;
   - C-f: drop `eslint.config.mjs:19`'s import of `../../scripts/lib/tools-import-guard.mjs` (the engine repo has no `tools/` to guard against).
   - C-g: `repository` = `{ "type": "git", "url": "https://github.com/onryde/seazn.club.engine" }`, no `directory`; re-pin `publish-manifest.test.ts:56`.
   - `MUTATION.md:549` "11.5 h" → "~10.8 h" (spec §11.8).
-- [ ] **Step 2:** Move in the M rows: reverse-inventory rows 4 (K7 only), 6 (engine half), 13 (the test is retired with the workflow, false premise 10), 15 (:59-65), 17 (the `mutation.yml` describe), 18 (engine-pack and floor halves), 25 (:1395), 26 (`core.void` pin), plus `tools/matrix/single-sport.ts`, `tools/matrix/lib/harness-path.ts` and `tools/matrix/catalogue/single-sport-baseline.json` as `scripts/single-sport.ts` etc. (false premise 7), re-rooted. Each test keeps its title so its id matches the ledger's `moved` entry.
+- [ ] **Step 2:** Move in the M rows: reverse-inventory rows 4 (K7 only), 6 (engine half), 13 (the test is retired with the workflow, false premise 10), 15 (:59-65), 17 (the `mutation.yml` describe), 18 (engine-pack and floor halves), **29 (the fold-epoch guard describe, `ci-wiring.test.ts:572-639`, 4 tests, re-rooted; false premise 11)**, 25 (the `assertLineup(` caller scan, now `scenarios.test.ts:1566-1571`), 26 (`core.void` pin), plus `tools/matrix/single-sport.ts`, `tools/matrix/lib/harness-path.ts` and `tools/matrix/catalogue/single-sport-baseline.json` as `scripts/single-sport.ts` etc. (false premise 7), re-rooted. Each test keeps its title so its id matches the ledger's `moved` entry (row 29's four tests are `moved` entries in `ledgers/2b.json`).
+  Also keep, in the engine repo where reading `src/` is legitimate, a source-scan ⇔ `reachableResultKinds` parity test: Batch R's matrix readers now take the tie-capable sports from the module's own `reachableResultKinds`, so a future sport whose fold writes `kind: "tie"` but forgets the declaration would hide from both the LEVEL_PROBES guard and the streams tie sweep (review m1).
 - [ ] **Step 3:** `.npmrc`: `@onryde:registry=https://npm.pkg.github.com`. `pnpm install`; `pnpm build:dist`; `pnpm typecheck`. Expected: all exit 0.
 - [ ] **Step 4:** `AGENTS.md`: what lives here and where the history is (`onryde/seazn.club@<tag sha>`, D22); registry auth for local dev (D18); the dev loop (§9: `link:` override, paired PRs, never commit `link:`); the in-flight porting note (D37):
   ```
@@ -177,14 +180,14 @@ Four types: regression (parity, golden ledgers byte-identical: `git diff --no-in
 **Files (engine clone):** `.github/workflows/ci.yml` (new).
 
 Jobs, ported from seazn.club `ci.yml` with `--workspace packages/engine` / `--filter ./packages/engine` removed:
-- `gates`: `engine:boundary` + RN-safe rule (`:105`); single-sport ratchet `--against HEAD^1` (`:113`, now `scripts/single-sport.ts`); Stryker floor `--check-file-against HEAD^1` (`:126`); schema-snapshot drift (`:175-184`); lint; tsc.
+- `gates`: `engine:boundary` + RN-safe rule (`:105`); single-sport ratchet `--against HEAD^1` (`:113`, now `scripts/single-sport.ts`); Stryker floor `--check-file-against HEAD^1` (`:126`); **fold-epoch guard `fold-epoch:check --against HEAD^1` with `--fail-if-no-match` dropped (`:132`; the D15/D26 guard must survive the move, false premise 11; its wiring test moved in E1 step 2)**; schema-snapshot drift (`:175-184`); lint; tsc.
 - `test`: `test:coverage` (`:598`), `SIM_SEEDS=5 sim:matrix` (`:606`), golden ledgers.
 - `engine-pack`: `node pack-proof/run.mjs` (`:662`).
 - `changeset`: PR fails with no `.changeset/*.md`; fails a `FOLD_EPOCH` change under a non-major changeset, or a `FOLD_MINOR`-only change under a patch (§8).
 - `downstream` (§9.3): check out `onryde/seazn.club@main`, install the PR snapshot, run app `tsc`, `apps/web/src/lib/match-rules/__tests__/*.contract.test.ts`, `tools/matrix` unit tests. No DB.
 
 - [ ] **Step 1:** Write the workflow. `permissions: contents: read` at the top; nothing else needs more.
-- [ ] **Step 2: the missing-`HEAD^1`-file case (false premise 2).** The floor and ratchet gates on the import commit read `HEAD^1` = the README commit, where neither file exists. Add the case to the existing gate tests (`stryker-floor` and `single-sport` tests): "baseline file absent at `HEAD^1` → check the file against itself, exit 0 with a notice"; and "`HEAD^1` unresolvable (shallow clone) → exit non-zero". Run red, fix, run green. Mutate once: make the absent case return early before checking → the self-check test reds.
+- [ ] **Step 2: the missing-`HEAD^1`-file case (false premise 2).** The floor and ratchet gates on the import commit read `HEAD^1` = the README commit, where neither file exists. Add the case to the existing gate tests (`stryker-floor`, `single-sport` and `fold-epoch-guard` tests; the fold-epoch guard also reads `HEAD^1`): "baseline file absent at `HEAD^1` → check the file against itself, exit 0 with a notice"; and "`HEAD^1` unresolvable (shallow clone) → exit non-zero". Run red, fix, run green. Mutate once: make the absent case return early before checking → the self-check test reds.
 - [ ] **Step 3:** `actionlint` the file (if installed; else `gh workflow view` after push). Commit.
 
 ### Task E3: Stryker in the engine repo
@@ -217,7 +220,7 @@ Opus review of the clone → `reviews/2b-engine.md` (in the Batch A worktree): T
 - [ ] **O5 — OWNER (GitHub UI): package access.** Package `seazn-engine` → Package settings → Manage Actions access: add `onryde/seazn.club.engine` (**Write**), confirm `onryde/seazn.club` (**Read**), add `onryde/seazn.club.capture` (**Read**). Visibility stays private (owner's call; private needs nothing else since every install authenticates).
 - [ ] **O6 — The cold Stryker run.** `gh workflow run mutation.yml -R onryde/seazn.club.engine --ref main -f group=all`. When both O2 and O6 finish: every family ≥ its floor in `stryker-floor.json` AND within ±0.5 of O2's score. Write both tables into `reviews/2b-engine.md`. Outside ±0.5: investigate before O9; do not merge the cutover.
 - [ ] **O7 — OWNER GO: merge the Version PR.** `1.0.0` publishes; tag `v1.0.0` and a GitHub Release appear. Confirm: `gh api /orgs/onryde/packages/npm/seazn-engine/versions --jq '.[0].name'` → `1.0.0`.
-- [ ] **O8 — The published tarball is right (Review Focus 3).** In a scratch dir outside both repos, install `@onryde/seazn-engine@1.0.0` with the owner's `~/.npmrc`, and run the engine's `pack-proof` against the installed package (`--tarball` from `npm pack @onryde/seazn-engine@1.0.0`). Expected: node, next, rn and types fixtures green; `./pad` and `./testkit` resolve to `dist/`.
+- [ ] **O8 — The published tarball is right (Review Focus 3).** In a scratch dir outside both repos, install `@onryde/seazn-engine@1.0.0` with the owner's `~/.npmrc`, and run the engine's `pack-proof` against the installed package (`--tarball` from `npm pack @onryde/seazn-engine@1.0.0`). Expected: node, next, rn and types fixtures green; `./pad` and `./testkit` resolve to `dist/`; the node leg's `corpora.mjs` reads `dist/sports/**/*.golden.json` and `dist/sport/__fixtures__/bye-deltas.json` from the published package, each equal to the source's digest (11 corpora).
 - [ ] **O9 — Request to capture's owner (class 17):** a capture build that installs `@seazn/engine@^1.0.0` through the alias and bundles `@seazn/engine/pad` under Metro/Hermes (spec §7 proof; R2). Sent as a recommendation with the reason; the result is recorded, not assumed.
 
 ---
@@ -252,7 +255,7 @@ Four types: unit (the three tests); regression (parity, A3); smoke (stg `sync-sp
   - `pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching` (Review Focus 5): a lock diff moving `1.0.0 → 1.1.0` requires declared rows; a lock diff not touching the engine does not. In `tools/matrix/ci/__tests__/pr-rows.test.ts`.
   Run; expect FAIL.
 - [ ] **Step 2: ci.yml.**
-  - delete `:105` (`engine:boundary`), `:113` (single-sport, moved), `:126` (floor), `:175-184` (schema snapshot), the engine test job (`:564` filter, `:598`, `:606`), engine-pack (`:648`, `:662`);
+  - delete `:105` (`engine:boundary`), `:113` (single-sport, moved), `:126` (floor), **`:132` (fold-epoch guard, moved to the engine repo's `gates` in E2; its `ci-wiring.test.ts:572-639` describe left in E1, so no block is left pointing at the deleted step, false premise 11)**, `:175-184` (schema snapshot), the engine test job (`:564` filter, `:598`, `:606`), engine-pack (`:648`, `:662`);
   - the seven root vitest steps (`:247,267,293,320,368,391,950`) and `scripts/ci-local.sh:358` use the root `./node_modules/.bin/vitest`;
   - `matrix-rows` filter `:2328`: drop `packages/engine/**` (`pnpm-lock.yaml` already triggers it);
   - one step in `gates`: the two registry guards as one grep each: `! git grep -nE '"@seazn/engine": *"(link|file):' -- '*package.json'` and `git grep -c 'npm:@onryde/seazn-engine@' -- '*package.json'` equals 6.
@@ -261,10 +264,10 @@ Four types: unit (the three tests); regression (parity, A3); smoke (stg `sync-sp
 
 ### Task A3: Rehome the remaining readers (reverse inventory)
 
-**Files:** per reverse-inventory Section A rows 1, 2, 3, 6, 10, 11, 12, 14, 15, 16, 19, 20, 21, 24, and A2 rows a, b, l: each takes its stated fate (**I** reads the installed package; **U** edits; **D** deletes with the reason in the ledger; the M halves were moved in E1 and are deleted here).
+**Files:** per reverse-inventory Section A rows 1, 2, 3, 6, 10, 11, 12, 14, 15, 16, 19, 20, 21, 24, **30 and 31**, and A2 rows a, b, l (row 28 was done in Batch R; row 29 moved in E1): each takes its stated fate (**I** reads the installed package; **U** edits; **D** deletes with the reason in the ledger; the M halves were moved in E1 and are deleted here).
 
-- [ ] **Step 1:** Apply each row. `status-set-sweep.test.ts` (row 3) drops `packages/engine/src` from `ROOTS`; the engine-side sweep is not added (no engine row exists, reverse inventory row 3). `lock-isolation.test.ts` (row 20) loses its two override cases with the overrides. `rules-reference.test.ts` (row 16) runs only in the engine repo.
-- [ ] **Step 2: App parity.** Collect-only of every app/tools/scripts/reference test file that imports `@seazn/engine` or appears in the reverse inventory (list the files with `git grep -l -a '@seazn/engine' -- '*.test.ts' '*.test.tsx'` plus the inventory rows; record the count), at the tag vs this branch. `test-parity.mjs` with `ledgers/2b.json` → `unaccounted 0`, exit 0. Paste the line.
+- [ ] **Step 1:** Apply each row. `status-set-sweep.test.ts` (row 3) drops `packages/engine/src` from `ROOTS`; the engine-side sweep is not added (no engine row exists, reverse inventory row 3). `lock-isolation.test.ts` (row 20) loses its two override cases with the overrides. `rules-reference.test.ts` (row 16) runs only in the engine repo. **Row 30** `scripts/__tests__/prod-release-epoch-workflow.test.ts` is `retired` with the `prod.yml` step A2 deletes (30 tests, one ledger entry each; or `moved` with E4's report if E4 ports the wiring pins). **Row 31** `tools/matrix/__tests__/lint-warnings-gate.test.ts` drops its two `packages/engine` entries (`EXPECTED` :53, `PROBE_FILE` :172), `rewritten`.
+- [ ] **Step 2: App parity.** Collect-only of every app/tools/scripts/reference test file that imports `@seazn/engine` or appears in the reverse inventory (list the files with `git grep -l -a '@seazn/engine' -- '*.test.ts' '*.test.tsx'` plus the inventory rows; **rows 30 and 31 import no `@seazn/engine`, so the grep alone misses them: name `scripts/__tests__/prod-release-epoch-workflow.test.ts` and `tools/matrix/__tests__/lint-warnings-gate.test.ts` explicitly**; record the count), at the tag vs this branch. `test-parity.mjs` with `ledgers/2b.json` → `unaccounted 0`, exit 0. Paste the line.
 - [ ] **Step 3:** Scoped run (not collect) of the files this task edited, JSON reporter, EXIT=0. Commit.
 
 ### Batch A close

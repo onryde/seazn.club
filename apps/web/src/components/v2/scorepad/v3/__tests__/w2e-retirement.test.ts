@@ -14,13 +14,11 @@
 // Every expected value comes from the engine's declarations or the rulebook, never from the code under test: who is on the
 // field comes from the lineup the fixture declares and from the engine's state after the fold; the reasons cricket and
 // generic offer nothing are READ from their disposition rows (CK-DV-3, GN-DV-1), not typed here.
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { foldMatch, onFieldPersons, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { makeEnvelope } from "@seazn/engine/testkit";
+import { allRows, makeEnvelope } from "@seazn/engine/testkit";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { adaptSwapSlot, resolveSwapSlot, squadStateOf } from "../pad-host";
 import { resolvePad } from "../registry";
@@ -534,13 +532,12 @@ describe("M12b the seam is driven through its real producer and consumer, not a 
   });
 });
 
-/** Read one row of an engine rules table: `| id | rule | citation | status | enforced at | proved by |`. */
+/** Read one row of an engine rules table: `| id | rule | citation | status | enforced at | proved by |`. Through the testkit's own parser
+ *  (`allRows()`, the rules the installed package ships), not a path into the engine's tree. */
 function ruleRow(file: string, id: string): { rule: string; status: string } {
-  const text = readFileSync(fileURLToPath(new URL(`../../../../../../../../packages/engine/rules/${file}`, import.meta.url)), "utf8");
-  const line = text.split("\n").find((l) => l.startsWith(`| ${id} |`));
-  if (!line) throw new Error(`no ${id} row in ${file}`);
-  const cells = line.split("|").map((c) => c.trim());
-  return { rule: cells[2]!, status: cells[4]! };
+  const row = allRows().find((r) => r.file === file && r.id === id);
+  if (!row) throw new Error(`no ${id} row in ${file}`);
+  return { rule: row.rule, status: row.status };
 }
 
 describe("M12b cricket and generic offer none", () => {
@@ -554,6 +551,8 @@ describe("M12b cricket and generic offer none", () => {
     // product decision on record, not an omission.
     expect(ruleRow("cricket.md", "CK-DV-3").rule).toMatch(/all-out/);
     expect(ruleRow("generic.md", "GN-DV-1").rule).toMatch(/LINEUP_NOT_SUPPORTED/);
+    // the lookup is by file AND id: a real id asked of the wrong rules file is a refusal, not a row
+    expect(() => ruleRow("generic.md", "CK-DV-3")).toThrow(/no CK-DV-3 row in generic\.md/);
   });
 
   it("cricket and generic offer no retirement slot and no retirement tile", () => {
