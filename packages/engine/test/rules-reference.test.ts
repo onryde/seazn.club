@@ -347,7 +347,7 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(inEngine("apps/packages/engine/x")).toBe(false);
   });
 
-  it("the published testkit barrel exports the rules parser, and its disk-reading closure is exactly the rules reference", async () => {
+  it("the published testkit barrel exports the rules parser, and its disk-reading closure is exactly the rules reference and the corpora reader", async () => {
     const testkit = join(ENGINE, "src/testkit");
     const seen = new Set<string>();
     const readers: string[] = [];
@@ -363,8 +363,9 @@ describe("rules reference (ruling 75, spec §6)", () => {
       }
     }
     expect(seen.size, "files in the testkit barrel's closure").toBeGreaterThan(10);
-    // node:fs must not creep into the barrel again: the one exception is the module whose input ships with the package
-    expect(readers.map((f) => f.slice(ENGINE.length + 1))).toEqual(["src/testkit/rules-reference.ts"]);
+    // node:fs must not creep into the barrel again: the exceptions are the two modules whose input ships with the package, the rules
+    // (`rules/`) and the corpora and bye deltas (copied into dist/ by build:dist, engine-split 2b R1). Sorted: the walk order is not the contract.
+    expect(readers.map((f) => f.slice(ENGINE.length + 1)).sort()).toEqual(["src/testkit/corpora.ts", "src/testkit/rules-reference.ts"]);
     // the seam, not just the module: the barrel itself hands a consumer the parser, and what it parses is the package's rules
     const barrel = await import("../src/testkit/index.ts");
     expect(typeof barrel.allRows).toBe("function");
@@ -372,6 +373,9 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(barrel.ruleFiles()).toEqual(ruleFiles());
     expect(barrel.allRows().length).toBe(allRows().length);
     expect(barrel.allRows().length).toBeGreaterThan(0);
+    // ... and the corpora reader is exported the same way, so the second reader in the pin above is a real export and not a leftover import
+    expect(barrel.goldenCorpora().length, "corpora the barrel hands out").toBeGreaterThan(0);
+    expect(typeof barrel.byeDeltas()).toBe("object");
   });
 });
 

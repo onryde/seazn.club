@@ -13,6 +13,7 @@
 // installs differently. The version is asserted, not assumed.
 import { execFile, execFileSync } from "node:child_process";
 import console from "node:console";
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -268,7 +269,23 @@ async function nodeFixture(ctx) {
   assertSameSet("node: rules rows per file parsed from the tarball vs the workspace", Object.entries(byFile).map(([f, n]) => `${f}:${n}`), wsByFile);
   if (total !== wsRows.length) throw new Error(`node: rules.mjs parsed ${total} rows from the tarball, the workspace parses ${wsRows.length}`);
   info(`node: ${total} rules rows parsed from the installed testkit over ${wsByFile.length} rules files`);
-  return specifiersAndSports + dataChecked + requireChecked("node: rules.mjs", total);
+
+  // corpora.mjs (Task 2b-R1): the testkit's corpora and bye-deltas readers, run from the INSTALLED tarball, read the same files as the
+  // workspace's own readers, byte for byte (a digest of each parsed corpus). A tarball without the JSON, or with a stale copy, fails here.
+  const corpora = await run("node: corpora.mjs", process.execPath, ["corpora.mjs"], { cwd: kit, timeoutMs: 120_000 });
+  const installedDigests = JSON.parse(/^CORPORA_DIGESTS (\{.*\})$/m.exec(corpora)?.[1] ?? "null");
+  const installedBye = /^BYE_DELTAS_DIGEST ([0-9a-f]{64})$/m.exec(corpora)?.[1];
+  if (installedDigests === null || installedBye === undefined) throw new Error(`node: corpora.mjs printed no digests:\n${corpora}`);
+  // what to expect comes from the WORKSPACE source's read of src/; what was read came from the tarball
+  const wsCorpora = await import(pathToFileURL(path.join(ENGINE, "src", "testkit", "corpora.ts")).href);
+  const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const wsDigests = Object.fromEntries(wsCorpora.goldenCorpora().map((c) => [`${c.sport}/${c.key}`, digest(c.corpus)]));
+  const corporaChecked = requireChecked("node: corpora.mjs", Object.keys(wsDigests).length);
+  assertSameSet("node: corpora read from the tarball vs the workspace", Object.keys(installedDigests), Object.keys(wsDigests));
+  for (const [id, want] of Object.entries(wsDigests)) if (installedDigests[id] !== want) throw new Error(`node: the installed corpus ${id} differs from the workspace's file`);
+  if (installedBye !== digest(wsCorpora.byeDeltas())) throw new Error("node: the installed bye deltas differ from the workspace's fixture");
+  info(`node: ${corporaChecked} corpora and the bye deltas read from the installed testkit, each equal to the workspace's file`);
+  return specifiersAndSports + dataChecked + requireChecked("node: rules.mjs", total) + corporaChecked;
 }
 
 async function nextFixture(ctx) {

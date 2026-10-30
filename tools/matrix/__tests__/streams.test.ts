@@ -1,15 +1,15 @@
 // Every sport × declared variant × {league, knockout, swiss} × 7 outcomes:
 // generate, FOLD through the real module (strict), and demand the folded
 // outcome equals the request. Draw reachability comes from supportsDraws, not
-// a table (R9); tie reachability from the engine's own source and decideTie.
+// a table (R9); tie reachability from the module's reachableResultKinds and decideTie.
 // Gaps the generators knowingly leave are a COMMITTED list whose staleness is
 // checked in both directions (empty since ruling 44).
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { StageKind } from "@seazn/engine/core";
+import { StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
-import { defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
+import { declaredCfgs, defaultLineupPair, makeEnvelope, onePlayEvent } from "@seazn/engine/testkit";
 import { describe, expect, it } from "vitest";
 import { CfgInvalid, drawsAllowed, resolveSchemaCfg, resolveSportCfg, sportModule, variantKeys } from "../lib/sport-cfg.ts";
 import { foldStream } from "../lib/fold.ts";
@@ -25,16 +25,13 @@ import {
 } from "../lib/streams/types.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-/** Engine sport directories with a non-test source that emits a `kind: "tie"`
- *  outcome — read from the engine's own text, never from the generators, so a
- *  sport whose engine can end level but whose generator declares no tied()
- *  reds the sweep instead of hiding behind OutcomeUnreachable. */
-const SPORTS_SRC = resolve(REPO, "packages/engine/src/sports");
-const TIE_SPORTS = new Set((readdirSync(SPORTS_SRC, { recursive: true }) as string[])
-  .filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts") && !p.split(sep).includes("__tests__"))
-  .filter((p) => /kind:\s*"tie"/.test(readFileSync(resolve(SPORTS_SRC, p), "utf8")))
-  .map((p) => p.split(sep)[0]!));
-/** A tie is unreachable where the engine never emits one, or where its level
+/** The sports whose module DECLARES a tie as a reachable level result: `reachableResultKinds` holds "tie" for some declared config at
+ *  some stage kind. Read from the engine's own declaration through its public API, never from the generators, so a sport whose
+ *  engine can end level but whose generator declares no tied() reds the sweep instead of hiding behind OutcomeUnreachable. */
+const TIE_SPORTS = new Set(builtinModules
+  .filter((m) => declaredCfgs(m as never).some(({ cfg }) => StageKind.options.some((stage) => m.reachableResultKinds(cfg as never, stage).has("tie"))))
+  .map((m) => m.key));
+/** A tie is unreachable where the module declares none, or where its level
  *  score opens a super over instead (cricket decideTie, cricket.ts:935-946). */
 const tieUnreachable = (req: StreamRequest): boolean => !TIE_SPORTS.has(req.sportKey) || (req.cfg as { superOver?: unknown }).superOver === true;
 

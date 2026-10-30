@@ -60,7 +60,7 @@
 // All six compile and collect (`numTotalTests` unchanged in every run — 21
 // before the bare-keys test, 22 after, 28 after fix round 1), so none is the
 // collection-break shape that reads as a survivor.
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -84,7 +84,7 @@ import {
 } from "@seazn/engine/core";
 import { registry, resolvePositions, type AnySportModule } from "@seazn/engine/sport";
 import { registerBuiltins } from "@seazn/engine/sports";
-import { defaultLineupPair } from "@seazn/engine/testkit";
+import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
 import {
   SetsView,
   TimelineLine,
@@ -115,14 +115,13 @@ try {
 }
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// __tests__ -> public-site -> server -> src -> web -> apps -> repo root.
-const ENGINE_SPORTS = join(HERE, "../../../../../../packages/engine/src/sports");
 const DICT_DIR = join(HERE, "../../../dictionaries");
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 
 /** The golden corpora, keyed by sport. GOLDEN-POLICY.md: "The eleven
- *  `sports/**\/<key>.golden.json` files". Found by walking the tree rather than
- *  by a pinned list, so a twelfth module's corpus is picked up automatically. */
+ *  `sports/**\/<key>.golden.json` files". Read through `goldenCorpora()` from
+ *  @seazn/engine/testkit, which finds them by walking the tree rather than by a
+ *  pinned list, so a twelfth module's corpus is picked up automatically. */
 interface GoldenStream {
   config: string;
   /** Present only on streams recorded against NON-default lineups (a football
@@ -139,19 +138,7 @@ interface GoldenCorpus {
   streams: GoldenStream[];
 }
 
-function readCorpora(): GoldenCorpus[] {
-  const out: GoldenCorpus[] = [];
-  for (const dir of readdirSync(ENGINE_SPORTS, { withFileTypes: true })) {
-    if (!dir.isDirectory()) continue;
-    for (const file of readdirSync(join(ENGINE_SPORTS, dir.name))) {
-      if (!file.endsWith(".golden.json")) continue;
-      out.push(JSON.parse(readFileSync(join(ENGINE_SPORTS, dir.name, file), "utf8")));
-    }
-  }
-  return out;
-}
-
-const CORPORA = readCorpora();
+const CORPORA = goldenCorpora().map(({ corpus }) => corpus as GoldenCorpus);
 const corpusFor = (key: string): GoldenCorpus => {
   const found = CORPORA.find((c) => c.key === key);
   if (!found) throw new Error(`no golden corpus for "${key}"`);

@@ -3,15 +3,19 @@
 // rule, an unknown scenario filter, a second plan, a variant that enables a
 // rule but cannot be scored, another sport (every sweep walks the registry).
 // Expected values come from the product and the engine — the row's real stage
-// bodies, supportsDraws, entrantModel, eventSchemas, the schema.json files,
+// bodies, supportsDraws, entrantModel, eventSchemas, each module's configSchema and
+// reachableResultKinds (the tie declaration),
 // withdrawTableEntrant, a real fold of core.abandon, the product's table-kind
 // literal — never from applicability.ts itself.
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { EngineError, StageKind } from "@seazn/engine/core";
 import { BRACKET_STAGE_KINDS, withdrawTableEntrant } from "@seazn/engine/competition";
 import { generatePagePlayoff, generateStepladder } from "@seazn/engine/scheduling";
+import { builtinModules } from "@seazn/engine/sports";
+import { declaredCfgs } from "@seazn/engine/testkit";
+import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { SPORT_RULES, configKeysFor } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { stageKeysFor } from "@seazn/engine/sport";
@@ -39,27 +43,27 @@ const factsAt = (w: WitnessCell): CellFacts => {
   const [row, sport] = w.cell.split("|") as [RowKey, string];
   return cellFacts(row, sport, w.preset, undefined, w.values);
 };
+/** The top-level cfg keys a sport's `configSchema` declares: its JSON form, the way schema-snapshot.ts takes it (the committed
+ *  `<sport>.schema.json` is that output). Read off the module the engine exports, not off a file in the engine's tree. */
 const schemaProps = (sport: string): string[] =>
-  Object.keys((JSON.parse(readFileSync(resolve(REPO, "packages/engine/src/sports", sport, `${sport}.schema.json`), "utf8")) as { configSchema: { properties: Record<string, unknown> } }).configSchema.properties);
+  Object.keys((z.toJSONSchema(sportModule(sport).configSchema as never, { io: "input", target: "draft-2020-12" }) as { properties: Record<string, unknown> }).properties);
 
-/** Engine sport directories with a non-test source that emits a `kind: "tie"`
- *  outcome (MatchOutcome's tie). Read from the engine's source text, so a new
- *  tie-capable sport reds the LEVEL_PROBES guard instead of hiding from M5. */
-const SPORTS_SRC = resolve(REPO, "packages/engine/src/sports");
-const TIE_SOURCE_DIRS = new Set((readdirSync(SPORTS_SRC, { recursive: true }) as string[])
-  .filter((p) => p.endsWith(".ts") && !p.endsWith(".test.ts") && !p.split(sep).includes("__tests__"))
-  .filter((p) => /kind:\s*"tie"/.test(readFileSync(resolve(SPORTS_SRC, p), "utf8")))
-  .map((p) => p.split(sep)[0]!));
+/** The sports whose module DECLARES a tie as a reachable level result: `reachableResultKinds` holds "tie" for some declared config at
+ *  some stage kind (MatchOutcome's tie). The engine's own declaration, read through its public API, so a new tie-capable sport reds
+ *  the LEVEL_PROBES guard instead of hiding from M5. */
+const TIE_SPORTS = new Set(builtinModules
+  .filter((m) => declaredCfgs(m as never).some(({ cfg }) => StageKind.options.some((stage) => m.reachableResultKinds(cfg as never, stage).has("tie"))))
+  .map((m) => m.key));
 /** A level-scores stream built WITHOUT LEVEL_PROBES: the generator's own
  *  home-win stream with the chase's runs set to the first innings' (cricket's
  *  shape, START + one summary per innings — streams/cricket.ts), folded by the
  *  real engine. At two innings a side (ruling 44: the generator builds them)
  *  the first two innings made level leave the match undecided — the engine
  *  decides only after the fourth (cricket.ts decideAfterClose). A sport whose
- *  engine emits no tie (TIE_SOURCE_DIRS) is null without a fold; a stream the
+ *  engine declares no tie (TIE_SPORTS) is null without a fold; a stream the
  *  generator or engine refuses is "refused". */
 function independentLevelFold(sport: string, cfg: Readonly<Record<string, unknown>>): string | null {
-  if (!TIE_SOURCE_DIRS.has(sport)) return null;
+  if (!TIE_SPORTS.has(sport)) return null;
   let win: StreamEvent[];
   try {
     win = generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: "H", away: "A", outcome: { kind: "win", winner: "home" } });
@@ -272,9 +276,9 @@ describe("applicability — predicates against the product's own declarations", 
 });
 
 describe("M5's tie arm — a level result supportsDraws does not declare (I-1)", () => {
-  it("every engine source that emits a `kind: \"tie\"` outcome lives under a sport LEVEL_PROBES probes, and every probe has one", () => {
-    expect([...TIE_SOURCE_DIRS].length).toBeGreaterThan(0);
-    expect(new Set(Object.keys(LEVEL_PROBES))).toEqual(TIE_SOURCE_DIRS);
+  it("every sport whose module declares a tie as reachable (reachableResultKinds) is a sport LEVEL_PROBES probes, and every probe has one", () => {
+    expect([...TIE_SPORTS].length).toBeGreaterThan(0);
+    expect(new Set(Object.keys(LEVEL_PROBES))).toEqual(TIE_SPORTS);
   });
   it("levelFold is the engine's answer: parity with an independently built level stream over every cricket preset and committed variant — and both answers occur", () => {
     // single-sport: cricket is the only sport whose engine emits a tie (guard above).
@@ -637,7 +641,7 @@ function readsOf(sport: string, fn: (c: Readonly<Record<string, unknown>>) => bo
 }
 
 describe("DECIDERS — every key read is declared by the sport's configSchema", () => {
-  it("each decider reads only keys in <sport>.schema.json's configSchema.properties (reads recorded, not typed)", () => {
+  it("each decider reads only keys in the sport's configSchema.properties (reads recorded, not typed)", () => {
     const expected: Record<string, string[]> = { football: ["extraTime", "shootout"], cricket: ["superOver"], icehockey: ["overtime", "shootout"], hockey: ["overtime", "shootout"], carrom: ["tieBoard"] };
     expect(Object.keys(DECIDERS)).toEqual(Object.keys(expected));
     let judged = 0;

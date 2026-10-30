@@ -18,7 +18,6 @@
 //    are pinned without a database.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
 
 // `unstable_cache` is a Next server-runtime API with no incrementalCache under
 // vitest. A bare passthrough (the double most tests here use) would make the
@@ -106,7 +105,7 @@ import { generic } from "@seazn/engine/sports/generic";
 import { icehockey } from "@seazn/engine/sports/icehockey";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { tennis } from "@seazn/engine/sports/tennis";
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { defaultLineupPair, goldenCorpora, makeEnvelope } from "@seazn/engine/testkit";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { getDictionary } from "@/lib/i18n";
@@ -2056,10 +2055,7 @@ describe("scoreLineFor — the named shapes: home reads the headline, AWAY reads
 describe("scoreLineFor — every registered sport, over its recorded golden ledgers", () => {
   // Class 7: not one lucky sample. Every module the engine ships, every golden
   // stream it recorded, at an in-play prefix and at the full ledger.
-  const sportsDir = new URL("../../../../../../packages/engine/src/sports/", import.meta.url);
-  const corpora = (readdirSync(sportsDir, { recursive: true }) as string[])
-    .filter((file) => file.endsWith(".golden.json"))
-    .map((file) => JSON.parse(readFileSync(new URL(file, sportsDir), "utf8")) as GoldenCorpus);
+  const corpora = goldenCorpora().map(({ corpus }) => corpus as GoldenCorpus);
   interface GoldenCorpus {
     key: string;
     configs: Record<string, unknown>;

@@ -13,8 +13,8 @@
 // `setInterval`: the island also runs a clock for its "Updated Ns ago" line,
 // and a spy that reads interval lengths cannot tell that clock from the poll.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
 import { builtinModules } from "@seazn/engine/sports";
+import { goldenCorpora } from "@seazn/engine/testkit";
 import { renderToStaticMarkup } from "react-dom/server";
 import { t as tDict } from "@/lib/i18n-runtime";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
@@ -327,11 +327,10 @@ describe("PlayerMatches — dates in the org's locale, day-month for English", (
 // in play and decided), plus the cricket figure line built from each locale's
 // dictionary templates.
 describe("PlayerMatches — a score breaks only between its parts (R11)", () => {
-  const sportsDir = new URL("../../../../../../packages/engine/src/sports/", import.meta.url);
   const headlines = (() => {
     const byShape = new Map<string, Set<string>>();
-    for (const file of (readdirSync(sportsDir, { recursive: true }) as string[]).filter((f) => f.endsWith(".golden.json"))) {
-      const corpus = JSON.parse(readFileSync(new URL(file, sportsDir), "utf8")) as {
+    for (const { corpus: recorded } of goldenCorpora()) {
+      const corpus = recorded as {
         key: string;
         streams: { states: string[] }[];
       };
