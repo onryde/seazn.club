@@ -16,6 +16,7 @@ export type { PadFieldScope } from "./spec-lookup.ts";
 // every declared variant cfg when built, so one variant its schema refused would throw for every sport's pad. The declared-cfg
 // sweeps in period.test.ts are the guard; a later record doing load-time work owes the same sweep, or a lazy build.
 export { hockeyPadRules, icehockeyPadRules } from "./period.ts";
+export { footballPadRules } from "./football.ts";
 
 // P2: cricket
 

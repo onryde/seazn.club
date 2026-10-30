@@ -14,6 +14,7 @@
       "src/core/sanction-ending.ts",
       "src/core/time.ts",
       "src/core/types.ts",
+      "src/pad/football.ts",
       "src/pad/index.ts",
       "src/pad/period.ts",
       "src/pad/spec-lookup.ts",
