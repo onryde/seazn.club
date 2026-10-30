@@ -26,7 +26,7 @@ explicit rather than implicit.
 | --- | --- | --- | --- | --- | --- |
 | A rally is won, scoring a point | all | entrant | `Ev.Rally.wonBy` | modelled | rally-point scoring since 2006; every rally scores. |
 | Running score inside a game | all | entrant | `State.sets[].home` / `.away` | modelled | |
-| Completed game score | all | entrant | `Ev.GameSummary.home/away` → `State.sets[]` | modelled | coarse tier: a whole game entered as one score. The pad's score entry is bounded by the cap, or by the higher target plus 20 when uncapped (30 in bwf, 21 in bwf-3x15; `summaryScoreBound`, BD-SC-2); whether a score can end the set stays the fold's call. |
+| Completed game score | all | entrant | `Ev.GameSummary.home/away` → `State.sets[]` | modelled | coarse tier: a whole game entered as one score. The pad's score entry is bounded by the cap, or by the higher target plus 20 when uncapped (30 in bwf, 21 in bwf-3x15; `summaryScoreBound`, BD-SC-2, a house limit: ruling 249); whether a score can end the set stays the fold's call. |
 | Game to 21, win by 2 | bwf | — | `Cfg.setTo = 21`, `Cfg.winBy = 2` | modelled | |
 | Setting: at 20–20 play continues to a two-point lead | bwf | — | `Cfg.winBy` with `Cfg.cap = 30` | modelled | 22–20, 25–23 accepted; 21–20 rejected. The pad notes Setting at every tie from 20-all to 28-all while the match is live, never on a decided board (`deuceNote`, BD-SC-1, ruling 243). |
 | Golden point: 29–29 is decided by the next rally, 30–29 | bwf | — | `Cfg.cap = 30` | modelled | the cap is the badminton-shaped kernel parameter; 31–30 is unreachable. The pad notes Golden point at 29-all while live (BD-SC-1). |

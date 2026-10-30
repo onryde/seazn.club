@@ -33,7 +33,7 @@ limitation stated in the table rather than buried in the code.
 | --- | --- | --- | --- | --- | --- |
 | A rally is won, scoring a point | all | entrant | `Ev.Rally.wonBy` | modelled | every rally scores. |
 | Running score inside a game | all | entrant | `State.sets[].home` / `.away` | modelled | |
-| Completed game score | all | entrant | `Ev.GameSummary.home/away` → `State.sets[]` | modelled | coarse tier: a whole game entered as one score. The pad's score entry is bounded by the cap, or by the higher target plus 20 when uncapped (31 in a game to 11; `summaryScoreBound`, TT-SC-2); whether a score can end the set stays the fold's call. |
+| Completed game score | all | entrant | `Ev.GameSummary.home/away` → `State.sets[]` | modelled | coarse tier: a whole game entered as one score. The pad's score entry is bounded by the cap, or by the higher target plus 20 when uncapped (31 in a game to 11; `summaryScoreBound`, TT-SC-2, a house limit: ruling 249); whether a score can end the set stays the fold's call. |
 | Game to 11, win by 2 | bo5, bo7 | — | `Cfg.setTo = 11`, `Cfg.winBy = 2` | modelled | |
 | Uncapped deuce endgame (12–10, 15–13, …) | bo5, bo7 | — | `Cfg.cap = null` | modelled | 11–10 is rejected as non-terminal; 13–10 is rejected as unreachable (12–10 already decided it). The pad notes Deuce at every tie from 10-all (20-all in hardbat-21) while the match is live, never on a decided board (`deuceNote`, TT-SC-1, ruling 243). |
 | Hardbat games to 21 | hardbat-21 | — | `Cfg.setTo`, `Cfg.finalSetTo` (variant `hardbat-21`) | modelled | same kernel, different target. |

@@ -99,7 +99,7 @@ describe("P2.1 premise (Q1b): which batter the fold accepts as `out`", () => {
     expect(outs).toEqual([STRIKER, NON_STRIKER]);
   });
 
-  it("the fold's only `out` check is crease membership: it accepts the non-striker for EVERY mode, and refuses a batter not at the crease (lenient beyond the Laws; owed as rules row CK-WK-4, open: tightening the fold reds this on purpose)", () => {
+  it("the fold's only `out` check is crease membership: it accepts the non-striker for EVERY mode, and refuses a batter not at the crease (lenient beyond the Laws; owed as rules row CK-WK-4, deviation 249: tightening the fold reds this on purpose)", () => {
     // This is what makes `variableOutKinds` a declaration (c) and not a mirror of a fold guard: cricket.ts's applyDelivery checks
     // `wicket.out` against the two batters at the crease and nothing else, so bowled-the-non-striker folds. Pinned here so a
     // drift test can never claim the fold enforces "who can be out" per mode. The Laws allow it for none of bowled, caught, lbw,
