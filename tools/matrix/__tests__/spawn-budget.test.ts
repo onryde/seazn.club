@@ -48,15 +48,19 @@ describe("spawn budget (final batch FB-6)", () => {
     // the harness keeps its CLI spawns (cli-main-module), and the module's own
     // test moved beside it to scripts/__tests__ with crash-exit's — scripts/
     // may not import spawn-budget.ts, so each holds its own constant pair.
+    // Engine split 2b: two files are no longer spawning files.
+    // scripts/__tests__/main-module.test.ts had one spawn, FB-10 (the engine
+    // boundary gate run through a symlink). That test moved to
+    // onryde/seazn.club.engine with the gate. workspace-wiring's two spawns
+    // were turbo dry runs keyed on the engine WORKSPACE. They were retired
+    // because a registry package has no turbo task (ledgers/2b.json, `narrowed`).
     const covered: readonly [string, string, number][] = [
       ["tools/matrix/__tests__/cli-main-module.test.ts", "./spawn-budget.ts", 2],
-      ["scripts/__tests__/main-module.test.ts", "SPAWN_MS", 1],
       ["scripts/__tests__/crash-exit.test.ts", "SPAWN_MS", 1],
       ["tools/matrix/__tests__/committed-catalogue.test.ts", "./spawn-budget.ts", 2],
       ["tools/matrix/__tests__/single-sport.test.ts", "./spawn-budget.ts", 2],
       ["packages/reference/test/eslint-inline-type.test.ts", "LINT_MS", 2],
       ["tools/matrix/__tests__/ci-wiring.test.ts", "./spawn-budget.ts", 2],
-      ["tools/matrix/__tests__/workspace-wiring.test.ts", "./spawn-budget.ts", 1],
     ];
     let checked = 0;
     for (const [path, source, sites] of covered) {

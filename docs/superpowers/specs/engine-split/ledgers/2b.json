@@ -974,6 +974,10 @@
     {
       "id": "__tests__/audit-ledger.test.ts › buildLedger (D22): each id gets exactly one outcome › verified-by-failing-test: the named file must hold an it.fails whose title is the verdict's and carries the audit id",
       "note": "narrowed: subject left the repo. The `engine-src` refusal and its one assertion, a witness under packages/engine/src, are deleted with audit-ledger.ts's dead ENGINE_SRC constant (review m9). No file can live under that path now."
+    },
+    {
+      "id": "__tests__/spawn-budget.test.ts › spawn budget (final batch FB-6) › every covered spawning test file takes its caps and budgets from one constant — no numeric literal after `timeout:`",
+      "note": "narrowed: subject left the repo. Two rows are deleted from `covered` (8 -> 6), because neither file spawns any more. (1) `scripts/__tests__/main-module.test.ts`: its one spawn site was FB-10, which moved to onryde/seazn.club.engine (its `moved` row in `entries`), and its SPAWN_MS/SLACK_MS pair went with it. (2) `tools/matrix/__tests__/workspace-wiring.test.ts`: its two spawn sites were the turbo dry runs of the packages/reference and packages/scheduler cases, `retired` in `entries` with the engineInputsHashedBy helper and the spawn-budget.ts import. Both files now hold zero spawnSync/execFileSync calls and zero `timeout:` options, so neither has a cap to take from a constant. Before the deletion, CI reds `scripts/__tests__/main-module.test.ts: its constant: expected … to contain 'SPAWN_MS'` (PR #1093, Typecheck + lint + drift gates). With that row gone, the next red is the same assertion on workspace-wiring (`… to contain './spawn-budget.ts'`)."
     }
   ]
 }
