@@ -180,7 +180,7 @@ describe("what a tile offers, by band, is the record's eventBands", () => {
 });
 
 describe("what the skin refuses, phase by phase, is the record's eventAllowedInPhase", () => {
-  it("over every phase both kernels reach, refusedEventTypes is exactly the types the record does not allow there", () => {
+  it("HK-PH-1 IH-PH-1: over every phase both kernels reach, refusedEventTypes is exactly the types the record does not allow there", () => {
     let facts = 0;
     let refusals = 0;
     for (const sport of SPORTS) {

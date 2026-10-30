@@ -239,7 +239,7 @@ describe("suspension classes: the static catalogue, and what one cfg offers", ()
     expect(covered).toBeGreaterThan(0);
   });
 
-  it("suspensionClasses(cfg) is the cfg's own classes: icehockey recreational offers two, iihf seven, hockey youth the adult names", () => {
+  it("IH-SU-2: suspensionClasses(cfg) is the cfg's own classes: icehockey recreational offers two, iihf seven, hockey youth the adult names", () => {
     let checked = 0;
     for (const sport of SPORTS) {
       for (const { name, cfg } of cfgsOf(sport)) {
@@ -297,7 +297,7 @@ describe("suspensionMinutes: padSpec's bound, the schema's floor, and the (c) fa
     console.info(`[pad/period] suspensionMinutes: ${checked} cfgs compared`);
   });
 
-  it("max follows the cfg: double the longest finite class nominal the cfg declares (an FIH yellow is a minimum of 5, 10 is common)", () => {
+  it("HK-SU-2 IH-SU-3: max follows the cfg: double the longest finite class nominal the cfg declares (an FIH yellow is a minimum of 5, 10 is common)", () => {
     const maxima = new Set<number>();
     let checked = 0;
     for (const sport of SPORTS) {
@@ -344,7 +344,7 @@ describe("suspensionMinutes: padSpec's bound, the schema's floor, and the (c) fa
 });
 
 describe("assistsMax is the cap the goal schema enforces", () => {
-  it("PeriodGoal takes assistsMax assists and refuses one more; the fold that records assists takes the cap, the one that does not refuses any", () => {
+  it("HK-AS-1: PeriodGoal takes assistsMax assists and refuses one more; the fold that records assists takes the cap, the one that does not refuses any", () => {
     const people = (n: number) => Array.from({ length: n }, (_, i) => `p${i}`);
     for (const sport of SPORTS) {
       const max = sport.rules.assistsMax;
@@ -366,7 +366,7 @@ describe("assistsMax is the cap the goal schema enforces", () => {
     expect(hockeyPadRules.assistsMax).toBe(icehockeyPadRules.assistsMax);
   });
 
-  it("the cap is the rulebook's two (icehockey/DOMAIN.md, the assists row: A1 then A2), and the real fold takes two and refuses three", () => {
+  it("IH-AS-1: the cap is the rulebook's two (icehockey/DOMAIN.md, the assists row: A1 then A2), and the real fold takes two and refuses three", () => {
     // Typed from the rule row, not read off the constant: a cap that moved to three would pass the relative test above.
     expect(icehockeyPadRules.assistsMax).toBe(2);
     expect(hockeyPadRules.assistsMax).toBe(2);
@@ -385,7 +385,7 @@ describe("assistsMax is the cap the goal schema enforces", () => {
 });
 
 describe("goalKinds(cfg) is exactly the kinds the fold accepts", () => {
-  it("a strict goal of each kind is accepted exactly when goalKinds(cfg) lists it, at every declared cfg of both sports", () => {
+  it("IH-GL-1: a strict goal of each kind is accepted exactly when goalKinds(cfg) lists it, at every declared cfg of both sports", () => {
     // Every kind either sport's cfgs name, plus the two the kernel always takes and one nobody declares.
     const tried = new Set<string>(["fg", "og", "not_a_goal_kind"]);
     for (const sport of SPORTS) for (const { cfg } of cfgsOf(sport)) for (const kind of cfg.goalKinds) tried.add(kind);
@@ -415,7 +415,7 @@ describe("goalKinds(cfg) is exactly the kinds the fold accepts", () => {
 });
 
 describe("goalKindRequired is the preset flag the fold refuses an untyped goal by", () => {
-  it("a strict untyped goal is refused GOAL_KIND_REQUIRED exactly where the record says so, at every declared cfg", () => {
+  it("HK-TB-2 IH-GL-1: a strict untyped goal is refused GOAL_KIND_REQUIRED exactly where the record says so, at every declared cfg", () => {
     let checked = 0;
     for (const sport of SPORTS) {
       for (const { name, cfg } of cfgsOf(sport)) {
@@ -447,7 +447,7 @@ describe("swapBand (c) is the band the engine gives a substitution", () => {
 });
 
 describe("eventAllowedInPhase: the phase table the fold's WRONG_PHASE guards read", () => {
-  it("EVENT_PHASES states the rulebook rows, one per event type of each module", () => {
+  it("HK-PH-1 IH-PH-1: EVENT_PHASES states the rulebook rows, one per event type of each module", () => {
     let rows = 0;
     for (const sport of SPORTS) {
       const suffixes = Object.keys(sport.module.eventSchemas ?? {}).map((type) => suffixOf(sport, type)).sort();
@@ -462,7 +462,7 @@ describe("eventAllowedInPhase: the phase table the fold's WRONG_PHASE guards rea
     expect(rows).toBe(8);
   });
 
-  it("over every phase a real fold of every declared cfg reaches, the fold refuses WRONG_PHASE exactly when the record says no", () => {
+  it("HK-PH-1 IH-PH-1: over every phase a real fold of every declared cfg reaches, the fold refuses WRONG_PHASE exactly when the record says no", () => {
     let pairs = 0;
     let refusals = 0;
     let decidedWithShootout = 0;
