@@ -130,7 +130,7 @@ For **each** of the two videos in Studio:
   `TBD`. At most 100 characters; an over-long title gives up the competition first, then the division
   (`server/youtube/title.ts:13-14`, `prepare.ts:279-285`).
 - **Description** is two paragraphs: "Live score and results:" followed by the public match page URL, then a blank line and
-  "Powered by Seazn Club · <this environment's site origin>/" (stg links stg, prod links prod; the words are in the
+  "Powered by Seazn Club · <this environment's site origin>" with no trailing slash (stg links stg, prod links prod; the words are in the
   organisation's default locale; owner request 2026-10-29). Shown for every organisation, including ones with
   `dashboard.branding` (owner, 2026-10-29).
 - **Visibility.** This is the spec §10 unknown: whether YouTube forces an unverified project's videos to Private even
