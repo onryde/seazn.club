@@ -261,7 +261,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
        where f.id = ${w.fixtures[0]!}`;
     let checked = 0;
     let witnessed = 0;   // locale words that differ from English, so their absence is a real witness
-    let poweredChecked = 0;   // locales whose description carries the localised "Powered by Seazn Club · origin/" paragraph
+    let poweredChecked = 0;   // locales whose description carries the localised "Powered by Seazn Club · origin" paragraph
     let poweredWitnessed = 0;   // of those, the non-en ones whose words differ from English (so the English words' absence is a witness)
     // es first (the brief's case); fr's schedule.vs ("contre") is the one locale whose vs differs from en's "vs".
     for (const [i, locale] of (["es", "fr", "nl", "en"] as const).entries()) {
@@ -275,10 +275,11 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
       const d = dicts[locale]!;
       expect(yt.title, locale).toBe(`${home} ${d["schedule.vs"]} ${d["schedule.tbd"]} · Open · ${comp}`);
       expect(yt.description.startsWith(`${d["streaming.youtube.broadcast.descriptionLine"]} `), locale).toBe(true);
-      // Second paragraph (owner request 2026-10-29): "Powered by Seazn Club · <origin>/", in the org's locale, and last.
+      // Second paragraph (owner request 2026-10-29): "Powered by Seazn Club · <origin>" (no trailing slash, owner 2026-10-30), in the org's locale, and last.
       const poweredBy = d["streaming.youtube.broadcast.poweredBy"]!;
       expect(poweredBy, `${locale} has the key`).toBeTruthy();
-      expect(yt.description.endsWith(`\n\n${poweredBy} · ${origin}/`), locale).toBe(true);
+      expect(yt.description.endsWith(`\n\n${poweredBy} · ${origin}`), locale).toBe(true);
+      expect(yt.description, `${locale} site link has no trailing slash (owner 2026-10-30)`).not.toMatch(/\/$/);
       const paragraphs = yt.description.split("\n\n");
       expect(paragraphs, `${locale} paragraphs`).toHaveLength(2);
       expect(paragraphs[0], `${locale} first paragraph still carries the match URL`).toContain(`${origin}/shared/`);
@@ -315,7 +316,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
       (await sql<{ branded: boolean }[]>`select org_has_feature(${orgId}, 'dashboard.branding') as branded`)[0]!.branded;
     const origin = siteOrigin();
     const line = en["streaming.youtube.broadcast.descriptionLine"];
-    const powered = `\n\n${en["streaming.youtube.broadcast.poweredBy"]} · ${origin}/`;
+    const powered = `\n\n${en["streaming.youtube.broadcast.poweredBy"]} · ${origin}`;
     let checked = 0;
     const expectBoth = async (w: World, f: string, wantBranded: boolean, why: string) => {
       expect(await branded(w.orgId), `${why}: the premise (dashboard.branding)`).toBe(wantBranded);
@@ -388,7 +389,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     const w = await world(4);
     // The owner's strings (2026-10-29), typed here — not read back from the dictionary under test.
     const WANT: Record<"es" | "fr" | "nl" | "en", string> = {
-      es: "Seazn Club · clave de emisión {n}", fr: "Seazn Club · clé de diffusión {n}",
+      es: "Seazn Club · clave de emisión {n}", fr: "Seazn Club · clé de diffusion {n}",
       nl: "Seazn Club · streamsleutel {n}", en: "Seazn Club · stream key {n}",
     };
     const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;

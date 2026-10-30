@@ -118,7 +118,7 @@ describe("broadcastTitle (spec §6.5, plan P11)", () => {
 
 describe("broadcastDescription (spec §6.5)", () => {
   const url = "https://seazn.club/shared/club/cup/open/fixtures/abc";
-  const site = "https://seazn.club/";
+  const site = "https://seazn.club";
   const base = { line: "Live score and results:", matchUrl: url, poweredBy: "Powered by Seazn Club", siteUrl: site };
 
   it("two paragraphs: the line + the public match URL, a blank line, then 'Powered by …' · the site", () => {
@@ -130,10 +130,10 @@ describe("broadcastDescription (spec §6.5)", () => {
       line: "Score <live> & results:",
       matchUrl: `${url}?x=<y>`,
       poweredBy: "Powered <by> Seazn Club",
-      siteUrl: "https://<seazn>.club/",
+      siteUrl: "https://<seazn>.club",
     });
     expect(d).not.toMatch(/[<>]/);
-    expect(d).toBe(`Score live & results: ${url}?x=y\n\nPowered by Seazn Club · https://seazn.club/`);
+    expect(d).toBe(`Score live & results: ${url}?x=y\n\nPowered by Seazn Club · https://seazn.club`);
   });
 
   it("the powered-by paragraph is present and last (exactly two paragraphs)", () => {

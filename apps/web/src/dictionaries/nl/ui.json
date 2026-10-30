@@ -1476,7 +1476,7 @@
   "streaming.youtube.replay.playerTitlePart": "Herhaling van de wedstrijd, deel {n}",
   "streaming.youtube.replay.unavailable": "Deze video kan hier niet worden afgespeeld. Open hem op YouTube.",
   "streaming.youtube.replay.private": "Privé op YouTube",
-  "streamDest.add": "Bestemming toevoegen",
+  "streamDest.add": "Streamsleutel toevoegen",
   "streamDest.listLabel": "Streambestemmingen",
   "streamDest.platform": "Platform",
   "streamDest.name": "Naam",
