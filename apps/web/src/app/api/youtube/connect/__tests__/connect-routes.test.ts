@@ -1257,7 +1257,7 @@ describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing le
     const { connectionId, targetId } = await savedOf(0);
     expect(await connRow(connectionId)).toMatchObject({
       org_id: r.orgId, channel_id: ch.id, channel_title: "Solo United", google_sub: "sub-solo", granted_scope: YOUTUBE_SCOPE, default_privacy: "private",
-      made_for_kids: true, consent_by: r.userId, consent_version: 1, status: "connected", created_by: r.userId, last_error_code: null,
+      made_for_kids: true, consent_by: r.userId, consent_version: YOUTUBE_CONSENT_VERSION, status: "connected", created_by: r.userId, last_error_code: null,
     });
     expect(await openToken(sql, r.orgId, connectionId), "the stored token is the one the grant minted").toBe(await minted(exchange));
     const targets = await targetRows(r.orgId);

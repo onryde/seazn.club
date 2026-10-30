@@ -78,6 +78,6 @@ The history shows 25 rows to a page; use **Older** and **Latest** to move throug
 
 ### Streaming junior matches on YouTube
 
-YouTube doesn't allow live streams that show children under 16 unless an adult is visibly with them, and it can take live streaming away from a channel that breaks this rule. The **Connect YouTube** step on the **Streaming** page reminds you of this before you go to Google. Read YouTube's [child safety policy](https://support.google.com/youtube/answer/2801999) for the full rule.
+YouTube doesn't allow live streams that show children under 16 unless an adult is visibly with them, and it can take live streaming away from a channel that breaks this rule. When you connect YouTube on the **Streaming** page, the agreement you tick includes keeping an adult visibly present whenever players under 16 are on camera. Read YouTube's [child safety policy](https://support.google.com/youtube/answer/2801999) for the full rule.
 
 See also [Plans at a glance](/help/billing/plans) and [Billing groups](/help/billing/groups).

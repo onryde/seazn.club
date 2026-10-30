@@ -400,7 +400,13 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
     await expect(page.getByTestId("youtube-connect-submit")).toBeDisabled();
     await expect(page.getByTestId("youtube-consent-required")).toHaveText(en("streaming.youtube.consent.required"));
     await expect(form).toContainText(en("streaming.youtube.settingsNote"));
-    await expect(page.getByTestId("youtube-minors-note"), "YouTube's under-16 live rule, before Continue (PO 2026-10-30)").toHaveText(en("streaming.youtube.connect.minors"));
+    // YouTube's under-16 live rule is a clause of what the organiser ticks (PO 2026-10-30, owner-requested): inside the consent box's
+    // own label, which sits above Continue at every width; the separate note #1089 added is gone. The clause is typed from the ruling.
+    const consentLabel = labelOf(page.getByTestId("youtube-consent"));
+    await expect(consentLabel, "the under-16 clause is part of the consent").toContainText("makes sure an adult is visibly present whenever players under 16 are on camera");
+    await expect(page.getByTestId("youtube-minors-note"), "no separate note any more").toHaveCount(0);
+    const [labelBox, continueBox] = [await consentLabel.boundingBox(), await page.getByTestId("youtube-connect-submit").boundingBox()];
+    expect(labelBox && continueBox && labelBox.y + labelBox.height <= continueBox.y, `the consent label is read before Continue at ${w}`).toBe(true);
     for (const id of ["youtube-privacy-unlisted", "youtube-privacy-public", "youtube-privacy-private", "youtube-kids-no", "youtube-kids-yes", "youtube-consent"]) {
       await expectTappable(labelOf(page.getByTestId(id)), `${id} at ${w}`);
     }
