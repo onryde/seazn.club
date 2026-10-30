@@ -72,7 +72,7 @@ ends it. It also gets the video id back, so every match gets its own YouTube lin
 - Per-competition or per-court destination overrides (`_OAUTH` doc recommends per-court later; not now).
 - Automatic fallback to a pasted key (D6).
 - Twitch or any other platform API. Twitch stays pasted-key.
-- Chat, moderation, thumbnails, descriptions beyond a link back to Seazn, playlists.
+- Chat, moderation, thumbnails, descriptions beyond the match line + URL and a "Powered by Seazn Club" line linking the site, shown for every org including ones with `dashboard.branding` (owner, 2026-10-29), playlists.
 - Changing the pasted-key path. It stays exactly as it is, as a separate destination kind.
 - Any relay/compositor change, any change to `docs/contracts/relay-job.v1.json`.
 
@@ -363,8 +363,9 @@ reuses a claimed row, it creates a new one).
 ### 6.5 Title and description *(my call)*
 
 Title: `<Home> v <Away> · <Division> · <Competition>`, trimmed to YouTube's title limit (builder verifies the limit;
-truncate the competition first). Description: one line + the Seazn public match URL ("Live score and results:").
-Both in the org's default locale (`organizations.default_locale`).
+truncate the competition first). Description: the match line + the Seazn public match URL ("Live score and results:"),
+then a blank line and a "Powered by Seazn Club" line linking the site (`siteOrigin()` + `/`; owner request 2026-10-29),
+i.e. `<line> <matchUrl>\n\n<poweredBy> · <origin>/`; shown for every org, including ones with `dashboard.branding` (owner, 2026-10-29). Both in the org's default locale (`organizations.default_locale`).
 
 ### 6.6 The tick (D8, D9)
 
