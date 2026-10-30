@@ -1,8 +1,9 @@
 // volleyball: the setScore tile authors the coarse set summary that the matrix
-// generator emits (streams/setbased.ts). The references into volleyball.tsx:
-//  - :921 is SET_SCORE_TILE_ID;
-//  - :1388 registers its sheet, setScoreSheet: two number steps, home then
-//    away.
+// generator emits (streams/setbased.ts). The references into volleyball.tsx,
+// by symbol (line numbers go stale on every skin edit):
+//  - SET_SCORE_TILE_ID is the tile's id;
+//  - `buildSheets` registers its sheet, `setScoreSheet`: two number steps,
+//    home then away.
 // Step 0 (2026-09-30, 320, the builder default `beach`) saw the tile's first
 // tap open the home number step directly (no set-opener sheet came first),
 // on a rosterless beach fixture. Each tap route wrote one
@@ -11,9 +12,9 @@
 import { START_MATCH_TESTID, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
-/** volleyball.tsx:921 (text-pinned in pad-adapters.test.ts). */
+/** volleyball.tsx SET_SCORE_TILE_ID (text-pinned in pad-adapters.test.ts). */
 export const VOLLEYBALL_SET_SCORE_TILE = "setScore";
-/** `volleyball.${coarseEventType}`: volleyball.tsx:249, the engine's setbased/volleyball.ts:99 (pinned). */
+/** `volleyball.${coarseEventType}`: volleyball.tsx SUMMARY_TYPE, the engine's setbased/volleyball.ts `coarseEventType` (pinned). */
 export const VOLLEYBALL_SUMMARY = "volleyball.set.summary";
 
 function summarySteps(payload: unknown): readonly TapStep[] {

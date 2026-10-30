@@ -208,7 +208,7 @@ const LAW_NO_BALL_PENALTY = 1;
 const sorted = (xs: readonly (string | number)[]) => [...xs].sort();
 
 describe("cricketPadRules: the static sets are the fold's own declarations", () => {
-  it("wicketKinds / extraKinds are the schema enums the fold parses with (the same objects)", () => {
+  it("CK-EX-1 wicketKinds / extraKinds are the schema enums the fold parses with (the same objects)", () => {
     expect(WicketKind).toBe(CricketWicket.shape.kind);
     expect(ExtraKind).toBe(CricketExtras.shape.kind);
     expect(cricketPadRules.wicketKinds).toBe(WicketKind.options);
@@ -353,7 +353,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(folded).toBe(LAWS_NO_FIELDER_NAMED.length);
   });
 
-  it("CK-PR-1 penaltyRuns: Law 41's one award; a penalty extra of it lands on the batting side, charged to no bowler, run by nobody", () => {
+  it("CK-PR-1 CK-PR-2 penaltyRuns: Law 41's one award; a penalty extra of it lands on the batting side, charged to no bowler, run by nobody", () => {
     expect(cricketPadRules.penaltyRuns).toBe(LAW_41_ONE_AWARD);
     const innings = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind: "penalty", runs: cricketPadRules.penaltyRuns } })]));
     expect(innings.battingSide).toBe("home");

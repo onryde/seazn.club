@@ -385,7 +385,13 @@ describe("M12b a coach or staff member on the team sheet is never offered (revie
 });
 
 describe("M12b the control is gated like the swap slot: the band and the play phase", () => {
-  it("the band is the swap slot's own", () => {
+  it("the band is the swap slot's own: the band the engine gives a substitution event, and the period record's swapBand", () => {
+    // RETIREMENT_BAND READS hockeyPadRules.swapBand, so comparing the two alone is a tautology. The independent fact is the band the
+    // football module's own padSpec declares for its substitution, which the retirement control (a person off) is gated like.
+    const football = moduleOf("football");
+    const subBand = football.padSpec?.(football.configSchema.parse({})).fidelity?.["football.sub"];
+    expect(subBand, "football declares a band for football.sub").toBeDefined();
+    expect(RETIREMENT_BAND).toBe(subBand);
     expect(RETIREMENT_BAND).toBe(hockeyPadRules.swapBand);
   });
 
