@@ -315,9 +315,12 @@ async function connectChannel(
     await waitForHydration(opener);
     await opener.click();
     const submit = page.getByTestId("youtube-connect-submit");
-    await expect(submit, "Continue is disabled until the box is ticked").toBeDisabled();
+    await expect(submit, "Continue is disabled until both boxes are ticked").toBeDisabled();
     await opts.atConsent?.();
+    // Two boxes (PO 2026-10-30): the terms, and YouTube's under-16 rule. Only both enable Continue.
     await page.getByTestId("youtube-consent").check();
+    await page.getByTestId("youtube-consent-minors").check();
+    await expect(submit).toBeEnabled();
     await Promise.all([page.waitForURL(/\/streaming\?youtube=/), submit.click()]);
     expect(fired, "the channel offer ran once for this connect").toBe(1);
   } finally {
@@ -468,6 +471,7 @@ for (const width of [1280, 320] as const) {
         await expect(page.getByTestId("youtube-privacy-unlisted")).toBeChecked();
         await expect(page.getByTestId("youtube-kids-no")).toBeChecked();
         await expect(page.getByTestId("youtube-consent")).not.toBeChecked();
+        await expect(page.getByTestId("youtube-consent-minors")).not.toBeChecked();
         await expect(page.getByTestId("youtube-connect-submit")).toBeDisabled();
         await expect(page.getByTestId("youtube-consent-required")).toHaveText(en("streaming.youtube.consent.required"));
         if (width < 768) await expectNoHorizontalScroll(page);
