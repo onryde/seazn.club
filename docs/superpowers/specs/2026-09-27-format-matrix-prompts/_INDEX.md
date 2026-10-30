@@ -1928,6 +1928,13 @@ Elsewhere the text is the controller's record.
      accepted visible change against the pad-wave spec §3.5 ("no behaviour change"). The table-tennis expedite floor of 9
      stays advisory and as is: the fold enforces none, and whether the current ITTF text reads "both have reached 9" or
      "18 points scored" stays an open question (review m4). Rows signed: BD-SC-1, TT-SC-1, VB-SC-1, TT-EX-2.
+244. **The tennis pad's ends-change cue follows ITF Rule 10 and Rule 5(b)** (2026-10-30, owner "yes accept tennis 244";
+     pad wave P3.2, review I1). The cue shows after an odd number of games in a set, at the end of a set whose games total
+     is odd (a 7-6 set counts its tie-break game, and a match tie-break after an odd set opens on it), and after every
+     sixth point of a tie-break or match tie-break; never before the first point, once the match is decided, or once it
+     is retired or abandoned. It replaces the old skin's reading (lit through tie-break points 7 to 11, off at 12, off at
+     a set boundary, still lit after a mid-set retirement): an accepted visible change against the pad-wave spec's §3.5
+     "no behaviour change", with the fold unchanged (no golden or epoch moves). Rule TN-EN-1 (`packages/engine/rules/tennis.md`).
 
 ## Recommendations (mine — not rulings)
 

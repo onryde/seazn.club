@@ -82,8 +82,8 @@ competition public or unlisted, and notes the organisation id and its default lo
    If the account has several channels, pick yours under **Choose a channel** → **Connect channel**.
 
 **Expect.** You land on Streaming with "YouTube channel connected." and a row for your channel (channel name,
-visibility Unlisted, "Not made for kids"). Straight after connecting the badge may read **Not checked yet** ("Seazn hasn't
-confirmed that this channel can go live yet."): that is correct until a Go live succeeds or the 04:17 UTC daily check
+visibility Unlisted, "Not made for kids"). Straight after connecting the badge may read **Not checked yet** ("Seazn checks this
+the next time you go live."): that is correct until a Go live succeeds or the 04:17 UTC daily check
 runs (`connections.ts:221-229`, `prepare.ts:399-407`). **Record** the badge text, whether Google showed the unverified
 screen, and what the permissions page lists for Seazn now.
 
@@ -427,6 +427,11 @@ Also by design, seen during this run:
 - **A Private channel gets no public replay**: a Private broadcast is not a part the public sees, and the end step does
   not write its link (`V480`, `end-step.ts:328`). That is why step 2 keeps Unlisted.
 - **The first part owns `fixtures.stream_url`**: written only while empty (`usecases/fixtures.ts:521-535`).
+- **Studio's own Go live page shows a yellow "Error: Stream key is currently assigned …"** while a match streams
+  (stg run, 2026-10-29). That page opens on Studio's own stream event and picks the most recent key, which is the one
+  Seazn bound to the match's broadcast; Studio refuses to share it and says so. The match broadcast is unaffected (it
+  was live and playable signed-out the whole time). Watch the match from **Content → Live → <the match's video>** or
+  **Change dashboard**, not from Studio's Go live page.
 
 ---
 
