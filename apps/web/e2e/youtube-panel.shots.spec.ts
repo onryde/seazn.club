@@ -938,6 +938,60 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
   expect([confirmed, refused, disconnected], "anti-vacuity: every width walked the whole path").toEqual([WIDTHS.length, WIDTHS.length, WIDTHS.length]);
 });
 
+/** The fake YouTube's control route (the e2e server runs YOUTUBE_DRIVER=fake): one op, its `data` back. */
+async function fakeOp(page: Page, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const res = await page.request.post("/api/internal/youtube/fake", { data: body });
+  expect(res.status(), `SETUP: the fake takes ${String(body.op)}`).toBe(200);
+  return ((await res.json()) as { data: Record<string, unknown> }).data;
+}
+
+test("Disconnect that could not check the channel's stream keys (fix 2026-10-30): the keys-left notice, never \"deleted\" - at 1280, 768 and 320", async ({ page }) => {
+  // The longest copy the notice has: the keys could not be checked (YouTube would not list the channel's streams) AND Google did not
+  // answer the revoke, so the lead sentence is the keys' and the revoke's own sentence, with its Google link, follows it. The count
+  // variant ("couldn't delete N stream keys") needs a pooled key on the fake channel, which only a Go live makes; its copy is the same
+  // shape and is pinned in every locale by youtube-connect-panel.test.tsx and through the real route by youtube-connect-seam.test.tsx.
+  test.setTimeout(budget({ navs: WIDTHS.length * 4, acts: WIDTHS.length * 12 }));
+  const r = await rig(page, { match: true });
+  let walked = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    await open(page, "/streaming");
+    const ch = channel(`Riverside Keys ${w}`);
+    await connectChannel(page, [ch], "youtube-connect-empty");
+    const row = page.getByTestId("youtube-channel-row");
+    await expect(row).toHaveCount(1, { timeout: NAV_MS });
+    // Scoped to THIS channel's grant, so a disconnect another worker runs beside this one never takes the failures.
+    const state = await fakeOp(page, { op: "state", fixtureId: r.fixtureId! });
+    const tokenHandle = state.tokenHandle;
+    expect(typeof tokenHandle, `PREMISE at ${w}: the fixture's destination is this channel, so the fake can name its grant`).toBe("string");
+    await fakeOp(page, { op: "failNext", method: "listStreams", code: "youtube_unavailable", reason: "backendError", tokenHandle });
+    await fakeOp(page, { op: "failNext", method: "revoke", code: "youtube_unavailable", reason: "backendError", tokenHandle });
+
+    const disconnect = row.getByTestId("youtube-disconnect");
+    await waitForHydration(disconnect);
+    await disconnect.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: en("streaming.youtube.disconnect.confirm"), exact: true }).click();
+    const notice = page.getByTestId("youtube-disconnected");
+    await expect(notice).toContainText(en("streaming.youtube.disconnect.keysUnchecked", { name: ch.title }));
+    await expect(notice).toContainText(en("streaming.youtube.disconnect.keysTail.unconfirmed", { link: en("streaming.youtube.disconnect.googleLink") }));
+    await expect(notice, `never "deleted" while a key may be left, at ${w}`).not.toContainText("Seazn deleted what it stored");
+    await expect(notice).toHaveAttribute("data-keys-left", "unknown");
+    await expect(notice).toHaveAttribute("data-outcome", "not_confirmed");
+    await expect(notice).toHaveAttribute("role", "alert");
+    await expect(notice, `focus follows the news at ${w}`).toBeFocused();
+    await expect(page.getByTestId("youtube-channel-row"), "the channel left the list").toHaveCount(0);
+    await expect(notice.getByTestId("youtube-disconnected-google-link"), `the revoke's Google link at ${w} (an inline link in the sentence)`).toBeVisible();
+    await expectTappable(page.getByTestId("youtube-disconnected-dismiss"), `Dismiss at ${w}`);
+    await expectNoPageScroll(page, `the keys-left notice at ${w}`);
+    await expectNavPinned(page, `the keys-left notice at ${w}`);
+    await shot(page, `disconnect-keys-unchecked-${w}`);
+    await page.getByTestId("youtube-disconnected-dismiss").click();
+    await expect(notice, "Dismiss clears the news").toHaveCount(0);
+    walked++;
+  }
+  expect(walked, "anti-vacuity: every width walked the whole path").toBe(WIDTHS.length);
+});
+
 test("Disconnect stays reachable after the org loses Go live - the restricted Streaming page, then a 404 once nothing is left - at 1280, 768 and 320", async ({ page }) => {
   test.setTimeout(budget({ navs: WIDTHS.length * 3 + 12, acts: 40 }));
   const r = await rig(page);

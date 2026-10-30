@@ -404,6 +404,23 @@ tick after reconnect. The destination row shows "Reconnect needed" with the reas
   refresh token kills the other's grant; if it does, delete our token without the Google revoke and record why), null `refresh_token_enc`, connection → `revoked`, archive
   the destination row, and **purge stored YouTube data now**: broadcast ids/titles, and every `fixtures.stream_url`
   pointing at that channel's videos (DP III.E.4: 7 days; doing it inline satisfies it).
+- **Every Seazn key goes, or the organiser is told it did not** *(fix 2026-10-30, PO ruling the same day: a stg Disconnect
+  said "Seazn deleted what it stored" while Studio still listed a "Seazn stream key")*. After the purge commits, and before
+  the revoke (the revoke stays LAST, since a revoked token can delete nothing):
+  1. each pooled key's stream is deleted; one YouTube refuses (e.g. `liveStreamDeletionNotAllowed` while its broadcast is
+     still winding down) is tried **once more**, after its broadcast reads `complete` (`broadcastLife`, a few reads apart),
+     inside the same 30 s budget;
+  2. the channel's own streams are listed (`liveStreams.list`, `part=snippet`, `mine=true`, 50 a page: ids and titles only,
+     never `cdn`, so no stream key is ever fetched) and every stream **whose whole title is a name Seazn gives its keys**,
+     on that channel, is deleted, so a key that no row of ours records (an orphan) goes as well. The names come from
+     `streaming.youtube.streamKeyTitle` in every locale (`{n}` = digits), plus the two names keys had before: "Seazn stream
+     key" (before 79a208d8b0) and the fr "clé de diffusión {n}" (before #1088). A club's own key never matches;
+  3. the result carries `keysLeft`: the Seazn keys still on the channel (`0` = none), or `null` when the listing could not
+     be read (no usable token, a dead grant, the budget spent, or YouTube refused the list): **not confirmed, never 0**.
+  The notice: `keysLeft > 0` says "`<channel>` is disconnected, but Seazn couldn't delete N stream key(s) from YouTube.
+  Delete them in YouTube Studio → Go live → Stream → Manage stream keys."; `null` says Seazn couldn't check. Either
+  REPLACES the "deleted" sentence; the revoke's own outcome follows it as a second sentence (another channel shares the
+  Google account, or Google's revoke was not confirmed, with the Google link), and says nothing more when it was revoked.
 - Revoked on Google's side (discovered as `invalid_grant`): connection stays `reconnect_needed`; after **7 days**
   without reconnect, the same purge runs from the daily sweep. *(PO ruling 2026-10-29, T19 fix round 1: DP III.D.2 gives 30 days
   from the revocation, and the sweep finds a revocation up to a day later, so a 30-day wait after the flip could land past it. The
