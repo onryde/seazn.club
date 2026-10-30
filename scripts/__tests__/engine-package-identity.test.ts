@@ -13,6 +13,8 @@ const ALIAS = "@seazn/engine";
 const SPEC = `workspace:${SCOPED}@*`;
 const FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] as const;
 const ENGINE_MANIFEST = "packages/engine/package.json";
+/** Engine split 2b (reverse inventory row 14, I): the engine is the installed package, linked under its alias. */
+const INSTALLED_ENGINE_MANIFEST = "node_modules/@seazn/engine/package.json";
 
 type Field = (typeof FIELDS)[number];
 type Manifest = { name?: string } & Partial<Record<Field, Record<string, string>>>;
@@ -83,7 +85,7 @@ const good: Manifest = { dependencies: { [ALIAS]: SPEC } };
 
 describe("engine package identity", () => {
   it("is published under the GitHub owner's scope", () => {
-    expect((JSON.parse(readFileSync(path.join(ROOT, ENGINE_MANIFEST), "utf8")) as Manifest).name).toBe(SCOPED);
+    expect((JSON.parse(readFileSync(path.join(ROOT, INSTALLED_ENGINE_MANIFEST), "utf8")) as Manifest).name).toBe(SCOPED);
   });
 
   it("every workspace that depends on the engine imports it as @seazn/engine through the alias, in every dependency field", () => {

@@ -6,17 +6,30 @@
 // against the W2b spec, and the CI wiring of both checkers, because all three read the monorepo and must survive the engine leaving it.
 //
 // The rows are read through the engine's PUBLISHED testkit (`@seazn/engine/testkit`), as a consumer of the package would read them.
-// Phase-1 couplings that 2b must resolve, listed in the reverse inventory (1d-6): the proof checker (`proofProblems`, which needs
-// `typescript` and so cannot ship in the testkit), the shared W2b pins and the spawn budget are imported from packages/engine/test/.
+// Engine split 2b (reverse inventory row 16): packages/engine/test/ left with the engine, so this file takes its own copies of what it
+// imported from there: the proof checker (`proofProblems`, which needs `typescript` and so cannot ship in the testkit) in
+// scripts/lib/rules-reference.ts, the shared W2b pins in scripts/lib/w2b-rows.ts, and the spawn budget below. The engine checker's
+// ci.yml step left too (A2), so the CI-wiring describe pins the root step, which is now the only rules checker step in ci.yml.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { allRows, type RuleRow } from "@seazn/engine/testkit";
 import { describe, expect, it } from "vitest";
-import { AWAITING_PROOF, REPO, fileExists, inEngine, isMatrixCase, proofBudget, proofProblems, readRepoFile, type ReadRepoFile } from "../../packages/engine/test/rules-reference.ts";
-import { SPAWN_MS, spawnBudget } from "../../packages/engine/test/stryker-spawn.ts";
-import { readAppendixA, w2bIds, w2bProblems, type AppendixA } from "../../packages/engine/test/w2b-rows.ts";
+import { AWAITING_PROOF, REPO, fileExists, inEngine, isMatrixCase, proofBudget, proofProblems, readRepoFile, type ReadRepoFile } from "../lib/rules-reference.ts";
+import { readAppendixA, w2bIds, w2bProblems, type AppendixA } from "../lib/w2b-rows.ts";
+
+/** One spawned process's own cap, and the budget derived from it: the engine's test/stryker-spawn.ts pair, copied with its values
+ *  (engine split 2b; scripts/ may not import the harness's twin in tools/matrix/__tests__/spawn-budget.ts, ruling 56). AGENTS.md
+ *  class 20: a spawning test states its budget from the SAME constant as the spawn's cap. */
+const SPAWN_MS = 30_000;
+/** Time a test spends outside its spawns: scratch trees, git setup, reading reports. */
+const SLACK_MS = 5_000;
+/** The budget for a test that spawns `spawns` processes, one after another. */
+function spawnBudget(spawns: number): number {
+  if (!Number.isInteger(spawns) || spawns < 1) throw new Error(`spawnBudget: ${spawns} is not a spawn count of at least 1`);
+  return spawns * SPAWN_MS + SLACK_MS;
+}
 
 /** The approved W2b spec. Its Appendix A is the W2b rows' written source, read at test time (review M-2), so a row whose
  *  text drifts from the spec — "3-0" becoming "5-0" — is a failure, and a spec amendment moves the pin with it. */
@@ -120,12 +133,14 @@ const noTitle = (p: string) => `X-ZZ-1: ${p} has no it/test/describe title namin
 
 describe("rules reference (ruling 75, spec §6)", () => {
   it("the default reader reads the real repo: a missing file is undefined, any other failure is loud, and proofProblems uses it when none is injected", () => {
-    expect(readRepoFile("packages/engine/rules/carrom.md")).toContain("CA-KO-1");
-    expect(readRepoFile("packages/engine/rules/no-such.md")).toBeUndefined();
-    expect(() => readRepoFile("packages/engine/rules")).toThrow(/EISDIR/);
+    // Engine split 2b (I): the rules ship in the installed package, read through the repo root's link to it.
+    expect(readRepoFile("node_modules/@seazn/engine/rules/carrom.md")).toContain("CA-KO-1");
+    expect(readRepoFile("node_modules/@seazn/engine/rules/no-such.md")).toBeUndefined();
+    expect(() => readRepoFile("node_modules/@seazn/engine/rules")).toThrow(/EISDIR/);
     expect(proofProblems(row(["apps/web/src/no-such-file.test.ts"]))).toEqual(["X-ZZ-1: apps/web/src/no-such-file.test.ts does not exist"]);
     // A REAL test file, read through the default reader: it exists, and none of its titles names the synthetic id.
-    const real = "packages/engine/test/source-bytes.test.ts";
+    // (The engine's test/source-bytes.test.ts left with the engine; any real test file of this repo is the same witness.)
+    const real = "scripts/__tests__/dockerignore.test.ts";
     expect(proofProblems(row([real]))).toEqual([noTitle(real)]);
   });
 
@@ -233,13 +248,15 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
   });
 });
 
-// Review I-3: the proofs live in apps/web, e2e and tools, so a PR that touches none of packages/engine/** must still
-// run this checker. The engine job in ci.yml is path-filtered; the `gates` job is not.
+// Review I-3: the proofs live in apps/web, e2e and tools, so a PR that touches none of the engine must still
+// run this checker. The `gates` job is not path-filtered.
+// Engine split 2b: the engine checker's step left ci.yml with the engine (A2; it runs in onryde/seazn.club.engine's CI), so the
+// step these tests pin is the root checker's, the one rules checker step left here.
 describe("the checker runs on every pull request: CI wiring (review I-3)", () => {
   const lines = readFileSync(join(REPO, ".github/workflows/ci.yml"), "utf8").split("\n");
   const code = (l: string) => l.trim() !== "" && !l.trimStart().startsWith("#");
-  const HEAD = "      - name: Engine rules reference checker (DB-free)";
-  const REPORT = "vitest-results-rules.json";
+  const HEAD = "      - name: Root rules reference checker (DB-free)";
+  const REPORT = "vitest-results-rules-root.json";
   const at = lines.indexOf(HEAD);
   /** The step's own lines: everything after its `- name:` line indented 8 or more (its keys and its block scalar). */
   const stepLines = (): string[] => {
@@ -251,14 +268,14 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     return out;
   };
 
-  it("the engine checker's step appears once, in the gates job, named for the checker", () => {
+  it("the root checker's step appears once, in the gates job, named for the checker", () => {
     expect(lines.filter((l) => l === HEAD)).toHaveLength(1);
     expect(at).toBeGreaterThan(0);
     const jobHead = lines.slice(0, at).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop();
     expect(jobHead).toBe("  gates:");
   });
 
-  it("nothing narrows the engine checker's step: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block", () => {
+  it("nothing narrows the root checker's step: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block", () => {
     const onAt = lines.indexOf("on:");
     const afterOn = lines.findIndex((l, i) => i > onAt && /^[a-z]/.test(l));
     expect(onAt).toBeGreaterThanOrEqual(0);
@@ -269,12 +286,12 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(stepLines().filter((l) => /^ {8}[a-z-]+:/.test(l)).map((l) => l.trim().replace(/:.*$/, ""))).toEqual(["run"]);
   });
 
-  it("the engine checker's step runs only packages/engine/test/rules-reference.test.ts with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)", () => {
+  it("the root checker's step runs only scripts/__tests__/rules-reference.test.ts with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)", () => {
     const script = stepLines().filter((l) => l.startsWith("          ")).map((l) => l.slice(10));
     expect(script.slice(0, 3)).toEqual([
       "set -euo pipefail",
       `rm -f ${REPORT}`,
-      `./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=${REPORT} --testTimeout=30000 packages/engine/test/rules-reference.test.ts`,
+      `./node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=${REPORT} --testTimeout=30000 scripts/__tests__/rules-reference.test.ts`,
     ]);
     // The judge is the rest: one `node -e '…'` block, nothing after its closing quote, no single quote inside it.
     expect(script[3]).toBe("node -e '");
@@ -297,7 +314,7 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     spawns++;
     const root = realpathSync(mkdtempSync(join(tmpdir(), `w2a-rules-ci-${process.pid}-`)));
     try {
-      const bin = join(root, "packages/engine/node_modules/.bin");
+      const bin = join(root, "node_modules/.bin");
       mkdirSync(bin, { recursive: true });
       writeFileSync(join(bin, "vitest"), ["#!/bin/sh", 'out=""', 'for a in "$@"; do case "$a" in --outputFile=*) out="${a#--outputFile=}";; esac; done', 'if [ -n "$FAKE_JSON" ]; then cp "$FAKE_JSON" "$out"; fi', 'exit "$FAKE_EXIT"', ""].join("\n"));
       chmodSync(join(bin, "vitest"), 0o755);
@@ -329,7 +346,7 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
   /** A non-zero vitest exit, no report written, and a stale report left behind. */
   const STEP_RUNS = 3;
 
-  it(`the engine step's judge is green on a clean single-file pass and red, naming its reason, on each of ${REDS.length} faults, run through real bash and node`, (ctx) => {
+  it(`the root step's judge is green on a clean single-file pass and red, naming its reason, on each of ${REDS.length} faults, run through real bash and node`, (ctx) => {
     spawns = 0;
     const green = runStep({ json: report() });
     expect(green.status, green.stderr).toBe(0);
@@ -345,7 +362,7 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those runs, not a default").toBe(spawnBudget(spawns));
   }, spawnBudget(JUDGE_RUNS));
 
-  it("the engine checker's step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run", (ctx) => {
+  it("the root checker's step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run", (ctx) => {
     spawns = 0;
     const failedExit = runStep({ json: report(), exit: 1 });
     expect(failedExit.status).not.toBe(0);
@@ -359,35 +376,11 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(ctx.task.timeout, "the timeout vitest applied is the one stated from those runs, not a default").toBe(spawnBudget(spawns));
   }, spawnBudget(STEP_RUNS));
 
-  // ---- Added by engine-split 1d-5 (R30). The engine file moved out of this job's reach once the engine leaves, and its monorepo half
-  // needs a step of its own: a separate step with its own report, so the step above keeps running only the engine file.
-  const ENGINE_FILE = "packages/engine/test/rules-reference.test.ts";
+  // ---- Added by engine-split 1d-5 (R30): the root half's own step. Engine split 2b: the two tests that pinned it AGAINST the engine
+  // checker's step (after it, running not each other's file; the same judge byte for byte) left with that step (A2 deleted it); the
+  // root step's own text is pinned by the tests above.
   const ROOT_FILE = "scripts/__tests__/rules-reference.test.ts";
   const ROOT_HEAD = "      - name: Root rules reference checker (DB-free)";
-  const ROOT_REPORT = "vitest-results-rules-root.json";
-  const rootAt = lines.indexOf(ROOT_HEAD);
-  /** A step's own lines, from the index of its `- name:` line. */
-  const bodyAt = (from: number): string[] => {
-    const out: string[] = [];
-    for (const l of lines.slice(from + 1)) {
-      if (l.trim() !== "" && !l.startsWith("        ")) break;
-      out.push(l);
-    }
-    return out;
-  };
-  const scriptAt = (from: number): string[] => bodyAt(from).filter((l) => l.startsWith("          ")).map((l) => l.slice(10));
-
-  it("the gates job runs scripts/__tests__/rules-reference.test.ts, in a step of its own after the engine checker's, which still runs only the engine file", () => {
-    expect(lines.filter((l) => l === ROOT_HEAD)).toHaveLength(1);
-    expect(at, "the engine checker's step").toBeGreaterThan(0);
-    expect(rootAt, "the root checker's step comes after it").toBeGreaterThan(at);
-    expect(lines.slice(0, rootAt).filter((l) => /^ {2}[a-z][\w-]*:$/.test(l)).pop(), "the job the root step is in").toBe("  gates:");
-    expect(scriptAt(rootAt)[2]).toBe(`./packages/engine/node_modules/.bin/vitest run --reporter=default --reporter=json --outputFile=${ROOT_REPORT} --testTimeout=30000 ${ROOT_FILE}`);
-    // the two steps run one file each, and not each other's
-    expect(scriptAt(at).filter((l) => l.includes(ROOT_FILE))).toEqual([]);
-    expect(scriptAt(rootAt).filter((l) => l.includes(ENGINE_FILE))).toEqual([]);
-    expect(scriptAt(at).filter((l) => l.includes(ENGINE_FILE))).toHaveLength(1);
-  });
 
   it("the whole-directory scripts step leaves this file to its own step: it excludes it, so the file runs once per pull request", () => {
     const dirStep = lines.findIndex((l) => l === "      - name: Repo-root scripts tests (real Postgres)");
@@ -400,17 +393,5 @@ describe("the checker runs on every pull request: CI wiring (review I-3)", () =>
     expect(run!.match(/--exclude/g)).toHaveLength(1);
     // ...and the file still has its own step (else it would run in neither)
     expect(lines.filter((l) => l === ROOT_HEAD)).toHaveLength(1);
-  });
-
-  it("the root step is the engine step with its own file and report, name-and-run only, and the same judge byte for byte", () => {
-    const engineScript = scriptAt(at).join("\n");
-    const derived = engineScript
-      .replaceAll(ENGINE_FILE, ROOT_FILE)
-      .replaceAll("vitest-results-rules.json", ROOT_REPORT)
-      .replaceAll("rules reference", "root rules reference");
-    expect(derived, "the substitution changed the engine step's text").not.toBe(engineScript);
-    expect(scriptAt(rootAt).join("\n")).toBe(derived);
-    expect(bodyAt(rootAt).filter((l) => /^ {8}[a-z-]+:/.test(l)).map((l) => l.trim().replace(/:.*$/, ""))).toEqual(["run"]);
-    expect(scriptAt(rootAt).join("\n")).not.toMatch(/\bjq\b/);
   });
 });

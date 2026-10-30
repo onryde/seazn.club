@@ -8,14 +8,16 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { checkReferenceBoundary, engineDir, parseDiagnosticsOf } from "../../../scripts/reference-boundary.ts";
 
 const PKG = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = resolve(PKG, "..", "..");
-const ENGINE = resolve(REPO, "packages", "engine");
+// Engine split 2b (reverse inventory row 10, I): the engine is the INSTALLED package this one links (`engineDir()`'s default), by its
+// real path in the pnpm store. Its code there is the compiled `dist/`, so the symlink fixtures below point at `dist/core`.
+const ENGINE = realpathSync(resolve(PKG, "node_modules", "@seazn", "engine"));
 const CLI = resolve(REPO, "scripts", "reference-boundary.ts");
 function src(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), "w1b-ref-"));
@@ -291,12 +293,14 @@ describe("review I-1: each runtime-load bypass the line judge passed is refused"
     expect(refused).toBe(CASES.length);
   });
   it("(11) a symlink in src — to an engine file or an engine directory — is refused, and the import through it resolves into the engine", () => {
-    const file = judged({ "a.ts": `import { x } from "./eng.ts";\nexport { x };\n` }, (root) => symlinkSync(join(ENGINE, "src", "core", "clock.ts"), join(root, "eng.ts")));
+    const file = judged({ "a.ts": `import { x } from "./eng.ts";\nexport { x };\n` }, (root) => symlinkSync(join(ENGINE, "dist", "core", "clock.js"), join(root, "eng.ts")));
     expect(file).toEqual([`1 ./eng.ts: ${INTO_ENGINE}`, `1 eng.ts: ${SYMLINK}`]);
     // Line 2 names a file that does not exist: it is judged by where its
     // path lands (the realpath of its nearest existing ancestor), so a
     // missing file behind the link is still the engine.
-    const dir = judged({ "a.ts": `import type { C } from "./core/index.ts";\nimport type { N } from "./core/not-there.ts";\nexport type { C, N };\n` }, (root) => symlinkSync(join(ENGINE, "src", "core"), join(root, "core")));
+    // (Engine split 2b: behind the link is the installed `dist/core`, where line 1's `index.ts` is compiled to `index.js`, so line 1
+    // lands by its path too; the file-symlink case above is the existing-file witness.)
+    const dir = judged({ "a.ts": `import type { C } from "./core/index.ts";\nimport type { N } from "./core/not-there.ts";\nexport type { C, N };\n` }, (root) => symlinkSync(join(ENGINE, "dist", "core"), join(root, "core")));
     expect(dir).toEqual([`1 ./core/index.ts: ${INTO_ENGINE}`, `2 ./core/not-there.ts: ${INTO_ENGINE}`, `1 core: ${SYMLINK}`]);
   });
   it("the positive pair: a relative import of a file not (yet) in src is judged by its path — inside src, allowed", () => {
@@ -321,8 +325,9 @@ describe("containment is by path SEGMENT, not by string prefix (review M-1)", ()
       // From the REAL root: node resolves a relative import from the file's
       // real path, and the tmp dir is a symlink on macOS (/var → /private/var).
       const real = realpathSync(root);
-      const extras = relative(real, join(REPO, "packages", "engine-extras", "x.ts"));
-      const engine = relative(real, join(ENGINE, "src", "core", "index.ts"));
+      // The engine's sibling whose name only starts with the engine dir's name (`seazn-engine-extras` beside `seazn-engine`).
+      const extras = relative(real, join(dirname(ENGINE), `${basename(ENGINE)}-extras`, "x.ts"));
+      const engine = relative(real, join(ENGINE, "dist", "core", "index.js"));
       writeFileSync(join(root, "a.ts"), `import type { X } from "${extras}";\nimport type { Y } from "${engine}";\nexport type { X, Y };\n`);
       expect(checkReferenceBoundary(root).violations.map((v) => `${v.line}: ${v.reason}`)).toEqual([`1: ${TRAP3}`, `2: ${INTO_ENGINE}`]);
     } finally { rmSync(root, { recursive: true, force: true }); }

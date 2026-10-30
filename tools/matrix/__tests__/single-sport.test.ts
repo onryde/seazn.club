@@ -53,11 +53,13 @@ function tree(files: Record<string, string>): string {
 }
 
 // One sweep-free file under every scope root, so the CLI has nothing to refuse
-// on scope grounds. `competition/standings.test.ts` also counts for the engine
-// name root; `stage-progression.test.ts` is the apps/web name root's.
+// on scope grounds: `stage-progression.test.ts` is the apps/web name root's.
+// Engine split 2b: the engine's scope dirs and name root left with the engine
+// (SCOPE_DIRS is empty, NAME_ROOTS is apps/web/src), and FULL_SCHED, the file the
+// ratchet cases pin, is an apps/web name-root file instead of an engine one (the
+// path was only an example: any in-scope file is the same witness).
 const FULL: Record<string, string> = {
-  "packages/engine/src/scheduling/sched.test.ts": "const a = 1;\n",
-  "packages/engine/src/competition/standings.test.ts": "const b = 2;\n",
+  "apps/web/src/server/usecases/__tests__/sched-standings.test.ts": "const a = 1;\n",
   "apps/web/src/server/usecases/__tests__/stage-progression.test.ts": "const c = 3;\n",
 };
 
@@ -121,24 +123,13 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     expect(c.stderr).toMatch(/ZERO/);
   });
 
-  it("one scope root that finds nothing is refused by name even when the others find files (the CLI, run for real)", () => {
-    for (const drop of Object.keys(FULL)) {
-      const root = tree(Object.fromEntries(Object.entries(FULL).filter(([p]) => p !== drop)));
-      const c = cli(["--root", root]);
-      expect({ drop, status: c.status }).toEqual({ drop, status: 2 });
-      expect(c.stderr).toMatch(/ZERO/);
-    }
-    expect(cli(["--root", tree(FULL)]).status).toBe(0);
-  });
+  // Engine split 2b: "one scope root that finds nothing is refused by name even when the others find files" left with the engine's
+  // scope roots. With one root (apps/web/src) there are no others; that root finding nothing is the empty case above.
 
   it("scope: .test.ts AND .test.tsx under the scope dirs and the name roots; the name is the file's; out-of-scope files are not read", () => {
+    // (app half, engine split 2b) The engine's scope dirs (scheduling, competition) and its name root (packages/engine/src) left with
+    // the engine, and their six fixture files and five expected pins with them; the apps/web name root's files and pins are the source's.
     const root = tree({
-      "packages/engine/src/scheduling/a.test.ts": `const x = "badminton";\nconst y = 'generic';\nconst z = \`tennis\`;\nconst n = "padel";\nconst m = "generic';\n`,
-      "packages/engine/src/scheduling/b.test.tsx": `const el = <Table sport="hockey" />;\n`,
-      "packages/engine/src/competition/__tests__/deep.test.ts": `f("cricket");\n`,
-      "packages/engine/src/competition/helper.ts": `f("cricket");\n`, // not a test file
-      "packages/engine/src/stats/tiebreak-order.test.ts": `f("football");\n`, // named in, outside the scope dirs
-      "packages/engine/src/stats/other.test.ts": `f("football");\n`, // neither
       "apps/web/src/server/usecases/__tests__/stage-progression.test.ts": "sportKey: `tennis`\n",
       "apps/web/src/server/usecases/__tests__/other.test.ts": `const z = "football";\n`,
       "apps/web/src/standings/inner.test.ts": `const z = "football";\n`, // the NAME is the file's, not a directory's
@@ -147,18 +138,12 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
       "scripts/standings.test.ts": `const z = "football";\n`, // outside both name roots
     });
     const r = scanSingleSport(root);
-    expect(r.scanned).toBe(6);
+    expect(r.scanned).toBe(2);
     expect(r.pins.map((p) => [p.file, p.line, p.sport, p.via])).toEqual([
       ["apps/web/src/components/standings-table.test.tsx", 1, "volleyball", "literal"],
       ["apps/web/src/server/usecases/__tests__/stage-progression.test.ts", 1, "tennis", "literal"],
-      ["packages/engine/src/competition/__tests__/deep.test.ts", 1, "cricket", "literal"],
-      ["packages/engine/src/scheduling/a.test.ts", 1, "badminton", "literal"],
-      ["packages/engine/src/scheduling/a.test.ts", 2, "generic", "literal"],
-      ["packages/engine/src/scheduling/a.test.ts", 3, "tennis", "literal"],
-      ["packages/engine/src/scheduling/b.test.tsx", 1, "hockey", "literal"],
-      ["packages/engine/src/stats/tiebreak-order.test.ts", 1, "football", "literal"],
     ]);
-    expect(r.perRoot).toEqual({ "packages/engine/src/scheduling": 2, "packages/engine/src/competition": 1, "packages/engine/src": 1, "apps/web/src": 2 });
+    expect(r.perRoot).toEqual({ "apps/web/src": 2 });
   });
 
   it("a key quoted INSIDE a string or template counts (the SQL seeding idiom); a key merely mentioned in one does not", () => {
@@ -480,7 +465,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("the sport list is the registry's (every registry key is found, one file each)", () => {
-    const root = tree(Object.fromEntries(REGISTRY.map((s, i) => [`packages/engine/src/scheduling/s${i}.test.ts`, `const k = "${s}";\n`])));
+    const root = tree(Object.fromEntries(REGISTRY.map((s, i) => [`apps/web/src/server/usecases/__tests__/s${i}-standings.test.ts`, `const k = "${s}";\n`])));
     const r = scanSingleSport(root);
     expect(r.scanned).toBe(REGISTRY.length);
     expect(r.pins.map((p) => p.sport).sort()).toEqual([...REGISTRY].sort());
@@ -538,7 +523,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("the ratchet, run for real: --init, a green --check; a risen count and a new sport fail, and --write refuses to record either", () => {
-    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const pinned = "apps/web/src/server/usecases/__tests__/sched-standings.test.ts";
     const root = tree({ ...FULL, [pinned]: `f("generic");\nf("generic");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
 
@@ -569,7 +554,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("the ratchet, run for real: a reasoned new pin is fine; a fall FAILS --check until --write records it, down to zero (review RR-1)", () => {
-    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const pinned = "apps/web/src/server/usecases/__tests__/sched-standings.test.ts";
     const root = tree({ ...FULL, [pinned]: `f("generic");\nf("generic");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
     expect(run("--init").status).toBe(0);
@@ -598,7 +583,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("the review's two-PR probe goes red at PR1: lowering pins without --write fails; with --write the lowered ceiling then catches PR2's re-raise (the CLI, run for real)", () => {
-    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const pinned = "apps/web/src/server/usecases/__tests__/sched-standings.test.ts";
     const root = tree({ ...FULL, [pinned]: `f("generic");\nf("generic");\nf("generic");\nf("tennis");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
     expect(run("--init").status).toBe(0);
@@ -624,7 +609,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   it("--move transfers a renamed file's entries, and refuses a move that is not a rename (the CLI, run for real)", () => {
     const old = "apps/web/src/server/usecases/__tests__/old-progression.test.ts";
     const moved = "apps/web/src/server/usecases/__tests__/new-progression.test.ts";
-    const other = "packages/engine/src/scheduling/other.test.ts";
+    const other = "apps/web/src/server/usecases/__tests__/other-standings.test.ts";
     const root = tree({ ...FULL, [old]: `f("generic");\nf("generic");\n`, [other]: `f("tennis");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
     expect(run("--init").status).toBe(0);
@@ -659,7 +644,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("--against REF: the baseline may not rise above REF's — a hand raise and an rm + --init reset both fail; a fall and a recorded move pass (the CLI, run for real)", () => {
-    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const pinned = "apps/web/src/server/usecases/__tests__/sched-standings.test.ts";
     const root = tree({ ...FULL, [pinned]: `f("generic");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
     expect(run("--init").status).toBe(0);
@@ -691,8 +676,8 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("--against REF maps a recorded move back to the base's entry, and refuses an unknown ref, a malformed base, or a non-repo root (the CLI, run for real)", () => {
-    const old = "packages/engine/src/scheduling/old.test.ts";
-    const moved = "packages/engine/src/scheduling/new.test.ts";
+    const old = "apps/web/src/server/usecases/__tests__/old-standings.test.ts";
+    const moved = "apps/web/src/server/usecases/__tests__/new-standings.test.ts";
     const root = tree({ ...FULL, [old]: `f("generic");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
     // not a git checkout
@@ -706,11 +691,11 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     expect(run("--move", old, moved).status).toBe(0);
     expect(run("--check", "--against", "HEAD").status).toBe(0);
     // a hand-made move onto a file the base already had is refused (review RR-2)
-    writeBaseline(root, { [`${moved}:generic`]: 1, "packages/engine/src/scheduling/sched.test.ts:tennis": 1 }, { [moved]: old, "packages/engine/src/scheduling/sched.test.ts": "packages/engine/src/scheduling/ghost.test.ts" });
+    writeBaseline(root, { [`${moved}:generic`]: 1, "apps/web/src/server/usecases/__tests__/sched-standings.test.ts:tennis": 1 }, { [moved]: old, "apps/web/src/server/usecases/__tests__/sched-standings.test.ts": "apps/web/src/server/usecases/__tests__/ghost-standings.test.ts" });
     writeFileSync(join(root, FULL_SCHED), `f("tennis");\n`);
     const handMade = run("--check", "--against", "HEAD");
     expect(handMade.status).toBe(2);
-    expect(handMade.stderr).toContain("packages/engine/src/scheduling/sched.test.ts already exists at HEAD");
+    expect(handMade.stderr).toContain("apps/web/src/server/usecases/__tests__/sched-standings.test.ts already exists at HEAD");
 
     for (const ref of ["no-such-ref", "-p", "HEAD~5"]) {
       const c = run("--check", ...(ref.startsWith("-") ? [`--against=${ref}`] : ["--against", ref]));
@@ -727,11 +712,11 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("a move --against REF must be a real rename since REF: the review's probes D and D2, each condition alone, an inherited move, and a changed one (the CLI, run for real; review RR-2)", () => {
-    const OLD = "packages/engine/src/scheduling/old.test.ts";
-    const B = "packages/engine/src/scheduling/b.test.ts";
-    const N = "packages/engine/src/scheduling/n.test.ts";
-    const R = "packages/engine/src/scheduling/renamed.test.ts";
-    const GHOST = "packages/engine/src/scheduling/ghost.test.ts";
+    const OLD = "apps/web/src/server/usecases/__tests__/old-standings.test.ts";
+    const B = "apps/web/src/server/usecases/__tests__/b-standings.test.ts";
+    const N = "apps/web/src/server/usecases/__tests__/n-standings.test.ts";
+    const R = "apps/web/src/server/usecases/__tests__/renamed-standings.test.ts";
+    const GHOST = "apps/web/src/server/usecases/__tests__/ghost-standings.test.ts";
     const three = `f("generic");\nf("generic");\nf("generic");\n`;
     const root = tree({ ...FULL, [OLD]: three, [B]: "f(1);\n" });
     const run = (...args: string[]) => cli([...args, "--root", root]);
@@ -776,7 +761,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("--against a base with the scanner but no baseline is refused — a PR cannot move or drop the baseline to take the introducing-PR notice (the CLI, run for real; review RR-3)", () => {
-    const root = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n`, "tools/matrix/single-sport.ts": "// the scanner\n", "tools/matrix/catalogue/old-baseline.json": "{}\n" });
+    const root = tree({ ...FULL, "apps/web/src/server/usecases/__tests__/p-standings.test.ts": `f("generic");\n`, "tools/matrix/single-sport.ts": "// the scanner\n", "tools/matrix/catalogue/old-baseline.json": "{}\n" });
     commitAll(root, "base with the scanner, baseline elsewhere");
     const run = (...args: string[]) => cli([...args, "--root", root]);
     expect(run("--init").status).toBe(0);
@@ -793,7 +778,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     expect(oldBaseline).toBeDefined();
     expect(oldBaseline).not.toBe(BASELINE_PATH);
     expect(oldScanner).not.toBe(SCANNER_PATH);
-    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const pinned = "apps/web/src/server/usecases/__tests__/sched-standings.test.ts";
     const base = { ...FULL, [pinned]: `f("generic");\n`, [oldScanner!]: "// the scanner, before the move\n", [oldBaseline!]: `${JSON.stringify({ schemaVersion: 2, generatedBy: oldScanner, pins: { [`${pinned}:generic`]: 1 }, moves: {} }, null, 2)}\n` };
     const root = tree(base);
     commitAll(root, "base: the harness at its historical path");
@@ -854,7 +839,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     let checked = 0;
     // G1: the scanner file renamed; G2: left in place under a typo'd constant — at REF neither sits at SCANNER_PATH.
     for (const scanner of ["tools/matrix/single-sport-v2.ts", "tools/matrix/single_sport.ts"]) {
-      const root = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n`, [scanner]: "// the scanner\n", "package.json": pkg({ [RATCHET_SCRIPT]: `node --experimental-strip-types ${scanner}` }), "tools/matrix/catalogue/old-baseline.json": "{}\n" });
+      const root = tree({ ...FULL, "apps/web/src/server/usecases/__tests__/p-standings.test.ts": `f("generic");\n`, [scanner]: "// the scanner\n", "package.json": pkg({ [RATCHET_SCRIPT]: `node --experimental-strip-types ${scanner}` }), "tools/matrix/catalogue/old-baseline.json": "{}\n" });
       commitAll(root, "base that runs the ratchet, baseline elsewhere");
       const run = (...args: string[]) => cli([...args, "--root", root]);
       expect(run("--init").status).toBe(0);
@@ -866,14 +851,14 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     }
     expect(checked).toBe(2);
     // A REF package.json that cannot be read is refused by name, never taken for "no ratchet yet".
-    const broken = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n`, "package.json": "{ not json\n" });
+    const broken = tree({ ...FULL, "apps/web/src/server/usecases/__tests__/p-standings.test.ts": `f("generic");\n`, "package.json": "{ not json\n" });
     commitAll(broken, "base with a broken package.json");
     expect(cli(["--init", "--root", broken]).status).toBe(0);
     const b = cli(["--check", "--against", "HEAD", "--root", broken]);
     expect(b.status).toBe(2);
     expect(b.stderr).toContain("HEAD:package.json is not JSON");
     // The pair: a base whose package.json does NOT name the script is the introducing PR — a notice, exit 0.
-    const before = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n`, "package.json": pkg({ build: "tsc" }) });
+    const before = tree({ ...FULL, "apps/web/src/server/usecases/__tests__/p-standings.test.ts": `f("generic");\n`, "package.json": pkg({ build: "tsc" }) });
     commitAll(before, "before the ratchet, with other scripts");
     expect(cli(["--init", "--root", before]).status).toBe(0);
     const intro = cli(["--check", "--against", "HEAD", "--root", before]);
@@ -882,7 +867,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("--against a base with no baseline yet (the introducing PR) passes with a notice; --against applies to --check only (the CLI, run for real)", () => {
-    const root = tree({ ...FULL, "packages/engine/src/scheduling/p.test.ts": `f("generic");\n` });
+    const root = tree({ ...FULL, "apps/web/src/server/usecases/__tests__/p-standings.test.ts": `f("generic");\n` });
     commitAll(root, "before the ratchet");
     const run = (...args: string[]) => cli([...args, "--root", root]);
     expect(run("--init").status).toBe(0);
@@ -896,10 +881,10 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     }
   });
 
-  const MOVE = ["--move", "packages/engine/src/scheduling/gone.test.ts", "packages/engine/src/scheduling/sched.test.ts"];
+  const MOVE = ["--move", "apps/web/src/server/usecases/__tests__/gone-standings.test.ts", "apps/web/src/server/usecases/__tests__/sched-standings.test.ts"];
 
   it("--init writes sorted counts and refuses over an existing baseline; --check, --write and --move refuse a missing one (the CLI, run for real)", () => {
-    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const pinned = "apps/web/src/server/usecases/__tests__/sched-standings.test.ts";
     const root = tree({ ...FULL, [pinned]: `f("tennis");\nf("generic");\nf("tennis");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
     for (const mode of [["--check"], ["--write"], MOVE]) {
@@ -919,7 +904,7 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 
   it("a malformed baseline is refused by --check, --write and --move, and left as it was (the CLI, run for real)", () => {
-    const pinned = "packages/engine/src/scheduling/sched.test.ts";
+    const pinned = "apps/web/src/server/usecases/__tests__/sched-standings.test.ts";
     const root = tree({ ...FULL, [pinned]: `f("tennis");\n` });
     const run = (...args: string[]) => cli([...args, "--root", root]);
     const bodies = ["not json", "{}", JSON.stringify({ schemaVersion: 1, unreasoned: [] }), JSON.stringify({ schemaVersion: 2, pins: { [`${pinned}:tennis`]: 0 }, moves: {} })];
@@ -956,9 +941,9 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     for (const d of [...SCOPE_DIRS, ...NAME_ROOTS]) expect({ d, n: (r.perRoot[d] ?? 0) > 0 }).toEqual({ d, n: true });
     const counts = countsOf(r.pins);
     // Witnesses read from the files by hand (review I-1..I-3), not from the scanner.
+    // (Engine split 2b: the two engine witnesses, packages/engine/src/competition/tiebreak-rule-award-alias.test.ts:cricket, the
+    // engine module import, and tie-what-if.test.ts:carrom, left with the engine's scope; the apps/web witnesses are the source's.)
     for (const key of [
-      "packages/engine/src/competition/tiebreak-rule-award-alias.test.ts:cricket",
-      "packages/engine/src/competition/tie-what-if.test.ts:carrom",
       "apps/web/src/components/public-site/__tests__/standings-table-locale.test.tsx:badminton",
       "apps/web/src/components/v2/__tests__/division-settings-standings-points.test.tsx:tennis",
       "apps/web/src/server/engine-db/__tests__/pooled-standings-null-snapshot.test.ts:generic",
@@ -987,4 +972,4 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   });
 });
 
-const FULL_SCHED = "packages/engine/src/scheduling/sched.test.ts";
+const FULL_SCHED = "apps/web/src/server/usecases/__tests__/sched-standings.test.ts";

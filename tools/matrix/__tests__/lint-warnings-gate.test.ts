@@ -47,10 +47,11 @@ function lintScripts(): { label: string; cwd: string; script: string }[] {
   return out;
 }
 
-/** The scripts as they stand. Each is a whole-script pin: a reshaped script reds here and is re-judged by a person. */
+/** The scripts as they stand. Each is a whole-script pin: a reshaped script reds here and is re-judged by a person.
+ *  Engine split 2b (reverse inventory row 31): packages/engine left the workspace with its lint script; its gate is the engine
+ *  repository's. The two anti-vacuity floors below each counted it, and each is lowered by exactly that one workspace. */
 const EXPECTED: Record<string, string> = {
   "apps/web": "eslint --max-warnings 0",
-  "packages/engine": "eslint --max-warnings 0",
   "packages/reference": "eslint --max-warnings 0",
   "packages/scheduler": "eslint --max-warnings 0",
   "root lint:scripts": "eslint --max-warnings 0 scripts tools",
@@ -74,7 +75,7 @@ function gateProblem(script: string): string | null {
 }
 
 describe("--max-warnings 0 is on every lint script, exactly once", () => {
-  it("scans the scripts it claims to: the four lint workspaces and the scripts/tools gate, and each is its pinned whole script", () => {
+  it("scans the scripts it claims to: the three lint workspaces and the scripts/tools gate, and each is its pinned whole script", () => {
     const found = Object.fromEntries(lintScripts().map((s) => [s.label, s.script]));
     expect(found).toEqual(EXPECTED);
   });
@@ -85,7 +86,7 @@ describe("--max-warnings 0 is on every lint script, exactly once", () => {
       checked++;
       expect(gateProblem(script), `${label}: \`${script}\``).toBeNull();
     }
-    expect(checked, "anti-vacuity: scripts judged").toBeGreaterThanOrEqual(5);
+    expect(checked, "anti-vacuity: scripts judged").toBeGreaterThanOrEqual(4);
   });
 
   it("the matcher refuses every bypass and accepts the two spellings of the gate", () => {
@@ -169,7 +170,6 @@ describe("the flag does what the pins claim, in EVERY lint workspace", () => {
    *  unknown path). A new lint workspace owes an entry here, or the test below refuses it by name. */
   const PROBE_FILE: Record<string, string> = {
     "apps/web": "src/__planted__.ts",
-    "packages/engine": "src/core/events.ts",
     "packages/reference": "src/index.ts",
     "packages/scheduler": "src/index.ts",
     "root lint:scripts": "scripts/seed-demo-templates.ts",
@@ -210,7 +210,7 @@ describe("the flag does what the pins claim, in EVERY lint workspace", () => {
   it("every lint script has a probe file (a new lint workspace must add one)", () => {
     const unmapped = lintScripts().filter((s) => PROBE_FILE[s.label] === undefined).map((s) => s.label);
     expect(unmapped).toEqual([]);
-    expect(probes.length, "anti-vacuity: probes").toBeGreaterThanOrEqual(6);
+    expect(probes.length, "anti-vacuity: probes").toBeGreaterThanOrEqual(5);
     // apps/web's probe is a path that need not exist (its config is not type-aware); the others must be real files.
     for (const p of probes.filter((x) => x.label !== "apps/web")) {
       expect(existsSync(resolve(REPO, p.cwd, p.file!)), `${p.label}: ${p.file} is a real file its config reaches`).toBe(true);

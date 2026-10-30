@@ -562,7 +562,6 @@ describe.skipIf(!HAS_DB)("a lineup event is refused by the append path of a spor
 const TEST_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(TEST_DIR, "../../../../../..");
 const V3_DIR = resolve(REPO_ROOT, "apps/web/src/components/v2/scorepad/v3");
-const ENGINE_SPORTS_DIR = resolve(REPO_ROOT, "packages/engine/src/sports");
 
 function sourceFilesUnder(dir: string, exts: string[]): string[] {
   const out: string[] = [];
@@ -613,15 +612,8 @@ describe("no logger outside the sanctioned funnel (R3.5 Task K, K6/K7)", () => {
     const offenders = files.filter((f) => /from\s+["']@\/server\//.test(readFileSync(f, "utf8")));
     expect(offenders).toEqual([]);
   });
-
-  it("K7: no sport module imports a logger (packages/engine is zero-effectful-deps by declaration)", () => {
-    const files = sourceFilesUnder(ENGINE_SPORTS_DIR, [".ts"]);
-    expect(files.length).toBeGreaterThan(0);
-    const offenders = files.filter((f) =>
-      /from\s+["']pino["']|require\(\s*["']pino["']\s*\)/.test(readFileSync(f, "utf8")),
-    );
-    expect(offenders).toEqual([]);
-  });
+  // K7 (no sport module imports a logger) read packages/engine/src/sports and moved with the engine (engine split 2b E1): it is
+  // onryde/seazn.club.engine's test/append-event.test.ts.
 });
 
 // W2e T32 fix round 2 (item 3) — the API behaviour `docs/api-v1-breaking-changes.md` (2026-10-29) promises, at the funnel

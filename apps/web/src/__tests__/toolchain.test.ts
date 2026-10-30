@@ -50,7 +50,9 @@ describe("toolchain: node floor", () => {
   });
 
   it("@types/node tracks the runtime major in every TS workspace", () => {
-    for (const ws of ["apps/web", "packages/engine", "apps/cron-worker"]) {
+    // Engine split 2b (reverse inventory row 1, I): the engine is the installed package; its published manifest carries its
+    // devDependencies, so its @types/node is read from there.
+    for (const ws of ["apps/web", "node_modules/@seazn/engine", "apps/cron-worker"]) {
       const pkg = JSON.parse(
         readFileSync(join(REPO_ROOT, ws, "package.json"), "utf8"),
       ) as { devDependencies?: Record<string, string> };
@@ -71,13 +73,9 @@ describe("toolchain: compile target", () => {
         readFileSync(join(REPO_ROOT, "apps/web/tsconfig.json"), "utf8"),
       ),
     ) as { compilerOptions: { target: string } };
-    const engine = JSON.parse(
-      stripJsonComments(
-        readFileSync(join(REPO_ROOT, "packages/engine/tsconfig.json"), "utf8"),
-      ),
-    ) as { compilerOptions: { target: string } };
+    // Engine split 2b (reverse inventory row 1): the engine's tsconfig is not published, so this is the app half; the
+    // engine's ES2022 target is the engine repository's to pin.
     expect(web.compilerOptions.target).toBe("ES2022");
-    expect(web.compilerOptions.target).toBe(engine.compilerOptions.target);
   });
 });
 
@@ -93,7 +91,7 @@ describe("toolchain: suppression policy", () => {
    */
   for (const cfg of [
     "apps/web/eslint.config.mjs",
-    "packages/engine/eslint.config.mjs",
+    // Engine split 2b: packages/engine/eslint.config.mjs left with the engine (its config is not published).
     // The two packages that copied the rule (engine split 1a-3 added the scheduler's; reference carried the same block).
     // Each is as strict as the engine's, and each was unpinned: a weakened copy would have gone unseen.
     "packages/scheduler/eslint.config.mjs",
@@ -142,7 +140,8 @@ describe("toolchain: which compiler gates types", () => {
 
   it("no typecheck script invokes bare tsc", () => {
     const offenders: string[] = [];
-    for (const p of ["package.json", "apps/web/package.json", "packages/engine/package.json"]) {
+    // The engine's scripts are read from its installed (published) manifest (engine split 2b, I).
+    for (const p of ["package.json", "apps/web/package.json", "node_modules/@seazn/engine/package.json"]) {
       const pkg = JSON.parse(readFileSync(join(REPO_ROOT, p), "utf8")) as {
         scripts?: Record<string, string>;
       };
@@ -470,7 +469,8 @@ describe("toolchain: pnpm workspace", () => {
      * install with the same ERR_MODULE_NOT_FOUND. So the set is read from the engine, not typed here: every peer not marked
      * optional in `peerDependenciesMeta`. (fast-check and vitest are optional: only the testkit loads them.)
      */
-    const engine = JSON.parse(readFileSync(join(REPO_ROOT, "packages/engine/package.json"), "utf8")) as {
+    // Engine split 2b (reverse inventory row 1, I): the peers ship in the published manifest, read from the installed package.
+    const engine = JSON.parse(readFileSync(join(REPO_ROOT, "node_modules/@seazn/engine/package.json"), "utf8")) as {
       peerDependencies?: Record<string, string>;
       peerDependenciesMeta?: Record<string, { optional?: boolean }>;
     };

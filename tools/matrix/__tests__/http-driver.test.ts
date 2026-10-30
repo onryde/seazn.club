@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, TEMPLATE_VISIBILITY, type Transport } from "../lib/driver/http-driver.ts";
-import { DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId, VOID_EVENT, voidTargetOf } from "../lib/driver/types.ts";
+import { DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId, voidTargetOf } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { nextMatchStartedText, wireCodeFor } from "./product-text.ts";
 
@@ -1005,7 +1005,8 @@ describe("HttpDriver — divisionPhase (W1d Task 14, item 15c)", () => {
   });
 
   it("the void and the dating are the product's: core.void is a kernel core event, and PATCH /fixtures/:id takes scheduled_at as an offset datetime or null", () => {
-    expect(product("packages/engine/src/core/events.ts")).toContain(`"${VOID_EVENT}": CoreVoid,`);
+    // (app half, owner ruling 2026-10-30 option A) The pin that core.void is a kernel core event read packages/engine/src/core/events.ts:
+    // it is the engine half, in onryde/seazn.club.engine's test/http-driver.test.ts. This half pins the product's dating.
     const schemas = product("apps/web/src/server/api-v1/schemas.ts");
     const block = schemas.slice(schemas.indexOf("export const PatchFixture"), schemas.indexOf("export type PatchFixture"));
     expect(block).toContain("scheduled_at: z.iso.datetime({ offset: true }).nullable(),");

@@ -1,6 +1,6 @@
 {
   "batch": "2b",
-  "note": "Test-id ledger for engine-split Phase 2b Task E1: the import commit of onryde/seazn.club.engine (0e77252 in the local clone, not pushed), built from tag engine-split-base = 5a67fbf37d25675c683bbc91785bba5bacd93714. Ids are relative to each collection ROOT. BEFORE (the tag): packages/engine (the whole engine suite), apps/web, tools/matrix and the repo root (scripts/__tests__). AFTER: the clone root. Every report collected with `vitest run --isolate -t __parity_collect_only__ --reporter=json`: the engine suite whole on both sides; at the tag, apps/web over src/server/engine-db/__tests__/{append-event,outcome-readers}.test.ts (DATABASE_URL empty), tools/matrix over __tests__/{ci-wiring,matrix-workflow}.test.ts, the root (packages/engine/node_modules/.bin/vitest) over scripts/__tests__/{main-module,engine-canary-workflow}.test.ts. The three app-side reports are FILTERED to the ids this ledger accounts for (web 3 of 23, matrix 57 of 185, root 9 of 13): the tests left in those files stay in onryde/seazn.club, and their fate (kept, or edited where a clause names a moved workflow) is Batch A Task A3 parity, not this ledger. The after side was collected in a detached worktree of the clone at the import commit with the tag own .github/workflows/{ci,mutation,matrix-truth}.yml placed untracked, because test/ci-wiring.test.ts, test/matrix-workflow.test.ts and the engine own test/stryker-outputs-ignored.test.ts read them at module scope; the engine repository workflows are Tasks E2/E3, and matrix-truth.yml never exists there. Run: node scripts/lib/test-parity.mjs --before <engine>=<tag>/packages/engine --before <web.filtered>=<tag>/apps/web --before <matrix.filtered>=<tag>/tools/matrix --before <root.filtered>=<tag> --after <clone>=<clone> --ledger this-file. RESULT: engine 8019 -> 8081, no engine id lost; +61 moved (row 4 K7 1, row 6 2, rows 18+29 11, row 17 46, row 15 FB-10 1), +1 added (tie declaration parity), 8 retired (row 13). TASK E2 (clone commit 4412622 on top of 0e77252, not pushed): the after side re-collected the same way at 4412622 (its own ci.yml now tracked; the tag mutation.yml and matrix-truth.yml still placed untracked, until E3), and tools/matrix re-collected at the tag over __tests__/{ci-wiring,matrix-workflow,scenarios,http-driver}.test.ts. Filtered: web 7 of 23, matrix 59 of 489, root 9 of 13. RESULT: engine 8019 -> 8094; +6 moved, each the ENGINE HALF of a SPLIT mixed test (owner ruling 2026-10-30, option A: row 6 outcome-readers 4, row 25 scenarios 1, row 26 http-driver 1), titled \"<source title> (engine half)\", whose app half stays in onryde/seazn.club under the original id (Batch A Task A3 accounts for it there); +7 added (plan false premise 2, the import commit HEAD^1 cases: stryker-floor 2, single-sport 3, fold-epoch-guard-cli 2). before-only 75, after-only 75, both 8019, unaccounted 0; with the E1 entries alone, 19 unaccounted (the 13 new ids and the 6 split sources). TASK E3 (the clone working tree on top of 4412622, not pushed): .github/workflows/mutation.yml moved in, re-rooted, vars.MATRIX_RUNNER -> vars.STRYKER_RUNNER (D32g) and the weekly gate on vars.STRYKER_WEEKLY_ENABLED (D29); test/matrix-workflow.test.ts reads mutation.yml alone (owner ruling 2026-10-30, option A). The after side was collected in the clone itself (its own ci.yml and mutation.yml; no matrix-truth.yml, which never exists there); the before side is the E2 reports unchanged (every id E3 touches was already ledgered). Entries: 2 split engine halves (`moved`, to \"<source title> (engine half)\": the switchable-runner test and the RUNNER_ENV guard test); 1 `retired` (the guard script compared with matrix-truth.yml line for line, cross-repo) and 1 `added` (its mutation.yml-only part, under its own title); 4 `moved` reasons re-stated where E3 re-pinned a line (the weekly variable rename; three path re-roots the import missed: the upload root and the floors job `../../floors-in`). RESULT: engine 8019 -> 8094 (unchanged from E2); before-only 75, after-only 75, both 8019, unaccounted 0; with the E2 ledger alone, 9 unaccounted (the 3 source ids, the 3 new ids, 3 targets missing). BATCH E REVIEW FIX (clone working tree on top of 0260d0b, not pushed): I1, the carry (b) test (tools/matrix matrix-workflow, `the visibility guard (Review Focus 2)`) was mixed and unledgered: its engine half is `moved` (the app half keeps the original id), and the nine-case table plus its count pin run on mutation.yml's own guard (10 `added`); the reason of the E3 `added` guard test is corrected (it checks the guard's text, never runs it). The tools/matrix before report is re-filtered from the E2 collection to the ledgered ids, carry (b) now among them (60 of 489). RESULT: engine 8019 -> 8105 (+11: the carry (b) engine half, the nine table rows and their count pin); before-only 76, after-only 86, both 8019, unaccounted 0; with the ledger before this fix, 11 unaccounted. TASK A2 (seazn.club worktree engine-split-2b, on top of A1 eb5ba972db): ids collected at eacdb01244 (the branch before A1, whose copies of these files are byte-identical to the branch's) with the root vitest, `--isolate -t __parity_collect_only__`; scripts/__tests__ ids relative to the repo root, ci-wiring ids relative to tools/matrix. Entries: 30 `retired` (scripts/__tests__/prod-release-epoch-workflow.test.ts, reverse inventory row 30: the prod.yml step it pins is deleted); 1 `retired` (ci-wiring's engine boundary entry-point test); 1 `rewritten` (ci-wiring's R26 ratchet-order test, anchored on the typecheck step). The 11 ci-wiring and 8 engine-canary-workflow entries above (E1) are the ones A2 deletes from this repository, ids checked equal to the files' own collection.",
+  "note": "Test-id ledger for engine-split Phase 2b Task E1: the import commit of onryde/seazn.club.engine (0e77252 in the local clone, not pushed), built from tag engine-split-base = 5a67fbf37d25675c683bbc91785bba5bacd93714. Ids are relative to each collection ROOT. BEFORE (the tag): packages/engine (the whole engine suite), apps/web, tools/matrix and the repo root (scripts/__tests__). AFTER: the clone root. Every report collected with `vitest run --isolate -t __parity_collect_only__ --reporter=json`: the engine suite whole on both sides; at the tag, apps/web over src/server/engine-db/__tests__/{append-event,outcome-readers}.test.ts (DATABASE_URL empty), tools/matrix over __tests__/{ci-wiring,matrix-workflow}.test.ts, the root (packages/engine/node_modules/.bin/vitest) over scripts/__tests__/{main-module,engine-canary-workflow}.test.ts. The three app-side reports are FILTERED to the ids this ledger accounts for (web 3 of 23, matrix 57 of 185, root 9 of 13): the tests left in those files stay in onryde/seazn.club, and their fate (kept, or edited where a clause names a moved workflow) is Batch A Task A3 parity, not this ledger. The after side was collected in a detached worktree of the clone at the import commit with the tag own .github/workflows/{ci,mutation,matrix-truth}.yml placed untracked, because test/ci-wiring.test.ts, test/matrix-workflow.test.ts and the engine own test/stryker-outputs-ignored.test.ts read them at module scope; the engine repository workflows are Tasks E2/E3, and matrix-truth.yml never exists there. Run: node scripts/lib/test-parity.mjs --before <engine>=<tag>/packages/engine --before <web.filtered>=<tag>/apps/web --before <matrix.filtered>=<tag>/tools/matrix --before <root.filtered>=<tag> --after <clone>=<clone> --ledger this-file. RESULT: engine 8019 -> 8081, no engine id lost; +61 moved (row 4 K7 1, row 6 2, rows 18+29 11, row 17 46, row 15 FB-10 1), +1 added (tie declaration parity), 8 retired (row 13). TASK E2 (clone commit 4412622 on top of 0e77252, not pushed): the after side re-collected the same way at 4412622 (its own ci.yml now tracked; the tag mutation.yml and matrix-truth.yml still placed untracked, until E3), and tools/matrix re-collected at the tag over __tests__/{ci-wiring,matrix-workflow,scenarios,http-driver}.test.ts. Filtered: web 7 of 23, matrix 59 of 489, root 9 of 13. RESULT: engine 8019 -> 8094; +6 moved, each the ENGINE HALF of a SPLIT mixed test (owner ruling 2026-10-30, option A: row 6 outcome-readers 4, row 25 scenarios 1, row 26 http-driver 1), titled \"<source title> (engine half)\", whose app half stays in onryde/seazn.club under the original id (Batch A Task A3 accounts for it there); +7 added (plan false premise 2, the import commit HEAD^1 cases: stryker-floor 2, single-sport 3, fold-epoch-guard-cli 2). before-only 75, after-only 75, both 8019, unaccounted 0; with the E1 entries alone, 19 unaccounted (the 13 new ids and the 6 split sources). TASK E3 (the clone working tree on top of 4412622, not pushed): .github/workflows/mutation.yml moved in, re-rooted, vars.MATRIX_RUNNER -> vars.STRYKER_RUNNER (D32g) and the weekly gate on vars.STRYKER_WEEKLY_ENABLED (D29); test/matrix-workflow.test.ts reads mutation.yml alone (owner ruling 2026-10-30, option A). The after side was collected in the clone itself (its own ci.yml and mutation.yml; no matrix-truth.yml, which never exists there); the before side is the E2 reports unchanged (every id E3 touches was already ledgered). Entries: 2 split engine halves (`moved`, to \"<source title> (engine half)\": the switchable-runner test and the RUNNER_ENV guard test); 1 `retired` (the guard script compared with matrix-truth.yml line for line, cross-repo) and 1 `added` (its mutation.yml-only part, under its own title); 4 `moved` reasons re-stated where E3 re-pinned a line (the weekly variable rename; three path re-roots the import missed: the upload root and the floors job `../../floors-in`). RESULT: engine 8019 -> 8094 (unchanged from E2); before-only 75, after-only 75, both 8019, unaccounted 0; with the E2 ledger alone, 9 unaccounted (the 3 source ids, the 3 new ids, 3 targets missing). BATCH E REVIEW FIX (clone working tree on top of 0260d0b, not pushed): I1, the carry (b) test (tools/matrix matrix-workflow, `the visibility guard (Review Focus 2)`) was mixed and unledgered: its engine half is `moved` (the app half keeps the original id), and the nine-case table plus its count pin run on mutation.yml's own guard (10 `added`); the reason of the E3 `added` guard test is corrected (it checks the guard's text, never runs it). The tools/matrix before report is re-filtered from the E2 collection to the ledgered ids, carry (b) now among them (60 of 489). RESULT: engine 8019 -> 8105 (+11: the carry (b) engine half, the nine table rows and their count pin); before-only 76, after-only 86, both 8019, unaccounted 0; with the ledger before this fix, 11 unaccounted. TASK A2 (seazn.club worktree engine-split-2b, on top of A1 eb5ba972db): ids collected at eacdb01244 (the branch before A1, whose copies of these files are byte-identical to the branch's) with the root vitest, `--isolate -t __parity_collect_only__`; scripts/__tests__ ids relative to the repo root, ci-wiring ids relative to tools/matrix. Entries: 30 `retired` (scripts/__tests__/prod-release-epoch-workflow.test.ts, reverse inventory row 30: the prod.yml step it pins is deleted); 1 `retired` (ci-wiring's engine boundary entry-point test); 1 `rewritten` (ci-wiring's R26 ratchet-order test, anchored on the typecheck step). The 11 ci-wiring and 8 engine-canary-workflow entries above (E1) are the ones A2 deletes from this repository, ids checked equal to the files' own collection. TASK A3 (seazn.club worktree engine-split-2b, on top of A2 045d6de751): APP parity is one COMBINED run, so that each engine half lands on the side that holds it. BEFORE is the tag engine-split-base: packages/engine collected whole (287 files, 8019 tests; root packages/engine), plus the app files (536 files, 13818 tests before the filter below). AFTER is onryde/seazn.club.engine at v1.0.0 (fb7d7e4), collected whole from a detached worktree (296 files, 8105 tests; root = the clone), plus the same app files on this branch (535 files, 13724 tests before the filter; lock-isolation.test.ts deleted). The app files are every *.test.ts(x) that `git grep -l -a '@seazn/engine'` names at the tag or on the branch, plus the reverse-inventory rows, including rows 30 (prod-release-epoch-workflow) and 31 (lint-warnings-gate). Each app file is collected by its own runner, with `vitest run --isolate -t __parity_collect_only__`. apps/web ids are relative to apps/web and tools/matrix ids relative to tools/matrix; scripts/, packages/reference, packages/scheduler and tools/bench ids are relative to the repo root. One row is filtered out of BOTH web reports: apps/web/src/server/usecases/external-play/__tests__/open-round.test.ts:1046 puts `new Date()` into an `it.each` title, so its id differs on every run. The file is byte-identical tag to branch, and no ledger entry could name that id. Entries: the nine ruling-A splits, which E1/E2 ledgered `moved` (matrix-workflow x3, http-driver, outcome-readers x4, scenarios), become `added` engine halves with `splitFrom`. The app half keeps the original id, which is therefore on both sides, so a `moved` from it was LEDGER-INVALID (E2's predicted warning). Then 44 new entries: 16 `retired` (toolchain's engine eslint case, lint-warnings' engine probe, lock-isolation x7, single-sport's multi-root case, workspace-wiring turbo x2, main-module byte-identity, rules-reference x2 relative to the deleted engine step, tools-import-guard's engine config), 8 `rewritten` (lint-warnings four -> three workspaces; matrix-workflow permissions x2 for `packages: read`; rules-reference x5, from the deleted engine step to the root step), and 20 `added` (pr-rows x14 and registry-auth-workflows x3 from A2, registry-install x3 from A1). RESULT: before-only 123, after-only 115, both 21713, unaccounted 0 (exit 0).",
   "entries": [
     {
       "id": "src/server/engine-db/__tests__/append-event.test.ts › no logger outside the sanctioned funnel (R3.5 Task K, K6/K7) › K7: no sport module imports a logger (packages/engine is zero-effectful-deps by declaration)",
@@ -81,16 +81,16 @@
       "reason": "2b E1: reverse inventory row 15 (FB-10), moved to onryde/seazn.club.engine with title and assertions unchanged; paths re-rooted to the engine repository's root"
     },
     {
-      "id": "__tests__/matrix-workflow.test.ts › both workflows run on the switchable runner (ruling 68, D24) › every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes",
-      "fate": "moved",
-      "to": "test/matrix-workflow.test.ts › both workflows run on the switchable runner (ruling 68, D24) › every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes (engine half)",
-      "reason": "2b E3 (owner ruling 2026-10-30, option A: matrix-truth.yml stays in onryde/seazn.club and never exists in the engine repository): SPLIT. The engine half keeps the source's assertions over mutation.yml alone, titled as the source with \" (engine half)\"; the matrix-truth.yml half stays in onryde/seazn.club under this original id (Batch A, Task A3). Its one changed line: the runs-on string's vars.MATRIX_RUNNER is vars.STRYKER_RUNNER (D32g, a required rename)"
+      "id": "test/matrix-workflow.test.ts › both workflows run on the switchable runner (ruling 68, D24) › every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes (engine half)",
+      "fate": "added",
+      "splitFrom": "__tests__/matrix-workflow.test.ts › both workflows run on the switchable runner (ruling 68, D24) › every job of matrix-truth.yml AND mutation.yml runs on the switchable runner (ruling 68, D24), and has a timeout-minutes",
+      "reason": "2b E3 (owner ruling 2026-10-30, option A: matrix-truth.yml stays in onryde/seazn.club and never exists in the engine repository): SPLIT. The engine half keeps the source's assertions over mutation.yml alone, titled as the source with \" (engine half)\"; the matrix-truth.yml half stays in onryde/seazn.club under this original id (Batch A, Task A3). Its one changed line: the runs-on string's vars.MATRIX_RUNNER is vars.STRYKER_RUNNER (D32g, a required rename) 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
-      "id": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed)",
-      "fate": "moved",
-      "to": "test/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed) (engine half)",
-      "reason": "2b E3 (owner ruling 2026-10-30, option A: matrix-truth.yml stays in onryde/seazn.club and never exists in the engine repository): SPLIT. The engine half keeps the source's assertions over mutation.yml alone, titled as the source with \" (engine half)\"; the matrix-truth.yml half stays in onryde/seazn.club under this original id (Batch A, Task A3). Its anti-vacuity floor was \"> 4, matrix-truth's four plus mutation's\"; the half holds mutation.yml to the per-workflow floor the switchable-runner test uses (> 1 job)"
+      "id": "test/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed) (engine half)",
+      "fate": "added",
+      "splitFrom": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › every guard step of BOTH workflows takes RUNNER_ENV from runner.environment, never a literal (the one line that decides whether private hosted minutes can be billed)",
+      "reason": "2b E3 (owner ruling 2026-10-30, option A: matrix-truth.yml stays in onryde/seazn.club and never exists in the engine repository): SPLIT. The engine half keeps the source's assertions over mutation.yml alone, titled as the source with \" (engine half)\"; the matrix-truth.yml half stays in onryde/seazn.club under this original id (Batch A, Task A3). Its anti-vacuity floor was \"> 4, matrix-truth's four plus mutation's\"; the half holds mutation.yml to the per-workflow floor the switchable-runner test uses (> 1 job) 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
       "id": "__tests__/matrix-workflow.test.ts › mutation.yml and the runner wiring (review 5: R5-I1, m2, m3; moved here by review 6, R6-I1) › mutation.yml's guard is the first step of every job, with matrix-truth's script in every line but the refusal's wording (the identical-script claim for the second workflow)",
@@ -428,40 +428,40 @@
       "reason": "2b E2 Step 2 (plan false premise 2): the fold-epoch guard on this repository's import commit (HEAD^1 holds no engine anywhere): the tree is checked against itself with a notice and every sport and stream counted, exit 0, and a table entry with no corpus is still a violation, exit 1 (the renamed-engine-directory refusal stays). Red first (it refused, exit 2), green after scripts/fold-epoch-guard.ts; mutation-checked (an early return in the no-engine branch reds both)"
     },
     {
-      "id": "__tests__/http-driver.test.ts › HttpDriver — divisionPhase (W1d Task 14, item 15c) › the void and the dating are the product's: core.void is a kernel core event, and PATCH /fixtures/:id takes scheduled_at as an offset datetime or null",
-      "fate": "moved",
-      "to": "test/http-driver.test.ts › HttpDriver — divisionPhase (W1d Task 14, item 15c) › the void and the dating are the product's: core.void is a kernel core event, and PATCH /fixtures/:id takes scheduled_at as an offset datetime or null (engine half)",
-      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 26 (the core.void registry pin). SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3)"
+      "id": "test/http-driver.test.ts › HttpDriver — divisionPhase (W1d Task 14, item 15c) › the void and the dating are the product's: core.void is a kernel core event, and PATCH /fixtures/:id takes scheduled_at as an offset datetime or null (engine half)",
+      "fate": "added",
+      "splitFrom": "__tests__/http-driver.test.ts › HttpDriver — divisionPhase (W1d Task 14, item 15c) › the void and the dating are the product's: core.void is a kernel core event, and PATCH /fixtures/:id takes scheduled_at as an offset datetime or null",
+      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 26 (the core.void registry pin). SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3) 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
-      "id": "src/server/engine-db/__tests__/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › every allowed file still exists and still holds a bare call (a stale entry is a failure)",
-      "fate": "moved",
-      "to": "test/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › every allowed file still exists and still holds a bare call (a stale entry is a failure) (engine half)",
-      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 6. SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3)"
+      "id": "test/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › every allowed file still exists and still holds a bare call (a stale entry is a failure) (engine half)",
+      "fate": "added",
+      "splitFrom": "src/server/engine-db/__tests__/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › every allowed file still exists and still holds a bare call (a stale entry is a failure)",
+      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 6. SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3) 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
-      "id": "src/server/engine-db/__tests__/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › no bare <module>.outcome(state) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers",
-      "fate": "moved",
-      "to": "test/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › no bare <module>.outcome(state) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers (engine half)",
-      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 6. SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3)"
+      "id": "test/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › no bare <module>.outcome(state) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers (engine half)",
+      "fate": "added",
+      "splitFrom": "src/server/engine-db/__tests__/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › no bare <module>.outcome(state) outside the allowed list, and outcomeOf's readers are exactly the eight moved fold readers",
+      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 6. SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3) 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
-      "id": "src/server/engine-db/__tests__/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › ruling D-C3: no fold result's outcome is read as a PROPERTY (`x.outcome`, `x.state.outcome`) — that drops a settle too",
-      "fate": "moved",
-      "to": "test/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › ruling D-C3: no fold result's outcome is read as a PROPERTY (`x.outcome`, `x.state.outcome`) — that drops a settle too (engine half)",
-      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 6. SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3)"
+      "id": "test/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › ruling D-C3: no fold result's outcome is read as a PROPERTY (`x.outcome`, `x.state.outcome`) — that drops a settle too (engine half)",
+      "fate": "added",
+      "splitFrom": "src/server/engine-db/__tests__/outcome-readers.test.ts › finding 1: every fold-outcome reader goes through outcomeOf › ruling D-C3: no fold result's outcome is read as a PROPERTY (`x.outcome`, `x.state.outcome`) — that drops a settle too",
+      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 6. SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3) 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
-      "id": "src/server/engine-db/__tests__/outcome-readers.test.ts › review I-1: every module.apply replay loop skips what the kernel owns › each module.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason",
-      "fate": "moved",
-      "to": "test/outcome-readers.test.ts › review I-1: every module.apply replay loop skips what the kernel owns › each module.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason (engine half)",
-      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 6. SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3)"
+      "id": "test/outcome-readers.test.ts › review I-1: every module.apply replay loop skips what the kernel owns › each module.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason (engine half)",
+      "fate": "added",
+      "splitFrom": "src/server/engine-db/__tests__/outcome-readers.test.ts › review I-1: every module.apply replay loop skips what the kernel owns › each module.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason",
+      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 6. SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3) 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
-      "id": "__tests__/scenarios.test.ts › team rosters and per-fixture lineups (W1-driving Task 4, fold-in beneath ruling 49) › Step 0: the product's lineup PUT, pinned from its source — the refusal codes, replace-not-append, a warning-only check, no event-time assertLineup",
-      "fate": "moved",
-      "to": "test/scenarios.test.ts › team rosters and per-fixture lineups (W1-driving Task 4, fold-in beneath ruling 49) › Step 0: the product's lineup PUT, pinned from its source — the refusal codes, replace-not-append, a warning-only check, no event-time assertLineup (engine half)",
-      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 25 (25b: the assertLineup( callers scan). SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3)"
+      "id": "test/scenarios.test.ts › team rosters and per-fixture lineups (W1-driving Task 4, fold-in beneath ruling 49) › Step 0: the product's lineup PUT, pinned from its source — the refusal codes, replace-not-append, a warning-only check, no event-time assertLineup (engine half)",
+      "fate": "added",
+      "splitFrom": "__tests__/scenarios.test.ts › team rosters and per-fixture lineups (W1-driving Task 4, fold-in beneath ruling 49) › Step 0: the product's lineup PUT, pinned from its source — the refusal codes, replace-not-append, a warning-only check, no event-time assertLineup",
+      "reason": "2b E2 (owner ruling 2026-10-30, option A: split the mixed tests, same assertions): reverse inventory row 25 (25b: the assertLineup( callers scan). SPLIT: the engine half (the source's assertions verbatim over the engine's own src, the engine's rows only) moved to onryde/seazn.club.engine, titled as the source with \" (engine half)\"; the app half stays in onryde/seazn.club under this original id (Batch A, Task A3) 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
       "id": "test/single-sport.test.ts › single-sport --check --against HEAD^1 on this repository's import commit (engine-split 2b E2, plan false premise 2) › a shallow clone of the import (fetch-depth 1) cannot resolve HEAD^1: exit 2, never a pass",
@@ -489,10 +489,10 @@
       "reason": "2b E2 Step 2 (plan false premise 2): the Stryker floor's --check-file-against on this repository's import commit (HEAD^1 = the README commit, no stryker-floor.json): the working file is checked against itself with a notice and its count, exit 0; a shallow clone is refused, exit 2. Red first (the self-check was absent), green after scripts/stryker-floor.ts; mutation-checked (an early return in the absent branch reds the self-check test)"
     },
     {
-      "id": "__tests__/matrix-workflow.test.ts › the visibility guard (Review Focus 2) › carry (b): a refusal on a private repository NAMES the Stryker mutation workflow, in every job, and says nothing of a matrix truth run (run for real, with a stand-in gh)",
-      "fate": "moved",
-      "to": "test/matrix-workflow.test.ts › the visibility guard (Review Focus 2) › carry (b): a refusal on a private repository NAMES the Stryker mutation workflow, in every job, and says nothing of a matrix truth run (run for real, with a stand-in gh) (engine half)",
-      "reason": "2b Batch E review I1 (owner ruling 2026-10-30, option A): SPLIT, missed by E1. The only tag test that RAN mutation.yml's visibility guard: each job's guard, private + hosted, is exit 1 with the Stryker refusal, and the public repository passes. The engine half keeps that loop and the public pass-through, assertions verbatim, titled as the source with \" (engine half)\"; the stand-in gh helper (runWith) moved with it, its default script mutation.yml's plan guard. The matrix-truth.yml positive control stays with the app half, which keeps this original id in onryde/seazn.club (Batch A, Task A3). Mutation-checked: the review's M5 (`if false` for the public check in all three guards) was green 50/50 before, and reds this test and four table rows after"
+      "id": "test/matrix-workflow.test.ts › the visibility guard (Review Focus 2) › carry (b): a refusal on a private repository NAMES the Stryker mutation workflow, in every job, and says nothing of a matrix truth run (run for real, with a stand-in gh) (engine half)",
+      "fate": "added",
+      "splitFrom": "__tests__/matrix-workflow.test.ts › the visibility guard (Review Focus 2) › carry (b): a refusal on a private repository NAMES the Stryker mutation workflow, in every job, and says nothing of a matrix truth run (run for real, with a stand-in gh)",
+      "reason": "2b Batch E review I1 (owner ruling 2026-10-30, option A): SPLIT, missed by E1. The only tag test that RAN mutation.yml's visibility guard: each job's guard, private + hosted, is exit 1 with the Stryker refusal, and the public repository passes. The engine half keeps that loop and the public pass-through, assertions verbatim, titled as the source with \" (engine half)\"; the stand-in gh helper (runWith) moved with it, its default script mutation.yml's plan guard. The matrix-truth.yml positive control stays with the app half, which keeps this original id in onryde/seazn.club (Batch A, Task A3). Mutation-checked: the review's M5 (`if false` for the public check in all three guards) was green 50/50 before, and reds this test and four table rows after 2b A3: the app half keeps the original id here, so that id is on both sides (`both`); this entry, once `moved` from it, accounts the engine half as `added` instead (test-parity.mjs: a `moved` entry needs its source gone from this side, and a split's source stays). `splitFrom` names the original id; the parity tool ignores it."
     },
     {
       "id": "test/matrix-workflow.test.ts › the visibility guard (Review Focus 2) › 'private but injected public (cannot l…' → exit 1, on mutation.yml's guard",
@@ -704,6 +704,234 @@
       "fate": "rewritten",
       "to": "__tests__/ci-wiring.test.ts › matrix CI wiring › R26: the single-sport ratchet › the gates job runs it as the next step after the typecheck, exactly once, through pnpm, against HEAD^1",
       "reason": "2b A2: the step the ratchet followed (`npm run engine:boundary`) left with the engine, so the anchor is the step that now precedes it (`npx turbo run typecheck`) and the title names it; every assertion on the ratchet step itself (the very next non-comment line, exactly once, in gates, the package script, the CLI file) is unchanged"
+    },
+    {
+      "id": "src/__tests__/toolchain.test.ts › toolchain: suppression policy › packages/engine/eslint.config.mjs bans @ts-ignore and keeps @ts-expect-error described",
+      "fate": "retired",
+      "reason": "2b A3: the `it.each` case over packages/engine/eslint.config.mjs. That config left this repository with the engine, and the installed package ships no eslint config; the other config cases are unchanged. The engine repo has no toolchain.test.ts, so this case has no engine twin. The engine config's ban-ts-comment pin is an engine-repo gap, routed in the A3 report."
+    },
+    {
+      "id": "__tests__/lint-warnings-gate.test.ts › --max-warnings 0 is on every lint script, exactly once › scans the scripts it claims to: the four lint workspaces and the scripts/tools gate, and each is its pinned whole script",
+      "fate": "rewritten",
+      "to": "__tests__/lint-warnings-gate.test.ts › --max-warnings 0 is on every lint script, exactly once › scans the scripts it claims to: the three lint workspaces and the scripts/tools gate, and each is its pinned whole script",
+      "reason": "2b A3: packages/engine, one of the four lint workspaces, left the repository. Its EXPECTED row is gone, the title says three, and the scripts-judged floor drops by that workspace's one script (5 -> 4)."
+    },
+    {
+      "id": "__tests__/lint-warnings-gate.test.ts › the flag does what the pins claim, in EVERY lint workspace › packages/engine (src/core/events.ts): a planted warning exits 1 under the real script's flags, and 0 without them",
+      "fate": "retired",
+      "reason": "2b A3: the `it.each` probe case for the packages/engine lint workspace, which left the repository. The probe floor drops by that one case (6 -> 5); the other workspaces' probes are unchanged."
+    },
+    {
+      "id": "__tests__/lock-isolation.test.ts › the lock scan itself, on the shapes a deleted or stale override writes › a clean lock passes with every guarded package looked at, and the engine's own @babel/core 8 link is not a violation",
+      "fate": "retired",
+      "reason": "2b A3: tools/matrix/__tests__/lock-isolation.test.ts is deleted whole (reverse inventory row 20). It guarded the two Stryker isolation overrides (@babel/core 8, rxjs 7), which A1 removed along with the engine's Stryker, and the lock now links neither, so no case has a subject. The test's own anti-vacuity message said to drop it at that point, and the 2b design deletes its pins ('nothing is left to mutate')."
+    },
+    {
+      "id": "__tests__/lock-isolation.test.ts › the lock scan itself, on the shapes a deleted or stale override writes › override 1 gone (apps/web re-linked to @babel/core 8): the importer, the next / styled-jsx / @sentry/nextjs keys and every reference to them are named",
+      "fate": "retired",
+      "reason": "2b A3: tools/matrix/__tests__/lock-isolation.test.ts is deleted whole (reverse inventory row 20). It guarded the two Stryker isolation overrides (@babel/core 8, rxjs 7), which A1 removed along with the engine's Stryker, and the lock now links neither, so no case has a subject. The test's own anti-vacuity message said to drop it at that point, and the 2b design deletes its pins ('nothing is left to mutate')."
+    },
+    {
+      "id": "__tests__/lock-isolation.test.ts › the lock scan itself, on the shapes a deleted or stale override writes › override 2 gone (posthog-node given rxjs 7.8.2): the importer, the snapshot key and its optionalDependencies are named",
+      "fate": "retired",
+      "reason": "2b A3: tools/matrix/__tests__/lock-isolation.test.ts is deleted whole (reverse inventory row 20). It guarded the two Stryker isolation overrides (@babel/core 8, rxjs 7), which A1 removed along with the engine's Stryker, and the lock now links neither, so no case has a subject. The test's own anti-vacuity message said to drop it at that point, and the 2b design deletes its pins ('nothing is left to mutate')."
+    },
+    {
+      "id": "__tests__/lock-isolation.test.ts › the lock scan itself, on the shapes a deleted or stale override writes › the empty case: an empty lock looks at nothing and says so (the real-lock test fails on zero looked at, not on a pass)",
+      "fate": "retired",
+      "reason": "2b A3: tools/matrix/__tests__/lock-isolation.test.ts is deleted whole (reverse inventory row 20). It guarded the two Stryker isolation overrides (@babel/core 8, rxjs 7), which A1 removed along with the engine's Stryker, and the lock now links neither, so no case has a subject. The test's own anti-vacuity message said to drop it at that point, and the 2b design deletes its pins ('nothing is left to mutate')."
+    },
+    {
+      "id": "__tests__/lock-isolation.test.ts › the lockfile keeps Stryker's @babel/core 8 and rxjs 7 out of apps/web (T15-LOCK; the overrides in pnpm-workspace.yaml) › anti-vacuity: it looked at every other importer and at snapshots of each guarded package, and Stryker's @babel/core 8 and rxjs 7 are in the lock to be kept out",
+      "fate": "retired",
+      "reason": "2b A3: tools/matrix/__tests__/lock-isolation.test.ts is deleted whole (reverse inventory row 20). It guarded the two Stryker isolation overrides (@babel/core 8, rxjs 7), which A1 removed along with the engine's Stryker, and the lock now links neither, so no case has a subject. The test's own anti-vacuity message said to drop it at that point, and the 2b design deletes its pins ('nothing is left to mutate')."
+    },
+    {
+      "id": "__tests__/lock-isolation.test.ts › the lockfile keeps Stryker's @babel/core 8 and rxjs 7 out of apps/web (T15-LOCK; the overrides in pnpm-workspace.yaml) › no importer but packages/engine, and no next / @sentry/nextjs / styled-jsx / posthog-node snapshot, links @babel/core 8 or rxjs",
+      "fate": "retired",
+      "reason": "2b A3: tools/matrix/__tests__/lock-isolation.test.ts is deleted whole (reverse inventory row 20). It guarded the two Stryker isolation overrides (@babel/core 8, rxjs 7), which A1 removed along with the engine's Stryker, and the lock now links neither, so no case has a subject. The test's own anti-vacuity message said to drop it at that point, and the 2b design deletes its pins ('nothing is left to mutate')."
+    },
+    {
+      "id": "__tests__/lock-isolation.test.ts › the lockfile keeps Stryker's @babel/core 8 and rxjs 7 out of apps/web (T15-LOCK; the overrides in pnpm-workspace.yaml) › the two overrides are written in pnpm-workspace.yaml and in the lock (the selector names a RANGE, so a 7.x bump of the helper keeps matching)",
+      "fate": "retired",
+      "reason": "2b A3: tools/matrix/__tests__/lock-isolation.test.ts is deleted whole (reverse inventory row 20). It guarded the two Stryker isolation overrides (@babel/core 8, rxjs 7), which A1 removed along with the engine's Stryker, and the lock now links neither, so no case has a subject. The test's own anti-vacuity message said to drop it at that point, and the 2b design deletes its pins ('nothing is left to mutate')."
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › the exposure surface of the two workflows is read-only, secret-free and never pull_request_target (m1) › matrix-truth.yml: ONE permissions block, workflow-level, exactly contents+actions read; no job widens it",
+      "fate": "rewritten",
+      "to": "__tests__/matrix-workflow.test.ts › the exposure surface of the two workflows is read-only, secret-free and never pull_request_target (m1) › matrix-truth.yml: ONE permissions block, workflow-level, exactly contents+actions+packages read; no job widens it",
+      "reason": "2b A3: A2 granted `packages: read` so the install can fetch @seazn/engine from GitHub Packages (scripts/__tests__/registry-auth-workflows.test.ts). The A3 dispatch names this pin; the title and the expected set now name packages."
+    },
+    {
+      "id": "__tests__/matrix-workflow.test.ts › the exposure surface of the two workflows is read-only, secret-free and never pull_request_target (m1) › ci.yml: the matrix-rows block reads contents, pull-requests and actions; matrix-sample (a called workflow cannot exceed its caller) reads contents and actions",
+      "fate": "rewritten",
+      "to": "__tests__/matrix-workflow.test.ts › the exposure surface of the two workflows is read-only, secret-free and never pull_request_target (m1) › ci.yml: the matrix-rows block reads contents, pull-requests, actions and packages; matrix-sample (a called workflow cannot exceed its caller) reads contents, actions and packages",
+      "reason": "2b A3: the same change as the matrix-truth permissions entry: `packages: read` on the matrix-rows block and on matrix-sample, which A2 granted for the registry install."
+    },
+    {
+      "id": "__tests__/single-sport.test.ts › single-sport scanner (R26) › one scope root that finds nothing is refused by name even when the others find files (the CLI, run for real)",
+      "fate": "retired",
+      "reason": "2b A3: this case's subject is SEVERAL scope roots, one of them empty. The engine's scope roots left with the engine (single-sport.ts has SCOPE_DIRS = [] and NAME_ROOTS = [apps/web/src]), so no other roots remain. The one root's zero-file refusal is still covered by the empty case. The engine repo's test/single-sport.test.ts has no grammar or multi-root case, so 'moved' had no target."
+    },
+    {
+      "id": "__tests__/workspace-wiring.test.ts › workspace wiring (trap 2: a new package is invisible to the root chains) › packages/reference: turbo keys its lint AND typecheck on the engine's inputs, so an engine type change is a cache miss (review M-4)",
+      "fate": "retired",
+      "reason": "2b A3: turbo keyed reference and scheduler on the engine WORKSPACE's inputs. The engine is now a registry package, keyed through the lock (hashOfExternalDependencies, measured in A1), so there are no workspace inputs to name. The engineInputsHashedBy helper is deleted with these cases."
+    },
+    {
+      "id": "__tests__/workspace-wiring.test.ts › workspace wiring (trap 2: a new package is invisible to the root chains) › packages/scheduler: turbo keys its lint AND typecheck on the engine's solver port, so an engine port change is a cache miss",
+      "fate": "retired",
+      "reason": "2b A3: turbo keyed reference and scheduler on the engine WORKSPACE's inputs. The engine is now a registry package, keyed through the lock (hashOfExternalDependencies, measured in A1), so there are no workspace inputs to name. The engineInputsHashedBy helper is deleted with these cases."
+    },
+    {
+      "id": "scripts/__tests__/main-module.test.ts › the engine's copy of main-module.ts › is byte-identical to the root's: a copy by design, so a fix to one must reach the other (remove at 2b)",
+      "fate": "retired",
+      "reason": "2b A3: the engine's copy of main-module.ts left the repository; the title itself says 'remove at 2b'."
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › nothing narrows the engine checker's step: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › nothing narrows the root checker's step: the workflow triggers on every pull request, the job has no condition, the step is only a name and a run block",
+      "reason": "2b A3: A2 deleted ci.yml's engine rules-reference step (that checker runs in the engine repo) and kept the root step. These five CI-wiring pins move from the engine step to the root step, with HEAD, REPORT and the run line naming the root file. The structural expectations are the same: the step appears once, nothing narrows it, it has the same run shape, the judge holds on 7 faults, and the step is red on a non-zero, missing or stale report."
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the engine checker's step appears once, in the gates job, named for the checker",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the root checker's step appears once, in the gates job, named for the checker",
+      "reason": "2b A3: A2 deleted ci.yml's engine rules-reference step (that checker runs in the engine repo) and kept the root step. These five CI-wiring pins move from the engine step to the root step, with HEAD, REPORT and the run line naming the root file. The structural expectations are the same: the step appears once, nothing narrows it, it has the same run shape, the judge holds on 7 faults, and the step is red on a non-zero, missing or stale report."
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the engine checker's step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the root checker's step is red when vitest exits non-zero on a clean report, when it writes no report, and when only a stale clean one is left from an earlier run",
+      "reason": "2b A3: A2 deleted ci.yml's engine rules-reference step (that checker runs in the engine repo) and kept the root step. These five CI-wiring pins move from the engine step to the root step, with HEAD, REPORT and the run line naming the root file. The structural expectations are the same: the step appears once, nothing narrows it, it has the same run shape, the judge holds on 7 faults, and the step is red on a non-zero, missing or stale report."
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the engine checker's step runs only packages/engine/test/rules-reference.test.ts with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the root checker's step runs only scripts/__tests__/rules-reference.test.ts with the JSON reporter, clears any stale report first, and ends in a node judge (no jq)",
+      "reason": "2b A3: A2 deleted ci.yml's engine rules-reference step (that checker runs in the engine repo) and kept the root step. These five CI-wiring pins move from the engine step to the root step, with HEAD, REPORT and the run line naming the root file. The structural expectations are the same: the step appears once, nothing narrows it, it has the same run shape, the judge holds on 7 faults, and the step is red on a non-zero, missing or stale report."
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the engine step's judge is green on a clean single-file pass and red, naming its reason, on each of 7 faults, run through real bash and node",
+      "fate": "rewritten",
+      "to": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the root step's judge is green on a clean single-file pass and red, naming its reason, on each of 7 faults, run through real bash and node",
+      "reason": "2b A3: A2 deleted ci.yml's engine rules-reference step (that checker runs in the engine repo) and kept the root step. These five CI-wiring pins move from the engine step to the root step, with HEAD, REPORT and the run line naming the root file. The structural expectations are the same: the step appears once, nothing narrows it, it has the same run shape, the judge holds on 7 faults, and the step is red on a non-zero, missing or stale report."
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the gates job runs scripts/__tests__/rules-reference.test.ts, in a step of its own after the engine checker's, which still runs only the engine file",
+      "fate": "retired",
+      "reason": "2b A3: this pinned the root step RELATIVE to the engine checker's step: that it comes after it and uses the same judge byte for byte. A2 deleted the engine step, so the relation has no subject. The root step's own pins are the five rewritten entries."
+    },
+    {
+      "id": "scripts/__tests__/rules-reference.test.ts › the checker runs on every pull request: CI wiring (review I-3) › the root step is the engine step with its own file and report, name-and-run only, and the same judge byte for byte",
+      "fate": "retired",
+      "reason": "2b A3: this pinned the root step RELATIVE to the engine checker's step: that it comes after it and uses the same judge byte for byte. A2 deleted the engine step, so the relation has no subject. The root step's own pins are the five rewritten entries."
+    },
+    {
+      "id": "scripts/__tests__/tools-import-guard.test.ts › tools import guard: each real eslint config reaches its files › packages/engine: lines 2, 3 and 6 of the probe go red as src/competition/index.ts, the decoys do not",
+      "fate": "retired",
+      "reason": "2b A3: the CONFIGS case for packages/engine's eslint config, which left the repository; the other configs' cases are unchanged."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › main: --lock-diff-file <path> (engine split 2b, A2) › an empty lock diff beside a change list without the lock decides as the two-file call does",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › main: --lock-diff-file <path> (engine split 2b, A2) › an undeclared engine bump in the lock exits 1, stdout empty, stderr naming the lock; declared, it prints the rows",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › main: --lock-diff-file <path> (engine split 2b, A2) › an unreadable --lock-diff-file exits 2 naming the flag",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › main: --lock-diff-file <path> (engine split 2b, A2) › the lock in the change list and no --lock-diff-file is exit 2, stdout empty (the wiring fault, never a pass)",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › a bump the other way (1.1.0 → 1.0.0, a revert) is an engine change too",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › a lock diff moving @onryde/seazn-engine 1.0.0 → 1.1.0 requires declared rows: undeclared is exit 1, naming the lock and both versions",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › a lock diff that does not touch the engine does not: a zod-only bump is the fixed sample, undeclared",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › a peer-only re-resolution (the engine's version unchanged on every line that names it) is not an engine change",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › a second call decides afresh, and the lock rule is earned by the version change alone (a zod diff of the same file stays undeclared)",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › empty case first: an empty lock diff with no lock in the change list decides exactly as before (a web-only PR, a declaring-path PR)",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › the engine arriving in the lock (this cutover: a workspace link replaced by the registry package) is engine-touching",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › the lock in the change list with no lock diff given is refused (exit 2): the job dropped --lock-diff-file, and an engine bump would pass undeclared",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › the same bump with a declaration is decided like any engine change (the declared rows, or none with a reason)",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "__tests__/pr-rows.test.ts › pr-rows treats an @onryde/seazn-engine version change in pnpm-lock.yaml as engine-touching (engine split 2b, A2; Review Focus 5) › the two inputs must agree: lock lines changed but the lock not in the change list, or the lock listed but its diff empty, is refused (exit 2)",
+      "fate": "added",
+      "reason": "2b A3: added by A2: pr-rows' lock-diff engine rule and its --lock-diff-file wiring. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "scripts/__tests__/registry-auth-workflows.test.ts › every workflow install authenticates to GitHub Packages (engine split 2b, A2; plan Review Focus 1) › a job that calls a workflow which installs grants packages: read (a called workflow's token is capped by its caller's job)",
+      "fate": "added",
+      "reason": "2b A3: added by A2: every workflow install authenticates to GitHub Packages. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "scripts/__tests__/registry-auth-workflows.test.ts › every workflow install authenticates to GitHub Packages (engine split 2b, A2; plan Review Focus 1) › every install step authenticates",
+      "fate": "added",
+      "reason": "2b A3: added by A2: every workflow install authenticates to GitHub Packages. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "scripts/__tests__/registry-auth-workflows.test.ts › every workflow install authenticates to GitHub Packages (engine split 2b, A2; plan Review Focus 1) › the token reaches the install steps alone: no workflow-level or job-level env sets NODE_AUTH_TOKEN",
+      "fate": "added",
+      "reason": "2b A3: added by A2: every workflow install authenticates to GitHub Packages. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "scripts/__tests__/registry-install.test.ts › @seazn/engine is installed from GitHub Packages (engine split 2b, A1) › @seazn/engine resolves to the registry package",
+      "fate": "added",
+      "reason": "2b A3: added by A1: @seazn/engine is installed from GitHub Packages. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "scripts/__tests__/registry-install.test.ts › @seazn/engine is installed from GitHub Packages (engine split 2b, A1) › Dockerfile installs with the npmrc secret only",
+      "fate": "added",
+      "reason": "2b A3: added by A1: @seazn/engine is installed from GitHub Packages. A3's app parity is the first collection of this file."
+    },
+    {
+      "id": "scripts/__tests__/registry-install.test.ts › @seazn/engine is installed from GitHub Packages (engine split 2b, A1) › every consumer pins the alias",
+      "fate": "added",
+      "reason": "2b A3: added by A1: @seazn/engine is installed from GitHub Packages. A3's app parity is the first collection of this file."
     }
   ]
 }

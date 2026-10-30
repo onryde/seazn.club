@@ -41,7 +41,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const STAGES_TS = resolve(REPO, "apps/web/src/server/usecases/stages.ts");
 const FORMAT_TEMPLATES_TS = resolve(REPO, "apps/web/src/lib/format-templates.ts");
-const ENGINE_AMERICANO_TS = resolve(REPO, "packages/engine/src/scheduling/americano.ts");
+// Engine split 2b (reverse inventory row 24): the engine is the installed package, so the rule's line is read from its compiled module,
+// which keeps the source line verbatim (I: the same expectation, read from what this harness runs).
+const ENGINE_AMERICANO_JS = resolve(REPO, "tools/matrix/node_modules/@seazn/engine/dist/scheduling/americano.js");
 const ENTRANT_MEMBERS_SQL = resolve(REPO, "db/migration/v2-engine/tables/V213__entrant_members.sql");
 const HTTP_TS = resolve(REPO, "apps/web/src/server/api-v1/http.ts");
 /** PF-9: every case runs on the sport's builder-default variant. */
@@ -926,7 +928,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
   it("F1 on americano (T7-R1): the round size is the ENGINE's (americano.ts:50, min(floor(n/4), courtCount)) — never floor(n/2)", async () => {
     // The rule, stated from the engine's own line (text-pinned) and computed
     // here — never read from f1-odd-field.ts.
-    expect(readFileSync(ENGINE_AMERICANO_TS, "utf8")).toContain("const playable = Math.min(Math.floor(order.length / 4), courtCount);");
+    expect(readFileSync(ENGINE_AMERICANO_JS, "utf8")).toContain("const playable = Math.min(Math.floor(order.length / 4), courtCount);");
     for (const sport of ["generic", "badminton"]) {   // the scoring path differs (generic folds a score); the round size must not
       const driver = new FakeAmericanoDriver({ mode: "americano" });
       const { out, checks } = await runOn(driver, "F1", { row: "americano", sport });
