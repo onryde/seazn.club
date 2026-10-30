@@ -400,6 +400,7 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
     await expect(page.getByTestId("youtube-connect-submit")).toBeDisabled();
     await expect(page.getByTestId("youtube-consent-required")).toHaveText(en("streaming.youtube.consent.required"));
     await expect(form).toContainText(en("streaming.youtube.settingsNote"));
+    await expect(page.getByTestId("youtube-minors-note"), "YouTube's under-16 live rule, before Continue (PO 2026-10-30)").toHaveText(en("streaming.youtube.connect.minors"));
     for (const id of ["youtube-privacy-unlisted", "youtube-privacy-public", "youtube-privacy-private", "youtube-kids-no", "youtube-kids-yes", "youtube-consent"]) {
       await expectTappable(labelOf(page.getByTestId(id)), `${id} at ${w}`);
     }

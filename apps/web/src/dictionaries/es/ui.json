@@ -1400,6 +1400,7 @@
   "streaming.youtube.madeForKids.yes": "Sí",
   "streaming.youtube.madeForKids.hint": "YouTube pregunta esto en cada transmisión en directo.",
   "streaming.youtube.settingsNote": "Se aplican a un canal que conectas por primera vez. Un canal ya conectado conserva sus ajustes; cámbialos en Ajustes.",
+  "streaming.youtube.connect.minors": "¿Transmites partidos juveniles? YouTube no permite emisiones en directo que muestren a menores de 16 años si no hay un adulto visiblemente con ellos, y puede retirar la posibilidad de emitir en directo a un canal que incumpla esta norma.",
   "streaming.youtube.consent.body": "Confirmo que esta organización cumplirá las {tos} y las {guidelines} de YouTube, tiene los derechos para emitir este contenido (recinto, jugadores, música) y acepta que Seazn cree, titule, inicie y finalice una emisión en directo de YouTube en este canal por cada partido que transmitamos aquí.",
   "streaming.youtube.consent.disclaimer": "Solo YouTube decide si este canal puede emitir; Seazn no se hace responsable si YouTube restringe o desactiva las emisiones en directo, elimina una emisión, aplica una sanción o no guarda una repetición.",
   "streaming.youtube.consent.bound": "Al conectar, aceptas quedar sujeto a las {tos}. Consulta nuestra {privacy}.",
