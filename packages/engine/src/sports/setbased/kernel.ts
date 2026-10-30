@@ -7,6 +7,7 @@
 // outcomes, and all result math reads only the folded set ledger.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import {
   forfeitOf,
   isStrictFold,
@@ -851,7 +852,7 @@ function applyExpedite(state: SetBasedState): SetBasedState {
 // Forfeit — spec 04 §3 / volleyball.md §7: award the match to the opponent;
 // completed sets already stand in the ledger.
 function applyForfeit(state: SetBasedState, by: string, reason: ForfeitReason): SetBasedState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
@@ -873,7 +874,7 @@ const FORFEIT_PHASE: Record<SetBasedState["phase"], ForfeitPhase> = { pre: "pre"
 // Abandon — leave the fixture undecided and flagged for regeneration (mirrors
 // football's replay policy; a gym closure is re-scheduled, not awarded).
 function applyAbandon(state: SetBasedState): SetBasedState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   return { ...state, phase: "abandoned", replayFlagged: true };
@@ -1452,7 +1453,7 @@ export function setBasedServeContext(
 
   // "pre" is deliberately NOT here: a fixture that has not started still has a
   // first server to declare, and the pad wants to ask for it.
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     return unknown("match-over");
   }
 

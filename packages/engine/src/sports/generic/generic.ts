@@ -4,6 +4,7 @@
 // real module on the contract — proves PROMPT-03.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import { foldMatchWithStoppage, forfeitOf, outcomeOf, type CoreEv, type EventEnvelope, type FoldContext } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
@@ -856,7 +857,7 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   // spec 03 §6 — valid-event generator for the conformance kit.
   // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<GenericEv> | null {
-    if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") return null;
+    if (POST_PHASES.has(state.phase)) return null;
     if (state.phase === "pre" && rng() < 0.3) return { type: "core.start", payload: {} };
     const roll = rng();
     if (roll < 0.08) {

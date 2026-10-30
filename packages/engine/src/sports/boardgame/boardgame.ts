@@ -10,6 +10,7 @@
 // tiebreakers.ts).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import { CoreForfeit, forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
@@ -957,7 +958,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         return applyForfeit(state, by, reason);
       }
       case "core.abandon":
-        if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+        if (POST_PHASES.has(state.phase)) {
           wrongPhase("match already over");
         }
         // Rare for a board game; leave undecided and flag for regeneration.

@@ -7,6 +7,7 @@
 // `scoring.strike_by_strike`), see CarromStrike below.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import {
   foldMatchWithStoppage,
   isStrictFold,
@@ -480,7 +481,7 @@ function applyAdjust(
 // Walkover — carrom.md §7: the match is awarded to the opponent; completed
 // games stand in the ledger.
 function applyForfeit(state: CarromState, by: string, reason: ForfeitReason): CarromState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
@@ -505,7 +506,7 @@ const FORFEIT_PHASE: Record<CarromState["phase"], ForfeitPhase> = { pre: "pre", 
 // sharing (`abandonPolicy: "share"`, which the schema allows only where carrom takes a draw) records a draw, the games
 // and boards played staying on the state as they stood.
 function applyAbandon(state: CarromState): CarromState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   if (state.cfg.abandonPolicy === "share") return { ...state, phase: "done", outcome: { kind: "draw" } };
