@@ -48,6 +48,7 @@ export const BANNED: Readonly<Record<string, readonly string[]>> = {
   // P1: period sports (period-shared, hockey, icehockey, football)
   // P2: cricket
   // P3: set-based sports + tennis (badminton, tabletennis, volleyball, tennis)
+  "tennis.tsx": ["POINT_KINDS", "INTERRUPTION_KINDS", "SANCTION_LEVELS", "EVENT_BAND", "CALLS"],
   // P4: carrom, boardgame, generic, and POST_PHASES in every file that declares it
 };
 
