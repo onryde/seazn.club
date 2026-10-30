@@ -414,7 +414,9 @@ tick after reconnect. The destination row shows "Reconnect needed" with the reas
 House bar: mobile-first; 1280 / 768 / 320 with no horizontal scroll; house theme (mocks are layout only); every
 string in en/es/fr/nl + `npm run i18n:gen-keys`; `frontend-design` skill in every UI task.
 
-- **Directory → Streaming:** Connect YouTube action beside "Add destination"; the consent step; the channel picker;
+- **Directory → Streaming:** Connect YouTube action beside "Add streaming key" — Connect YouTube is the primary button and
+  comes first, Add streaming key (a pasted key, formerly "Add destination") the secondary one after it (owner 2026-10-30);
+  the consent step; the channel picker;
   a destination row: YouTube icon (a link to the channel on YouTube) · channel · visibility · status badge (Connected / Reconnect needed / Not enabled
   for live); actions Reconnect, Settings (visibility, made-for-kids), Disconnect.
 - **Fixture stream panel:** the destination picker shows API-backed YouTube rows like any other; refusal reasons

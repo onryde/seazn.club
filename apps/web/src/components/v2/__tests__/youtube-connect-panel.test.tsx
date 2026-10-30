@@ -1604,9 +1604,10 @@ describe("the archived 'disconnected' label is localized", () => {
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe("the panel with YouTube Connect", () => {
-  it("an editor with NO destinations: the empty card offers both ways in — Add destination and Connect YouTube (the mark beside it)", () => {
+  it("an editor with NO destinations: the empty card offers both ways in — Connect YouTube first, then Add streaming key (no YouTube mark on either)", () => {
     const html = panelHtml({ targets: [] });
-    expect(html).toMatch(/data-testid="stream-dest-empty"[\s\S]*data-testid="stream-dest-empty-add"[\s\S]*data-testid="youtube-connect-empty"/);
+    expect(html).toMatch(/data-testid="stream-dest-empty"[\s\S]*data-testid="youtube-connect-empty"[\s\S]*data-testid="stream-dest-empty-add"/);
+    expect(plain(html)).toContain(m("streamDest.add"));
     expect(plain(html)).toContain(m("streamDest.empty"));
     expect(plain(html)).toContain(m("streaming.youtube.connect"));
     expect(html.match(/data-platform-mark="youtube"/g), "the Connect button wears no mark").toBeNull();
@@ -1620,12 +1621,47 @@ describe("the panel with YouTube Connect", () => {
     for (const id of ["stream-dest-empty-add", "youtube-connect-empty", "youtube-connect", "stream-dest-add"]) expect(html, id).not.toContain(`data-testid="${id}"`);
   });
 
-  it("with destinations the Connect YouTube button sits beside Add destination, and Add is the louder of the two (the YouTube mark is never the most prominent thing)", () => {
-    const html = panelHtml({ targets: [pasted()] });
-    expect(html).toMatch(/data-testid="stream-dest-add"[^>]*class="[^"]*\bbtn-primary\b/);
-    expect(html).toMatch(/data-testid="youtube-connect"[^>]*class="[^"]*\bbtn-ghost\b/);
-    expect(html).not.toMatch(/data-testid="youtube-connect"[^>]*class="[^"]*\bbtn-primary\b/);
-    expect(html).not.toContain('data-testid="youtube-connect-empty"');
+  // Owner 2026-10-30: Connect YouTube is the primary way in and comes FIRST; adding a pasted key is the secondary one. Both places that offer
+  // the pair (the header row over a list, the empty card) — so a fix to one cannot leave the other behind.
+  it("Connect YouTube is the primary button and comes first; Add streaming key is the secondary one after it — in the header row AND the empty card", () => {
+    const classesOf = (html: string, testid: string): string[] => {
+      const tag = new RegExp(`<button\\b[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0];
+      expect(tag, `${testid} renders`).toBeDefined();
+      return (/\bclass="([^"]*)"/.exec(tag!)?.[1] ?? "").split(/\s+/).filter(Boolean);
+    };
+    const places = [
+      { where: "header row", targets: [pasted()], connect: "youtube-connect", add: "stream-dest-add", absent: "youtube-connect-empty" },
+      { where: "empty card", targets: [], connect: "youtube-connect-empty", add: "stream-dest-empty-add", absent: "youtube-connect" },
+    ];
+    let checked = 0;
+    for (const p of places) {
+      const html = panelHtml({ targets: p.targets });
+      const connect = classesOf(html, p.connect);
+      const add = classesOf(html, p.add);
+      expect(connect, `${p.where}: Connect YouTube is primary`).toContain("btn-primary");
+      expect(connect, `${p.where}: Connect YouTube is not the ghost`).not.toContain("btn-ghost");
+      expect(add, `${p.where}: Add streaming key is the ghost`).toContain("btn-ghost");
+      expect(add, `${p.where}: Add streaming key is not primary`).not.toContain("btn-primary");
+      expect(html.indexOf(`data-testid="${p.connect}"`), `${p.where}: Connect YouTube comes before Add streaming key`).toBeLessThan(html.indexOf(`data-testid="${p.add}"`));
+      expect(html, `${p.where}: only this place's pair renders`).not.toContain(`data-testid="${p.absent}"`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the Add button's label names a streaming key in every locale, in the same noun the YouTube stream-key title already uses (es/fr/nl)", () => {
+    // English is the owner's own wording (2026-10-30), "streaming key"; the shipped English title says "stream key", so en is pinned to the
+    // ruling and the other three to their title's noun (the title is "Seazn Club · <noun> {n}").
+    expect(m("streamDest.add")).toMatch(/\bstreaming key\b/i);
+    let checked = 0;
+    for (const l of ["es", "fr", "nl"] as const) {
+      const d = localeDict(l);
+      const noun = /·\s*(.+?)\s*\{n\}/.exec(d["streaming.youtube.streamKeyTitle"]!)?.[1];
+      expect(noun, `${l}: the stream-key title carries a noun`).toBeTruthy();
+      expect(d["streamDest.add"]!.toLowerCase(), l).toContain(noun!.toLowerCase());
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("connected channels and pasted keys list in two groups, channels first, each under a heading ONLY when both kinds are present", () => {
@@ -1658,7 +1694,7 @@ describe("the panel with YouTube Connect", () => {
     expect(checked).toBe(StreamTargetKind.options.length);
   });
 
-  it("Add destination and Connect YouTube are one form at a time: opening either closes the other (driven)", async () => {
+  it("Add streaming key and Connect YouTube are one form at a time: opening either closes the other (driven)", async () => {
     const panel = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [pasted()], locale: "en" });
     const has = () => ({ add: !!ofType(panel.tree(), AddForm), connect: !!ofType(panel.tree(), YoutubeConnectCard) });
     expect(has()).toEqual({ add: false, connect: false });
@@ -1800,7 +1836,7 @@ describe("T12 polish: the Streaming page", () => {
     const picking = panelHtml({ targets: [], landing: { code: "pick", pendingId: PENDING } });
     expect(picking, "the picker is the way in").toContain('data-testid="youtube-picker"');
     expect(picking, "no second Connect YouTube beside it").not.toContain('data-testid="youtube-connect-empty"');
-    expect(picking, "Add destination is untouched").toContain('data-testid="stream-dest-empty-add"');
+    expect(picking, "Add streaming key is untouched").toContain('data-testid="stream-dest-empty-add"');
     // The positive pairs: no landing, and a landing that is not a pick, both still offer it.
     expect(panelHtml({ targets: [] })).toContain('data-testid="youtube-connect-empty"');
     expect(panelHtml({ targets: [], landing: { code: "connected", pendingId: null } })).toContain('data-testid="youtube-connect-empty"');

@@ -389,7 +389,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     const w = await world(4);
     // The owner's strings (2026-10-29), typed here — not read back from the dictionary under test.
     const WANT: Record<"es" | "fr" | "nl" | "en", string> = {
-      es: "Seazn Club · clave de emisión {n}", fr: "Seazn Club · clé de diffusión {n}",
+      es: "Seazn Club · clave de emisión {n}", fr: "Seazn Club · clé de diffusion {n}",
       nl: "Seazn Club · streamsleutel {n}", en: "Seazn Club · stream key {n}",
     };
     const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;
