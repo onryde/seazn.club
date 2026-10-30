@@ -178,8 +178,9 @@ export function StreamDestinationsPanel({
   const pickPending = canEdit && landing?.code === "pick" ? landing.pendingId : null;
   const channels = targets.filter((t) => t.youtube !== null);
   const keys = targets.filter((t) => t.youtube === null);
+  // Connect YouTube is the primary way in and comes first; Add streaming key (a pasted key) is the secondary one (owner 2026-10-30).
   const connectButton = (testid: string) => (
-    <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-ghost min-h-11">
+    <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-primary min-h-11">
       {/* Words only: a button is not a link to YouTube, so it may not carry the YouTube logo (owner 2026-10-28). */}
       {msg("streaming.youtube.connect")}
     </button>
@@ -192,17 +193,17 @@ export function StreamDestinationsPanel({
       {disconnected !== null && <YoutubeDisconnectedNotice key={`${disconnected.name}:${disconnected.outcome}`} name={disconnected.name} outcome={disconnected.outcome} onDismiss={() => setDisconnected(null)} />}
       {canEdit && targets.length > 0 && (
         <div className="flex flex-wrap gap-2 max-md:flex-col">
+          {connectButton("youtube-connect")}
           <button
             type="button"
             data-testid="stream-dest-add"
             aria-expanded={addOpen}
             onClick={() => (addOpen ? setAddOpen(false) : openAdd())}
-            className="btn btn-primary min-h-11"
+            className="btn btn-ghost min-h-11"
           >
             <Plus aria-hidden className="h-4 w-4" strokeWidth={2} />
             {msg("streamDest.add")}
           </button>
-          {connectButton("youtube-connect")}
         </div>
       )}
       {canEdit && connectOpen && <YoutubeConnectCard orgId={orgId} onCancel={() => setConnectOpen(false)} />}
@@ -241,13 +242,13 @@ export function StreamDestinationsPanel({
           <p className="max-w-md text-sm text-slate-600">{msg("streamDest.empty")}</p>
           {canEdit && (
             <div className="flex flex-wrap justify-center gap-2 max-md:w-full max-md:flex-col">
+              {!connectOpen && pickPending === null && connectButton("youtube-connect-empty")}
               {!addOpen && (
-                <button type="button" data-testid="stream-dest-empty-add" onClick={openAdd} className="btn btn-primary min-h-11">
+                <button type="button" data-testid="stream-dest-empty-add" onClick={openAdd} className="btn btn-ghost min-h-11">
                   <Plus aria-hidden className="h-4 w-4" strokeWidth={2} />
                   {msg("streamDest.add")}
                 </button>
               )}
-              {!connectOpen && pickPending === null && connectButton("youtube-connect-empty")}
             </div>
           )}
         </div>

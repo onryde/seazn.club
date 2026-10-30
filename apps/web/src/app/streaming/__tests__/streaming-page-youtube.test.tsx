@@ -124,10 +124,11 @@ describe("Streaming page + real panel — the connect round trip's landing reach
 });
 
 describe("Streaming page + real panel — Connect YouTube is on the page", () => {
-  it("the owner of an org with no destinations is offered Connect YouTube beside Add destination", async () => {
+  it("the owner of an org with no destinations is offered Connect YouTube first, then Add streaming key", async () => {
     const html = await render();
     expect(html).toContain('data-testid="youtube-connect-empty"');
     expect(html).toContain('data-testid="stream-dest-empty-add"');
+    expect(html.indexOf('data-testid="youtube-connect-empty"'), "Connect YouTube leads (owner 2026-10-30)").toBeLessThan(html.indexOf('data-testid="stream-dest-empty-add"'));
     expect(html).toContain(sentence("streaming.youtube.connect"));
   });
 

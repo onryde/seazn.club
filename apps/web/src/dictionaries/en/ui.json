@@ -1476,7 +1476,7 @@
   "streaming.youtube.replay.playerTitlePart": "Match replay, part {n}",
   "streaming.youtube.replay.unavailable": "This video can't be played here. Open it on YouTube.",
   "streaming.youtube.replay.private": "Private on YouTube",
-  "streamDest.add": "Add destination",
+  "streamDest.add": "Add streaming key",
   "streamDest.listLabel": "Stream destinations",
   "streamDest.platform": "Platform",
   "streamDest.name": "Name",

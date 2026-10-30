@@ -1476,7 +1476,7 @@
   "streaming.youtube.replay.playerTitlePart": "Repetición del partido, parte {n}",
   "streaming.youtube.replay.unavailable": "Este vídeo no se puede reproducir aquí. Ábrelo en YouTube.",
   "streaming.youtube.replay.private": "Privado en YouTube",
-  "streamDest.add": "Añadir destino",
+  "streamDest.add": "Añadir clave de emisión",
   "streamDest.listLabel": "Destinos de emisión",
   "streamDest.platform": "Plataforma",
   "streamDest.name": "Nombre",

@@ -121,6 +121,15 @@ async function expectTappable(loc: Locator, label: string): Promise<void> {
   }
 }
 
+/** `first` precedes `second` in reading order as LAID OUT: on one row it sits to the left, stacked it sits above. */
+async function expectReadsBefore(first: Locator, second: Locator, label: string): Promise<void> {
+  const a = await first.boundingBox();
+  const b = await second.boundingBox();
+  expect(a !== null && b !== null, `${label}: both are laid out`).toBe(true);
+  const sameRow = Math.abs(a!.y - b!.y) < 2;
+  expect(sameRow ? a!.x < b!.x : a!.y < b!.y, `${label}: ${JSON.stringify({ first: a, second: b })}`).toBe(true);
+}
+
 /** The top gantry fits: every link in its <nav> shares one row (no wrap) and ends inside the viewport (nothing clipped or pushed), the
  *  Sign-out button (the control that used to be pushed out) ends inside it too, and each link's centre hit-tests to the link itself. */
 async function expectGantryFits(page: Page, where: string): Promise<void> {
@@ -341,7 +350,11 @@ test("Streaming page: no destinations, then a pasted key - Add and Connect YouTu
     await expect(page.getByTestId("stream-dest-empty-add")).toBeVisible();
     await expect(page.getByTestId("youtube-connect-empty")).toBeVisible();
     await expectTappable(page.getByTestId("youtube-connect-empty"), `Connect YouTube (empty) at ${w}`);
-    await expectTappable(page.getByTestId("stream-dest-empty-add"), `Add destination (empty) at ${w}`);
+    await expectTappable(page.getByTestId("stream-dest-empty-add"), `Add streaming key (empty) at ${w}`);
+    // Owner 2026-10-30: Connect YouTube is the primary button and comes first; Add streaming key is the secondary one after it.
+    await expect(page.getByTestId("youtube-connect-empty"), `Connect YouTube (empty) is primary at ${w}`).toHaveClass(/\bbtn-primary\b/);
+    await expect(page.getByTestId("stream-dest-empty-add"), `Add streaming key (empty) is secondary at ${w}`).toHaveClass(/\bbtn-ghost\b/);
+    await expectReadsBefore(page.getByTestId("youtube-connect-empty"), page.getByTestId("stream-dest-empty-add"), `empty card at ${w}`);
     await expectNoPageScroll(page, `empty Streaming page at ${w}`);
     await shot(page, `page-empty-${w}`);
   }
@@ -358,6 +371,9 @@ test("Streaming page: no destinations, then a pasted key - Add and Connect YouTu
     await expect(page.getByTestId("stream-dest-add")).toBeVisible();
     await expect(page.getByTestId("youtube-connect")).toBeVisible();
     await expectTappable(page.getByTestId("youtube-connect"), `Connect YouTube at ${w}`);
+    await expect(page.getByTestId("youtube-connect"), `Connect YouTube is primary at ${w}`).toHaveClass(/\bbtn-primary\b/);
+    await expect(page.getByTestId("stream-dest-add"), `Add streaming key is secondary at ${w}`).toHaveClass(/\bbtn-ghost\b/);
+    await expectReadsBefore(page.getByTestId("youtube-connect"), page.getByTestId("stream-dest-add"), `header row at ${w}`);
     await expectNoPageScroll(page, `Streaming page with a pasted key at ${w}`);
     await shot(page, `page-pasted-${w}`);
   }
