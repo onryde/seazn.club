@@ -273,7 +273,7 @@ select f.id, f.status, f.finished_at, f.stream_url,
 ```
 
 **S1 — the connection (after step 2).** Expect one row: `status = connected`, `default_privacy = unlisted`,
-`made_for_kids = false`, `consent_version = 1`, `last_error_code` null; and its destination row `kind = youtube`,
+`made_for_kids = false`, `consent_version = 2` (the current `YOUTUBE_CONSENT_VERSION`; 1 before the D16 under-16 clause), `last_error_code` null; and its destination row `kind = youtube`,
 `archived_at` null.
 
 ```sql

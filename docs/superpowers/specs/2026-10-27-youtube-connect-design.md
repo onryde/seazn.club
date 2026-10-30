@@ -32,7 +32,7 @@ These are the owner's own answers in this session's chat. Items marked *(my call
 | D13 | **Part labels only when a match has 2+ parts**; a single part shows the player alone. | "hope that we don't display part 1 like that always, only when more than one part" |
 | D14 | UI layouts: Directory = Option A connect flow + Option B channel rows; fixture panel = Option B; public page = D12. | "Option A but 4 from Option B" → clarified "1"; "Fixture stream panel Option B" |
 | D15 | Each broadcast stores YouTube's **actual start and end time** (filled when Seazn ends it), for R4 sponsors-on-stream's "watch this moment" replay link. | "if we can, then yes?" (2026-10-27) |
-| D16 | **The connect step warns about YouTube's under-16 live rule** (children under 16 only with an adult visibly present; a channel that breaks it can lose live streaming): one short note in `YoutubeConnectCard` before the consent and Continue to Google (`streaming.youtube.connect.minors`), plus a paragraph linking YouTube's child safety policy in the help (`billing/credits.md`, the only help page covering streaming). | PO ruling 2026-10-30 (product decision delegated by the owner), after stg's test stream was flagged under YouTube's child-safety policy. |
+| D16 | **The consent the organiser ticks includes YouTube's under-16 live rule** (children under 16 only with an adult visibly present; a channel that breaks it can lose live streaming): a clause of the D7 checkbox sentence, after the rights clause — "makes sure an adult is visibly present whenever players under 16 are on camera" (`streaming.youtube.consent.body`, all four locales) — so the rule is part of what is agreed, not a note beside it. The wording change moved `YOUTUBE_CONSENT_VERSION` (`lib/youtube.ts`) **1 → 2**: new connections record 2; existing ones keep their stored 1 (no row migration) and read "Review updated terms" per §6.1.5, never blocking Go live. Plus a paragraph linking YouTube's child safety policy in the help (`billing/credits.md`, the only help page covering streaming). | PO ruling 2026-10-30 (product decision delegated by the owner), after stg's test stream was flagged under YouTube's child-safety policy; moved from a separate note (`streaming.youtube.connect.minors`, #1089, removed) into the consent itself the same day, owner-requested. |
 
 Accepted without objection in playback (owner "Ok"), originally proposed by this author:
 - made-for-kids asked at connect, default **No** *(my call)*;
@@ -263,12 +263,14 @@ one open broadcast per key**. Index supporting "open broadcasts whose end may be
 2. A **consent step** inside Seazn, before Google: visibility (Unlisted preselected; Public; Private), made for
    kids (No preselected), and the required checkbox (D7). Draft wording — final legal text is the owner's:
    > ☐ I confirm this organisation will follow YouTube's **Terms of Service** and **Community Guidelines**, has the
-   > rights to stream this content (venue, players, music), and agrees that Seazn will **create, title, start and
-   > end a YouTube live broadcast on this channel for each match we stream** here. YouTube alone decides whether
+   > rights to stream this content (venue, players, music), makes sure an adult is visibly present whenever players
+   > under 16 are on camera (D16), and agrees that Seazn will **create, title, start and end a YouTube live broadcast
+   > on this channel for each match we stream** here. YouTube alone decides whether
    > this channel can stream; Seazn is not responsible if YouTube restricts or disables live streaming, removes a
    > stream, issues a strike, or does not save a replay. By connecting you agree to be bound by the YouTube Terms of
    > Service. See our **Privacy Policy**.
-   Links: YouTube ToS, Community Guidelines, Seazn privacy policy. The button stays disabled until ticked.
+   Links: YouTube ToS, Community Guidelines, Seazn privacy policy. The button stays disabled until ticked. Text version
+   (`YOUTUBE_CONSENT_VERSION`, stored as `consent_version`): **1** the launch wording; **2** adds the under-16 clause (D16).
 3. Google OAuth on a **separate route pair from sign-in** (never entangle with login): `access_type=offline`,
    `prompt=consent`, state cookie bound to org + user, PKCE. Scope: **`https://www.googleapis.com/auth/youtube`
    only** (owner configured it on the consent screen 2026-10-27; `youtube.force-ssl` dropped — both are accepted by
