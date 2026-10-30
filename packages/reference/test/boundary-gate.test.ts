@@ -298,10 +298,10 @@ describe("review I-1: each runtime-load bypass the line judge passed is refused"
     // Line 2 names a file that does not exist: it is judged by where its
     // path lands (the realpath of its nearest existing ancestor), so a
     // missing file behind the link is still the engine.
-    // (Engine split 2b: behind the link is the installed `dist/core`, where line 1's `index.ts` is compiled to `index.js`, so line 1
-    // lands by its path too; the file-symlink case above is the existing-file witness.)
-    const dir = judged({ "a.ts": `import type { C } from "./core/index.ts";\nimport type { N } from "./core/not-there.ts";\nexport type { C, N };\n` }, (root) => symlinkSync(join(ENGINE, "dist", "core"), join(root, "core")));
-    expect(dir).toEqual([`1 ./core/index.ts: ${INTO_ENGINE}`, `2 ./core/not-there.ts: ${INTO_ENGINE}`, `1 core: ${SYMLINK}`]);
+    // (Engine split 2b: behind the link is the installed `dist/core`, so line 1 names its compiled `index.js`, an EXISTING file
+    // reached through the directory link, and line 2 stays the missing one.)
+    const dir = judged({ "a.ts": `import type { C } from "./core/index.js";\nimport type { N } from "./core/not-there.ts";\nexport type { C, N };\n` }, (root) => symlinkSync(join(ENGINE, "dist", "core"), join(root, "core")));
+    expect(dir).toEqual([`1 ./core/index.js: ${INTO_ENGINE}`, `2 ./core/not-there.ts: ${INTO_ENGINE}`, `1 core: ${SYMLINK}`]);
   });
   it("the positive pair: a relative import of a file not (yet) in src is judged by its path — inside src, allowed", () => {
     expect(judged({ "a.ts": `import type { M } from "./sub/missing.ts";\nexport type { M };\n` })).toEqual([]);

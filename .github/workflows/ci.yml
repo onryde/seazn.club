@@ -129,13 +129,15 @@ jobs:
       # ci-wiring.test.ts pins this step (no `if:`, no continue-on-error:).
       - run: node node_modules/typescript-native/bin/tsc -p tsconfig.tools-tests.json
       # Engine split 2b: @seazn/engine is the registry package, so no manifest may point it back at a local tree (a `link:` or
-      # `file:` spec installs green against stale source, AGENTS.md class 14), and each of the six consumers pins the alias.
+      # `file:` spec installs green against stale source, AGENTS.md class 14), under either name and in any key shape: a dependency,
+      # a version-selected override (`@onryde/seazn-engine@1.0.0`) or a parent>child override, in package.json or
+      # pnpm-workspace.yaml. Each of the six consumers pins the alias.
       # One grep each (D37); scripts/__tests__/registry-install.test.ts pins the alias spec itself.
       - name: Registry engine guards (engine split 2b)
         run: |
           set -euo pipefail
-          if git grep -nE "@seazn/engine[\"']?: *[\"']?(link|file):" -- '*package.json' pnpm-workspace.yaml; then
-            echo "::error::@seazn/engine is a link:/file: dependency above. It is the registry package npm:@onryde/seazn-engine; point it at a local tree in your own checkout only, never in a commit."
+          if git grep -nE "(@seazn/engine|@onryde/seazn-engine)(@[^\"': ]*)?[\"']?: *[\"']?(link|file):" -- '*package.json' pnpm-workspace.yaml; then
+            echo "::error::the engine (@seazn/engine or @onryde/seazn-engine) is a link:/file: dependency or override above. It is the registry package npm:@onryde/seazn-engine; point it at a local tree in your own checkout only, never in a commit."
             exit 1
           fi
           n="$({ git grep -h -c 'npm:@onryde/seazn-engine@' -- '*package.json' || true; } | awk '{ s += $1 } END { print s + 0 }')"

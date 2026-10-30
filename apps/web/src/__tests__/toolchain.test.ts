@@ -65,7 +65,7 @@ describe("toolchain: node floor", () => {
 });
 
 describe("toolchain: compile target", () => {
-  it("apps/web targets ES2022, matching the engine", () => {
+  it("apps/web targets ES2022", () => {
     const stripJsonComments = (s: string) =>
       s.replace(/^\s*\/\/.*$/gm, "");
     const web = JSON.parse(
@@ -73,8 +73,8 @@ describe("toolchain: compile target", () => {
         readFileSync(join(REPO_ROOT, "apps/web/tsconfig.json"), "utf8"),
       ),
     ) as { compilerOptions: { target: string } };
-    // Engine split 2b (reverse inventory row 1): the engine's tsconfig is not published, so this is the app half; the
-    // engine's ES2022 target is the engine repository's to pin.
+    // Engine split 2b (reverse inventory row 1): the engine's tsconfig is not published, so the `matching the engine` comparison
+    // left with packages/engine. Engine twin owed: the engine repository has no ES2022 pin yet (2b review I1).
     expect(web.compilerOptions.target).toBe("ES2022");
   });
 });

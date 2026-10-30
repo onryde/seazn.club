@@ -16,15 +16,15 @@ generic win/loss brackets.
 | Path | Purpose |
 |------|---------|
 | [`apps/web/`](apps/web/) | Next.js app — UI, API routes, billing, auth, public dashboard |
-| [`packages/engine/`](packages/engine/) | Pure TypeScript tournament engine (`@seazn/engine`) |
+| `@seazn/engine` | Pure TypeScript tournament engine: the registry package `@onryde/seazn-engine` (GitHub Packages), built in [onryde/seazn.club.engine](https://github.com/onryde/seazn.club.engine) |
 | [`engine/`](engine/) | Engine v2 **design corpus** (PROMPT-00–15 landed) — domain model, sport specs, implementation prompts |
 | [`development/`](development/) | Product & platform **design docs** — billing, security, realtime, phased plan |
 | [`supabase/`](supabase/) | PostgreSQL schema + ordered migrations |
 | [`openapi/`](openapi/) | Generated OpenAPI spec for `/api/v1` |
 | [`scripts/`](scripts/) | DB bootstrap, engine checks, smoke tests, OpenAPI generation |
 
-This is an npm workspace monorepo. Root scripts delegate to `apps/web` and
-`packages/engine`.
+This is an npm workspace monorepo. Root scripts delegate to `apps/web`; the engine is
+installed from GitHub Packages as `@seazn/engine` (`npm:@onryde/seazn-engine`).
 
 ---
 
@@ -57,7 +57,7 @@ This is an npm workspace monorepo. Root scripts delegate to `apps/web` and
 └──────────────────────────┬──────────────────────────────┘
                            │ imports (pure logic only)
 ┌──────────────────────────▼──────────────────────────────┐
-│  packages/engine — zero I/O, event-sourced, deterministic│
+│  @seazn/engine — zero I/O, event-sourced, deterministic  │
 │  SportModule plugins · Competition engine · Scheduling  │
 └──────────────────────────┬──────────────────────────────┘
                            │ events + snapshots persisted
@@ -86,12 +86,12 @@ The DB adapter persists events and derived snapshots; business rules never live 
 | `generic` | Fallback win/loss scoring |
 
 Scheduling: round-robin (circle method), Swiss pairing, brackets, calendar slotting.
-Conformance tests live in `packages/engine/src/testkit/`.
+Conformance tests live in the engine repo's `src/testkit/`, shipped as `@seazn/engine/testkit`.
 
 The [`engine/`](engine/) folder holds the full greenfield design — sport deep-dives,
 greenfield schema, API design, entitlements matrix, and ordered
 [`engine/prompts/`](engine/prompts/) for incremental implementation. Most prompts are landed
-in `packages/engine` and `apps/web`; each design wave under [`design/`](design/) ships as
+in the engine (now onryde/seazn.club.engine) and `apps/web`; each design wave under [`design/`](design/) ships as
 an ordered `PROMPT-*` batch (see status table below for per-wave status).
 
 ---
@@ -234,9 +234,8 @@ npm run start      # serve production build
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Start the web app in development |
-| `npm test` | Vitest in `apps/web` + `packages/engine` |
+| `npm test` | Vitest in `apps/web` |
 | `npm run test:smoke` | End-to-end HTTP smoke test (needs running server + DB) |
-| `npm run engine:boundary` | Enforce zero-I/O boundary on `@seazn/engine` |
 | `node --experimental-strip-types scripts/migrate-v1-to-v2.ts --dry-run` | v1→v2 data migration (idempotent; see script header) |
 | `npm run db:apply` | Apply `schema.sql`, migrations, and `schema_v2.sql` |
 | `npm run sync:sports` | Sync sport catalog from engine registry to DB |
@@ -317,7 +316,7 @@ These apply across app and engine code:
 - **Thin API routes** — parse → authorize → delegate to a server-only module; wrap in `handler()`
 - **Pure vs effectful** — tournament math in `@seazn/engine` or pure lib modules; DB and side effects in transactional server modules (`import "server-only"`)
 - **Entitlement gate** — all paid capability checks go through one helper, enforced server-side and reflected in UI
-- **Engine boundary** — no `postgres`, `fetch`, `Date.now()`, or `Math.random()` inside `packages/engine`
+- **Engine boundary** — no `postgres`, `fetch`, `Date.now()`, or `Math.random()` inside the engine (onryde/seazn.club.engine)
 
 ---
 

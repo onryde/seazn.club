@@ -127,8 +127,9 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
   // scope roots. With one root (apps/web/src) there are no others; that root finding nothing is the empty case above.
 
   it("scope: .test.ts AND .test.tsx under the scope dirs and the name roots; the name is the file's; out-of-scope files are not read", () => {
-    // (app half, engine split 2b) The engine's scope dirs (scheduling, competition) and its name root (packages/engine/src) left with
-    // the engine, and their six fixture files and five expected pins with them; the apps/web name root's files and pins are the source's.
+    // (NARROWED, engine split 2b; not a ruling-A split, the engine repo holds no half) The engine's scope dirs (scheduling,
+    // competition) and its name root (packages/engine/src) left with packages/engine, and their six fixture files and five expected
+    // pins with them; the apps/web name root's files and pins are the source's. Engine twin owed (2b review I1).
     const root = tree({
       "apps/web/src/server/usecases/__tests__/stage-progression.test.ts": "sportKey: `tennis`\n",
       "apps/web/src/server/usecases/__tests__/other.test.ts": `const z = "football";\n`,
@@ -941,13 +942,18 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
     for (const d of [...SCOPE_DIRS, ...NAME_ROOTS]) expect({ d, n: (r.perRoot[d] ?? 0) > 0 }).toEqual({ d, n: true });
     const counts = countsOf(r.pins);
     // Witnesses read from the files by hand (review I-1..I-3), not from the scanner.
-    // (Engine split 2b: the two engine witnesses, packages/engine/src/competition/tiebreak-rule-award-alias.test.ts:cricket, the
-    // engine module import, and tie-what-if.test.ts:carrom, left with the engine's scope; the apps/web witnesses are the source's.)
+    // (NARROWED, engine split 2b: the two engine witnesses, packages/engine/src/competition/tiebreak-rule-award-alias.test.ts:cricket,
+    // the engine module import, and tie-what-if.test.ts:carrom, left with packages/engine; engine twin owed. The apps/web witnesses are
+    // the source's, and the module-import pick gets the app-side witness below.)
     for (const key of [
       "apps/web/src/components/public-site/__tests__/standings-table-locale.test.tsx:badminton",
       "apps/web/src/components/v2/__tests__/division-settings-standings-points.test.tsx:tennis",
       "apps/web/src/server/engine-db/__tests__/pooled-standings-null-snapshot.test.ts:generic",
     ]) expect({ key, counted: (counts[key] ?? 0) > 0 }).toEqual({ key, counted: true });
+    // The module-import pick on the real tree (2b review I1): boardgame-tiebreak.test.ts:7 imports `@seazn/engine/sports/boardgame`.
+    // It is reasoned, so it is a pin and not a count; read from the file by hand, like the witnesses above.
+    const BOARDGAME = "apps/web/src/components/v2/scorepad/v3/__tests__/boardgame-tiebreak.test.ts";
+    expect(r.pins.filter((p) => p.file === BOARDGAME && p.sport === "boardgame" && p.via === "import").map((p) => p.line), "the boardgame module import is picked, as an import").toEqual([7]);
     // The headers test's carrom `.find` pick is still FOUND, and now SWEPT: W2d T17 put a registry sweep in its test block
     // (the drawing-sports count), so the scan drops it (a swept pin is not a pin) and it no longer counts.
     const HEADERS = "apps/web/src/components/public-site/__tests__/standings-table-view-headers.test.tsx";

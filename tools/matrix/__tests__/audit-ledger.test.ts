@@ -486,8 +486,7 @@ describe("buildLedger (D22): each id gets exactly one outcome", () => {
     expect(reason({ file: WITNESS, title: "SH-G1: not a failing test" })).toEqual(["id-not-in-title", "not-a-fails-test"]);
     expect(reason({ file: WITNESS, title: "tiebreak validation never rejects an unknown key" })).toEqual(["id-not-in-title", "title-missing"]);
     expect(reason({ file: WITNESS, title: t }, (p) => (p === WITNESS ? `it("${t}", () => {});` : null))).toEqual(["not-a-fails-test"]);
-    // It goes OUTSIDE packages/engine/src (this wave does not touch it).
-    expect(reason({ file: "packages/engine/src/x.test.ts", title: t }, () => `it.fails("${t}", () => {});`)).toEqual(["engine-src"]);
+    // (Engine split 2b: the `engine-src` refusal, a witness under packages/engine/src, left with packages/engine; no file can live there.)
   });
 
   it("the failing test's title carries the audit id as a whole token: SW-H1 is not in 'SW-H10: …'", () => {

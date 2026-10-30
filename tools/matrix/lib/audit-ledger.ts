@@ -30,9 +30,6 @@ export const REPO_ROOT = resolve(MATRIX, "..", "..");
 /** The 2026-09-27 audit the ledger accounts for. */
 export const AUDIT_DIR = resolve(REPO_ROOT, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/audit-2026-09-27");
 
-/** Where a verified-by-failing-test witness may NOT live: this programme does not touch the engine's sources. */
-const ENGINE_SRC = "packages/engine/src/";
-
 // --- the audit files ------------------------------------------------------------------------------------------------------
 
 /** A malformed audit file, naming the file and line. The Error's own `name`, printed by the CLIs as it is. */
@@ -308,7 +305,7 @@ export class LedgerRefused extends Error {
   }
 }
 
-export const TEST_REASONS = ["file-missing", "title-missing", "not-a-fails-test", "witness-not-run", "id-not-in-title", "engine-src"] as const;
+export const TEST_REASONS = ["file-missing", "title-missing", "not-a-fails-test", "witness-not-run", "id-not-in-title"] as const;
 export type TestReason = (typeof TEST_REASONS)[number];
 
 export type Finding =
@@ -366,7 +363,6 @@ function testFindings(v: Verdict, readFile: (p: string) => string | null): Findi
   const { file, title } = v.test;
   const at = (reason: TestReason): Finding => ({ kind: "test-not-found", id: v.id, file, title, reason });
   const out: Finding[] = [];
-  if (file.startsWith(ENGINE_SRC)) out.push(at("engine-src"));
   const src = readFile(file);
   if (src === null) return [...out, at("file-missing")];
   if (!carriesId(title, v.id)) out.push(at("id-not-in-title"));
@@ -477,7 +473,6 @@ export function findingLine(f: Finding): string {
         case "witness-not-run": return `${where}: "${f.title}" is an it.fails that never runs (skipped, todo, or under a skip or a condition) — it cannot flip when the gap is fixed`;
         case "not-a-fails-test": return `${where}: "${f.title}" is a plain test, not an it.fails — a passing test is no witness that flips when the gap is fixed`;
         case "id-not-in-title": return `${where}: the title "${f.title}" does not carry ${f.id}`;
-        case "engine-src": return `${where} is under ${ENGINE_SRC}, which this wave does not touch`;
       }
     }
   }
