@@ -18,6 +18,10 @@
 // unit job must SKIP this file, not fail to collect it): every column list and query is built inside a test.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { createElement, type ComponentProps } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
@@ -58,6 +62,9 @@ import { FINISHED_STATUSES, YOUTUBE_FINISHED_END_MINUTES, YOUTUBE_GRACE_MINUTES 
 import { endDueBroadcasts, type EndStepHooks, type YoutubeEndResult } from "../end-step";
 import { FakeYouTube } from "../fake";
 import type { YouTubePort } from "../port";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { YoutubeDisconnectedNotice } from "@/components/v2/youtube-connect-panel";
+import type { Dict } from "@/lib/i18n-constants";
 import { openToken, revokeConnection } from "../token-store";
 import {
   accountLockWaiters, connect as connectChannel, grant, holdAccountLock, org as seedYoutubeOrg, waitForAccountLockWaiters, type Ch, type Org,
@@ -1192,6 +1199,39 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     const ok = await world();
     await completedMatch(ok, ok.fixtures[0]!);
     expect((await disconnect(ok)).keysLeft).toBe(0);
+  });
+
+  it("the budget runs out MID-SWEEP - after the listing answered, before the Seazn-named streams it found are deleted: each one left untried is a key LEFT (keysLeft 2, never 0), the notice says so, one budget report counts them, and the revoke is still made", async () => {
+    const w = await world();
+    const seazn = [await orphan(w, NAME_BEFORE_SLOTS), await orphan(w, KEY_TITLE("en", 1))];
+    const theirs = await orphan(w, "TestYouTube");
+    // the clock reads 0 until YouTube has answered the listing, and ten minutes on from then: the sweep starts with no room left
+    let listed = 0;
+    const f = w.fake;
+    const timed = Object.create(f) as FakeYouTube;
+    timed.listStreams = async (at) => { const streams = await f.listStreams(at); listed++; return streams; };
+    const from = f.calls.length;
+
+    const out = await disconnectYoutube(w.auth, w.orgId, w.connectionId, timed, {
+      now: () => new Date(w.now()), wallClock: () => (listed > 0 ? 10 * MIN : 0), sleep: async () => {},
+    });
+    expect(listed, "premise: the listing answered before the budget ran out").toBe(1);
+    expect(out).toEqual({ revokeOutcome: "revoked", keysDeleted: 0, keysLeft: seazn.length, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
+    expect(methods(f, from), "listed, then no delete at all (no room), then the revoke").toEqual(["accessToken", "listStreams", "revoke"]);
+    let checked = 0;
+    for (const id of [...seazn, theirs]) { expect(f.inspectStream(id), `still on the channel: ${id}`).not.toBeNull(); checked++; }
+    expect(checked).toBe(3);
+    const reports = disconnectReports();
+    expect(reports.length).toBe(1);
+    expect(reports[0]![1]).toMatchObject({ route: "youtube.disconnect.budget", extra: { skipped: seazn.length } });   // the club's own key is not one
+
+    // what the organiser reads: the REAL notice, handed the answer above - the keys' sentence, never "deleted" (en copy, the brief's literal)
+    const enUi = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8")) as Dict;
+    const notice = createElement(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: out.revokeOutcome, keysLeft: out.keysLeft, onDismiss: () => {} });
+    const text = renderToStaticMarkup(createElement(DictProvider, { dict: enUi, locale: "en" } as ComponentProps<typeof DictProvider>, notice))
+      .replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+    expect(text).toContain("Riverside FC is disconnected, but Seazn couldn't delete 2 stream keys from YouTube.");
+    expect(text).not.toContain("Seazn deleted what it stored");
   });
 
   it("only THIS channel's streams are swept: a Seazn-named stream a listing says belongs to another channel, or to no channel it names, is never deleted (the token of an account that manages several channels)", async () => {

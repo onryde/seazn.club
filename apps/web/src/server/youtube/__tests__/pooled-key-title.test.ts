@@ -10,12 +10,29 @@
 //     prepare.ts (every key pooled before 2026-10-29 carries it - existing keys are never renamed), and "Seazn Club · clé de diffusión {n}"
 //     is the fr template 79a208d8b0 shipped until a614ecf4fa (#1088) corrected "diffusión" to "diffusion".
 // Sport: not applicable - a stream key's name is sport-agnostic.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { LOCALES } from "@/lib/i18n-constants";
+import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
-import { isPooledKeyTitle } from "../pooled-key-title";
+import { POOLED_KEY_TITLES_SHIPPED, isPooledKeyTitle } from "../pooled-key-title";
 
 const SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+/** Every name shipped, per locale, typed from git history (`git log -p -G streamKeyTitle -- apps/web/src/dictionaries`, and
+ *  `git log -S STREAM_TITLE -- apps/web/src`): bdf12da878's single name, then 79a208d8b0's four templates, then a614ecf4fa's fr fix. */
+const HISTORY: Record<Locale, string[]> = {
+  en: ["Seazn stream key", "Seazn Club · stream key {n}"],
+  fr: ["Seazn stream key", "Seazn Club · clé de diffusión {n}", "Seazn Club · clé de diffusion {n}"],
+  es: ["Seazn stream key", "Seazn Club · clave de emisión {n}"],
+  nl: ["Seazn stream key", "Seazn Club · streamsleutel {n}"],
+};
+/** The template as the dictionary FILE holds it - read from disk, not through msgFor or the matcher. */
+const dictionaryTemplate = (locale: Locale): string => {
+  const ui = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", locale, "ui.json"), "utf8")) as Record<string, unknown>;
+  const v = ui["streaming.youtube.streamKeyTitle"];
+  if (typeof v !== "string") throw new Error(`${locale}/ui.json has no streaming.youtube.streamKeyTitle`);
+  return v;
+};
 const BEFORE_SLOTS = "Seazn stream key";
 const FR_BEFORE_1088 = (n: number) => `Seazn Club · clé de diffusión ${n}`;
 
@@ -63,6 +80,56 @@ describe("isPooledKeyTitle: the names Seazn gives a pooled stream key", () => {
     expect(checked).toBe(theirs.length);
     // the pair: the same shapes with a real slot DO match, so the refusals above are about the shape, not about the names
     expect([en(1), en(10), en(123)].map(isPooledKeyTitle)).toEqual([true, true, true]);
+  });
+
+  it("the shipped list is APPEND-ONLY history: it names every locale, and holds every name git history shows a key was given (anti-vacuity: every history entry judged)", () => {
+    expect(Object.keys(POOLED_KEY_TITLES_SHIPPED).sort(), "one entry per locale - a new locale must add its names").toEqual([...LOCALES].sort());
+    let checked = 0;
+    for (const locale of LOCALES) {
+      for (const name of HISTORY[locale]) {
+        expect(POOLED_KEY_TITLES_SHIPPED[locale] as readonly string[], `${locale}: ${name} is still listed (a key made with it keeps it)`).toContain(name);
+        checked++;
+      }
+    }
+    expect(checked).toBe(Object.values(HISTORY).flat().length);
+  });
+
+  it("a REWORD of streamKeyTitle cannot drop the old keys: every dictionary's current template must already be in the shipped list, so the new wording is added beside the old, never in place of it (anti-vacuity: 4 locales)", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const template = dictionaryTemplate(locale);
+      expect(POOLED_KEY_TITLES_SHIPPED[locale] as readonly string[], `${locale}/ui.json streamKeyTitle "${template}" is not in POOLED_KEY_TITLES_SHIPPED.${locale}: add it (keep the old one)`).toContain(template);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("every name - each shipped one and each dictionary's - carries \"Seazn\", and each shipped one matches with every slot: a name without it would be a club's own key name, and the disconnect would delete the club's key (anti-vacuity: every name judged)", () => {
+    let names = 0;
+    let titles = 0;
+    for (const locale of LOCALES) {
+      for (const name of [...POOLED_KEY_TITLES_SHIPPED[locale], dictionaryTemplate(locale)]) {
+        expect(name, `${locale}: ${name}`).toContain("Seazn");
+        names++;
+      }
+      for (const name of POOLED_KEY_TITLES_SHIPPED[locale]) {
+        for (const n of name.includes("{n}") ? SLOTS : [0]) {
+          const title = name.replaceAll("{n}", String(n));
+          expect(isPooledKeyTitle(title), `${locale}: ${title}`).toBe(true);
+          titles++;
+        }
+      }
+    }
+    expect(names).toBe(Object.values(POOLED_KEY_TITLES_SHIPPED).flat().length + LOCALES.length);
+    expect(titles).toBeGreaterThanOrEqual(LOCALES.length * SLOTS.length);
+  });
+
+  it("a club's own key named in its language without \"Seazn\" never matches - 'Streamsleutel 1' and its siblings - beside the Seazn names they echo, which do", () => {
+    const theirs = ["Streamsleutel 1", "streamsleutel 1", "Stream key 1", "stream key 1", "clave de emisión 1", "clé de diffusion 1", "clé de diffusión 1", "Club · streamsleutel 1"];
+    let checked = 0;
+    for (const title of theirs) { expect(isPooledKeyTitle(title), title).toBe(false); checked++; }
+    expect(checked).toBe(theirs.length);
+    expect(["nl", "en", "es", "fr"].map((l) => isPooledKeyTitle(msgFor(l as Locale, "streaming.youtube.streamKeyTitle", { n: 1 })))).toEqual([true, true, true, true]);
   });
 
   it("a title that is not a string is never a Seazn name (the listing is YouTube's data, not ours)", () => {

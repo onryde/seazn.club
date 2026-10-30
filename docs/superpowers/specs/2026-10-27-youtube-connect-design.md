@@ -412,9 +412,12 @@ tick after reconnect. The destination row shows "Reconnect needed" with the reas
      inside the same 30 s budget;
   2. the channel's own streams are listed (`liveStreams.list`, `part=snippet`, `mine=true`, 50 a page: ids and titles only,
      never `cdn`, so no stream key is ever fetched) and every stream **whose whole title is a name Seazn gives its keys**,
-     on that channel, is deleted, so a key that no row of ours records (an orphan) goes as well. The names come from
-     `streaming.youtube.streamKeyTitle` in every locale (`{n}` = digits), plus the two names keys had before: "Seazn stream
-     key" (before 79a208d8b0) and the fr "clé de diffusión {n}" (before #1088). A club's own key never matches;
+     on that channel, is deleted, so a key that no row of ours records (an orphan) goes as well. The names are the union of
+     `streaming.youtube.streamKeyTitle` in every locale (`{n}` = digits) and `POOLED_KEY_TITLES_SHIPPED`
+     (`server/youtube/pooled-key-title.ts`): every name ever shipped per locale, append-only, from "Seazn stream key"
+     (before 79a208d8b0) to the fr "clé de diffusión {n}" (before #1088). A reworded dictionary value fails the test
+     until it is added there, so keys made under the old wording stay matchable; every name carries "Seazn". A club's own
+     key never matches;
   3. the result carries `keysLeft`: the Seazn keys still on the channel (`0` = none), or `null` when the listing could not
      be read (no usable token, a dead grant, the budget spent, or YouTube refused the list): **not confirmed, never 0**.
   The notice: `keysLeft > 0` says "`<channel>` is disconnected, but Seazn couldn't delete N stream key(s) from YouTube.
