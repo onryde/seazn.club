@@ -9,10 +9,15 @@
   },
   "measured": {
     "competition-1": {
-      "mutants": 407,
-      "wallSeconds": 2733,
-      "dryRunSeconds": 152,
-      "phaseSeconds": 2538
+      "mutants": 553,
+      "wallSeconds": 2036,
+      "dryRunSeconds": 178,
+      "phaseSeconds": 1829,
+      "run": {
+        "id": 40984028505,
+        "job": 123830744319,
+        "sha": "499f6daf4"
+      }
     },
     "competition-2": {
       "mutants": 1172,
@@ -93,26 +98,36 @@
       }
     },
     "core-3": {
-      "mutants": 190,
-      "wallSeconds": 701,
-      "dryRunSeconds": 152,
-      "phaseSeconds": 514
+      "mutants": 321,
+      "wallSeconds": 3694,
+      "dryRunSeconds": 272,
+      "phaseSeconds": 3387,
+      "run": {
+        "id": 40984034760,
+        "job": 123830778924,
+        "sha": "499f6daf4"
+      }
     },
     "modules-1": {
-      "mutants": 405,
-      "wallSeconds": 74,
-      "dryRunSeconds": 2,
-      "phaseSeconds": 41
+      "mutants": 480,
+      "wallSeconds": 92,
+      "dryRunSeconds": 3,
+      "phaseSeconds": 60,
+      "run": {
+        "id": 40984038495,
+        "job": 123830775009,
+        "sha": "499f6daf4"
+      }
     },
     "modules-2": {
-      "mutants": 439,
-      "wallSeconds": 898,
-      "dryRunSeconds": 221,
-      "phaseSeconds": 651,
+      "mutants": 572,
+      "wallSeconds": 1031,
+      "dryRunSeconds": 232,
+      "phaseSeconds": 774,
       "run": {
-        "id": 39405548125,
-        "job": 118571520262,
-        "sha": "99f86e0b3"
+        "id": 40984041723,
+        "job": 123830793342,
+        "sha": "499f6daf4"
       }
     },
     "modules-3": {
@@ -321,10 +336,15 @@
       "phaseSeconds": 13080
     },
     "sports-period-3": {
-      "mutants": 387,
-      "wallSeconds": 6651,
-      "dryRunSeconds": 150,
-      "phaseSeconds": 6468
+      "mutants": 457,
+      "wallSeconds": 11626,
+      "dryRunSeconds": 262,
+      "phaseSeconds": 11335,
+      "run": {
+        "id": 40984060343,
+        "job": 123830837903,
+        "sha": "499f6daf4"
+      }
     },
     "sports-period-4": {
       "mutants": 321,
@@ -605,19 +625,19 @@
       }
     },
     "sports-cricket-10": {
-      "mutants": 401,
+      "mutants": 466,
       "lost": 0,
       "parts": {
         "sports-cricket-10": {
-          "mutants": 125,
+          "mutants": 190,
           "basis": "measured",
-          "wallSeconds": 4835,
-          "dryRunSeconds": 131,
-          "phaseSeconds": 4671,
+          "wallSeconds": 8372,
+          "dryRunSeconds": 189,
+          "phaseSeconds": 8157,
           "run": {
-            "id": 38442569507,
-            "job": 115452733659,
-            "sha": "3b580141b"
+            "id": 40984044723,
+            "job": 123830774268,
+            "sha": "499f6daf4"
           }
         },
         "sports-cricket-16": {
@@ -816,19 +836,19 @@
       }
     },
     "sports-nested-5": {
-      "mutants": 490,
+      "mutants": 520,
       "lost": 3,
       "parts": {
         "sports-nested-5": {
-          "mutants": 119,
+          "mutants": 132,
           "basis": "measured",
-          "wallSeconds": 1949,
-          "dryRunSeconds": 103,
-          "phaseSeconds": 1813,
+          "wallSeconds": 1473,
+          "dryRunSeconds": 168,
+          "phaseSeconds": 1272,
           "run": {
-            "id": 38442727299,
-            "job": 115453294058,
-            "sha": "3b580141b"
+            "id": 40984052592,
+            "job": 123830822445,
+            "sha": "499f6daf4"
           }
         },
         "sports-nested-6": {
@@ -844,15 +864,15 @@
           }
         },
         "sports-nested-7": {
-          "mutants": 138,
+          "mutants": 155,
           "basis": "measured",
-          "wallSeconds": 955,
-          "dryRunSeconds": 169,
-          "phaseSeconds": 753,
+          "wallSeconds": 1873,
+          "dryRunSeconds": 225,
+          "phaseSeconds": 1623,
           "run": {
-            "id": 40613464751,
-            "job": 122570433014,
-            "sha": "651d2a735"
+            "id": 40984057342,
+            "job": 123830817972,
+            "sha": "499f6daf4"
           }
         },
         "sports-nested-8": {
