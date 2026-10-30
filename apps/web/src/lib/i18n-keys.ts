@@ -7852,6 +7852,7 @@ export type DictionaryKey =
   | "streaming.youtube.consent.disclaimer"
   | "streaming.youtube.consent.guidelines"
   | "streaming.youtube.consent.intro"
+  | "streaming.youtube.consent.minors"
   | "streaming.youtube.consent.privacy"
   | "streaming.youtube.consent.required"
   | "streaming.youtube.consent.title"

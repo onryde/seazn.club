@@ -6,9 +6,10 @@
 export const YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube";
 
 /** The version of the consent text a user ticked (D7). Bump it when the wording changes; the Streaming page then shows
- *  "Review updated terms" without blocking Go live. 1: the launch wording. 2: + the under-16 clause (D16, PO 2026-10-30).
+ *  "Review updated terms" without blocking Go live. 1: the launch wording. 2: + the under-16 clause inside the box (D16, PO 2026-10-30).
+ *  3: two boxes — the launch wording, and the under-16 rule as its own box, both required (D16, PO 2026-10-30, owner-requested).
  *  youtube-connect-panel.test.tsx pins the English wording beside this number, so the two cannot move apart. */
-export const YOUTUBE_CONSENT_VERSION = 2;
+export const YOUTUBE_CONSENT_VERSION = 3;
 
 /** A broadcast's visibility, chosen at connect (D2, Unlisted preselected). */
 export const YOUTUBE_PRIVACIES = ["unlisted", "public", "private"] as const;

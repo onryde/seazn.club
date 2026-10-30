@@ -3,7 +3,7 @@
 //
 //   * the consent step (`YoutubeConnectCard`) — a plain <form method="post"> to `/api/youtube/connect` (T7), because the next hop is
 //     Google's consent screen and a navigation cannot be a fetch. Visibility (Unlisted preselected), made for kids (No preselected)
-//     and the required checkbox (D7): the button stays disabled until it is ticked;
+//     and the two required checkboxes (D7, D16): the button stays disabled until both are ticked;
 //   * the landing banner (`YoutubeLandingNotice`) — the callback's outcome, `?youtube=<code>`, as this page's own sentence;
 //   * the picker (`YoutubeChannelPicker`) — a Google account that manages several channels (`?youtube=pick&pending=<id>`);
 //   * a connected channel's row (`YoutubeChannelRow`) — its state in words, plus the actions that exist for it.
@@ -103,28 +103,45 @@ const PRIVACY_HINT_KEY = {
   private: "streaming.youtube.privacy.privateHint",
 } as const satisfies Record<YoutubePrivacy, MessageKey>;
 
-/** The consent text (spec §6.1.2) with its links, and the box. Used by the connect step and by "Review updated terms", so the
- *  wording a person ticks is one text in one place. `name="consent" value="1"` is what the connect route reads. */
-export function ConsentBox({ checked, onChange, withName }: { checked: boolean; onChange: (v: boolean) => void; withName: boolean }) {
+/** The two consent boxes' ticks (owner, PO 2026-10-30): the terms, and YouTube's under-16 rule. Only both is a consent. */
+type ConsentTicks = { terms: boolean; minors: boolean };
+const NO_TICKS: ConsentTicks = { terms: false, minors: false };
+const bothTicked = (t: ConsentTicks): boolean => t.terms && t.minors;
+
+const CONSENT_LABEL = "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700";
+const CONSENT_INPUT = "mt-0.5 h-5 w-5 shrink-0 accent-purple-600";
+
+/** The consent text (spec §6.1.2) with its links, as TWO boxes (owner, PO 2026-10-30): box 1 the terms sentence, box 2 right after it
+ *  YouTube's under-16 rule, each its own tick. Used by the connect step and by "Review updated terms", so the wording a person ticks is
+ *  one text in one place. `name="consent" value="1"` and `name="consentMinors" value="1"` are what the connect route reads; it refuses
+ *  either one alone. */
+export function ConsentBox({ value, onChange, withName }: { value: ConsentTicks; onChange: (v: ConsentTicks) => void; withName: boolean }) {
   const msg = useMsg();
-  const id = useId();
+  const termsId = useId();
+  const minorsId = useId();
   const tos = (label: string) => <a href={YOUTUBE_TOS_URL} {...EXTERNAL} className={LINK}>{label}</a>;
   const guidelines = <a href={YOUTUBE_GUIDELINES_URL} {...EXTERNAL} className={LINK}>{msg("streaming.youtube.consent.guidelines")}</a>;
   const privacy = <Link href="/legal/privacy" {...EXTERNAL} className={LINK}>{msg("streaming.youtube.consent.privacy")}</Link>;
+  // One box, the same markup for both: called as a function (not a component) so both inputs are this component's own elements.
+  const box = (id: string, testid: string, field: string, checked: boolean, flip: (on: boolean) => ConsentTicks, text: ReactNode) => (
+    <label htmlFor={id} className={CONSENT_LABEL}>
+      <input
+        id={id}
+        type="checkbox"
+        data-testid={testid}
+        {...(withName ? { name: field, value: "1" } : {})}
+        checked={checked}
+        onChange={(e) => onChange(flip(e.target.checked))}
+        className={CONSENT_INPUT}
+      />
+      <span className="min-w-0">{text}</span>
+    </label>
+  );
   return (
     <div className="space-y-2">
-      <label htmlFor={id} className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
-        <input
-          id={id}
-          type="checkbox"
-          data-testid="youtube-consent"
-          {...(withName ? { name: "consent", value: "1" } : {})}
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          className="mt-0.5 h-5 w-5 shrink-0 accent-purple-600"
-        />
-        <span className="min-w-0">{withSlots(msg("streaming.youtube.consent.body"), { tos: tos(msg("streaming.youtube.consent.tos")), guidelines })}</span>
-      </label>
+      {box(termsId, "youtube-consent", "consent", value.terms, (on) => ({ ...value, terms: on }),
+        withSlots(msg("streaming.youtube.consent.body"), { tos: tos(msg("streaming.youtube.consent.tos")), guidelines }))}
+      {box(minorsId, "youtube-consent-minors", "consentMinors", value.minors, (on) => ({ ...value, minors: on }), msg("streaming.youtube.consent.minors"))}
       <p className="text-xs text-slate-600">{msg("streaming.youtube.consent.disclaimer")}</p>
       <p className="text-xs text-slate-600">{withSlots(msg("streaming.youtube.consent.bound"), { tos: tos(msg("streaming.youtube.consent.tosFull")), privacy })}</p>
     </div>
@@ -188,7 +205,8 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
   const msg = useMsg();
   const [privacy, setPrivacy] = useState<YoutubePrivacy>("unlisted");
   const [kids, setKids] = useState<"0" | "1">("0");
-  const [consent, setConsent] = useState(false);
+  const [ticks, setTicks] = useState<ConsentTicks>(NO_TICKS);
+  const consent = bothTicked(ticks);
   const hintId = useId();
   return (
     <form
@@ -198,7 +216,7 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
       aria-label={msg("streaming.youtube.consent.title")}
       className="card space-y-5 p-5 max-md:p-4"
       // The disabled button refuses a click; Enter inside a field is refused here, so a consent the route would answer with a
-      // bare 400 never leaves the page.
+      // bare 400 (either box unticked) never leaves the page.
       onSubmit={(e) => {
         if (!consent) e.preventDefault();
       }}
@@ -211,9 +229,9 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
       <PrivacyChoice value={privacy} onChange={setPrivacy} />
       <KidsChoice value={kids} onChange={setKids} />
       <p data-testid="youtube-settings-note" className="max-w-xl text-xs text-slate-600">{msg("streaming.youtube.settingsNote")}</p>
-      {/* YouTube's child-safety rule for live streams (an adult visibly present whenever players under 16 are on camera) is a clause
-          of the consent sentence itself, so it is what the organiser ticks (PO 2026-10-30, owner-requested; spec D16). */}
-      <ConsentBox checked={consent} onChange={setConsent} withName />
+      {/* YouTube's child-safety rule for live streams (an adult visibly present whenever players under 16 are on camera) is the second
+          box, its own tick beside the terms: Continue needs both (PO 2026-10-30, owner-requested; spec D16). */}
+      <ConsentBox value={ticks} onChange={setTicks} withName />
       <div className="flex flex-wrap items-center gap-2 max-md:flex-col max-md:items-stretch">
         <button
           type="submit"
@@ -470,7 +488,8 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
   const [mode, setMode] = useState<"settings" | "terms" | null>(null);
   const [privacy, setPrivacy] = useState<YoutubePrivacy>(y?.privacy ?? "unlisted");
   const [kids, setKids] = useState<"0" | "1">(y?.madeForKids ? "1" : "0");
-  const [consent, setConsent] = useState(false);
+  const [ticks, setTicks] = useState<ConsentTicks>(NO_TICKS);
+  const consent = bothTicked(ticks);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -483,7 +502,7 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
   const meta = `${msg(PRIVACY_KEY[y.privacy])} · ${msg(y.madeForKids ? "streaming.youtube.row.kidsYes" : "streaming.youtube.row.kidsNo")}`;
   const changed = privacy !== y.privacy || (kids === "1") !== y.madeForKids;
 
-  const patch = async (body: { privacy: YoutubePrivacy; madeForKids: boolean } | { consent: true }) => {
+  const patch = async (body: { privacy: YoutubePrivacy; madeForKids: boolean } | { consent: true; consentMinors: true }) => {
     if (saving.current) return;
     saving.current = true;
     setBusy(true);
@@ -491,7 +510,7 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
     try {
       await apiV1(`/api/v1/orgs/${orgId}/youtube-connections/${y.connectionId}`, { method: "PATCH", json: body });
       setMode(null);
-      setConsent(false);
+      setTicks(NO_TICKS);
       router.refresh();
     } catch (err) {
       // A connection that is gone (a second tab disconnected it) is the list's news, not an error to sit under a dead row.
@@ -540,7 +559,7 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
   };
   const open = (which: "settings" | "terms") => {
     setError(null);
-    setConsent(false);
+    setTicks(NO_TICKS);
     setPrivacy(y.privacy);
     setKids(y.madeForKids ? "1" : "0");
     setMode((m) => (m === which ? null : which));
@@ -648,10 +667,10 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
           onSubmit={(e) => {
             e.preventDefault();
             if (!consent) return;
-            void patch({ consent: true });
+            void patch({ consent: true, consentMinors: true });
           }}
         >
-          <ConsentBox checked={consent} onChange={setConsent} withName={false} />
+          <ConsentBox value={ticks} onChange={setTicks} withName={false} />
           <div className="flex gap-2 max-md:flex-col">
             <button type="submit" data-testid="youtube-terms-accept" disabled={!consent || busy} className="btn btn-primary min-h-11">
               {msg("streaming.youtube.action.acceptTerms")}

@@ -26,12 +26,15 @@ const OAUTH_COOKIE_OPTS = {
 };
 
 /** The connect form (plan T7). An empty string is an absent field, so an unticked box or a blank select is "missing", never a
- *  value. A `consent` that is present must be exactly "1"; whether it is REQUIRED depends on the connection (D7, below). */
+ *  value. The consent is TWO boxes (D16, PO 2026-10-30): `consent` (the terms) and `consentMinors` (YouTube's under-16 rule). Each,
+ *  when present, must be exactly "1"; whether they are REQUIRED depends on the connection (D7, below), and one without the other is
+ *  never a consent. */
 const ConnectForm = z.object({
   orgId: z.uuid(),
   privacy: z.enum(YOUTUBE_PRIVACIES),
   madeForKids: z.enum(["0", "1", "true", "false"]).optional(),
   consent: z.literal("1").optional(),
+  consentMinors: z.literal("1").optional(),
   connectionId: z.uuid().optional(),
 });
 
@@ -75,11 +78,14 @@ export async function POST(req: Request) {
     if (refused) return redirectLocal(youtubeLanding(refused), 303);
 
     // D7: ONE consent per connection. A reconnect of a connection whose consent is on the CURRENT text needs no new tick (its
-    // own record is carried forward); a first connect, or a connection consented to older wording, must tick the box.
+    // own record is carried forward); a first connect, or a connection consented to older wording, must tick BOTH boxes (D16). Half a
+    // tick is never a consent, so it is refused even where no tick is needed: it is not carried, and not stamped as a new consent.
     const target = body.connectionId ? await reconnectTarget(body.orgId, body.connectionId) : null;
     if (body.connectionId && !target) throw new HttpError(404, "Not found");
     const consentCarried = target !== null && target.consentVersion === YOUTUBE_CONSENT_VERSION;
-    if (!consentCarried && body.consent !== "1") throw new HttpError(400, "Consent is required");
+    const ticked = body.consent === "1" && body.consentMinors === "1";
+    const halfTicked = !ticked && (body.consent !== undefined || body.consentMinors !== undefined);
+    if (halfTicked || (!consentCarried && !ticked)) throw new HttpError(400, "Consent is required: tick both boxes");
 
     // A grant made while the callback cannot seal it would be orphaned live at Google: refuse BEFORE sending anyone there.
     const unusable = unusableConnectKeys();
@@ -116,7 +122,7 @@ export async function POST(req: Request) {
       state, orgId: body.orgId, userId: user.id, connectionId: body.connectionId ?? null, privacy: body.privacy,
       madeForKids: body.madeForKids === "1" || body.madeForKids === "true", now: new Date(),
       // Ticked now: consent to the current text, now. Carried: the connection's own record, unchanged.
-      ...(body.consent === "1" || !target
+      ...(ticked || !target
         ? { consentVersion: YOUTUBE_CONSENT_VERSION }
         : { consentVersion: target.consentVersion, consentAt: target.consentAt }),
     });

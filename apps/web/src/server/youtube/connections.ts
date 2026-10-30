@@ -304,9 +304,13 @@ export async function updateConnectionSettings(
     throw new HttpError(422, "privacy must be unlisted, public or private", "YOUTUBE_PRIVACY_INVALID");
   }
   if (b.consent !== undefined && b.consent !== true) throw new HttpError(422, "consent can only be given, not withdrawn here", "YOUTUBE_CONSENT_INVALID");
+  // Two boxes (D16, PO 2026-10-30): the terms and YouTube's under-16 rule. Half a consent is none: one without the other is refused.
+  if ((b.consent === true) !== (b.consentMinors === true) || (b.consentMinors !== undefined && b.consentMinors !== true)) {
+    throw new HttpError(422, "consent needs both boxes: the terms and the under-16 rule", "YOUTUBE_CONSENT_INVALID");
+  }
+  const consenting = b.consent === true && b.consentMinors === true;
   // A consent names the person who gave it (consent_by is NOT NULL); a key has none to name.
-  if (b.consent === true && auth.userId === null) throw new HttpError(403, "Consent must be given by a signed-in person");
-  const consenting = b.consent === true;
+  if (consenting && auth.userId === null) throw new HttpError(403, "Consent must be given by a signed-in person");
   const rows = await sql<{ id: string }[]>`
     update org_youtube_connections
        set default_privacy = coalesce(${b.privacy ?? null}::text, default_privacy),
