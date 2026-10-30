@@ -69,7 +69,7 @@
 //     defect R2c closed for `cricket.retire`, rebuilt deliberately.
 "use client";
 import type { SquadState } from "@seazn/engine/core";
-import { tennisPadRules } from "@seazn/engine/pad";
+import { tennisPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import { serveContext, type NestedState } from "@seazn/engine/sports/nested";
 import { tennis as tennisModule } from "@seazn/engine/sports/tennis";
@@ -213,8 +213,6 @@ function vocabText(field: string, value: unknown, t: TFn): string | undefined {
 // in `applyForfeit`/`applyAbandon`'s match-over guard — mirror that, never give a sub-phase its own
 // `PadPhase` slot.
 // ---------------------------------------------------------------------------
-
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));

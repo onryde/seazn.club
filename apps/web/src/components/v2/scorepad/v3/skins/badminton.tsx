@@ -71,7 +71,7 @@
 //     see its own doc for why that is not redundant with the missing panels.
 "use client";
 import type { SquadState } from "@seazn/engine/core";
-import { badmintonPadRules } from "@seazn/engine/pad";
+import { badmintonPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import {
   badminton as badmintonModule,
@@ -242,8 +242,6 @@ function vocabText(field: string, value: unknown, t: TFn): string | undefined {
 // values MAPPED DOWN onto `PadPhase`'s closed three. Never widen `PadPhase`
 // to carry a sport's richer phase; the type's own doc forbids it.
 // ---------------------------------------------------------------------------
-
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));

@@ -57,7 +57,7 @@
 //     so there is no generic More sheet for this method to narrow — it exists
 //     only to keep that sheet honest, and carrom never opens one.
 "use client";
-import { carromPadRules } from "@seazn/engine/pad";
+import { carromPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -143,15 +143,12 @@ function readPhase(state: CarromStateShape): string {
   return typeof state.phase === "string" && state.phase.length > 0 ? state.phase : "pre";
 }
 
-/** Phases in which the fixture is over — `applyForfeit`/`applyAbandon`'s own
- *  refusal set, and the three that map to `PadPhase` "post". */
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
-
 // ---------------------------------------------------------------------------
 // phase() — G3. OPT-IN: declaring it is the deliverable. Carrom's five engine
 // phases map DOWN to the three-value `PadPhase` with no sub-phase nuance at
 // all (unlike football's SHOOTOUT) — pre -> "pre", the three decided phases
-// -> "post", everything else -> "live".
+// (`POST_PHASES`, `@seazn/engine/pad`: `applyForfeit`/`applyAbandon`'s own refusal
+// set) -> "post", everything else -> "live".
 // ---------------------------------------------------------------------------
 
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {

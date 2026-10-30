@@ -2386,7 +2386,7 @@ describe("carrom", () => {
     // Pad wave P4.1: the skin no longer types the bound (it was `max: 9` inline, twice); both board sheets (the plain board and
     // the queen board) ask the opponent's coins as a number step whose `max` is the engine's record. Read as text so a step that
     // goes back to a literal, or to any other source, reds here.
-    expect(skin).toMatch(/import \{ carromPadRules \} from "@seazn\/engine\/pad";/);
+    expect(skin).toMatch(/import \{[^}]*\bcarromPadRules\b[^}]*\} from "@seazn\/engine\/pad";/);
     const sources = [...skin.matchAll(/id: "coins",[^}]*?\bmax:\s*([^\s,}]+)/g)].map((m) => m[1]);
     expect(sources.length, "carrom.tsx no longer has the coins number step(s)").toBeGreaterThanOrEqual(2);
     expect(sources, "every coins field takes its max from the engine's record").toEqual(sources.map(() => "carromPadRules.opponentCoinsMax"));

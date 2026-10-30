@@ -60,7 +60,7 @@
 //     mirror of the engine with nothing to say.
 "use client";
 import { forbidsLevelResult, type SquadState } from "@seazn/engine/core";
-import { genericPadRules } from "@seazn/engine/pad";
+import { genericPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import {
@@ -174,11 +174,6 @@ function allowsDraws(cfg: GenericCfgShape, stageKind: string | null): boolean {
   return cfg.allowDraws === true && !forbidsLevelResult(stageKind);
 }
 
-/** `pre` and `live` are BOTH scoreable — `applyScore`/`applyResult` (generic.ts)
- *  each accept either, so a fresh fixture is scoreable with no "Start match"
- *  tap and this pad must not pretend otherwise. */
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
-
 function readPhase(state: GenericStateShape): string {
   return typeof state.phase === "string" && state.phase.length > 0 ? state.phase : "pre";
 }
@@ -188,7 +183,10 @@ function readPhase(state: GenericStateShape): string {
  *  "abandoned" (generic.ts), no longer "done" — so it is named in `POST_PHASES`
  *  beside the decided phases, or an abandoned fixture fell to "live" and offered
  *  live tiles. `generic.forfeitPhase` calls the same three phases "over"; the
- *  test pins `post` to that declaration over every phase a real fold reaches. */
+ *  test pins `post` to that declaration over every phase a real fold reaches.
+ *  `pre` and `live` are BOTH scoreable — `applyScore`/`applyResult` (generic.ts)
+ *  each accept either, so a fresh fixture is scoreable with no "Start match"
+ *  tap and this pad must not pretend otherwise. */
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));
   if (phase === "pre") return "pre";

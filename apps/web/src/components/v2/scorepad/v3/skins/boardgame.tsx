@@ -84,7 +84,7 @@
 //     `padSpec` alone.
 "use client";
 import { deciderPending, resolveVoids, type Settlement, type SettleMethod, type SquadState } from "@seazn/engine/core";
-import { boardgamePadRules } from "@seazn/engine/pad";
+import { boardgamePadRules, POST_PHASES } from "@seazn/engine/pad";
 import {
   ARMAGEDDON_RESULTS,
   boardgame,
@@ -222,8 +222,6 @@ function readPhase(state: BoardgameStateShape): string {
  *  phase (as generic's does since W2b D16), so POST_PHASES carries all three
  *  terminal values. "tiebreak" is neither: it is live while the decider is
  *  owed and post once settled (`resolvePhase` below). */
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
-
 export function resolvePhase(view: Pick<PadHostView, "state" | "events">): PadPhase {
   const phase = readPhase(asState(view.state));
   if (phase === "pre") return "pre";

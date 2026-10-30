@@ -62,7 +62,7 @@
 //     event.
 "use client";
 import type { SquadState } from "@seazn/engine/core";
-import { tabletennisPadRules } from "@seazn/engine/pad";
+import { tabletennisPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import {
   tabletennis as tabletennisModule,
@@ -227,8 +227,6 @@ function vocabText(field: string, value: unknown, t: TFn): string | undefined {
 // abandoned`, mapped down onto `PadPhase`'s closed three exactly as
 // badminton's own `resolvePhase` does.
 // ---------------------------------------------------------------------------
-
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));

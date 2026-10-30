@@ -36,8 +36,9 @@
 //
 // STILL MIRRORED, and pinned against the fold where they are driven:
 // second-yellow eligibility (`cardCandidates`, football.ts `applyCard`), the
-// `maxSubs` arithmetic (`subPolicy`, football's `lineupPolicy`), and the
-// "decided" phases (`POST_PHASES`, owned by pad wave P4).
+// `maxSubs` arithmetic (`subPolicy`, football's `lineupPolicy`). The "decided"
+// phases are `POST_PHASES` (`@seazn/engine/pad`, pad wave P4.2), the one set
+// every sport's fold and skin read.
 //
 // WHAT THIS SKIN DELIBERATELY DOES NOT DECLARE:
 //   - `context()`. Football has no persistent per-person slot the fold could
@@ -52,7 +53,7 @@
 //     engine-side asymmetry recorded in this wave's report, not worked around
 //     here with a tile that throws on tap.
 "use client";
-import { footballPadRules } from "@seazn/engine/pad";
+import { footballPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 // R3.5 — the pad's own alternation and tally rules for the shoot-out, both
 // re-exported from the football module's own barrel (not imported out of
@@ -133,10 +134,6 @@ export const CARD_TONES: Readonly<Record<CardColor, readonly SportTone[]>> = {
   red: ["dismissal"],
   second_yellow: ["caution", "dismissal"],
 };
-
-/** Phases in which the match is over — `applyCard`'s own refusal set, and the
- *  three that map to `PadPhase` "post". */
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
 /** Whether the ball is in play in this phase: `footballPadRules.playPhases`, the set the fold's goal / sub / penalty / sin-bin / shot
  *  / clock guards judge against (a card is NOT gated on it, which is why the card tiles are not). */

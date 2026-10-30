@@ -205,7 +205,7 @@
 "use client";
 import type { LineupPolicy, LineupRejectionReason, SquadMember, SquadState } from "@seazn/engine/core";
 import { DEFAULT_LINEUP_POLICY, memberOf, onFieldPersons } from "@seazn/engine/core";
-import { volleyballPadRules } from "@seazn/engine/pad";
+import { volleyballPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import { entrantKindCap } from "@seazn/engine/sport";
 import {
@@ -396,8 +396,6 @@ function vocabText(field: string, value: unknown, t: TFn): string | undefined {
 // ---------------------------------------------------------------------------
 // phase() — OPT-IN (G3), the identical mapping every setbased skin uses.
 // ---------------------------------------------------------------------------
-
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));
