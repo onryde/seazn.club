@@ -1166,13 +1166,28 @@ test(
     const panel = page.locator('[data-role="v3-activity"]');
     await expect(panel).toBeVisible({ timeout: 20_000 });
     const rows = panel.locator('[data-role="v3-activity-row"]');
-    await expect.poll(async () => rows.count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(7);
+    // core.start (emitCoreStart) + six API dot balls + the pad's ball 7 = EIGHT
+    // rows. core.start is a row too, so a floor of 7 is already met by the
+    // panel as first painted from initialEvents, BEFORE ball 7 lands — and a
+    // one-shot read taken then saw the old last ball, with no bowler note
+    // (main, run 41076995409, "1 flaky").
+    await expect.poll(async () => rows.count(), { timeout: 20_000 }).toBeGreaterThanOrEqual(8);
     // Rows are newest-first (established elsewhere in this file) — row 0 is
-    // the just-scored ball 7, the one carrying the bowler-changed note.
-    const latestRowText = (await rows.nth(0).innerText()).trim();
+    // the just-scored ball 7, the one carrying the bowler-changed note. The
+    // assertions retry on the row itself rather than reading its text once, so
+    // a panel refresh still in flight cannot be read as the answer.
+    const latestRow = rows.nth(0);
     const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-    expect(latestRowText, "must name the bowler, not fall back to a raw id").toContain(`V3 AN BowlerB ${TAG}`);
-    expect(latestRowText, "must never leak a raw person id into the activity log").not.toMatch(uuidPattern);
+    await expect(latestRow, "must name the bowler, not fall back to a raw id").toContainText(
+      `V3 AN BowlerB ${TAG}`,
+      { timeout: 20_000, useInnerText: true },
+    );
+    // After the positive, so it reads the SETTLED row (the one that names
+    // BowlerB), not whatever the panel showed before ball 7 arrived.
+    await expect(latestRow, "must never leak a raw person id into the activity log").not.toContainText(
+      uuidPattern,
+      { useInnerText: true },
+    );
   },
 );
 
