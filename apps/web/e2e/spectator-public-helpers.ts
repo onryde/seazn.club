@@ -355,7 +355,7 @@ export async function tapBallTile(page: Page, tileId: string): Promise<void> {
 }
 
 /** "Bowled" then "Who walks in?" — kind needs no fielder/out step (not in
- *  VARIABLE_OUT_KINDS or FIELDER_ELIGIBLE_KINDS), but ICC picks make the
+ *  cricketPadRules.variableOutKinds or .fielderCreditedKinds), but ICC picks make the
  *  incoming batter required. Leaving that unanswered holds the sheet open
  *  with no "Send now", so `flushHeld` returns as a no-op and the ledger
  *  never gains the ball (spectator-public match A: Expected 86 / Received 85).

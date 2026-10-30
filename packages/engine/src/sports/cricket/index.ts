@@ -36,6 +36,9 @@ export {
   // exported so the pad's default-picker reuses it instead of forking a
   // third copy; see its own doc (cricket.ts) for the live 422 that caused.
   soEligibleBatters,
+  // Pad wave P2 — the runs the final innings needs, so the pad shows a Test's fourth-innings target off the engine's own
+  // aggregation instead of omitting it (its narrow input type is the skin's to fill; see its own doc).
+  chaseTarget,
   // Owner decision 2026-09-16 — the decided margin as data (kind + count), so
   // the web can word it per locale instead of relaying the engine's English.
   CRICKET_MARGIN_KINDS,
