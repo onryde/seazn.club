@@ -324,7 +324,7 @@ function benchOf(view: PadHostView, side: Side): readonly string[] {
 // `"SHOOTOUT"` — so classification needs no copy of `periodLabels`/`otLabels`
 // and follows a cfg that renames every marker.
 // `__tests__/period-pair.test.ts` sweeps every phase both kernels can reach and
-// fails if this set ever stops being total.
+// fails if the engine's set ever stops covering them.
 export const SHOOTOUT_PHASE = "SHOOTOUT";
 
 /** A phase in which play is running — the kernel's own `isPlayPhase`, reached

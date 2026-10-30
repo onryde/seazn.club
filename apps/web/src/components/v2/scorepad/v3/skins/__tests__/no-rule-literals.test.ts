@@ -528,14 +528,16 @@ describe("the literal guard", () => {
     expect(tree.violations).toEqual([]);
   });
 
-  it("X-PH-1: nine skins read POST_PHASES from the engine, none declares a post-phase set of its own under any name", () => {
+  it("X-PH-1: nine skins read POST_PHASES from the engine, and none declares a Set literal of its own that opens with a terminal token", () => {
     // The nine files that declared POST_PHASES at 17948f93a8 (plan Task P4.2). Cricket never had one, and hockey and icehockey
     // reach it through period-shared.ts. Typed, not read from BANNED, so a skin dropped from BANNED reds here.
     const NINE = ["badminton.tsx", "boardgame.tsx", "carrom.tsx", "football.tsx", "generic.tsx", "period-shared.ts", "tabletennis.tsx", "tennis.tsx", "volleyball.tsx"];
     const banned = Object.entries(BANNED).filter(([, names]) => names.includes("POST_PHASES")).map(([file]) => file).sort();
     expect(banned, "skin files that ban POST_PHASES").toEqual(NINE);
     const importsEngineSet = /import\s*\{[^}]*\bPOST_PHASES\b[^}]*\}\s*from\s*"@seazn\/engine\/pad"/;
-    // A renamed copy (the guard above sees names only): a Set whose first members are the terminal tokens.
+    // A renamed copy (the name list above sees names only): a Set literal that OPENS with a terminal token. Narrow on purpose:
+    // it exempts period-shared's OWN_PHASE_TOKENS (opens with "pre"). A set that opens with another token, or an inline
+    // `phase === "done" || ...` chain, is the drift tests' job, as the header says.
     const ownCopy = /new Set(?:<[^>]*>)?\(\s*\[\s*"(?:done|final|abandoned)"/;
     let reads = 0;
     for (const file of NINE) {

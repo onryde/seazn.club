@@ -1,9 +1,10 @@
 // X-PH-1 (pad wave P4.2): a match's terminal phases are `done`, `final` and `abandoned`, declared once as POST_PHASES.
 //
-// Every expectation below is the rulebook's, typed out here (cross-sport.md X-PH-1; cricket.md: "Cricket has no
-// 'abandoned' phase: an abandon decides (done)"). None is read back from POST_PHASES or from a skin. The sweep walks the
-// whole sport registry (11 sports) through the engine's own events - a play-out to a decision, `core.finalize`,
-// `core.forfeit` and `core.abandon` - and judges the phase each one leaves.
+// Every expectation below is typed out here from the rule (cross-sport.md X-PH-1) and the engine's guards, never read back
+// from POST_PHASES or from a skin. Cricket's union has no `abandoned`: an abandon decides (`done`), which cricket.md states
+// through CK-AB-1 to CK-AB-3 and cricket.ts notes at CRICKET_FORFEIT_PHASE. The sweep walks the whole sport registry (11
+// sports) through the engine's own events - a play-out to a decision, `core.finalize`, `core.forfeit` and `core.abandon` -
+// and judges the phase each one leaves; the fold-level probe then judges what the fold answers a second forfeit or abandon.
 import { describe, expect, it } from "vitest";
 import * as padBarrel from "../pad/index.ts";
 import type { AnySportModule } from "../sport/module.ts";
@@ -12,6 +13,7 @@ import { forEachSport } from "../testkit/for-each-sport.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
 import { playWalk, SANCTION_SWEEP_SEEDS } from "../testkit/sanction-score.ts";
 import { EngineError } from "./errors.ts";
+import { foldMatchWithStoppage, outcomeOf } from "./events.ts";
 import * as coreBarrel from "./index.ts";
 import { POST_PHASES } from "./phase-tokens.ts";
 
@@ -23,6 +25,11 @@ const TERMINAL_PHASES_OF = (key: string): readonly string[] => (key === "cricket
 
 /** The cfg keys under which a module takes an abandon policy; each value one module accepts is tried. */
 const ABANDON_POLICIES = ["replay", "award", "share", "q4_stands"] as const;
+
+/** Pinned like `PINNED_SKIN_FILES`: re-pin when a sport declares or drops a variant. The cfgs the 11 sports declare (one forfeit
+ *  each), and the abandons the sweep takes across them (the cfg as declared, plus each policy its schema re-accepts). */
+const PINNED_DECLARED_CFGS = 43;
+const PINNED_ABANDONS = 71;
 
 const ev = (seq: number, type: string, payload: unknown = {}) => makeEnvelope(seq, { type, payload });
 const codeOf = (f: () => unknown): string | null => {
@@ -59,9 +66,9 @@ describe("X-PH-1: a match's terminal phases are done, final and abandoned (POST_
     // Frozen for real: a frozen Set still takes `add`, so the mutators refuse, and a refusal leaves the set as it was.
     const mutable = POST_PHASES as unknown as Set<string>;
     expect(Object.isFrozen(POST_PHASES)).toBe(true);
-    expect(() => mutable.add("live")).toThrow(TypeError);
-    expect(() => mutable.delete("done")).toThrow(TypeError);
-    expect(() => mutable.clear()).toThrow(TypeError);
+    expect(() => mutable.add("live")).toThrow(new TypeError("POST_PHASES is frozen: add refused"));
+    expect(() => mutable.delete("done")).toThrow(new TypeError("POST_PHASES is frozen: delete refused"));
+    expect(() => mutable.clear()).toThrow(new TypeError("POST_PHASES is frozen: clear refused"));
     expect([...POST_PHASES].sort()).toEqual([...RULEBOOK_POST_PHASES]);
   });
 
@@ -140,8 +147,9 @@ describe("X-PH-1: a match's terminal phases are done, final and abandoned (POST_
     expect(sports).toBe(11);
     expect(finishes).toBe(11);
     expect(finalizes).toBe(11);
-    expect(forfeits).toBeGreaterThanOrEqual(11);
-    expect(abandons).toBeGreaterThanOrEqual(forfeits);
+    // Exact, so a variant dropped from `declaredCfgs`, or a policy the schema stops accepting, reds here.
+    expect(forfeits, "declared cfgs forfeited").toBe(PINNED_DECLARED_CFGS);
+    expect(abandons, "abandons taken across them").toBe(PINNED_ABANDONS);
     // Every member of POST_PHASES is reached by at least one sport, and abandoned by ten (all but cricket).
     for (const token of POST_PHASES) {
       expect(reachedBy.get(token)?.size ?? 0, `POST_PHASES member "${token}" is reached by no sport`).toBeGreaterThan(0);
@@ -152,7 +160,9 @@ describe("X-PH-1: a match's terminal phases are done, final and abandoned (POST_
     expect(reachedBy.get("final")?.size).toBe(11);
   });
 
-  it("X-PH-1: in each terminal phase a second forfeit or abandon is refused WRONG_PHASE, and the module calls the phase over", () => {
+  it("X-PH-1: the sport module itself refuses a second forfeit or abandon WRONG_PHASE in each terminal phase, and calls the phase over", () => {
+    // `module.apply` on a synthetic `{...init, phase}`: the module's own guard, which the fold reaches only for an abandon of an
+    // abandon (next test). The other five cells answer a kernel code first, so this test is the guard's only witness there.
     let probes = 0;
     let generatorProbes = 0;
     const sports = forEachSport(({ module, key }) => {
@@ -181,6 +191,67 @@ describe("X-PH-1: a match's terminal phases are done, final and abandoned (POST_
     // 10 sports x 3 terminal phases + cricket x 2, three probes each.
     expect(probes).toBe((10 * 3 + 2) * 3);
     expect(generatorProbes).toBeGreaterThan(0);
+  });
+
+  it("X-PH-1: through the real fold, a second forfeit or abandon in a terminal phase answers the kernel's code (11 sports)", () => {
+    // The refusal codes, typed from the guards in events.ts in the order the fold runs them (not read from a run):
+    //  - X-AB-4, `abandonActive && settlement === null`, forfeit only and ABOVE guarantee 4: ABANDONED_SETTLE_OR_VOID.
+    //  - guarantee 4, `decided && !postDecision.has(type)`: a match with an effective outcome refuses everything but
+    //    core.note, core.finalize, core.award and core.settle: ALREADY_DECIDED. A forfeit or abandon is none of those, and the
+    //    withdrew-over-a-level-result exception needs reason `withdrew` (the probe sends `walkover`).
+    //  - otherwise the event reaches the sport module, whose guard answers WRONG_PHASE: an abandon of an abandon, which has no
+    //    outcome (replay) and no kernel guard of its own.
+    // Each cell asserts the premise its guard needs (an outcome, or none) from the folded state, so the expectation cannot be
+    // satisfied by the wrong guard answering.
+    const REFUSAL: Readonly<Record<"done" | "final" | "abandoned", Readonly<Record<"core.forfeit" | "core.abandon", string>>>> = {
+      done: { "core.forfeit": "ALREADY_DECIDED", "core.abandon": "ALREADY_DECIDED" },
+      final: { "core.forfeit": "ALREADY_DECIDED", "core.abandon": "ALREADY_DECIDED" },
+      abandoned: { "core.forfeit": "ABANDONED_SETTLE_OR_VOID", "core.abandon": "WRONG_PHASE" },
+    };
+    const forfeit = { type: "core.forfeit", payload: { by: "H", reason: "walkover" } };
+    const abandon = { type: "core.abandon", payload: { reason: "rain" } };
+    const start = { type: "core.start", payload: {} };
+    const finalize = { type: "core.finalize", payload: {} };
+    let cells = 0;
+    const sports = forEachSport(({ module, key }) => {
+      const m = loose(module);
+      const lineups = defaultLineupPair(m.positions);
+      const { cfg } = declaredCfgs(module)[0]!;
+      // The abandon that leaves no result: the replay policy where the cfg takes one, else the cfg as declared.
+      let replayCfg: unknown = cfg;
+      if (typeof cfg === "object" && cfg !== null && "abandonPolicy" in cfg) {
+        const parsed = module.configSchema.safeParse({ ...(cfg as object), abandonPolicy: "replay" });
+        expect(parsed.success, `${key}: a cfg with an abandonPolicy takes "replay"`).toBe(true);
+        replayCfg = parsed.data;
+      }
+      const stages = {
+        done: { cfg, stream: [start, forfeit], decided: true },
+        final: { cfg, stream: [start, forfeit, finalize], decided: true },
+        abandoned: { cfg: replayCfg, stream: [start, abandon], decided: false },
+      } as const;
+      for (const stage of Object.keys(stages) as Array<keyof typeof stages>) {
+        // Cricket has no abandoned phase: its abandon decides (`done`), which the `done` stage already covers.
+        if (!TERMINAL_PHASES_OF(key).includes(stage)) continue;
+        const { cfg: stageCfg, stream, decided } = stages[stage];
+        const fold = (events: ReadonlyArray<{ type: string; payload: unknown }>) =>
+          foldMatchWithStoppage(module as never, stageCfg as never, lineups, events.map((e, i) => ev(i + 1, e.type, e.payload)));
+        const folded = fold(stream);
+        expect(phaseOf(folded.state), `${key} ${stage}: the stream's phase`).toBe(stage);
+        expect(outcomeOf(module as never, folded as never) !== null, `${key} ${stage}: has an effective outcome`).toBe(decided);
+        for (const second of [forfeit, abandon] as const) {
+          expect(
+            codeOf(() => fold([...stream, second])),
+            `${key} ${stage} + ${second.type}`,
+          ).toBe(REFUSAL[stage][second.type as "core.forfeit" | "core.abandon"]);
+          cells++;
+        }
+      }
+    });
+    // eslint-disable-next-line no-console
+    console.info(`[X-PH-1] sports ${sports}, fold cells ${cells}`);
+    expect(sports).toBe(11);
+    // 10 sports x 3 terminal phases x 2 second events + cricket x 2 phases x 2.
+    expect(cells).toBe(10 * 3 * 2 + 2 * 2);
   });
 
   it("X-PH-1: a live phase is not refused as 'over' (the empty case: nothing in play is terminal)", () => {
