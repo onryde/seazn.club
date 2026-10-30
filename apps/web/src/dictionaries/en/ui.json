@@ -1400,6 +1400,7 @@
   "streaming.youtube.madeForKids.yes": "Yes",
   "streaming.youtube.madeForKids.hint": "YouTube asks this of every live stream.",
   "streaming.youtube.settingsNote": "These apply to a channel you connect for the first time. A channel you've already connected keeps its settings; change them under Settings.",
+  "streaming.youtube.connect.minors": "Streaming junior matches? YouTube doesn't allow live streams showing children under 16 unless an adult is visibly with them, and can take live streaming away from a channel that breaks this rule.",
   "streaming.youtube.consent.body": "I confirm this organisation will follow YouTube's {tos} and {guidelines}, has the rights to stream this content (venue, players, music), and agrees that Seazn will create, title, start and end a YouTube live broadcast on this channel for each match we stream here.",
   "streaming.youtube.consent.disclaimer": "YouTube alone decides whether this channel can stream; Seazn is not responsible if YouTube restricts or disables live streaming, removes a stream, issues a strike, or does not save a replay.",
   "streaming.youtube.consent.bound": "By connecting you agree to be bound by the {tos}. See our {privacy}.",

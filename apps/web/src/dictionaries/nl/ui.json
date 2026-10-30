@@ -1400,6 +1400,7 @@
   "streaming.youtube.madeForKids.yes": "Ja",
   "streaming.youtube.madeForKids.hint": "YouTube vraagt dit bij elke livestream.",
   "streaming.youtube.settingsNote": "Dit geldt voor een kanaal dat je voor het eerst koppelt. Een kanaal dat al gekoppeld is, behoudt zijn instellingen; wijzig ze onder Instellingen.",
+  "streaming.youtube.connect.minors": "Stream je jeugdwedstrijden? YouTube staat geen livestreams toe waarin kinderen onder de 16 te zien zijn zonder dat er zichtbaar een volwassene bij hen is, en kan een kanaal dat deze regel overtreedt het livestreamen afnemen.",
   "streaming.youtube.consent.body": "Ik bevestig dat deze organisatie de {tos} en {guidelines} van YouTube zal naleven, de rechten heeft om deze content te streamen (locatie, spelers, muziek) en ermee instemt dat Seazn op dit kanaal voor elke wedstrijd die we hier streamen een YouTube-livestream aanmaakt, een titel geeft, start en beëindigt.",
   "streaming.youtube.consent.disclaimer": "Alleen YouTube bepaalt of dit kanaal mag streamen; Seazn is niet verantwoordelijk als YouTube livestreamen beperkt of uitschakelt, een stream verwijdert, een waarschuwing geeft of geen herhaling bewaart.",
   "streaming.youtube.consent.bound": "Door te koppelen ga je akkoord met de {tos}. Lees ons {privacy}.",

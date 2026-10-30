@@ -286,6 +286,30 @@ describe("the consent step", () => {
     expect(m("streaming.youtube.settingsNote")).toMatch(/already connected/i);
   });
 
+  it("PO 2026-10-30 (stg child-safety flag): the card warns about YouTube's under-16 live rule in EVERY locale, BEFORE the button that goes to Google", () => {
+    const KEY = "streaming.youtube.connect.minors";
+    // The owner's sentence, typed from the PO ruling — not read back from the code under test.
+    expect(m(KEY)).toBe(
+      "Streaming junior matches? YouTube doesn't allow live streams showing children under 16 unless an adult is visibly with them, and can take live streaming away from a channel that breaks this rule.",
+    );
+    let checked = 0;
+    for (const l of LOCALES) {
+      const sentence = localeDict(l)[KEY];
+      expect(typeof sentence === "string" && sentence.length > 0, `${l}: the dictionary carries the notice`).toBe(true);
+      // A locale that still reads the English sentence is an untranslated key, not a notice in that language.
+      if (l !== "en") expect(sentence, `${l}: translated, not the English`).not.toBe(m(KEY));
+      const html = inLocale(l, <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
+      expect(plain(html), `${l}: the card shows the notice`).toContain(sentence);
+      const at = html.indexOf(esc(sentence!));
+      const button = html.indexOf('data-testid="youtube-connect-submit"');
+      expect(at, `${l}: the notice is in the markup`).toBeGreaterThan(-1);
+      expect(button, `${l}: the go-to-Google button is in the markup`).toBeGreaterThan(-1);
+      expect(at, `${l}: read before the button that sends the organiser to Google`).toBeLessThan(button);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("the consent text: the spec's words, the ToS / Community Guidelines / Privacy Policy links (external ones noopener), and no unfilled {slot} in ANY locale", () => {
     let checked = 0;
     for (const l of LOCALES) {

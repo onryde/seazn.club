@@ -32,6 +32,7 @@ These are the owner's own answers in this session's chat. Items marked *(my call
 | D13 | **Part labels only when a match has 2+ parts**; a single part shows the player alone. | "hope that we don't display part 1 like that always, only when more than one part" |
 | D14 | UI layouts: Directory = Option A connect flow + Option B channel rows; fixture panel = Option B; public page = D12. | "Option A but 4 from Option B" → clarified "1"; "Fixture stream panel Option B" |
 | D15 | Each broadcast stores YouTube's **actual start and end time** (filled when Seazn ends it), for R4 sponsors-on-stream's "watch this moment" replay link. | "if we can, then yes?" (2026-10-27) |
+| D16 | **The connect step warns about YouTube's under-16 live rule** (children under 16 only with an adult visibly present; a channel that breaks it can lose live streaming): one short note in `YoutubeConnectCard` before the consent and Continue to Google (`streaming.youtube.connect.minors`), plus a paragraph linking YouTube's child safety policy in the help (`billing/credits.md`, the only help page covering streaming). | PO ruling 2026-10-30 (product decision delegated by the owner), after stg's test stream was flagged under YouTube's child-safety policy. |
 
 Accepted without objection in playback (owner "Ok"), originally proposed by this author:
 - made-for-kids asked at connect, default **No** *(my call)*;
