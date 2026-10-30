@@ -1033,7 +1033,7 @@ describe("buildScorebug — free hit indicator (R2b)", () => {
 // fallback, matching v2 exactly.
 // ---------------------------------------------------------------------------
 
-describe("chaseTarget", () => {
+describe("CK-TG-1 chaseTarget", () => {
   it("is null before a second innings exists — nothing to chase yet", () => {
     expect(chaseTarget(cfg(), state({ innings: [innings({ closed: true })] }))).toBeNull();
   });

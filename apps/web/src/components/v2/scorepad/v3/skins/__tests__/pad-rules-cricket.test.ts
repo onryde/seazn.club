@@ -121,7 +121,7 @@ describe("the wicket sheet offers the engine's modes", () => {
     same(offered, cricketPadRules.wicketKinds.filter((k) => offered.includes(k)), "free-hit options keep the engine's order");
   });
 
-  it("asks who is out exactly for variableOutKinds and the fielder exactly for fielderCreditedKinds (optional exactly for fielderOptionalKinds), and every payload folds", () => {
+  it("CK-WK-2 CK-WK-3 asks who is out exactly for variableOutKinds and the fielder exactly for fielderCreditedKinds (optional exactly for fielderOptionalKinds), and every payload folds", () => {
     same([...cricketPadRules.variableOutKinds].sort(), LAWS_EITHER_BATTER, "either-batter modes are the Laws'");
     same([...cricketPadRules.fielderOptionalKinds].sort(), LAWS_NO_FIELDER_NAMED, "optional-fielder modes are the Laws'");
     const asked = new Map<string, string[]>();
@@ -228,7 +228,7 @@ describe("the free hit is the fold's (review I2)", () => {
   });
 });
 
-describe("in a super over the pad offers only what the fold accepts (review, trace c)", () => {
+describe("CK-SO-3 in a super over the pad offers only what the fold accepts (review, trace c)", () => {
   it.each([
     ["no DLS", {}],
     ["DLS on (Revise in padSpec)", { dls: { enabled: true, edition: "standard" } }],
@@ -331,7 +331,7 @@ describe("the tiles, dock and option sheets offer the engine's sets", () => {
   });
 });
 
-describe("balls per over is the cfg's, at two cfgs", () => {
+describe("CK-BO-2 balls per over is the cfg's, at two cfgs", () => {
   it("after five legal balls the next delivery is numbered by the cfg's over (T20 6, the hundred 5), and the fold takes it", () => {
     const numbering = new Map<string, [number, number]>();
     for (const [name, cfg] of [["t20", T20], ["hundred", HUNDRED]] as const) {

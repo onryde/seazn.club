@@ -234,7 +234,7 @@ describe("cricketPadRules: the static sets are the fold's own declarations", () 
 });
 
 describe("cricketPadRules against the real fold (T20)", () => {
-  it("fielderCreditedKinds: naming a fielder credits them exactly for these modes, in the rulebook's column; obstructed is one (Q1)", () => {
+  it("CK-WK-1 fielderCreditedKinds: naming a fielder credits them exactly for these modes, in the rulebook's column; obstructed is one (Q1)", () => {
     expect(sorted(cricketPadRules.fielderCreditedKinds)).toEqual(sorted(Object.keys(RULEBOOK_FIELDER_COLUMN)));
     expect(cricketPadRules.fielderCreditedKinds).toContain("obstructed");
     let credited = 0;
@@ -254,7 +254,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(credited).toBe(4);
   });
 
-  it("freeHitDismissalKinds: on a free hit the fold accepts exactly these modes and refuses the rest", () => {
+  it("CK-FH-1 freeHitDismissalKinds: on a free hit the fold accepts exactly these modes and refuses the rest", () => {
     expect(sorted(cricketPadRules.freeHitDismissalKinds)).toEqual(sorted(RULEBOOK_FREE_HIT));
     const NO_BALL = { kind: "noball", runs: 1 };
     let accepted = 0;
@@ -277,7 +277,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(refused).toBeGreaterThan(0);
   });
 
-  it("bowlerCreditedKinds: the fold requires bowlerCredited exactly for these modes, and they are the Laws' five", () => {
+  it("CK-WK-1 bowlerCreditedKinds: the fold requires bowlerCredited exactly for these modes, and they are the Laws' five", () => {
     expect(sorted(cricketPadRules.bowlerCreditedKinds)).toEqual(sorted(LAWS_BOWLER_CREDITED));
     let checked = 0;
     for (const kind of MODES) {
@@ -321,7 +321,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(folded).toBe(LAWS_NO_FIELDER_NAMED.length);
   });
 
-  it("penaltyRuns: Law 41's one award; a penalty extra of it lands on the batting side, charged to no bowler, run by nobody", () => {
+  it("CK-PR-1 penaltyRuns: Law 41's one award; a penalty extra of it lands on the batting side, charged to no bowler, run by nobody", () => {
     expect(cricketPadRules.penaltyRuns).toBe(LAW_41_ONE_AWARD);
     const innings = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind: "penalty", runs: cricketPadRules.penaltyRuns } })]));
     expect(innings.battingSide).toBe("home");
@@ -331,7 +331,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(innings.fine.striker).toBe(STRIKER); // odd, and still nobody crossed
   });
 
-  it("wideDefaultRuns: a bare wide scores its one-run penalty, no ball faced, no crossing; one run more and the batters have crossed", () => {
+  it("CK-EX-2 wideDefaultRuns: a bare wide scores its one-run penalty, no ball faced, no crossing; one run more and the batters have crossed", () => {
     expect(cricketPadRules.wideDefaultRuns).toBe(LAW_WIDE_PENALTY);
     const bare = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind: "wide", runs: cricketPadRules.wideDefaultRuns } })]));
     expect(bare.runs).toBe(LAW_WIDE_PENALTY);
@@ -346,7 +346,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     }
   });
 
-  it("noBallDefaultRuns: a bare no ball scores its one-run penalty (Law 21.14), no ball faced, no crossing, and arms the free hit", () => {
+  it("CK-EX-2 noBallDefaultRuns: a bare no ball scores its one-run penalty (Law 21.14), no ball faced, no crossing, and arms the free hit", () => {
     expect(cricketPadRules.noBallDefaultRuns).toBe(LAW_NO_BALL_PENALTY);
     const bare = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind: "noball", runs: cricketPadRules.noBallDefaultRuns } })]));
     expect(bare.runs).toBe(LAW_NO_BALL_PENALTY);
@@ -355,7 +355,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(bare.fine.freeHitPending).toBe(true);
   });
 
-  it("boundaryValues: the two the ball schema takes (Law 19: 4 and 6); the fold refuses any other", () => {
+  it("CK-BD-1 boundaryValues: the two the ball schema takes (Law 19: 4 and 6); the fold refuses any other", () => {
     expect(cricketPadRules.boundaryValues).toEqual(CricketBall.shape.boundary.unwrap().options.map((o) => o.value));
     expect(sorted(cricketPadRules.boundaryValues)).toEqual([4, 6]);
     let checked = 0;
@@ -369,7 +369,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
   });
 });
 
-describe("cricketPadRules.ballsPerOver(cfg)", () => {
+describe("CK-BO-2 cricketPadRules.ballsPerOver(cfg)", () => {
   it("is the cfg's own ballsPerOver, read through the schema, over every declared cfg and its raw variant; it equals the padSpec ballInOver max", () => {
     const seen = new Set<number>();
     let checked = 0;
@@ -398,7 +398,7 @@ describe("cricketPadRules.ballsPerOver(cfg)", () => {
   });
 });
 
-describe("cricketPadRules.superOverEventTypes against a real super over", () => {
+describe("CK-SO-3 CK-DV-2 cricketPadRules.superOverEventTypes against a real super over", () => {
   /** A tied one-over-a-side match with the super over on: the shortest legal route to phase "super_over", folded. */
   const SO_CFG = parse({ superOver: true, ballsPerInnings: 6, ballsPerOver: 6, minOversForResult: 1 });
   const side = (striker: string, nonStriker: string, bowler: string): Spec[] =>

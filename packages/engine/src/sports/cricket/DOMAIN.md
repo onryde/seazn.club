@@ -96,9 +96,9 @@ coarse scoring must stay legal.
 | Caught | all | persons: `out`, `fielder`, `bowler` | `…wicket.fielder` → `.fine.fielding[p].catches` | **extended** | `fielder` existed but was parsed and dropped; it is now validated against the fielding lineup and folded into a per-person fielding card |
 | Stumped | all | persons: `out`, `fielder` (the keeper), `bowler` | `…wicket.fielder` → `.fine.fielding[p].stumpings` | **extended** | same fold; `bowlerCredited` stays `true` |
 | Run out | all | persons: `out`, `fielder`, `fielderAssist` | `…wicket.fielder`, `…wicket.fielderAssist` → `.fine.fielding[p].runOuts` | **extended** | `fielderAssist` is new: the scorebook's "run out (thrower/breaker)". `fielder` = the fielder who completed it (broke the wicket), `fielderAssist` = the supporting fielder; both are credited a run out. Requires `fielder` and must differ from it. |
-| Obstructing the field | all | persons: `out`, `fielder` | `…wicket.kind = "obstructed"` | modelled | credits the fielder a run out; "handled the ball" was folded into this by the 2017 Code |
+| Obstructing the field | all | persons: `out`, `fielder` (optional) | `…wicket.kind = "obstructed"` | modelled | either batter can be out (Law 37.1.1), and the pad asks which (CK-WK-3). Credits the named fielder a run out, a departure from MCC Law 37, which credits no fielder (ruling 242, CK-WK-2); naming one is optional, and with none named the wicket stands and credits nobody. "Handled the ball" was folded into this by the 2017 Code |
 | Timed out | all | person: `out` | `…wicket.kind = "timedout"` | modelled | |
-| Retired out (as a delivery-time entry) | all | person: `out` | `…wicket.kind = "retired"` | modelled | legacy path, kept for back-compat; `cricket.retire` below is the richer one |
+| Retired out (as a delivery-time entry) | all | person: `out` | `…wicket.kind = "retired"` | modelled | legacy path, kept for back-compat; `cricket.retire` below is the richer one. Either batter can retire (Law 25.4.1), and the pad asks which (ruling 242, CK-WK-3) |
 | **Hit the ball twice** | all | person: `out` | `…wicket.kind = "hitballtwice"` | **extended** | Law 34 — the tenth mode of dismissal, previously absent from the enum. Credited to no bowler, so `bowlerCredited` must be `false`. |
 | Wicket-keeper distinguished from a fielder | all | person: `fielder` | `positions.roles[].key = "wicketkeeper"` | deferred | the keeper is a lineup role (required, unique), so "†" on a scorecard is derivable from the lineup rather than repeated on every ball. Recording it per delivery would be denormalised and could contradict the lineup. |
 | Who threw vs who broke the wicket | all | persons: `fielder`, `fielderAssist` | `…wicket.fielderAssist` | **extended** | judged scoreable: it is the standard scorebook entry for a run out. The pair is ordered (completer, assister) rather than (thrower, breaker) because the completer is the one the card always names. |
@@ -172,6 +172,11 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Downstream owed
 
+- **Only the striker can be out bowled, caught, hit the ball twice, hit wicket, lbw or stumped; the fold takes the
+  non-striker too** (ruling 242 (c), rules row CK-WK-4, open). `applyDelivery` checks only that `wicket.out` is at the
+  crease, for every mode, which no Law allows for these six (Laws 32 to 36 and 39 each dismiss the striker). The pad
+  never offers it (it asks who is out only for run out, obstructing and retired), so only a write through the API can
+  record one. The fix is a fold change with a cricket `FOLD_EPOCH` bump, after the pad wave (owed-work O-8).
 - **Position labels owed in all four locale dictionaries** (W4a T6b): `scoring.position.innings`, `scoring.position.over`.
   `SportModule.position` returns a stable segment `key` plus an ENGLISH `label`
   fallback — the engine writes no locale copy, by the same rule `MetricSpec.label`
