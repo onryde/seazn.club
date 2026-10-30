@@ -15,6 +15,11 @@ import { ICEHOCKEY_RECREATIONAL_SUSPENSIONS, ICEHOCKEY_SUSPENSIONS } from "../pe
 // fighting, which FIH has no equivalent of at all). Declared here, not
 // enforced by the (shared) event schema — see kernel.ts's comment on
 // PeriodSuspensionReason for why. Secondary-source sourced; see DOMAIN.md.
+// W2d T18 (HK-TB-2) — the IIHF ranks level teams on no goal type, so an untyped goal stays legal (see
+// `PeriodPreset.goalKindRequired`). Declared, not omitted, so the pad's record (`icehockeyPadRules.goalKindRequired`) reads
+// the preset's own flag rather than a default typed beside it.
+export const ICEHOCKEY_GOAL_KIND_REQUIRED = false;
+
 export const ICEHOCKEY_SUSPENSION_REASONS: readonly PeriodSuspensionReason[] = [
   "tripping",
   "hooking",
@@ -303,4 +308,5 @@ export const icehockey = makePeriodModule({
   // See `PeriodPreset.shotTracking`'s own comment for why this is a preset
   // flag and not a cfg knob.
   shotTracking: true,
+  goalKindRequired: ICEHOCKEY_GOAL_KIND_REQUIRED,
 });

@@ -21,7 +21,7 @@ import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TA
 // path; ice hockey is where a scorer meets it.
 //
 // The default `storageState` org, deliberately — the swap tile is band-gated
-// (`SWAP_BAND = 2`) and this is the same shared Pro account every
+// (`hockeyPadRules.swapBand`, 2) and this is the same shared Pro account every
 // `sub-home` tap in `scorepad-v3-football.spec.ts` already runs against. No
 // entitlement is granted or flipped here, so nothing this file does is visible
 // to another spec sharing that org.

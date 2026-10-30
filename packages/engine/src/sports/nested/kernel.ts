@@ -12,6 +12,7 @@
 // the same set ledger the rally path banks (mirrors setbased summary mode).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import {
   forfeitOf,
   isStrictFold,
@@ -222,8 +223,12 @@ export function makeNestedConfigSchema(defaults: NestedParams) {
 // Events — v6/00 §2
 // ---------------------------------------------------------------------------
 
+/** The shot that won a point, as the chair's card records it (pad wave P3.2: named, so the pad reads the enum the schema parses). */
+export const NestedPointKind = z.enum(["ace", "double_fault", "winner", "ue"]);
+export type NestedPointKind = z.infer<typeof NestedPointKind>;
+
 export const NestedPointMeta = z.strictObject({
-  kind: z.enum(["ace", "double_fault", "winner", "ue"]).optional(),
+  kind: NestedPointKind.optional(),
   // ITF App VI no-ad deciding point: the receiver chooses the service side.
   // Recorded for the record; no fold effect.
   receiverSide: z.enum(["deuce", "ad"]).optional(),
@@ -872,17 +877,28 @@ export interface SetRules {
 /** What the games path of a set reads (`setGamesWinner`, `reachableLiveGames`): never a tie-break's target or margin. */
 type SetGamesRules = Pick<SetRules, "gamesTo" | "winBy" | "tiebreakAt">;
 
-function isDecidingSet(state: NestedState): boolean {
+function isDecidingSet(state: Pick<NestedState, "cfg" | "setsWon">): boolean {
   const need = majority(state.cfg.bestOf) - 1;
   return state.setsWon.home === need && state.setsWon.away === need;
 }
 
-function rulesFor(state: NestedState): SetRules {
+/** The rules of the set about to be played. Exported for `@seazn/engine/pad` (pad wave P3.2), which asks it of the pad's cfg. */
+export function rulesFor(state: Pick<NestedState, "cfg" | "setsWon">): SetRules {
   const { set, finalSet } = state.cfg;
   const base: SetRules = { ...set, tiebreakWinBy: setTiebreakWinBy(state.cfg), mtbTo: null };
   if (!isDecidingSet(state) || finalSet === "same") return base;
   if ("matchTiebreakTo" in finalSet) return { ...base, mtbTo: finalSet.matchTiebreakTo };
   return { ...base, tiebreakTo: finalSet.tiebreakTo, tiebreakWinBy: state.cfg.tiebreak.winBy };
+}
+
+/** Whether `home`–`away` is the tie-break set score of a set played under `rules` (`tiebreakAt+1 : tiebreakAt`, either way
+ *  round): the score `applySetSummary` banks only with its tie-break's points (`tb`). Never for a set that IS a match
+ *  tie-break (its points ride in home/away, and a `tb` block is refused) nor for an advantage set (no tie-break). One predicate
+ *  for the fold and the pad's set-score sheet (pad wave P3.2). */
+export function tiebreakSetScore(home: number, away: number, rules: Pick<SetRules, "tiebreakAt" | "mtbTo">): boolean {
+  if (rules.mtbTo !== null || rules.tiebreakAt === null) return false;
+  const at = rules.tiebreakAt;
+  return (home === at + 1 && away === at) || (away === at + 1 && home === at);
 }
 
 // Terminal predicate for a TB/MTB score (first to `to`, win by `winBy`,
@@ -1039,6 +1055,19 @@ function serveAfterGame(state: NestedState): Side {
   return opponent(state.serving);
 }
 
+/** ITF Rule 5(b), inside a tie-break or a match tie-break: the player due to serve serves the first point, then each serves
+ *  two in turn, so the server changes after point 1, 3, 5, … (the odd ones). `pointsPlayed` counts the breaker's points with
+ *  the one just played. Read by `applyTbPoint` and by `@seazn/engine/pad` (pad wave P3.2). */
+export function tiebreakServeRotatesAfter(pointsPlayed: number): boolean {
+  return pointsPlayed % 2 === 1;
+}
+
+/** A tie-break or a match tie-break is being played: the breaker IS the deciding game, so `applyGameAward` refuses a game
+ *  award (GAME_AWARD_DURING_TIEBREAK) and serve turns over by points, not games. Read by the fold and by `@seazn/engine/pad`. */
+export function breakerInForce(points: GamePoints): boolean {
+  return points.kind !== "standard";
+}
+
 // ---------------------------------------------------------------------------
 // Point application
 // ---------------------------------------------------------------------------
@@ -1097,7 +1126,7 @@ function applyTbPoint(state: NestedState, side: Side, mtb: boolean): NestedState
   const played = state.tbPointsPlayed + 1;
   // Serve rotation: 1 point by the due server, then 2 each (ITF Rule 5b) —
   // the server flips after point 1, 3, 5, … (odd totals).
-  const serving = played % 2 === 1 ? opponent(state.serving) : state.serving;
+  const serving = tiebreakServeRotatesAfter(played) ? opponent(state.serving) : state.serving;
   const tally = { ...state.pointsWon, [side]: state.pointsWon[side] + 1 };
   let next: NestedState = {
     ...state,
@@ -1335,7 +1364,7 @@ function applyGameAward(state: NestedState, payload: NestedGameAward, strict: bo
   // does not build (DOMAIN.md). Refused loudly on the write path, rather than
   // silently corrupting `state.games` — `winGame` would bump it regardless,
   // and could even re-enter a tie-break immediately under a low `tiebreakAt`.
-  if (strict && state.points.kind !== "standard") {
+  if (strict && breakerInForce(state.points)) {
     const breaker = state.points.kind === "matchTiebreak" ? "a match tie-break" : "a tie-break";
     throw new EngineError(
       "GAME_AWARD_DURING_TIEBREAK",
@@ -1394,11 +1423,9 @@ function applySetSummary(
     return bankSet({ ...state, pointsWon: tally }, winner, { home, away, mtb: true });
   }
 
-  // Tie-break set score (tiebreakAt+1 : tiebreakAt) — tb block required.
-  const isTbScore =
-    rules.tiebreakAt !== null &&
-    ((home === rules.tiebreakAt + 1 && away === rules.tiebreakAt) ||
-      (away === rules.tiebreakAt + 1 && home === rules.tiebreakAt));
+  // Tie-break set score (tiebreakAt+1 : tiebreakAt) — tb block required. (`rules.mtbTo` is null here: the match tie-break
+  // branch above has returned.)
+  const isTbScore = tiebreakSetScore(home, away, rules);
   if (isTbScore) {
     if (strict && payload.tb === undefined) {
       invalid(`a ${home}–${away} set ends in a tie-break — include its points as tb`, {
@@ -1465,7 +1492,7 @@ function applySetSummary(
 // ---------------------------------------------------------------------------
 
 function applyForfeit(state: NestedState, by: string, reason: ForfeitReason): NestedState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
@@ -1485,7 +1512,7 @@ function applyForfeit(state: NestedState, by: string, reason: ForfeitReason): Ne
 const FORFEIT_PHASE: Record<NestedState["phase"], ForfeitPhase> = { pre: "pre", live: "play", done: "over", final: "over", abandoned: "over" };
 
 function applyAbandon(state: NestedState): NestedState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   return { ...state, phase: "abandoned", replayFlagged: true };
@@ -1495,7 +1522,9 @@ function applyAbandon(state: NestedState): NestedState {
 // Display — spoken score + set strip (v6/00 §2).
 // ---------------------------------------------------------------------------
 
-const CALLS = ["0", "15", "30", "40"] as const;
+/** ITF Rule 5(a): the call of a standard game's points won, 0 to 3 ("love", 15, 30, 40). Read by `gameScoreLine` and by
+ *  `@seazn/engine/pad` (pad wave P3.2). */
+export const POINT_CALLS = ["0", "15", "30", "40"] as const;
 
 export function gameScoreLine(points: GamePoints): string {
   switch (points.kind) {
@@ -1505,7 +1534,7 @@ export function gameScoreLine(points: GamePoints): string {
         if (points.advantage === "away") return "40–Ad";
         return "40–40";
       }
-      return `${CALLS[points.home]}–${CALLS[points.away]}`;
+      return `${POINT_CALLS[points.home]}–${POINT_CALLS[points.away]}`;
     }
     case "tiebreak":
       return `TB ${points.home}–${points.away}`;
@@ -1521,6 +1550,33 @@ function closedSetLine(set: ClosedSet): string {
     return `${set.home}–${set.away}(${loserTb})`;
   }
   return `${set.home}–${set.away}`;
+}
+
+/** ITF Rule 5(b): in a tie-break game the players change ends after every six points (a match tie-break does the same). */
+const TIEBREAK_POINTS_PER_END = 6;
+
+/**
+ * Pad wave P3.2 — ITF Rule 10, read off the state: whether the changeover the players have just had (the end of the last game,
+ * or of the last tie-break point) was a change of ends. The fold keeps no ends field and needs none, since nothing it scores
+ * depends on which end a player stands at; `@seazn/engine/pad` reads this for the pad's "ends changed" cue.
+ *
+ * Rule 10: the players change ends at the end of the first, third and every subsequent odd game of each set, and at the end
+ * of each set unless its total of games is even (then at the end of the next set's first game, its first odd game). In a
+ * tie-break game, and in a match tie-break, they change ends after every six points; the tie-break counts as one game of its
+ * set, so a 7–6 set (13 games) ends with a change.
+ *
+ * So, while play is live: inside a breaker under way, after every sixth point; otherwise after an odd game of the current set;
+ * and before a set's first game (none of it played yet) after a set of an odd total. Never before the first game of the match,
+ * and never once it is over (no changeover follows the last game). Rule TN-EN-1, owner ruling 244 (2026-10-30).
+ */
+export function endsChanged(state: Pick<NestedState, "phase" | "sets" | "games" | "points">): boolean {
+  if (state.phase !== "live") return false;
+  const breakerPoints = breakerInForce(state.points) ? state.points.home + state.points.away : 0;
+  if (breakerPoints > 0) return breakerPoints % TIEBREAK_POINTS_PER_END === 0;
+  const gamesPlayed = state.games.home + state.games.away;
+  if (gamesPlayed > 0) return gamesPlayed % 2 === 1;
+  const last = state.sets[state.sets.length - 1];
+  return last !== undefined && (last.home + last.away) % 2 === 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -1650,7 +1706,7 @@ function nestedPosition(state: NestedState): MatchPosition {
  *  advantage set (`tiebreakAt: null`) has no games ceiling at all, so it gets
  *  a generous open-ended sentinel instead — the same plausibility-sentinel
  *  pattern cricket's padSpec uses for `ballsPerInnings: null`. */
-function gamesFieldBound(cfg: NestedCfg): number {
+export function gamesFieldBound(cfg: NestedCfg): number {
   const base = setGamesBound(cfg.set);
   const mtb =
     cfg.finalSet !== "same" && "matchTiebreakTo" in cfg.finalSet ? cfg.finalSet.matchTiebreakTo + 2 : 0;
@@ -1661,7 +1717,7 @@ function gamesFieldBound(cfg: NestedCfg): number {
  *  target with the set tie-break's own margin (`setTiebreakWinBy`), or the
  *  decider's own `finalSet.tiebreakTo` (the slam rule) if larger, with the
  *  match's `tiebreak.winBy` (`rulesFor`; RBS:349). */
-function tbFieldBound(cfg: NestedCfg): number {
+export function tbFieldBound(cfg: NestedCfg): number {
   const ordinary = cfg.set.tiebreakTo + setTiebreakWinBy(cfg) + 2;
   const decider =
     cfg.finalSet !== "same" && "tiebreakTo" in cfg.finalSet
@@ -1675,9 +1731,34 @@ function tbFieldBound(cfg: NestedCfg): number {
  *  own doc comment), so there is no single cfg-derived ceiling to read for a
  *  generic "duration" field. A plausibility sentinel, matching cricket's own
  *  approach for a schema field the DOMAIN leaves genuinely unbounded. */
-const PLAUSIBLE_INTERRUPTION_SECONDS = 3600;
+export const PLAUSIBLE_INTERRUPTION_SECONDS = 3600;
 
-function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg): PadSpec {
+/**
+ * The fidelity map of one preset: one band per registered type (all 5 — see the module-level note above). The bare set score
+ * alone (band 0) already reaches a decided match (`bankSet` off summaries, exactly like the set-based kernel); code violations
+ * and interruptions are administrative records that never move the score, band 1 (matching the set-based kernel's own
+ * timeout/sanction placement); points and game-awards are both SCORE-MOVING facts at the kernel's maximum granularity — a game
+ * award is one level up from a point ("the game a code violation concedes"), not a discipline record like
+ * sanction/interruption — so both sit at band 3, the kernel's maximum granularity. Band 2 is unoccupied — same honest gap as
+ * the set-based kernel's (no player-line/box-score analogue here either); S2/#430 parked this kernel's own T3 addition
+ * (1st-vs-2nd serve, rally length) as future work, not this session's.
+ *
+ * It reads no cfg. Pad wave P3.2: built ONCE per module (`makeNestedModule`) and handed to every `padSpec(cfg)`, so every
+ * cfg's padSpec carries the same object, the one `@seazn/engine/pad` exposes as `tennisPadRules.eventBands`.
+ */
+function nestedFidelity(preset: NestedPreset): PadSpec["fidelity"] {
+  const key = preset.key;
+  // frozen: one object reaches every cfg's padSpec and the pad record, so an in-place edit by any reader would leak into all
+  return Object.freeze({
+    [`${key}.set_summary`]: 0,
+    [`${key}.sanction`]: 1,
+    [`${key}.interruption`]: 1,
+    [`${key}.point`]: 3,
+    [`${key}.game.award`]: 3,
+  } satisfies Record<string, FidelityBand>);
+}
+
+function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg, fidelity: PadSpec["fidelity"]): PadSpec {
   const key = preset.key;
   const pointType = `${key}.point`;
   const summaryType = `${key}.set_summary`;
@@ -1697,7 +1778,7 @@ function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg): PadSpec {
     type: pointType,
     labelKey: { key: `pad.${key}.action.pointAttributed`, label: "Point (server / scorer)" },
     fields: [
-      { kind: "enum", path: "meta.kind", values: ["ace", "double_fault", "winner", "ue"] },
+      { kind: "enum", path: "meta.kind", values: NestedPointKind.options },
       { kind: "enum", path: "meta.receiverSide", values: ["deuce", "ad"] },
     ],
     attribution: [
@@ -1803,26 +1884,8 @@ function nestedPadSpec(preset: NestedPreset, cfg: NestedCfg): PadSpec {
 
   return {
     panels,
-    // One band per registered type (all 5 — see the module-level note
-    // above). The bare set score alone (band 0) already reaches a decided
-    // match (`bankSet` off summaries, exactly like the set-based kernel);
-    // code violations and interruptions are administrative records that
-    // never move the score, band 1 (matching the set-based kernel's own
-    // timeout/sanction placement); points and game-awards are both
-    // SCORE-MOVING facts at the kernel's maximum granularity — a game award
-    // is one level up from a point ("the game a code violation concedes"),
-    // not a discipline record like sanction/interruption — so both sit at
-    // band 3, the kernel's maximum granularity. Band 2 is unoccupied — same
-    // honest gap as the set-based kernel's (no player-line/box-score
-    // analogue here either); S2/#430 parked this kernel's own T3 addition
-    // (1st-vs-2nd serve, rally length) as future work, not this session's.
-    fidelity: {
-      [summaryType]: 0,
-      [sanctionType]: 1,
-      [interruptionType]: 1,
-      [pointType]: 3,
-      [gameAwardType]: 3,
-    } satisfies Record<string, FidelityBand>,
+    // One band per registered type: the preset's one map (`nestedFidelity`), the same object for every cfg.
+    fidelity,
   };
 }
 
@@ -2124,6 +2187,8 @@ export function makeNestedModule(
   // One per module — see `sports/squad-state.ts` for the init handshake it
   // keys on.
   const squadAdopter = makeSquadAdopter<NestedState>();
+  // Pad wave P3.2 — one fidelity map per module, the same object in every cfg's padSpec (see `nestedFidelity`).
+  const fidelity = nestedFidelity(preset);
 
   // W4 review item 7 — the ITF code-violation ladder reaches the shared
   // discipline projection. The kernel folded a LOCAL sanction record in this
@@ -2213,7 +2278,7 @@ export function makeNestedModule(
     // R8/WS-B — `required` stamped ONCE here, from the SAME `eventSchemas`
     // registry already declared above (never hand-typed per action; see
     // module.ts's own doc comment).
-    padSpec: (padCfg) => stampAttributionRequired(nestedPadSpec(preset, padCfg), eventSchemas),
+    padSpec: (padCfg) => stampAttributionRequired(nestedPadSpec(preset, padCfg, fidelity), eventSchemas),
     positions: preset.positions,
     variants: preset.variants,
 

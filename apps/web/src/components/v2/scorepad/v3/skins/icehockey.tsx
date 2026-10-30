@@ -37,41 +37,16 @@
 // adds the decider to the official score), which reaches the pad as copy on
 // `pad.icehockey.strip.shootout` rather than as a code branch.
 
+import { icehockeyPadRules } from "@seazn/engine/pad";
 import type { SportTone } from "../sport-theme";
 import { makePeriodSkin, type PeriodSkinSpec, type TFn } from "./period-shared";
 import type { PadHostView, SkinDefV3 } from "../types";
 
-/**
- * IIHF's own offence list, in `padSpec` order (`ICEHOCKEY_SUSPENSION_REASONS`,
- * `sports/icehockey/icehockey.ts:17-37`). Restated for the same reason
- * hockey's is, and pinned to the real module by
- * `v3/__tests__/period-pair.test.ts`. Copy for all nineteen already ships via
- * `ENUM_VOCAB.reason`.
- */
-export const ICEHOCKEY_REASONS: readonly string[] = [
-  "tripping",
-  "hooking",
-  "holding",
-  "holding_the_stick",
-  "slashing",
-  "high_sticking",
-  "cross_checking",
-  "roughing",
-  "elbowing",
-  "charging",
-  "boarding",
-  "checking_from_behind",
-  "interference",
-  "delay_of_game",
-  "too_many_men",
-  "unsportsmanlike_conduct",
-  "fighting",
-  "illegal_equipment",
-  "other",
-];
-
 /** Seven classes, two tones — the ends only. An empty array is DECLARED AND
- *  UNCOLOURED, not "unknown": all seven have their own copy. */
+ *  UNCOLOURED, not "unknown": all seven have their own copy. A tone map keyed by
+ *  the engine's class catalogue (`icehockeyPadRules.suspensionClassKeys`, which
+ *  the recreational cfg offers only two of), pinned key for key by
+ *  `skins/__tests__/pad-rules-period.test.ts`. */
 export const ICEHOCKEY_CLASSES: Readonly<Record<string, readonly SportTone[]>> = {
   minor: ["caution"],
   bench_minor: [],
@@ -85,7 +60,7 @@ export const ICEHOCKEY_CLASSES: Readonly<Record<string, readonly SportTone[]>> =
 export const icehockeySpec: PeriodSkinSpec = {
   key: "icehockey",
   classes: ICEHOCKEY_CLASSES,
-  reasons: ICEHOCKEY_REASONS,
+  rules: icehockeyPadRules,
 };
 
 export const icehockeySkinV3: (t: TFn) => SkinDefV3<PadHostView> = makePeriodSkin(icehockeySpec);

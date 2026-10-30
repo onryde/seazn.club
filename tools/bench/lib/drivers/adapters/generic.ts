@@ -12,47 +12,49 @@
 // `import.ts` reads `import-caps.ts`.) Every constant/behaviour
 // below is a LOCAL restatement of
 // `apps/web/src/components/v2/scorepad/v3/skins/generic.tsx`'s own, cited by
-// file:line, and pinned EQUAL to the real module by
-// `__tests__/scorer-driver.test.ts` — the same "restate, then prove equal to
-// the source of truth" posture generic.tsx itself takes for
-// `MAX_PLAUSIBLE_SCORE`/`MAX_TALLY_STEP`.
+// SYMBOL (a line number goes stale with every edit above it), and pinned EQUAL
+// to the real module by `__tests__/scorer-driver.test.ts` — the "restate, then
+// prove equal to the source of truth" posture. The score-entry ceiling is the
+// engine's `genericPadRules.maxPlausibleScore` (`@seazn/engine/pad`; generic.tsx
+// declares no such constant since pad wave P4.1), which `MAX_PLAUSIBLE_SCORE`
+// below restates and `scorer-driver.test.ts` holds equal to it.
 //
 // SCOPE (this task only — see the report for what is owed to Task 10/13):
 //   - `core.start`               -> the "Start match" button (not an event
 //                                   to post at all — generic.tsx has no
 //                                   opinion on this; it is chassis-level).
 //   - `generic.score`, SCORE mode, payload EXACTLY `{by, points:1}`
-//                                -> a scorebug half tap (generic.tsx:310-341
+//                                -> a scorebug half tap (generic.tsx
 //                                   `buildHalf`, tapType SCORE_TYPE).
 //     Fix round 1, I3: mode-gated. Under win_loss, `tapTypeOf`
-//     (generic.tsx:303-304) never returns SCORE_TYPE at all — a pack
+//     (generic.tsx) never returns SCORE_TYPE at all — a pack
 //     `generic.score` event on a win_loss fixture has no corresponding tap;
 //     the half instead commits `generic.result {winnerId}`. Mapping it to a
 //     half tap anyway would write a TERMINAL result the pack never
 //     authored — the oracle-direction breach the Global Constraint forbids.
 //     `stepsForScore` therefore throws unless `resultModeOf(cfg) === "score"`.
 //   - `generic.result`, win_loss mode, payload EXACTLY `{winnerId}`
-//                                -> a scorebug half tap (generic.tsx:35,
-//                                   296-305 `tapTypeOf`, 310-341 `buildHalf`
+//                                -> a scorebug half tap (generic.tsx
+//                                   `tapTypeOf`, `buildHalf`
 //                                   — THE CAUTION this task's own dispatch
 //                                   carries verbatim: win_loss's half tap
 //                                   commits `generic.result`, not the
 //                                   settle tile).
 //   - `generic.result`, score mode, EMPTY payload
 //                                -> the "settle" tile, settling from the
-//                                   tally (generic.tsx:414 `SETTLE_TILE_ID`,
-//                                   :470-483 `buildTiles`).
+//                                   tally (generic.tsx `SETTLE_TILE_ID`,
+//                                   `buildTiles`).
 //   - Task 10 fix round 1 (R59(b)) — `generic.score`, SCORE mode, with
 //     `points` of 2/3/5 and/or a `person`
 //                                -> release any hold, the half tap, then the
 //                                   dock's amount chip, then the person chip
-//                                   IF the dock offers one (generic.tsx:
-//                                   663-712 `buildDock`; the pad stamps a
-//                                   sole on-field player itself, :324-327).
+//                                   IF the dock offers one (generic.tsx
+//                                   `buildDock`; the pad stamps a sole
+//                                   on-field player itself, `soleScorer`).
 //   - Task 10 fix round 1 (R59(a)) — `generic.result`, SCORE mode, exactly
 //     `{p1Score, p2Score}`       -> the score-entry sheet: tile, home number
 //                                   + confirm, away number + confirm
-//                                   (generic.tsx:554-578).
+//                                   (generic.tsx `scoreEntrySheet`).
 //   - Everything else — a draw (`isDraw:true`), a correction (negative
 //     `points`, the correction sheet), an amount no dock chip offers, and any
 //     non-generic event — THROWS. Organiser-only `core.*` events never reach
@@ -61,18 +63,19 @@ import { START_MATCH_TESTID, type TapAdapter, type TapAdapterContext, type TapSt
 
 const SPORT = "generic";
 
-/** generic.tsx:86 */
+/** generic.tsx `SCORE_TYPE` */
 export const SCORE_TYPE = "generic.score";
-/** generic.tsx:85 */
+/** generic.tsx `RESULT_TYPE` */
 export const RESULT_TYPE = "generic.result";
-/** generic.tsx:414 */
+/** generic.tsx `SETTLE_TILE_ID` */
 export const SETTLE_TILE_ID = "settle";
-/** generic.tsx:415 — the tile that opens the typed-result sheet (:488-495). */
+/** generic.tsx `SCORE_ENTRY_TILE_ID` — the tile that opens the typed-result sheet (`scoreEntrySheet`). */
 export const SCORE_ENTRY_TILE_ID = "scoreEntry";
-/** generic.tsx:663 — the amounts the hold-window dock offers, as chips
- *  `points:<n>` (:669-677). A half tap itself is worth 1 (:327). */
+/** generic.tsx `DOCK_AMOUNTS` — the amounts the hold-window dock offers, as chips
+ *  `points:<n>` (`amountChip`). A half tap itself is worth 1 (`buildHalf`). */
 export const DOCK_AMOUNTS: readonly number[] = [2, 3, 5];
-/** generic.tsx:430 — the score-entry sheet's per-side ceiling (:565, :573). */
+/** The score-entry sheet's per-side ceiling: the engine's `genericPadRules.maxPlausibleScore` (generic.tsx `scoreEntrySheet` reads
+ *  it for both number steps), restated here and pinned equal to it by `scorer-driver.test.ts`. */
 export const MAX_PLAUSIBLE_SCORE = 500;
 
 const SCORE_PAYLOAD_KEYS: readonly string[] = ["by", "points", "person"];
@@ -82,7 +85,7 @@ function asRecord(payload: unknown): Record<string, unknown> {
 }
 
 /** A number the score-entry sheet's number step can hold: a whole number in
- *  its `min: 0` .. `max: MAX_PLAUSIBLE_SCORE` range (generic.tsx:559-574). */
+ *  its `min: 0` .. `max: MAX_PLAUSIBLE_SCORE` range (generic.tsx `scoreEntrySheet`). */
 function isSheetScore(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_PLAUSIBLE_SCORE;
 }
@@ -91,7 +94,7 @@ interface GenericCfgShape {
   resultMode?: string;
 }
 
-/** Mirrors generic.tsx:168-170's `resultModeOf` — same fail-safe default
+/** Mirrors generic.tsx's `resultModeOf` — same fail-safe default
  *  ("score" whenever the cfg never carried a `resultMode`, or carried
  *  anything other than the literal `"win_loss"`), for the same reason: a
  *  wrong guess of "score" only ever offers a foldable, non-terminal tap,
@@ -114,8 +117,8 @@ function isEmptyPayload(payload: unknown): boolean {
   return typeof payload === "object" && payload !== null && !Array.isArray(payload) && Object.keys(payload).length === 0;
 }
 
-/** generic.tsx:310-341 (`buildHalf`) — score mode's half tap commits
- *  exactly `{by, points:1}` (the SOLE-SCORER auto-stamp at :324-328 adds a
+/** generic.tsx `buildHalf` — score mode's half tap commits
+ *  exactly `{by, points:1}` (the SOLE-SCORER auto-stamp (`soleScorer`) adds a
  *  `person` key the TAP ITSELF never carries — that key is stamped by the
  *  pad, not chosen by the scorer; `scorer.ts`'s `comparePayload` tolerates
  *  it via `tolerableExtraKeys` below, rather than this function pretending
@@ -125,7 +128,7 @@ function stepsForScore(payload: unknown, cfg: unknown, entrants: TapAdapterConte
   if (resultModeOf(cfg) !== "score") {
     throw new Error(
       `genericAdapter: generic.score payload ${JSON.stringify(payload)} is not tappable under win_loss mode — ` +
-        "the pad's half tap commits generic.result {winnerId} there, not this event (generic.tsx:303-304)",
+        "the pad's half tap commits generic.result {winnerId} there, not this event (generic.tsx `tapTypeOf`)",
     );
   }
   const p = asRecord(payload);
@@ -143,13 +146,13 @@ function stepsForScore(payload: unknown, cfg: unknown, entrants: TapAdapterConte
   if (p.points !== 1 && !DOCK_AMOUNTS.includes(p.points)) {
     throw new Error(
       `genericAdapter: generic.score payload ${JSON.stringify(payload)} — no dock chip offers ${p.points} ` +
-        `(a half tap is 1 and the dock amends it to ${DOCK_AMOUNTS.join("/")}, generic.tsx:663); ` +
+        `(a half tap is 1 and the dock amends it to ${DOCK_AMOUNTS.join("/")}, generic.tsx DOCK_AMOUNTS); ` +
         "a negative correction is the correction sheet, which is not mapped",
     );
   }
   // Fix round 1 (R59(b)) — the pad's own route: the half tap is HELD behind a
   // dock (pad-host.tsx `usesSoftCommit`), whose chips amend that same held
-  // submission (`DockChip.mutate`, generic.tsx:675/:685) rather than posting a
+  // submission (`DockChip.mutate`, generic.tsx `amountChip`/`personChip`) rather than posting a
   // second event. Release any earlier hold first, so the chips tapped are this
   // tap's own dock and not the previous one still on screen.
   const steps: TapStep[] = [{ kind: "releaseHold" }, { kind: "half", side }];
@@ -158,8 +161,7 @@ function stepsForScore(payload: unknown, cfg: unknown, entrants: TapAdapterConte
   return steps;
 }
 
-/** generic.tsx:35, :296-305 (`tapTypeOf`), :310-341 (`buildHalf`), :414-483
- *  (`SETTLE_TILE_ID`/`buildTiles`) — see the file header's CAUTION. */
+/** generic.tsx `tapTypeOf`, `buildHalf`, `SETTLE_TILE_ID` and `buildTiles` — see the file header's CAUTION. */
 function stepsForResult(payload: unknown, cfg: unknown, entrants: TapAdapterContext["entrants"]): readonly TapStep[] {
   const mode = resultModeOf(cfg);
   if (mode === "win_loss") {
@@ -178,8 +180,8 @@ function stepsForResult(payload: unknown, cfg: unknown, entrants: TapAdapterCont
   }
   // Fix round 1 (R59(a)) — the typed result: the score-entry sheet asks HOME
   // first, then AWAY, each a number step with its own confirm, and builds
-  // exactly `{p1Score: home, p2Score: away}` (generic.tsx:554-578). It commits
-  // immediately — `buildDock` declares no dock for a result (:696).
+  // exactly `{p1Score: home, p2Score: away}` (generic.tsx `scoreEntrySheet`). It commits
+  // immediately — `buildDock` declares no dock for a result.
   const p = asRecord(payload);
   const keys = Object.keys(p).sort();
   if (keys.length === 2 && keys[0] === "p1Score" && keys[1] === "p2Score" && isSheetScore(p.p1Score) && isSheetScore(p.p2Score)) {
@@ -202,12 +204,12 @@ function stepsForResult(payload: unknown, cfg: unknown, entrants: TapAdapterCont
  * beyond what a pack authors, by event type. Nothing else is tolerated, and
  * every entry carries its evidence:
  *   - `generic.score` → `person`: `buildHalf` stamps the side's SOLE on-field
- *     player into the half tap's own payload (generic.tsx:324 `soleScorer`,
- *     :327 `...{ person: soleScorer }`). The pipeline sends that payload
+ *     player into the half tap's own payload (generic.tsx `soleScorer`, spread
+ *     into `buildHalf`'s payload as `person`). The pipeline sends that payload
  *     unchanged (pipeline.ts:157) and append-event.ts:215/:336 stores it
  *     verbatim, so the row carries a key no pack author writes.
  * No other generic event gains a key: win_loss's half commits exactly
- * `{winnerId}` (generic.tsx:328), the settle tile exactly `{}` (:481),
+ * `{winnerId}` (generic.tsx `buildHalf`), the settle tile exactly `{}` (`buildTiles`),
  * `core.start` `{}` (device-score-pad.tsx:306), `core.finalize` `{}`
  * (fixture-console.tsx:1105).
  */

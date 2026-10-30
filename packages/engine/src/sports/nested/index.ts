@@ -23,12 +23,14 @@
 // every name added here is public surface forever. Left OUT on purpose:
 // - every mutator (`applyPoint` and the rest of the `apply*` family) — a pad
 //   has no business calling a fold function directly;
-// - `expectedDoublesServer`, `NestedCfg`, `Side`, and every other kernel-
-//   private helper `serveContext` itself composes over (`isDecidingSet`,
-//   `rulesFor`, `setInProgress`, `nestedGamesOf`, `serviceTurnsPerSide`,
-//   `gamesFieldBound`, `tbFieldBound` — none of the seven carries an
-//   `export` keyword in kernel.ts, so none of them could be re-exported here
-//   without editing kernel.ts itself, which this fix does not do).
+// - `expectedDoublesServer`, `NestedCfg`, `Side`, and the helpers
+//   `serveContext` composes over (`isDecidingSet`, `setInProgress`,
+//   `nestedGamesOf`, `serviceTurnsPerSide`), which stay kernel-private;
+// - the rule declarations kernel.ts exports for `@seazn/engine/pad` (pad
+//   wave P3.2: `rulesFor`, `gamesFieldBound`, `tbFieldBound`, `endsChanged`,
+//   `POINT_CALLS` and the rest). A pad reads those through
+//   `tennisPadRules` (`src/pad/tennis.ts`), the one record of them, so
+//   this barrel deliberately does not re-export them as a second road.
 // Widening this barrel for a later consumer (a padel skin, or a reader that
 // genuinely needs one of the above) is a decision for whoever needs it next,
 // not a default to reach for now.

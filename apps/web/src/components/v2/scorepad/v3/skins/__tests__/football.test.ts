@@ -24,6 +24,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import { football } from "@seazn/engine/sports/football";
+import { footballPadRules } from "@seazn/engine/pad";
 import { foldClient } from "../../../module-client";
 import { dedicatedEventTypes, squadStateOf, stampFor } from "../../pad-host";
 import { initClock, startClock } from "../../clock";
@@ -38,11 +39,6 @@ import { buildScorebug as buildTennisScorebug } from "../tennis";
 // to.
 import { foldedPhases, foldFootball, footballCfg } from "../../__tests__/_football-fold";
 import {
-  CARD_COLORS,
-  CARD_REASONS,
-  EVENT_BAND,
-  PENALTY_OFFENCES,
-  PENALTY_OUTCOMES,
   buildDock,
   buildScorebug,
   buildSheets,
@@ -60,6 +56,17 @@ import {
 } from "../football";
 import type { TFn } from "../football";
 import { SPORT_TONES } from "../../sport-theme";
+
+// P1.2: the skin no longer declares its own copy of these (the literal guard bans the names), so the tests below read the engine's
+// record, the one object the skin reads. Their "mirror" tests now pin the RECORD against padSpec; the skin's builders are driven against
+// the record and the fold in `pad-rules-football.test.ts`.
+const {
+  cardColors: CARD_COLORS,
+  cardReasons: CARD_REASONS,
+  eventBands: EVENT_BAND,
+  penaltyOffences: PENALTY_OFFENCES,
+  penaltyOutcomes: PENALTY_OUTCOMES,
+} = footballPadRules;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -236,22 +243,22 @@ function enumValues(action: PadAction, path: string): readonly string[] {
 describe("engine mirrors (a module change must red HERE, not drift silently)", () => {
   const spec = padSpecFor(engineCfg());
 
-  it("CARD_COLORS mirrors football.card's own colour enum, in order", () => {
+  it("cardColors is football.card's own colour enum, in order", () => {
     expect([...CARD_COLORS]).toEqual([...enumValues(engineAction(spec, "football.card"), "color")]);
     expect(CARD_COLORS).toHaveLength(3); // vacuity guard: an empty mirror would satisfy the line above
   });
 
-  it("CARD_REASONS mirrors football.card's own offence enum, all 13 of them", () => {
+  it("cardReasons is football.card's own offence enum, all 13 of them", () => {
     expect([...CARD_REASONS]).toEqual([...enumValues(engineAction(spec, "football.card"), "reason")]);
     expect(CARD_REASONS).toHaveLength(13);
   });
 
-  it("PENALTY_OUTCOMES mirrors football.penalty's own outcome enum — the shared attempt vocabulary MINUS scored", () => {
+  it("penaltyOutcomes is football.penalty's own outcome enum — the shared attempt vocabulary MINUS scored", () => {
     expect([...PENALTY_OUTCOMES]).toEqual([...enumValues(engineAction(spec, "football.penalty"), "outcome")]);
     expect(PENALTY_OUTCOMES).not.toContain("scored");
   });
 
-  it("EVENT_BAND mirrors padSpec's own fidelity map exactly — every type, every band", () => {
+  it("eventBands is padSpec's own fidelity map exactly — every type, every band", () => {
     expect(EVENT_BAND).toEqual(spec.fidelity);
     expect(Object.keys(EVENT_BAND)).toHaveLength(10);
   });
@@ -2174,7 +2181,7 @@ describe("second_yellow needs someone on a caution (R3 review, the unattributabl
 describe("the penalty's offence is askable again (R3 review, the v2 regression)", () => {
   const dockFor = (band: 0 | 1 | 2 | 3) => buildDock("football.penalty", view({ band }), t, { by: "home-1" });
 
-  it("PENALTY_OFFENCES mirrors football.penalty's own offence enum — the IFAB Law 12 taxonomy", () => {
+  it("penaltyOffences is football.penalty's own offence enum — the IFAB Law 12 taxonomy", () => {
     expect([...PENALTY_OFFENCES]).toEqual([
       ...enumValues(engineAction(padSpecFor(engineCfg()), "football.penalty"), "offence"),
     ]);

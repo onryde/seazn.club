@@ -46,18 +46,12 @@
 // against the same oracle so a future barrel edit can't silently re-fork
 // this.
 //
-// WHAT STAYS LOCAL, AND WHY THAT IS A DIFFERENT GAP. `isDecidingSet`,
-// `rulesFor`, `setInProgress`, `gamesFieldBound` and `tbFieldBound`
-// (`sheets()` section below) restate kernel.ts functions that stay
-// MODULE-PRIVATE there BY THE KERNEL'S OWN DESIGN — none of the five carries
-// an `export` keyword, and this fix's grant was to export what the barrel's
-// own readers already make public, not to widen kernel.ts's visibility
-// (kernel.ts itself is otherwise untouched — see the barrel file's header).
-// So these five stay as local re-derivations, each still commented with the
-// kernel.ts range it restates for provenance, but "restates" is now the
-// honest word: there is no barrel gap left to close here, only an
-// architectural boundary. Widening kernel.ts's exports to close it is a call
-// for whoever owns that file next, not something this fix reaches for.
+// THE RULE FACTS ARE THE ENGINE'S (pad wave P3.2). `isDecidingSet`, `rulesFor`, `gamesFieldBound` and `tbFieldBound` used to be
+// restated here because the kernel kept them module-private. They, the point/interruption/sanction vocabularies, the fidelity
+// map, the calls, the interruption bound, the breaker predicate, the tie-break serve turn-over and the ends-change reading now
+// come from `tennisPadRules` (`@seazn/engine/pad`), the object the fold itself reads, and
+// `__tests__/pad-rules-tennis.test.ts` drives these builders against the engine's padSpec and the strict fold's own refusals.
+// `setInProgress` alone is still restated (D-16's gate, below).
 //
 // WHAT THIS SKIN DELIBERATELY DOES NOT DECLARE:
 //   - `swap()`. `lineupPolicy: () => ({reentry: "none", ...})` (tennis.ts) —
@@ -68,13 +62,14 @@
 //     player is carried on the scorebug's own `WhoLine`, not a strip pick.
 //   - a Fault tile, a Let tile, a Retire tile (R4-1, R4-2): tennis declares
 //     five event types only (`point`/`set_summary`/`sanction`/
-//     `interruption`/`game.award`, `kernel.ts:1766-1772`) — no fault/let
+//     `interruption`/`game.award`, the kernel's `eventSchemas`) — no fault/let
 //     event exists to dispatch, and §9.4 bars a new one. Forfeit/Abandon
 //     already have a home in `fixture-console.tsx`'s console chrome; a Retire
 //     tile here would be a second entry point to that same capability, the
 //     defect R2c closed for `cricket.retire`, rebuilt deliberately.
 "use client";
 import type { SquadState } from "@seazn/engine/core";
+import { tennisPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import { serveContext, type NestedState } from "@seazn/engine/sports/nested";
 import { tennis as tennisModule } from "@seazn/engine/sports/tennis";
@@ -115,17 +110,8 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
   home: "scorepad.attribution.home",
   away: "scorepad.attribution.away",
 };
-/** `NestedPointMeta.kind` (`kernel.ts:200-205`) — R4-1's dock chips. */
-export const POINT_KINDS: readonly string[] = ["ace", "double_fault", "winner", "ue"];
-/** `NestedInterruptionKind` (`kernel.ts:90`). */
-export const INTERRUPTION_KINDS: readonly string[] = ["medical", "toilet", "heat", "other"];
-/** `NestedSanctionLevel` (`kernel.ts:250-255`) — the ITF ladder, in order. */
-export const SANCTION_LEVELS: readonly string[] = [
-  "warning",
-  "point_penalty",
-  "game_penalty",
-  "default",
-];
+// The point kinds (R4-1's dock chips), the interruption kinds and the ITF sanction ladder are the engine's own enums, read off
+// `tennisPadRules` (`@seazn/engine/pad`, pad wave P3.2) — never copied here.
 
 /**
  * R4-4's recorded note (`_INDEX.md`): tennis's four-step ladder against TWO
@@ -141,29 +127,22 @@ const SANCTION_LEVEL_TONE: Readonly<Partial<Record<string, readonly SportTone[]>
 };
 
 /**
- * One band per event type — `nestedPadSpec`'s own `fidelity` map verbatim
- * (`kernel.ts:1553-1559`). Same reason football's `EVENT_BAND` mirrors it:
- * `buildPadView` drops an action whose band exceeds the ACTIVE band, so an
- * entitled-but-scoring-low org must never be shown a tile that band would
- * refuse.
+ * One band per event type — the nested padSpec's own `fidelity` map, the SAME object (`tennisPadRules.eventBands`).
+ * `buildPadView` drops an action whose band exceeds the ACTIVE band, so an entitled-but-scoring-low org must never be shown a
+ * tile that band would refuse.
  */
-export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
-  [SET_SUMMARY_TYPE]: 0,
-  [SANCTION_TYPE]: 1,
-  [INTERRUPTION_TYPE]: 1,
-  [POINT_TYPE]: 3,
-  [GAME_AWARD_TYPE]: 3,
-};
-
 function withinBand(eventType: string, band: FidelityBand): boolean {
-  const declared = EVENT_BAND[eventType];
+  const declared = tennisPadRules.eventBands[eventType];
   return declared === undefined || declared <= band;
 }
 
 // ---------------------------------------------------------------------------
-// State/cfg readers. `PadHostView.state`/`.cfg` are `unknown` by contract;
-// every reader degrades cleanly from `{}`, never throws — the same posture
-// every v3 skin's own readers take.
+// State/cfg readers. `PadHostView.state`/`.cfg` are `unknown` by contract.
+// Every STATE reader degrades cleanly from `{}`, never throws — the same
+// posture every v3 skin's own readers take. The CFG is read only through
+// `tennisPadRules`, which parses it with tennis's own configSchema: `{}` reads
+// as the schema defaults, and a cfg the schema refuses throws (every writer
+// validates the cfg it stores, so a pad never receives one — pad wave P3.2).
 // ---------------------------------------------------------------------------
 
 interface TennisClosedSet {
@@ -187,14 +166,6 @@ interface TennisStateShape {
   tbFirstServer?: string | null;
 }
 
-type TennisFinalSet = "same" | { matchTiebreakTo: number } | { tiebreakTo: number };
-interface TennisCfgShape {
-  bestOf?: number;
-  set?: { gamesTo?: number; winBy?: number; tiebreakAt?: number | null; tiebreakTo?: number; tiebreakWinBy?: number };
-  finalSet?: TennisFinalSet;
-  tiebreak?: { winBy?: number };
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
@@ -204,11 +175,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function asState(state: unknown): TennisStateShape {
   return asRecord(state) as TennisStateShape;
 }
-function asCfg(cfg: unknown): TennisCfgShape {
-  return asRecord(cfg) as TennisCfgShape;
-}
-
-/** `NestedState.phase`'s default (`kernel.ts:1933`'s own `init`). */
+/** `NestedState.phase`'s default (the kernel's own `init`). */
 function readPhase(state: TennisStateShape): string {
   return typeof state.phase === "string" && state.phase.length > 0 ? state.phase : "pre";
 }
@@ -242,12 +209,10 @@ function vocabText(field: string, value: unknown, t: TFn): string | undefined {
 
 // ---------------------------------------------------------------------------
 // phase() — build spec §2. `NestedState.phase` is `pre|live|done|final|
-// abandoned` (`kernel.ts:393`); the kernel already collapses the last three
-// pairwise at `:1143`/`:1155` — mirror that, never give a sub-phase its own
+// abandoned` (the kernel's `NestedState`); the kernel already treats the last three alike
+// in `applyForfeit`/`applyAbandon`'s match-over guard — mirror that, never give a sub-phase its own
 // `PadPhase` slot.
 // ---------------------------------------------------------------------------
-
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
 
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));
@@ -257,44 +222,13 @@ export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
 }
 
 // ---------------------------------------------------------------------------
-// Engine-private re-derivations. `isDecidingSet`/`rulesFor`/`setInProgress`
-// restate kernel.ts functions the kernel itself keeps MODULE-PRIVATE (see
-// this file's header) — there is no barrel gap left to close for these
-// three, only a boundary this fix does not cross. Every function here still
-// restates a SPECIFIC, cited kernel.ts range; none invents tennis domain
-// logic of its own.
+// `setInProgress` restates a kernel.ts function the kernel keeps MODULE-PRIVATE (see this file's header). Which rules govern the
+// set about to be played (`rulesFor`/`isDecidingSet`) is no longer restated: the set-score sheet asks the engine
+// (`tennisPadRules.setScoreTakesTiebreak`, pad wave P3.2).
 // ---------------------------------------------------------------------------
 
-/** `isDecidingSet` (`kernel.ts:692-695`). */
-function isDecidingSet(state: TennisStateShape, cfg: TennisCfgShape): boolean {
-  const bestOf = cfg.bestOf ?? 3;
-  const need = Math.ceil(bestOf / 2) - 1;
-  return (state.setsWon?.home ?? 0) === need && (state.setsWon?.away ?? 0) === need;
-}
-
-interface TennisSetRules {
-  tiebreakAt: number | null;
-  tiebreakTo: number;
-  mtbTo: number | null;
-}
-
-/** `rulesFor` (`kernel.ts:697-703`) — which rules govern the set ABOUT TO BE
- *  PLAYED, i.e. the one `state.games`/`state.points` are currently tracking.
- *  Defaults mirror tennis's own shipped "tour" variant (`tennis.ts:17-24`)
- *  only as a degrade-safe fallback for a `{}` fixture — a real `view.cfg` is
- *  always the module's own fully-parsed, defaulted config. */
-function rulesFor(state: TennisStateShape, cfg: TennisCfgShape): TennisSetRules {
-  const set = cfg.set ?? {};
-  const tiebreakAt = set.tiebreakAt === undefined ? 6 : set.tiebreakAt;
-  const base: TennisSetRules = { tiebreakAt, tiebreakTo: set.tiebreakTo ?? 7, mtbTo: null };
-  const finalSet = cfg.finalSet ?? "same";
-  if (!isDecidingSet(state, cfg) || finalSet === "same") return base;
-  if ("matchTiebreakTo" in finalSet) return { ...base, mtbTo: finalSet.matchTiebreakTo };
-  return { ...base, tiebreakTo: finalSet.tiebreakTo }; // the slam rule: same tiebreakAt, richer target
-}
-
-/** `setInProgress` (`kernel.ts:1107-1111`) — D-16's gate. Scoped to the
- *  CURRENT set only: `bankSet` (`kernel.ts:753-789`) resets both
+/** `setInProgress` (the kernel's, module-private) — D-16's gate. Scoped to the
+ *  CURRENT set only: the kernel's `bankSet` resets both
  *  `state.games` and `state.points` the moment a set closes, so this can
  *  never read a past set as "in progress". */
 function setInProgressOf(state: TennisStateShape): boolean {
@@ -329,7 +263,7 @@ interface ServeContext {
  * Adapts `PadHostView`'s split shape into `serveContext`'s real input, then
  * delegates outright — no recomputation. `.state` and `.squads` are separate
  * fields on `PadHostView`, where `NestedState.squads` is one of `.state`'s
- * own properties (`kernel.ts:426`), so this builds the one object the real
+ * own properties (`NestedState.squads`), so this builds the one object the real
  * function expects rather than casting `view.state` wholesale.
  *
  * Every field `serveContext`'s call graph actually reads — `serving`,
@@ -358,7 +292,7 @@ interface ServeContext {
  * themselves — the four fields this function actually constructs — would
  * have shown up as a runtime crash on render, not a red build. The
  * `Pick<...>`-typed local restores that check for exactly those four fields,
- * verified against `NestedState`'s real shape (`kernel.ts:390-427`) — drop
+ * verified against `NestedState`'s real shape (the kernel's `NestedState`) — drop
  * `away` from the `games` literal below by hand and `tsc --noEmit` reds on
  * this exact line; do the same with the old `as unknown as NestedState` and
  * it stays silent, a runtime crash away from being noticed. `NestedState`
@@ -477,11 +411,9 @@ function servingInfo(view: PadHostView): ServingInfo | null {
 // scorebug() — tapModel S.
 // ---------------------------------------------------------------------------
 
-const CALLS = ["0", "15", "30", "40"] as const;
-
-/** The points as a scorer WORDS them, for one half — `gameScoreLine`
- *  (`kernel.ts:1242-1257`)'s per-side twin: that function renders both sides
- *  as one spoken line, and `ScorebugHalf.big` needs exactly one side's word. */
+/** The points as a scorer WORDS them, for one half — `gameScoreLine`'s per-side twin: that function renders both sides as
+ *  one spoken line, and `ScorebugHalf.big` needs exactly one side's word. The calls are the kernel's own `POINT_CALLS`
+ *  (`tennisPadRules.pointCalls`); only the advantage call's capitals ("AD", the fold writes "Ad") are presentation. */
 function pointBig(points: TennisPoints | undefined, side: Side): string {
   // `points === undefined` folds into the "standard, love-all" branch — an
   // absent `points` degrades exactly like a fresh game would, never like a
@@ -492,8 +424,7 @@ function pointBig(points: TennisPoints | undefined, side: Side): string {
     const home = points?.home ?? 0;
     const away = points?.away ?? 0;
     if (home === 3 && away === 3) return points?.advantage === side ? "AD" : "40";
-    const idx = (side === "home" ? home : away) as 0 | 1 | 2 | 3;
-    return CALLS[idx] ?? "0";
+    return tennisPadRules.pointCalls[side === "home" ? home : away] ?? "0";
   }
   return String(points[side] ?? 0);
 }
@@ -503,8 +434,8 @@ function pointBig(points: TennisPoints | undefined, side: Side): string {
  *  of the brief's literal "tiebreak" wording, deliberately: an unexplained
  *  jump to double-digit "points" with no set context read as a bug in
  *  review, and the same suffix reads correctly for both shapes. */
-function buildContext(state: TennisStateShape, cfg: TennisCfgShape, t: TFn): string {
-  const bestOf = cfg.bestOf ?? 3;
+function buildContext(state: TennisStateShape, cfg: unknown, t: TFn): string {
+  const bestOf = tennisPadRules.bestOf(cfg);
   const setNumber = (state.sets?.length ?? 0) + 1;
   const base = t("pad.tennis.context.line", { bestOf, set: setNumber });
   const kind = state.points?.kind;
@@ -535,8 +466,8 @@ function buildHalf(
   // is a band-3 event itself), so a tappable half there would be a dead-end
   // tap. WITHHELD above the ACTIVE band, not merely the entitled one — the
   // same `filterTilesByBand` vs. `buildPadView` distinction football's own
-  // `EVENT_BAND` doc states.
-  const tappable = resolvePhase(view) === "live" && view.band >= 3;
+  // band doc states.
+  const tappable = resolvePhase(view) === "live" && withinBand(POINT_TYPE, view.band);
   const server = serving?.personId ?? undefined;
   // R4-5 (owner ruling, 2026-08-25): SINGLES auto-set. `players` above is
   // this side's WHOLE on-field roster — one person for an individual
@@ -573,22 +504,6 @@ function buildHalf(
   };
 }
 
-/** Whether the ends should currently read as swapped relative to the start
- *  of the set (or the tie-break) — build spec §1: "after the 1st game … and
- *  every 2 games thereafter" is "whenever the completed-game total is ODD",
- *  and "every 6 points inside a tiebreak" is the identical rule one level
- *  down. DERIVED, no state field — there is no ends-change anywhere in
- *  `nested/kernel.ts` (checked). */
-function endsChanged(state: TennisStateShape): boolean {
-  const kind = state.points?.kind;
-  if (kind === "tiebreak" || kind === "matchTiebreak") {
-    const total = (state.points?.home ?? 0) + (state.points?.away ?? 0);
-    return Math.floor(total / 6) % 2 === 1;
-  }
-  const completed = (state.games?.home ?? 0) + (state.games?.away ?? 0);
-  return completed % 2 === 1;
-}
-
 function buildStrip(view: PadHostView, state: TennisStateShape, serving: ServingInfo | null, t: TFn): StripItem[] {
   const items: StripItem[] = [
     {
@@ -611,7 +526,9 @@ function buildStrip(view: PadHostView, state: TennisStateShape, serving: Serving
       : t(SIDE_LABEL[serving.side]);
     items.push({ id: "server", label: t("pad.tennis.scorebug.strip.server"), value });
   }
-  if (endsChanged(state)) {
+  // ITF Rule 10, the engine's reading (`tennisPadRules.endsChanged`): after the odd games of a set, at the end of a set of an
+  // odd total, and every six points of a (match) tie-break; never outside live play.
+  if (tennisPadRules.endsChanged(view.state)) {
     items.push({ id: "ends", value: t("pad.tennis.scorebug.strip.endsChanged") });
   }
   return items;
@@ -619,10 +536,9 @@ function buildStrip(view: PadHostView, state: TennisStateShape, serving: Serving
 
 export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
   const state = asState(view.state);
-  const cfg = asCfg(view.cfg);
   const serving = servingInfo(view);
   return {
-    context: buildContext(state, cfg, t),
+    context: buildContext(state, view.cfg, t),
     phase: resolvePhase(view),
     halves: [buildHalf(view, state, "home", serving, t), buildHalf(view, state, "away", serving, t)],
     strip: buildStrip(view, state, serving, t),
@@ -681,9 +597,8 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   // is the whole payload bar an uncollectable free-text `reason` (no text
   // step exists, per build spec §5's identical ruling for the sanction's own
   // `reason`). NOT while a tie-break/match-tie-break is in force — the
-  // breaker itself IS the deciding game (`applyGameAward`, `kernel.ts:
-  // 1081-1101`; mirrored here via `state.points.kind`, the SAME condition the
-  // engine's own gate reads, `kernel.ts:1526-1532`).
+  // breaker itself IS the deciding game (`applyGameAward`'s GAME_AWARD_DURING_TIEBREAK guard, read through
+  // `tennisPadRules.breakerInForce`, the SAME predicate that guard reads; `gameAwardRefused` below).
   if (offerable(GAME_AWARD_TYPE) && !gameAwardRefused(state)) {
     for (const side of SIDES) {
       tiles.push({
@@ -800,16 +715,9 @@ export function refusedEventTypes(view: PadHostView): string[] {
 // convention every v3 skin's `sheets` takes.
 // ---------------------------------------------------------------------------
 
-/** `gamesFieldBound` (`kernel.ts:1382-1391`) — no counterpart to import (not
- *  exported; see this file's header), and the real kernel function computes
- *  it straight off `cfg` too rather than via `rulesFor`, so there is no
- *  already-imported reader to derive this from either. A re-derivation, kept
- *  and renamed rather than left claiming to mirror something reachable. */
 /**
- * `applyGameAward`'s own refusal condition (`kernel.ts:1233-1240`), read off
- * the SAME `state.points.kind` discriminant the engine gates on: a breaker IS
- * the deciding game, so there is no separate game left to concede and the
- * fold throws `GAME_AWARD_DURING_TIEBREAK`.
+ * `applyGameAward`'s own refusal condition, read off the engine (`tennisPadRules.breakerInForce`, the predicate the fold's
+ * GAME_AWARD_DURING_TIEBREAK guard reads): a breaker IS the deciding game, so there is no separate game left to concede.
  *
  * ONE predicate, consumed by BOTH `buildTiles` (which withholds the tile) and
  * `refusedEventTypes` (which withholds the generic More form) — extracted in
@@ -820,56 +728,20 @@ export function refusedEventTypes(view: PadHostView): string[] {
  * gate ever moves.
  */
 function gameAwardRefused(state: TennisStateShape): boolean {
-  return (state.points?.kind ?? "standard") !== "standard";
+  return tennisPadRules.breakerInForce(state);
 }
 
-function gamesFieldBound(cfg: TennisCfgShape): number {
-  const set = cfg.set ?? {};
-  const base = set.tiebreakAt === null ? 200 : (set.gamesTo ?? 6) + (set.winBy ?? 2) + 2;
-  const finalSet = cfg.finalSet;
-  const mtb = finalSet && typeof finalSet === "object" && "matchTiebreakTo" in finalSet ? finalSet.matchTiebreakTo + 2 : 0;
-  return Math.max(base, mtb);
-}
-/** `tbFieldBound` (`kernel.ts:1396-1403`) — same posture as `gamesFieldBound`
- *  above: no export to consume, and the kernel's own version reads `cfg`
- *  directly rather than through `rulesFor`. */
-function tbFieldBound(cfg: TennisCfgShape): number {
-  // W2e TN-SS-2: a set tie-break's margin is the set's own `tiebreakWinBy` (the kernel's `setTiebreakWinBy`), else the
-  // match's `tiebreak.winBy`; a final-set tie-break (the slam rule) always plays to the match's (`rulesFor`; RBS:349).
-  const matchMargin = cfg.tiebreak?.winBy ?? 2;
-  const margin = cfg.set?.tiebreakWinBy ?? matchMargin;
-  const ordinary = (cfg.set?.tiebreakTo ?? 7) + margin + 2;
-  const finalSet = cfg.finalSet;
-  const decider =
-    finalSet && typeof finalSet === "object" && "tiebreakTo" in finalSet
-      ? finalSet.tiebreakTo + matchMargin + 2
-      : 0;
-  return Math.max(ordinary, decider);
-}
-
-/** Whether a `home`/`away` games pair is the tie-break SET-SCORE shape
- *  (`tiebreakAt+1 : tiebreakAt`, either order) that `applySetSummary`
- *  requires a `tb` block for in strict mode (`kernel.ts:1151-1156`). `false`
- *  outright when the current set is a match-tie-break decider — that shape
- *  carries its points in `home`/`away` directly and REFUSES a `tb` block
- *  (`kernel.ts:1136-1138`) — and when the set has no tie-break at all
- *  (advantage set, `tiebreakAt: null`). */
-function isTbShape(home: number, away: number, rules: TennisSetRules): boolean {
-  if (rules.mtbTo !== null || rules.tiebreakAt === null) return false;
-  const at = rules.tiebreakAt;
-  return (home === at + 1 && away === at) || (away === at + 1 && home === at);
-}
-
+/** The set-score sheet. Its field bounds are the kernel's own `gamesFieldBound`/`tbFieldBound`, and whether a games pair is
+ *  the set's tie-break score (`tiebreakAt+1 : tiebreakAt`, the one strict mode banks only with its `tb` points — never in an
+ *  advantage set or a match tie-break decider) is the engine's `tiebreakSetScore` for the set about to be scored. All three
+ *  read through `tennisPadRules` (pad wave P3.2). */
 function setScoreSheet(view: PadHostView): GuidedSheetSpec {
-  const state = asState(view.state);
-  const cfg = asCfg(view.cfg);
-  const rules = rulesFor(state, cfg);
-  const gamesBound = gamesFieldBound(cfg);
-  const tbBound = tbFieldBound(cfg);
+  const gamesBound = tennisPadRules.gamesFieldBound(view.cfg);
+  const tbBound = tennisPadRules.tiebreakFieldBound(view.cfg);
   const tbShape: StepPredicate = (answers) => {
     const home = Number(answers.home);
     const away = Number(answers.away);
-    return Number.isFinite(home) && Number.isFinite(away) && isTbShape(home, away, rules);
+    return Number.isFinite(home) && Number.isFinite(away) && tennisPadRules.setScoreTakesTiebreak(view.state, view.cfg, home, away);
   };
   const steps: GuidedSheetStep[] = [
     { id: "home", kind: "number", title: "pad.tennis.sheet.setScore.home.title", initial: 0, min: 0, max: gamesBound },
@@ -913,8 +785,8 @@ function setScoreSheet(view: PadHostView): GuidedSheetSpec {
  *  defers the person to the dock) — build spec §5's own instruction.
  *  `NestedSanction.reason` is free text and there is no text step, so it is
  *  not collected from the pad; `by` names the OFFENDER (the engine's own
- *  convention — `game.award.winner` is the opposite party, `kernel.ts:
- *  336-343`).
+ *  convention — `game.award.winner` is the opposite party, the kernel's
+ *  `NestedGameAward`).
  *
  *  Defect 2 fix (code review, 2026-08-25): `NestedSanction.person` is
  *  OPTIONAL by the engine's own schema ("absent = the pair/team, not a named
@@ -939,7 +811,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
       id: SANCTION_LEVEL_STEP_ID,
       kind: "choice",
       title: "pad.tennis.sheet.sanction.level.title",
-      options: SANCTION_LEVELS.map((level) => ({
+      options: tennisPadRules.sanctionLevels.map((level) => ({
         id: level,
         label: vocabKey("level", level) ?? level,
         ...(SANCTION_LEVEL_TONE[level] ? { tone: SANCTION_LEVEL_TONE[level] } : {}),
@@ -1001,7 +873,7 @@ function interruptionSheet(view: PadHostView): GuidedSheetSpec {
       id: "kind",
       kind: "choice",
       title: "pad.tennis.sheet.interruption.kind.title",
-      options: INTERRUPTION_KINDS.map((kind) => ({ id: kind, label: vocabKey("kind", kind) ?? kind })),
+      options: tennisPadRules.interruptionKinds.map((kind) => ({ id: kind, label: vocabKey("kind", kind) ?? kind })),
     },
     {
       id: "side",
@@ -1037,10 +909,9 @@ function interruptionSheet(view: PadHostView): GuidedSheetSpec {
       title: "pad.tennis.sheet.interruption.duration.title",
       initial: 0,
       min: 0,
-      // Mirrors `nested/kernel.ts`'s own `PLAUSIBLE_INTERRUPTION_SECONDS`
-      // sentinel (`kernel.ts:1410`) — a plausibility bound, not an ITF rule:
-      // the allowance itself is recorded/flagged, never refused.
-      max: 3600,
+      // The kernel's own `PLAUSIBLE_INTERRUPTION_SECONDS` sentinel — a plausibility bound, not an ITF rule: the allowance
+      // itself is recorded/flagged, never refused.
+      max: tennisPadRules.interruptionMaxSeconds,
     },
   ];
   return {
@@ -1085,13 +956,13 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
  * own `players.length > 0` fallback and `v6-sports.spec.ts`'s comment both
  * acknowledge this is a common, legitimate state) can never name a SERVER
  * PERSON, so `payload.server` below is always absent there — but the serving
- * SIDE is not similarly unknowable: `serveContext.side` (`kernel.ts:511-518`)
+ * SIDE is not similarly unknowable: `serveContext.side` (the kernel's `serveContext`)
  * is `state.serving` directly, entirely independent of roster, and side is
  * all the ace-vs-double-fault legality rule needs (an ace is won BY the
  * serving side, a double fault by the receiving one). `buildHalf` has no
  * wire-safe way to carry that side fact forward for `buildDock` to read back
  * — `NestedPoint` is a `z.strictObject` (`by`/`server`/`scorer`/`meta` only,
- * kernel.ts:223-228) parsed the instant the optimistic fold applies the tap,
+ * the kernel's `NestedPoint`) parsed the instant the optimistic fold applies the tap,
  * so a new field would throw right there, before this dock ever renders —
  * so this fix lives entirely on the READ side, re-deriving the SIDE ONLY
  * (never a person) fresh off `view.state`.
@@ -1106,7 +977,7 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
  * boundaries, not one, and each needs its own treatment.
  *
  * ONE — the game/set boundary, which is unrecoverable and stays withheld.
- * `winGame`/`bankSet` (kernel.ts:791-825/752-789) rotate `state.serving` AND
+ * the kernel's `winGame`/`bankSet` rotate `state.serving` AND
  * reset `state.points` to a fresh (0, 0) TOGETHER on every exit path of both
  * functions (checked exhaustively) — so a (0, 0) readout immediately after a
  * point was just applied can only mean THIS point closed the game, and
@@ -1118,7 +989,7 @@ function sideOfPerson(squads: SquadState, personId: string): Side | null {
  *
  * TWO — the tie-break's PER-POINT handoff, which is exactly recoverable and
  * so is corrected rather than withheld. Inside a breaker `state.serving`
- * rotates mid-"game", after every ODD point (`applyTbPoint`, kernel.ts:993),
+ * rotates mid-"game", after every ODD point (`applyTbPoint`, via `tiebreakServeRotatesAfter`),
  * and the (0, 0) guard above cannot see it because a breaker at 5-3 is not
  * at (0, 0). Reading `ctx.side` raw there names the NEXT point's server, so
  * `buildDock` offered `double_fault` where `ace` is correct, and the reverse,
@@ -1133,11 +1004,10 @@ function rosterlessServerSide(view: PadHostView, state: TennisStateShape): Side 
   if (played === 0) return null; // boundary ONE — see the doc above
   const ctx = deriveServeContext(state, view.squads);
   if (!serveOrderTrusted(ctx)) return null;
-  // Boundary TWO. `points.kind` is the SAME discriminant `applyTbPoint` is
-  // routed on (`applyPoint`, kernel.ts), so this asks "is a breaker in force"
-  // the way the fold does, not by sniffing the score for a 6-6.
-  const inBreaker = (state.points?.kind ?? "standard") !== "standard";
-  const side: Side = inBreaker && played % 2 === 1 ? (ctx.side === "home" ? "away" : "home") : ctx.side;
+  // Boundary TWO. "Is a breaker in force" and "did the serve turn over after this many points" are the engine's own
+  // predicates (`breakerInForce`, `tiebreakServeRotatesAfter`, the ones `applyTbPoint` reads), not a sniffed 6-6.
+  const inBreaker = tennisPadRules.breakerInForce(state);
+  const side: Side = inBreaker && tennisPadRules.tiebreakServeRotatesAfter(played) ? (ctx.side === "home" ? "away" : "home") : ctx.side;
   return onFieldPlayers(view.squads, side).length === 0 ? side : null;
 }
 
@@ -1249,20 +1119,19 @@ export function buildDock(
   // desynchronise from in the first place.
   const serverSide =
     server !== undefined ? sideOfPerson(view.squads, server) : rosterlessServerSide(view, state);
-  const chips: DockChip[] = [];
-  if (side !== null && serverSide !== null) {
-    if (side === serverSide) chips.push(pointKindChip("ace"));
-    else chips.push(pointKindChip("double_fault"));
-  }
-  chips.push(pointKindChip("winner"));
-  chips.push(pointKindChip("ue"));
+  // The engine's point kinds, in its order (`tennisPadRules.pointKinds`, the enum `NestedPointMeta.kind` parses), less the two
+  // a side can only win from one end of the serve.
+  const servedBy: "server" | "receiver" | null = side !== null && serverSide !== null ? (side === serverSide ? "server" : "receiver") : null;
+  const chips: DockChip[] = tennisPadRules.pointKinds
+    .filter((kind) => (kind === "ace" ? servedBy === "server" : kind === "double_fault" ? servedBy === "receiver" : true))
+    .map(pointKindChip);
   return { title, chips };
 }
 
 // ---------------------------------------------------------------------------
 // activityDetail() — the ribbon's varying half. Five keys for five event
 // types (`pad.tennis.ribbon.*`) — the brief said four; the engine declares
-// five (`kernel.ts:1766-1772`), and this skin's ribbon coverage is complete.
+// five (the kernel's `eventSchemas`), and this skin's ribbon coverage is complete.
 // ---------------------------------------------------------------------------
 
 function join(parts: (string | undefined)[]): string | undefined {

@@ -796,7 +796,15 @@ export interface SheetPersonStep {
    * insisted. Skins whose person step is genuinely required (cricket's
    * "who's out") simply do not set this.
    */
-  optional?: boolean; id: string; kind: "person"; title: MessageKey; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
+  optional?: boolean;
+  /**
+   * The decline control's own label, for an `optional` step. Absent, it reads
+   * the shared `pad.sheet.person.none`, whose copy was written for the period
+   * sin-bin's "served by" step ("Nobody — the offender serves it"); a step
+   * that declines something else (cricket's obstructing fielder, ruling 242)
+   * names its own, or the scorer reads the sin-bin's sentence.
+   */
+  noneLabel?: MessageKey; id: string; kind: "person"; title: MessageKey; pool: "onfield" | "bench" | "all"; side: "home" | "away"; candidates?: readonly string[]; when?: StepPredicate }
 
 /**
  * R2b/task 1 (`docs/superpowers/plans/2026-08-17-scorepad-v3-r2b-cricket-

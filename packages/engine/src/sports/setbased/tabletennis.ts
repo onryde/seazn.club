@@ -8,7 +8,7 @@
 // reserves the column). That is NOT this module's concern — this module scores a
 // single singles/doubles fixture only (table-tennis.md §4).
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { makeSetBasedModule, samePointsMap, SET_RULE_KEYS, type SetBasedParams } from "./kernel.ts";
+import { makeSetBasedModule, samePointsMap, SET_RULE_KEYS, type SetBasedParams, type SetBasedSanctionLevel } from "./kernel.ts";
 
 // League convention 2/0 for the cfg's own map (`standingsDelta` reads it; configurable).
 const TT_POINTS: SetBasedParams["pointsMap"] = { "*": [2, 0] };
@@ -19,6 +19,12 @@ const positions: PositionCatalog = {
   groups: [],
   lineup: { size: 1, benchMax: 1 },
 };
+
+/** S7/#427 — the ITTF umpire has exactly two cards, yellow and red, and no third: "only `warning` and `penalty` correspond
+ *  to the ITTF yellow and red cards; a pad should probably surface just those two" (DOMAIN.tabletennis.md:75-77).
+ *  `expulsion`/`disqualification` are the REFEREE removing a player — not a card an umpire shows. The preset's
+ *  `sanctionLevels`; exported for `@seazn/engine/pad` (pad wave P3.1), so the pad offers this very array. */
+export const TABLETENNIS_SANCTION_LEVELS: readonly SetBasedSanctionLevel[] = ["warning", "penalty"];
 
 export const tabletennis = makeSetBasedModule({
   key: "tabletennis",
@@ -70,14 +76,9 @@ export const tabletennis = makeSetBasedModule({
   primaryTableKey: "points", // W2d (D11): ITTF match points first (a played loss pays 1).
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",
-  // S7/#427 — the ITTF umpire has exactly two cards, yellow and red, and no
-  // third: "only `warning` and `penalty` correspond to the ITTF yellow and
-  // red cards; a pad should probably surface just those two"
-  // (DOMAIN.tabletennis.md:75-77). `expulsion`/`disqualification` are the
-  // REFEREE removing a player — not a card an umpire shows, and not a control
-  // that belongs on the umpire's pad. Still accepted by `eventSchema`, so a
+  // S7/#427 — see TABLETENNIS_SANCTION_LEVELS. `expulsion`/`disqualification` are still accepted by `eventSchema`, so a
   // removal that was recorded (or a golden corpus payload) parses unchanged.
-  sanctionLevels: ["warning", "penalty"],
+  sanctionLevels: TABLETENNIS_SANCTION_LEVELS,
   // R5-1 — ITTF service.
   //  * 2.13.3: two points each, whoever wins them — so the serve is a pure
   //    function of the game's score once the game's first server is known,

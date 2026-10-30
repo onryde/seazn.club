@@ -60,6 +60,7 @@
 //     mirror of the engine with nothing to say.
 "use client";
 import { forbidsLevelResult, type SquadState } from "@seazn/engine/core";
+import { genericPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import {
@@ -92,22 +93,14 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 };
 
 /**
- * Event type -> fidelity band, MIRRORING `padSpec`'s own `fidelity` map
- * (generic.ts) rather than inventing a second scale — every converted skin
- * takes this posture, and `__tests__/generic.test.ts` pins this table EQUAL to
- * the module's own. The chassis filters tiles by the engine-side twin
- * (`filterTilesByBand` reads `PadSpec.fidelity` against the org's
- * ENTITLEMENTS); this copy exists so the builders below can decline to draw —
- * or to make a half tappable — against the FIXTURE's own recording band, an
- * earlier and separate decision from the chassis's entitlement filter.
+ * Event type -> fidelity band: `genericPadRules.eventBands`, the very map `padSpec(cfg).fidelity` returns (pad wave P4.1), so
+ * there is no second scale to keep equal. The chassis filters tiles by the engine-side twin (`filterTilesByBand` reads
+ * `PadSpec.fidelity` against the org's ENTITLEMENTS); this read exists so the builders below can decline to draw — or to make
+ * a half tappable — against the FIXTURE's own recording band, an earlier and separate decision from the chassis's entitlement
+ * filter.
  */
-export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
-  [RESULT_TYPE]: 0,
-  [SCORE_TYPE]: 1,
-};
-
 function withinBand(eventType: string, band: FidelityBand): boolean {
-  const need = EVENT_BAND[eventType];
+  const need = genericPadRules.eventBands[eventType];
   return need === undefined || need <= band;
 }
 
@@ -181,11 +174,6 @@ function allowsDraws(cfg: GenericCfgShape, stageKind: string | null): boolean {
   return cfg.allowDraws === true && !forbidsLevelResult(stageKind);
 }
 
-/** `pre` and `live` are BOTH scoreable — `applyScore`/`applyResult` (generic.ts)
- *  each accept either, so a fresh fixture is scoreable with no "Start match"
- *  tap and this pad must not pretend otherwise. */
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
-
 function readPhase(state: GenericStateShape): string {
   return typeof state.phase === "string" && state.phase.length > 0 ? state.phase : "pre";
 }
@@ -195,7 +183,10 @@ function readPhase(state: GenericStateShape): string {
  *  "abandoned" (generic.ts), no longer "done" — so it is named in `POST_PHASES`
  *  beside the decided phases, or an abandoned fixture fell to "live" and offered
  *  live tiles. `generic.forfeitPhase` calls the same three phases "over"; the
- *  test pins `post` to that declaration over every phase a real fold reaches. */
+ *  test pins `post` to that declaration over every phase a real fold reaches.
+ *  `pre` and `live` are BOTH scoreable — `applyScore`/`applyResult` (generic.ts)
+ *  each accept either, so a fresh fixture is scoreable with no "Start match"
+ *  tap and this pad must not pretend otherwise. */
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));
   if (phase === "pre") return "pre";
@@ -423,18 +414,10 @@ export const CORRECTION_TILE_ID = "correction";
 export const DRAW_TILE_ID = "draw";
 export const MORE_TILE_ID = "more";
 
-/**
- * The engine's own field bounds, RESTATED here because `generic.ts` keeps them
- * module-private, and PINNED equal to the real `padSpec(cfg)` output in
- * `__tests__/generic.test.ts` — the same "restate, then prove equal to the
- * source of truth" posture table tennis takes for `EXPEDITE_RETURNS`.
- *
- * `MAX_PLAUSIBLE_SCORE` bounds a final `p1Score`/`p2Score`; `MAX_TALLY_STEP`
- * bounds a single `generic.score` press, which is what caps a correction: the
- * fold refuses `points` outside ±50 whatever the tally says.
- */
-export const MAX_PLAUSIBLE_SCORE = 500;
-export const MAX_TALLY_STEP = 50;
+// The field bounds are `genericPadRules.maxPlausibleScore` (a final `p1Score`/`p2Score`, GN-SC-1) and
+// `genericPadRules.maxTallyStep` (a single `generic.score` press, GN-SC-2, which is what caps a correction). Both are the PAD's
+// bounds, the very values `padSpec(cfg)` carries: the fold itself takes any non-negative final score and any non-zero press
+// (`packages/engine/src/pad/small-sports.test.ts` feeds it one past each).
 
 /** `applyResult`'s settle branch, mirrored: a result card with no scores
  *  settles FROM the tally, and a level tally settles only where the division
@@ -447,11 +430,11 @@ function settleable(view: PadHostView, state: GenericStateShape): boolean {
 }
 
 /** The biggest correction any side could legally take right now: what the
- *  leading side actually holds, capped by the engine's own single-press
- *  bound. Zero means there is nothing to subtract at all, and the tile is
+ *  leading side actually holds, capped by the pad's single-press
+ *  bound (`genericPadRules.maxTallyStep`; a bound of the pad, not a refusal of the fold). Zero means there is nothing to subtract at all, and the tile is
  *  withheld rather than opening a sheet whose stepper has no legal value. */
 function correctionCeiling(state: GenericStateShape): number {
-  return Math.min(MAX_TALLY_STEP, Math.max(tallyOf(state, "home"), tallyOf(state, "away")));
+  return Math.min(genericPadRules.maxTallyStep, Math.max(tallyOf(state, "home"), tallyOf(state, "away")));
 }
 
 /** Both phases the fold accepts, and — since the R7 defect fix — both phases
@@ -568,7 +551,7 @@ function scoreEntrySheet(view: PadHostView): GuidedSheetSpec {
         title: "pad.generic.sheet.scoreEntry.home.title",
         initial: tallyOf(state, "home"),
         min: 0,
-        max: MAX_PLAUSIBLE_SCORE,
+        max: genericPadRules.maxPlausibleScore,
       },
       {
         id: "away",
@@ -576,7 +559,7 @@ function scoreEntrySheet(view: PadHostView): GuidedSheetSpec {
         title: "pad.generic.sheet.scoreEntry.away.title",
         initial: tallyOf(state, "away"),
         min: 0,
-        max: MAX_PLAUSIBLE_SCORE,
+        max: genericPadRules.maxPlausibleScore,
       },
     ],
     buildPayload: (answers) => ({ p1Score: Number(answers.home ?? 0), p2Score: Number(answers.away ?? 0) }),
@@ -590,7 +573,7 @@ function scoreEntrySheet(view: PadHostView): GuidedSheetSpec {
  * offer 0 would build a payload the schema refuses; `min: 1` on the magnitude
  * and a negation in `buildPayload` make zero unreachable by construction
  * rather than by validation. The ceiling is what the leading side actually
- * holds (capped by the engine's own single-press bound), because the fold
+ * holds (capped by the pad's single-press bound, `genericPadRules.maxTallyStep`), because the fold
  * refuses a correction that would take a side below zero.
  */
 function correctionSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
@@ -662,7 +645,7 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
 // enrich, and inventing an enrichment step for one would be furniture.
 // ---------------------------------------------------------------------------
 
-/** The amounts worth one tap. Well inside the engine's own `MAX_TALLY_STEP`,
+/** The amounts worth one tap. Well inside the pad's `genericPadRules.maxTallyStep`,
  *  and deliberately short: a scorer scanning under a countdown reads three
  *  options, not fifty. Anything else is a Correction plus a re-tap, which is
  *  the honest cost of an unusual answer. */

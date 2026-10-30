@@ -7,6 +7,7 @@
 // `scoring.strike_by_strike`), see CarromStrike below.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import {
   foldMatchWithStoppage,
   isStrictFold,
@@ -38,6 +39,7 @@ import { SHARE_NEEDS_DRAWN_GAME } from "../../sport/abandon-share.ts";
 import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
+  FidelityBand,
   ModuleEvent,
   PadAction,
   PadPanel,
@@ -109,9 +111,13 @@ export type CarromToss = z.infer<typeof CarromToss>;
 
 const PersonId = z.string().min(1);
 
+/** ICF Laws of Carrom 52(b)(ii), 53(a): each side plays nine coins, so the winner's opponent has at most nine left on the board (CA-CN-1).
+ *  The schema's bound, both board actions' padSpec field and `carromPadRules.opponentCoinsMax` all read this one value. */
+export const OPPONENT_COINS_MAX = 9;
+
 export const CarromBoardSummary = z.strictObject({
   winner: EntrantId,
-  opponentCoinsLeft: z.number().int().min(0).max(9), // winner's coin points ×pointsPerCoin (Law 53a)
+  opponentCoinsLeft: z.number().int().min(0).max(OPPONENT_COINS_MAX), // winner's coin points ×pointsPerCoin (Law 53a)
   // who pocketed AND covered the queen (null = nobody). S6/#416 (W5): ALSO
   // tolerates omission, treated identically to explicit `null` at the one
   // call site below — the padSpec field/attribution DSL has no primitive
@@ -475,7 +481,7 @@ function applyAdjust(
 // Walkover — carrom.md §7: the match is awarded to the opponent; completed
 // games stand in the ledger.
 function applyForfeit(state: CarromState, by: string, reason: ForfeitReason): CarromState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   // W2b (spec §5.1): both sides absent is a double walkover; otherwise the award names its loser and the closed
@@ -500,7 +506,7 @@ const FORFEIT_PHASE: Record<CarromState["phase"], ForfeitPhase> = { pre: "pre", 
 // sharing (`abandonPolicy: "share"`, which the schema allows only where carrom takes a draw) records a draw, the games
 // and boards played staying on the state as they stood.
 function applyAbandon(state: CarromState): CarromState {
-  if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+  if (POST_PHASES.has(state.phase)) {
     wrongPhase("match already over");
   }
   if (state.cfg.abandonPolicy === "share") return { ...state, phase: "done", outcome: { kind: "draw" } };
@@ -680,7 +686,16 @@ export const CARROM_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
 // is unavoidable to build any accepted payload at all. Deliberately minimal,
 // with an "other" escape hatch, so it does not read as a taxonomy the ruling
 // declined to build.
-const ADJUST_REASONS = ["due_coins", "foul", "other"] as const;
+export const ADJUST_REASONS = Object.freeze(["due_coins", "foul", "other"] as const);
+
+/** One band per event type, built once (the object every `padSpec(cfg).fidelity` returns, and `carromPadRules.eventBands`). Band 0 is the
+ *  board summary alone, band 1 adds the toss and umpire adjustments. Strike-by-strike (reserved, `CarromStrike`) would be tiers 2/3
+ *  whenever T4 lands, and is out of scope here (no `eventSchema` branch). */
+export const CARROM_FIDELITY: Readonly<Record<string, FidelityBand>> = Object.freeze({
+  "carrom.board.summary": 0,
+  "carrom.toss": 1,
+  "carrom.game.adjust": 1,
+});
 
 export function padSpec(cfg: CarromCfg): PadSpec {
   // --- Pre-match: the toss (Laws 39/42/43) ---------------------------------
@@ -700,7 +715,7 @@ export function padSpec(cfg: CarromCfg): PadSpec {
   const boardAction: PadAction = {
     type: "carrom.board.summary",
     labelKey: { key: "pad.carrom.action.board", label: "Board (no queen)" },
-    fields: [{ kind: "number", path: "opponentCoinsLeft", min: 0, max: 9 }], // Law 52(b)(ii) — fixed rules bound, not cfg-derived
+    fields: [{ kind: "number", path: "opponentCoinsLeft", min: 0, max: OPPONENT_COINS_MAX }], // Law 52(b)(ii) — fixed rules bound, not cfg-derived
     attribution: [
       { kind: "side", path: "winner" },
       // S7/#427 — the dossier's "per-board player pickers". Keys are scoped
@@ -716,7 +731,7 @@ export function padSpec(cfg: CarromCfg): PadSpec {
   const boardQueenAction: PadAction = {
     type: "carrom.board.summary",
     labelKey: { key: "pad.carrom.action.boardQueen", label: "Board (queen covered)" },
-    fields: [{ kind: "number", path: "opponentCoinsLeft", min: 0, max: 9 }],
+    fields: [{ kind: "number", path: "opponentCoinsLeft", min: 0, max: OPPONENT_COINS_MAX }],
     attribution: [
       { kind: "side", path: "winner" },
       { kind: "side", path: "queenTo" },
@@ -800,14 +815,8 @@ export function padSpec(cfg: CarromCfg): PadSpec {
   return stampAttributionRequired(
     {
       panels,
-      // Band 0 is the board summary alone, band 1 adds the toss and umpire
-      // adjustments. Strike-by-strike (reserved, `CarromStrike`) would be tiers 2/3
-      // whenever T4 lands, and is out of scope here (no `eventSchema` branch).
-      fidelity: {
-        "carrom.board.summary": 0,
-        "carrom.toss": 1,
-        "carrom.game.adjust": 1,
-      },
+      // One band per event type: see CARROM_FIDELITY (the same object, every call - `carromPadRules.eventBands`).
+      fidelity: CARROM_FIDELITY,
     },
     CARROM_EVENT_SCHEMAS,
   );

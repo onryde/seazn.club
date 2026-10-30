@@ -38,31 +38,15 @@
 // scorer chips and no assist chips at all. That branch is `cfg.assists`-driven
 // in the shared builder, not hard-coded here.
 
+import { hockeyPadRules } from "@seazn/engine/pad";
 import type { SportTone } from "../sport-theme";
 import { makePeriodSkin, type PeriodSkinSpec, type TFn } from "./period-shared";
 import type { PadHostView, SkinDefV3 } from "../types";
 
-/**
- * FIH's own offence list, in `padSpec` order (`HOCKEY_SUSPENSION_REASONS`,
- * `sports/hockey/hockey.ts:21-29`). Restated because `PeriodPreset.
- * suspensionReasons` reaches the pad only through `padSpec(cfg)`, which the
- * view does not carry — and pinned to the real module by
- * `v3/__tests__/period-pair.test.ts`, which is the obligation every mirror in
- * this chassis comes with. Copy for all seven already ships via
- * `ENUM_VOCAB.reason`.
- */
-export const HOCKEY_REASONS: readonly string[] = [
-  "tripping",
-  "hooking",
-  "obstruction",
-  "dangerous_play",
-  "dissent",
-  "time_wasting",
-  "other",
-];
-
 /** Three cards, three swatches — see this file's header for why all three are
- *  coloured where ice hockey's seven are not. */
+ *  coloured where ice hockey's seven are not. A tone map keyed by the engine's
+ *  class catalogue (`hockeyPadRules.suspensionClassKeys`), which
+ *  `skins/__tests__/pad-rules-period.test.ts` pins key for key. */
 export const HOCKEY_CLASSES: Readonly<Record<string, readonly SportTone[]>> = {
   green: ["advisory"],
   yellow: ["caution"],
@@ -72,10 +56,9 @@ export const HOCKEY_CLASSES: Readonly<Record<string, readonly SportTone[]>> = {
 export const hockeySpec: PeriodSkinSpec = {
   key: "hockey",
   classes: HOCKEY_CLASSES,
-  reasons: HOCKEY_REASONS,
-  // W2d T18 (HK-TB-2): FIH ranks on field goals, so the engine refuses a goal without its type — the goal tap
-  // asks Field goal / Penalty corner / Penalty stroke (or Own goal) before anything is queued. See the flag's doc.
-  goalKindRequired: true,
+  // The offence list, the goal-type flag (W2d T18, HK-TB-2: FIH ranks on field goals, so the goal tap asks Field goal /
+  // Penalty corner / Penalty stroke, or Own goal, before anything is queued), the bands and the phase table: the engine's.
+  rules: hockeyPadRules,
 };
 
 export const hockeySkinV3: (t: TFn) => SkinDefV3<PadHostView> = makePeriodSkin(hockeySpec);

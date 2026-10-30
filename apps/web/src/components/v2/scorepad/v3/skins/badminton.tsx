@@ -71,6 +71,7 @@
 //     see its own doc for why that is not redundant with the missing panels.
 "use client";
 import type { SquadState } from "@seazn/engine/core";
+import { badmintonPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import {
   badminton as badmintonModule,
@@ -121,21 +122,6 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 
 
 /**
- * BWF's misconduct ladder, in the order the umpire's sheet climbs it:
- * yellow warning -> red fault -> (referee) removal from a game -> black
- * disqualification. All four are declared by `setbased/badminton.ts`'s own
- * `sanctionLevels` — this list restates that preset field so the sheet's
- * option order is a decision this file owns, and `__tests__/badminton.test.ts`
- * pins the two lists equal so they cannot drift apart.
- */
-export const SANCTION_LEVELS: readonly string[] = [
-  "warning",
-  "penalty",
-  "expulsion",
-  "disqualification",
-];
-
-/**
  * The card code, as `SheetChoiceStep`'s `tone` (an ARRAY — the chassis reads
  * the LAST entry as the outcome that washes the button). The BWF's yellow is
  * `caution`; everything above it is the `dismissal` end.
@@ -154,25 +140,15 @@ function toneFor(level: string): readonly SportTone[] {
 }
 
 /**
- * Event type -> fidelity band, MIRRORING `setBasedPadSpec`'s own `fidelity`
- * map (setbased/kernel.ts) rather than inventing a second scale. The chassis
- * filters tiles by this table's engine-side twin (`filterTilesByBand` reads
- * `PadSpec.fidelity`); this copy exists so `buildTiles` can decline to DRAW an
- * out-of-band tile in the first place, which is a different and earlier
- * decision than the chassis's safety filter — football's own `EVENT_BAND`
- * takes the identical posture and states the identical reason.
+ * Event type -> fidelity band: `setBasedPadSpec`'s own `fidelity` map, read
+ * from `@seazn/engine/pad` (pad wave P3.1), never a copy. The chassis filters
+ * tiles by the same map (`filterTilesByBand` reads `PadSpec.fidelity`); this
+ * file reads it so `buildTiles` can decline to DRAW an out-of-band tile in the
+ * first place, which is a different and earlier decision than the chassis's
+ * safety filter.
  */
-export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
-  [SUMMARY_TYPE]: 0,
-  [TIMEOUT_TYPE]: 1,
-  [SANCTION_TYPE]: 1,
-  [SUB_TYPE]: 1,
-  [EXPEDITE_TYPE]: 1,
-  [RALLY_TYPE]: 3,
-};
-
 function withinBand(eventType: string, band: FidelityBand): boolean {
-  const need = EVENT_BAND[eventType];
+  const need = badmintonPadRules.eventBands[eventType];
   return need === undefined || need <= band;
 }
 
@@ -267,8 +243,6 @@ function vocabText(field: string, value: unknown, t: TFn): string | undefined {
 // to carry a sport's richer phase; the type's own doc forbids it.
 // ---------------------------------------------------------------------------
 
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
-
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));
   if (phase === "pre") return "pre";
@@ -344,24 +318,6 @@ function gameNumber(state: BadmintonStateShape): number {
   const sets = state.sets ?? [];
   const open = openGame(state);
   return open === null ? sets.length + 1 : open.index + 1;
-}
-
-/** `setTarget` (kernel.ts) — the deciding game may run to a different target,
- *  which is what `finalSetTo` is for. */
-function targetOf(cfg: BadmintonCfgShape, gameIndex: number): number {
-  const bestOf = cfg.bestOf ?? 3;
-  const setTo = cfg.setTo ?? 21;
-  return gameIndex === bestOf - 1 ? (cfg.finalSetTo ?? setTo) : setTo;
-}
-
-/** `summaryScoreBound` (kernel.ts) — the cfg-derived plausibility ceiling for
- *  the Set score sheet's two number fields. Badminton is a CAPPED sport, so
- *  the cap itself is the bound; the uncapped fallback mirrors the kernel's own
- *  `+20` margin for a config that removes the cap. */
-function scoreBound(cfg: BadmintonCfgShape): number {
-  const cap = cfg.cap;
-  if (typeof cap === "number") return cap;
-  return Math.max(cfg.setTo ?? 21, cfg.finalSetTo ?? 21) + 20;
 }
 
 // ---------------------------------------------------------------------------
@@ -575,14 +531,14 @@ function serveDrifted(view: PadHostView, state: BadmintonStateShape): boolean {
 // scorebug() — tapModel S, and D-11's fix: ONE score, rendered once.
 // ---------------------------------------------------------------------------
 
-/** "Best of 3 · Game 2", plus the endgame BWF actually has words for.
- *  `setting` is 20-all (win by two from here); `golden point` is 29-all under
- *  the hard cap of 30, where the next rally simply ends the game — the one
- *  rule that genuinely distinguishes badminton from volleyball on this same
- *  kernel, and worth saying on screen. Golden point wins when both apply,
- *  because it is the stronger statement. */
+/** "Best of 3 · Game 2", plus the endgame BWF actually has words for. WHEN
+ *  each note shows is the engine's `deuceNote` (pad wave P3.1, read off the
+ *  kernel's own `setWinner`): `golden point` where the next rally ends the game
+ *  whoever wins it (29-all under the cap of 30, BWF Law 7.4), `setting` at
+ *  every other level score from target-1 up (20-all to 28-all: win by two from
+ *  there, Law 7.3). The wording is this file's. */
 function buildContext(state: BadmintonStateShape, cfg: BadmintonCfgShape, t: TFn): string {
-  const bestOf = cfg.bestOf ?? 3;
+  const bestOf = badmintonPadRules.bestOf(cfg);
   // CLAMPED to `bestOf`. `gameNumber` is "closed games plus one", which is what makes
   // "Game 2" appear the instant game 1 banks — correct while a match is
   // live, and wrong the moment it ends: every game is then closed, so a
@@ -600,14 +556,9 @@ function buildContext(state: BadmintonStateShape, cfg: BadmintonCfgShape, t: TFn
   const decided = POST_PHASES.has(readPhase(state));
   const game = decided ? Math.max(played, 1) : Math.min(gameNumber(state), bestOf);
   const base = t("pad.badminton.context.line", { bestOf, game });
-  const open = openGame(state);
-  if (open === null || open.home !== open.away) return base;
-  const cap = cfg.cap;
-  if (typeof cap === "number" && open.home === cap - 1) {
-    return `${base} · ${t("pad.badminton.context.goldenPoint")}`;
-  }
-  const target = targetOf(cfg, gameNumber(state) - 1);
-  if (open.home === target - 1) return `${base} · ${t("pad.badminton.context.setting")}`;
+  const note = badmintonPadRules.deuceNote(state, cfg);
+  if (note === "goldenPoint") return `${base} · ${t("pad.badminton.context.goldenPoint")}`;
+  if (note === "setting") return `${base} · ${t("pad.badminton.context.setting")}`;
   return base;
 }
 
@@ -642,7 +593,7 @@ function buildHalf(
   // half would be a dead-end tap. WITHHELD against the ACTIVE band, not merely
   // the entitled one — the same `filterTilesByBand`-vs-`buildPadView`
   // distinction football's `EVENT_BAND` states.
-  const tappable = resolvePhase(view) === "live" && view.band >= 3;
+  const tappable = resolvePhase(view) === "live" && withinBand(RALLY_TYPE, view.band);
   // R5-2 — SINGLES AUTO-SET. `players` is this side's whole on-field roster,
   // so a length-1 side has nothing to choose: its sole member IS whoever won
   // the rally, and that is stamped INTO THE TAP rather than left for the
@@ -727,7 +678,7 @@ function intervalHint(
   // no open entry at all — and "Interval at 11" is exactly the thing a scorer
   // wants to see then. `gameNumber` already reads that boundary the same way.
   const index = open?.index ?? (state.sets ?? []).length;
-  const mark = Math.ceil(targetOf(cfg, index) / 2);
+  const mark = badmintonPadRules.intervalMark(cfg, index);
   const home = open?.home ?? 0;
   const away = open?.away ?? 0;
   const leader = Math.max(home, away);
@@ -772,7 +723,7 @@ function serviceCourt(state: BadmintonStateShape, serving: ServingInfo | null, t
     // No label. "Right service court" is already a complete phrase, and a
     // "Court: Right" pairing reads as a table cell rather than as something an
     // umpire would say — the register the rest of this strip is written in.
-    value: t(score % 2 === 0 ? "pad.badminton.scorebug.strip.court.right" : "pad.badminton.scorebug.strip.court.left"),
+    value: t(badmintonPadRules.serviceCourt(score) === "right" ? "pad.badminton.scorebug.strip.court.right" : "pad.badminton.scorebug.strip.court.left"),
   };
 }
 
@@ -1038,7 +989,7 @@ export function refusedEventTypes(view: PadHostView): string[] {
 function setScoreSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const cfg = cfgOf(view);
-  const bound = scoreBound(cfg);
+  const bound = badmintonPadRules.scoreBound(cfg);
   const open = openGame(state);
   return {
     event: SUMMARY_TYPE,
@@ -1089,7 +1040,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
       id: SANCTION_LEVEL_STEP_ID,
       kind: "choice",
       title: "pad.badminton.sheet.sanction.level.title",
-      options: SANCTION_LEVELS.map((level) => ({
+      options: badmintonPadRules.sanctionLevels.map((level) => ({
         id: level,
         label: vocabKey("level", level) ?? level,
         tone: toneFor(level),

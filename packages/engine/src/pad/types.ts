@@ -34,7 +34,8 @@ export interface PeriodPadRules extends PadRulesBase {
   /** The classes a fixture with this cfg is offered: equals the padSpec suspension `class` enum for the cfg. */
   suspensionClasses(cfg: unknown): readonly string[];
   goalKinds(cfg: unknown): readonly string[];
-  /** Takes the cfg because the fold's phase guards do: the scoring phases and the expected advance both read it. */
+  /** `eventType` is one of this sport's own event types; any other throws, naming it; a skin filters first. Takes the cfg because the
+   *  fold's phase guards do: the scoring phases and the expected advance both read it. */
   eventAllowedInPhase(eventType: string, phase: string, cfg: unknown): boolean;
 }
 
@@ -47,8 +48,14 @@ export interface FootballPadRules extends PadRulesBase {
   readonly playPhases: readonly string[];
   readonly teamSizeDefault: number;
   subWindowsCap(cfg: unknown): number | undefined;
-  /** Takes the cfg because the fold's period-marker refusals do (`cfg.halves`). */
+  /** `eventType` is one of this sport's own event types; any other throws, naming it; a skin filters first. Takes the cfg because the fold's period-marker refusals do (`cfg.halves`). */
   eventAllowedInPhase(eventType: string, phase: string, cfg: unknown): boolean;
+  /** The `football.period` markers this cfg offers, in offer order (halves HT/FT, quarters QT/HT/3QT/FT, plus ET_HT/ET_FT with extra time). Added by P1.2. */
+  periodMarkers(cfg: unknown): readonly string[];
+  /** The marker(s) the fold accepts in `phase` under this cfg: at most one, none outside the in-play phases. Added by P1.2. */
+  legalPeriodMarkers(phase: string, cfg: unknown): readonly string[];
+  /** Whether the fold lets a substituted-off player come back on (football's `lineupPolicy(cfg).reentry`; false under the Laws, true under `rollingSubs`). Added by P1.2. */
+  reentryAllowed(cfg: unknown): boolean;
 }
 
 /** cricket (P2). */
@@ -59,7 +66,9 @@ export interface CricketPadRules extends PadRulesBase {
   readonly fielderCreditedKinds: readonly string[];
   readonly freeHitDismissalKinds: readonly string[];
   readonly bowlerCreditedKinds: readonly string[];
-  /** (c) - Q1b. */
+  /** Members of fielderCreditedKinds whose fielder is optional (ruling 242: obstructed). */
+  readonly fielderOptionalKinds: readonly string[];
+  /** (c) - Q1b, ruling 242. */
   readonly variableOutKinds: readonly string[];
   readonly boundaryValues: readonly number[];
   readonly tossElections: readonly string[];
@@ -69,8 +78,12 @@ export interface CricketPadRules extends PadRulesBase {
   readonly reviewOutcomes: readonly string[];
   /** (c) Law 41: 5. */
   readonly penaltyRuns: number;
-  /** (c) Law 22: 1. */
+  /** (c) Law 22.6: 1. */
   readonly wideDefaultRuns: number;
+  /** (c) ICC playing conditions 21.15 (MCC Law 21.14): 1. */
+  readonly noBallDefaultRuns: number;
+  /** The cricket.* event types the fold accepts in a super over. */
+  readonly superOverEventTypes: readonly string[];
   ballsPerOver(cfg: unknown): number;
 }
 
@@ -79,21 +92,28 @@ export interface SetBasedPadRules extends PadRulesBase {
   readonly sanctionLevels: readonly string[];
   bestOf(cfg: unknown): number;
   setTo(cfg: unknown): number;
+  /** P3.1: the target of the set at `setIndex` (0-based), the deciding set's own included - the kernel's `setTarget`. */
+  setTarget(cfg: unknown, setIndex: number): number;
   scoreBound(cfg: unknown): number;
-  /** (c) "golden point" / "setting" / null for the open game. */
+  /** (c) "golden point" / "setting" / null for the open game, while the match is live (null once it is decided, a forfeit
+   *  or abandon included). `state` is the folded state (or a pre-fold `{}`). */
   deuceNote(state: unknown, cfg: unknown): "goldenPoint" | "setting" | null;
 }
 
 export interface BadmintonPadRules extends SetBasedPadRules {
   /** (c) ceil(target/2). */
   intervalMark(cfg: unknown, setIndex: number): number;
+  /** (c) P3.1: BWF 10.1/11.1, the service court for the serving side's score in the game (even: right). */
+  serviceCourt(servingSideScore: number): "right" | "left";
 }
 
 export interface TableTennisPadRules extends SetBasedPadRules {
   /** toBe-equal to the kernel's EXPEDITE_RETURNS. */
   readonly expediteReturns: number;
-  /** (c) 9. */
+  /** (c) 9. Advisory: the fold enforces no floor (ITTF 2.15.1's guard lives in the pad, DOMAIN.tabletennis.md). */
   readonly expediteScoreFloor: number;
+  /** P3.1: ITTF 2.15.2 as the fold applies it - whether a rally that reached `expediteReturns` may credit `winnerSide`. */
+  expediteReturnsCreditable(servingSide: "home" | "away", winnerSide: "home" | "away"): boolean;
 }
 
 export interface VolleyballPadRules extends SetBasedPadRules {
@@ -107,33 +127,57 @@ export interface TennisPadRules extends PadRulesBase {
   readonly pointKinds: readonly string[];
   readonly interruptionKinds: readonly string[];
   readonly sanctionLevels: readonly string[];
-  /** (c) 3600. */
+  /** 3600: the kernel's own plausibility sentinel for a break's duration (PLAUSIBLE_INTERRUPTION_SECONDS), never refused by the fold. */
   readonly interruptionMaxSeconds: number;
-  /** (c) ["0","15","30","40"]. */
+  /** ["0","15","30","40"]: the kernel's own POINT_CALLS (ITF Rule 5(a)), which its spoken game score reads. */
   readonly pointCalls: readonly string[];
-  /** (c). */
+  /** (c) ITF Rule 10: whether the changeover just had (after the last game, or the last tie-break point) changed ends. False with no
+   *  folded state, before the first game and once the match is over. */
   endsChanged(state: unknown): boolean;
   gamesFieldBound(cfg: unknown): number;
   tiebreakFieldBound(cfg: unknown): number;
+  /** P3.2: the cfg's own `bestOf`. */
+  bestOf(cfg: unknown): number;
+  /** P3.2: whether a `home`–`away` set score for the set about to be scored is its tie-break score, the one the fold banks only with
+   *  the tie-break's points (`tb`): never in an advantage set or a match tie-break decider. A pre-fold `{}` is the first set. */
+  setScoreTakesTiebreak(state: unknown, cfg: unknown, home: number, away: number): boolean;
+  /** P3.2: a tie-break or match tie-break is being played: the fold refuses a game award (GAME_AWARD_DURING_TIEBREAK), and serve
+   *  turns over by points. False with no folded state. */
+  breakerInForce(state: unknown): boolean;
+  /** P3.2: ITF Rule 5(b), whether the serve changes after a breaker's `pointsPlayed`-th point (the fold's own rotation). */
+  tiebreakServeRotatesAfter(pointsPlayed: number): boolean;
 }
 
 /** carrom (P4). */
 export interface CarromPadRules extends PadRulesBase {
+  /** CA-AD-2: the reasons the pad offers an umpire adjustment (the schema keeps `reason` free text). */
   readonly adjustReasons: readonly string[];
+  /** CA-CN-1: the most coins the winner's opponent has left on a board (nine a side). */
   readonly opponentCoinsMax: number;
+  /** CA-FM-1: the cfg's games per match, read through carrom's own schema. */
   bestOf(cfg: unknown): number;
+  /** CA-FM-1: the cfg's points a game is played to; the bound of an umpire adjustment (CA-AD-1). */
   gameTo(cfg: unknown): number;
 }
 
 /** boardgame (P4). */
 export interface BoardgamePadRules extends PadRulesBase {
+  /** BG-PA-1: the pad's bound on the pairing card's board number (a plausibility bound; the fold takes any positive integer). */
   readonly boardMax: number;
+  /** BG-TS-1: the mini-match scores a rapid or blitz tie-break offers, `null` for none. The schema takes any CHESS_SCORE; this is the offer.
+   *  It has a second role: the list `boardgame.arbitraryEvent` draws from, so its ORDER is a seeded stream the pad does not need (it
+   *  compares the set) and a reorder would rewrite. */
   readonly tiebreakScores: readonly (string | null)[];
+  /** BG-KO-2: the one tie-break rung that records who had Black and the result (the fold's `BoardgameArmageddon` branch); every other rung
+   *  records a winner. Added by P4.1. */
+  readonly armageddonRung: string;
 }
 
 /** generic (P4). */
 export interface GenericPadRules extends PadRulesBase {
+  /** GN-SC-1: the pad's bound on a typed final score (a plausibility bound; the fold takes any non-negative integer). */
   readonly maxPlausibleScore: number;
+  /** GN-SC-2: the pad's bound on one tally press (the fold takes any non-zero integer). */
   readonly maxTallyStep: number;
 }
 

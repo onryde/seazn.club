@@ -8,15 +8,18 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
+import { carromPadRules, hockeyPadRules, icehockeyPadRules } from "@seazn/engine/pad";
 import { writeConfigIssues } from "@seazn/engine/sport";
 import { ARMAGEDDON_RESULTS, BoardgameMethod, DECISIVE_METHODS, DRAWN_METHODS, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
+import { cricketPadRules } from "@seazn/engine/pad";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
 import { hockey } from "@seazn/engine/sports/hockey";
 import { icehockey } from "@seazn/engine/sports/icehockey";
 import { badminton, tabletennis, volleyball } from "@seazn/engine/sports/setbased";
 import { tennis } from "@seazn/engine/sports/tennis";
+import { badmintonPadRules, tabletennisPadRules, tennisPadRules, volleyballPadRules, type SetBasedPadRules } from "@seazn/engine/pad";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GENERIC_TOLERATED_EXTRA_KEYS, genericAdapter } from "../../bench/lib/drivers/adapters/generic.ts";
 import { START_MATCH_TESTID, selectorForTapStep, type TapAdapterContext, type TapStep } from "../../bench/lib/drivers/scorer.ts";
@@ -610,13 +613,14 @@ describe("volleyball", () => {
 // A cap or deciding-set stream is the same `<sport>.<game|set>.summary {home, away}` the adapters already route (no new event
 // type, so `emits` and the routing sweep are unchanged); what is new is the SCORES: a cap set ends at cap : cap-1 (30-29), the
 // number the sheet's field must accept. The sheet's bound is the engine's own padSpec summary-field max (kernel
-// summaryScoreBound), which the skin copies as `scoreBound`: pinned to that source below, so a skin that bounded the field
-// below the cap would red here and not at a scorer's thumb.
+// summaryScoreBound), which the skin reads from its `@seazn/engine/pad` record's `scoreBound` (pad wave P3.1; it used to copy
+// the arithmetic as a local function): pinned to that source below, so a skin that bounded the field below the cap would red
+// here and not at a scorer's thumb.
 describe("the set sports' deciding-set and cap streams on the setScore sheet (W2e Task 22)", () => {
-  const SKIN_OF: Readonly<Record<string, { file: string; pad: MatrixPadAdapter; summary: string; tile: string }>> = {
-    badminton: { file: "badminton.tsx", pad: badmintonPad, summary: BADMINTON_SUMMARY, tile: BADMINTON_SET_SCORE_TILE },
-    volleyball: { file: "volleyball.tsx", pad: volleyballPad, summary: VOLLEYBALL_SUMMARY, tile: VOLLEYBALL_SET_SCORE_TILE },
-    tabletennis: { file: "tabletennis.tsx", pad: tabletennisPad, summary: TABLETENNIS_SUMMARY, tile: TABLETENNIS_SET_SCORE_TILE },
+  const SKIN_OF: Readonly<Record<string, { file: string; pad: MatrixPadAdapter; summary: string; tile: string; rules: SetBasedPadRules; rulesName: string }>> = {
+    badminton: { file: "badminton.tsx", pad: badmintonPad, summary: BADMINTON_SUMMARY, tile: BADMINTON_SET_SCORE_TILE, rules: badmintonPadRules, rulesName: "badmintonPadRules" },
+    volleyball: { file: "volleyball.tsx", pad: volleyballPad, summary: VOLLEYBALL_SUMMARY, tile: VOLLEYBALL_SET_SCORE_TILE, rules: volleyballPadRules, rulesName: "volleyballPadRules" },
+    tabletennis: { file: "tabletennis.tsx", pad: tabletennisPad, summary: TABLETENNIS_SUMMARY, tile: TABLETENNIS_SET_SCORE_TILE, rules: tabletennisPadRules, rulesName: "tabletennisPadRules" },
   };
   // Task 22 M6: the sports this table must cover are the ENGINE's set sports (the module marks them with reachableSetScores), not
   // a list typed here - a set sport added to the registry without a skin row fails this, instead of being skipped by the sweeps.
@@ -676,18 +680,33 @@ describe("the set sports' deciding-set and cap streams on the setScore sheet (W2
 
   it("the skins bound the sheet the way the engine does: the cap when the cfg has one, else the larger target plus 20 - so a cap score (cap, cap-1) is always typeable", () => {
     let pinned = 0;
-    for (const [sport, { file }] of skinRows()) {
+    let variants = 0;
+    for (const [sport, { file, rules, rulesName }] of skinRows()) {
       const skin = readFileSync(resolve(REPO, SKINS, file), "utf8");
-      expect(skin, `${file}: scoreBound`).toMatch(/function scoreBound\(cfg: \w+\): number \{\s*const cap = cfg\.cap;\s*if \(typeof cap === "number"\) return cap;\s*return Math\.max\(cfg\.setTo \?\? \d+, cfg\.finalSetTo \?\? \d+\) \+ 20;\s*\}/);
+      // The skin's sheet takes its bound from the engine's own pad record (imported from @seazn/engine/pad, not a local
+      // look-alike), read off the view's cfg, and both number steps are bounded by it and by nothing else.
+      expect(skin, `${file}: imports ${rulesName} from @seazn/engine/pad`).toMatch(new RegExp(`import \\{[^}]*\\b${rulesName}\\b[^}]*\\} from "@seazn/engine/pad";`));
+      const sheet = /\nfunction setScoreSheet\(view: PadHostView\): GuidedSheetSpec \{\n([\s\S]*?)\n\}\n/.exec(skin);
+      expect(sheet, `${file}: setScoreSheet`).not.toBeNull();
+      const body = sheet![1]!;
+      expect(body, `${file}: the sheet's cfg is the view's`).toMatch(/\bconst cfg = cfgOf\(view\);/);
+      expect(body, `${file}: the sheet's bound`).toMatch(new RegExp(`\\bconst bound = ${rulesName}\\.scoreBound\\(cfg\\);`));
+      expect(body.match(/\bmax: [^,\n]+,/g), `${file}: both number steps take the bound, and only it`).toEqual(["max: bound,", "max: bound,"]);
       pinned++;
-      // ...and the engine's declaration is the same arithmetic, for each variant.
+      // ...and that record's bound is the engine's declaration (the padSpec field max) and the same arithmetic, for each variant.
       for (const variant of variantKeys(sport)) {
         const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as { cap: number | null; setTo: number; finalSetTo: number };
-        expect(boundOf(sport, cfg), `${sport}/${variant}`).toBe(cfg.cap ?? Math.max(cfg.setTo, cfg.finalSetTo) + 20);
+        const expected = cfg.cap ?? Math.max(cfg.setTo, cfg.finalSetTo) + 20;
+        expect(rules.scoreBound(cfg), `${sport}/${variant}: ${rulesName}.scoreBound`).toBe(expected);
+        expect(boundOf(sport, cfg), `${sport}/${variant}`).toBe(expected);
+        variants++;
       }
     }
+    console.info(`pad-adapters: set-sport sheet bounds pinned in ${pinned} skins, ${variants} variants`);
     expect(pinned).toBe(SET_SPORTS.length);
     expect(pinned).toBeGreaterThan(0);
+    expect(variants).toBe(SET_SPORTS.reduce((n, sport) => n + variantKeys(sport).length, 0));
+    expect(variants).toBeGreaterThan(pinned);
   });
 });
 
@@ -871,11 +890,38 @@ describe("tennis", () => {
   it("the skin's sheet is what the adapter models: tbHome and tbAway are asked only `when: tbShape`, tbShape is false for a match tie-break or an advantage set, tiebreakAt defaults to 6 and bestOf to 3, and the payload's tb block rides only a tb-shaped answer", () => {
     expect(skin).toMatch(/id: "tbHome",[\s\S]*?when: tbShape,/);
     expect(skin).toMatch(/id: "tbAway",[\s\S]*?when: tbShape,/);
-    expect(skin).toMatch(/if \(rules\.mtbTo !== null \|\| rules\.tiebreakAt === null\) return false;/);
-    expect(skin).toMatch(/const tiebreakAt = set\.tiebreakAt === undefined \? 6 : set\.tiebreakAt;/);
-    expect(skin).toMatch(/const bestOf = cfg\.bestOf \?\? 3;/);
     expect(skin).toMatch(/\.\.\.\(tbShape\(answers\) \? \{ tb: \{ home: Number\(answers\.tbHome\), away: Number\(answers\.tbAway\) \} \} : \{\}\),/);
-    expect(skin).toMatch(/if \("matchTiebreakTo" in finalSet\) return \{ \.\.\.base, mtbTo: finalSet\.matchTiebreakTo \};/);
+    // Pad wave P3.2: tbShape is the engine's own answer (tennisPadRules.setScoreTakesTiebreak, the kernel's rulesFor +
+    // tiebreakSetScore for the set about to be scored), no longer a skin copy of rulesFor; the skin imports the record.
+    expect(skin).toMatch(/import \{[^}]*\btennisPadRules\b[^}]*\} from "@seazn\/engine\/pad";/);
+    expect(skin).toMatch(/const tbShape: StepPredicate = \(answers\) => \{\s*const home = Number\(answers\.home\);\s*const away = Number\(answers\.away\);\s*return Number\.isFinite\(home\) && Number\.isFinite\(away\) && tennisPadRules\.setScoreTakesTiebreak\(view\.state, view\.cfg, home, away\);\s*\};/);
+    // ...and what that record answers, which is what the adapter models. A state of `{}` is a pad before any fold (no set won).
+    const takesTb = tennisPadRules.setScoreTakesTiebreak;
+    const tour = { gamesTo: 6, winBy: 2, tiebreakTo: 7 };
+    const oneAll = { setsWon: { home: 1, away: 1 } };
+    const mtb = { finalSet: { matchTiebreakTo: 10 } };
+    const cases: [string, unknown, unknown, number, number, boolean][] = [
+      // tiebreakAt defaults to 6: 7-6 either way is tb-shaped at the schema default, 8-7 (a default of 7) and 7-5 are not
+      ["default 7-6", {}, {}, 7, 6, true],
+      ["default 6-7", {}, {}, 6, 7, true],
+      ["default 8-7", {}, {}, 8, 7, false],
+      ["default 7-5", {}, {}, 7, 5, false],
+      // an advantage set (tiebreakAt null) has no tie-break score at all
+      ["advantage set 7-6", {}, { set: { ...tour, tiebreakAt: null } }, 7, 6, false],
+      // a match tie-break decider carries its points in home/away: never tb-shaped, at one set all in the default bo3...
+      ["mtb decider 7-6", oneAll, mtb, 7, 6, false],
+      ["mtb decider 10-8", oneAll, mtb, 10, 8, false],
+      // ...while a set before the decider, under the same cfg, still is (the false above is the decider, not the cfg)
+      ["mtb cfg, first set 7-6", {}, mtb, 7, 6, true],
+      ["mtb cfg, 1-0 7-6", { setsWon: { home: 1, away: 0 } }, mtb, 7, 6, true],
+      // bestOf defaults to 3: one set all is the decider only because of it; at bestOf 5 it is not
+      ["mtb cfg bo5, 1-1 7-6", oneAll, { ...mtb, bestOf: 5 }, 7, 6, true],
+    ];
+    for (const [name, state, cfg, home, away, want] of cases) expect(takesTb(state, cfg, home, away), name).toBe(want);
+    expect(tennisPadRules.bestOf({}), "bestOf defaults to 3").toBe(3);
+    console.info(`pad-adapters: tennis tbShape cases checked ${cases.length}`);
+    expect(cases.filter((c) => c[5]).length, "both answers are witnessed").toBeGreaterThan(0);
+    expect(cases.filter((c) => !c[5]).length, "both answers are witnessed").toBeGreaterThan(0);
   });
 
   it("Step 0: the 6-3 row Step 0 saw (no tb key) is equal to the generated summary; no fallback, no tolerated key", () => {
@@ -1454,8 +1500,40 @@ describe("the period kernel pins (hockey + icehockey share period-shared.ts)", (
     expect(shared).toContain("...(next === \"home\" || next === \"away\" ? (next === side ? {} : { disabled: true }) : {}),");
     expect(shared).toContain("action: { sheet: attemptSheetKey(side) },");
     expect(shared).toContain("sheets[attemptSheetKey(side)] = attemptSheet(spec, view, side);");
-    expect(shared).toContain("if (eventType === e.attempt) return phase === SHOOTOUT_PHASE;");
-    const sheet = shared.slice(shared.indexOf("function attemptSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side): GuidedSheetSpec {"));
+    // P1 (pad wave) moved the attempt's phase window out of this file: phaseAllows asks the engine's pad record, whose row is the
+    // fold's own WRONG_PHASE table (EVENT_PHASES, sports/period/kernel.ts). Pin the hand-off, that each skin hands it its own
+    // sport's record, and that record's verdict in every phase a real shoot-out walk reaches, folded: the shoot-out only (the
+    // rulebook's window — no attempt before it, in a period, or once decided), and in no phase at all under a cfg with no shoot-out.
+    expect(shared).toContain("if (!spec.rules.eventAllowedInPhase(eventType, readPhase(view.state), view.cfg)) return false;");
+    let verdicts = 0;
+    for (const [key, m, rules] of [["hockey", hockey, hockeyPadRules], ["icehockey", icehockey, icehockeyPadRules]] as const) {
+      expect(readFileSync(resolve(REPO, SKINS, `${key}.tsx`), "utf8")).toContain(`rules: ${key}PadRules,`);
+      let inShootout = 0;
+      for (const v of variantKeys(key)) {
+        const cfg = stageCfg(key, resolveSportCfg(key, v), "knockout", v);
+        const noShootout = { ...(cfg as Record<string, unknown>), shootout: null };
+        for (const path of ["shootout", "gws"] as const) {
+          const evs = streamOf(bracketReq(key, cfg, { kind: "win", winner: "home", path }));
+          const phases = new Set<string>();
+          for (let i = 0; i <= evs.length; i++) {
+            const phase = (foldStream(m, cfg, HOME, AWAY, evs.slice(0, i)).state as { phase?: unknown }).phase;
+            expect(typeof phase, `${key} ${v} ${path} after ${i} event(s)`).toBe("string");
+            phases.add(phase as string);
+          }
+          for (const phase of phases) {
+            const at = `${key} ${v} ${path} ${phase}`;
+            expect(rules.eventAllowedInPhase(`${key}.shootout.attempt`, phase, cfg), at).toBe(phase === "SHOOTOUT");
+            expect(rules.eventAllowedInPhase(`${key}.shootout.attempt`, phase, noShootout), `${at}, no shoot-out`).toBe(false);
+            if (phase === "SHOOTOUT") inShootout++;
+            verdicts += 2;
+          }
+        }
+      }
+      expect(inShootout, `${key}: a walk reached the shoot-out`).toBeGreaterThan(0);
+    }
+    console.info(`pad-adapters: period attempt window: ${verdicts} record verdict(s) over the phases real shoot-out walks reach`);
+    expect(verdicts).toBeGreaterThan(0);
+    const sheet =shared.slice(shared.indexOf("function attemptSheet(spec: PeriodSkinSpec, view: PadHostView, side: Side): GuidedSheetSpec {"));
     expect(sheet.length, "period-shared.ts no longer declares attemptSheet").toBeLessThan(shared.length);
     expect(sheet).toMatch(/^[\s\S]*?event: e\.attempt,[\s\S]*?\{ id: "scored", [\s\S]*?\{ id: "missed", [\s\S]*?buildPayload: \(answers\) => \(\{ by, scored: answers\.outcome === "scored" \}\),/);
     expect([PERIOD_ATTEMPT_SCORED, PERIOD_ATTEMPT_MISSED]).toEqual(["scored", "missed"]);
@@ -1463,6 +1541,50 @@ describe("the period kernel pins (hockey + icehockey share period-shared.ts)", (
       expect(Object.keys(m.eventSchemas ?? {})).toContain(`${key}.shootout.attempt`);
       expect(pad.emits).toContain(`${key}.shootout.attempt`);
     }
+  });
+});
+
+describe("the football and period adapters' skin cites", () => {
+  // P1 (pad wave) moved football.tsx and period-shared.ts and stranded every line these two adapters cite; two of the doc cites
+  // (kickSheetKey, attemptSheetKey) were already stale before it, because nothing read them. Each cite is keyed by the
+  // declaration it documents (`why` for a fallback's), beside text its line(s) must hold. A cite in either adapter that this
+  // table does not name is refused, so a new one cannot rot unread. Two adapters, not every one: these are the skins P1 moved.
+  const NEEDLES: Readonly<Record<string, readonly string[]>> = {
+    "football.ts FOOTBALL_PERIOD_TILE": [`id: "${FOOTBALL_PERIOD_TILE}",`],
+    "football.ts footballGoalTile": ["id: `goal-${side}`,"],
+    "football.ts footballKickTile": ["export function kickSheetKey(side: Side): string {", "return `kick-${side}`;"],
+    "football.ts FOOTBALL_KICK_SCORED": [`{ id: "${FOOTBALL_KICK_SCORED}", `, `{ id: "${FOOTBALL_KICK_MISSED}", `],
+    "football.ts why": [`action: { event: { type: "${FOOTBALL_GOAL}", payload: { by: entrantOf(state, side) } } },`],
+    "period.ts AT_STAMP": ["payload: at === undefined ? { to: next } : { to: next, at },"],
+    "period.ts PERIOD_ADVANCE_TILE": [`id: "${PERIOD_ADVANCE_TILE}",`],
+    "period.ts periodGoalTile": ["id: `goal-${side}`,"],
+    "period.ts periodAttemptTile": ["export function attemptSheetKey(side: Side): string {", "return `attempt-${side}`;"],
+    "period.ts PERIOD_ATTEMPT_SCORED": [`{ id: "${PERIOD_ATTEMPT_SCORED}", `, `{ id: "${PERIOD_ATTEMPT_MISSED}", `],
+    "period.ts why": ["payload: at === undefined ? { to: next } : { to: next, at },"],
+  };
+
+  it("every `<skin>:<line>` cite in tools/matrix/lib/pads/{football,period}.ts lands on the line(s) holding what it documents, and every cite is read", () => {
+    const seen: string[] = [];
+    for (const [adapter, skinFile] of [["football.ts", "football.tsx"], ["period.ts", "period-shared.ts"]] as const) {
+      const src = readFileSync(resolve(REPO, "tools/matrix/lib/pads", adapter), "utf8");
+      const skinLines = readFileSync(resolve(REPO, SKINS, skinFile), "utf8").split("\n");
+      for (const c of src.matchAll(/([\w-]+\.tsx?):(\d+)(?:-(\d+))?/g)) {
+        expect(c[1], `${adapter} cites ${c[0]}, not its skin`).toBe(skinFile);
+        const onWhy = /^\s*why: "$/.test(src.slice(src.lastIndexOf("\n", c.index) + 1, c.index));
+        const key = `${adapter} ${onWhy ? "why" : /(?:const|function) (\w+)/.exec(src.slice(c.index))?.[1]}`;
+        const needles = NEEDLES[key];
+        expect(needles, `${key} (${c[0]}) is a cite this test does not read`).toBeDefined();
+        const from = Number(c[2]);
+        const to = c[3] === undefined ? from : Number(c[3]);
+        expect(to - from, `${key}: ${c[0]} is a range of at most three lines`).toBeGreaterThanOrEqual(0);
+        expect(to - from, `${key}: ${c[0]} is a range of at most three lines`).toBeLessThanOrEqual(2);
+        const cited = skinLines.slice(from - 1, to).join("\n");
+        for (const n of needles!) expect(cited, `${key}: ${skinFile}:${from}-${to} no longer holds it`).toContain(n);
+        seen.push(key);
+      }
+    }
+    console.info(`pad-adapters: ${seen.length} skin cite(s) resolved across the football and period adapters`);
+    expect(seen.sort()).toEqual(Object.keys(NEEDLES).sort());
   });
 });
 
@@ -1721,7 +1843,10 @@ describe("cricket", () => {
     // The premise, from the product's text: the tile ids, the phase switch and the boundary rule.
     expect(skin).toMatch(/for \(const r of RUN_VALUES\) \{\s*tiles\.push\(ballTile\(\{\s*id: `run\$\{r\}`,/);
     expect(skin).toMatch(/return state\.phase === "super_over" \? "cricket\.superover\.ball" : "cricket\.ball";/);
-    expect(skin).toMatch(/const boundary = runs === 4 \? 4 : runs === 6 \? 6 : undefined;/);
+    // Pad wave P2: the skin's boundary flag is the engine's declared boundary values (`cricketPadRules.boundaryValues`), and
+    // this adapter mirrors them as 4 and 6 (lib/pads/cricket.ts), so the engine's set must be exactly those two.
+    expect(skin).toMatch(/function runPayload\(base: Record<string, unknown>, runs: number\): Record<string, unknown> \{\s*const boundary = cricketPadRules\.boundaryValues\.includes\(runs\) \? runs : undefined;/);
+    expect([...cricketPadRules.boundaryValues].sort((a, b) => a - b), "the adapter's 4 and 6 are the engine's boundary values").toEqual([4, 6]);
     const fb = cricketPad.fallbacks.find((f) => f.eventType === CRICKET_SUPER_OVER_BALL);
     expect(fb, "the super-over ball is declared a fallback").toBeDefined();
     expect(fb!.why).toMatch(/\.tsx?:\d+/);
@@ -2257,12 +2382,16 @@ describe("carrom", () => {
     expect(() => carromPad.stepsFor({ type: "carrom.adjust", payload: {} }, ctxOf(r))).toThrow(/carrom\.adjust/);
   });
 
-  it("M-8: carrom's coin bound is the skin's — read from carrom.tsx as text, every coins field carries one `max`, the adapter accepts it and refuses one more", () => {
-    // Both board sheets (the plain board and the queen board) ask the opponent's coins as a number step with a max.
-    const maxes = [...skin.matchAll(/id: "coins",[^}]*?\bmax:\s*(\d+)/g)].map((m) => Number(m[1]));
-    expect(maxes.length, "carrom.tsx no longer has the coins number step(s)").toBeGreaterThanOrEqual(2);
-    expect(new Set(maxes).size, `the skin's coins fields disagree: ${maxes.join(", ")}`).toBe(1);
-    const max = maxes[0]!;
+  it("M-8: carrom's coin bound is the skin's — carrom.tsx reads every coins field's `max` from carromPadRules.opponentCoinsMax, the adapter holds the engine's value, accepts it and refuses one more", () => {
+    // Pad wave P4.1: the skin no longer types the bound (it was `max: 9` inline, twice); both board sheets (the plain board and
+    // the queen board) ask the opponent's coins as a number step whose `max` is the engine's record. Read as text so a step that
+    // goes back to a literal, or to any other source, reds here.
+    expect(skin).toMatch(/import \{[^}]*\bcarromPadRules\b[^}]*\} from "@seazn\/engine\/pad";/);
+    const sources = [...skin.matchAll(/id: "coins",[^}]*?\bmax:\s*([^\s,}]+)/g)].map((m) => m[1]);
+    expect(sources.length, "carrom.tsx no longer has the coins number step(s)").toBeGreaterThanOrEqual(2);
+    expect(sources, "every coins field takes its max from the engine's record").toEqual(sources.map(() => "carromPadRules.opponentCoinsMax"));
+    const max = carromPadRules.opponentCoinsMax;
+    expect(max, "nine coins a side (ICF Laws of Carrom 52(b)(ii), 53(a); rule row CA-CN-1), typed from the row").toBe(9);
     expect(CARROM_COIN_MAX).toBe(max);
     const { r } = summariesOf("carrom", CARROM_BOARD, "home");
     const board = (coins: number) => ({ type: CARROM_BOARD, payload: { winner: HOME, opponentCoinsLeft: coins, queenTo: null } });

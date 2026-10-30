@@ -1220,8 +1220,8 @@ async function capturePeriodPairExtra(
   await sheet.locator(`[data-choice-option-id="${recipe.shortClass}"]`).click();
   // `reason` — band-gated (`when: () => view.band >= 2`), and this harness's
   // org is Pro (`setOrgPlanBySql`, the shared per-sport setup), band 3.
-  // "tripping" is reason index 0 for BOTH federations (HOCKEY_REASONS,
-  // ICEHOCKEY_REASONS — hockey.tsx/icehockey.tsx).
+  // "tripping" is reason index 0 for BOTH federations (`hockeyPadRules` /
+  // `icehockeyPadRules.suspensionReasons`, `@seazn/engine/pad`).
   await expect(
     sheet.locator('[data-choice-option-id="tripping"]'),
     `gallery(${recipe.slug}): the reason step must follow the class step at band 3`,
@@ -1454,7 +1454,7 @@ const SPORTS: GallerySport[] = [
     },
     // The wicket sheet again, on a DIFFERENT step than `scoreOne` completed
     // (kind -> "Run out", which asks "who's out" before it would ask
-    // "fielder" — VARIABLE_OUT_KINDS, v3/skins/cricket.tsx) — stopped before
+    // "fielder" — cricketPadRules.variableOutKinds, @seazn/engine/pad) — stopped before
     // picking a batter, so nothing submits. Two of the three home batters
     // remain not-out after `scoreOne`'s own dismissal (see the roster
     // comment above), so this sheet has real candidates to show.

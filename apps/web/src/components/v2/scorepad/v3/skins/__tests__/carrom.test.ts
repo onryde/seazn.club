@@ -23,6 +23,7 @@ import type { EventEnvelope, Lineup, LineupPair } from "@seazn/engine/core";
 import { foldMatchWithStoppage, initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
+import { carromPadRules } from "@seazn/engine/pad";
 import { carrom } from "@seazn/engine/sports/carrom";
 import uiEn from "@/dictionaries/en/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
@@ -32,8 +33,6 @@ import { resolvePad } from "../../registry";
 import { ribbonKeyFor } from "../../ribbon";
 import { assertScorebugSpec, type DockSpec, type PadHostView, type TileSpec } from "../../types";
 import {
-  ADJUST_REASONS,
-  EVENT_BAND,
   buildDock,
   buildScorebug,
   buildSheets,
@@ -42,6 +41,11 @@ import {
   resolvePhase,
   type TFn,
 } from "../carrom";
+
+// P4.1: the skin declares neither the adjustment reasons nor the band map any more; it reads `carromPadRules`. These aliases keep the
+// tests below pinning the RECORD against the real `padSpec` (the record is what the skin now offers from).
+const ADJUST_REASONS = carromPadRules.adjustReasons;
+const EVENT_BAND = carromPadRules.eventBands;
 
 // ---------------------------------------------------------------------------
 // Fixtures — the fold, and nothing but the fold
@@ -525,7 +529,7 @@ describe("buildSheets — umpire adjustment", () => {
     });
   });
 
-  it("ADJUST_REASONS is the engine's own padSpec field values, not hand-copied", () => {
+  it("the pad rules' adjustReasons are the engine's own padSpec field values, not hand-copied", () => {
     const spec = realPadSpec(DEFAULT_CFG);
     const actions = spec.panels.flatMap((panel) => panel.actions).filter((a) => a.type === "carrom.game.adjust");
     for (const action of actions) {
@@ -536,8 +540,8 @@ describe("buildSheets — umpire adjustment", () => {
   });
 });
 
-describe("the engine surface this skin restates", () => {
-  it("EVENT_BAND is the module's own fidelity map, not a second scale", () => {
+describe("the engine surface this skin reads", () => {
+  it("the pad rules' eventBands are the module's own fidelity map, not a second scale", () => {
     expect(EVENT_BAND).toEqual(realPadSpec(DEFAULT_CFG).fidelity);
     expect(EVENT_BAND).toEqual(realPadSpec(CLUB29_CFG).fidelity);
   });

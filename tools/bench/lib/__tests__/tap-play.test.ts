@@ -23,15 +23,15 @@
 //     tap releases the previous one first (queue.ts `flushHeldBefore`); an
 //     immediate submit queues BEHIND a held one; `pad-send-now` releases.
 //   - the pad stamps a side's SOLE on-field player into the half tap
-//     (generic.tsx:324-327) and offers person chips only for a side with more
-//     than one (:702-705). `roster` absent ≡ no saved lineup — neither.
+//     (generic.tsx `soleScorer`) and offers person chips only for a side with more
+//     than one (`buildDock`). `roster` absent ≡ no saved lineup — neither.
 //   - THE DOCK RENDERS LATE. A hold's dock is not on screen the instant the tap
 //     that made it returns: this fake re-renders it only when time passes (a
 //     ledger read) or while a `waitFor` has to poll. A `count()`/`click()`
 //     right after a tap therefore still sees the PREVIOUS dock, which is the
 //     real race `releaseHold` exists for.
 //   - the score-entry sheet: tile, then number + confirm per side, home first
-//     (generic.tsx:554-578), then an immediate `generic.result`.
+//     (generic.tsx `scoreEntrySheet`), then an immediate `generic.result`.
 //   - the console's forfeit dialog (W2b T11): the opener, a side choice
 //     (home, away or both), a reason radio, then Confirm — blocked until both
 //     are chosen — and the send carries `expected_seq` from

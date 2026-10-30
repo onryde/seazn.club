@@ -1270,9 +1270,13 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
             const read = await getRules.call(transport, fixtureId);
             const version = rulesVersionOf(read.rules_version);
             if (version === undefined || version <= (knownRulesVersionRef.current ?? -1)) return;
+            // Through the sport's own schema, as the mount's cfg is (`resolveScorePadBootstrap`): GET /rules answers the raw
+            // stored cfg, and the skins' engine records (`@seazn/engine/pad`) read a parsed one. A cfg the schema refuses is a
+            // failed read (below), parsed BEFORE the version is raised, so the next refusal asks again.
+            const cfg: unknown = sportModule.configSchema.parse(read.cfg);
             knownRulesVersionRef.current = version;
             setReloadedRules({
-              cfg: read.cfg,
+              cfg,
               rulesVersion: version,
               formatLine: typeof read.format_line === "string" && read.format_line.length > 0 ? read.format_line : null,
             });
@@ -1289,7 +1293,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       };
       return attempt(false);
     },
-    [transport, fixtureId],
+    [transport, fixtureId, sportModule],
   );
 
   // The in-flight drain, shared by every caller. NOT a boolean guard that

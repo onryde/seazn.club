@@ -10,6 +10,7 @@
 // tiebreakers.ts).
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import { CoreForfeit, forfeitOf, isStrictFold, type CoreEv, type EventEnvelope } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
@@ -31,6 +32,7 @@ import type { PositionCatalog } from "../../sport/catalog.ts";
 import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
+  FidelityBand,
   ModuleEvent,
   PadAction,
   PadGate,
@@ -608,10 +610,18 @@ export const BOARDGAME_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
   [BOARDGAME_TIEBREAK_TYPE]: BoardgameTiebreak,
 };
 
+/** One band per event type, built once (the object every `padSpec(cfg).fidelity` returns, and `boardgamePadRules.eventBands`). Band 0 is
+ *  the result alone, band 1 adds the pairing card. Board games declare nothing above band 1 today. */
+export const BOARDGAME_FIDELITY: Readonly<Record<string, FidelityBand>> = Object.freeze({
+  "boardgame.result": 0,
+  "boardgame.pairing": 1,
+  [BOARDGAME_TIEBREAK_TYPE]: 0, // W2a: the result family's band
+});
+
 // Sentinels for fields with no cfg knob to derive a bound from (spec 04 §6
 // has no move-count or board-count cap) — generous, not a rules number, only
 // a property-testing upper bound. Mirrors cricket's UNBOUNDED_BALLS_SENTINEL.
-const BOARD_MAX = 200; // team-match board-number sentinel
+export const BOARD_MAX = 200; // team-match board-number sentinel (BG-PA-1: the PAD's bound - the schema takes any positive board number)
 
 // Every decisive method needs a winner; every drawn/no-result method needs
 // none (W2e BG-RS-1: `requireMethodAgreesWithWinner` refuses a contradiction on the write path; the web pad imports
@@ -757,13 +767,8 @@ export function padSpec(cfg: BoardgameCfg): PadSpec {
   return stampAttributionRequired(
     {
       panels,
-      // Band 0 is the result alone, band 1 adds the pairing card. Board
-      // games declare nothing above band 1 today.
-      fidelity: {
-        "boardgame.result": 0,
-        "boardgame.pairing": 1,
-        [BOARDGAME_TIEBREAK_TYPE]: 0, // W2a: the result family's band
-      },
+      // One band per event type: see BOARDGAME_FIDELITY (the same object, every call - `boardgamePadRules.eventBands`).
+      fidelity: BOARDGAME_FIDELITY,
     },
     BOARDGAME_EVENT_SCHEMAS,
   );
@@ -873,7 +878,9 @@ function foldBoardgameStats(
 // W2a — the generator's tie-break draws: one uniform pick per choice (`rng` is
 // uniform in [0, 1), so the index is always in range). `null` = no score.
 const SIDES = ["home", "away"] as const;
-const TIEBREAK_SCORES = [null, "1½–½", "2–0"] as const;
+// BG-TS-1: the mini-match scores the tie-break offers (the pad's offer) AND the generator's draw list: none, the narrow win, the clean one.
+// The schema takes any CHESS_SCORE, so this is the offer, not a refusal. Reordering rewrites seeded streams (pinned in pad/small-sports.test.ts).
+export const TIEBREAK_SCORES = Object.freeze([null, "1½–½", "2–0"] as const);
 function pickFrom<T>(rng: Rng, items: readonly T[]): T {
   return items[Math.floor(rng() * items.length)] as T;
 }
@@ -951,7 +958,7 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         return applyForfeit(state, by, reason);
       }
       case "core.abandon":
-        if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") {
+        if (POST_PHASES.has(state.phase)) {
           wrongPhase("match already over");
         }
         // Rare for a board game; leave undecided and flag for regeneration.

@@ -53,8 +53,8 @@ describe("period phase order (§7)", () => {
     for (const [name, cfg] of cfgsOf(mod)) {
       const phases = playPhases(cfg);
       const labels = periodLabels(cfg);
-      // "pre" first: cards are legal before the opening whistle (kernel's
-      // suspensionAllowed), so a stamped one must be orderable.
+      // "pre" first: cards are legal before the opening whistle (the kernel's
+      // EVENT_PHASES), so a stamped one must be orderable.
       expect(phases[0], name).toBe("pre");
       // The regulation periods, in their own order, immediately after it.
       expect(phases.slice(1, 1 + labels.length), name).toEqual(labels);

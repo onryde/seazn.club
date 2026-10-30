@@ -27,7 +27,7 @@ import { resolvePad } from "../registry";
 import { createSkinDispatch } from "../skin-dispatch";
 import { SwapSheet } from "../swap-sheet";
 import { RETIREMENT_BAND, RETIREMENT_REASON, RETIREMENT_TYPE, buildRetirement, retireSlotId } from "../retirement-slot";
-import { SWAP_BAND } from "../skins/period-shared";
+import { hockeyPadRules } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { PadHostView, SkinDefV3, SwapSlot, TileSpec } from "../types";
 import { lineupsFor, periodCfg } from "./_period-fold";
@@ -386,7 +386,7 @@ describe("M12b a coach or staff member on the team sheet is never offered (revie
 
 describe("M12b the control is gated like the swap slot: the band and the play phase", () => {
   it("the band is the swap slot's own", () => {
-    expect(RETIREMENT_BAND).toBe(SWAP_BAND);
+    expect(RETIREMENT_BAND).toBe(hockeyPadRules.swapBand);
   });
 
   it("below the band: no slot and no tile; at and above it: both, for every sport", () => {
@@ -394,7 +394,7 @@ describe("M12b the control is gated like the swap slot: the band and the play ph
     for (const key of OFFERING) {
       for (const band of [0, 1, 2, 3] as const) {
         const { view } = viewOf(key, undefined, { band });
-        const offered = band >= SWAP_BAND;
+        const offered = band >= hockeyPadRules.swapBand;
         expect(retireSlots(view, key).length > 0, `${key} band ${band}: slot`).toBe(offered);
         expect(retireTiles(view, key).length > 0, `${key} band ${band}: tile`).toBe(offered);
         checked += 1;

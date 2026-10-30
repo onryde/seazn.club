@@ -1919,6 +1919,33 @@ Elsewhere the text is the controller's record.
      `18155d5ca0`, with the two `stryker-sizing` tests red (owned by the mutation session's `chore/w2e-stryker-measure`):
      the owner's explicit go over a known red. "Rebase when possible" → lane W is rebased onto main (linear), gated on an
      empty tree diff against its pre-rebase tip.
+242. **Cricket dismissals on the scoring pad: obstructing and retired** (2026-10-30, owner "all yes", engine-split pad
+     wave P2, its review fix round). (a) The house rulebook credits the named fielder for an obstruction (cricket
+     `DOMAIN.md`, Dismissals), which departs from MCC Law 37: the Law credits no fielder (37.6: nor the bowler). Kept, and
+     the pad's fielder step for an obstruction is optional; the fold takes an obstruction with no fielder named and
+     credits nobody (rules row CK-WK-2, deviation). (b) Either batter can be out obstructing the field (Law 37.1.1) or
+     retired (Law 25.4.1); the fold takes either batter for both (folded both ways, the retirement as a wicket kind and
+     as `cricket.retire`), so the pad asks who is out for both, as it does for a run out (CK-WK-3, signed). (c) The fold
+     accepts the non-striker out bowled, caught, hit the ball twice, hit wicket, lbw or stumped, which the Laws forbid
+     (each dismisses the striker). Only an API write reaches it: the pad never asks who is out for those modes. Parked to
+     owed work: a fold change with a cricket `FOLD_EPOCH` bump after the pad wave (CK-WK-4, open; engine-split owed-work
+     O-8). No fold change in the pad wave.
+243. **The set-based deuce/setting note follows the rulebook** (2026-10-30, owner "apply rec", pad wave P3.1, review I2;
+     242 is the cricket batch's). The note is the engine's `deuceNote` (`packages/engine/src/pad/setbased.ts`, read off
+     the kernel's own `setWinner`): badminton shows Setting at every tie from target−1 up to the cap, where Golden point
+     shows (BWF 7.3, 7.4); volleyball shows Deuce at every tie from 24-all, or 14-all in the deciding set (FIVB 6.1.2);
+     a `winBy: 1` cfg shows Golden point at target−1 all; table tennis is unchanged (Deuce at every tie from 10-all, the
+     PR #678 fix); the note never shows outside live play (a forfeit or abandon at a tie leaves none, review I1). An
+     accepted visible change against the pad-wave spec §3.5 ("no behaviour change"). The table-tennis expedite floor of 9
+     stays advisory and as is: the fold enforces none, and whether the current ITTF text reads "both have reached 9" or
+     "18 points scored" stays an open question (review m4). Rows signed: BD-SC-1, TT-SC-1, VB-SC-1, TT-EX-2.
+244. **The tennis pad's ends-change cue follows ITF Rule 10 and Rule 5(b)** (2026-10-30, owner "yes accept tennis 244";
+     pad wave P3.2, review I1). The cue shows after an odd number of games in a set, at the end of a set whose games total
+     is odd (a 7-6 set counts its tie-break game, and a match tie-break after an odd set opens on it), and after every
+     sixth point of a tie-break or match tie-break; never before the first point, once the match is decided, or once it
+     is retired or abandoned. It replaces the old skin's reading (lit through tie-break points 7 to 11, off at 12, off at
+     a set boundary, still lit after a mid-set retirement): an accepted visible change against the pad-wave spec's §3.5
+     "no behaviour change", with the fold unchanged (no golden or epoch moves). Rule TN-EN-1 (`packages/engine/rules/tennis.md`).
 
 ## Recommendations (mine — not rulings)
 

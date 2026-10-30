@@ -138,8 +138,8 @@
 //    both omit it, i.e. it inherits the kernel's own `false`) and FIVB has no
 //    ITTF-style Law-2.15 system at all. `EXPEDITE_TYPE` is still DECLARED (the
 //    shared 6-branch kernel union needs it registered for
-//    `padSpecConformanceSuite`'s bijection check, and `EVENT_BAND` mirrors
-//    `padSpec`'s own map entry-for-entry, matching badminton's identical
+//    `padSpecConformanceSuite`'s bijection check, and the band gate reads
+//    `padSpec`'s own map (`volleyballPadRules.eventBands`), matching badminton's identical
 //    "registered but preset-dead" posture) but no tile is ever built for it,
 //    and `refusedEventTypes` refuses it PER FIXTURE off the fold's own cfg
 //    (never hardcoded "always off") — the same defence-in-depth discipline
@@ -205,6 +205,7 @@
 "use client";
 import type { LineupPolicy, LineupRejectionReason, SquadMember, SquadState } from "@seazn/engine/core";
 import { DEFAULT_LINEUP_POLICY, memberOf, onFieldPersons } from "@seazn/engine/core";
+import { volleyballPadRules, POST_PHASES } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import { entrantKindCap } from "@seazn/engine/sport";
 import {
@@ -258,7 +259,7 @@ export const TIMEOUT_TYPE = `${SPORT}.timeout`;
 /** FIVB's own scoresheet substitution-BOX tally (`SetBasedSub`,
  *  `setbased/kernel.ts`) — `{by, off?, on?}`, a per-set count with no policy
  *  check beyond phase. NOT what the libero swap below posts (see this file's
- *  header) — kept only for `EVENT_BAND`'s bijection and `refusedEventTypes`'s
+ *  header) — kept only for the band map's bijection and `refusedEventTypes`'s
  *  per-fixture defence. */
 export const SUB_TYPE = `${SPORT}.sub`;
 export const EXPEDITE_TYPE = `${SPORT}.expedite.start`;
@@ -278,25 +279,6 @@ const SIDE_LABEL: Record<Side, MessageKey> = {
 };
 
 
-/**
- * S7/#427 — the FIVB card ladder verbatim, in the order the sheet climbs it.
- * `setbased/volleyball.ts`'s own `sanctionLevels` restated here so the
- * sheet's option order is a decision this file owns, and
- * `__tests__/volleyball.test.ts` pins the two lists equal so they cannot
- * drift apart. FOUR steps — the FIVB ladder, badminton's own shape, NOT table
- * tennis's two: `DOMAIN.volleyball.md:38` is volleyball's own vocabulary for
- * all four (and `reference_engine_domain_dossiers_miscite_laws.md`'s own
- * caution about trusting that file's LAW CITATIONS, never its factual claims
- * about who holds which card, is heeded — the four steps themselves are not
- * in question here).
- */
-export const SANCTION_LEVELS: readonly string[] = [
-  "warning",
-  "penalty",
-  "expulsion",
-  "disqualification",
-];
-
 /** Same tone posture as badminton's own ladder (`SANCTION_LEVEL_TONE`): a
  *  text ENUM, not a swatch, so `contrast.test.ts` holds it to the full
  *  4.5:1 text floor. `penalty`/`expulsion`/`disqualification` all fall
@@ -311,42 +293,25 @@ function toneFor(level: string): readonly SportTone[] {
 }
 
 /**
- * Event type -> fidelity band, MIRRORING `setBasedPadSpec`'s own `fidelity`
- * map (setbased/kernel.ts) rather than inventing a second scale — badminton's
- * and table tennis's identical `EVENT_BAND` take the same posture. The
- * chassis filters tiles by this table's engine-side twin (`filterTilesByBand`
- * reads `PadSpec.fidelity`); this copy exists so `buildTiles` can decline to
- * DRAW an out-of-band tile in the first place, an earlier and separate
- * decision from the chassis's safety filter.
+ * Event type -> fidelity band: `setBasedPadSpec`'s own `fidelity` map, read
+ * from `@seazn/engine/pad` (pad wave P3.1), never a copy. The chassis filters
+ * tiles by the same map (`filterTilesByBand` reads `PadSpec.fidelity`); this
+ * file reads it so `buildTiles` can decline to DRAW an out-of-band tile in the
+ * first place, an earlier and separate decision from the chassis's safety
+ * filter.
  *
  * `LIBERO_TYPE` (`core.lineup.replacement`) is DELIBERATELY ABSENT from this
  * map: it is not a sport-namespaced type, it carries no `padSpec.fidelity`
  * entry for ANY sport, and `filterTilesByBand`/`tileEventType` (pad-host.tsx)
- * fail OPEN for an unclassified type by design — the libero tile's own
- * band gate is enforced directly in `buildTiles`/`buildSwap` below
- * (`LIBERO_BAND`), never through this map.
+ * fail OPEN for an unclassified type by design — the libero tile's own band
+ * gate is enforced directly in `buildTiles`/`buildSwap` below
+ * (`volleyballPadRules.liberoBand`, the engine's administrative band), never
+ * through this map.
  */
-export const EVENT_BAND: Readonly<Record<string, FidelityBand>> = {
-  [SUMMARY_TYPE]: 0,
-  [TIMEOUT_TYPE]: 1,
-  [SANCTION_TYPE]: 1,
-  [SUB_TYPE]: 1,
-  [EXPEDITE_TYPE]: 1,
-  [RALLY_TYPE]: 3,
-};
-
 function withinBand(eventType: string, band: FidelityBand): boolean {
-  const need = EVENT_BAND[eventType];
+  const need = volleyballPadRules.eventBands[eventType];
   return need === undefined || need <= band;
 }
-
-/** The administrative tier the libero swap is offered at — timeouts,
- *  sanctions and the scoresheet sub tally all sit here, and the libero
- *  exchange is the same kind of non-scoring, lineup-management fact. Not
- *  read off `EVENT_BAND[SUB_TYPE]` (which WOULD equal the same number today,
- *  but coupling the two would imply `buildEvent` posts `SUB_TYPE`, which it
- *  never does — see `LIBERO_TYPE`'s own doc). */
-const LIBERO_BAND: FidelityBand = 1;
 
 // ---------------------------------------------------------------------------
 // The folded state, as this file reads it. A STRUCTURAL view of
@@ -432,8 +397,6 @@ function vocabText(field: string, value: unknown, t: TFn): string | undefined {
 // phase() — OPT-IN (G3), the identical mapping every setbased skin uses.
 // ---------------------------------------------------------------------------
 
-const POST_PHASES = new Set(["done", "final", "abandoned"]);
-
 export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   const phase = readPhase(asState(view.state));
   if (phase === "pre") return "pre";
@@ -495,25 +458,6 @@ function setNumber(state: VolleyballStateShape): number {
   const sets = state.sets ?? [];
   const open = openSet(state);
   return open === null ? sets.length + 1 : open.index + 1;
-}
-
-/** `setTarget` (kernel.ts) — the deciding set may run to `finalSetTo`. */
-function targetOf(cfg: VolleyballCfgShape, setIndex: number): number {
-  const bestOf = cfg.bestOf ?? 5;
-  const setTo = cfg.setTo ?? 25;
-  return setIndex === bestOf - 1 ? (cfg.finalSetTo ?? setTo) : setTo;
-}
-
-/** `summaryScoreBound` (kernel.ts) — the cfg-derived plausibility ceiling for
- *  the Set score sheet's two number fields. Volleyball ships `cap: null`
- *  (uncapped — FIVB win-by-2 runs indefinitely, 26-24, 30-28, …) on every
- *  shipped variant, so this reads the same margin-past-target fallback the
- *  siblings' own uncapped branch uses; a custom cfg that DOES set a cap is
- *  honoured, never assumed absent. */
-function scoreBound(cfg: VolleyballCfgShape): number {
-  const cap = cfg.cap;
-  if (typeof cap === "number") return cap;
-  return Math.max(cfg.setTo ?? 25, cfg.finalSetTo ?? 15) + 20;
 }
 
 // ---------------------------------------------------------------------------
@@ -642,16 +586,16 @@ function serveDrifted(view: PadHostView, state: VolleyballStateShape): boolean {
 // file's header); the strip carries every positional fact instead.
 // ---------------------------------------------------------------------------
 
-/** "Best of 5 · Set 2", plus the endgame FIVB actually has words for.
- *  `Deuce` is the same 2013.3-shaped clause the siblings use, one short of
- *  the game's own cfg-resolved target — derived, never hardcoded at 24, so a
- *  21-point beach set accelerates at 20-all on the SAME code path. Golden
- *  point mirrors the siblings' own capped-endgame wording for a custom cfg
- *  that sets a cap — volleyball ships uncapped on every variant, but the
- *  schema genuinely allows one, and this reads it rather than assuming it
- *  absent. */
+/** "Best of 5 · Set 2", plus the endgame FIVB actually has words for. WHEN
+ *  each note shows is the engine's `deuceNote` (pad wave P3.1, read off the
+ *  kernel's own `setWinner`, so the set's cfg-resolved target is used, never
+ *  24): `Deuce` at EVERY level score from target-1 up, since FIVB 6.1.2's
+ *  two-point lead stays in force at each later tie (24-all, 25-all, ...;
+ *  14-all in a deciding set to 15, 20-all in a 21-point beach set); `golden
+ *  point` where the next rally ends the set whoever wins it, which only a
+ *  custom capped cfg reaches. The wording is this file's. */
 function buildContext(state: VolleyballStateShape, cfg: VolleyballCfgShape, t: TFn): string {
-  const bestOf = cfg.bestOf ?? 5;
+  const bestOf = volleyballPadRules.bestOf(cfg);
   // CLAMPED to `bestOf`. `setNumber` is "closed sets plus one", which is what makes
   // "Set 2" appear the instant set 1 banks — correct while a match is
   // live, and wrong the moment it ends: every set is then closed, so a
@@ -661,14 +605,9 @@ function buildContext(state: VolleyballStateShape, cfg: VolleyballCfgShape, t: T
   // real screen a scorer reads, not a transient. Found in review of PR #678.
   const set = Math.min(setNumber(state), bestOf);
   const base = t("pad.volleyball.context.line", { bestOf, set });
-  const open = openSet(state);
-  if (open === null || open.home !== open.away) return base;
-  const cap = cfg.cap;
-  if (typeof cap === "number" && open.home === cap - 1) {
-    return `${base} · ${t("pad.volleyball.context.goldenPoint")}`;
-  }
-  const target = targetOf(cfg, setNumber(state) - 1);
-  if (open.home === target - 1) return `${base} · ${t("pad.volleyball.context.deuce")}`;
+  const note = volleyballPadRules.deuceNote(state, cfg);
+  if (note === "goldenPoint") return `${base} · ${t("pad.volleyball.context.goldenPoint")}`;
+  if (note === "setting") return `${base} · ${t("pad.volleyball.context.deuce")}`;
   return base;
 }
 
@@ -687,7 +626,7 @@ function buildHalf(
 
   // Band 3 gate: `volleyball.rally` IS a band-3 event, so below it a
   // tappable half would be a dead-end tap.
-  const tappable = resolvePhase(view) === "live" && view.band >= 3;
+  const tappable = resolvePhase(view) === "live" && withinBand(RALLY_TYPE, view.band);
   // The SERVER, as a PERSON, for the `serves` playerStats metric
   // (setbased/volleyball.ts declares one). Side-INDEPENDENT: it names who
   // served the rally that is ABOUT TO BE recorded, which is the same fact
@@ -793,7 +732,7 @@ function buildStrip(
   // `value ∈ reserve` — the check that catches a reserve which has silently
   // drifted from its own value space. Special-casing this one slot on a
   // typographic argument would have bought nothing and cost the guard.
-  const rotationReserve = ROTATION_VALUES;
+  const rotationReserve = rotationValues(view);
   if (phase === "live" && serving) {
     const value = serving.personId ? nameOf(view, serving.personId, t) : t(SIDE_LABEL[serving.side]);
     items.push({
@@ -928,18 +867,19 @@ export const SET_SCORE_TILE_ID = "setScore";
 export const SERVE_ANCHOR_TILE_ID = "serveAnchor";
 
 /** FIVB 7.6.2 — six court positions, rotated one place each time the side takes
- *  the serve back. DERIVED from the preset that actually drives the kernel
- *  (`setbased/volleyball.ts`'s `serveRotation.rotationCycle`), never a second
- *  copy of the number: a hand-typed 6 sitting beside its own source of truth is
- *  how a cycle change ships half-applied. `?? 6` only for the type's optionality
- *  — volleyball declares it. */
-const ROTATION_CYCLE = volleyballModule.serveRotation.rotationCycle ?? 6;
+ *  the serve back. The engine's `rotationCycle` (pad wave P3.1: the preset's
+ *  own `serve.rotationCycle`, the object the kernel rotates by), read for this
+ *  fixture's cfg, never a second copy of the number. */
+function rotationCycleOf(view: PadHostView): number {
+  return volleyballPadRules.rotationCycle(cfgOf(view));
+}
 
 /** Every rotation number this sport can display, 1..cycle — the `rotation`
- *  slot's whole value space, for `StripItem.reserve`. Derived from the same
- *  constant for the same reason, and matching the kernel's own
- *  `rotationNumber = (gains % cycle) + 1`. */
-const ROTATION_VALUES: string[] = Array.from({ length: ROTATION_CYCLE }, (_, i) => String(i + 1));
+ *  slot's whole value space, for `StripItem.reserve`, matching the kernel's
+ *  own `rotationNumber = (gains % cycle) + 1`. */
+function rotationValues(view: PadHostView): string[] {
+  return Array.from({ length: rotationCycleOf(view) }, (_, i) => String(i + 1));
+}
 
 /**
  * Does this side field the six positions FIVB 7.6.2 numbers?
@@ -972,7 +912,7 @@ function fieldsTheRotation(view: PadHostView, _state: VolleyballStateShape, side
   // `onFieldPersons` is the ENGINE'S own function, not a hand-rolled filter,
   // so the count cannot drift from the one being compared against.
   const squad = view.squads[side];
-  return onFieldPersons(squad).length === ROTATION_CYCLE;
+  return onFieldPersons(squad).length === rotationCycleOf(view);
 }
 
 /**
@@ -1064,7 +1004,7 @@ const PLAYER_COUNT_WORD: Readonly<Record<number, MessageKey>> = {
 export function playersToField(view: PadHostView): number {
   const implied = volleyballModule.serveRotation.rotationImpliedBy;
   const rotates = implied !== undefined && recordsFlag(view, implied);
-  return rotates ? ROTATION_CYCLE : entrantKindCap("pair");
+  return rotates ? rotationCycleOf(view) : entrantKindCap("pair");
 }
 
 /** Whether a role a `SquadMember` carries includes "libero". */
@@ -1141,7 +1081,7 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   // existing "no roster" empty state already renders honestly — not a
   // defect, the same shape a genuinely empty bench already produces
   // elsewhere on this chassis).
-  const anyLibero = live && band >= LIBERO_BAND && (liberoNamed(view.squads, "home") || liberoNamed(view.squads, "away"));
+  const anyLibero = live && band >= volleyballPadRules.liberoBand && (liberoNamed(view.squads, "home") || liberoNamed(view.squads, "away"));
   if (anyLibero) {
     for (const side of SIDES) {
       tiles.push({
@@ -1246,7 +1186,7 @@ export function refusedEventTypes(view: PadHostView): string[] {
 function setScoreSheet(view: PadHostView): GuidedSheetSpec {
   const state = asState(view.state);
   const cfg = cfgOf(view);
-  const bound = scoreBound(cfg);
+  const bound = volleyballPadRules.scoreBound(cfg);
   const open = openSet(state);
   return {
     event: SUMMARY_TYPE,
@@ -1285,7 +1225,7 @@ function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
       id: SANCTION_LEVEL_STEP_ID,
       kind: "choice",
       title: "pad.volleyball.sheet.sanction.level.title",
-      options: SANCTION_LEVELS.map((level) => ({
+      options: volleyballPadRules.sanctionLevels.map((level) => ({
         id: level,
         label: vocabKey("level", level) ?? level,
         tone: toneFor(level),
@@ -1481,7 +1421,7 @@ export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedShe
  * `exemptReplacement` kernel change (`bringOn`, `core/lineup.ts`, this file's
  * header note), NEITHER is reachable from this file's own `blocked`
  * computation any more. Both stay dedicated anyway, defensively, the same
- * reason `SANCTION_LEVELS` is restated rather than
+ * reason a card ladder is read from the engine rather than
  * assumed — the wave's own brief names both "once" AND "position lock" as
  * facts this skin owes wording for:
  *  - `reentry-limit` — FIVB 15.6's "once, and only once" cap. Before the
@@ -1741,7 +1681,7 @@ export function buildRetirementSlots(view: PadHostView, t?: TFn): SwapSlot[] {
 
 export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
   const state = asState(view.state);
-  if (resolvePhase(view) !== "live" || view.band < LIBERO_BAND) return [];
+  if (resolvePhase(view) !== "live" || view.band < volleyballPadRules.liberoBand) return [];
   const squads = view.squads;
   if (!(liberoNamed(squads, "home") || liberoNamed(squads, "away"))) return [];
   const policy = volleyballModule.lineupPolicy?.(cfgOf(view) as SetBasedCfg) ?? DEFAULT_LINEUP_POLICY;

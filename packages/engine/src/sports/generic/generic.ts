@@ -4,6 +4,7 @@
 // real module on the contract — proves PROMPT-03.
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
+import { POST_PHASES } from "../../core/phase-tokens.ts";
 import { foldMatchWithStoppage, forfeitOf, outcomeOf, type CoreEv, type EventEnvelope, type FoldContext } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
 import {
@@ -24,6 +25,7 @@ import {
 import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
+  FidelityBand,
   ModuleEvent,
   PadAction,
   PadGate,
@@ -332,8 +334,16 @@ export const GENERIC_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
 // Sentinels for fields with no cfg knob to derive a bound from (GenericCfg
 // has no score cap) — generous, not a rules number, only a property-testing
 // upper bound. Mirrors cricket's UNBOUNDED_BALLS_SENTINEL / MAX_PLAUSIBLE_RUNS.
-const MAX_PLAUSIBLE_SCORE = 500; // a final score.{p1,p2}Score
-const MAX_TALLY_STEP = 50; // a single generic.score press
+// Both are the PAD's bounds (GN-SC-1, GN-SC-2): the schema takes any non-negative final score and any non-zero press.
+export const MAX_PLAUSIBLE_SCORE = 500; // a final score.{p1,p2}Score
+export const MAX_TALLY_STEP = 50; // a single generic.score press
+
+/** One band per event type, built once (the object every `padSpec(cfg).fidelity` returns, and `genericPadRules.eventBands`). Band 0 is the
+ *  terminal card alone, band 1 adds the running tally. */
+export const GENERIC_FIDELITY: Readonly<Record<string, FidelityBand>> = Object.freeze({
+  "generic.result": 0,
+  "generic.score": 1,
+});
 
 // R7 (defect fix): `applyScore`/`applyResult` (above) accept `phase: "pre"`
 // exactly as they accept `"live"` — a scorer who never taps "Start match"
@@ -471,11 +481,8 @@ export function padSpec(cfg: GenericCfg): PadSpec {
   return stampAttributionRequired(
     {
       panels,
-      // Band 0 is the terminal card alone, band 1 adds the running tally.
-      fidelity: {
-        "generic.result": 0,
-        "generic.score": 1,
-      },
+      // One band per event type: see GENERIC_FIDELITY (the same object, every call - `genericPadRules.eventBands`).
+      fidelity: GENERIC_FIDELITY,
     },
     GENERIC_EVENT_SCHEMAS,
   );
@@ -850,7 +857,7 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   // spec 03 §6 — valid-event generator for the conformance kit.
   // Stryker disable all: W2b ruling 109 (owner-approved, MD-1) — arbitraryEvent is test-data generation, never mutated
   arbitraryEvent(state, rng: Rng): ModuleEvent<GenericEv> | null {
-    if (state.phase === "done" || state.phase === "final" || state.phase === "abandoned") return null;
+    if (POST_PHASES.has(state.phase)) return null;
     if (state.phase === "pre" && rng() < 0.3) return { type: "core.start", payload: {} };
     const roll = rng();
     if (roll < 0.08) {

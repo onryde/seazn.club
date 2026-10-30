@@ -29,6 +29,11 @@ export const HOCKEY_SUSPENSION_REASONS: readonly PeriodSuspensionReason[] = [
   "other",
 ];
 
+// W2d T18 (HK-TB-2, B3) — FIH ranks level teams on field goals (GTR App. 3), so every goal records its type: the write path
+// refuses an untyped goal with GOAL_KIND_REQUIRED. See `PeriodPreset.goalKindRequired`. Exported so the pad's record
+// (`@seazn/engine/pad`'s `hockeyPadRules.goalKindRequired`) reads the preset's own flag.
+export const HOCKEY_GOAL_KIND_REQUIRED = true;
+
 const positions: PositionCatalog = {
   groups: [
     { key: "GK", name: "Goalkeeper", min: 1, max: 1 },
@@ -264,7 +269,5 @@ export const hockey = makePeriodModule({
   // rows). See `PeriodPreset.shotTracking`'s own comment for why this is a
   // preset flag and not a cfg knob.
   shotTracking: true,
-  // W2d T18 (HK-TB-2, B3) — FIH ranks level teams on field goals (GTR App. 3), so every goal records its type: the write
-  // path refuses an untyped goal with GOAL_KIND_REQUIRED. See `PeriodPreset.goalKindRequired`.
-  goalKindRequired: true,
+  goalKindRequired: HOCKEY_GOAL_KIND_REQUIRED,
 });
