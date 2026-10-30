@@ -135,7 +135,7 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     // Engine split 2b (I): the engine's devDependencies are read from its installed (published) manifest.
     const engine = JSON.parse(read("packages/reference/node_modules/@seazn/engine/package.json")) as Manifest;
     expect(ref.dependencies?.["@seazn/engine"]).toBeUndefined();
-    expect(ref.devDependencies?.["@seazn/engine"]).toBe("workspace:@onryde/seazn-engine@*");
+    expect(ref.devDependencies?.["@seazn/engine"]).toBe("npm:@onryde/seazn-engine@^1.0.0"); // engine split 2b (A1): the registry alias
     let shared = 0;
     for (const [name, range] of Object.entries(ref.devDependencies ?? {})) {
       const theirs = engine.devDependencies?.[name];

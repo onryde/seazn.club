@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const SCOPED = "@onryde/seazn-engine";
 const ALIAS = "@seazn/engine";
-const SPEC = `workspace:${SCOPED}@*`;
+const SPEC = `npm:${SCOPED}@^1.0.0`; // engine split 2b (A1): the registry alias, as scripts/__tests__/registry-install.test.ts pins
 const FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] as const;
 const ENGINE_MANIFEST = "packages/engine/package.json";
 /** Engine split 2b (reverse inventory row 14, I): the engine is the installed package, linked under its alias. */

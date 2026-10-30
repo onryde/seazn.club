@@ -345,16 +345,16 @@ function rootManifest(): {
 }
 
 describe("toolchain: pnpm workspace", () => {
-  it("declares the workspace and uses the workspace protocol", () => {
+  it("declares the workspace and uses the registry alias", () => {
     const ws = readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8");
     expect(ws).toContain("apps/*");
     expect(ws).toContain("packages/*");
     const web = JSON.parse(
       readFileSync(join(REPO_ROOT, "apps/web/package.json"), "utf8"),
     ) as { dependencies: Record<string, string> };
-    // `"*"` makes pnpm hit the registry for a private package and fail with
-    // "No authorization header" — it must be the workspace protocol.
-    expect(web.dependencies["@seazn/engine"]).toBe("workspace:@onryde/seazn-engine@*");
+    // Engine split 2b (A1): the engine is the registry package @onryde/seazn-engine from GitHub Packages, consumed under the
+    // @seazn/engine alias (scripts/__tests__/registry-install.test.ts pins every consumer).
+    expect(web.dependencies["@seazn/engine"]).toBe("npm:@onryde/seazn-engine@^1.0.0");
   });
 
   /**
