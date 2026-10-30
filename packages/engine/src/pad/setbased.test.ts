@@ -77,7 +77,7 @@ function setsBefore(module: SetBasedModule, cfg: SetBasedCfg, index: number): Mo
 }
 
 describe("the declarations each record is (toBe)", () => {
-  it("BD-SN-1 VB-SN-1 sanctionLevels is the sport file's own exported ladder, and the very array padSpec offers, for every declared cfg", () => {
+  it("BD-SN-1 TT-SN-1 VB-SN-1 sanctionLevels is the sport file's own exported ladder, and the very array padSpec offers, for every declared cfg", () => {
     let checked = 0;
     for (const c of CASES) {
       expect(c.rules.sanctionLevels, c.key).toBe(c.sanctionLevels);

@@ -251,7 +251,7 @@ describe("setbased padSpec — the sanction ladder is subset per sport (S7/#427)
     expect(sanctionLevels(tabletennis)).not.toContain("disqualification");
   });
 
-  it("BD-SN-1 VB-SN-1 table tennis offers exactly the two ITTF cards; badminton and volleyball keep the full ladder", () => {
+  it("BD-SN-1 TT-SN-1 VB-SN-1 table tennis offers exactly the two ITTF cards; badminton and volleyball keep the full ladder", () => {
     expect([...sanctionLevels(tabletennis)]).toEqual(["warning", "penalty"]);
     expect([...sanctionLevels(badminton)]).toEqual([...SetBasedSanctionLevel.options]);
     expect([...sanctionLevels(volleyball)]).toEqual([...SetBasedSanctionLevel.options]);
