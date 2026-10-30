@@ -340,10 +340,10 @@ export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
   return "live";
 }
 
-/** The five phase tokens this skin words itself. Everything else is either in
- *  the shared `matchPhase.*` vocabulary (FT/HT/QT/3QT/ET_*) or a scoreboard
- *  token a scorer already reads verbatim — Q3, P2, OT, OT2. */
-const OWN_PHASE_TOKENS: ReadonlySet<string> = new Set(["pre", SHOOTOUT_PHASE, "done", "final", "abandoned"]);
+/** The phase tokens this skin words itself: `pre`, the shoot-out, and every match-over phase (the engine's `POST_PHASES`, so a
+ *  post phase added there is worded here, not left to fall through as a raw token). Everything else is either in the shared
+ *  `matchPhase.*` vocabulary (FT/HT/QT/3QT/ET_*) or a scoreboard token a scorer already reads verbatim — Q3, P2, OT, OT2. */
+const OWN_PHASE_TOKENS: ReadonlySet<string> = new Set(["pre", SHOOTOUT_PHASE, ...POST_PHASES]);
 
 function vocabKey(field: string, value: string): MessageKey | null {
   for (const map of ENUM_VOCAB[field] ?? []) {

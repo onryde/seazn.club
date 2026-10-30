@@ -1,11 +1,13 @@
 // tennis: the setScore tile authors the set summary that the matrix generator
-// emits (streams/tennis.ts). The references into tennis.tsx:
-//  - :702-709 offers the tile (id "setScore", not exported) while no set is
-//    in progress;
-//  - :857-891 is setScoreSheet: games home, games away, then two tie-break
-//    steps asked only `when: tbShape` (:863-867, :878, :887), i.e. only for a
-//    set that ends tiebreakAt+1 to tiebreakAt (isTbShape, :851-855);
-//  - :1055 registers the sheet under "setScore".
+// emits (streams/tennis.ts). The references into tennis.tsx, by symbol (line
+// numbers go stale on every skin edit):
+//  - `buildTiles` offers the tile (id "setScore", not exported) while no set
+//    is in progress;
+//  - `setScoreSheet` is its sheet: games home, games away, then two tie-break
+//    steps asked only `when: tbShape` (the engine's
+//    `tennisPadRules.setScoreTakesTiebreak`), i.e. only for a set that ends
+//    tiebreakAt+1 to tiebreakAt;
+//  - `buildSheets` registers the sheet under "setScore".
 // Step 0 (2026-09-30, 320, the builder default `tour`) saw a 6-3 set ask
 // exactly two numbers, home first ("Games — Home"), and write one
 // `tennis.set_summary {home, away}` row at once, with no hold and no `tb` key.
@@ -22,9 +24,9 @@
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
-/** tennis.tsx:704 (text-pinned in pad-adapters.test.ts). */
+/** tennis.tsx `buildTiles`' setScore tile id (text-pinned in pad-adapters.test.ts). */
 export const TENNIS_SET_SCORE_TILE = "setScore";
-/** tennis.tsx:106 SET_SUMMARY_TYPE, an event the engine's tennis module declares (pinned). */
+/** tennis.tsx SET_SUMMARY_TYPE, an event the engine's tennis module declares (pinned). */
 export const TENNIS_SUMMARY = "tennis.set_summary";
 
 /** The fields of the cfg the sheet's rules read (tennis.tsx TennisCfgShape); every one optional, as the skin reads it. */

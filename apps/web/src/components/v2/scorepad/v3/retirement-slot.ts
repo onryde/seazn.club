@@ -11,6 +11,7 @@
 // know is passed in -- whether play is on (each sport's own phase vocabulary), the entrant, and WHO IS ON THE FIELD (football
 // keeps its own live `onPitch`; `view.squads` is its frozen kickoff sheet, the staleness `SwapSlot.offCandidates` documents).
 import { onFieldPersons } from "@seazn/engine/core";
+import { hockeyPadRules } from "@seazn/engine/pad";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { CandidateMeta, PadHostView, SwapSlot, TileSpec } from "./types";
 
@@ -27,11 +28,11 @@ export const RETIREMENT_REASON = "injured";
 
 /**
  * The band at which the control appears -- the swap slot's own. `core.lineup.retirement` is a core event with no
- * `padSpec.fidelity` entry, so this is a pad policy, not an engine one: who is on the field is exactly the detail band 2
- * buys (the period skins' swap band, `@seazn/engine/pad`'s `hockeyPadRules.swapBand`, which this must equal -- pinned equal
- * in `__tests__/w2e-retirement.test.ts`).
+ * `padSpec.fidelity` entry, so this is a pad policy, not an engine one: who is on the field is exactly the detail band the
+ * period sports' swap buys, which the engine declares (`@seazn/engine/pad`'s `hockeyPadRules.swapBand`) and this READS.
+ * `__tests__/w2e-retirement.test.ts` holds it equal to the band the engine gives a substitution event (`football.sub`).
  */
-export const RETIREMENT_BAND: FidelityBand = 2;
+export const RETIREMENT_BAND: FidelityBand = hockeyPadRules.swapBand;
 
 /** The slot id, and the tile's `{swap: id}`. One per side. */
 export function retireSlotId(side: Side): string {

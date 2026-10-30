@@ -3,11 +3,11 @@
 // the wicket sheet's `when`-skip logic is proved by driving the REAL
 // guided-sheet.tsx step machine against this file's own `buildSheets`
 // output, not a re-implemented stand-in.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
-import { cricket } from "@seazn/engine/sports/cricket";
-import { cricketPadRules } from "@seazn/engine/pad";
+import { cricket, type CricketState } from "@seazn/engine/sports/cricket";
+import { cricketPadRules, POST_PHASES } from "@seazn/engine/pad";
 import { ballSeq, cricketEnvelopes, foldCricket, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import { answerStep, backStep, currentStep, initialSheetState } from "../../guided-sheet";
 import { assertDisabledTilesExplained } from "../../tile-grid";
@@ -823,6 +823,33 @@ describe("resolvePhase", () => {
     expect(resolvePhase({ state: { phase: "super_over" } })).toBe("live");
     expect(resolvePhase({ state: { phase: "done" } })).toBe("post");
     expect(resolvePhase({ state: { phase: "final" } })).toBe("post");
+  });
+
+  // The assumption behind `resolvePhase` reading POST_PHASES (pad wave close): the shared set is {done, final, abandoned}, the skin
+  // used to test `done || final`, and the two agree ONLY while cricket's phase union has no `abandoned`. The union is the engine's
+  // own declaration: `forfeitPhase` reads `CRICKET_FORFEIT_PHASE`, a Record keyed by every phase the union holds (closed, so a
+  // phase added later cannot go unclassified); a phase it does not hold answers undefined.
+  it("X-PH-1: cricket's phase union has no `abandoned` (an abandon decides: done), so POST_PHASES reads as done || final", () => {
+    const declaredBy = (phase: string): string | undefined => (cricket.forfeitPhase({ phase } as unknown as CricketState) as string | undefined);
+    // Compile-time half: `abandoned` is not assignable to the union (tsc fails here if cricket ever gains it).
+    expectTypeOf<"abandoned" extends CricketState["phase"] ? true : false>().toEqualTypeOf<false>();
+    expect(POST_PHASES.has("abandoned"), "premise: the shared set names abandoned").toBe(true);
+    expect(declaredBy("abandoned"), "cricket's union holds `abandoned`").toBeUndefined();
+    // Every phase the engine DOES declare for cricket: the live ones (their classification is not "over") plus every token of the
+    // shared set. The skin is post exactly where the engine classifies the phase "over".
+    let declared = 0;
+    let post = 0;
+    for (const phase of new Set(["pre", "live", "super_over", ...POST_PHASES])) {
+      const klass = declaredBy(phase);
+      if (klass === undefined) continue;
+      declared++;
+      const isPost = resolvePhase({ state: { phase } }) === "post";
+      expect(isPost, `${phase}: the skin's PadPhase is post iff the engine classifies the phase "over" (${klass})`).toBe(klass === "over");
+      if (isPost) post++;
+    }
+    // Anti-vacuity: five declared phases (pre, live, super_over, done, final), two of them match-over.
+    expect(declared, "phases cricket declares").toBe(5);
+    expect(post, "of which match-over").toBe(2);
   });
 });
 
