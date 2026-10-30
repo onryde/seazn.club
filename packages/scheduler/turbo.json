@@ -3,12 +3,11 @@
   "extends": ["//"],
   "tasks": {
     // The lint is type-aware (recommendedTypeChecked) over the engine's types, imported as `@seazn/engine` (the alias key; the
-    // package's name is @onryde/seazn-engine; the solver port, the clock), so its cache key must hold the engine's sources
-    // as typecheck's does: `^build` puts @onryde/seazn-engine#build (whose inputs are the engine's files, read as src by
-    // workspace consumers) in the hash.
-    // Without it an engine type change could restore a stale green lint from the remote cache (the same review M-4
-    // that packages/reference/turbo.json answers). Pinned by tools/matrix/__tests__/workspace-wiring.test.ts, which spawns
-    // turbo's dry-run graph for this package as it does for @seazn/reference.
+    // package's name is @onryde/seazn-engine; the solver port, the clock), so its cache key must move with the engine as
+    // typecheck's does (the same review M-4 that packages/reference/turbo.json answers). Since engine split 2b the engine is
+    // a registry package, not a workspace one, so there is no @onryde/seazn-engine#build task for `^build` to reach: turbo
+    // keys the engine through this package's external-dependency hash, i.e. the version pnpm-lock.yaml resolves. `^build`
+    // stays for any workspace dependency this package gains.
     "lint": {
       "dependsOn": ["^build"]
     }

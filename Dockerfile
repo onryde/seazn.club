@@ -12,7 +12,6 @@ WORKDIR /app
 # designed path, so nothing surfaces an error..
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/
-COPY packages/engine/package.json packages/engine/
 COPY packages/reference/package.json packages/reference/
 COPY packages/scheduler/package.json packages/scheduler/
 # node 26 dropped corepack, so pnpm is installed explicitly rather than activated.
@@ -20,8 +19,19 @@ RUN npm i -g pnpm@10.34.5
 # BuildKit cache mount over pnpm's content-addressed store: it persists on the
 # Fly builder disk between deploys, so a lockfile change re-fetches only what
 # actually changed.
+#
+# @seazn/engine comes from GitHub Packages (engine split 2b), which needs a
+# read:packages credential. It arrives ONLY as a BuildKit secret mounted at the
+# user-level npmrc for this one RUN: never an ARG or ENV (both land in the image
+# history) and never a COPY (a layer). ci.yml passes it with
+# `docker build --secret id=npmrc,src=...`, stg.yml/prod.yml through
+# build-push-action's `secrets:` input. The mount is read-only, so nothing in
+# this RUN writes user config: the store dir is a flag, not `pnpm config set`.
+# The lock records the engine's full tarball URL, so the credential line is all
+# the install needs. Pinned by scripts/__tests__/registry-install.test.ts.
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile
+    --mount=type=secret,id=npmrc,target=/root/.npmrc \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store
 
 COPY . .
 

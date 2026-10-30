@@ -22,7 +22,7 @@
     "@cloudflare/realtimekit": "2.0.2",
     "@formatjs/intl-localematcher": "^0.8.12",
     "@scalar/api-reference-react": "^0.9.54",
-    "@seazn/engine": "workspace:@onryde/seazn-engine@*",
+    "@seazn/engine": "npm:@onryde/seazn-engine@^1.0.0",
     "@seazn/scheduler": "workspace:*",
     "@sentry/nextjs": "^10.62.0",
     "@stripe/react-stripe-js": "^6.7.0",

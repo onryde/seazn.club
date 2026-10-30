@@ -35,6 +35,11 @@ jobs:
   deploy-stg:
     name: Deploy (stg)
     runs-on: ubuntu-latest
+    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine (consumed as
+    # @seazn/engine) from GitHub Packages inside the image build below.
+    permissions:
+      contents: read
+      packages: read
     concurrency:
       group: deploy-stg
       # Staging is latest-wins: stacked merges to main supersede the deploy in
@@ -172,6 +177,12 @@ jobs:
           build-args: |
             ${{ steps.flycfg.outputs.args }}
             SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
+          # The registry credential for the image's install RUN, as a BuildKit
+          # secret that the Dockerfile mounts at /root/.npmrc for that one RUN:
+          # never build-args (they land in the image history). The same one line
+          # ci.yml's container job writes for `docker build --secret`.
+          secrets: |
+            npmrc=//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}
 
       # --image, so no builder is involved at all: fly pulls the digest above.
       - name: Deploy the pushed image

@@ -83,8 +83,13 @@ const TOKENS: ReadonlyMap<string, string> = new Map([["Date", "now"], ["Math", "
 /** The global object's names in node: `globalThis.performance` is `performance`. */
 const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(["globalThis", "global"]);
 
-/** The engine's real directory; a missing one is refused, never read as "nothing is the engine". */
-export function engineDir(p: string = fileURLToPath(new URL("../packages/engine", import.meta.url))): string {
+/**
+ * The engine's real directory; a missing one is refused, never read as "nothing is the engine". Since engine split 2b the
+ * engine is the registry package @onryde/seazn-engine, linked under the alias key: the default is the copy the REFERENCE
+ * package resolves (its own `node_modules/@seazn/engine`), realpathed into pnpm's store, since that is the code the oracle
+ * would load.
+ */
+export function engineDir(p: string = fileURLToPath(new URL("../packages/reference/node_modules/@seazn/engine", import.meta.url))): string {
   if (!existsSync(p)) throw new Error(`reference:boundary: ${p} does not exist — the gate cannot tell a path into the engine from one out of it`);
   return realpathSync(p);
 }

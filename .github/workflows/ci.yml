@@ -710,15 +710,32 @@ jobs:
   container:
     name: docker build + TS 7 musl exec
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine (consumed as
+    # @seazn/engine) from GitHub Packages inside the image's install RUN.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v5
+
+      # The Dockerfile's install RUN mounts this file as a BuildKit secret at
+      # /root/.npmrc, so the registry credential never reaches an ARG, an ENV or
+      # a layer. Owner-only (umask 077), written by the printf builtin, never
+      # echoed. The same one line stg.yml/prod.yml pass through build-push-action's
+      # `secrets:` input, so this job proves the deploy builds' install path.
+      - name: Write the registry npmrc for the BuildKit secret
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          umask 077
+          printf '//npm.pkg.github.com/:_authToken=%s\n' "$NODE_AUTH_TOKEN" > "$RUNNER_TEMP/npmrc"
 
       # The builder stage installs devDeps, so the 20 platform-conditional
       # TypeScript 7 binaries land in that layer. None of them declare a `libc`
       # field, so npm cannot filter musl from glibc: alpine gets the linux
       # binary whether or not it can execute there.
       - name: Build the builder stage
-        run: docker build --target builder -t seazn-builder:ci .
+        run: docker build --secret id=npmrc,src="$RUNNER_TEMP/npmrc" --target builder -t seazn-builder:ci .
 
       # The whole point. `docker build` runs the app build with SKIP_TYPECHECK=1
       # and never invokes tsc, so a musl-incompatible Go binary builds perfectly
@@ -742,7 +759,7 @@ jobs:
         run: docker images seazn-builder:ci --format '{{.Size}}'
 
       - name: Build the full image, including the runner stage
-        run: docker build -t seazn:ci .
+        run: docker build --secret id=npmrc,src="$RUNNER_TEMP/npmrc" -t seazn:ci .
 
   # -------------------------------------------------------------------------
   # The original single "smoke" job ran its DB/Redis vitest suites AND the

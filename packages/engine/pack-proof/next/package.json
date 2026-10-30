@@ -1,8 +1,0 @@
-{
-  "name": "pack-proof-next",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build": "next build"
-  }
-}
