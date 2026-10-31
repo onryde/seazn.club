@@ -2,7 +2,12 @@
 // a table-tennis "table", a badminton "court", a chess "board". Labels,
 // placeholders and default names in the scheduling UI use the right word.
 
-const VENUE_BY_SPORT: Record<string, string> = {
+/** Every playing-area noun `venueNoun` can answer: a closed set, so a caller can key copy on it (Match Day's
+ *  `matchDay.noun.<noun>`) and a new noun is a compile error at every exhaustive reader rather than a missing string. */
+export const VENUE_NOUNS = ["court", "pitch", "table", "board", "rink"] as const;
+export type VenueNoun = (typeof VENUE_NOUNS)[number];
+
+const VENUE_BY_SPORT: Record<string, VenueNoun> = {
   football: "pitch",
   soccer: "pitch",
   cricket: "pitch",
@@ -27,7 +32,7 @@ const VENUE_BY_SPORT: Record<string, string> = {
 };
 
 /** Singular playing-area noun for a sport (lowercase). Defaults to "court". */
-export function venueNoun(sportKey?: string | null): string {
+export function venueNoun(sportKey?: string | null): VenueNoun {
   return VENUE_BY_SPORT[(sportKey ?? "").toLowerCase()] ?? "court";
 }
 

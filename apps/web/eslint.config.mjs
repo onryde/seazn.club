@@ -139,7 +139,9 @@ const eslintConfig = defineConfig([
     // is used (not the typescript-eslint variant) because the tools-import guard below spreads
     // `@typescript-eslint/no-restricted-imports` over every file, and in flat config a later block's value for the same rule
     // REPLACES an earlier one's.
-    files: ["src/lib/round-column.ts", "src/lib/invite-status.ts"],
+    // Match Day's `lib/match-day/*.ts` (its wire types, refusal codes and the pure estimate) are read by its client shell on
+    // the same terms.
+    files: ["src/lib/round-column.ts", "src/lib/invite-status.ts", "src/lib/match-day/*.ts"],
     rules: {
       "no-restricted-imports": [
         "error",

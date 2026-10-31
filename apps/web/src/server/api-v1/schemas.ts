@@ -1632,6 +1632,68 @@ export const FixtureCallPreview = z.object({
   ),
 });
 
+/** Match Day's read model (spec 2026-10-31 §6.2, §7, §7.1, task A2). The shapes are lib/match-day/types.ts's; the route test
+ *  parses each real answer with these. A match as Match Day shows it. */
+export const MatchDayFixture = z.object({
+  id: Uuid,
+  division_id: Uuid,
+  division_name: z.string(),
+  sport_key: z.string(),
+  stage_label: z.string(),
+  home: z.string().nullable(),
+  away: z.string().nullable(),
+  headline: z.string().nullable(),
+  started_at: z.iso.datetime({ offset: true }).nullable(),
+  called_at: z.iso.datetime({ offset: true }).nullable(),
+  stream: z.enum(["live", "waiting"]).nullable(),
+});
+
+export const MatchDayCourt = z.object({
+  court_id: Uuid,
+  court_name: z.string(),
+  venue_name: z.string(),
+  // lib/venue.ts's VENUE_NOUNS (the route test pins the two equal; this module may not import @/).
+  sport_noun: z.enum(["court", "pitch", "table", "board", "rink"]),
+  state: z.enum(["playing", "called", "free", "in_use_elsewhere"]),
+  current: MatchDayFixture.nullable(),
+  in_use_by: z.string().nullable(),
+  free_since: z.iso.datetime({ offset: true }).nullable(),
+  queue: z.array(
+    MatchDayFixture.extend({ planned_at: z.iso.datetime({ offset: true }), estimated_at: z.iso.datetime({ offset: true }) }),
+  ),
+});
+
+export const MatchDayView = z.object({
+  competition_id: Uuid,
+  date: z.iso.date(),
+  tz: z.string(),
+  now: z.iso.datetime({ offset: true }),
+  courts: z.array(MatchDayCourt),
+  needs_you: z.array(
+    z.object({
+      key: z.string(),
+      severity: z.enum(["red", "amber", "slate"]),
+      kind: z.string(),
+      title: z.string(),
+      sub: z.string(),
+      action: z.object({ label: z.string(), href: z.string() }),
+    }),
+  ),
+  results_owed: z.number().int().nonnegative(),
+  fixtures_today: z.number().int().nonnegative(),
+});
+
+export const MatchDayCandidate = z.object({
+  fixture: MatchDayFixture,
+  source: z.enum(["this_court", "other_court", "no_court"]),
+  from_court_name: z.string().nullable(),
+  waiting_minutes: z.number().int().nonnegative(),
+  behind_minutes: z.number().int().nonnegative(),
+  blocked: z
+    .object({ kind: z.literal("player_busy"), person_name: z.string(), court_name: z.string().nullable() })
+    .nullable(),
+});
+
 /** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3; D16, §5.6.4) — the request names ONE PLAYER's meeting by the
  *  ENTRANT side (a board has a meeting per player, and nothing reads a meeting by colour, which a pairing card can swap).
  *  Strict: a missing side, another value or an extra key is a 400. */

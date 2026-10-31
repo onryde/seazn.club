@@ -84,6 +84,9 @@ const RULES: RouteRule[] = [
   // W3 Task 6 — the in-play band's poll. Report-only, same scope as the
   // competition GET it's a sibling of.
   { method: "GET", path: "/competitions/:id/desk", scope: "read", pin: "competition" },
+  // Match Day (spec 2026-10-31, task A2): the court board and a free court's candidates. Reads only, the desk's terms.
+  { method: "GET", path: "/competitions/:id/match-day", scope: "read", pin: "competition" },
+  { method: "GET", path: "/competitions/:id/match-day/candidates", scope: "read", pin: "competition" },
   { method: "GET", path: "/competitions/:id/exports/timetable", scope: "read", pin: "competition" },
   { method: "GET", path: "/competitions/:id/exports/tickets", scope: "read", pin: "competition" },
   // RS005 W1b — competition-wide Registrants tab, the cross-division twin of

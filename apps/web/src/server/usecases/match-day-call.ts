@@ -28,6 +28,7 @@ import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { appendDivisionEvent } from "@/server/engine-db";
+import { estimateQueue } from "@/lib/match-day/estimate";
 import {
   CALL_REFUSAL,
   TBD_ENTRANT,
@@ -51,8 +52,9 @@ import {
 type Tx = postgres.TransactionSql;
 
 const MS_PER_MIN = 60_000;
-/** The one status a match is playing in. A single literal: the in-play half of each busy question below. */
-const IN_PLAY = "in_play";
+/** The one status a match is playing in. A single literal: the in-play half of each busy question below (and of Match Day's
+ *  read model, match-day.ts). */
+export const IN_PLAY = "in_play";
 const iso = (t: number): string => new Date(t).toISOString();
 
 interface CallTarget {
@@ -146,8 +148,19 @@ async function recordScheduleEdit(
   await tx`update divisions set seq = ${seq} where id = ${f.division_id}`;
 }
 
-/** The target court, which must be this org's (RLS) and not archived. */
-async function targetCourt(tx: Tx, courtId: string): Promise<{ id: string; venue_id: string }> {
+/** Match Day's "today": the day `now` falls on in `tz`, as the instants [from, to). One authority for the call preview's queue
+ *  and the read model's (match-day.ts), so the two never disagree about which matches are today's. */
+export function todayIn(tz: string, now: Date): { day: string; from: Date; to: Date } {
+  const day = dayKeyInTz(now.getTime(), tz);
+  return {
+    day,
+    from: new Date(zonedTimeToUtc(day, "00:00", tz)),
+    to: new Date(zonedTimeToUtc(ymdAddDays(day, 1), "00:00", tz)),
+  };
+}
+
+/** The target court, which must be this org's (RLS) and not archived: a court a match can be called onto. */
+export async function targetCourt(tx: Tx, courtId: string): Promise<{ id: string; venue_id: string }> {
   const [court] = await tx<{ id: string; venue_id: string }[]>`
     select id, venue_id from courts where id = ${courtId} and archived_at is null`;
   if (!court) throw new HttpError(404, "court not found");
@@ -191,86 +204,114 @@ async function assertCallable(tx: Tx, f: CallTarget, courtId: string, courtNames
     });
   }
 
-  await assertPeopleFree(tx, f, courtNames);
-  await assertEntrantsFree(tx, f, courtNames);
+  const holder = (await whoIsBusy(tx, [f])).get(f.id);
+  if (holder !== undefined) {
+    const busyCourtName = holder.court_id !== null ? (courtNames.get(holder.court_id) ?? null) : null;
+    refuse(CALL_REFUSAL.PLAYER_BUSY, `${holder.name} is on ${busyCourtName ?? "another court"}`, {
+      person_name: holder.name,
+      court_name: busyCourtName,
+    });
+  }
 }
 
-/** PLAYER_BUSY, person by person: a doubles partner on another court is a person of THIS match even when the match they are in
- *  shares no entrant with it. Sees only rostered sides (`entrant_members`); `assertEntrantsFree` covers the rest. */
-async function assertPeopleFree(tx: Tx, f: CallTarget, courtNames: ReadonlyMap<string, string>): Promise<void> {
-  const people = await peopleByEntrant(
-    tx,
-    [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null),
-  );
-  const mine = peopleOf(f, people);
-  if (mine.length === 0) return;
-  const theirs = await tx<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null; court_id: string | null }[]>`
-    with entrants_of_mine as (
-      select distinct entrant_id from entrant_members where person_id in ${tx(mine)}
-    )
+/** A match that holds its people, and its sides, right now: playing (`in_play`), or called with the call still holding
+ *  (`liveCallSql`), anywhere in the org (RLS). rank 0 = playing, 1 = called; a called match holds its call's court. In the
+ *  order the busy questions name them: playing before called, then by id. */
+interface HeldMatch {
+  id: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  court_id: string | null;
+  rank: number;
+}
+
+async function heldMatches(tx: Tx): Promise<HeldMatch[]> {
+  return tx<HeldMatch[]>`
     select g.id, g.home_entrant_id, g.away_entrant_id, g.court_id, 0 as rank
       from fixtures g
-     where g.status = ${IN_PLAY} and g.id <> ${f.id}
-       and (g.home_entrant_id in (select entrant_id from entrants_of_mine)
-            or g.away_entrant_id in (select entrant_id from entrants_of_mine))
+     where g.status = ${IN_PLAY}
     union all
     select g.id, g.home_entrant_id, g.away_entrant_id, fc.court_id, 1 as rank
       from fixture_calls fc join fixtures g on g.id = fc.fixture_id
-     where ${liveCallSql(tx)} and g.id <> ${f.id}
-       and (g.home_entrant_id in (select entrant_id from entrants_of_mine)
-            or g.away_entrant_id in (select entrant_id from entrants_of_mine))
+     where ${liveCallSql(tx)}
      order by rank, id`;
-  if (theirs.length === 0) return;
-  const theirPeople = await peopleByEntrant(tx, [
-    ...new Set(theirs.flatMap((g) => [g.home_entrant_id, g.away_entrant_id]).filter((e): e is string => e !== null)),
-  ]);
-  // Where each busy person is: the first of their matches in the order above (playing before called).
-  const courtOf = new Map<string, string | null>();
-  for (const personId of mine) {
-    const busyIn = theirs.find((g) => peopleOf(g, theirPeople).includes(personId));
-    if (busyIn !== undefined) courtOf.set(personId, busyIn.court_id);
-  }
-  if (courtOf.size === 0) return;
-  // One person is named; by name, so the answer never depends on the order the roster rows come back in.
-  const [p] = await tx<{ id: string; full_name: string }[]>`
-    select id, full_name from persons where id in ${tx([...courtOf.keys()])} order by full_name, id limit 1`;
-  if (!p) throw new Error("match-day call: a busy person has no persons row");
-  const busyCourt = courtOf.get(p.id) ?? null;
-  const busyCourtName = busyCourt !== null ? (courtNames.get(busyCourt) ?? null) : null;
-  refuse(CALL_REFUSAL.PLAYER_BUSY, `${p.full_name} is on ${busyCourtName ?? "another court"}`, {
-    person_name: p.full_name,
-    court_name: busyCourtName,
-  });
 }
 
-/** PLAYER_BUSY, entrant by entrant: a side of this match that is itself in a match playing, or called, elsewhere. In ADDITION to
- *  the person check, for the side that check cannot see: a roster is optional (a name-only team or player has no members), and
- *  such a side is still one set of people who cannot be on two courts. Named by the entrant's own name. */
-async function assertEntrantsFree(tx: Tx, f: CallTarget, courtNames: ReadonlyMap<string, string>): Promise<void> {
-  const sides = [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null);
-  if (sides.length === 0) return;
-  const [busy] = await tx<{ entrant_name: string; court_id: string | null }[]>`
-    select e.display_name as entrant_name, b.court_id
-      from (
-        select g.home_entrant_id, g.away_entrant_id, g.court_id, 0 as rank
-          from fixtures g
-         where g.status = ${IN_PLAY} and g.id <> ${f.id}
-           and (g.home_entrant_id in ${tx(sides)} or g.away_entrant_id in ${tx(sides)})
-        union all
-        select g.home_entrant_id, g.away_entrant_id, fc.court_id, 1 as rank
-          from fixture_calls fc join fixtures g on g.id = fc.fixture_id
-         where ${liveCallSql(tx)} and g.id <> ${f.id}
-           and (g.home_entrant_id in ${tx(sides)} or g.away_entrant_id in ${tx(sides)})
-      ) b
-      join entrants e on e.id in (b.home_entrant_id, b.away_entrant_id) and e.id in ${tx(sides)}
-     order by b.rank, e.display_name, e.id
-     limit 1`;
-  if (!busy) return;
-  const busyCourtName = busy.court_id !== null ? (courtNames.get(busy.court_id) ?? null) : null;
-  refuse(CALL_REFUSAL.PLAYER_BUSY, `${busy.entrant_name} is on ${busyCourtName ?? "another court"}`, {
-    person_name: busy.entrant_name,
-    court_name: busyCourtName,
-  });
+/** Who keeps a match off a court: the name PLAYER_BUSY gives, and the court the busy match holds (null when it has none). */
+export interface BusyHolder {
+  name: string;
+  court_id: string | null;
+}
+
+const sidesOf = (f: { home_entrant_id: string | null; away_entrant_id: string | null }): string[] =>
+  [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null);
+
+/**
+ * PLAYER_BUSY's ONE judge (§7.2), for one match (a call, its preview) or many (Match Day's candidates): for each match, who
+ * is in a match playing, or called, elsewhere — never the match itself. Two arms, the person arm first:
+ *  - by PERSON, through the scheduler's own `peopleByEntrant` + `peopleOf`: a doubles partner on another court is a person of
+ *    this match even when the two matches share no entrant. Several busy: the first by `full_name` (in the database's own
+ *    order, so the answer never depends on the order roster rows come back in), on the first of their matches in held order;
+ *  - by ENTRANT, for the side the person arm cannot see: a roster is optional (a name-only team or player has no members), and
+ *    such a side is still one set of people who cannot be on two courts. Named by the entrant's own name; playing before
+ *    called, then by name.
+ * Matches nothing holds are absent from the answer.
+ */
+export async function whoIsBusy(
+  tx: Tx,
+  fixtures: readonly { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[],
+): Promise<Map<string, BusyHolder>> {
+  const out = new Map<string, BusyHolder>();
+  if (fixtures.length === 0) return out;
+  const held = await heldMatches(tx);
+  if (held.length === 0) return out;
+  const people = await peopleByEntrant(tx, [...new Set([...fixtures.flatMap(sidesOf), ...held.flatMap(sidesOf)])]);
+  const heldPeople = held.map((g) => new Set(peopleOf(g, people)));
+
+  // The person arm: per match, each busy person and the court of the first held match they are in.
+  const busyPeople = new Map<string, Map<string, string | null>>();
+  for (const f of fixtures) {
+    const where = new Map<string, string | null>();
+    for (const personId of peopleOf(f, people)) {
+      const i = held.findIndex((g, k) => g.id !== f.id && heldPeople[k]!.has(personId));
+      if (i >= 0) where.set(personId, held[i]!.court_id);
+    }
+    if (where.size > 0) busyPeople.set(f.id, where);
+  }
+  if (busyPeople.size > 0) {
+    const ids = [...new Set([...busyPeople.values()].flatMap((m) => [...m.keys()]))];
+    const named = await tx<{ id: string; full_name: string }[]>`
+      select id, full_name from persons where id in ${tx(ids)} order by full_name, id`;
+    for (const [fixtureId, where] of busyPeople) {
+      const p = named.find((r) => where.has(r.id));
+      if (!p) throw new Error("match-day: a busy person has no persons row");
+      out.set(fixtureId, { name: p.full_name, court_id: where.get(p.id) ?? null });
+    }
+  }
+
+  // The entrant arm, for every match the person arm left free.
+  const rest = fixtures.filter((f) => !out.has(f.id));
+  const restSides = [...new Set(rest.flatMap(sidesOf))];
+  if (restSides.length === 0) return out;
+  const entrants = await tx<{ id: string; display_name: string }[]>`
+    select id, display_name from entrants where id in ${tx(restSides)} order by display_name, id`;
+  const nameOrder = new Map(entrants.map((e, i) => [e.id, i]));
+  for (const f of rest) {
+    let best: { rank: number; order: number; name: string; court_id: string | null } | null = null;
+    for (const g of held) {
+      if (g.id === f.id) continue;
+      for (const e of sidesOf(f)) {
+        if (e !== g.home_entrant_id && e !== g.away_entrant_id) continue;
+        const order = nameOrder.get(e);
+        if (order === undefined) throw new Error("match-day: a busy side has no entrants row");
+        if (best === null || g.rank < best.rank || (g.rank === best.rank && order < best.order)) {
+          best = { rank: g.rank, order, name: entrants[order]!.display_name, court_id: g.court_id };
+        }
+      }
+    }
+    if (best !== null) out.set(f.id, { name: best.name, court_id: best.court_id });
+  }
+  return out;
 }
 
 /**
@@ -388,9 +429,7 @@ export async function previewCall(
     };
     const tz = settings.orgTz;
     const start = now.getTime();
-    const day = dayKeyInTz(start, tz);
-    const dayFrom = zonedTimeToUtc(day, "00:00", tz);
-    const dayTo = zonedTimeToUtc(ymdAddDays(day, 1), "00:00", tz);
+    const { day, from: dayFrom, to: dayTo } = todayIn(tz, now);
     const calledEnd = start + settings.config.matchMinutes * MS_PER_MIN;
 
     const queue = await tx<
@@ -401,24 +440,35 @@ export async function previewCall(
         left join entrants h on h.id = f.home_entrant_id
         left join entrants a on a.id = f.away_entrant_id
        where f.court_id = ${court.id} and f.status = ${MOVABLE_STATUS} and f.id <> ${f.id}
-         and f.scheduled_at >= ${new Date(dayFrom)} and f.scheduled_at < ${new Date(dayTo)}
+         and f.scheduled_at >= ${dayFrom} and f.scheduled_at < ${dayTo}
        order by f.scheduled_at, f.id`;
-    const shifts: CallShift[] = [];
-    let cursor = calledEnd;
+    // The called match runs first, from now; the queue then runs through Match Day's one estimate (lib/match-day/estimate.ts).
+    const planned: { id: string; planned_at: Date; match_minutes: number }[] = [];
     for (const q of queue) {
-      const planned = new Date(q.scheduled_at).getTime();
-      const estimated = Math.max(planned, cursor);
-      if (estimated > planned) {
+      planned.push({ id: q.id, planned_at: new Date(q.scheduled_at), match_minutes: await matchMinutesOf(q.division_id) });
+    }
+    const estimates = estimateQueue(planned, new Date(calledEnd), settings.config.matchMinutes);
+    const estimateOf = (id: string): number => {
+      const e = estimates.get(id);
+      if (e === undefined) throw new Error(`previewCall: no estimate for queued match ${id}`);
+      return e.getTime();
+    };
+    const shifts: CallShift[] = [];
+    for (const q of queue) {
+      const plannedAt = new Date(q.scheduled_at).getTime();
+      const estimated = estimateOf(q.id);
+      if (estimated > plannedAt) {
         shifts.push({
           fixture_id: q.id,
           // A side still to be decided has no name yet: the em dash, never an English placeholder.
           label: `${q.home_name ?? "—"} v ${q.away_name ?? "—"}`,
-          planned_at: iso(planned),
+          planned_at: iso(plannedAt),
           estimated_at: iso(estimated),
         });
       }
-      cursor = estimated + (await matchMinutesOf(q.division_id)) * MS_PER_MIN;
     }
+    // Where the court's queue ends: the latest estimated end, the called match's own when the queue is empty.
+    const cursor = Math.max(calledEnd, ...planned.map((p) => estimateOf(p.id) + p.match_minutes * MS_PER_MIN));
 
     const warnings: CallWarning[] = [];
     if (shifts.length > 0) warnings.push({ kind: "pushes_later", count: shifts.length });
