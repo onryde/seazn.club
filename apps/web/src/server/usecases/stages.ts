@@ -69,8 +69,10 @@ import { cancelBoardInvites } from "./external-play/cancel-invites";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import {
   isSwissBoardSeated,
+  isSwissByeShellExtKey,
   latestSeatedSwissRound,
   latestSwissRoundWithAnySeat,
+  mintSwissBoardExtKeys,
   nextUnseatedSwissRound,
   planSwissShells,
   swissBoardsForField,
@@ -1219,7 +1221,7 @@ function generatedAward(winner: string, home: string | null, away: string | null
   return other === null ? byeAward(winner) : { kind: "award", winner, loser: other, reason: "withdrew" };
 }
 
-type SwissExistingFixture = {
+export type SwissExistingFixture = {
   id: string;
   ext_key: string | null;
   round_no: number;
@@ -1228,7 +1230,48 @@ type SwissExistingFixture = {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   outcome: unknown;
+  /** W3 T2 (SW-L8): the slot a shrinking pre-Start round weighs before it
+   *  deletes a board (`chooseDoomedBoards`). postgres.js parses `timestamptz`
+   *  into a Date. */
+  scheduled_at: Date | string | null;
+  court_id: string | null;
+  schedule_locked: boolean;
 };
+
+/**
+ * W3 T2 (SW-L8, X-RB-1; spec §4 "Before Start" inherits G3): which of a
+ * round's BOARD shells a shrinking pre-Start reshape deletes, and where the
+ * rest sit. The surplus is chosen so an organiser's advance layout survives:
+ * a board with no time AND no court goes first, then one that is not
+ * `schedule_locked`, then the highest `seq_in_round` (the old rule, now the
+ * last tie-break). Survivors keep their id and `ext_key`, in their prior seq
+ * order, re-packed to `seq_in_round` 1..keep.
+ *
+ * Board rows only: a bye shell is never a board, and is refused by name.
+ */
+export function chooseDoomedBoards(
+  rows: readonly SwissExistingFixture[],
+  keep: number,
+): { survivors: SwissExistingFixture[]; doomed: SwissExistingFixture[] } {
+  if (!Number.isInteger(keep) || keep < 0) {
+    throw new RangeError(`chooseDoomedBoards: keep must be a whole number >= 0, got ${keep}`);
+  }
+  const bye = rows.find((r) => isSwissByeShellExtKey(r.ext_key));
+  if (bye) throw new RangeError(`chooseDoomedBoards: ${bye.ext_key} is a bye shell, not a board`);
+  const inOrder = [...rows].sort((a, b) => a.seq_in_round - b.seq_in_round);
+  const holdsSlot = (r: SwissExistingFixture) => r.scheduled_at !== null || r.court_id !== null;
+  const doomOrder = [...inOrder].sort(
+    (a, b) =>
+      Number(holdsSlot(a)) - Number(holdsSlot(b)) ||
+      Number(a.schedule_locked) - Number(b.schedule_locked) ||
+      b.seq_in_round - a.seq_in_round,
+  );
+  const doomedIds = new Set(doomOrder.slice(0, Math.max(0, inOrder.length - keep)).map((r) => r.id));
+  return {
+    survivors: inOrder.filter((r) => !doomedIds.has(r.id)).map((r, i) => ({ ...r, seq_in_round: i + 1 })),
+    doomed: inOrder.filter((r) => doomedIds.has(r.id)),
+  };
+}
 
 type SwissGenResult = {
   gen: GenFixture[];
@@ -1507,8 +1550,8 @@ async function swissGen(
     reshaped = addSwissReshape(reshaped, later.delta);
   }
   const roundShells = targetReconcile.shells;
-  const boardShells = roundShells.filter((f) => !f.ext_key?.endsWith("-bye"));
-  const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
+  const boardShells = roundShells.filter((f) => !isSwissByeShellExtKey(f.ext_key));
+  const byeShell = roundShells.find((f) => isSwissByeShellExtKey(f.ext_key));
 
   let seatedCount = 0;
   const seatedIds: string[] = [];
@@ -1715,7 +1758,7 @@ async function reconcileSwissRoundShells(
 ): Promise<SwissRoundReconcile> {
   const bySeq = (a: SwissExistingFixture, b: SwissExistingFixture) =>
     a.seq_in_round - b.seq_in_round;
-  const isByeShell = (f: SwissExistingFixture) => f.ext_key?.endsWith("-bye") === true;
+  const isByeShell = (f: SwissExistingFixture) => isSwissByeShellExtKey(f.ext_key);
 
   const round = existing.filter((f) => f.round_no === target).sort(bySeq);
   const boardRows = round.filter((f) => !isByeShell(f));
@@ -1763,10 +1806,13 @@ async function reconcileSwissRoundShells(
     }
   }
 
-  // Deletes first: `boardRows` is seq-ascending, so the tail IS the highest
-  // `seq_in_round` down, and dropping it frees the seats the mint below wants.
-  const survivors = boardRows.slice(0, boards);
-  const doomed = [...boardRows.slice(boards), ...(byeRow && !bye ? [byeRow] : [])];
+  // Deletes first. W3 T2 (SW-L8): the surplus is the boards that hold the
+  // least — an unscheduled board before a pinned one (`chooseDoomedBoards`) —
+  // never simply the highest seq, which deleted an organiser's advance layout
+  // while a bare board survived.
+  const chosen = chooseDoomedBoards(boardRows, boards);
+  const survivors = chosen.survivors;
+  const doomed = [...chosen.doomed, ...(byeRow && !bye ? [byeRow] : [])];
   if (doomed.length > 0) {
     // W2c Task 14 (fix round 1) — a fourth arm, read before the first write
     // like the three above: a doomed shell carrying its own format
@@ -1780,6 +1826,16 @@ async function reconcileSwissRoundShells(
       throw ownFormatLoss(own);
     }
     await tx`delete from fixtures where id in ${tx(doomed.map((f) => f.id))}`;
+  }
+
+  // Re-pack: a survivor keeps its id, its slot and its ext_key, and moves to
+  // its place in 1..survivors.length — one update per row that moved, before
+  // the mint below takes the seats after them.
+  const priorSeq = new Map(boardRows.map((f) => [f.id, f.seq_in_round]));
+  for (const row of survivors) {
+    if (priorSeq.get(row.id) !== row.seq_in_round) {
+      await tx`update fixtures set seq_in_round = ${row.seq_in_round} where id = ${row.id}`;
+    }
   }
 
   const kept: SwissExistingFixture[] = [...survivors];
@@ -1808,9 +1864,11 @@ async function reconcileSwissRoundShells(
     outcome: null,
   });
   const minted = [] as ReturnType<typeof shell>[];
-  for (let b = survivors.length + 1; b <= boards; b++) {
-    minted.push(shell(`sw-r${target}-b${b}`, b));
-  }
+  // A minted board takes the next index past the highest the round has ever
+  // shown (`mintSwissBoardExtKeys`): after a shrink kept b4 over b3, b3 is
+  // never reissued beside it, so every key stays unique and stable.
+  const keys = mintSwissBoardExtKeys(target, round.map((f) => f.ext_key), Math.max(0, boards - survivors.length));
+  for (const [i, key] of keys.entries()) minted.push(shell(key, survivors.length + i + 1));
   if (bye && !byeRow) minted.push(shell(`sw-r${target}-bye`, boards + 1));
   if (minted.length > 0) await tx`insert into fixtures ${tx(minted)}`;
 
@@ -1824,14 +1882,17 @@ async function reconcileSwissRoundShells(
       home_entrant_id: null,
       away_entrant_id: null,
       outcome: null,
+      scheduled_at: null,
+      court_id: null,
+      schedule_locked: false,
     });
   }
   return {
     shells: kept.sort(bySeq),
     delta: {
-      matches_added: minted.filter((r) => !r.ext_key.endsWith("-bye")).length,
+      matches_added: minted.filter((r) => !isSwissByeShellExtKey(r.ext_key)).length,
       matches_removed: doomed.filter((f) => !isByeShell(f)).length,
-      byes_added: minted.filter((r) => r.ext_key.endsWith("-bye")).length,
+      byes_added: minted.filter((r) => isSwissByeShellExtKey(r.ext_key)).length,
       byes_removed: doomed.filter(isByeShell).length,
     },
   };
@@ -2412,7 +2473,8 @@ export async function unseatSwissRoundsSeatingEntrant(
   let cleared = 0;
   for (const { stage_id, round_no } of rounds) {
     const inRound = await tx<SwissExistingFixture[]>`
-      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
+             scheduled_at, court_id, schedule_locked
       from fixtures where stage_id = ${stage_id} and round_no = ${round_no}`;
     if (swissRoundHasPlayedResult(inRound, round_no)) {
       throw new EngineError(
@@ -2458,7 +2520,8 @@ export async function unpairSwissRound(
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
 
     const existing = await tx<SwissExistingFixture[]>`
-      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
+             scheduled_at, court_id, schedule_locked
       from fixtures where stage_id = ${stageId}`;
 
     // PARTLY seated counts (2026-09-22). This used to ask for a WHOLLY seated
@@ -2782,7 +2845,8 @@ export async function generateStageFixturesTx(
   }
 
   const existing = await tx<SwissExistingFixture[]>`
-    select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
+    select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
+           scheduled_at, court_id, schedule_locked
     from fixtures where stage_id = ${stageId}`;
 
   let swissSeatedCount = 0;

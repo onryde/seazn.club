@@ -6,12 +6,14 @@ import { type Session, newSession, check, signIn, tag, v1, v1data } from "../har
  * HTTP against a live server. One check per task that owes one, each beside the state it proves.
  *
  * T1 (X-RB-1, #840, FX-G13): Rebuild keeps every time and court at its (pool, round, seq) position, in one transaction,
- * and reports what it could not keep. Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
+ * and reports what it could not keep. T2 (X-RB-1, SW-L8): a pre-Start Swiss reshape deletes an unscheduled board before a
+ * pinned one. Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
  * is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissASuite(): Promise<void> {
-  // T1: 2 (a rebuild keeps 3 slots; a shrinking rebuild counts the slots it freed).
-  const EXPECTED_CHECKS = 2;
+  // T1: 2 (a rebuild keeps 3 slots; a shrinking rebuild counts the slots it freed) + T2: 1 (a pre-Start reshape keeps
+  // the pinned boards).
+  const EXPECTED_CHECKS = 3;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -35,7 +37,16 @@ export async function w3SwissASuite(): Promise<void> {
     await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss A ${tag}`, visibility: "private" }),
   );
 
-  type Fx = { id: string; stage_id: string; pool_id: string | null; round_no: number; seq_in_round: number; scheduled_at: string | null; court_id: string | null };
+  type Fx = {
+    id: string;
+    stage_id: string;
+    pool_id: string | null;
+    round_no: number;
+    seq_in_round: number;
+    scheduled_at: string | null;
+    court_id: string | null;
+    ext_key?: string | null;
+  };
   type Rebuilt = { removed: number; slots?: { kept: number; freed: number; unscheduled: number } };
   const position = (f: Fx) => `${f.pool_id ?? "-"}|${f.round_no}|${f.seq_in_round}`;
 
@@ -110,6 +121,59 @@ export async function w3SwissASuite(): Promise<void> {
     w3Check(
       `w3a X-RB-1: a shrinking Rebuild counts every slot whose position is gone in slots.freed (${gone} expected)` +
         (ok ? "" : ` — placed ${league.placed}, status ${res.status}, fresh ${fresh}, out ${JSON.stringify(out ?? res.json)}`),
+      ok,
+    );
+  }
+
+  // Check 3 (T2) — eight Swiss players, boards 1, 2 and 4 of round 2 laid out and board 3 bare; the highest seed leaves
+  // before Start, and the next press reshapes every unseated round to seven (three boards and a bye). The bare board
+  // goes; b4 keeps its slot at seq 3.
+  {
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", {
+        name: "Reshape",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      }),
+    )?.id;
+    const players =
+      v1data<{ id: string; display_name: string }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `P${i + 1} ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 } }),
+    )?.id;
+    await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST"); // mint: four boards a round
+    const round2 = async () =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [])
+        .filter((f) => f.stage_id === stageId && f.round_no === 2)
+        .sort((a, b) => a.seq_in_round - b.seq_in_round);
+    const laid = new Map<string, { scheduled_at: string; court_id: string }>();
+    let placed = 0;
+    for (const [i, key] of ["sw-r2-b1", "sw-r2-b2", "sw-r2-b4"].entries()) {
+      const f = (await round2()).find((r) => r.ext_key === key);
+      const slot = { scheduled_at: `2030-06-16T${String(9 + i).padStart(2, "0")}:00:00.000Z`, court_id: courts[i % 2] ?? "" };
+      if (f && (await v1(owner, `/api/v1/fixtures/${f.id}`, "PATCH", { ...slot, venue_id: venueId })).status === 200) placed++;
+      laid.set(key, slot);
+    }
+    // The highest seed leaves: the pre-Start departure path (a delete, not a withdrawal).
+    const leaving = players.find((p) => p.display_name === `P8 ${tag}`);
+    const left = await v1(owner, `/api/v1/entrants/${leaving?.id}`, "DELETE");
+    const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const after = await round2();
+    const shape = after.map((f) => `${f.seq_in_round}:${f.ext_key}`).join(",");
+    const kept = [...laid].filter(([key, want]) => {
+      const f = after.find((r) => r.ext_key === key);
+      return f !== undefined && f.scheduled_at === want.scheduled_at && f.court_id === want.court_id;
+    }).length;
+    const ok =
+      players.length === 8 && placed === 3 && left.status < 300 && paired.status === 200 &&
+      shape === "1:sw-r2-b1,2:sw-r2-b2,3:sw-r2-b4,4:sw-r2-bye" && kept === 3;
+    w3Check(
+      "w3a X-RB-1 SW-L8: a pre-Start Swiss reshape deletes the unscheduled board 3, and the pinned boards 1, 2 and 4 keep their slots" +
+        (ok ? "" : ` — players ${players.length}, placed ${placed}, delete ${left.status}, pair ${paired.status}, round 2 ${shape}, kept ${kept}`),
       ok,
     );
   }

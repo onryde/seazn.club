@@ -20,6 +20,7 @@ type Fx = {
   seq_in_round: number;
   scheduled_at: string | null;
   court_id: string | null;
+  ext_key?: string | null;
 };
 
 const position = (f: Pick<Fx, "pool_id" | "round_no" | "seq_in_round">) =>
@@ -140,3 +141,101 @@ test.describe("X-RB-1 rebuild keeps the board", () => {
     expect(checked, "anti-vacuity: every rebuilt fixture was read back").toBe(3);
   });
 });
+
+// X-RB-1 (W3 T2, SW-L8): a pre-Start departure shrinks every unseated Swiss
+// round, and the shrink used to take the highest-seq board whatever it held —
+// so the board an organiser had laid out in advance went, while a bare one
+// survived. Driven through the desk's own "Pair next round" button, the press
+// that runs the reshape, and read back on the run sheet.
+test.describe("X-RB-1 pre-Start reshape keeps pinned boards", () => {
+  test("eight → seven before Start: round 2 loses its unscheduled board, the pinned b4 keeps its court and time", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const orgId = await activeOrgIdFromRequest(request);
+    const courtNames = [`Pin Court A ${TAG}`, `Pin Court B ${TAG}`];
+    const { venueId, courts } = await seedVenueWithCourts(request, courtNames, { orgId });
+
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Reshape keeps ${TAG}`,
+      visibility: "private",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string; display_name: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Pin P${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 3 },
+    });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    // Mint the shells: eight ⇒ four boards a round, no bye.
+    const minted = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+    expect(minted.status, JSON.stringify(minted.error)).toBe(200);
+
+    const round2 = (rows: Fx[]) => rows.filter((f) => f.round_no === 2).sort((a, b) => a.seq_in_round - b.seq_in_round);
+    const before = round2(await stageFixtures(request, divisionId, stageId));
+    expect(before.map((f) => f.ext_key)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b3", "sw-r2-b4"]);
+    // Lay out boards 1, 2 and 4; board 3 stays bare.
+    const laid = new Map<string, { scheduled_at: string; court_id: string; court: string }>();
+    for (const [i, key] of ["sw-r2-b1", "sw-r2-b2", "sw-r2-b4"].entries()) {
+      const f = before.find((r) => r.ext_key === key)!;
+      const at = `2030-06-16T${String(9 + i).padStart(2, "0")}:00:00.000Z`;
+      const court = courts[i % 2]!;
+      const placed = await apiJson(request, `/api/v1/fixtures/${f.id}`, "PATCH", {
+        scheduled_at: at,
+        venue_id: venueId,
+        court_id: court.id,
+      });
+      expect(placed.status, JSON.stringify(placed.error)).toBe(200);
+      laid.set(key, { scheduled_at: at, court_id: court.id, court: court.name });
+    }
+
+    // A pre-Start departure: the highest seed leaves before anything starts.
+    const leaving = added.data!.find((e) => e.display_name === `Pin P8 ${TAG}`)!;
+    const gone = await apiJson(request, `/api/v1/entrants/${leaving.id}`, "DELETE");
+    expect(gone.status, JSON.stringify(gone.error)).toBeLessThan(300);
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const pairNext = page.getByTestId("stage-generate");
+    await expect(pairNext).toHaveText(/pair next round/i, { timeout: 20_000 });
+    await pairNext.click();
+    await expect
+      .poll(async () => round2(await stageFixtures(request, divisionId, stageId)).map((f) => `${f.seq_in_round}:${f.ext_key}`), {
+        timeout: 20_000,
+      })
+      .toEqual(["1:sw-r2-b1", "2:sw-r2-b2", "3:sw-r2-b4", "4:sw-r2-bye"]);
+
+    const after = round2(await stageFixtures(request, divisionId, stageId));
+    let checked = 0;
+    for (const [key, want] of laid) {
+      const f = after.find((r) => r.ext_key === key)!;
+      expect({ scheduled_at: f.scheduled_at, court_id: f.court_id }, key).toEqual({
+        scheduled_at: want.scheduled_at,
+        court_id: want.court_id,
+      });
+      await expect(page.locator(`[data-fixture-no="${f.fixture_no}"]`)).toContainText(want.court);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every pinned board was read back").toBe(3);
+    expect(after.some((f) => f.id === before.find((r) => r.ext_key === "sw-r2-b3")!.id), "the bare board is the one deleted").toBe(false);
+  });
+});
+

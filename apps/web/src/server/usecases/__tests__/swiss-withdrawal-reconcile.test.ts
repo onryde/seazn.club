@@ -37,7 +37,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
 import { publishSchedule, startDivision } from "../schedule";
-import { addFixture, createStages, generateStageFixtures } from "../stages";
+import { addFixture, chooseDoomedBoards, createStages, generateStageFixtures, unpairSwissRound } from "../stages";
 import { swissBoardsForField } from "@/lib/swiss-shell";
 import { createVenue, createCourt } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -77,6 +77,7 @@ async function fixturesOf(stageId: string): Promise<FixtureRow[]> {
 
 const inRound = (rows: FixtureRow[], r: number) => rows.filter((f) => f.round_no === r);
 const keysIn = (rows: FixtureRow[], r: number) => inRound(rows, r).map((f) => f.ext_key);
+const iso = (at: Date | string | null) => (at instanceof Date ? at.toISOString() : at);
 
 /**
  * The ext_keys round `roundNo` must hold for a field of `field` entrants,
@@ -260,6 +261,78 @@ describe("swiss — the expected-key helper matches the shipped shell naming", (
     // every `toEqual` above depends on.
     expect(expectedRoundKeys(1, 9).at(-1)).toBe("sw-r1-bye");
     expect(expectedRoundKeys(1, 9)).toHaveLength(5);
+  });
+});
+
+// W3 T2 (SW-L8, X-RB-1): which boards a shrinking pre-Start round loses. The
+// rule, from the brief: a board with no time AND no court goes first, then one
+// that is not `schedule_locked`, then the highest seq. Each key is pinned by a
+// case where it — and only it — changes the answer (an ordering differential),
+// so dropping any one of them reds exactly its own case.
+type Board = Parameters<typeof chooseDoomedBoards>[0][number];
+function board(seq: number, over: Partial<Board> = {}): Board {
+  return {
+    id: `id-b${seq}`,
+    ext_key: `sw-r2-b${seq}`,
+    round_no: 2,
+    seq_in_round: seq,
+    status: "scheduled",
+    home_entrant_id: null,
+    away_entrant_id: null,
+    outcome: null,
+    scheduled_at: null,
+    court_id: null,
+    schedule_locked: false,
+    ...over,
+  };
+}
+const AT = new Date("2030-06-15T09:00:00.000Z");
+const doomedKeys = (rows: Board[], keep: number) => chooseDoomedBoards(rows, keep).doomed.map((r) => r.ext_key);
+
+describe("X-RB-1 chooseDoomedBoards — which boards a shrinking pre-Start round loses", () => {
+  it("keeping every board dooms none and re-packs nothing; an empty round is empty", () => {
+    expect(chooseDoomedBoards([], 0)).toEqual({ survivors: [], doomed: [] });
+    const rows = [board(1), board(2), board(3)];
+    const out = chooseDoomedBoards(rows, 3);
+    expect(out.doomed).toEqual([]);
+    expect(out.survivors).toEqual(rows);
+  });
+
+  it("key 1: an unscheduled board goes before a higher-seq board that holds a time or a court", () => {
+    const rows = [board(1, { scheduled_at: AT }), board(2, { court_id: "c" }), board(3), board(4, { scheduled_at: AT, court_id: "c" })];
+    expect(doomedKeys(rows, 3)).toEqual(["sw-r2-b3"]);
+    // A court alone, and a time alone, each count as holding a slot.
+    expect(doomedKeys([board(1), board(2, { court_id: "c" })], 1)).toEqual(["sw-r2-b1"]);
+    expect(doomedKeys([board(1), board(2, { scheduled_at: AT })], 1)).toEqual(["sw-r2-b1"]);
+  });
+
+  it("key 2: among boards that all hold a slot, an unlocked one goes before a higher-seq locked one", () => {
+    const rows = [1, 2, 3, 4].map((q) => board(q, { scheduled_at: AT, schedule_locked: q !== 2 }));
+    expect(doomedKeys(rows, 3)).toEqual(["sw-r2-b2"]);
+  });
+
+  it("key 3: all alike, the highest seq goes — the old rule, now the fallback", () => {
+    const pinned = [1, 2, 3, 4].map((q) => board(q, { scheduled_at: AT, court_id: "c" }));
+    expect(doomedKeys(pinned, 3)).toEqual(["sw-r2-b4"]);
+    const bare = [1, 2, 3, 4].map((q) => board(q));
+    expect(doomedKeys(bare, 2)).toEqual(["sw-r2-b3", "sw-r2-b4"]);
+  });
+
+  it("survivors keep their ext_key and prior order, re-packed to seq 1..keep", () => {
+    const rows = [board(1, { scheduled_at: AT }), board(2, { scheduled_at: AT }), board(3), board(4, { court_id: "c" })];
+    const out = chooseDoomedBoards(rows, 3);
+    expect(out.survivors.map((r) => `${r.seq_in_round}:${r.ext_key}:${r.id}`)).toEqual([
+      "1:sw-r2-b1:id-b1", "2:sw-r2-b2:id-b2", "3:sw-r2-b4:id-b4",
+    ]);
+    expect(out.doomed.map((r) => r.id)).toEqual(["id-b3"]);
+    // Input order does not matter: the prior order is seq order.
+    expect(chooseDoomedBoards([...rows].reverse(), 3).survivors.map((r) => r.ext_key)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b4"]);
+  });
+
+  it("refuses a bye shell or a keep it cannot honour, by name", () => {
+    expect(() => chooseDoomedBoards([board(1), { ...board(2), ext_key: "sw-r2-bye" }], 1)).toThrow(/bye/);
+    expect(() => chooseDoomedBoards([board(1)], -1)).toThrow(/keep/);
+    expect(() => chooseDoomedBoards([board(1)], 1.5)).toThrow(/keep/);
   });
 });
 
@@ -729,7 +802,12 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
   //
   // This is not a defect to fix here: a board that no longer exists cannot
   // carry a slot. It is asserted so the cost is a pinned fact.
-  it("an eager shrink deletes a surplus board in a later round, pinned time and court included", async () => {
+  // W3 T2 (SW-L8, X-RB-1): this case used to pin the defect — the shrink took
+  // the highest-seq board whatever it held, so the one board an organiser had
+  // laid out in advance went, time and court with it. A shrink now dooms an
+  // UNSCHEDULED board first; the pinned b4 survives, re-packed to seq 3 under
+  // its own ext_key, and the bare b3 goes instead.
+  it("an eager shrink keeps the pinned surplus-seq board and deletes an unscheduled one instead (SW-L8)", async () => {
     const { auth } = await seedOrg();
     const { divisionId, stageId } = await seedSwissStage(auth, 3, 9);
 
@@ -741,12 +819,13 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     const before = await fixturesOf(stageId);
     expect(keysIn(before, 3)).toEqual(expectedRoundKeys(3, 9));
 
-    // The surplus board a 9 → 6 shrink removes, laid out in advance.
-    const surplus = inRound(before, 3).find((f) => f.ext_key === "sw-r3-b4")!;
+    // The highest-seq board, laid out in advance: the one the old rule took.
+    const pinned = inRound(before, 3).find((f) => f.ext_key === "sw-r3-b4")!;
+    const bare = inRound(before, 3).find((f) => f.ext_key === "sw-r3-b3")!;
     const survivor = inRound(before, 3).find((f) => f.ext_key === "sw-r3-b1")!;
     await sql`
       update fixtures set scheduled_at = ${pinnedAt}, court_id = ${court.id}
-      where id = ${surplus.id}`;
+      where id = ${pinned.id}`;
 
     for (let i = 0; i < 3; i++) await deleteLastEntrant(auth, divisionId);
     expect(await activeFieldSize(divisionId)).toBe(6);
@@ -754,20 +833,17 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     await generateStageFixtures(auth, stageId);
 
     const rows = await fixturesOf(stageId);
-    expect(keysIn(rows, 3)).toEqual(["sw-r3-b1", "sw-r3-b2", "sw-r3-b3"]);
-    // The surplus row is GONE — not emptied, not re-keyed.
-    const [gone] = await sql<{ id: string }[]>`select id from fixtures where id = ${surplus.id}`;
+    // Three boards, no bye; b4 now sits at seq 3 under its own key.
+    expect(inRound(rows, 3).map((f) => `${f.seq_in_round}:${f.ext_key}`)).toEqual([
+      "1:sw-r3-b1", "2:sw-r3-b2", "3:sw-r3-b4",
+    ]);
+    const kept = inRound(rows, 3).find((f) => f.ext_key === "sw-r3-b4")!;
+    expect(kept.id).toBe(pinned.id);
+    expect(iso(kept.scheduled_at)).toBe(pinnedAt);
+    expect(kept.court_id).toBe(court.id);
+    // The bare board is the one GONE — not emptied, not re-keyed.
+    const [gone] = await sql<{ id: string }[]>`select id from fixtures where id = ${bare.id}`;
     expect(gone).toBeUndefined();
-    // And its slot left the timetable with it: nothing in the stage holds that
-    // court or that time any more.
-    expect(rows.filter((f) => f.court_id === court.id)).toEqual([]);
-    const stillAt = rows.filter((f) => {
-      const at = f.scheduled_at;
-      return (at instanceof Date ? at.toISOString() : at) === pinnedAt;
-    });
-    expect(stillAt).toEqual([]);
-    // The boards the field still needs keep their identity, which is the whole
-    // point of a reconcile — the loss is confined to the surplus.
     expect(inRound(rows, 3).find((f) => f.ext_key === "sw-r3-b1")!.id).toBe(survivor.id);
   });
 
@@ -864,6 +940,124 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     expect(idsOf(rows)).toEqual(idsOf(before));
     expect(inRound(rows, 1).every(isSeated)).toBe(true);
     expect(inRound(rows, 2).every((f) => !isSeated(f))).toBe(true);
+  });
+});
+
+// W3 T2 (SW-L8, X-RB-1): the pre-Start reshape inherits G3 — a shrinking round
+// keeps the boards that hold a slot. Every slot below is one this file writes
+// itself before the reshape, never one read back from the code under test.
+describe.runIf(HAS_DB)("X-RB-1 swiss — a pre-Start reshape keeps the boards that hold a slot", () => {
+  async function twoCourts(auth: AuthCtx) {
+    const venue = await createVenue(auth, { name: "Main " + randomUUID().slice(0, 4), sort: 0 });
+    const c1 = await createCourt(auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const c2 = await createCourt(auth, venue.id, { name: "Court 2", sort: 1, tags: [] });
+    return [c1.id, c2.id] as const;
+  }
+  /** Lay out `keys` in round `r`: its own hour each, alternating courts. Returns ext_key → slot. */
+  async function layOut(stageId: string, r: number, keys: string[], courts: readonly string[]) {
+    const laid = new Map<string, { id: string; at: string; court: string }>();
+    const rows = inRound(await fixturesOf(stageId), r);
+    for (const [i, key] of keys.entries()) {
+      const row = rows.find((f) => f.ext_key === key);
+      expect(row, key).toBeDefined();
+      const at = new Date(Date.UTC(2030, 5, 15, 9 + i, 0, 0)).toISOString();
+      const court = courts[i % courts.length]!;
+      await sql`update fixtures set scheduled_at = ${at}, court_id = ${court} where id = ${row!.id}`;
+      laid.set(key, { id: row!.id, at, court });
+    }
+    return laid;
+  }
+  function expectKept(rows: FixtureRow[], r: number, laid: Map<string, { id: string; at: string; court: string }>) {
+    let checked = 0;
+    for (const [key, slot] of laid) {
+      const row = inRound(rows, r).find((f) => f.ext_key === key);
+      expect(row, `${key} survives`).toBeDefined();
+      expect({ id: row!.id, at: iso(row!.scheduled_at), court: row!.court_id }, key).toEqual(slot);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every laid-out board was read back").toBe(laid.size);
+    expect(checked).toBeGreaterThan(0);
+  }
+
+  it("X-RB-1 a shrinking pre-Start round deletes the unscheduled board, not the pinned seq-4 board", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 8);
+    const courts = await twoCourts(auth);
+    await generateStageFixtures(auth, stageId); // eight ⇒ four boards, no bye
+    expect(keysIn(await fixturesOf(stageId), 2)).toEqual(expectedRoundKeys(2, 8));
+    const laid = await layOut(stageId, 2, ["sw-r2-b1", "sw-r2-b2", "sw-r2-b4"], courts);
+    const bare = inRound(await fixturesOf(stageId), 2).find((f) => f.ext_key === "sw-r2-b3")!;
+
+    await deleteLastEntrant(auth, divisionId); // pre-Start departure: eight → seven
+    expect(await activeFieldSize(divisionId)).toBe(7);
+    await generateStageFixtures(auth, stageId); // the eager reshape, and round 1's pairing
+
+    const rows = await fixturesOf(stageId);
+    // Seven ⇒ three boards and a bye: b3 went, b4 sits at seq 3, the bye at 4.
+    expect(inRound(rows, 2).map((f) => `${f.seq_in_round}:${f.ext_key}`)).toEqual([
+      "1:sw-r2-b1", "2:sw-r2-b2", "3:sw-r2-b4", "4:sw-r2-bye",
+    ]);
+    expectKept(rows, 2, laid);
+    const [gone] = await sql<{ id: string }[]>`select id from fixtures where id = ${bare.id}`;
+    expect(gone, "the unscheduled board is the one deleted").toBeUndefined();
+  });
+
+  it("ext_keys stay unique and seqs contiguous after a shrink then a grow", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 8);
+    const courts = await twoCourts(auth);
+    await generateStageFixtures(auth, stageId); // eight ⇒ four boards ×3
+    const laid = await layOut(stageId, 2, ["sw-r2-b1", "sw-r2-b2", "sw-r2-b4"], courts);
+
+    await deleteLastEntrant(auth, divisionId); // shrink: eight → seven
+    await generateStageFixtures(auth, stageId); // reshape every round; pairs round 1
+    await unpairSwissRound(auth, stageId); // round 1 back onto its shells, so it can grow too
+    await addEntrants(auth, divisionId, 2); // grow: seven → nine
+    expect(await activeFieldSize(divisionId)).toBe(9);
+    await generateStageFixtures(auth, stageId); // reshape every round again; Pair round 1
+
+    const rows = await fixturesOf(stageId);
+    const { boards, bye } = swissBoardsForField(9);
+    let checked = 0;
+    for (const r of [1, 2, 3]) {
+      const round = inRound(rows, r);
+      const keys = round.map((f) => f.ext_key!);
+      expect(new Set(keys).size, `round ${r}: ext_keys unique — ${keys.join(",")}`).toBe(keys.length);
+      expect(round.map((f) => f.seq_in_round), `round ${r}: seqs contiguous`).toEqual(
+        Array.from({ length: round.length }, (_, i) => i + 1),
+      );
+      expect(round.length, `round ${r}: ${boards} boards${bye ? " + a bye" : ""}`).toBe(boards + (bye ? 1 : 0));
+      expect(round.at(-1)!.ext_key, `round ${r}: the bye sits last`).toBe(`sw-r${r}-bye`);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // Round 2's pinned boards came through both reshapes; the board minted for
+    // the grow takes the next index past the highest it has, never a reused b3.
+    expectKept(rows, 2, laid);
+    expect(keysIn(rows, 2)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b4", "sw-r2-b5", "sw-r2-bye"]);
+    expect(inRound(rows, 1).filter((f) => !f.ext_key!.endsWith("-bye")).every(isSeated), "round 1 was paired").toBe(true);
+  });
+
+  it("all boards pinned → the highest-seq board goes and the delta counts it", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 8);
+    const courts = await twoCourts(auth);
+    await generateStageFixtures(auth, stageId);
+    const all = ["sw-r2-b1", "sw-r2-b2", "sw-r2-b3", "sw-r2-b4"];
+    const laid = await layOut(stageId, 2, all, courts);
+    const highest = laid.get("sw-r2-b4")!;
+    laid.delete("sw-r2-b4");
+
+    await deleteLastEntrant(auth, divisionId); // eight → seven
+    const out = await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
+    expect(keysIn(rows, 2)).toEqual(expectedRoundKeys(2, 7));
+    expectKept(rows, 2, laid);
+    const [gone] = await sql<{ id: string }[]>`select id from fixtures where id = ${highest.id}`;
+    expect(gone, "with nothing to choose between, the highest seq goes").toBeUndefined();
+    // Each of the three rounds lost one board and gained a bye.
+    expect(out.reshaped).toEqual({ matches_added: 0, matches_removed: 3, byes_added: 3, byes_removed: 0 });
   });
 });
 
