@@ -366,6 +366,30 @@ describe.skipIf(!HAS_DB)("loadSheetCandidates / listSheetDays (scorer sheets §4
     expect((await loadSheetCandidates(auth, competition.id, en, "2026-09-25")).map((r) => r.id)).toEqual([shell.id]);
   });
 
+  it("X-SW-29 an unseated Swiss bye shell with a time does not print, in the loader or the day list", async () => {
+    // W3 T3 (RB3-23): the bye shell (`sw-r{N}-bye`) is unseated AND unlabelled until Pair — the shape the case above
+    // prints. Only its ext_key says it is a bye. A time on one (placed before V483) gives it no sheet and no day; the
+    // round's board shell beside it, with a time of its own, is the positive pair.
+    const { auth } = await seedOrg("pro");
+    const { competition, stage } = await seedStage(auth, "swiss", ["A", "B", "C", "D", "E"], { rounds: 2 });
+    const r2 = await sql<{ id: string; ext_key: string | null; status: string; home_entrant_id: string | null; home_slot_label: unknown; away_slot_label: unknown }[]>`
+      select id, ext_key, status, home_entrant_id, home_slot_label, away_slot_label from fixtures
+      where stage_id = ${stage.id} and round_no = 2 order by seq_in_round`;
+    const bye = r2.find((f) => f.ext_key === "sw-r2-bye");
+    const board = r2.find((f) => f.ext_key === "sw-r2-b1");
+    expect(bye, "premise: an odd field mints round 2's bye shell").toBeDefined();
+    expect(board, "premise: … beside its board shell").toBeDefined();
+    // premise: the bye shell is the unlabelled, unseated, scheduled shape the label rule cannot see
+    expect([bye!.status, bye!.home_entrant_id, bye!.home_slot_label, bye!.away_slot_label]).toEqual(["scheduled", null, null, null]);
+    await at(bye!.id, "2026-09-24T09:00:00Z");
+    await at(board!.id, "2026-09-25T09:00:00Z");
+    expect(await listSheetDays(auth, competition.id), "the bye shell lends the picker no day").toEqual(["2026-09-25"]);
+    expect((await loadSheetCandidates(auth, competition.id, en)).map((r) => r.id), "only the board shell prints").toEqual([board!.id]);
+    expect(await loadSheetCandidates(auth, competition.id, en, "2026-09-24"), "the bye's day has no sheet").toEqual([]);
+    // The SQL and `isPrintable` are two spellings of one rule: they agree here too.
+    expect(await listSheetDays(auth, competition.id)).toEqual(sheetDays(await loadSheetCandidates(auth, competition.id, en)));
+  });
+
   it("is tenant-scoped: another org cannot load this competition", async () => {
     const a = await seedOrg("pro");
     const b = await seedOrg("pro");

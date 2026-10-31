@@ -9,7 +9,9 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
-import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
+import { fixtureHasResultSql, playedFixtureIds, swissByeShellSql } from "./fixture-results-sql";
+import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
+import { swissRefusal } from "./swiss-refusal";
 import { requireFeature } from "@/lib/entitlements";
 import { cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
@@ -177,28 +179,34 @@ export const OCCUPYING = ["scheduled", "in_play", "decided", "finalized", "forfe
  *  this one, so there is no way for them to disagree about what "fixed" means. */
 export const FIXED_OCCUPYING = OCCUPYING.filter((s) => s !== MOVABLE_STATUS);
 
-/** Whether the board, the solver and an apply may move `f`: `scheduled`, and
- *  holding no result. `played` is history's played set (`playedFixtureIds`,
- *  ./fixture-results-sql.ts). The status alone cannot say it: a start taken
- *  back walks the status to `scheduled` and leaves its events behind. History
- *  refuses to undo any step that touches such a row, so a move written to one
- *  would leave an Undo that nothing can get past (review 3 of #857, N1). */
-export function isMovable(f: { id: string; status: string }, played: ReadonlySet<string>): boolean {
-  return f.status === MOVABLE_STATUS && !played.has(f.id);
+/** Whether the board, the solver and an apply may move `f`: `scheduled`,
+ *  holding no result, and not a Swiss bye shell. `played` is history's played
+ *  set (`playedFixtureIds`, ./fixture-results-sql.ts). The status alone cannot
+ *  say it: a start taken back walks the status to `scheduled` and leaves its
+ *  events behind. History refuses to undo any step that touches such a row, so
+ *  a move written to one would leave an Undo that nothing can get past (review
+ *  3 of #857, N1). A Swiss stage mints its round's bye row as a `scheduled`
+ *  shell before Pair (`sw-r{N}-bye`), and a bye is not played: it takes no
+ *  court and no time (W3 T3, SW-M13, X-SW-29; `isSwissByeShellExtKey`, the one
+ *  bye-shell predicate). */
+export function isMovable(f: { id: string; status: string; ext_key: string | null }, played: ReadonlySet<string>): boolean {
+  return f.status === MOVABLE_STATUS && !played.has(f.id) && !isSwissByeShellExtKey(f.ext_key);
 }
 
-/** A `scheduled` fixture that holds a result all the same. An apply skips it
- *  silently, the way a rain-delay shift does, and counts it. */
-export function heldInPlace(f: { id: string; status: string }, played: ReadonlySet<string>): boolean {
+/** A `scheduled` fixture no builder may move all the same: one that holds a
+ *  result, or a Swiss bye shell (`isMovable`). An apply skips it silently, the
+ *  way a rain-delay shift does, and counts it — so a stale proposal naming a
+ *  bye shell writes nothing to it and the rest of the apply lands. */
+export function heldInPlace(f: { id: string; status: string; ext_key: string | null }, played: ReadonlySet<string>): boolean {
   return f.status === MOVABLE_STATUS && !isMovable(f, played);
 }
 
-/** `isMovable`, as SQL: `scheduled` and holding no result. For the counts
- *  that price, drop or size a run (competition-schedule-ai.ts,
- *  schedule-ai-preview.ts), so they count exactly what a builder moves.
- *  `on` names the `fixtures` row in the enclosing query. */
+/** `isMovable`, as SQL: `scheduled`, holding no result, and not a Swiss bye
+ *  shell. For the counts that price, drop or size a run
+ *  (competition-schedule-ai.ts, schedule-ai-preview.ts), so they count exactly
+ *  what a builder moves. `on` names the `fixtures` row in the enclosing query. */
 export function movableFixtureSql(tx: Tx, on = "f") {
-  return tx`(${tx(on)}.status = ${MOVABLE_STATUS} and not ${fixtureHasResultSql(tx, on)})`;
+  return tx`(${tx(on)}.status = ${MOVABLE_STATUS} and not ${fixtureHasResultSql(tx, on)} and not ${swissByeShellSql(tx, on)})`;
 }
 
 /** The English sentence behind a refused board move or pin. Clients say it in
@@ -3047,7 +3055,7 @@ export async function moveFixture(
     const [fixture] = await tx<
       (FixtureLite & { competition_id: string })[]
     >`
-      select f.id, f.stage_id, f.division_id, f.round_no, f.home_entrant_id,
+      select f.id, f.stage_id, f.division_id, f.round_no, f.ext_key, f.home_entrant_id,
              f.away_entrant_id, f.scheduled_at, f.court_id, f.venue_id,
              f.court_label, f.venue, f.pool_id,
              f.status, f.schedule_locked, f.winner_to_fixture, f.loser_to_fixture,
@@ -3070,6 +3078,14 @@ export async function moveFixture(
     }
 
     const movesTimetable = patch.scheduled_at !== undefined || patch.court_id !== undefined;
+    // W3 T3 (SW-M13, X-SW-29): a Swiss bye is not played, so it takes no court, no time and no pin — seated or not, and
+    // named, ahead of the status gate below (a seated bye is `forfeited`, which would refuse it with the generic
+    // sentence). Taking a legacy slot OFF one (a bye placed before V483) is not placing it, and stays open.
+    const places = (patch.scheduled_at !== undefined && patch.scheduled_at !== null)
+      || (patch.court_id !== undefined && patch.court_id !== null)
+      || (patch.venue_id !== undefined && patch.venue_id !== null)
+      || patch.schedule_locked === true;
+    if (places && isSwissByeShellExtKey(fixture.ext_key)) throw swissRefusal("SWISS_BYE_NOT_PLACEABLE");
     if (movesTimetable && fixture.status !== MOVABLE_STATUS) {
       throw new HttpError(422, `fixture is ${fixture.status} — decided fixtures are immutable`);
     }
@@ -3944,9 +3960,10 @@ export async function startDivision(
         ? ms(settings.config.startAt)
         : roundToMinute(Date.now());
       const step = settings.config.roundMinutes * MS_PER_MIN;
+      // A Swiss bye shell takes no rolling time (W3 T3, X-SW-29): a bye is not played.
       const rounds = await tx<{ round_no: number }[]>`
         select distinct round_no from fixtures
-        where stage_id = ${pre.firstStage.id} and scheduled_at is null
+        where stage_id = ${pre.firstStage.id} and scheduled_at is null and not ${swissByeShellSql(tx, "fixtures")}
         order by round_no`;
       // The sweep below writes `scheduled_at` across the first stage, which is
       // a schedule edit whatever door it came through — so a frozen board
@@ -3962,7 +3979,7 @@ export async function startDivision(
         await tx`
           update fixtures set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'
           where stage_id = ${pre.firstStage.id} and round_no = ${r.round_no}
-            and scheduled_at is null`;
+            and scheduled_at is null and not ${swissByeShellSql(tx, "fixtures")}`;
       }
     }
 

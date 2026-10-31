@@ -24,6 +24,10 @@
 //       fixtures.ts)
 //   `fixtureEvidenceSql` alone, beside the caller's own status clause
 //     - stages.ts: the Swiss shell reconcile, unseat and Unpair
+//   `systemByeSql` (W3 T3): the snapshot exemption inside `fixtureEvidenceSql`
+//     and `playedSql` (engine-db/format-standing.ts)
+//   `swissByeShellSql` (W3 T3, X-SW-29): `movableFixtureSql` and the quick
+//     Start's rolling times (schedule.ts), the sheet day list (scorer-sheets.ts)
 //   NEITHER, a status list only
 //     - stages.ts: `deleteStage` refuses `in_play`/`decided`/`finalized` and
 //       deletes every other row with its evidence, an abandoned match or a
@@ -57,11 +61,15 @@ type Tx = postgres.TransactionSql;
  * generator's own line N2 (below) rules is no result, and its score does not make it one. Ruling 116's walkover over
  * a dead seat writes the same kind of row with HER SEAT EMPTY (`awardSeededByes`); that one stays evidence, held on
  * the board as any walkover is (R116-3). Every other row — a seq-0 row beside no award included — still is evidence.
+ *
+ * W3 T3 (SW-M7, X-SW-5): a SYSTEM bye freezes its cfg when it is awarded (the Swiss bye seat, stages.ts), so its
+ * snapshot is not play — `systemByeSql` exempts it from the snapshot clause, and from that clause ONLY. Every other
+ * table still speaks for it, and ruling 116's walkover over a dead seat (a loser, `reason` not `bye`) is untouched.
  */
 export function fixtureEvidenceSql(tx: Tx, on = "f") {
   const f = tx(on);
   return tx`
-    ${f}.config_snapshot is not null
+    (${f}.config_snapshot is not null and not ${systemByeSql(tx, on)})
     or exists (select 1 from score_events se where se.fixture_id = ${f}.id)
     or exists (select 1 from match_states ms where ms.fixture_id = ${f}.id
                  and not (ms.last_seq = 0 and coalesce(${f}.outcome ->> 'kind' = 'award', false)
@@ -69,6 +77,35 @@ export function fixtureEvidenceSql(tx: Tx, on = "f") {
     or exists (select 1 from match_reports mr where mr.fixture_id = ${f}.id)
     or exists (select 1 from official_marks om where om.fixture_id = ${f}.id)
     or exists (select 1 from suspensions s where s.fixture_id = ${f}.id)`;
+}
+
+/**
+ * W3 T3 (SW-M7): a SYSTEM bye, as SQL over the fixtures row `on` — the typed bye every server writer stores
+ * (`byeAward`, lib/fixture-bye.ts: an `award` with `reason: "bye"`), on a row with at most one seat filled, and that
+ * seat the winner's. At most one, not exactly one: a bye whose holder was deleted before the swiss guard existed
+ * keeps its award with BOTH seats empty (swiss-delete-entrant.test.ts's orphan), and Unpair is how it is cleared.
+ * Ruling 116's walkover over a dead seat has `reason` `withdrew`, so it is not one; nor is any award with both seats
+ * filled. Each clause is pinned by its own shape in swiss-bye-snapshot.test.ts. Never null: a null here would turn its readers' `not (...)` null and drop a row from the evidence
+ * set (three-valued logic), so a row with no outcome reads false.
+ */
+export function systemByeSql(tx: Tx | postgres.Sql, on = "f") {
+  const f = tx(on);
+  return tx`coalesce(
+    ${f}.outcome ->> 'kind' = 'award'
+    and ${f}.outcome ->> 'reason' = 'bye'
+    and (${f}.home_entrant_id is null or ${f}.away_entrant_id is null)
+    and (coalesce(${f}.home_entrant_id, ${f}.away_entrant_id) is null
+         or ${f}.outcome ->> 'winner' = coalesce(${f}.home_entrant_id, ${f}.away_entrant_id)::text),
+    false)`;
+}
+
+/**
+ * W3 T3 (SW-M13, X-SW-29; RB3-23): a Swiss stage's bye row, seated or not, as SQL over the fixtures row `on` — the
+ * SQL twin of `isSwissByeShellExtKey` (lib/swiss-shell.ts), the one bye-shell predicate. A bye is not played, so it
+ * takes no court, no time and no sheet. Never null (a row with no ext_key reads false).
+ */
+export function swissByeShellSql(tx: Tx | postgres.Sql, on = "f") {
+  return tx`coalesce(${tx(on)}.ext_key ~ '^sw-r[0-9]+-bye$', false)`;
 }
 
 /**

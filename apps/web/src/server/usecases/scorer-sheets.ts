@@ -46,6 +46,7 @@ import {
 import type { SheetModel } from "@/server/scorer-sheet-pdf";
 import { log } from "@/server/logger";
 import { boardMatchNamer, MATCH_NAME_COLS, type MatchNameRow } from "./scan-match-names";
+import { swissByeShellSql } from "./fixture-results-sql";
 import { courtNamesById } from "./schedule";
 import {
   ensureDeviceLinks,
@@ -195,7 +196,8 @@ export async function loadSheetCandidates(
     const away = side(r.id, r.away_entrant_id);
     const home_slot_label = r.home_slot_label as SlotLabel | null;
     const away_slot_label = r.away_slot_label as SlotLabel | null;
-    if (!isPrintable({ status: r.status, scheduled_at, tz, home, away, home_slot_label, away_slot_label })) continue;
+    const ext_key = r.ext_key ?? null;
+    if (!isPrintable({ status: r.status, scheduled_at, tz, home, away, home_slot_label, away_slot_label, ext_key })) continue;
     // Every row is one the namer was built from.
     const names = name(r.id)!;
     candidates.push({
@@ -220,6 +222,7 @@ export async function loadSheetCandidates(
       away_tbd: names.away,
       home_slot_label,
       away_slot_label,
+      ext_key,
     });
   }
   return day === undefined ? candidates : selectSheetFixtures(candidates, day);
@@ -229,9 +232,10 @@ export async function loadSheetCandidates(
  * The org-clock days that have something to print, ascending. Read on every
  * schedule-page render, so it is ONE query that returns only the days: the
  * same exclusions as `isPrintable`, spelled in SQL — a printable status, a
- * time, and no seat that is EMPTY and stamped a bye. `coalesce` keeps an
- * unlabelled empty seat (a null key — a Swiss shell, say) from turning the
- * whole `not (...)` null and dropping a row that prints.
+ * time, no seat that is EMPTY and stamped a bye, and no Swiss bye shell
+ * (W3 T3, X-SW-29: `swissByeShellSql`, which never reads null). `coalesce`
+ * keeps an unlabelled empty seat (a null key — a Swiss board shell, say) from
+ * turning the whole `not (...)` null and dropping a row that prints.
  */
 export async function listSheetDays(auth: AuthCtx, competitionId: string): Promise<string[]> {
   return withTenant(auth.orgId, async (tx) => {
@@ -245,6 +249,7 @@ export async function listSheetDays(auth: AuthCtx, competitionId: string): Promi
         and f.scheduled_at is not null
         and not (f.home_entrant_id is null and coalesce(f.home_slot_label->>'key', '') = ${BYE_SLOT_KEY})
         and not (f.away_entrant_id is null and coalesce(f.away_slot_label->>'key', '') = ${BYE_SLOT_KEY})
+        and not ${swissByeShellSql(tx, "f")}
       order by day`;
     return rows.map((r) => r.day);
   });

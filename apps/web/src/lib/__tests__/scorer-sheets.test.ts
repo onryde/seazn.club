@@ -43,6 +43,7 @@ function c(over: Partial<SheetCandidate> = {}): SheetCandidate {
     away_tbd: "TBD",
     home_slot_label: null,
     away_slot_label: null,
+    ext_key: null,
     ...over,
   };
 }
@@ -73,6 +74,24 @@ describe("selectSheetFixtures (scorer sheets §4.4)", () => {
     const awayBye = c({ away: null, away_slot_label: { key: "bracket.slot.bye", params: {} } });
     const homeBye = c({ home: null, home_slot_label: { key: "bracket.slot.bye", params: {} } });
     expect(ids(selectSheetFixtures([tbd, awayBye, homeBye], DAY))).toEqual([tbd.id]);
+  });
+
+  it("X-SW-29 an unseated Swiss bye shell with a time does not print", () => {
+    // W3 T3 (RB3-23): a Swiss stage mints its round's bye row as a shell before Pair — `sw-r{N}-bye`, no seats, NO
+    // slot label (the label is written at seat time) — so the label rule above cannot see it. One that holds a time
+    // (placed before V483) is still not a match anyone plays.
+    const byeShell = c({ ext_key: "sw-r2-bye", home: null, away: null });
+    expect(selectSheetFixtures([byeShell], DAY), "a bye shell is not on the sheet").toEqual([]);
+    expect(sheetDays([byeShell]), "… and lends the picker no day").toEqual([]);
+  });
+
+  it("X-SW-29 the positive pair: an unlabelled Swiss BOARD shell with a time still prints (W8 owns sheet content)", () => {
+    const boardShell = c({ ext_key: "sw-r2-b1", home: null, away: null });
+    const byeShell = c({ ext_key: "sw-r2-bye", home: null, away: null });
+    // An ext_key that only CONTAINS the bye shape is not one (the predicate is anchored).
+    const lookalike = c({ ext_key: "sw-r2-bye-x", home: null, away: null });
+    expect(ids(selectSheetFixtures([boardShell, byeShell, lookalike], DAY)).sort()).toEqual([boardShell.id, lookalike.id].sort());
+    expect(sheetDays([boardShell, byeShell]), "the board shell's day stays in the picker").toEqual([DAY]);
   });
 
   it("an entrant is never a bye: a FILLED seat beside a stale bye label still prints, on either side", () => {

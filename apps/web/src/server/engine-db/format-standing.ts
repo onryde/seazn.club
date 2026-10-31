@@ -1,6 +1,7 @@
 import "server-only";
 import type postgres from "postgres";
 import type { Tx } from "@/lib/db";
+import { systemByeSql } from "@/server/usecases/fixture-results-sql";
 
 // W2c batch-3 I1 — where a match stands for a FORMAT write: the one definition every format door reads. Two facts,
 // independent of each other (a walkover over a ledger every void took back is both):
@@ -17,10 +18,13 @@ import type { Tx } from "@/lib/db";
 //  - `fixture-override-guards.ts` asks a different question — which cfg a row RESOLVES (`config_snapshot is null`:
 //    the live resolution a division save moves) — and is not a reader of either fact.
 
-/** PLAYED, as a predicate over the fixtures row aliased `on`. */
+/** PLAYED, as a predicate over the fixtures row aliased `on`. W3 T3 (SW-M7, X-SW-5): a SYSTEM bye freezes its cfg at
+ *  award (the Swiss bye seat, stages.ts) and is not play, so its snapshot does not count (`systemByeSql`, the same
+ *  exemption `fixtureEvidenceSql` makes) — else an odd-field Pair would lock the stage's and the division's format. */
 export function playedSql(tx: postgres.Sql | Tx, on = "f") {
   const f = tx(on);
-  return tx`(${f}.config_snapshot is not null or exists (select 1 from score_events e where e.fixture_id = ${f}.id))`;
+  return tx`((${f}.config_snapshot is not null and not ${systemByeSql(tx, on)})
+             or exists (select 1 from score_events e where e.fixture_id = ${f}.id))`;
 }
 
 /** DECIDED WITHOUT PLAY, as a predicate over the fixtures row aliased `on`: an outcome, and no event that is not a void

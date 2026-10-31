@@ -55,7 +55,7 @@ import {
 } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
-import { resolveModule } from "@/server/engine-db";
+import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 // L3/#414 pass 3 — not re-exported through the engine-db barrel (index.ts),
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
@@ -1482,11 +1482,12 @@ async function swissGen(
   // of aborting the Generate and taking round 1's pairing with it. See
   // `SwissReconcileBlockedPolicy` for the full reasoning.
   //
-  // This is also what absorbs the ad-hoc case: `addFixture` puts a swiss
-  // fixture at `maxRound + 1` seated on both sides (Task 2.3), so a 3-round
-  // stage can hold a fully seated round 4. It trips the seated guard and is
-  // skipped, rather than needing a filter of its own here — one mechanism, so
-  // neither can quietly cover for the other.
+  // This is also what absorbed the ad-hoc case: `addFixture` used to put a
+  // swiss fixture at `maxRound + 1` seated on both sides (Task 2.3), so a
+  // 3-round stage could hold a fully seated round 4. W3 refuses that now
+  // (SWISS_ADHOC_REFUSED), but a LEGACY row of that shape still trips the
+  // seated guard and is skipped, rather than needing a filter of its own here
+  // — one mechanism, so neither can quietly cover for the other.
   const laterRounds = eager
     ? [...new Set(existing.map((f) => f.round_no))].filter((r) => r > target).sort((a, b) => a - b)
     : [];
@@ -1545,6 +1546,23 @@ async function swissGen(
     if (!byeShell) {
       throw new EngineError("CONFIG_INVALID", "swiss bye shell missing for pairing", { stageId, target });
     }
+    // W3 T3 (SW-M7, X-SW-5; RB3-7(a)'s app half): the bye's value is frozen at AWARD. The cfg is exactly what
+    // append-event.ts freezes at a match's first event — `resolveFixtureCfg` over the division, this stage and the
+    // shell's own override, at the division's pinned module — read here under the `division:` lock the caller holds,
+    // which every format save takes before its `division-config:` one, so no save lands between this read and the
+    // write. Like append-event, a null cfg freezes nothing. The snapshot is not PLAY: `systemByeSql` exempts it in
+    // `fixtureEvidenceSql` and `playedSql`, so Unpair, Rebuild, Undo and the format locks read the bye as before.
+    // And a bye is not played, so it takes no slot (SW-M13, X-SW-29): time, court, venue and pin go (`holdsSlot`).
+    const [division] = await tx<{ config: unknown; sport_key: string; module_version: string }[]>`
+      select config, sport_key, module_version from divisions where id = ${divisionId}`;
+    if (!division) throw new EngineError("CONFIG_INVALID", "swiss bye: division missing", { stageId, divisionId });
+    const [shellCfg] = await tx<{ rules_override: unknown }[]>`select rules_override from fixtures where id = ${byeShell.id}`;
+    const frozen = resolveFixtureCfg(
+      { config_snapshot: null, rules_override: shellCfg?.rules_override ?? null },
+      division.config,
+      { kind: "swiss", config: cfg },
+      resolveModule(division.sport_key, division.module_version),
+    );
     const seated = await tx<{ id: string }[]>`
       update fixtures set
         home_entrant_id = ${round.bye},
@@ -1552,7 +1570,13 @@ async function swissGen(
         status = 'forfeited',
         outcome = ${tx.json(byeAward(round.bye) as never)},
         home_slot_label = null,
-        away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+        away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)},
+        config_snapshot = ${frozen == null ? null : tx.json(frozen as never)},
+        config_snapshot_at = ${frozen == null ? null : tx`now()`},
+        scheduled_at = null,
+        court_id = null,
+        venue_id = null,
+        schedule_locked = false
       where id = ${byeShell.id}
       returning id`;
     for (const row of seated) seatedIds.push(row.id);
@@ -2381,6 +2405,9 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
   // rows they are judged by are deleted. A row already `sending` is left to finish; a seat that was never invited has no row.
   await cancelBoardInvites(tx, ids, ROUND_VOIDED_REASON);
   await tx`delete from fixture_external_play where fixture_id in ${tx(ids)}`;
+  // W3 T3 (SW-M7): a seated bye froze its cfg at award, so its snapshot goes with its seat — the round's next Pair
+  // freezes afresh, under the format that stands then. Only a system bye can reach here holding one: both callers refuse
+  // a round with any other evidence first (`fixtureEvidenceSql`, which exempts a system bye's snapshot alone).
   await tx`
     update fixtures set
       home_entrant_id = null,
@@ -2388,7 +2415,9 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
       status = 'scheduled',
       outcome = null,
       home_slot_label = null,
-      away_slot_label = null
+      away_slot_label = null,
+      config_snapshot = null,
+      config_snapshot_at = null
     where id in ${tx(ids)}`;
 }
 
@@ -2525,9 +2554,11 @@ export async function unpairSwissRound(
     // forfeit or retirement was excluded from the one guard that could still
     // have caught it after the status guard above had also been fooled.
     // Nothing is exempt here: a genuine bye never goes through appendEvent,
-    // so it has no events, no state and no frozen cfg, and the exemption
-    // belongs in the STATUS test above where `forfeited` would otherwise
-    // block every odd-field round.
+    // so it has no events and no state, and the exemption belongs in the
+    // STATUS test above where `forfeited` would otherwise block every
+    // odd-field round. Its frozen cfg (W3 T3: the bye freezes at award) is
+    // the one thing it holds, and `fixtureEvidenceSql` exempts it by name
+    // (`systemByeSql`), so this guard reads the bye exactly as before.
     const ids = inRound.map((f) => f.id);
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
@@ -2815,10 +2846,16 @@ export async function generateStageFixturesTx(
     }
   }
 
+  // ORDERED (W3 T3, controller ruling from the engine review): swissGen walks these rows to build each player's colour
+  // history, and the engine reads that history as a sequence. Without the ORDER BY the rows come back in whatever order
+  // the plan yields — round order through the (stage_id, round_no, seq_in_round) index, PHYSICAL order through a seq or
+  // bitmap scan, where a round written after a later one (any update makes a new tuple) reads back after it
+  // (swiss-history-round-order.test.ts).
   const existing = await tx<SwissExistingFixture[]>`
     select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
            scheduled_at, court_id, venue_id, schedule_locked
-    from fixtures where stage_id = ${stageId}`;
+    from fixtures where stage_id = ${stageId}
+    order by round_no, seq_in_round`;
 
   let swissSeatedCount = 0;
   let swissReshaped: SwissReshape | undefined;
