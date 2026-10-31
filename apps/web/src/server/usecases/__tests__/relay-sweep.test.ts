@@ -46,9 +46,20 @@ import { saveStreamSettings } from "../stream-codes";
 import { createStreamTarget } from "../stream-targets";
 import { type SessionDeps, createSession, currentSession, heartbeat, stopSession, storageReservations } from "../stream-sessions";
 import { type BackstopBucket, SweepScopeEmpty, backstopOutcome, isOrphan, sweepSessionLockKey, sweepStreamSessions } from "../relay-sweep";
+import { SPONSOR_FRAMES_BUCKET } from "@/lib/supabase-storage";
+import { ORPHAN_FRAME_GRACE_MS } from "@/server/sponsors/airings";
 
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
+
+// R4 S9 step 7d: the orphan-frame purge removes objects from the private frames bucket. The bucket, faked: every remove
+// is kept (bucket and paths) and answers success.
+const frameStore = vi.hoisted(() => ({ removes: [] as { bucket: string; paths: string[] }[] }));
+vi.mock("@/lib/supabase-admin", () => ({
+  supabaseAdmin: () => ({
+    storage: { from: (bucket: string) => ({ async remove(paths: string[]) { frameStore.removes.push({ bucket, paths: [...paths] }); return { data: [], error: null }; } }) },
+  }),
+}));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -164,6 +175,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       videosListed: 0, listingTruncated: false, videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0,
       videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0,
       cameraInputsCleared: 0, cameraRecordingsDeleted: 0, cameraRecordingsDeferred: 0, cameraRecordingsRefused: 0, cameraListingsTruncated: 0,   // R2004 1c
+      framesPurged: 0, framePurgesFailed: 0,   // R4 S9 7d
     });
     expect(listMachines).not.toHaveBeenCalled();   // no composed session in scope ever held a runner
     expect(listInputVideos, "R2004 1c: no ended composed session, no camera listed").not.toHaveBeenCalled();
@@ -311,6 +323,26 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(left).toEqual([fresh, foreign].sort());
     const links = (await sql<{ record_id: string }[]>`select record_id from capture_record_sessions where record_id in (${expired}, ${fresh}, ${foreign}) order by record_id`).map((x) => x.record_id);
     expect(links, "the expired record's link went with it").toEqual([fresh, foreign].sort());
+  });
+
+  it("R4 S9 orphan frames (step 7d): a frame no airing claims, on a session over for longer than ORPHAN_FRAME_GRACE_MS, is purged — its object from the private bucket, then its row; a claimed frame stays (the empty case first; mutant: drop the step → framesPurged 0)", async () => {
+    const r = await rig();
+    expect(await sweep(r), "the empty case: nothing to purge").toMatchObject({ framesPurged: 0, framePurgesFailed: 0 });
+    const orphan = { id: "1:sponsor.over_end", path: `${r.orgId}/${r.sessionId}/orphan.jpg` };
+    const claimed = { id: "2:sponsor.over_end", path: `${r.orgId}/${r.sessionId}/claimed.jpg` };
+    for (const f of [orphan, claimed]) {
+      await sql`insert into sponsor_airing_frames (session_id, moment_id, org_id, path) values (${r.sessionId}, ${f.id}, ${r.orgId}, ${f.path})`;
+    }
+    await sql`
+      insert into sponsor_airings (org_id, sponsor_name, fixture_id, session_id, moment_id, source, break_kind, style, started_at, ended_at)
+      values (${r.orgId}, 'Acme', ${r.fixtureId}, ${r.sessionId}, ${claimed.id}, 'rotation', 'over_end', 'lower_third', now() - interval '3 days', now() - interval '3 days')`;
+    await sql`update fixture_stream_sessions set state = 'completed', ended_at = now() - make_interval(secs => ${ORPHAN_FRAME_GRACE_MS / 1000 + 60}) where id = ${r.sessionId}`;
+    const removes = frameStore.removes.length;
+    const res = await sweep(r);
+    expect(res).toMatchObject({ framesPurged: 1, framePurgesFailed: 0 });
+    expect(frameStore.removes.slice(removes)).toEqual([{ bucket: SPONSOR_FRAMES_BUCKET, paths: [orphan.path] }]);
+    const left = await sql<{ moment_id: string }[]>`select moment_id from sponsor_airing_frames where session_id = ${r.sessionId}`;
+    expect(left.map((x) => x.moment_id)).toEqual([claimed.id]);
   });
 
   it("ORPHANS: a Machine with no session, one whose metadata names no session at all, and one whose session is terminal are destroyed — the terminal one through the shared forceDestroy, on EVERY pass (A22(a)); a live session's Machine is kept", async () => {

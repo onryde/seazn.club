@@ -27,7 +27,7 @@ import "server-only";
 //      BEFORE inputs (C2), inputs re-planned over what the pass actually deleted; a 409 is reported and retried tomorrow;
 //      a FULL page is flagged, never read as the whole set (A13).
 //   5. VIDEO FACTS (ruling 13 item 5, Dd), 6. SUMMARIES, 7. SAMPLE RETENTION, 7b. PHONE-BEAT RETENTION (W10, 24 h),
-//   7c. CAPTURE-RECORD RETENTION (spec 2026-10-12 §9, 30 days),
+//   7c. CAPTURE-RECORD RETENTION (spec 2026-10-12 §9, 30 days), 7d. ORPHAN SPONSOR FRAMES (R4 S9, session end + 24 h),
 //   8. ONE storage snapshot.
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
@@ -39,6 +39,7 @@ import type { DbEndReason } from "@/server/relay/domain/end-reason";
 import { isTerminal, type FailReason, type SessionState } from "@/server/relay/domain/session";
 import type { IngestVideo, RunnerListing } from "@/server/relay/ports";
 import { recordEvent, recordStorageSnapshot } from "@/server/relay/telemetry";
+import { purgeOrphanFrames } from "@/server/sponsors/airings";
 import {
   ACTIVE_STATES, TERMINAL_STATES, type SessionDeps,
   apply, destroyListedMachine, estimateCostMinor, reconcileSession, releaseOutput, storageHeadroomMinutes, storageUsageForColumns, tickSession,
@@ -83,6 +84,8 @@ export interface SweepResult {
   videosSeen: number; recordingsFinalised: number; summariesWritten: number; samplesDeleted: number;   // ruling 13 + Dd
   beatsDeleted: number;            // W10: phone-beat history past PHONE_BEAT_RETENTION_HOURS
   recordsDeleted: number;          // capture record upload (spec 2026-10-12 §9, P6): records past their expires_at
+  framesPurged: number;            // R4 S9 7d: orphan sponsor frames removed (object and row)
+  framePurgesFailed: number;       // R4 S9 7d: orphans whose storage remove failed — rows kept, retried tomorrow
 }
 
 export type BackstopBucket = Exclude<keyof SweepResult["backstop"], "candidates" | "visited" | "skippedLocked" | "errored">;
@@ -252,6 +255,7 @@ export async function sweepStreamSessions(
     videosListed: 0, listingTruncated: false,
     videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0, foreignVideosSkipped: 0,
     headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0, recordsDeleted: 0,
+    framesPurged: 0, framePurgesFailed: 0,
   };
 
   // 1. BACKSTOP — every non-terminal session, PLUS (C27) every session whose runner has not finished dying: `reconcileSession`
@@ -655,6 +659,15 @@ export async function sweepStreamSessions(
        where expires_at < ${now} ${orgIds ? sql`and org_id in ${sql(orgIds)}` : sql``}
        returning id`;
     out.recordsDeleted = purged.length;
+  }
+
+  // 7d. ORPHAN SPONSOR FRAMES (R4 S9): a proof-of-play frame no airing row claims, on a session over for longer than
+  //     ORPHAN_FRAME_GRACE_MS, goes — object, then row (`purgeOrphanFrames`, sponsors/airings.ts). A storage failure keeps
+  //     the rows for tomorrow's pass and is counted here, never thrown: the frames are never worth the sweep.
+  {
+    const frames = await purgeOrphanFrames(now, orgIds ? { orgIds } : {});
+    out.framesPurged = frames.purged;
+    out.framePurgesFailed = frames.failed;
   }
 
   // 8. ONE storage snapshot per run, on the fitted reading (its CHECK: headroom = limit − used − reserved, in integers).
