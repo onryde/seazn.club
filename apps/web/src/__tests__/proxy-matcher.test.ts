@@ -19,7 +19,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
 const { unstable_doesMiddlewareMatch } = await import("next/experimental/testing/server");
 const { config } = await import("@/proxy");
 
-const runs = (url: string): boolean => unstable_doesMiddlewareMatch({ config, nextConfig: {}, url });
+const matchesAsGiven = (url: string): boolean => unstable_doesMiddlewareMatch({ config, nextConfig: {}, url });
+/** Whether proxy runs on `url` IN PRODUCTION. `unstable_doesMiddlewareMatch` tries the path as given only, but a server
+ *  tries it as given AND decoded once (next/dist/server/lib/router-utils/resolve-routes.js: `match(parsedUrl.pathname)
+ *  || match(decodeURIComponent(…))`, the decode skipped when it throws) — so a test of the raw path alone would excuse a
+ *  `%2F` that the server decodes into a path proxy runs on (S9 review m2). */
+const runs = (url: string): boolean => {
+  let decoded = url;
+  try { decoded = decodeURIComponent(url); } catch { /* the server matches the raw path only */ }
+  return matchesAsGiven(url) || matchesAsGiven(decoded);
+};
 
 describe("proxy matcher (review fix 5)", () => {
   it("the records path — with or without a trailing slash, any code — never runs proxy, so Next never buffers its body", () => {
@@ -38,7 +47,7 @@ describe("proxy matcher (review fix 5)", () => {
       `/api/internal/relay/sessions/${sid}/airings/12%3Asponsor.over_end/frame`,
       `/api/internal/relay/sessions/${sid}/airings/12%3Asponsor.over_end/frame/`,
       `/api/internal/relay/sessions/${sid}/airings/scene%3Astarting%3A173000000/frame`,
-      `/api/internal/relay/sessions/${sid}/airings/a%2Fb/frame`,
+      `/api/internal/relay/sessions/${sid}/airings/50%/frame`,
     ];
     let checked = 0;
     for (const url of skipped) {
@@ -46,6 +55,12 @@ describe("proxy matcher (review fix 5)", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+
+  it("R4 S9 (review m2): `runs` is the server's raw-OR-decoded rule — an encoded slash decodes into a path proxy runs on, though the raw path alone would not match", () => {
+    const url = "/api/internal/relay/sessions/sid-1/airings/a%2Fb/frame";
+    expect(matchesAsGiven(url), "premise: the raw path alone is excluded").toBe(false);
+    expect(runs(url), "the server decodes it to …/airings/a/b/frame and runs proxy").toBe(true);
   });
 
   it("everything else still runs it: the other capture routes, near misses of the records path, other /api routes and pages — counted", () => {
@@ -66,14 +81,14 @@ describe("proxy matcher (review fix 5)", () => {
       "/api/internal/relay/sessions/sid-1", "/api/internal/relay/sessions/sid-1/heartbeat",
       "/api/internal/relay/sessions/sid-1/airings/12%3Asponsor.over_end", "/api/internal/relay/sessions/sid-1/airings/12%3Asponsor.over_end/frame-x",
       "/api/internal/relay/sessions/sid-1/airings/12%3Asponsor.over_end/frame/x", "/api/internal/relay/sessions/sid-1/airings/a/b/frame",
-      "/api/internal/relay/sessions/airings/m/frame",
+      "/api/internal/relay/sessions/airings/m/frame", "/api/internal/relay/sessions/sid-1/airings/a%2Fb/frame",
     ];
     let relayChecked = 0;
     for (const url of relayKept) {
       expect(runs(url), url).toBe(true);
       relayChecked++;
     }
-    expect(relayChecked).toBe(7);
+    expect(relayChecked).toBe(8);
     // Next's own exclusions stay excluded.
     expect(runs("/_next/static/chunk.js")).toBe(false);
     expect(runs("/favicon.ico")).toBe(false);

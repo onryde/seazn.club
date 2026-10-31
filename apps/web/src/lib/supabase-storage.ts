@@ -39,7 +39,7 @@ export async function deleteStorageObject(storagePath: string): Promise<void> {
 /**
  * R4 S9 (preflight R10): the PRIVATE bucket the compositor's proof-of-play frames live in — the one bucket here that is
  * not public. Ops creates it on stg and prod before the deploy (not Flyway); nothing ever builds a public URL into it, and
- * every read is a short-lived signed URL (`signedReadUrl`). The three helpers below touch THIS bucket only, never `assets`.
+ * every read is a short-lived signed URL (`signedReadUrl`). The helpers below touch THIS bucket only, never `assets`.
  */
 export const SPONSOR_FRAMES_BUCKET = "sponsor-frames";
 
@@ -56,14 +56,28 @@ export async function putStorageObject(path: string, bytes: Uint8Array, contentT
 }
 
 /** A signed URL that reads `path` from the private bucket for `ttlSec` seconds: a whole number from 1 to
- *  SIGNED_READ_MAX_TTL_SEC. Any other TTL is refused before the provider is asked (thrown, never repaired). */
-export async function signedReadUrl(path: string, ttlSec: number): Promise<string> {
+ *  SIGNED_READ_MAX_TTL_SEC. `path` must be one of `orgId`'s objects — a frame's key leads with its org
+ *  (`<orgId>/<sessionId>/<id>.jpg`, airingFramePath) — so a caller holding one org's report can never sign another org's
+ *  frame. Any other TTL, an org that is empty or holds a `/`, or a path outside the org is refused before the provider is
+ *  asked (thrown, never repaired). */
+export async function signedReadUrl(orgId: string, path: string, ttlSec: number): Promise<string> {
+  if (orgId === "" || orgId.includes("/") || !path.startsWith(`${orgId}/`)) {
+    throw new RangeError("signedReadUrl: the path is not one of the organisation's frames");
+  }
   if (!Number.isInteger(ttlSec) || ttlSec < 1 || ttlSec > SIGNED_READ_MAX_TTL_SEC) {
     throw new RangeError(`signedReadUrl: ttlSec must be a whole number from 1 to ${SIGNED_READ_MAX_TTL_SEC}, got ${ttlSec}`);
   }
   const { data, error } = await supabaseAdmin().storage.from(SPONSOR_FRAMES_BUCKET).createSignedUrl(path, ttlSec);
   if (error || !data) throw new Error(`storage sign failed: ${error?.message ?? "no URL"}`);
   return data.signedUrl;
+}
+
+/** Whether the frames bucket is PUBLIC — the one thing it must never be (preflight R10: ops creates it private). The
+ *  relay sweep asks once a day and raises an alarm on `true`. Throws when the provider cannot say (no such bucket). */
+export async function framesBucketIsPublic(): Promise<boolean> {
+  const { data, error } = await supabaseAdmin().storage.getBucket(SPONSOR_FRAMES_BUCKET);
+  if (error || !data) throw new Error(`storage bucket read failed: ${error?.message ?? "no bucket"}`);
+  return data.public === true;
 }
 
 /** Removes objects from the private bucket. An empty list asks the provider nothing. Throws on a storage error. */

@@ -39,6 +39,7 @@ import type { DbEndReason } from "@/server/relay/domain/end-reason";
 import { isTerminal, type FailReason, type SessionState } from "@/server/relay/domain/session";
 import type { IngestVideo, RunnerListing } from "@/server/relay/ports";
 import { recordEvent, recordStorageSnapshot } from "@/server/relay/telemetry";
+import { framesBucketIsPublic } from "@/lib/supabase-storage";
 import { purgeOrphanFrames } from "@/server/sponsors/airings";
 import {
   ACTIVE_STATES, TERMINAL_STATES, type SessionDeps,
@@ -84,8 +85,11 @@ export interface SweepResult {
   videosSeen: number; recordingsFinalised: number; summariesWritten: number; samplesDeleted: number;   // ruling 13 + Dd
   beatsDeleted: number;            // W10: phone-beat history past PHONE_BEAT_RETENTION_HOURS
   recordsDeleted: number;          // capture record upload (spec 2026-10-12 §9, P6): records past their expires_at
-  framesPurged: number;            // R4 S9 7d: orphan sponsor frames removed (object and row)
-  framePurgesFailed: number;       // R4 S9 7d: orphans whose storage remove failed — rows kept, retried tomorrow
+  framesPurged: number;            // R4 S9 7d: sponsor-frame objects removed (orphans past the grace, and every row's
+                                   //   cascade or moved key: sponsor_frame_tombstones)
+  framePurgesFailed: number;       // R4 S9 7d: objects whose storage remove failed (tombstones kept, retried tomorrow),
+                                   //   +1 when the purge itself threw
+  framesBucketPublic: boolean | null; // R4 S9 7d: the frames bucket's visibility (null: it could not be read)
 }
 
 export type BackstopBucket = Exclude<keyof SweepResult["backstop"], "candidates" | "visited" | "skippedLocked" | "errored">;
@@ -255,7 +259,7 @@ export async function sweepStreamSessions(
     videosListed: 0, listingTruncated: false,
     videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0, foreignVideosSkipped: 0,
     headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0, recordsDeleted: 0,
-    framesPurged: 0, framePurgesFailed: 0,
+    framesPurged: 0, framePurgesFailed: 0, framesBucketPublic: null,
   };
 
   // 1. BACKSTOP — every non-terminal session, PLUS (C27) every session whose runner has not finished dying: `reconcileSession`
@@ -661,13 +665,29 @@ export async function sweepStreamSessions(
     out.recordsDeleted = purged.length;
   }
 
-  // 7d. ORPHAN SPONSOR FRAMES (R4 S9): a proof-of-play frame no airing row claims, on a session over for longer than
-  //     ORPHAN_FRAME_GRACE_MS, goes — object, then row (`purgeOrphanFrames`, sponsors/airings.ts). A storage failure keeps
-  //     the rows for tomorrow's pass and is counted here, never thrown: the frames are never worth the sweep.
-  {
+  // 7d. SPONSOR FRAMES (R4 S9): a proof-of-play frame no airing row claims, on a session over for longer than
+  //     ORPHAN_FRAME_GRACE_MS, loses its row, and every object whose row went (that, a cascade, a moved key) is removed
+  //     (`purgeOrphanFrames`, sponsors/airings.ts). The frames are never worth the sweep: a storage failure is counted by
+  //     the purge, and a throw from it — the database, anything — is counted (+1), reported, and step 8 still runs.
+  try {
     const frames = await purgeOrphanFrames(now, orgIds ? { orgIds } : {});
     out.framesPurged = frames.purged;
     out.framePurgesFailed = frames.failed;
+  } catch (err) {
+    out.framePurgesFailed += 1;
+    log.error({ err: String(err) }, "relay sweep: the sponsor-frame purge failed — nothing was lost; the next pass retries it");
+    captureError(err, { route: "relay.sweep.sponsor_frames" });
+  }
+  //     And the bucket is asked whether it is PUBLIC (preflight R10: it must never be): `true` is an alarm, on both
+  //     channels, every day until it is fixed. A bucket that cannot be read is a warning only — every upload then 502s.
+  try {
+    out.framesBucketPublic = await framesBucketIsPublic();
+    if (out.framesBucketPublic) {
+      log.error({ alarm: "sponsor_frames_public" }, "relay sweep: the sponsor-frames bucket is PUBLIC — every proof-of-play frame is readable by its URL alone");
+      captureError(new Error("relay sweep: the sponsor-frames storage bucket is public"), { route: "relay.sweep.sponsor_frames_bucket" });
+    }
+  } catch (err) {
+    log.warn({ err: String(err) }, "relay sweep: the sponsor-frames bucket could not be read — its privacy was not checked");
   }
 
   // 8. ONE storage snapshot per run, on the fitted reading (its CHECK: headroom = limit − used − reserved, in integers).

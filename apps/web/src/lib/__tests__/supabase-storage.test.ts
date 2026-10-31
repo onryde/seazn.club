@@ -9,10 +9,17 @@ const sb = vi.hoisted(() => ({
   calls: [] as { bucket: string; op: string; args: unknown[] }[],
   error: null as { message: string } | null,
   noData: false,
+  bucket: { public: false } as { public: unknown },
+  bucketsAsked: [] as string[],
 }));
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: () => ({
     storage: {
+      async getBucket(id: string) {
+        sb.bucketsAsked.push(id);
+        if (sb.error) return { data: null, error: sb.error };
+        return { data: sb.noData ? null : { id, name: id, ...sb.bucket }, error: null };
+      },
       from: (bucket: string) => {
         const call = (op: string, data: unknown) => async (...args: unknown[]) => {
           sb.calls.push({ bucket, op, args });
@@ -31,13 +38,19 @@ vi.mock("@/lib/supabase-admin", () => ({
 
 import { ASSETS_BUCKET } from "@/lib/storage-url";
 import {
-  SIGNED_READ_MAX_TTL_SEC, SPONSOR_FRAMES_BUCKET, putStorageObject, removeStorageObjects, signedReadUrl,
+  SIGNED_READ_MAX_TTL_SEC, SPONSOR_FRAMES_BUCKET, framesBucketIsPublic, putStorageObject, removeStorageObjects, signedReadUrl,
 } from "@/lib/supabase-storage";
+
+const ORG = "6b65a1f0-1111-4c1a-9a51-6f1d2b3c4d5e";
+const OTHER_ORG = "6b65a1f0-2222-4c1a-9a51-6f1d2b3c4d5e";
+const KEY = `${ORG}/0b5f6f1e-8c8e-4c1a-9a51-6f1d2b3c4d5e/MTI6c3BvbnNvci5vdmVyX2VuZA.jpg`;
 
 beforeEach(() => {
   sb.calls.length = 0;
   sb.error = null;
   sb.noData = false;
+  sb.bucket = { public: false };
+  sb.bucketsAsked.length = 0;
 });
 
 describe("the private frames bucket (R4 S9)", () => {
@@ -58,34 +71,65 @@ describe("the private frames bucket (R4 S9)", () => {
     expect(err.message).not.toContain("255");
   });
 
-  it("signedReadUrl signs a read of the private bucket for the TTL asked — 1 s and SIGNED_READ_MAX_TTL_SEC both accepted — and never asks for a public URL", async () => {
+  it("signedReadUrl signs a read of one of the org's frames in the private bucket for the TTL asked — 1 s and SIGNED_READ_MAX_TTL_SEC both accepted — and never asks for a public URL", async () => {
     let checked = 0;
     for (const ttl of [1, 60, SIGNED_READ_MAX_TTL_SEC]) {
-      const url = await signedReadUrl("o/s/m.jpg", ttl);
+      const url = await signedReadUrl(ORG, KEY, ttl);
       expect(url).toContain("/object/sign/");
       checked++;
     }
     expect(checked).toBe(3);
-    expect(sb.calls.map((c) => [c.bucket, c.op, c.args])).toEqual([1, 60, SIGNED_READ_MAX_TTL_SEC].map((ttl) => [SPONSOR_FRAMES_BUCKET, "createSignedUrl", ["o/s/m.jpg", ttl]]));
+    expect(sb.calls.map((c) => [c.bucket, c.op, c.args])).toEqual([1, 60, SIGNED_READ_MAX_TTL_SEC].map((ttl) => [SPONSOR_FRAMES_BUCKET, "createSignedUrl", [KEY, ttl]]));
   });
 
   it("signedReadUrl refuses, before asking the provider, a TTL that is not a whole number from 1 to SIGNED_READ_MAX_TTL_SEC", async () => {
     const refused = [0, -1, SIGNED_READ_MAX_TTL_SEC + 1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 86_400 * 365];
     let checked = 0;
     for (const ttl of refused) {
-      await expect(signedReadUrl("o/s/m.jpg", ttl), String(ttl)).rejects.toThrow(RangeError);
+      await expect(signedReadUrl(ORG, KEY, ttl), String(ttl)).rejects.toThrow(RangeError);
       checked++;
     }
     expect(checked).toBe(refused.length);
     expect(sb.calls, "the provider was never asked").toEqual([]);
   });
 
+  it("signedReadUrl refuses (review m9), before asking the provider, a path that is not one of the org's: another org's key, a key that only starts with the org's id, a bare org id, an empty org, and an org holding a `/`", async () => {
+    const refused: Array<[string, string]> = [
+      [OTHER_ORG, KEY], [ORG, `${ORG}x/s/m.jpg`], [ORG, ORG], [ORG, `x/${KEY}`], ["", `/${KEY}`], ["", KEY], [`${ORG}/s`, `${ORG}/s/m.jpg`],
+    ];
+    let checked = 0;
+    for (const [org, path] of refused) {
+      await expect(signedReadUrl(org, path, 60), `${org} ${path}`).rejects.toThrow(/not one of the organisation's frames/);
+      checked++;
+    }
+    expect(checked).toBe(refused.length);
+    expect(sb.calls, "the provider was never asked").toEqual([]);
+    expect(await signedReadUrl(ORG, KEY, 60), "the positive pair").toContain("/object/sign/");
+  });
+
   it("signedReadUrl throws on a storage error or an answer with no URL", async () => {
     sb.error = { message: "Object not found" };
-    await expect(signedReadUrl("o/s/m.jpg", 60)).rejects.toThrow(/Object not found/);
+    await expect(signedReadUrl(ORG, KEY, 60)).rejects.toThrow(/Object not found/);
     sb.error = null;
     sb.noData = true;
-    await expect(signedReadUrl("o/s/m.jpg", 60)).rejects.toThrow(/no URL/);
+    await expect(signedReadUrl(ORG, KEY, 60)).rejects.toThrow(/no URL/);
+  });
+
+  it("framesBucketIsPublic asks about the frames bucket and reads `public` strictly — only `true` is public; a storage error or no bucket throws", async () => {
+    const cases: Array<[unknown, boolean]> = [[false, false], [true, true], [undefined, false], ["true", false]];
+    let checked = 0;
+    for (const [flag, expected] of cases) {
+      sb.bucket = { public: flag };
+      expect({ flag, isPublic: await framesBucketIsPublic() }).toEqual({ flag, isPublic: expected });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    expect(sb.bucketsAsked).toEqual(cases.map(() => SPONSOR_FRAMES_BUCKET));
+    sb.error = { message: "Bucket not found" };
+    await expect(framesBucketIsPublic()).rejects.toThrow(/Bucket not found/);
+    sb.error = null;
+    sb.noData = true;
+    await expect(framesBucketIsPublic()).rejects.toThrow(/no bucket/);
   });
 
   it("removeStorageObjects removes the paths from the private bucket; an empty list asks nothing; an error is thrown", async () => {
@@ -99,7 +143,7 @@ describe("the private frames bucket (R4 S9)", () => {
 
   it("no helper ever touches the public bucket or builds a public URL", async () => {
     await putStorageObject("x.jpg", Uint8Array.of(1), "image/jpeg");
-    await signedReadUrl("x.jpg", 30);
+    await signedReadUrl(ORG, KEY, 30);
     await removeStorageObjects(["x.jpg"]);
     expect(sb.calls).toHaveLength(3);
     expect(new Set(sb.calls.map((c) => c.bucket))).toEqual(new Set([SPONSOR_FRAMES_BUCKET]));
