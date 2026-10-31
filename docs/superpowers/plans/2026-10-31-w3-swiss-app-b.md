@@ -197,6 +197,15 @@ type TiebreakerKey = /* … */ | "opp_diff";
 1. **A stored-config cleanup.** No storage is keyed by epoch (`scoring.ts:222,735-780` is the only consumer, a write gate), and there is no re-fold job. What changed is the config shape the epoch moved for: `byeScore` is gone. The owner's data rule (10-28) and the W2e precedent (V481 step 3, `progressScore`) say remove it in all five stored places, pre-deploy and loudly.
 2. **The 426 gate.** After deploy, a native capture client running engine 1.x and sending `engine_epoch: 4` for a boardgame fixture gets `426 ENGINE_OUTDATED`. The web pad sends no `engine_epoch` and is unaffected (smoke `epochFloorOverride.ts:86`). The emergency lever is `ENGINE_EPOCH_FLOOR_OVERRIDE` (`engine-epoch-override.ts:38`). This is owed a release-note line and a pinned test, not code.
 3. **No cache invalidation** beyond step 1. `match_states.state->'cfg'` is one of the five places.
+4. **The division save refuses the stripped key unless step 1 runs (engine T6 review, read at 5d7bac77b6).**
+   - `divisions.ts:1138` `changedConfigKeys` diffs the parsed patch against the RAW stored row. A 2.0.0 parse strips `byeScore`, so the stored key reads as a change.
+   - `divisionRefusals` then refuses it on any started stage with `DIVISION_FORMAT_LOCKED` (`rule-locks.ts:155-157`).
+   - `restoreKey` writes it back (`divisions.ts:1164`), so every later save repeats the refusal. A no-change save gets a 409 that names `byeScore` (`divisions.ts:1216-1233`).
+   - So the `divisions.config` strip is load-bearing, not cosmetic. Pin it: a started boardgame division that still carries `byeScore` saves an unrelated field without a 409 after this task (the I-2 retitle in Task 1 covers the key not being written back).
+5. **The 1.x window.** Between the pre-deploy strip and 2.0.0 serving, the 1.x app re-adds the default `byeScore: 2` on any boardgame config it writes.
+   - The migration is idempotent, so re-run it once after 2.0.0 is serving. The runbook line goes in the PR body.
+   - Smoke check 2 and the stg read in Task 12 run after that re-run.
+6. **The rollback lever is safe here.** `ENGINE_EPOCH_FLOOR_OVERRIDE=boardgame=4` lets an epoch-4 phone through. Engine T6 proved outcomes, summaries and deltas are byte-identical across the bump (only the `byeScore` text left the states), so an epoch-4 phone folds the same results. Say so in the release note.
 
 **Files:**
 - Create: `db/migration/deltas/V<next>__w3_bye_score_cleanup.sql` (DATA CHANGE, LOUD). Its header names the five places in V481's words. It counts first, writes in one block, and scopes every statement by the division's `sport_key = 'boardgame'`. Each statement is `… #- '{byeScore}'` (or the nested path for `state->'cfg'`) `where … ? 'byeScore'`. It is idempotent.
