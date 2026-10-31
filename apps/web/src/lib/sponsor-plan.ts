@@ -9,10 +9,13 @@
 //   2. The dial (P2) — Light: every major; Normal: every major + every 3rd minor, counted over every minor of the
 //      fixture, hidden ones included; Busy: every break.
 //   3. Hidden graphics: a break opened while Hide graphics was on gets no card and takes no rotation position.
-//   4. The 90 s cooldown thins MINOR breaks only, measured from the last break that has a card (R4).
+//   4. The 90 s cooldown thins MINOR breaks only (R4): within 90 s after the last break that has a card, or within 90 s
+//      before a frozen card (a minor made eligible by a mid-match dial change must not crowd a card already given).
 //   5. A NEW assignment only for a break inside the `recent` window and no older than SPONSOR_STALE_MS (R2), so a first
 //      poll mid-match does not hand every past break a card.
 //   6. Who: a pending Play next choice (operator, no position), else the P7 cycle at the org's next position (D14, F9).
+//      Both draw on TICKED cards only. A frozen break still airs after its sponsor is unticked (spec §3.2: an untick
+//      applies only to breaks not yet assigned), through `assignedCards`.
 import { SPONSOR_TIER_WEIGHTS, type SponsorTier } from "@/lib/sponsor-tiers";
 
 export type SponsorFrequency = "light" | "normal" | "busy";
@@ -55,7 +58,8 @@ export interface SponsorPlanAiring {
   holdMs: number;
   breakKind: string;
 }
-/** Spec §3.2, exact. Null: rotation off for this fixture, or no sponsor ticked. */
+/** Spec §3.2, exact. Null: rotation off for this fixture, or no card at all (none ticked, none assigned). `cards` is
+ *  the ticked cards plus any unticked card an airing still references. */
 export type SponsorPlan = { cards: SponsorCard[]; airings: SponsorPlanAiring[] } | null;
 
 export interface BreakOpened extends BreakDecl {
@@ -91,8 +95,11 @@ export interface PlanInput {
   /** The `recent` window. */
   windowSeqs: readonly number[];
   settings: { enabled: boolean; frequency: SponsorFrequency } | null;
-  /** Ticked, in resolveSponsors order. One card per sponsor. */
+  /** Ticked, in resolveSponsors order. One card per sponsor. The rotation and Play next draw on these only. */
   cards: readonly SponsorCard[];
+  /** The current card of every sponsor this fixture's assignments name, ticked or not (a deleted sponsor has none).
+   *  Airings resolve through `cards` ∪ `assignedCards`; a ticked card may appear in both lists. */
+  assignedCards: readonly SponsorCard[];
   /** This fixture's persisted (frozen) assignments. */
   assigned: readonly SponsorAssignment[];
   operatorLog: readonly OperatorLogEntry[];
@@ -228,12 +235,22 @@ function checkInput(i: PlanInput): void {
     const id = sponsorMomentId(b.seq, b.kind);
     if (moments.has(id)) throw new SponsorPlanInputError(`breaks: ${id} twice`);
     moments.add(id);
+    if (b.size !== "minor" && b.size !== "major") throw new SponsorPlanInputError(`breaks: ${id} has size ${String(b.size)}`);
   }
   // An assignment names a sponsor, not a card: with two cards for one sponsor a re-plan could not tell which it showed.
-  const sponsors = new Set<string>();
+  // Across the two lists the same card may appear in both (a ticked sponsor that is also assigned).
+  const tickedCard = new Map<string, string>();
   for (const c of i.cards) {
-    if (sponsors.has(c.sponsorId)) throw new SponsorPlanInputError(`cards: sponsor ${c.sponsorId} has two cards`);
-    sponsors.add(c.sponsorId);
+    if (tickedCard.has(c.sponsorId)) throw new SponsorPlanInputError(`cards: sponsor ${c.sponsorId} has two cards`);
+    tickedCard.set(c.sponsorId, c.id);
+  }
+  const assignedSponsors = new Set<string>();
+  for (const c of i.assignedCards) {
+    const ticked = tickedCard.get(c.sponsorId);
+    if (assignedSponsors.has(c.sponsorId) || (ticked !== undefined && ticked !== c.id)) {
+      throw new SponsorPlanInputError(`assignedCards: sponsor ${c.sponsorId} has two cards`);
+    }
+    assignedSponsors.add(c.sponsorId);
   }
 }
 
@@ -241,20 +258,34 @@ export function planSponsors(i: PlanInput): SponsorPlanResult {
   checkInput(i);
   const live = new Set(i.breaks.map((b) => sponsorMomentId(b.seq, b.kind)));
   const undone = i.complete ? i.assigned.filter((a) => !live.has(a.momentId)) : [];
-  if (i.settings === null || !i.settings.enabled || i.cards.length === 0) {
+  if (i.settings === null || !i.settings.enabled || (i.cards.length === 0 && i.assignedCards.length === 0)) {
     return { plan: null, newAssignments: [], undone };
   }
 
   const frozen = new Map(i.assigned.map((a) => [a.momentId, a]));
   const eligible = new Set(eligibleBreaks(i.breaks, i.settings.frequency).map((b) => sponsorMomentId(b.seq, b.kind)));
   const inWindow = new Set(i.windowSeqs);
-  const cardOfSponsor = new Map(i.cards.map((c) => [c.sponsorId, c]));
+  const tickedOfSponsor = new Map(i.cards.map((c) => [c.sponsorId, c]));
   const cardById = new Map(i.cards.map((c) => [c.id, c]));
   const cycle = weightedCycle(i.cards);
+  // What an airing can show: a ticked card first, else the assigned sponsor's current card.
+  const shownOfSponsor = new Map([...i.assignedCards, ...i.cards].map((c) => [c.sponsorId, c]));
+
+  // Every live stored operator row has used its choice, whatever its seq: a break that becomes assignable before it
+  // (a dial change, a voided undo) must not air the same pick twice.
+  const usedChoices = new Set<number>();
+  const frozenCardMs: number[] = [];
+  for (const b of i.breaks) {
+    const stored = frozen.get(sponsorMomentId(b.seq, b.kind));
+    if (stored === undefined) continue;
+    frozenCardMs.push(timeOf(b.at, `break ${stored.momentId}`));
+    if (stored.source === "operator" && stored.operatorChoiceAt !== null) {
+      usedChoices.add(timeOf(stored.operatorChoiceAt, `assignment ${stored.momentId}`));
+    }
+  }
 
   const held = new Map<string, SponsorAssignment>(); // momentId → the assignment this plan airs it with
   const newAssignments: SponsorAssignment[] = [];
-  const usedChoices = new Set<number>(); // Play next choices (by instant) an earlier live operator assignment used
   let lastCardMs: number | null = null;
   let position = i.nextPosition;
 
@@ -265,14 +296,12 @@ export function planSponsors(i: PlanInput): SponsorPlanResult {
     if (stored !== undefined) {
       held.set(momentId, stored);
       lastCardMs = atMs;
-      if (stored.source === "operator" && stored.operatorChoiceAt !== null) {
-        usedChoices.add(timeOf(stored.operatorChoiceAt, `assignment ${momentId}`));
-      }
       continue;
     }
     if (!eligible.has(momentId)) continue;
     if (graphicsHiddenAt(i.operatorLog, b.at)) continue;
     if (b.size === "minor" && lastCardMs !== null && atMs - lastCardMs < SPONSOR_COOLDOWN_MS) continue;
+    if (b.size === "minor" && frozenCardMs.some((t) => t >= atMs && t - atMs < SPONSOR_COOLDOWN_MS)) continue;
     if (!inWindow.has(b.seq) || i.now - atMs > SPONSOR_STALE_MS) continue;
 
     const look = SPONSOR_STYLE_BY_SIZE[b.size];
@@ -280,7 +309,7 @@ export function planSponsors(i: PlanInput): SponsorPlanResult {
     const choice = playNextChoiceAt(i.operatorLog, b.at);
     const choiceMs = choice === null ? null : timeOf(choice.setAt, "next_sponsor_id");
     const chosen =
-      choice !== null && choiceMs !== null && !usedChoices.has(choiceMs) ? cardOfSponsor.get(choice.sponsorId) : undefined;
+      choice !== null && choiceMs !== null && !usedChoices.has(choiceMs) ? tickedOfSponsor.get(choice.sponsorId) : undefined;
     let a: SponsorAssignment;
     if (chosen !== undefined && choice !== null && choiceMs !== null) {
       usedChoices.add(choiceMs);
@@ -293,7 +322,9 @@ export function planSponsors(i: PlanInput): SponsorPlanResult {
         operatorChoiceAt: choice.setAt,
       };
     } else {
-      // A choice whose sponsor is no longer ticked falls through to the rotation and stays pending.
+      // A choice whose sponsor is no longer ticked falls through to the rotation and stays pending. With no ticked
+      // card there is no rotation: the break gets nothing and gives the cooldown nothing to run from.
+      if (cycle.length === 0) continue;
       const c = cardById.get(cycle[position % cycle.length]!)!;
       a = { ...base, sponsorId: c.sponsorId, sponsorName: c.name, position, source: "rotation", operatorChoiceAt: null };
       position++;
@@ -303,17 +334,23 @@ export function planSponsors(i: PlanInput): SponsorPlanResult {
     lastCardMs = atMs;
   }
 
-  // The window's breaks that have an assignment whose sponsor still has a card. A deleted sponsor (null) or an
-  // unticked one keeps its assignment — the break is never handed to anyone else — but has no card to show.
+  // The window's breaks that have an assignment whose sponsor still has a card (ticked or assigned). A deleted sponsor
+  // (null) keeps its assignment — the break is never handed to anyone else — but has no card to show.
   const airings: SponsorPlanAiring[] = [];
+  const cards = [...i.cards];
+  const cardIds = new Set(cards.map((c) => c.id));
   for (const b of i.breaks) {
     if (!inWindow.has(b.seq)) continue;
     const momentId = sponsorMomentId(b.seq, b.kind);
     const a = held.get(momentId);
-    const c = a?.sponsorId == null ? undefined : cardOfSponsor.get(a.sponsorId);
+    const c = a?.sponsorId == null ? undefined : shownOfSponsor.get(a.sponsorId);
     if (a === undefined || c === undefined) continue;
     airings.push({ momentId, seq: b.seq, cardId: c.id, style: a.style, holdMs: a.holdMs, breakKind: b.kind });
+    if (!cardIds.has(c.id)) {
+      cardIds.add(c.id);
+      cards.push(c);
+    }
   }
 
-  return { plan: { cards: [...i.cards], airings }, newAssignments, undone };
+  return { plan: { cards, airings }, newAssignments, undone };
 }
