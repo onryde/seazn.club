@@ -53,14 +53,16 @@ async function renderGallery(keep: (c: GalleryCell) => boolean) {
 }
 
 describe("the gallery's sponsor cells draw the card in the template's declared slot", () => {
-  it("every sponsor-slot cell: one card, in its slot's declared box, the 43-character name and the short link", async () => {
+  it("every sponsor-slot cell: one card, in its slot's declared box, its own card's face (name; link and logo when it has them)", async () => {
     const { cells, html } = await renderGallery((c) => c.sponsorSlot !== null);
     const byKey = figures(html);
-    const title = GALLERY_SPONSOR_CARDS[0]!;
-    const link = sponsorShortLinkText(title.shortCode);
-    expect(link, "premise: the title card prints a short link").not.toBeNull();
+    expect(sponsorShortLinkText(GALLERY_SPONSOR_CARDS[0]!.shortCode), "premise: the title card prints a short link").not.toBeNull();
     let checked = 0;
+    let plainFaces = 0;
     for (const cell of cells) {
+      const own = GALLERY_SPONSOR_CARDS.find((c) => c.id === cell.sponsorCard);
+      expect(own, `${cell.key}: a gallery card`).toBeDefined();
+      const link = sponsorShortLinkText(own!.shortCode);
       const fig = byKey.get(cell.key);
       expect(fig, `${cell.key} is drawn`).toBeDefined();
       const declared = OVERLAY_TEMPLATES[cell.templateId as keyof typeof OVERLAY_TEMPLATES].sponsorSlots[cell.sponsorSlot!];
@@ -69,14 +71,22 @@ describe("the gallery's sponsor cells draw the card in the template's declared s
       expect(fig, `${cell.key}: the declared box`).toContain(slotStyle(declared));
       expect(fig, `${cell.key}: the card in the slot's own look`).toContain(`data-style="${cell.sponsorSlot}"`);
       expect(fig, `${cell.key}: held, not folding`).toContain('data-phase="hold"');
-      expect(fig).toContain(title.name.replaceAll("&", "&amp;"));
-      expect(fig).toContain(`data-testid="ovl-sponsor-link" class="ovl-sponsor-link">${link}<`);
+      expect(fig).toContain(own!.name.replaceAll("&", "&amp;"));
+      if (link !== null) expect(fig).toContain(`data-testid="ovl-sponsor-link" class="ovl-sponsor-link">${link}<`);
+      else expect(fig, `${cell.key}: no link without a code`).not.toContain("ovl-sponsor-link");
+      expect(fig!.includes('class="ovl-sponsor-logo"'), `${cell.key}: a logo iff the card has one`).toBe(own!.logoUrl !== null);
+      expect(fig!.includes('class="ovl-sponsor-mono"'), `${cell.key}: the monogram otherwise`).toBe(own!.logoUrl === null);
+      if (link === null && own!.logoUrl === null) {
+        plainFaces++;
+        expect(fig, "its caption says so").toContain("Sponsor card without logo or link");
+      }
       // The card is not ALSO drawn as a slab in the moment slot.
       expect(fig, `${cell.key}: no slab`).not.toContain('data-testid="overlay-moment"');
       checked++;
     }
-    console.log(`sponsor-slot cells drawn and checked: ${checked}`);
+    console.log(`sponsor-slot cells drawn and checked: ${checked} (plain face: ${plainFaces})`);
     expect(checked, "anti-vacuity").toBeGreaterThan(0);
+    expect(plainFaces, "anti-vacuity (m3): the plain face is drawn").toBeGreaterThan(0);
     expect(byKey.size).toBe(checked);
   });
 

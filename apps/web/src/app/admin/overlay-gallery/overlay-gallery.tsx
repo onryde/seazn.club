@@ -17,6 +17,7 @@ import { OVERLAY_SPORT_KEYS } from "@/components/overlay/overlay-tokens";
 import { OVERLAY_TEMPLATES, type TemplateId } from "@/components/overlay/template-registry";
 import {
   GALLERY_MOMENT_SAMPLES,
+  GALLERY_SPONSOR_CARDS,
   gallerySponsorPlan,
   type GalleryCell,
   type GallerySnapshotKind,
@@ -67,7 +68,7 @@ function cellData(
   // R4 S7: a sponsor cell pins the card the REAL planner airs in that slot; a carousel cell carries the cards only, and
   // the stage's carousel shows them. Both on the cell's own snapshot, so the scene and the scorebug are the real ones.
   if (cell.sponsorSlot !== null) {
-    const plan = gallerySponsorPlan(cell.sponsorSlot);
+    const plan = gallerySponsorPlan(cell.sponsorSlot, cell.sponsorCard ?? undefined);
     const moment = sponsorMoments(plan)[0];
     if (moment === undefined) throw new Error(`overlay gallery: no sponsor moment for cell ${cell.key}`);
     return { snapshot: { ...snapshot, sponsorPlan: plan }, moment };
@@ -98,9 +99,21 @@ function decidedWinnerIndex(snapshot: OverlayLiveData, sides: OverlayGalleryProp
   return at === 0 || at === 1 ? at : null;
 }
 
+/** Which face a sponsor cell's card shows — what gallery check 9 holds it to: `full` (a logo and a short link), `plain`
+ *  (the monogram, no link), or "" off the sponsor cells. */
+function sponsorFaceOf(cell: GalleryCell): "full" | "plain" | "" {
+  const c = GALLERY_SPONSOR_CARDS.find((x) => x.id === cell.sponsorCard);
+  if (c === undefined) return "";
+  return c.logoUrl !== null && c.shortCode !== undefined ? "full" : "plain";
+}
+
 function cellState(cell: GalleryCell, ui: Record<string, string>, moment: OverlayMoment | undefined): string {
   if (cell.sponsorSlot !== null) {
-    return t(ui, "admin.overlayGallery.sponsorCard", { slot: t(ui, SPONSOR_SLOT_LABEL[cell.sponsorSlot]) });
+    const slot = t(ui, SPONSOR_SLOT_LABEL[cell.sponsorSlot]);
+    // The plain face (fix round 1, m3): the card with no logo and no short code.
+    return sponsorFaceOf(cell) === "plain"
+      ? t(ui, "admin.overlayGallery.sponsorCardPlain", { slot })
+      : t(ui, "admin.overlayGallery.sponsorCard", { slot });
   }
   if (cell.carousel) return t(ui, "admin.overlayGallery.sponsorCarousel");
   if (cell.resultStatus !== null) return t(ui, `score.status.${cell.resultStatus}`);
@@ -185,6 +198,8 @@ export function OverlayGallery(props: OverlayGalleryProps) {
                     data-slab-placement={def.slabPlacement}
                     data-safe-area={JSON.stringify(def.sceneCardSafeArea)}
                     data-sponsor-slot={cell.sponsorSlot ?? ""}
+                    data-sponsor-card={cell.sponsorCard ?? ""}
+                    data-sponsor-face={sponsorFaceOf(cell)}
                     data-sponsor-carousel={cell.carousel ? "1" : ""}
                     data-sponsor-slots={JSON.stringify(def.sponsorSlots)}
                     className="m-0 space-y-1.5"

@@ -13,13 +13,14 @@
 // planner (`planSponsors`) planned and the REAL `sponsorMoments` built — the hook's own inputs, in the hook's order.
 // The stage-level seam (the hook emitting through the real stage) is `overlay-stage-sponsor.test.tsx`.
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sponsorMoments, type OverlayMoment } from "@/lib/overlay-moments";
 import {
   SIGNAL_SPONSOR_END,
   SIGNAL_SPONSOR_START,
   SPONSOR_LINE_MAX_BYTES,
   SponsorLineError,
+  droppingSponsorLine,
   sponsorLine,
   sponsorQueueLines,
   type SponsorQueueView,
@@ -37,10 +38,13 @@ import { INITIAL, momentIdOf, momentQueueReducer as reduce, type MomentQueueStat
 import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../moment-timing";
 import {
   CAROUSEL_INITIAL,
+  CAROUSEL_MEMORY_INITIAL,
   carouselDeadline,
   carouselLines,
+  carouselMemoryOf,
   carouselMomentId,
   carouselOrder,
+  carouselResume,
   carouselStep,
   type CarouselState,
 } from "../sponsor-card";
@@ -265,6 +269,53 @@ describe("sponsorQueueLines — when a line fires", () => {
     expect(parse(lines[1]!).body).toEqual({ momentId: momentIdOf(m), at: AT, cutShort: true });
   });
 
+  it("fix round 1 (m2): a start the emit site's builder drops is never tracked — no end follows it; ONE warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const real = sponsorMomentAt(12, OVER_END);
+      const m: OverlayMoment = { ...real, sponsor: { ...real.sponsor!, cardId: "x".repeat(600) } };
+      const states: MomentQueueState[] = [];
+      let s = reduce(INITIAL, { type: "enqueue", moments: [m], now: 0, foldMs: F, holdMs: H });
+      states.push(s);
+      s = reduce(s, { type: "tick", now: s.deadline!, foldMs: F, holdMs: H });
+      states.push(s, s);
+      runOut(s, states);
+      const build = droppingSponsorLine();
+      let onAir: string | null = null;
+      const lines: string[] = [];
+      for (const st of states) {
+        const r = sponsorQueueLines(onAir, view(st), AT, build);
+        onAir = r.onAir;
+        lines.push(...r.lines);
+      }
+      expect(lines, "neither half of the pair").toEqual([]);
+      expect(onAir).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      // The same states through the throwing default: the refusal is real.
+      expect(() => track(states)).toThrow(SponsorLineError);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("droppingSponsorLine: a good body is the line; refusals return null, warned once per builder; any OTHER error still throws", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const build = droppingSponsorLine();
+      const end = { momentId: "1:sponsor.over_end", at: AT, cutShort: false };
+      expect(build("end", end)).toBe(sponsorLine("end", end));
+      expect(build("end", { momentId: "x" })).toBeNull();
+      expect(build("end", { ...end, momentId: "x".repeat(600) })).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(droppingSponsorLine()("end", { momentId: "x" }), "a second builder warns for itself").toBeNull();
+      expect(warn).toHaveBeenCalledTimes(2);
+      // JSON cannot carry a BigInt: a TypeError, not a refusal — it is not swallowed.
+      expect(() => build("end", { ...end, momentId: 1n })).toThrow(TypeError);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("two cards back to back (a second break queued behind the first): start A, end A, start B, end B — in that order", () => {
     const a = sponsorMomentAt(12, OVER_END);
     const b = sponsorMomentAt(20, OVER_END);
@@ -446,31 +497,84 @@ describe("carouselStep — 10 s each, one at a time, yielding to the moment on a
     expect(step(s, T0 + 1_000)).toBe(s);
   });
 
-  it("over a long run, the ids of consecutive showings never collide, whatever the yields (property)", () => {
+  // Fix round 1: across REMOUNTS too (I1 — the stage's memory, `carouselMemoryOf` → `carouselResume`), and with the
+  // timer dispatching the yielding flag IN FORCE (m6: the hook's timer closes over the current `yielding` prop — the
+  // last event's — never a hard-coded false). A showing is keyed by when it started and what it showed, never by its
+  // id: keying on the id would fold the reviewer's probe — two DIFFERENT cards under one id — into one showing.
+  it("over a long run, across remounts, every showing has its own id and the rotation never restarts, whatever the yields (property)", () => {
     let runs = 0;
+    let remounts = 0;
+    let showingsWalked = 0;
     fc.assert(
       fc.property(
-        fc.array(fc.record({ gap: fc.integer({ min: 0, max: 25_000 }), yielding: fc.boolean() }), { minLength: 1, maxLength: 40 }),
+        fc.array(fc.record({ gap: fc.integer({ min: 0, max: 25_000 }), yielding: fc.boolean(), remount: fc.boolean() }), {
+          minLength: 1,
+          maxLength: 40,
+        }),
         (events) => {
-          let s = step(CAROUSEL_INITIAL, T0);
+          let yielding = false;
+          let s = step(CAROUSEL_INITIAL, T0, yielding);
           let now = T0;
-          const ids: string[] = s.showing ? [s.showing.momentId] : [];
+          const showings = new Map<string, { id: string; card: string }>();
+          const record = () => {
+            if (s.showing) showings.set(`${s.showing.startedAt}:${s.showing.cardId}`, { id: s.showing.momentId, card: s.showing.cardId });
+          };
+          record();
           for (const e of events) {
-            // Every deadline that passes before the next event is stepped, as the hook's one timer would.
+            // Every deadline before the next event fires the hook's one timer, with the flag in force. A step that
+            // changes nothing re-renders nothing, so no further timer is armed (`useCarousel`).
             for (let d = carouselDeadline(s); d !== null && d <= now + e.gap; d = carouselDeadline(s)) {
-              s = step(s, d, false);
-              if (s.showing && ids.at(-1) !== s.showing.momentId) ids.push(s.showing.momentId);
+              const next = step(s, d, yielding);
+              if (next === s) break;
+              s = next;
+              record();
             }
             now += e.gap;
-            s = step(s, now, e.yielding);
-            if (s.showing && ids.at(-1) !== s.showing.momentId) ids.push(s.showing.momentId);
+            if (e.remount) {
+              s = carouselResume(carouselMemoryOf(s));
+              remounts++;
+            }
+            yielding = e.yielding;
+            s = step(s, now, yielding);
+            record();
           }
-          expect(new Set(ids).size).toBe(ids.length);
+          const list = [...showings.values()];
+          showingsWalked += list.length;
+          expect(new Set(list.map((x) => x.id)).size, "one id per showing").toBe(list.length);
+          // Each showing is the next card in order — a remount continues the rotation, never restarts it at the title.
+          list.forEach((x, i) => expect(x.card, `showing ${i}`).toBe(ORDER[i % ORDER.length]));
           runs++;
         },
       ),
       { seed: 11, numRuns: 150 },
     );
+    console.log(`carousel property: ${runs} runs, ${remounts} remounts, ${showingsWalked} showings`);
     expect(runs, "anti-vacuity").toBe(150);
+    expect(remounts, "anti-vacuity: remounts walked").toBeGreaterThan(0);
+    expect(showingsWalked, "anti-vacuity: showings walked").toBeGreaterThan(runs);
+  });
+
+  it("the reviewer's probe: gold on air, the carousel remounts 2 s in, 5 s later — no start in gold's bucket, then silver under a new id", () => {
+    let s = step(CAROUSEL_INITIAL, T0);
+    s = step(s, T0 + SCENE_CAROUSEL_MS);
+    expect(s.showing?.cardId, "premise: gold from 10 s").toBe("card-g");
+    const gold = s.showing!.momentId;
+    s = carouselResume(carouselMemoryOf(s)); // unmounted at 12 s; remounted from the stage's memory
+    s = step(s, T0 + 15_000);
+    expect(s.showing, "15 s: gold's bucket is spent").toBeNull();
+    expect(carouselDeadline(s)).toBe(T0 + 2 * SCENE_CAROUSEL_MS);
+    s = step(s, T0 + 2 * SCENE_CAROUSEL_MS);
+    expect(s.showing?.cardId).toBe("card-s");
+    expect(s.showing?.momentId).not.toBe(gold);
+  });
+
+  it("carouselMemoryOf: a showing on air spends its own bucket; carouselResume: no showing, no stale `ended`, the memory's next and notBefore", () => {
+    const on = step(CAROUSEL_INITIAL, T0);
+    expect(carouselMemoryOf(on)).toEqual({ next: 1, notBefore: T0 + SCENE_CAROUSEL_MS });
+    const off = step(on, T0 + 3_000, true);
+    expect(carouselMemoryOf(off), "cut at 3 s: notBefore is still its 10 s").toEqual({ next: 1, notBefore: T0 + SCENE_CAROUSEL_MS });
+    expect(carouselResume(carouselMemoryOf(off))).toEqual({ next: 1, notBefore: T0 + SCENE_CAROUSEL_MS, showing: null, ended: null });
+    expect(carouselMemoryOf(CAROUSEL_INITIAL), "the empty case").toEqual(CAROUSEL_MEMORY_INITIAL);
+    expect(carouselResume(CAROUSEL_MEMORY_INITIAL)).toEqual(CAROUSEL_INITIAL);
   });
 });

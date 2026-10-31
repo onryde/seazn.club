@@ -550,6 +550,9 @@ test.describe("the staff overlay gallery (R2007)", () => {
             const base = {
               key: cell.dataset.galleryCell ?? "",
               template: cell.dataset.template ?? "",
+              face: cell.dataset.sponsorFace ?? "",
+              logo: root.querySelector('[data-testid="ovl-sponsor-card"] .ovl-sponsor-logo') !== null,
+              mono: root.querySelector('[data-testid="ovl-sponsor-card"] .ovl-sponsor-mono') !== null,
               slot: slotName,
               carousel,
               declared: (JSON.parse(cell.dataset.sponsorSlots ?? "{}") as Record<string, { x: number; y: number; width: number; height: number }>)[slotName] ?? null,
@@ -622,7 +625,14 @@ test.describe("the staff overlay gallery (R2007)", () => {
     const badCut = probes.filter((p) => !p.nameCutOk).map((p) => p.key);
     const lowerCut = slotCells.filter((p) => p.slot === "lower_third" && p.nameCut).length;
     const lowerThirds = slotCells.filter((p) => p.slot === "lower_third").length;
-    const linkless = slotCells.filter((p) => p.link !== "seazn.club/s/NB7K").map((p) => `${p.key}: ${p.link}`);
+    // The face each cell pins (`data-sponsor-face`): full = a logo and `seazn.club/s/<code>` (R7); plain = the
+    // monogram and nothing link-like (fix round 1, m3).
+    const fullFaces = slotCells.filter((p) => p.face === "full");
+    const plainFaces = slotCells.filter((p) => p.face === "plain");
+    const linkless = fullFaces.filter((p) => !/^seazn\.club\/s\/[A-Z0-9]+$/.test(p.link ?? "") || !p.logo || p.mono).map((p) => `${p.key}: ${p.link}`);
+    const plainWrong = plainFaces.filter((p) => p.link !== null || p.logo || !p.mono).map((p) => `${p.key}: link ${p.link}, logo ${p.logo}`);
+    expect(fullFaces.length + plainFaces.length, "every sponsor-slot cell names its face").toBe(slotCells.length);
+    expect(plainFaces.length, "anti-vacuity: the plain face is drawn").toBeGreaterThan(0);
     // The scene's match card and its brand mark, where the scene draws them (Starting soon always does).
     const besideMatch = carouselCells.filter((p) => p.slotBox !== null && p.matchBox !== null);
     const overMatch = carouselCells
@@ -635,6 +645,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
     console.log(
       `[9] cards checked: ${probes.length - cardless.length}, text elements: ${textChecked}, below ${TEXT_FLOOR_PX}px: ${below.length}, ` +
         `lowest lift: ${Math.min(...probes.filter((p) => p.slotBox).map(lift)).toFixed(1)}px, lower-third names cut: ${lowerCut} of ${lowerThirds}, ` +
+        `faces: ${fullFaces.length} full, ${plainFaces.length} plain, ` +
         `carousel cards measured against a match card: ${besideMatch.length} of ${carouselCells.length}, over it: ${overMatch.length}`,
     );
     expect(besideMatch.length, "anti-vacuity: a carousel shares the canvas with a match card (Starting soon)").toBeGreaterThan(0);
@@ -649,7 +660,8 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect.soft(below, `sponsor text below the ${TEXT_FLOOR_PX}px floor`).toEqual([]);
     expect.soft(overflowing, "sponsor content escaping its card").toEqual([]);
     expect.soft(badCut, "a cut name with no ellipsis or clamp").toEqual([]);
-    expect.soft(linkless, "R7: the title card's short link").toEqual([]);
+    expect.soft(linkless, "R7: the full face's logo and short link").toEqual([]);
+    expect.soft(plainWrong, "the plain face: the monogram, no logo, nothing link-like").toEqual([]);
     expect.soft(overMatch, "a carousel card over the scene's match card").toEqual([]);
   });
 

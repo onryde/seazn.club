@@ -20,6 +20,7 @@ import {
   GALLERY_RESULT_VARIANT_SPORTS,
   GALLERY_SNAPSHOT_KINDS,
   GALLERY_SPONSOR_CARDS,
+  GALLERY_SPONSOR_FACE_SPORTS,
   galleryCells,
   galleryMatrix,
   gallerySponsorPlan,
@@ -90,14 +91,23 @@ describe("galleryMatrix — the size, from the declarations", () => {
   ]);
 
   it("plain + moment + variant + sponsor + carousel cells, keys unique", () => {
-    const cells = galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS, GALLERY_CAROUSEL_SPORTS);
+    const cells = galleryMatrix(
+      OVERLAY_TEMPLATES,
+      OVERLAY_SPORT_KEYS,
+      OVERLAY_SCENES,
+      GALLERY_MOMENT_SAMPLES,
+      VARIANTS,
+      GALLERY_CAROUSEL_SPORTS,
+      GALLERY_SPONSOR_FACE_SPORTS,
+    );
     const firing = OVERLAY_SCENES.filter((s) => s.momentsFire).length;
     const carouselScenes = OVERLAY_SCENES.filter((s) => SPONSOR_CAROUSEL_SCENES.includes(s.id)).length;
     let expected = 0;
     for (const sport of OVERLAY_SPORT_KEYS) {
       expected += templatesForSport(sport).length * OVERLAY_SCENES.length * GALLERY_SNAPSHOT_KINDS.length;
-      // R4 S7: template × sport × each slot the template declares (spec 2026-10-27 §3.5).
-      for (const def of templatesForSport(sport)) expected += Object.keys(def.sponsorSlots).length;
+      // R4 S7: template × sport × each slot the template declares (spec 2026-10-27 §3.5), plus the plain face's (m3).
+      const faces = (GALLERY_SPONSOR_FACE_SPORTS as readonly string[]).includes(sport) ? 2 : 1;
+      for (const def of templatesForSport(sport)) expected += Object.keys(def.sponsorSlots).length * faces;
     }
     for (const s of GALLERY_MOMENT_SAMPLES) expected += templatesForSport(s.sportKey).length * firing;
     for (const v of VARIANTS) expected += templatesForSport(v.sportKey).length;
@@ -110,13 +120,16 @@ describe("galleryMatrix — the size, from the declarations", () => {
   });
 
   it("each cell kind carries exactly its own fields", () => {
-    const cells = galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS, GALLERY_CAROUSEL_SPORTS);
+    const cells = galleryCells(OVERLAY_TEMPLATES, VARIANTS);
     const kinds = { plain: 0, moment: 0, variant: 0, sponsor: 0, carousel: 0 };
+    const cardIds = GALLERY_SPONSOR_CARDS.map((c) => c.id);
     for (const c of cells) {
       const own = [c.momentSampleId !== null, c.resultStatus !== null, c.sponsorSlot !== null, c.carousel].filter(Boolean);
       expect(own.length, `${c.key}: at most one kind`).toBeLessThanOrEqual(1);
+      expect(c.sponsorCard === null, `${c.key}: a card id exactly on sponsor cells`).toBe(c.sponsorSlot === null);
       if (c.sponsorSlot !== null) {
         kinds.sponsor++;
+        expect(cardIds, c.key).toContain(c.sponsorCard);
         expect(c.scene, c.key).toBe("live");
         expect(c.snapshot, c.key).toBe("live");
         expect(Object.keys(OVERLAY_TEMPLATES[c.templateId as "bar" | "bug"].sponsorSlots), c.key).toContain(c.sponsorSlot);
@@ -151,7 +164,15 @@ describe("galleryMatrix — the size, from the declarations", () => {
 
   it("galleryCells is galleryMatrix over the shipped sports, scenes, samples and carousel sports", () => {
     expect(galleryCells(OVERLAY_TEMPLATES, VARIANTS)).toEqual(
-      galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS, GALLERY_CAROUSEL_SPORTS),
+      galleryMatrix(
+        OVERLAY_TEMPLATES,
+        OVERLAY_SPORT_KEYS,
+        OVERLAY_SCENES,
+        GALLERY_MOMENT_SAMPLES,
+        VARIANTS,
+        GALLERY_CAROUSEL_SPORTS,
+        GALLERY_SPONSOR_FACE_SPORTS,
+      ),
     );
   });
 
@@ -193,21 +214,32 @@ describe("decision 8 (D14) — a scene's momentsFire is the one authority for mo
 });
 
 describe("R4 S7 — the sponsor cells (spec 2026-10-27 §3.5: template × sport × slot) and the carousel cells", () => {
-  it("every template × sport × declared slot has exactly one sponsor cell", () => {
+  it("every template × sport × declared slot has one full-face (title) cell; the face sports one plain-face (gold) cell too", () => {
     const cells = galleryCells(OVERLAY_TEMPLATES, []);
+    const [full, plain] = GALLERY_SPONSOR_CARDS;
     let checked = 0;
+    let plainChecked = 0;
     for (const sport of OVERLAY_SPORT_KEYS) {
+      const faceSport = (GALLERY_SPONSOR_FACE_SPORTS as readonly string[]).includes(sport);
       for (const def of templatesForSport(sport)) {
         for (const slot of Object.keys(def.sponsorSlots)) {
-          const hits = cells.filter((c) => c.templateId === def.id && c.sportKey === sport && c.sponsorSlot === slot);
-          expect(hits, `${def.id} × ${sport} × ${slot}`).toHaveLength(1);
+          const at = (id: string) => cells.filter((c) => c.templateId === def.id && c.sportKey === sport && c.sponsorSlot === slot && c.sponsorCard === id);
+          expect(at(full!.id), `${def.id} × ${sport} × ${slot}: full face`).toHaveLength(1);
+          expect(at(plain!.id), `${def.id} × ${sport} × ${slot}: plain face`).toHaveLength(faceSport ? 1 : 0);
           checked++;
+          if (faceSport) plainChecked++;
         }
       }
     }
-    console.log(`sponsor cells checked: ${checked}`);
+    console.log(`sponsor cells checked: ${checked} slots, ${plainChecked} with the plain face`);
     expect(checked, "anti-vacuity").toBeGreaterThan(0);
-    expect(cells.filter((c) => c.sponsorSlot !== null)).toHaveLength(checked);
+    expect(plainChecked, "anti-vacuity: a plain face").toBeGreaterThan(0);
+    expect(cells.filter((c) => c.sponsorSlot !== null)).toHaveLength(checked + plainChecked);
+    // Premise (m3): the second gallery card IS the plain face — no logo, no short code.
+    expect(plain!.logoUrl).toBeNull();
+    expect(plain!.shortCode).toBeUndefined();
+    expect(full!.logoUrl).not.toBeNull();
+    expect(full!.shortCode).toBeDefined();
   });
 
   it("carousel cells: every template of each carousel sport, once per carousel scene — and only there", () => {
@@ -246,6 +278,19 @@ describe("R4 S7 — the sponsor cells (spec 2026-10-27 §3.5: template × sport 
       checked++;
     }
     expect(checked, "anti-vacuity").toBe(2);
+  });
+
+  it("gallerySponsorPlan(style, gold): the airing names the gold card — the only card in the plan", () => {
+    const gold = GALLERY_SPONSOR_CARDS[1]!;
+    for (const { style } of Object.values(SPONSOR_STYLE_BY_SIZE)) {
+      const plan = gallerySponsorPlan(style, gold.id);
+      expect(plan, style).not.toBeNull();
+      expect(plan!.airings.map((a) => a.cardId), style).toEqual([gold.id]);
+      expect(plan!.cards.map((c) => c.id)).toEqual([gold.id]);
+    }
+    expect(() => gallerySponsorPlan("banner", "no-such-card"), "a card the gallery does not hold is refused by name").toThrow(
+      /no gallery card no-such-card|airing/,
+    );
   });
 
   it("gallerySponsorPlan(null): the carousel's plan — every gallery card, all ticked, no airing", () => {

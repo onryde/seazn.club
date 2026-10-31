@@ -22,7 +22,7 @@
 // says `sponsorLines` (the stage: `host=compositor`, never a preview).
 import { useEffect, useReducer, useRef } from "react";
 import type { OverlayMoment } from "@/lib/overlay-moments";
-import { sponsorQueueLines } from "@/lib/overlay-compositor";
+import { droppingSponsorLine, sponsorQueueLines, type SponsorLineBuilder } from "@/lib/overlay-compositor";
 import { INITIAL, momentQueueReducer, nextDeadline, type Phase } from "./moment-queue";
 import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "./moment-timing";
 
@@ -35,10 +35,13 @@ export function useMomentQueue(
     discard?: boolean;
     /** R4 S7: log the sponsor proof-of-play lines. The stage passes its compositor-host flag; absent ⇒ none. */
     sponsorLines?: boolean;
+    /** R4 S7 fix round 1 (ruling m4): a match card is up — sponsor cards wait (the reducer's rule 4). */
+    holdSponsors?: boolean;
   },
 ): { current: OverlayMoment | null; phase: Phase } {
   const discard = opts.discard === true;
   const sponsorLines = opts.sponsorLines === true;
+  const holdSponsors = opts.holdSponsors === true;
   // Reduced motion shortens the folds to nothing but keeps the PHASES, so the
   // slab still appears and leaves on the same schedule and `data-phase` still
   // reaches the DOM for the e2e to read. Skipping the phases would make the
@@ -52,6 +55,12 @@ export function useMomentQueue(
   useEffect(() => {
     if (discard) dispatch({ type: "flush" });
   }, [discard]);
+
+  // Rule 4, on each edge of the match card. Declared BEFORE the enqueue effect, so a card arriving in the same commit
+  // as the match card (the first poll of a Reconnecting) meets the hold, not an idle queue that would air it.
+  useEffect(() => {
+    dispatch({ type: "holdSponsors", hold: holdSponsors, now: Date.now(), foldMs });
+  }, [holdSponsors, foldMs]);
 
   // `incoming` is a fresh array on every poll even when nothing changed, so the
   // effect is keyed on the moments' IDENTITIES rather than the array. The
@@ -97,12 +106,18 @@ export function useMomentQueue(
   }, [deadline, state.revision, foldMs, holdMs]);
 
   // The sponsor id whose start line has been logged and whose end has not. Read and written only inside the effect
-  // (`react-hooks/refs`); a mutable box, so the effect owns one object for the island's life.
-  const onAir = useRef<{ id: string | null }>({ id: null });
+  // (`react-hooks/refs`); a mutable box, so the effect owns one object for the island's life. A line `sponsorLine`
+  // refuses is dropped with one warning (`droppingSponsorLine`), never thrown into the tree.
+  const onAir = useRef<{ id: string | null; build: SponsorLineBuilder }>({ id: null, build: droppingSponsorLine() });
   useEffect(() => {
     if (!sponsorLines) return;
     const box = onAir.current;
-    const step = sponsorQueueLines(box.id, { current: state.current, phase: state.phase, cutShort: state.cutShort }, new Date().toISOString());
+    const step = sponsorQueueLines(
+      box.id,
+      { current: state.current, phase: state.phase, cutShort: state.cutShort },
+      new Date().toISOString(),
+      box.build,
+    );
     box.id = step.onAir;
     for (const line of step.lines) console.info(line);
     // Keyed on the whole state: a re-run on a state that changed nothing the tracker reads logs nothing (it is

@@ -1751,9 +1751,12 @@ body {
    off the card it labels. Right, not left: the region's top-left corner beside
    the bug put this "seazn" a few px from the bug's own, reading as a stutter;
    top-right is the broadcast watermark's corner, far from every template's
-   brand (the bar's is at its foot). `right` is measured from the 1920 canvas. */
-.ovl-slate-brand { position: absolute; top: var(--ovl-card-y, 72px);
-                    right: calc(1920px - var(--ovl-card-x, 96px) - var(--ovl-card-w, 1728px));
+   brand (the bar's is at its foot). `right` is measured from the 1920 canvas.
+   R4 S7: the corner is the template's WHOLE region (`--ovl-brand-*`), not the
+   strip the scene carousel moves the card into: a card filling that strip
+   reaches its top-right corner. */
+.ovl-slate-brand { position: absolute; top: var(--ovl-brand-y, var(--ovl-card-y, 72px));
+                    right: calc(1920px - var(--ovl-brand-x, var(--ovl-card-x, 96px)) - var(--ovl-brand-w, var(--ovl-card-w, 1728px)));
                     font-size: 30px; font-weight: 600; letter-spacing: 0.08em;
                     color: color-mix(in srgb, var(--sport-ink) 75%, transparent); z-index: 2;
                     text-shadow: 0 1px 8px color-mix(in srgb, var(--sport-board) 70%, transparent); }
@@ -2359,8 +2362,11 @@ body {
   gap: 24px;
   flex: 1 1 auto;
   min-width: 0;
-  /* 120 tall: 12 + (50 name + 6 + 35 link) + 12 = 115, and the 88 px plate. */
-  padding: 12px 32px 12px 40px;
+  /* 120 tall: 10 + (57.6 name + 2 + 36 link) + 10 = 115.6, and the 88 px plate. Each line is as tall as Barlow
+     Condensed's content area (ascent 1.0 + descent 0.2 = 1.2em), so no glyph overflows its line box: a shorter
+     line-height lets the descenders out, the name's own `overflow: hidden` clips them, and its scroll box outgrows
+     its client box (gallery check 9 read every lower-third name as cut vertically at 1.05). */
+  padding: 10px 32px 10px 40px;
   border-radius: 12px;
   overflow: hidden;
   background: var(--sport-board);
@@ -2408,7 +2414,7 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 6px;
+  gap: 2px;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -2420,7 +2426,7 @@ body {
   font-family: var(--font-barlow), system-ui, sans-serif;
   font-size: 48px;
   font-weight: 700;
-  line-height: 1.05;
+  line-height: 1.2;
   letter-spacing: 0.01em;
 }
 .ovl-sponsor-link {
@@ -2430,7 +2436,7 @@ body {
   text-overflow: ellipsis;
   font-size: 30px;
   font-weight: 600;
-  line-height: 1.15;
+  line-height: 1.2;
   letter-spacing: 0.02em;
   color: color-mix(in srgb, var(--sport-ink) 72%, transparent);
 }

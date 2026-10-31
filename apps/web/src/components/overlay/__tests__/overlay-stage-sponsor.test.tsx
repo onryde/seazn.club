@@ -46,7 +46,10 @@ vi.mock("@/components/public-site/live-score-data", async () => {
 });
 
 import { OverlayStage, type OverlayStageProps } from "../overlay-stage";
+import { OverlayMatchCard } from "../overlay-slate";
+import { OVERLAY_SCENES } from "../overlay-scenes";
 import { SponsorCardView, SponsorCarousel } from "../sponsor-card";
+import { SPONSOR_STALE_MS } from "@/lib/sponsor-plan";
 
 const NOW = Date.parse("2026-10-31T10:00:00.000Z");
 const dict = en as Record<string, string>;
@@ -342,12 +345,19 @@ describe("the queue's rules reach the lines through the stage", () => {
     const DELAY = 10_000;
     const initial = snap({ lastSeq: 7, recent: [], sponsorPlan: planAt(7, SPORTS[0]!.d) });
     live.snapshot = initial;
-    renderIsland<OverlayStageProps>(OverlayStage, props({ host: "compositor", delayMs: DELAY, initial }));
-    await vi.advanceTimersByTimeAsync(DELAY - 500);
+    const island = renderIsland<OverlayStageProps>(OverlayStage, props({ host: "compositor", delayMs: DELAY, initial }));
+    let steps = 0;
+    for (let t = 0; t < DELAY - 500; t += 250) {
+      await vi.advanceTimersByTimeAsync(250);
+      expect(cardView(island.tree()), `t=${t}: nothing drawn`).toBeUndefined();
+      expect(byTestId(island.tree(), "ovl-sponsor-slot"), `t=${t}: no slot`).toEqual([]);
+      steps++;
+    }
+    expect(steps, "anti-vacuity").toBeGreaterThan(0);
     expect(sponsorLines(), "nothing while awaiting the delay").toEqual([]);
   });
 
-  it("Final discards a card waiting in the queue: it never airs (owner ruling 4)", async () => {
+  it("Final discards a card ARRIVING under it: it never airs (owner ruling 4)", async () => {
     const p = props({ snapshotOnly: true, sceneOverride: "final" });
     const island = renderIsland<OverlayStageProps>(OverlayStage, p);
     island.rerender({ ...p, initial: snap({ lastSeq: 7, recent: [quiet(7)], sponsorPlan: planAt(7, SPORTS[0]!.d) }) });
@@ -423,6 +433,12 @@ describe("the scene carousel's mount", () => {
       const vars = (tree: ReactElement[]) => propsOf(byTestId(tree, "ovl-root")[0]!).style as Record<string, string>;
       const withCarousel = vars(render({ sceneOverride: "starting", style, initial: snap({ status: "scheduled", summary: null, lastSeq: null, sponsorPlan: cardsOnly([TITLE]) }) }));
       const without = vars(render({ sceneOverride: "starting", style, initial: snap({ status: "scheduled", summary: null, lastSeq: null }) }));
+      // Fix round 1 (CI check 4): the brand keeps the WHOLE region's top-right corner — never the strip's, where a
+      // card filling the strip would reach it.
+      expect(withCarousel["--ovl-brand-x"], `${style}: brand on the whole region`).toBe(`${region.x}px`);
+      expect(withCarousel["--ovl-brand-y"]).toBe(`${region.y}px`);
+      expect(withCarousel["--ovl-brand-w"]).toBe(`${region.width}px`);
+      expect(without["--ovl-brand-w"], `${style}: no carousel, the same corner`).toBe(`${region.width}px`);
       expect(withCarousel["--ovl-card-x"], style).toBe(`${beside.x}px`);
       expect(withCarousel["--ovl-card-w"], style).toBe(`${beside.width}px`);
       expect(withCarousel["--ovl-card-h"], style).toBe(`${beside.height}px`);
@@ -430,5 +446,173 @@ describe("the scene carousel's mount", () => {
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// ── fix round 1 ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const SILVER: SponsorCard = { id: "card-silver", sponsorId: "sponsor-silver", name: "Silver Co", logoUrl: null, tier: "silver", onStream: true };
+/** A break card's lines (the queue's: `source: "rotation"` on its start) — never the carousel's `scene:` ids. */
+const rotationLines = () => sponsorLines().filter((l) => !String(parse(l).body.momentId).startsWith("scene:"));
+const matchCardUp = (tree: ReactElement[]) => tree.some((el) => el.type === OverlayMatchCard);
+/** A break card drawn by the stage itself — not the carousel's (its card renders inside SponsorCarousel). */
+const breakCardSlot = (tree: ReactElement[]) => byTestId(tree, "ovl-sponsor-slot").filter((el) => propsOf(el)["data-carousel"] === undefined);
+
+describe("ruling m4 — break cards WAIT while a match card is up; the carousel is the scene's sponsor path", () => {
+  const d = SPORTS[0]!.d;
+
+  it("Reconnecting's card is up: the break card waits (nothing drawn, no line); the scene leaves within 20 s → it airs, ONE start", async () => {
+    live.snapshot = snap();
+    const p = props({ host: "compositor", sceneOverride: "reconnecting" });
+    const island = renderIsland<OverlayStageProps>(OverlayStage, p);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(matchCardUp(island.tree()), "premise: Reconnecting draws its card").toBe(true);
+    live.snapshot = snap({ lastSeq: 7, recent: [quiet(7)], sponsorPlan: planAt(7, d) });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    const arrived = Date.now();
+    for (let t = 0; t < 10_000; t += 250) {
+      await vi.advanceTimersByTimeAsync(250);
+      expect(cardView(island.tree()), `t=${t}: no break card over the match card`).toBeUndefined();
+    }
+    expect(rotationLines(), "nothing logged for a card that waits").toEqual([]);
+    expect(carousel(island.tree()), "the carousel is the scene's sponsor path").toBeDefined();
+    island.rerender({ ...p, sceneOverride: "live" });
+    expect(Date.now() - arrived, "premise: inside the stale cut").toBeLessThan(SPONSOR_STALE_MS);
+    await vi.advanceTimersByTimeAsync(OVERLAY_MOMENT_FOLD_MS);
+    expect(cardView(island.tree()), "back on the live camera, the waiting card airs").toBeDefined();
+    const starts = rotationLines().filter((l) => l.startsWith("seazn:sponsor:start"));
+    expect(starts).toHaveLength(1);
+    expect(parse(starts[0]!).body.momentId).toBe(sponsorMomentId(7, d.kind));
+  });
+
+  it("…held past SPONSOR_STALE_MS it is dropped: back on the live camera it never airs, and nothing is logged for it", async () => {
+    live.snapshot = snap();
+    const p = props({ host: "compositor", sceneOverride: "reconnecting" });
+    const island = renderIsland<OverlayStageProps>(OverlayStage, p);
+    await vi.advanceTimersByTimeAsync(0);
+    live.snapshot = snap({ lastSeq: 7, recent: [quiet(7)], sponsorPlan: planAt(7, d) });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS + SPONSOR_STALE_MS + 1_000);
+    island.rerender({ ...p, sceneOverride: "live" });
+    for (let t = 0; t < 20_000; t += 250) {
+      await vi.advanceTimersByTimeAsync(250);
+      expect(cardView(island.tree()), `t=${t}`).toBeUndefined();
+    }
+    expect(rotationLines()).toEqual([]);
+  });
+
+  it("a card ON AIR when Reconnecting comes up is cut: ONE end, cutShort true, and the card leaves", async () => {
+    live.snapshot = snap();
+    const p = props({ host: "compositor" });
+    const island = renderIsland<OverlayStageProps>(OverlayStage, p);
+    await vi.advanceTimersByTimeAsync(0);
+    live.snapshot = snap({ lastSeq: 7, recent: [quiet(7)], sponsorPlan: planAt(7, d) });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS + OVERLAY_MOMENT_FOLD_MS);
+    expect(rotationLines(), "premise: on air").toHaveLength(1);
+    island.rerender({ ...p, sceneOverride: "reconnecting" });
+    await vi.advanceTimersByTimeAsync(2 * OVERLAY_MOMENT_FOLD_MS);
+    const all = rotationLines();
+    expect(all).toHaveLength(2);
+    expect(parse(all[1]!)).toMatchObject({ prefix: "seazn:sponsor:end", body: { momentId: sponsorMomentId(7, d.kind), cutShort: true } });
+    expect(cardView(island.tree())).toBeUndefined();
+  });
+
+  it("witness: every template × scene × snapshot — whenever the match card is up, no break card is drawn (and off it, one airs)", async () => {
+    let underCard = 0;
+    let aired = 0;
+    let combos = 0;
+    for (const style of ["bar", "bug"] as const) {
+      for (const scene of OVERLAY_SCENES) {
+        for (const status of ["in_play", "scheduled", "completed"] as const) {
+          // The compositor host polls at STREAM_POLL_MS whatever the status, so every combo receives the break.
+          live.snapshot = snap({ status });
+          const island = renderIsland<OverlayStageProps>(
+            OverlayStage,
+            props({ host: "compositor", sceneOverride: scene.id, style, initial: snap({ status }) }),
+          );
+          await vi.advanceTimersByTimeAsync(0);
+          live.snapshot = snap({ status, lastSeq: 7, recent: [quiet(7)], sponsorPlan: planAt(7, d) });
+          for (let t = 0; t < STREAM_POLL_MS + 12_000; t += 250) {
+            await vi.advanceTimersByTimeAsync(250);
+            const tree = island.tree();
+            if (matchCardUp(tree)) {
+              underCard++;
+              expect(breakCardSlot(tree), `${style} × ${scene.id} × ${status} t=${t}`).toEqual([]);
+            } else if (breakCardSlot(tree).length > 0) aired++;
+          }
+          island.unmount();
+          combos++;
+        }
+      }
+    }
+    console.log(`m4 witness: ${combos} combos, ${underCard} steps under a match card, ${aired} steps with a break card off it`);
+    expect(combos).toBe(2 * OVERLAY_SCENES.length * 3);
+    expect(underCard, "anti-vacuity: the match card was up").toBeGreaterThan(0);
+    expect(aired, "anti-vacuity: off the match card the same break DOES air").toBeGreaterThan(0);
+  });
+});
+
+describe("I1 — the carousel's rotation survives a remount (the stage keeps the memory)", () => {
+  // The harness renders the stage, not its children: the carousel's own resumption (unmount at 12 s, remount at 15 s ⇒
+  // no start before 20 s, then the next card under a new id) is `sponsor-card.test.tsx`'s, run with a memory box. What
+  // only the stage can prove is that the box OUTLIVES the mount — the same object on every mount, for the page's life.
+  it("every carousel mount — after leaving the scene, after a poll with no plan — receives the SAME memory object", async () => {
+    const plan = cardsOnly([TITLE, GOLD, SILVER]);
+    live.snapshot = snap({ sponsorPlan: plan });
+    const p = props({ host: "compositor", sceneOverride: "reconnecting", initial: snap({ sponsorPlan: plan }) });
+    const island = renderIsland<OverlayStageProps>(OverlayStage, p);
+    await vi.advanceTimersByTimeAsync(0);
+    const first = propsOf(carousel(island.tree())!).memory as { read: () => { next: number } };
+    expect(typeof first.read().next, "premise: a memory store").toBe("number");
+    island.rerender({ ...p, sceneOverride: "live" });
+    expect(carousel(island.tree()), "premise: the carousel unmounted").toBeUndefined();
+    island.rerender({ ...p, sceneOverride: "reconnecting" });
+    expect(propsOf(carousel(island.tree())!).memory, "re-entering the scene").toBe(first);
+    live.snapshot = snap({ sponsorPlan: null });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    expect(carousel(island.tree()), "premise: a poll with no plan unmounts it").toBeUndefined();
+    live.snapshot = snap({ sponsorPlan: plan });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    expect(propsOf(carousel(island.tree())!).memory, "after a null plan").toBe(first);
+  });
+});
+
+describe("m2 — a refused line is dropped at the emit site: the overlay stays up, one warning", () => {
+  it("a break card whose start body is over 512 bytes airs, logs nothing, warns once — and a second poll warns no more", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const LONG: SponsorCard = { ...TITLE, id: `card-${"x".repeat(600)}` };
+    live.snapshot = snap();
+    const island = renderIsland<OverlayStageProps>(OverlayStage, props({ host: "compositor" }));
+    await vi.advanceTimersByTimeAsync(0);
+    live.snapshot = snap({ lastSeq: 7, recent: [quiet(7)], sponsorPlan: planAt(7, SPORTS[0]!.d, [LONG]) });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS + OVERLAY_MOMENT_FOLD_MS);
+    expect(cardView(island.tree()), "the card is on air").toBeDefined();
+    await vi.advanceTimersByTimeAsync(2 * STREAM_POLL_MS);
+    expect(sponsorLines()).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("m5 — Final flushes a card already QUEUED (owner ruling 4), which the hold alone would not", () => {
+  it("a card queued behind a goal when Final enters never airs — not even back on the live camera inside the stale cut", async () => {
+    const d: BreakDecl = { kind: "after_goal", size: "minor" };
+    live.snapshot = snap();
+    const p = props({ host: "compositor", sportKey: "football", style: "bug" });
+    const island = renderIsland<OverlayStageProps>(OverlayStage, p);
+    await vi.advanceTimersByTimeAsync(0);
+    live.snapshot = snap({ lastSeq: 8, recent: [goal(8)], sponsorPlan: planAt(8, d) });
+    await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+    const arrived = Date.now();
+    await vi.advanceTimersByTimeAsync(OVERLAY_MOMENT_FOLD_MS);
+    const slab = propsOf(byTestId(island.tree(), "ovl-moment-slot")[0]!).children as ReactElement | null;
+    expect((propsOf(slab!).moment as { seq: number }).seq, "premise: the goal is on air, the card queued behind it").toBe(8);
+    island.rerender({ ...p, sceneOverride: "final" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    island.rerender({ ...p, sceneOverride: "live" });
+    expect(Date.now() - arrived, "premise: back inside the stale cut — only the flush can keep it off").toBeLessThan(SPONSOR_STALE_MS);
+    for (let t = 0; t < 30_000; t += 250) {
+      await vi.advanceTimersByTimeAsync(250);
+      expect(cardView(island.tree()), `t=${t}`).toBeUndefined();
+    }
+    expect(rotationLines()).toEqual([]);
   });
 });

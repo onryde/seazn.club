@@ -89,6 +89,7 @@ export type DictionaryKey =
   | "admin.overlayGallery.snapshot.live"
   | "admin.overlayGallery.snapshot.warming"
   | "admin.overlayGallery.sponsorCard"
+  | "admin.overlayGallery.sponsorCardPlain"
   | "admin.overlayGallery.sponsorCarousel"
   | "admin.overlayGallery.sponsorSlot.banner"
   | "admin.overlayGallery.sponsorSlot.lowerThird"

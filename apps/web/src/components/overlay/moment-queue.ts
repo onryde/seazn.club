@@ -26,6 +26,14 @@
 //      seen. The wait is timed on THIS page's clock from when the card was
 //      queued — never against the event's server timestamp, which `?delay=`
 //      (up to 5 min) and an OBS machine's own clock would both skew.
+//
+// R4 S7 fix round 1 (ruling m4): a fourth, `holdSponsors`. While the stage
+// shows a match card (a scene's — Starting soon, Reconnecting, Final — or the
+// slate's), no break card airs over it: a card on air folds off early
+// (`cutShort`), and queued cards WAIT rather than leave — score moments still
+// air past them. When the card goes, the next promotion airs a card that has
+// waited no longer than `SPONSOR_STALE_MS`; one that waited longer is dropped by
+// rule 3. The scene's own sponsor path is the carousel.
 import { isSponsorMomentId, type MomentPriority, type OverlayMoment } from "@/lib/overlay-moments";
 import { SPONSOR_STALE_MS } from "@/lib/sponsor-plan";
 
@@ -78,6 +86,8 @@ export interface MomentQueueState {
    * `current`.
    */
   cutShort: string[];
+  /** R4 S7 fix round 1 (ruling m4): a match card is up, so no sponsor card airs (see the header, rule 4). */
+  holdSponsors: boolean;
 }
 
 export type QueueAction =
@@ -95,7 +105,9 @@ export type QueueAction =
   /** R4 S6, for the operator console's "Skip this card" (C4 dispatches it — inert until then). Folds ONLY the named
    *  sponsor moment: on air → `out` and `cutShort`; queued → removed (it stays seen, so it never airs). A score moment
    *  is never skipped. */
-  | { type: "skip"; momentId: string; now: number; foldMs: number };
+  | { type: "skip"; momentId: string; now: number; foldMs: number }
+  /** Rule 4: the stage's match card came up (`hold: true`) or went (`false`). */
+  | { type: "holdSponsors"; hold: boolean; now: number; foldMs: number };
 
 
 export const INITIAL: MomentQueueState = {
@@ -107,6 +119,7 @@ export const INITIAL: MomentQueueState = {
   revision: 0,
   queuedAt: {},
   cutShort: [],
+  holdSponsors: false,
 };
 
 /**
@@ -190,7 +203,18 @@ function promote(state: MomentQueueState, now: number, foldMs: number): MomentQu
   while (queue.length > 0 && isStale(queue[0]!, state.queuedAt, now)) queue = queue.slice(1);
   const [head, ...rest] = queue;
   const revision = state.revision + 1;
-  if (head === undefined) return { ...INITIAL, seen: state.seen, cutShort: state.cutShort, revision };
+  // Rule 4: a card at the head while sponsors are held — and so every moment behind it a card too — waits, idle.
+  if (head === undefined || (state.holdSponsors && isSponsor(head))) {
+    return {
+      ...INITIAL,
+      queue,
+      queuedAt: waitsOf(queue, state.queuedAt),
+      seen: state.seen,
+      cutShort: state.cutShort,
+      holdSponsors: state.holdSponsors,
+      revision,
+    };
+  }
   return {
     current: head,
     phase: "in",
@@ -200,6 +224,7 @@ function promote(state: MomentQueueState, now: number, foldMs: number): MomentQu
     revision,
     queuedAt: waitsOf(rest, state.queuedAt),
     cutShort: state.cutShort,
+    holdSponsors: state.holdSponsors,
   };
 }
 
@@ -253,6 +278,21 @@ export function momentQueueReducer(
     }
 
     return { ...state, queue, queuedAt, seen, revision };
+  }
+
+  if (action.type === "holdSponsors") {
+    if (action.hold === state.holdSponsors) return state;
+    const next: MomentQueueState = { ...state, holdSponsors: action.hold, revision: state.revision + 1 };
+    if (action.hold) {
+      // A card on air folds off now, early; one already folding out is already leaving.
+      const current = next.current;
+      if (current !== null && isSponsor(current) && next.phase !== "out") {
+        return foldEarly(next, current, action.now, action.foldMs);
+      }
+      return next;
+    }
+    // Released while idle: the waiting card (if it is still fresh) airs now — nothing else would promote it.
+    return next.current === null ? promote(next, action.now, action.foldMs) : next;
   }
 
   if (action.type === "flush") {

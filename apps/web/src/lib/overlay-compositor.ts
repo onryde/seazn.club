@@ -204,6 +204,32 @@ export function sponsorLine(kind: "start" | "end", body: object): string {
   return `${kind === "start" ? SIGNAL_SPONSOR_START : SIGNAL_SPONSOR_END} ${json}`;
 }
 
+/** How a tracker turns a body into its line: `sponsorLine` (which throws), or an emit site's `droppingSponsorLine`
+ *  (which drops). `null` = no line. */
+export type SponsorLineBuilder = (kind: "start" | "end", body: object) => string | null;
+
+/**
+ * The EMIT SITES' builder (fix round 1, m2): `sponsorLine`, except that a line it refuses (`SponsorLineError`) is
+ * dropped with ONE `console.warn` per builder instead of thrown — an effect that throws takes the whole overlay down
+ * mid-broadcast, and a proof-of-play line is never worth the scorebug. Anything else still throws: only the refusal
+ * this module raises on purpose is swallowed. Each emit site owns one builder (one warning per hook or carousel mount).
+ */
+export function droppingSponsorLine(): SponsorLineBuilder {
+  let warned = false;
+  return (kind, body) => {
+    try {
+      return sponsorLine(kind, body);
+    } catch (err) {
+      if (!(err instanceof SponsorLineError)) throw err;
+      if (!warned) {
+        warned = true;
+        console.warn(`seazn overlay: a sponsor proof-of-play line was dropped (${err.message})`);
+      }
+      return null;
+    }
+  };
+}
+
 /** What the tracker reads of the moment queue (`MomentQueueState`): who is on air, in which phase, and which sponsor
  *  ids ran short. Structural, so this pure module does not import the component tree. */
 export interface SponsorQueueView {
@@ -225,6 +251,7 @@ export function sponsorQueueLines(
   onAir: string | null,
   view: SponsorQueueView,
   at: string,
+  build: SponsorLineBuilder = sponsorLine,
 ): { onAir: string | null; lines: string[] } {
   const lines: string[] = [];
   const m = view.current;
@@ -234,7 +261,8 @@ export function sponsorQueueLines(
   let tracked = onAir;
   if (tracked !== null && tracked !== currentId) {
     const end: SponsorEndBody = { momentId: tracked, at, cutShort: view.cutShort.includes(tracked) };
-    lines.push(sponsorLine("end", end));
+    const line = build("end", end);
+    if (line !== null) lines.push(line);
     tracked = null;
   }
   if (tracked === null && currentId !== null && sponsor !== null && view.phase === "hold") {
@@ -246,8 +274,12 @@ export function sponsorQueueLines(
       breakKind: sponsor.breakKind,
       at,
     };
-    lines.push(sponsorLine("start", start));
-    tracked = currentId;
+    // A start the builder drops is never tracked, so no end can follow it: S8 sees neither half of the pair.
+    const line = build("start", start);
+    if (line !== null) {
+      lines.push(line);
+      tracked = currentId;
+    }
   }
   return { onAir: tracked, lines };
 }
