@@ -8,6 +8,7 @@
 // recorded golden streams — never from the components under test.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactNode } from "react";
 import { EngineError, foldMatchWithStoppage, outcomeOf, summaryOf, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import { registerBuiltins } from "@seazn/engine/sports";
 import { registry, resolvePositions, type AnySportModule, type SportRegistry } from "@seazn/engine/sport";
@@ -33,6 +34,7 @@ import {
   isMatchDayView,
   courtScorerAttention,
   needsYouButtonParts,
+  needsYouCount,
   needsYouOrder,
   needsYouTone,
   primaryCandidateId,
@@ -47,6 +49,8 @@ import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-fo
 import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CallSheetBody } from "@/components/v2/match-day/call-sheet";
 import { DotLine, MatchDayShell } from "@/components/v2/match-day/match-day-shell";
+import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
+import { propsOf, renderIsland, walk } from "@/components/__tests__/_hook-harness";
 import { NeedsYou, needsYouItems, type NeedsYouItem } from "@/components/v2/desk/needs-you";
 import { ATTENTION_SEVERITY, type Attention } from "@/lib/division-phase";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
@@ -951,13 +955,18 @@ describe("A4 — Needs you, behind the header's attention button", () => {
     expect(needsYouTone([])).toBeNull();
   });
 
-  it("the button reads 'N need you · M results owed' (the list's own row count; the desk's result_missing count), closed at first", () => {
+  it("the button reads 'N need you · M results owed' (N = the rows that are not owed results + every match owing one), closed at first", () => {
     const rows = deskRows([ONE_OF_EACH.no_scorer, ONE_OF_EACH.result_missing, ONE_OF_EACH.unscheduled]);
     expect(rows).toHaveLength(3);
-    const html = shellHtml({ ...view([court()]), needs_you: rows, results_owed: 3 });
+    // The desk's own owed count: the result_missing attention's fixtures (three here, in ONE row).
+    const owed = ONE_OF_EACH.result_missing.count;
+    expect(owed).toBe(3);
+    const n = rows.filter((r) => r.kind !== "result_missing").length + owed;
+    expect(n, "a case where N differs from the row count").not.toBe(rows.length);
+    const html = shellHtml({ ...view([court()]), needs_you: rows, results_owed: owed });
     const toggle = html.slice(html.indexOf('data-testid="md-needs-you-toggle"'), html.indexOf("</button>", html.indexOf('data-testid="md-needs-you-toggle"')));
-    expect(toggle).toContain(`>${plural(dict, "matchDay.needsYou.count", 3, "en")}<`);
-    expect(toggle).toContain(`>${plural(dict, "matchDay.needsYou.owed", 3, "en")}<`);
+    expect(toggle).toContain(`>${plural(dict, "matchDay.needsYou.count", n, "en")}<`);
+    expect(toggle).toContain(`>${plural(dict, "matchDay.needsYou.owed", owed, "en")}<`);
     // Its tone is its most urgent row's: a red no_scorer row (the desk's declared severity) makes it red.
     expect(tagWith(html, "md-needs-you-toggle")).toContain(`data-severity="${ATTENTION_SEVERITY.no_scorer}"`);
     expect(tagWith(html, "md-needs-you-toggle")).toContain('aria-expanded="false"');
@@ -968,6 +977,16 @@ describe("A4 — Needs you, behind the header's attention button", () => {
     const controls = /aria-controls="([^"]+)"/.exec(tagWith(html, "md-needs-you-toggle"))?.[1];
     expect(controls).toBeTruthy();
     expect(tagWith(html, "md-needs-you")).toContain(`id="${controls}"`);
+  });
+
+  it("m1 — ONE owed row covering three matches never reads '1 needs you · 3 results owed': it reads 3 and 3", () => {
+    const rows = deskRows([ONE_OF_EACH.result_missing]);
+    expect(rows).toHaveLength(1);
+    const owed = ONE_OF_EACH.result_missing.count;
+    const parts = needsYouButtonParts(dict, { needs_you: rows, results_owed: owed }, "en");
+    expect(parts).toEqual([plural(dict, "matchDay.needsYou.count", owed, "en"), plural(dict, "matchDay.needsYou.owed", owed, "en")]);
+    expect(parts[0]).not.toBe(plural(dict, "matchDay.needsYou.count", 1, "en"));
+    expect(needsYouCount({ needs_you: rows, results_owed: owed })).toBe(owed);
   });
 
   it("no result owed: the button names the rows only; one row reads in the singular", () => {
@@ -1011,24 +1030,76 @@ describe("A4 — Needs you, behind the header's attention button", () => {
 });
 
 describe("A4 — the scorer's QR on a called or playing court", () => {
-  it("playing and called: the console's Remote scoring panel, embedded, under the court's own heading for it", () => {
+  /** The panel's explainer, as the dictionary words it up to its `{scorer}` slot (the slot is the sport's official's name). */
+  const DESC_HEAD = esc(String(dict["dlink.desc"]).split("{scorer}")[0]!);
+  const CALLED = () => court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) });
+
+  it("playing and called: the console's Remote scoring panel, embedded AND compact, under the court's own heading for it", () => {
     let checked = 0;
-    for (const c of [
-      court(),
-      court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) }),
-    ]) {
+    for (const c of [court(), CALLED()]) {
       const html = focus(c);
       const at = html.indexOf('data-testid="md-scorer"');
       expect(at, c.state).toBeGreaterThan(-1);
       const section = html.slice(at, html.indexOf("</section>", html.indexOf('data-role="device-link-panel"', at)));
       expect(section, c.state).toContain(`>${t(dict, "dlink.title")}<`);
       expect(section, c.state).toContain('data-role="device-link-panel"');
+      expect(section, c.state).toContain('data-compact="true"');
       // Embedded: no card of its own and no second "Remote scoring" heading inside it.
       expect(section.split(`>${t(dict, "dlink.title")}<`).length - 1, c.state).toBe(1);
       expect(section, c.state).toContain('data-testid="device-link-mint"');
+      // Compact: the explainer is in the panel's "More" fold, closed, after the button — never above it.
+      const more = section.indexOf('data-testid="device-link-more"');
+      expect(more, c.state).toBeGreaterThan(section.indexOf('data-testid="device-link-mint"'));
+      expect(section.slice(section.lastIndexOf("<", more), section.indexOf(">", more)), c.state).not.toMatch(/\sopen=""/);
+      expect(section.indexOf(DESC_HEAD), c.state).toBeGreaterThan(more);
       checked++;
     }
     expect(checked).toBe(2);
+  });
+
+  it("V5 — PLAYING: the QR is folded behind its heading, closed at every width, and comes after the scoreboard", () => {
+    const html = focus(court());
+    const tag = /<details[^>]*data-testid="md-scorer"[^>]*>/.exec(html)?.[0];
+    expect(tag, "a native disclosure").toBeDefined();
+    expect(tag).toContain('data-folded="true"');
+    expect(tag).not.toMatch(/\sopen=""/);
+    // No width-conditional hiding: the fold is the same at 320 and 1280.
+    expect(tag).not.toMatch(/(?:^|\s|")(?:max-)?(?:sm|md|lg):/);
+    const summary = html.slice(html.indexOf("<summary", html.indexOf(tag!)), html.indexOf("</summary>", html.indexOf(tag!)));
+    expect(summary).toContain(`>${t(dict, "dlink.title")}<`);
+    expect(summary, "the panel is inside the fold, not its heading").not.toContain('data-role="device-link-panel"');
+    expect(html.indexOf(tag!), "the scoreboard outranks the QR").toBeGreaterThan(html.indexOf('data-testid="md-scoreboard"'));
+  });
+
+  it("a link made, re-shown or revoked on Match Day re-reads the board: the panel gets the focus's own onChanged (I1: a live link IS a scorer)", () => {
+    let checked = 0;
+    for (const c of [court(), CALLED()]) {
+      const onChanged = () => {};
+      const island = renderIsland(
+        CourtFocus,
+        { ctx, court: c, backLabel: "All courts", onBack: () => {}, onChanged, onRefused: () => {}, notice: null, refreshKey: "k", divisions: null },
+        // The scorer section is a hookless component inside court-focus.tsx: expand it to reach the panel element it mounts.
+        (node) => {
+          const els = walk(node);
+          const scorer = els.filter((e) => typeof e.type === "function" && "folded" in propsOf(e));
+          return [...els, ...scorer.flatMap((e) => walk((e.type as (p: unknown) => ReactNode)(e.props)))];
+        },
+      );
+      const panels = island.tree().filter((e) => e.type === DeviceLinkPanel);
+      expect(panels, c.state).toHaveLength(1);
+      expect(propsOf(panels[0]!).onChanged, c.state).toBe(onChanged);
+      expect(propsOf(panels[0]!).compact, c.state).toBe(true);
+      island.unmount?.();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("V5 — CALLED: open (no fold around it); the hand-over button comes first", () => {
+    const html = focus(CALLED());
+    expect(html).toMatch(/<section[^>]*data-testid="md-scorer"/);
+    expect(html).not.toMatch(/<details[^>]*data-testid="md-scorer"/);
+    expect(html).not.toContain('data-folded="true"');
   });
 
   it("free and in use elsewhere: no scorer QR (nothing to score here) — decided by the court's STATE, not by whether a match rode along", () => {
@@ -1085,10 +1156,12 @@ describe("A4 — no_scorer / not_recording mark the affected court's row", () =>
     expect(courtScorerAttention(court({ current: fx({ scorer_attention: "not_recording" }) }))).toBe("not_recording");
   });
 
-  it("the focused court's QR heading carries the same mark", () => {
+  it("the focused court's QR heading carries the same mark — on a playing court, ON the fold's own heading, so it shows while closed", () => {
     const html = focus(court({ current: fx({ scorer_attention: "no_scorer" }) }));
     const scorer = html.slice(html.indexOf('data-testid="md-scorer"'));
-    expect(scorer.slice(0, scorer.indexOf('data-role="device-link-panel"'))).toContain('data-md-scorer="no_scorer"');
+    const summary = scorer.slice(scorer.indexOf("<summary"), scorer.indexOf("</summary>"));
+    expect(summary).toContain('data-md-scorer="no_scorer"');
+    expect(summary).toContain(`>${esc(t(dict, "matchDay.scorer.no_scorer"))}<`);
   });
 });
 
@@ -1124,6 +1197,20 @@ describe("A4 — a playing court with a live stream shows its preview; any other
     // The stream panel is one tap away.
     expect(preview).toContain(`href="${routes.fixture("acme", "safe-badminton", "girls-u14", 7)}?stream=open"`);
     expect(preview).toContain(`>${t(dict, "matchDay.stream.settings")}<`);
+  });
+
+  it("m4 — a sport without sets (football): the strip under the video carries the sport's own headline, whole", () => {
+    const football = inPlaySummary("football");
+    expect(football, "a football golden stream in play").not.toBeNull();
+    expect(isSetSport(football!)).toBe(false);
+    const html = focus(
+      goldenCourt("football", football!, { stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } }),
+    );
+    expect(html).toContain('data-testid="md-stream-preview"');
+    const strip = html.slice(html.indexOf('data-testid="md-preview-score"'), html.indexOf("</section>", html.indexOf('data-testid="md-preview-score"')));
+    expect(strip).toContain(`>${esc(football!.headline!)}<`);
+    // No set sport's games-won pair: the text branch, not the sets branch.
+    expect(strip).not.toMatch(/>\d+ – \d+</);
   });
 
   it("every case with nothing to embed falls back to the C1 scoreboard, with no video box (count reported)", () => {

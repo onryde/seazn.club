@@ -199,4 +199,27 @@ describe("A4 — Needs you opens from the header's button, results owed first, a
     expect(propsOf(toggleOf(tree)!)["aria-expanded"]).toBe(false);
     expect(listOf(tree)).toBeUndefined();
   });
+
+  it("m5 — open, a poll EMPTIES the list (button gone), a later poll brings rows back: the button returns CLOSED, the list does not reopen unasked", async () => {
+    const island = renderIsland(MatchDayShell, props({ ...view([C1], "2026-10-31T11:00:00.000Z"), needs_you: desk, results_owed: 2 }));
+    (propsOf(toggleOf(island.tree())!).onClick as () => void)();
+    expect(propsOf(toggleOf(island.tree())!)["aria-expanded"]).toBe(true);
+    expect(listOf(island.tree())).toBeDefined();
+
+    net.next = { ...view([C1], "2026-10-31T11:00:30.000Z"), needs_you: [], results_owed: 0 };
+    poll.tick!();
+    await settle();
+    expect(toggleOf(island.tree())).toBeUndefined();
+    expect(listOf(island.tree())).toBeUndefined();
+
+    net.next = { ...view([C1], "2026-10-31T11:01:00.000Z"), needs_you: [row("unscheduled", "amber")], results_owed: 0 };
+    poll.tick!();
+    await settle();
+    const tree = island.tree();
+    expect(toggleOf(tree), "the button is back").toBeDefined();
+    expect(propsOf(toggleOf(tree)!)["aria-expanded"]).toBe(false);
+    expect(propsOf(boxOf(tree)!).hidden).toBe(true);
+    expect(listOf(tree)).toBeUndefined();
+    expect(net.calls).toHaveLength(2);
+  });
 });

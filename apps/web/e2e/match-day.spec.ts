@@ -119,8 +119,11 @@ async function seedMatchDay(request: APIRequestContext, label: string, opts: { n
     const benDee = fixtureOf(ben, dee);
     await withDb(async (sql) => {
       // Court 3: in play with NOTHING recorded and no scorer — the state a phone that never opened the pad leaves. A status
-      // patch on purpose: a core.start would be a recorded event, and the desk's no_scorer asks for none.
-      await sql`update fixtures set court_id = ${court3.id}, scheduled_at = ${within(-15)}, status = 'in_play' where id = ${eveFay}`;
+      // patch on purpose: a core.start would be a recorded event, and the desk's no_scorer asks for none. Kicked off 5
+      // minutes ago — INSIDE the desk's not_recording grace (15), on purpose: no_scorer has no clock, so the mark shows the
+      // same, and once a link is made the match has a scorer and is not yet late, so the court carries NO mark at all.
+      // Past the grace it would turn amber not_recording instead (pinned in competition-desk.test.ts, I1).
+      await sql`update fixtures set court_id = ${court3.id}, scheduled_at = ${within(-5)}, status = 'in_play' where id = ${eveFay}`;
       // Ben v Dee: its window closed hours ago, on no court, no result. Not clamped to today: the desk owes a result whatever
       // day the window closed on.
       await sql`update fixtures set court_id = null, scheduled_at = ${new Date(now - 3 * 3_600_000).toISOString()} where id = ${benDee}`;
@@ -159,12 +162,13 @@ async function expectNoDanglingDot(box: Locator): Promise<number> {
 }
 
 /** The header's Needs-you button opens the desk's own list with the owed result FIRST (the desk itself puts the red
- *  no_scorer row first); the unscored Court 3 is marked on its row; its focus shows the scorer QR — Create mints it the
- *  first time, and a second visit (`minted`) offers the same link back with Show QR rather than a second Create. */
+ *  no_scorer row first). Court 3 is unscored: marked on its row and on its folded "Remote scoring" heading. Opening the
+ *  fold and creating the link mints the QR — and a live link IS a scorer (the desk, fix round 1 I1), so the mark goes from
+ *  the heading and the row at once. A second visit (`minted`) finds no mark, and Show QR rather than a second Create. */
 async function needsYouAndScorer(page: Page, seed: Seed, minted = false): Promise<void> {
   const toggle = page.getByTestId("md-needs-you-toggle");
   await expect(toggle).toBeVisible();
-  await expect(toggle).toContainText("need you");
+  await expect(toggle).toContainText(/\d+ needs? you/);
   await expect(toggle).toContainText("1 result owed");
   await expect(toggle).toHaveAttribute("data-severity", "red");
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -187,28 +191,51 @@ async function needsYouAndScorer(page: Page, seed: Seed, minted = false): Promis
   await toggle.click();
   await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
 
-  // Court 3 is marked on its row. Court 2 is free: nothing in play, nothing to mark.
+  // Court 2 is free: nothing in play, nothing to mark.
   const r3 = row(page, seed.court3!);
-  await expect(r3).toHaveAttribute("data-scorer", "no_scorer");
-  await expect(r3).toContainText("No scorer");
   await expect(row(page, seed.court2)).toHaveAttribute("data-state", "free");
   await expect(row(page, seed.court2)).not.toHaveAttribute("data-scorer", /.+/);
+  if (minted) {
+    // Its link is live from the first visit: a scorer, so no mark.
+    await expect(r3).not.toHaveAttribute("data-scorer", /.+/);
+  } else {
+    await expect(r3).toHaveAttribute("data-scorer", "no_scorer");
+    await expect(r3).toContainText("No scorer");
+  }
 
   await r3.click();
   const focus = page.getByTestId("md-focus");
   await expect(focus).toHaveAttribute("data-state", "playing");
+  // A playing court's QR is FOLDED (V5): the heading shows, closed, after the scoreboard; the mark sits on the heading.
   const scorer = focus.getByTestId("md-scorer");
-  await expect(scorer).toBeVisible();
-  await expect(scorer).toContainText("Remote scoring");
-  await expect(scorer.locator('[data-md-scorer="no_scorer"]')).toBeVisible();
-  if (minted) {
-    await expect(scorer.getByTestId("device-link-show")).toBeVisible();
-    await expect(scorer.getByTestId("device-link-mint")).toHaveCount(0);
-    await scorer.getByTestId("device-link-show").click();
-  } else {
-    await scorer.getByTestId("device-link-mint").click();
-  }
+  // The fold's OWN heading: the panel inside has a "More" fold of its own.
+  const heading = scorer.locator(":scope > summary");
+  await expect(heading).toBeVisible();
+  await expect(heading).toContainText("Remote scoring");
+  await expect(scorer).not.toHaveAttribute("open", /.*/);
+  const mark = heading.locator('[data-md-scorer="no_scorer"]');
+  if (minted) await expect(mark).toHaveCount(0);
+  else await expect(mark).toBeVisible();
+  // AGENTS 22: what the fold hides is ATTACHED before it opens; open it, then it is visible.
+  const action = scorer.getByTestId(minted ? "device-link-show" : "device-link-mint");
+  await expect(action).toBeAttached();
+  await expect(action).toBeHidden();
+  await heading.click();
+  await expect(scorer).toHaveAttribute("open", "");
+  await expect(action).toBeVisible();
+  if (minted) await expect(scorer.getByTestId("device-link-mint")).toHaveCount(0);
+  await action.click();
   await expect(scorer.getByTestId("dlink-qr")).toBeVisible({ timeout: 15_000 });
+  // Compact: Copy beside the QR; the raw link behind More, closed.
+  await expect(scorer.getByTestId("device-link-copy")).toBeVisible();
+  await expect(scorer.getByTestId("device-link-url")).toBeAttached();
+  await expect(scorer.getByTestId("device-link-url")).toBeHidden();
+  if (!minted) {
+    // The link is a scorer: the panel re-reads the board, and the mark goes from the heading AND the row — well inside the
+    // 20 s live poll, so it is the re-read that moved it, not the next tick.
+    await expect(mark).toHaveCount(0, { timeout: 5_000 });
+    await expect(r3).not.toHaveAttribute("data-scorer", /.+/, { timeout: 5_000 });
+  }
   await expectNoHorizontalScroll(page);
 }
 

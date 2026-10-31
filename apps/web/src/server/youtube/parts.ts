@@ -75,8 +75,8 @@ export async function sessionVideoUrl(orgId: string, sessionId: string): Promise
  *  LATEST open session streams into, with that broadcast's own made-for-kids stamp - or nothing. "Latest open" is the very session
  *  `openStreamStates` reads (latest by creation among `ACTIVE_STATES`), so the preview and the court's Live badge speak about one
  *  session; its video is `sessionVideoUrl`'s rule (its own broadcast, once YouTube gave it an id, not failed). A pasted key names no
- *  broadcast, so its fixture is absent. Org-scoped on both rows. The caller decides whether a part may be embedded
- *  (`mayEmbedReplay`). */
+ *  broadcast, so its fixture is absent, and so is a PRIVATE broadcast (fix round 1, m2: only its owner's account can play it).
+ *  Org-scoped on both rows. The caller decides whether a part may be embedded (`mayEmbedReplay`). */
 export async function liveSessionVideos(orgId: string, fixtureIds: readonly string[]): Promise<Record<string, PublicReplayPart>> {
   if (fixtureIds.length === 0) return {};
   const rows = await sql<{ fixture_id: string; video_id: string; made_for_kids: boolean }[]>`
@@ -86,7 +86,9 @@ export async function liveSessionVideos(orgId: string, fixtureIds: readonly stri
              where org_id = ${orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}
              order by fixture_id, created_at desc) s
       join youtube_broadcasts b on b.id = s.youtube_broadcast_id and b.org_id = s.org_id
-     where b.yt_broadcast_id is not null and b.state <> 'failed'`;
+     where b.yt_broadcast_id is not null and b.state <> 'failed'
+       -- A4 fix round 1, m2: a PRIVATE broadcast plays for its owner's account only; embedded, it is an error box.
+       and b.privacy <> 'private'`;
   const out: Record<string, PublicReplayPart> = {};
   for (const r of rows) out[r.fixture_id] = { partNo: 1, url: youtubeWatchUrl(r.video_id), madeForKids: r.made_for_kids };
   return out;

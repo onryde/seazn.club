@@ -10,7 +10,7 @@
 // "Revoke now" under a shown QR) kills a printed sheet just the same, so it
 // asks first too, with the same on-screen question (owner ruling, T3 fix
 // round 2). One question at a time.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -36,6 +36,8 @@ export function DeviceLinkPanel({
   fixtureId,
   sportKey,
   embedded = false,
+  compact = false,
+  onChanged,
   viewerPlan,
 }: {
   fixtureId: string;
@@ -51,6 +53,16 @@ export function DeviceLinkPanel({
    * is. Everything below the heading is unchanged.
    */
   embedded?: boolean;
+  /**
+   * Match Day (task A4 fix round 1, V5): the hand-over a court needs at a glance — the Create / Show QR button, then the QR
+   * and Copy — with everything else (what the link is, the raw pad URL, "same QR every time", the live line, Revoke,
+   * Revoke & reissue and their questions) behind one "More" fold (`device-link-more`). Same state, same handlers, same
+   * testids as the full panel; implies `embedded`'s chrome.
+   */
+  compact?: boolean;
+  /** Called after any change this panel made to the fixture's link (created or re-shown, reissued, revoked) succeeded,
+   *  so a host that reads the link elsewhere (Match Day's "No scorer" mark: a live link IS a scorer) can re-read. */
+  onChanged?: () => void;
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
@@ -135,6 +147,7 @@ export function DeviceLinkPanel({
       );
       await showLink(link);
       await refresh();
+      onChanged?.();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
       else refused(err);
@@ -156,6 +169,7 @@ export function DeviceLinkPanel({
       await showLink(link);
       setConfirm(null);
       await refresh();
+      onChanged?.();
     } catch (err) {
       // Same rule as a refused revoke: never leave "Yes, reissue" on screen
       // after the server said no. Close the question and re-read what is live.
@@ -178,6 +192,7 @@ export function DeviceLinkPanel({
       setMinted(null);
       setConfirm(null);
       await refresh();
+      onChanged?.();
     } catch (err) {
       // A refused revoke must not leave "Yes, revoke" on screen — on a 404 the
       // link is already gone. Close the question and re-read what is live.
@@ -226,17 +241,140 @@ export function DeviceLinkPanel({
   if (over) {
     return (
       <section
-        className={embedded ? "rounded-xl border border-purple-100 bg-purple-50/40 p-4" : "card p-5"}
+        className={embedded || compact ? "rounded-xl border border-purple-100 bg-purple-50/40 p-4" : "card p-5"}
         data-role="device-link-panel"
       >
-        {!embedded && <h2 className="text-sm font-semibold text-slate-700">{msg("dlink.title")}</h2>}
+        {!embedded && !compact && <h2 className="text-sm font-semibold text-slate-700">{msg("dlink.title")}</h2>}
         <p
           data-testid="device-link-match-over"
           role="status"
-          className={`text-xs text-slate-600 ${embedded ? "" : "mt-1"}`}
+          className={`text-xs text-slate-600 ${embedded || compact ? "" : "mt-1"}`}
         >
           {msg("dlink.error.matchOver")}
         </p>
+      </section>
+    );
+  }
+
+  if (compact) {
+    const desc = (
+      <p className="text-xs text-slate-600">{msg("dlink.desc", { scorer: msg(officialLabelKey(sportKey)).toLowerCase() })}</p>
+    );
+    const more = (body: ReactNode) => (
+      <details data-testid="device-link-more" className="group mt-3 min-w-0 text-left">
+        <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 rounded-lg text-xs font-semibold text-purple-800 hover:text-purple-900 lg:min-h-0 lg:py-1 [&::-webkit-details-marker]:hidden">
+          <svg aria-hidden viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 fill-none stroke-current transition-transform group-open:rotate-90 motion-reduce:transition-none" strokeWidth={1.8}>
+            <path d="M6 3.5 10.5 8 6 12.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {msg("dlink.more")}
+        </summary>
+        <div className="mt-2 min-w-0 space-y-2">{body}</div>
+      </details>
+    );
+    return (
+      <section
+        className="rounded-xl border border-purple-100 bg-purple-50/40 p-4"
+        data-role="device-link-panel"
+        data-compact="true"
+      >
+        {paywall && (
+          <div className="mb-3">
+            <UpgradeGate feature="scoring.device_links" viewerPlan={viewerPlan} />
+          </div>
+        )}
+        {error && <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+        {minted ? (
+          <div className="min-w-0">
+            <div className="space-y-2 text-center">
+              {/* `ph-no-capture` on the QR and the URL, exactly as the full panel below (session replay). */}
+              <SeaznQrImage testId="dlink-qr" sensitive qr={minted.qr} alt={msg("dlink.alt")} maxSize={DLINK_QR_MAX_PX} />
+              <button
+                type="button"
+                data-testid="device-link-copy"
+                className="btn btn-ghost min-h-11 text-xs"
+                onClick={() => padUrl && navigator.clipboard?.writeText(padUrl)}
+              >
+                {msg("dlink.copy")}
+              </button>
+            </div>
+            {more(
+              <>
+                {desc}
+                <p
+                  data-testid="device-link-url"
+                  className="ph-no-capture break-all rounded bg-slate-50 px-2 py-1 font-mono text-[10px] text-slate-500"
+                >
+                  {padUrl}
+                </p>
+                <p className="text-xs text-slate-500">{msg("dlink.sameQr")}</p>
+                {active && (
+                  <button
+                    type="button"
+                    data-testid="device-link-revoke-now"
+                    disabled={busy}
+                    onClick={() => setConfirm("revoke")}
+                    className="btn btn-danger min-h-11 text-xs"
+                  >
+                    {msg("dlink.revokeNow")}
+                  </button>
+                )}
+                {question}
+              </>,
+            )}
+          </div>
+        ) : active && live ? (
+          <div className="min-w-0">
+            <button
+              type="button"
+              data-testid="device-link-show"
+              disabled={busy}
+              onClick={show}
+              className="btn btn-primary min-h-11 text-xs"
+            >
+              {msg("dlink.showQr")}
+            </button>
+            {more(
+              <>
+                {desc}
+                <p className="text-xs text-slate-600">{msg(live.key, live.vars)}</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    data-testid="device-link-revoke"
+                    disabled={busy}
+                    onClick={() => setConfirm("revoke")}
+                    className="btn btn-danger min-h-11 text-xs"
+                  >
+                    {msg("dlink.revoke")}
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="device-link-reissue"
+                    disabled={busy}
+                    onClick={() => setConfirm("reissue")}
+                    className="btn btn-ghost min-h-11 text-xs"
+                  >
+                    {msg("dlink.reissue")}
+                  </button>
+                </div>
+                {question}
+              </>,
+            )}
+          </div>
+        ) : (
+          <div className="min-w-0">
+            <button
+              type="button"
+              data-testid="device-link-mint"
+              disabled={busy}
+              onClick={show}
+              className="btn btn-primary min-h-11"
+            >
+              {busy ? "…" : msg("dlink.create")}
+            </button>
+            {more(desc)}
+          </div>
+        )}
       </section>
     );
   }

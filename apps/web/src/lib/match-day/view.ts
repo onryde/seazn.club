@@ -233,14 +233,21 @@ export function needsYouTone(items: readonly Pick<NeedsYouItem, "severity">[]): 
   return best;
 }
 
-/** The header button's words (§6.3, "11 need you · 3 results owed"): how many rows the list holds — the list's own count — and,
- *  when any, how many matches owe a result. Parts, so the page can join them without a separator left dangling on a wrap. */
+/** How many things need the organiser, by the header's own count (fix round 1, m1): every list row that is NOT an owed result,
+ *  plus each MATCH that owes one — so "N need you" never reads fewer than the "M results owed" beside it (the desk folds all of
+ *  a division's owed results into one row). */
+export function needsYouCount(view: Pick<MatchDayView, "needs_you" | "results_owed">): number {
+  return view.needs_you.filter((r) => r.kind !== "result_missing").length + view.results_owed;
+}
+
+/** The header button's words (§6.3, "11 need you · 3 results owed"): `needsYouCount` and, when any, how many matches owe a
+ *  result. Parts, so the page can join them without a separator left dangling on a wrap. */
 export function needsYouButtonParts(
   dict: Dict,
   view: Pick<MatchDayView, "needs_you" | "results_owed">,
   locale: Locale,
 ): string[] {
-  const parts = [plural(dict, "matchDay.needsYou.count", view.needs_you.length, locale)];
+  const parts = [plural(dict, "matchDay.needsYou.count", needsYouCount(view), locale)];
   if (view.results_owed > 0) parts.push(plural(dict, "matchDay.needsYou.owed", view.results_owed, locale));
   return parts;
 }

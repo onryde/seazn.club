@@ -10,8 +10,10 @@
 // refresh, and the refresh can change the court's state and unmount the panel that was refused (review M5).
 //
 // The scorer's QR (spec §2, §9: "Match Day … now shows the scorer QR for a called or live match"; task A4) is the console's own
-// Remote scoring panel (`DeviceLinkPanel`, embedded): the same per-match link, ENSURE'd — showing it never kills a printed sheet.
-// Keyed by the match, so another court's match never shows the last one's link.
+// Remote scoring panel (`DeviceLinkPanel`, embedded and COMPACT — fix round 1, V5): the same per-match link, ENSURE'd — showing
+// it never kills a printed sheet. Open on a called court (the hand-over is next); folded behind its heading on a playing one (the
+// scorer is on; the scoreboard comes first), the No-scorer mark staying on the heading. Keyed by the match, so another court's
+// match never shows the last one's link.
 import { useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -159,7 +161,13 @@ export function CourtFocus({
       )}
       {court.state === "called" && f !== null && <CalledPanel ctx={ctx} fixture={f} onChanged={onChanged} onRefused={onRefused} />}
       {f !== null && (court.state === "playing" || court.state === "called") && (
-        <ScorerPanel ctx={ctx} fixture={f} attention={courtScorerAttention(court)} />
+        <ScorerPanel
+          ctx={ctx}
+          fixture={f}
+          attention={courtScorerAttention(court)}
+          folded={court.state === "playing"}
+          onChanged={onChanged}
+        />
       )}
       {court.state === "free" && (
         <FreeCourt
@@ -261,21 +269,61 @@ function ScorerPanel({
   ctx,
   fixture,
   attention,
+  folded,
+  onChanged,
 }: {
   ctx: MatchDayCtx;
   fixture: MatchDayFixture;
   attention: ReturnType<typeof courtScorerAttention>;
+  /** A PLAYING court (fix round 1, V5): the scorer is already on, so the QR sits behind its heading, closed at every width,
+   *  and never outranks the scoreboard. A CALLED court shows it open — handing the phone over is the next thing to do. */
+  folded: boolean;
+  /** A link made, re-shown or revoked here re-reads the board: a live link IS a scorer (the desk, I1), so "No scorer" goes. */
+  onChanged: () => void;
 }) {
   const { dict } = ctx;
+  const heading = (
+    <>
+      <h3 id={`md-scorer-${fixture.id}`} className="text-xs font-semibold text-slate-600">
+        {t(dict, "dlink.title")}
+      </h3>
+      {attention !== null && <ScorerMark dict={dict} kind={attention} severity={ATTENTION_SEVERITY[attention]} />}
+    </>
+  );
+  // Compact either way: Create / Show QR, then the QR and Copy; the rest behind the panel's own "More".
+  const panel = (
+    <DeviceLinkPanel
+      key={fixture.id}
+      fixtureId={fixture.id}
+      sportKey={fixture.sport_key}
+      embedded
+      compact
+      onChanged={onChanged}
+      viewerPlan={ctx.viewerPlan}
+    />
+  );
+  if (folded) {
+    return (
+      <details data-testid="md-scorer" data-folded="true" className="group min-w-0">
+        <summary className="flex min-h-11 min-w-0 cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 rounded-lg [&::-webkit-details-marker]:hidden">
+          <svg
+            aria-hidden
+            viewBox="0 0 16 16"
+            className="h-3.5 w-3.5 shrink-0 fill-none stroke-current text-slate-500 transition-transform group-open:rotate-90 motion-reduce:transition-none"
+            strokeWidth={1.8}
+          >
+            <path d="M6 3.5 10.5 8 6 12.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {heading}
+        </summary>
+        <div className="mt-2 min-w-0">{panel}</div>
+      </details>
+    );
+  }
   return (
     <section data-testid="md-scorer" aria-labelledby={`md-scorer-${fixture.id}`} className="min-w-0">
-      <div className="mb-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-        <h3 id={`md-scorer-${fixture.id}`} className="text-xs font-semibold text-slate-600">
-          {t(dict, "dlink.title")}
-        </h3>
-        {attention !== null && <ScorerMark dict={dict} kind={attention} severity={ATTENTION_SEVERITY[attention]} />}
-      </div>
-      <DeviceLinkPanel key={fixture.id} fixtureId={fixture.id} sportKey={fixture.sport_key} embedded viewerPlan={ctx.viewerPlan} />
+      <div className="mb-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">{heading}</div>
+      {panel}
     </section>
   );
 }

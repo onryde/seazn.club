@@ -101,6 +101,9 @@ export function MatchDayShell({
   // A phone whose court left the list is back on the list (review M6b): it stays there when the court returns, rather than
   // jumping back into a court the organiser was told had gone. React's render-phase adjustment, not an effect.
   if (phoneOpen && focus.kind === "lost") setPhoneOpen(false);
+  // Same adjustment for the Needs-you list (fix round 1, m5): once a poll empties it, the button goes and the list is CLOSED,
+  // so rows arriving later bring the button back closed rather than reopening the list unasked.
+  if (needsOpen && view.needs_you.length === 0) setNeedsOpen(false);
   /** A phone shows one court full-screen only while the court it opened is still there. */
   const phoneCourt = phoneOpen && focused !== null;
   const counts = courtCounts(courts);

@@ -20,6 +20,7 @@ import {
 } from "../stages";
 import { appendEvent } from "@/server/engine-db";
 import { getCompetitionDesk, competitionPhase } from "../competition-desk";
+import { NOT_RECORDING_GRACE_MINUTES } from "@/lib/division-phase";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -499,6 +500,64 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
     const desk = await getCompetitionDesk(auth, competitionId);
     const d = desk.divisions.get(divisionId)!;
     expect(d.attention.some((a) => a.kind === "no_scorer")).toBe(true);
+  });
+
+  // Match Day A4 fix round 1, I1 (controller ruling): a device link IS a scorer. Spec 2026-10-31 §9 makes the scoring
+  // link THE scorer path, so an ACTIVE link (the same rule DeviceLinkPanel and the pad's token resolver use: not revoked,
+  // and no expiry or one still ahead) suppresses no_scorer exactly as an assigned official does. A revoked or expired link
+  // is no scorer. not_recording keeps its own rule (zero events past the grace), so a linked match quiet past the grace
+  // is not_recording, never no_scorer.
+  it("I1: an ACTIVE device link counts as a scorer; a revoked or expired one does not; none raises no_scorer — and a quiet linked match past the grace is not_recording", async () => {
+    const { auth } = await seedOrg();
+    const { competitionId, divisionId } = await seedDivision(auth, 4);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "League", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    await sql`update divisions set status = 'active' where id = ${divisionId}`;
+    const fx = await sql<{ id: string }[]>`select id from fixtures where division_id = ${divisionId} order by fixture_no limit 5`;
+    expect(fx.length, "premise: five fixtures to put in play").toBe(5);
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${`desk-link-${randomUUID()}@test.local`}, 'Desk', true) returning id`;
+    // Five in-play fixtures, zero events, nobody assigned; minutes since kick-off chosen around the grace.
+    const minutes = [5, 30, 5, 5, 5];
+    for (const [i, f] of fx.entries()) {
+      await sql`update fixtures set status = 'in_play', scheduled_at = now() - make_interval(mins => ${minutes[i]!}) where id = ${f.id}`;
+    }
+    const links: { fixture: string; revoked_at: string | null; expires_at: string | null }[] = [
+      { fixture: fx[0]!.id, revoked_at: null, expires_at: null }, // sealed, live until the match is over
+      { fixture: fx[1]!.id, revoked_at: null, expires_at: new Date(Date.now() + 3_600_000).toISOString() }, // expiry ahead
+      { fixture: fx[2]!.id, revoked_at: new Date(Date.now() - 60_000).toISOString(), expires_at: null }, // revoked
+      { fixture: fx[3]!.id, revoked_at: null, expires_at: new Date(Date.now() - 60_000).toISOString() }, // expired
+      // fx[4]: no link at all
+    ];
+    for (const l of links) {
+      await sql`
+        insert into device_links (org_id, fixture_id, token_hash, issued_by, revoked_at, expires_at)
+        values (${auth.orgId}, ${l.fixture}, ${`h-${randomUUID()}`}, ${user!.id}, ${l.revoked_at}, ${l.expires_at})`;
+    }
+    const now = Date.now();
+    const active = (l: (typeof links)[number]) => l.revoked_at === null && (l.expires_at === null || Date.parse(l.expires_at) > now);
+    const linked = new Set(links.filter(active).map((l) => l.fixture));
+    expect(linked.size, "premise: two active links, two dead ones").toBe(2);
+
+    const desk = await getCompetitionDesk(auth, competitionId);
+    const d = desk.divisions.get(divisionId)!;
+    const ids = (kind: string) =>
+      [...(d.attention.find((a) => a.kind === kind) as { fixtureIds?: string[] } | undefined)?.fixtureIds ?? []].sort();
+    // no_scorer: every in-play fixture without an active link (no official anywhere here).
+    expect(ids("no_scorer")).toEqual(fx.map((f) => f.id).filter((id) => !linked.has(id)).sort());
+    // not_recording: the linked fixtures quiet for at least the grace — the 30-minute one, not the 5-minute one.
+    expect(ids("not_recording")).toEqual(
+      fx.filter((f, i) => linked.has(f.id) && minutes[i]! >= NOT_RECORDING_GRACE_MINUTES).map((f) => f.id).sort(),
+    );
+    expect(ids("not_recording")).toHaveLength(1);
+
+    // Revoking the sealed link puts its fixture back on no_scorer.
+    await sql`update device_links set revoked_at = now() where fixture_id = ${fx[0]!.id}`;
+    const after = await getCompetitionDesk(auth, competitionId);
+    const ad = after.divisions.get(divisionId)!;
+    expect((ad.attention.find((a) => a.kind === "no_scorer") as { fixtureIds: string[] }).fixtureIds).toContain(fx[0]!.id);
   });
 
   it("F4: an official on a DIFFERENT fixture does not suppress this one's no_scorer", async () => {

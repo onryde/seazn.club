@@ -429,7 +429,8 @@ export async function getMatchDay(
     // Who serves, on this competition's playing courts only, for a sport whose engine reads a serve (S1). One match whose fold
     // throws (a side whose entrant went: `loadFoldInputs`' WRONG_PHASE) says nothing about who serves — `null`, logged — and
     // never takes the rest of the board down with it (A3 carry-in). A savepoint, so a statement it failed cannot abort the
-    // tenant transaction the reads below still need.
+    // tenant transaction the next court's fold and the reads below still need — a JS throw never aborts a transaction, a
+    // failed STATEMENT does; witnessed by match-day.test.ts "S1 guard (SQL)" (fix round 1, m3), which a direct call reds.
     const serving = new Map<string, Serving>();
     for (const c of board.courts) {
       if (c.state === "playing" && c.current !== null && sportReadsServe(c.current.sport_key)) {

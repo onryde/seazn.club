@@ -3235,6 +3235,7 @@
   "dlink.revokeConfirm": "Yes, revoke",
   "dlink.keep": "Keep this QR",
   "dlink.create": "Create scoring link",
+  "dlink.more": "More",
   "sheets.pdf.eyebrow": "SCORER SHEETS",
   "sheets.pdf.courtPage": "{court} · page {n} of {of}",
   "sheets.pdf.noCourt": "No court assigned",

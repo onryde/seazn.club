@@ -307,7 +307,7 @@ export async function getCompetitionDesk(
     hasFeature(auth.orgId, "discipline.enforced", competitionId),
   ]);
   const ids = divisions.map((d) => d.id);
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial } = await withTenant(auth.orgId, async (tx) => {
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -436,9 +436,24 @@ export async function getCompetitionDesk(
            where f.division_id = any(${ids})
              and fo.response is distinct from 'declined'`
       : [];
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial };
+    // Match Day A4 fix round 1, I1 (controller ruling): a scoring link IS a scorer — spec 2026-10-31 §9 makes the device
+    // link THE scorer path, and a match being scored on a phone must not read "No scorer" until its first point. ACTIVE
+    // is the device-link usecase's own rule (device-links.ts `newestLiveLink` / `resolveDeviceLinkToken`): not revoked,
+    // and no expiry or one still ahead — measured at this desk's `now`, the one clock every other row here reads. Only
+    // in-play fixtures are asked: hasScorer is read by no_scorer / not_recording alone, both in-play-only.
+    const fixturesWithLink = ids.length
+      ? await tx<FixtureWithOfficialRaw[]>`
+          select distinct dl.fixture_id
+            from device_links dl
+            join fixtures f on f.id = dl.fixture_id
+           where f.division_id = any(${ids})
+             and f.status = 'in_play'
+             and dl.revoked_at is null
+             and (dl.expires_at is null or dl.expires_at > ${now})`
+      : [];
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink };
   });
-  const fixturesWithScorer = new Set(fixturesWithOfficial.map((a) => a.fixture_id));
+  const fixturesWithScorer = new Set([...fixturesWithOfficial, ...fixturesWithLink].map((a) => a.fixture_id));
   // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
   // read with the privileged client, for these divisions only — the ones listDivisions just proved are this org's.
   const onlineIds = new Set(

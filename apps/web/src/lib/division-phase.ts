@@ -73,10 +73,12 @@ export interface PhaseFixture {
    *  unreachable and both live-recording rows inert: review 7, Blocker 1. */
   eventCount: number;
   matchMinutes: number;
-  /** Whether an official is assigned to score this fixture — resolved by the
-   *  caller from `fixture_officials` using the same rule as
-   *  `hasAssignedScorer` (any response other than explicit "declined" counts).
-   *  Pure and DB-free; competition-desk.ts performs the lookup. */
+  /** Whether anyone is set to score this fixture — resolved by the caller:
+   *  an official from `fixture_officials` by the same rule as
+   *  `hasAssignedScorer` (any response other than explicit "declined" counts),
+   *  OR an active scoring link in `device_links` (not revoked, not expired —
+   *  Match Day A4 fix round 1, I1: the link is the scorer path). Pure and
+   *  DB-free; competition-desk.ts performs both lookups. */
   hasScorer: boolean;
   /** Which stage this fixture belongs to. M1 (fix round I): "has this
    *  bracket been drawn yet?" is a question about a STAGE answered by ITS

@@ -2170,6 +2170,7 @@ export type DictionaryKey =
   | "dlink.kekMissing"
   | "dlink.live"
   | "dlink.liveUntilOver"
+  | "dlink.more"
   | "dlink.reissue"
   | "dlink.reissueConfirm"
   | "dlink.reissueWarn"

@@ -25,7 +25,7 @@
 // court noun of a football and a chess division (the brief's pair); the call path's own sports are A1's.
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { foldMatchWithStoppage, initSquads, summaryOf, type EventEnvelope } from "@seazn/engine/core";
 import { resolvePositions } from "@seazn/engine/sport";
@@ -38,6 +38,26 @@ import uiFr from "@/dictionaries/fr/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { venueNoun } from "@/lib/venue";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
+
+// A4 fix round 1, m3: the serve fold runs in a SAVEPOINT so a statement that fails inside it cannot abort the board's
+// transaction. A JS throw (the S1 guard test below) never aborts a transaction, so it cannot witness the savepoint; this
+// fault can — the real fold, preceded on one chosen fixture by a statement Postgres refuses, on the transaction the fold
+// is handed. Every other call is the real fold, untouched.
+const serveFault = vi.hoisted(() => ({ sqlFailOn: null as string | null, hits: 0 }));
+vi.mock("@/server/engine-db/serving", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/engine-db/serving")>();
+  return {
+    ...real,
+    servingSideOf: async (...args: Parameters<typeof real.servingSideOf>) => {
+      const [tx, fixtureId] = args;
+      if (fixtureId === serveFault.sqlFailOn) {
+        serveFault.hits++;
+        await tx`select 1 / 0`;
+      }
+      return real.servingSideOf(...args);
+    },
+  };
+});
 import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
 import { apiSessionOnTarget, rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import { youtubeWatchUrl } from "@/lib/youtube";
@@ -208,13 +228,19 @@ async function nominate(day: Day, fixtureId: string): Promise<void> {
 /** A session in `state` on a connected channel (`rigApiTarget`), streaming into a YouTube broadcast YouTube has given an id —
  *  the shape Go live leaves (session-video-url.test.ts drives the real one); written raw, since only the READ is under test.
  *  Returns the broadcast's YouTube id. */
-async function onYouTube(day: Day, fixtureId: string, state: string, madeForKids: boolean): Promise<string> {
+async function onYouTube(
+  day: Day,
+  fixtureId: string,
+  state: string,
+  madeForKids: boolean,
+  privacy: "public" | "unlisted" | "private" = "unlisted",
+): Promise<string> {
   const { targetId, connectionId } = await rigApiTarget(day.orgId, `Cam ${randomUUID().slice(0, 6)}`);
   const sessionId = await apiSessionOnTarget(day.orgId, fixtureId, targetId, state);
   const ytId = `v${randomUUID().replace(/-/g, "").slice(0, 10)}`;
   const [b] = await sql<{ id: string }[]>`
     insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id)
-    values (${madeForKids}, ${day.orgId}, ${connectionId}, ${fixtureId}, 'Match', 'unlisted', 'live', ${ytId}) returning id`;
+    values (${madeForKids}, ${day.orgId}, ${connectionId}, ${fixtureId}, 'Match', ${privacy}, 'live', ${ytId}) returning id`;
   await sql`update fixture_stream_sessions set youtube_broadcast_id = ${b!.id} where id = ${sessionId}`;
   return ytId;
 }
@@ -490,6 +516,37 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     expect(generic.queue.map((q) => [q.id, q.serving])).toEqual([[f34.id, null]]);
   });
 
+  it("S1 guard (SQL) — a statement that FAILS inside one court's fold does not abort the board's transaction: that court reads `serving` null, the next court's fold still runs", async () => {
+    const rallyEnds = BWF.events.flatMap((e, i) => (e.type === "badminton.rally" && i > BWF.events.findIndex((x) => x.type === "badminton.game.summary") ? [i + 1] : []));
+    const k = [...rallyEnds].reverse().find((n) => engineSays(BWF.events.slice(0, n)).serving !== null);
+    expect(k, "a moment of game 2 the engine has a server for").toBeDefined();
+    const events = BWF.events.slice(0, k);
+
+    const day = await seedDay();
+    const [fFirst, fNext] = await badmintonFixtures(day, day.courts.c1);
+    await place(day, fFirst!.id, 0, day.courts.c1);
+    await place(day, fNext!.id, 0, day.courts.c2);
+    await record(day, fFirst!, events);
+    await record(day, fNext!, events);
+    const before = await getMatchDay(day.auth, day.comp.id, at(5));
+    // Premise: Court 1's fold runs BEFORE Court 2's (the board's court order), so an aborted transaction would reach Court 2.
+    expect(before.courts.map((c) => c.court_id).indexOf(day.courts.c1)).toBeLessThan(before.courts.map((c) => c.court_id).indexOf(day.courts.c2));
+    expect(courtOf(before, day.courts.c2).current!.serving, "premise: Court 2's fold reads a server").not.toBeNull();
+
+    serveFault.sqlFailOn = fFirst!.id;
+    serveFault.hits = 0;
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(5));
+      expect(serveFault.hits, "the fault really fired, once").toBe(1);
+      expect(courtOf(view, day.courts.c1).current!.serving).toBeNull();
+      // Court 2's fold ran on a live transaction: the same server as before, and the court reads exactly as before.
+      expect(courtOf(view, day.courts.c2)).toEqual(courtOf(before, day.courts.c2));
+      expect(courtOf(view, day.courts.c2).current!.serving).toBe(engineSays(events).serving);
+    } finally {
+      serveFault.sqlFailOn = null;
+    }
+  });
+
   it("S1 guard — one playing match whose fold throws leaves the rest of the board intact: its `serving` is null, every other court reads as before", async () => {
     // The throw is a real one the fold makes on a real shape: a side whose entrant row went (the fixtures FK is `on delete set
     // null`), which `loadFoldInputs` refuses with WRONG_PHASE "unassigned_entrant" (server/engine-db/fold.ts). Before the guard it
@@ -577,15 +634,17 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     }
   });
 
-  it("A4 — a playing match whose stream is LIVE carries the YouTube video it streams into, with that broadcast's made-for-kids stamp; a pasted key, a stream still warming: none", async () => {
+  it("A4 — a playing match whose stream is LIVE carries the YouTube video it streams into, with that broadcast's made-for-kids stamp; a pasted key, a stream still warming, a PRIVATE broadcast: none", async () => {
     const day = await seedDay();
     const c4 = await addCourt(day, "hallA", "Court 4", 3);
+    const c5 = await addCourt(day, "hallA", "Court 5", 4);
     const { p1, p2, p3, p4 } = pairs(day);
     const f12 = between(day.comp, p1, p2);
     const f34 = between(day.comp, p3, p4);
     const f13 = between(day.comp, p1, p3);
     const f24 = between(day.comp, p2, p4);
-    for (const [f, c] of [[f12, day.courts.c1], [f34, day.courts.c2], [f13, day.courts.c3], [f24, c4]] as const) {
+    const f14 = between(day.comp, p1, p4);
+    for (const [f, c] of [[f12, day.courts.c1], [f34, day.courts.c2], [f13, day.courts.c3], [f24, c4], [f14, c5]] as const) {
       await place(day, f.id, -10, c);
       await start(day, f.id, -10);
     }
@@ -594,6 +653,8 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     const open = await onYouTube(day, f12.id, "live", false);
     const kids = await onYouTube(day, f34.id, "live", true);
     await onYouTube(day, f24.id, "warming", false);
+    // Fix round 1, m2: a PRIVATE broadcast cannot be watched by anyone but its owner — no preview, the scoreboard instead.
+    await onYouTube(day, f14.id, "live", false, "private");
 
     const view = await getMatchDay(day.auth, day.comp.id, at(0));
     const expected: [string, string, MatchDayFixture["live_video"], string][] = [
@@ -601,6 +662,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       [day.courts.c2, f34.id, { url: youtubeWatchUrl(kids), made_for_kids: true }, "live"],
       [day.courts.c3, f13.id, null, "live"],
       [c4, f24.id, null, "waiting"],
+      [c5, f14.id, null, "live"],
     ];
     let checked = 0;
     for (const [court, id, video, stream] of expected) {
@@ -610,7 +672,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       expect(current.live_video, court).toEqual(video);
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
   });
 
   it("what holds a court ends no earlier than now: an overrunning match holds it until now; a called match for a match length from now", async () => {
