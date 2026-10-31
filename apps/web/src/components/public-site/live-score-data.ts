@@ -7,6 +7,7 @@ import { OVERLAY_KEY_PARAM, OVERLAY_REALTIME_PURPOSE, REALTIME_PURPOSE_PARAM, ty
 import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
 import type { ProgrammePhaseWire } from "@/lib/relay-phase";
+import type { SponsorPlan } from "@/lib/sponsor-plan";
 import type { OverlayCarromToss } from "@/lib/overlay-toss";
 import type { OverlayClosedOver, OverlayCricketLive, OverlayCricketToss, OverlayHighlights } from "@/lib/overlay-cricket";
 
@@ -114,6 +115,11 @@ export interface OverlayLiveData extends LiveFixtureData {
    *  heartbeat. Present ONLY on an answer to a verified composed relay page (`sid` + `st`), and only when that beat
    *  carried one — an absent key is absent, never defaulted. Every public answer omits it. */
   programmePhase?: ProgrammePhaseWire;
+  /** R4 sponsors on stream (spec 2026-10-27 §3.2): the planner's plan for this fixture — `planSponsors(...).plan`, the
+   *  break cards in the recent window and the cards they name. ABSENT or null: no card (rotation off, none ticked).
+   *  S5 is the producer (the overlay read path); S7's stage turns `airings` into sponsor moments and puts the ticked
+   *  cards (`onStream`) on the scene carousel. */
+  sponsorPlan?: SponsorPlan;
 }
 
 export interface PublicRealtimeToken {

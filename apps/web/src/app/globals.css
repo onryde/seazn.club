@@ -2324,3 +2324,184 @@ body {
     animation: none;
   }
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   R4 sponsors on stream, S7 — the sponsor card (spec 2026-10-27 §3.5).
+
+   The SLOT is placed by the stage from the template's declared box
+   (`OverlayTemplateDef.sponsorSlots`, `--ovl-sponsor-x/y/w/h`) and CLIPS, as
+   the moment slot does: the card slides out from under its own leading edge.
+   Above the scene backdrop and the match card, below the scorebug.
+
+   The CARD fills its slot in the scorebug's own materials: the board, the
+   ink, and the 8 px LED rail the bug carries on its left edge (`.ovl-bug
+   .ovl-led`) — on the lower third's leading edge, along the banner's top. A
+   43-character name ellipsises (lower third) or clamps at two lines (banner):
+   `min-width: 0` on EVERY flex ancestor of the name, or `truncate` silently
+   widens the row instead (Review Focus 5).
+   ─────────────────────────────────────────────────────────────────────────── */
+.ovl-sponsor-slot {
+  position: absolute;
+  left: var(--ovl-sponsor-x);
+  top: var(--ovl-sponsor-y);
+  width: var(--ovl-sponsor-w);
+  height: var(--ovl-sponsor-h);
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+}
+.ovl-sponsor-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex: 1 1 auto;
+  min-width: 0;
+  /* 120 tall: 12 + (50 name + 6 + 35 link) + 12 = 115, and the 88 px plate. */
+  padding: 12px 32px 12px 40px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--sport-board);
+  color: var(--sport-ink);
+  box-shadow: 0 16px 48px color-mix(in srgb, #000 40%, transparent);
+  will-change: transform;
+}
+/* The LED rail: the lower third's leading edge. */
+.ovl-sponsor-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  background: var(--sport-led);
+}
+/* A logo is the sponsor's own artwork, drawn for a light ground: a palette tone
+   cannot promise its contrast across eleven sports, so the plate is white. */
+.ovl-sponsor-logo {
+  flex: none;
+  width: 88px;
+  height: 88px;
+  padding: 10px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: #ffffff;
+  object-fit: contain;
+}
+.ovl-sponsor-mono {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  border-radius: 8px;
+  background: var(--sport-led);
+  color: var(--sport-board);
+  font-family: var(--font-barlow), system-ui, sans-serif;
+  font-size: 56px;
+  font-weight: 800;
+  line-height: 1;
+}
+.ovl-sponsor-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ovl-sponsor-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-barlow), system-ui, sans-serif;
+  font-size: 48px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+.ovl-sponsor-link {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--sport-ink) 72%, transparent);
+}
+
+/* The banner: a panel — logo over the name over the link, centred, the rail
+   along its top. The name may take two lines before it clamps. */
+.ovl-sponsor-card[data-style="banner"] {
+  flex-direction: column;
+  justify-content: center;
+  gap: 28px;
+  padding: 48px 40px 40px;
+  text-align: center;
+}
+.ovl-sponsor-card[data-style="banner"]::before {
+  right: 0;
+  bottom: auto;
+  width: auto;
+  height: 8px;
+}
+.ovl-sponsor-card[data-style="banner"] .ovl-sponsor-logo,
+.ovl-sponsor-card[data-style="banner"] .ovl-sponsor-mono {
+  width: 176px;
+  height: 176px;
+  border-radius: 16px;
+}
+.ovl-sponsor-card[data-style="banner"] .ovl-sponsor-mono {
+  font-size: 104px;
+}
+.ovl-sponsor-card[data-style="banner"] .ovl-sponsor-text {
+  flex: 0 1 auto;
+  align-items: center;
+  width: 100%;
+  gap: 12px;
+}
+.ovl-sponsor-card[data-style="banner"] .ovl-sponsor-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The folds, on the slab's clock (`--ovl-slab-fold`): from the slot's leading
+   edge, clipped by it. Keyframes, as the slab's, so `in` paints from its first
+   frame and `hold` stays still for its whole length. */
+@keyframes ovl-sponsor-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes ovl-sponsor-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+.ovl-sponsor-card--in {
+  animation: ovl-sponsor-in var(--ovl-slab-fold, 250ms) ease-out both;
+}
+.ovl-sponsor-card--out {
+  animation: ovl-sponsor-out var(--ovl-slab-fold, 250ms) ease-in both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ovl-sponsor-card--in,
+  .ovl-sponsor-card--out {
+    animation: none;
+  }
+}

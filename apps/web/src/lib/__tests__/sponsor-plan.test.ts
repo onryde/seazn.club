@@ -54,6 +54,7 @@ const card = (key: string, tier: SponsorTier): SponsorCard => ({
   name: `${key} sponsor`,
   logoUrl: null,
   tier,
+  onStream: true,
 });
 const TITLE = card("title", "title");
 const GOLD = card("gold", "gold");
@@ -1040,6 +1041,8 @@ describe("planSponsors — refused input (assumptions are guards)", () => {
       ["two assigned cards for one sponsor", { assignedCards: [PARTNER, { ...PARTNER, id: "card-partner-2" }] }],
       ["a break size that is neither minor nor major", { breaks: [{ ...ok[0]!, size: "medium" as never }] }],
       ["an unknown dial", { breaks: ok, settings: { enabled: true, frequency: "often" as SponsorFrequency } }],
+      // R4 S7: the ticked list is the carousel's too, and the page finds it again by `onStream`.
+      ["an unticked card in the ticked list", { cards: [TITLE, { ...GOLD, onStream: false }] }],
     ];
     let checked = 0;
     for (const [what, over] of refused) {
@@ -1051,6 +1054,10 @@ describe("planSponsors — refused input (assumptions are guards)", () => {
     // and one event may open two distinct kinds at one seq.
     expect(() => planSponsors(input({ breaks: ok, windowSeqs: [1, 2], now: T0 + 101 * SEC }))).not.toThrow();
     expect(() => planSponsors(input({ breaks: ok, assignedCards: [GOLD, PARTNER], windowSeqs: [1, 2], now: T0 + 101 * SEC }))).not.toThrow();
+    // …and an unticked card is fine among the ASSIGNED ones (a frozen break still airs after its sponsor is unticked).
+    expect(() =>
+      planSponsors(input({ breaks: ok, assignedCards: [{ ...PARTNER, onStream: false }], windowSeqs: [1, 2], now: T0 + 101 * SEC })),
+    ).not.toThrow();
     const twoKinds = [brk(5, T0, SET_END), brk(5, T0, { kind: "match_point", size: "major" })];
     expect(planSponsors(input({ breaks: twoKinds, windowSeqs: [5], now: T0 + SEC })).newAssignments).toHaveLength(2);
   });

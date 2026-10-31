@@ -8,7 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
 import { useLiveFixture } from "@/components/public-site/match-centre/use-live-fixture";
-import { maxSeq, momentsFor } from "@/lib/overlay-moments";
+import { maxSeq, momentsFor, sponsorMoments } from "@/lib/overlay-moments";
 import { endOfOverMoment, closedOverBaselineOf } from "@/lib/overlay-end-of-over";
 import { tossMoment } from "@/lib/overlay-openers";
 import { useMomentQueue } from "./use-moment-queue";
@@ -31,7 +31,7 @@ import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 // Owner answer 18 (Q7): the stage knows the REGISTRY, not two components. It
 // imports neither `overlay-bar` nor `overlay-bug` — registering a third template
 // must not touch this file, and an import here would be exactly that edit.
-import { OVERLAY_TEMPLATES, cardRegionFor, type CanvasBox, type TemplateId } from "./template-registry";
+import { OVERLAY_TEMPLATES, cardRegionBeside, cardRegionFor, type CanvasBox, type TemplateId } from "./template-registry";
 import { OverlayMatchCard, slateStateOf } from "./overlay-slate";
 import { forfeitCopyOf } from "@/lib/forfeit-tag";
 import { COMPOSITOR_HOST } from "@/lib/overlay-compositor";
@@ -40,6 +40,7 @@ import { momentsFireIn, type SceneId } from "./overlay-scenes";
 import { OverlaySceneBackdrop, phaseForScene, sceneFor } from "./overlay-scene";
 import { useProgrammePhase } from "./use-programme-phase";
 import { useCompositorSignals } from "./use-compositor-signals";
+import { SPONSOR_CAROUSEL_SCENES, SponsorCardView, SponsorCarousel } from "./sponsor-card";
 
 export interface OverlayStageProps {
   fixtureId: string;
@@ -117,6 +118,19 @@ function cardLayoutVars(box: CanvasBox, region: CanvasBox | null): Record<string
           "--ovl-card-h": px(region.height),
         }),
   };
+}
+
+/** R4 S7: a sponsor slot's box (`OverlayTemplateDef.sponsorSlots`), as the inline custom properties `.ovl-sponsor-slot`
+ *  reads, plus the fold duration the card's slide shares with the slab's (`moment-timing.ts`). */
+function sponsorSlotVars(box: CanvasBox): React.CSSProperties {
+  const px = (n: number) => `${n}px`;
+  return {
+    "--ovl-sponsor-x": px(box.x),
+    "--ovl-sponsor-y": px(box.y),
+    "--ovl-sponsor-w": px(box.width),
+    "--ovl-sponsor-h": px(box.height),
+    "--ovl-slab-fold": `${OVERLAY_MOMENT_FOLD_MS}ms`,
+  } as React.CSSProperties;
 }
 
 /** Stable identity: a fresh `[]` every render would re-run the enqueue effect
@@ -243,6 +257,18 @@ export function OverlayStage(props: OverlayStageProps) {
   const decision = sceneFor(scenePhase, slateStateOf(model));
   const showMatchCard = decision.card !== null && cardRegion !== null;
 
+  // R4 S7 — the sponsor plan (S5's, on the payload). The carousel shows the TICKED cards only: `plan.cards` also carries
+  // an unticked card an airing still names (S4), and `onStream` is the one thing that tells them apart.
+  const sponsorPlan = data.sponsorPlan ?? null;
+  const ticked = (sponsorPlan?.cards ?? []).filter((c) => c.onStream === true);
+  const carouselScene = decision.scene !== null && SPONSOR_CAROUSEL_SCENES.includes(decision.scene) ? decision.scene : null;
+  // The carousel's banner shares the scene with the match card, so the card moves into the region beside the banner
+  // (`cardRegionBeside`). No room for the card there ⇒ no carousel: the match card outranks it.
+  const carouselRegion =
+    showMatchCard && cardRegion !== null ? cardRegionBeside(cardRegion, template.sponsorSlots.banner) : cardRegion;
+  const showCarousel = carouselScene !== null && ticked.length > 0 && (!showMatchCard || carouselRegion !== null);
+  const layoutRegion = showCarousel ? carouselRegion : cardRegion;
+
   // Moments first, then end-of-over (so OUT precedes the over card), then toss
   // (only when the match card is NOT up — card owns warming openers).
   const sideShorts: [string, string] = [model.sides[0].short, model.sides[1].short];
@@ -270,15 +296,34 @@ export function OverlayStage(props: OverlayStageProps) {
               scoringStarted: data.scoringStarted === true,
               msg,
             });
-        return [...moments, ...(eoo ?? []), ...(toss ? [toss] : [])];
+        // R4 S7 (S6 addendum): the sponsor cards join the ONE list — the queue's `sync` drops every id missing from it,
+        // so a second list would lose a queued card on the next poll — behind the mount's tip like every moment (OBS
+        // opened mid-broadcast must not replay a break), and inside this delay gate.
+        const cards = sponsorMoments(sponsorPlan).filter((m) => m.seq > momentBaseline);
+        return [...moments, ...(eoo ?? []), ...(toss ? [toss] : []), ...cards];
       })();
 
   // R2005 change 7 (spec §4.8, D14): the active scene's own `momentsFire` decides — Final discards, so nothing it drops
   // can ever replay. Read off the declaration (`momentsFireIn`), never off a scene id.
-  const queued = useMomentQueue(incoming, { reducedMotion, discard: !momentsFireIn(decision.scene) });
+  // R4 S7: proof-of-play lines at the compositor host only (never an OBS page, never a preview).
+  const queued = useMomentQueue(incoming, {
+    reducedMotion,
+    discard: !momentsFireIn(decision.scene),
+    sponsorLines: compositor,
+  });
   // A pinned moment (the gallery's moment cells) replaces the queue's, held in the fully-shown phase.
   const moment = props.pinnedMoment ?? queued.current;
   const phase = props.pinnedMoment ? "hold" : queued.phase;
+  // R4 S7: a sponsor moment draws its card (the plan's, by id) in the slot its template declares for its look. A card
+  // missing from the current plan (an out-fold after the plan dropped it) draws nothing rather than a blank box.
+  const sponsorOnAir =
+    moment !== null && moment.graphic === "sponsor" && moment.sponsor !== undefined
+      ? (() => {
+          const look = moment.sponsor;
+          const card = sponsorPlan?.cards.find((c) => c.id === look.cardId);
+          return card === undefined ? null : { card, style: look.style };
+        })()
+      : null;
 
   // Score tick: the ONE `big` that changed, and only that one (R13). The
   // previous pair lives in a ref that is read AND written only inside this
@@ -320,7 +365,7 @@ export function OverlayStage(props: OverlayStageProps) {
   const Theme = template.component;
   const canvasStyle = {
     ...sportThemeStyle(props.sportKey),
-    ...cardLayoutVars(template.sceneCardSafeArea, cardRegion),
+    ...cardLayoutVars(template.sceneCardSafeArea, layoutRegion),
     transform: `scale(${scale})`,
   } as React.CSSProperties;
 
@@ -397,6 +442,31 @@ export function OverlayStage(props: OverlayStageProps) {
         {moment !== null && moment.graphic === "toss" ? (
           <OverlayTossCard moment={moment} phase={phase} />
         ) : null}
+        {/* R4 S7: the break's sponsor card, in its template's declared slot for its look. The slot clips, as the slab's
+            does, so the card slides out from under its own edge. */}
+        {sponsorOnAir !== null ? (
+          <div
+            data-testid="ovl-sponsor-slot"
+            data-slot={sponsorOnAir.style}
+            className="ovl-sponsor-slot"
+            style={sponsorSlotVars(template.sponsorSlots[sponsorOnAir.style])}
+          >
+            <SponsorCardView card={sponsorOnAir.card} style={sponsorOnAir.style} phase={phase} />
+          </div>
+        ) : null}
+        {/* R4 S7 (spec §3.4): the scene carousel, in the banner slot. It steps aside while any moment is on air — one
+            card at a time — and logs its showings only at the compositor host. */}
+        {showCarousel && carouselScene !== null ? (
+          <div
+            data-testid="ovl-sponsor-slot"
+            data-slot="banner"
+            data-carousel=""
+            className="ovl-sponsor-slot"
+            style={sponsorSlotVars(template.sponsorSlots.banner)}
+          >
+            <SponsorCarousel cards={ticked} scene={carouselScene} host={compositor ? COMPOSITOR_HOST : null} yielding={moment !== null} />
+          </div>
+        ) : null}
         <div
           data-testid="ovl-moment-slot"
           className={`ovl-moment-slot ovl-moment-slot--${placement}`}
@@ -408,7 +478,7 @@ export function OverlayStage(props: OverlayStageProps) {
           data-band={hasDetailBand(model) ? "" : undefined}
           style={{ "--ovl-slab-fold": `${OVERLAY_MOMENT_FOLD_MS}ms` } as React.CSSProperties}
         >
-          {moment === null || moment.graphic === "toss" ? null : moment.graphic === "endOfOver" &&
+          {moment === null || moment.graphic === "toss" || moment.graphic === "sponsor" ? null : moment.graphic === "endOfOver" &&
             moment.endOfOver ? (
             <OverlayEndOfOverCard moment={moment} phase={phase} msg={msg} />
           ) : (

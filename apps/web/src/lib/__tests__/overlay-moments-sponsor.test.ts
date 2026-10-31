@@ -35,6 +35,7 @@ const card = (key: string, tier: SponsorCard["tier"]): SponsorCard => ({
   name: `${key} sponsor`,
   logoUrl: null,
   tier,
+  onStream: true,
 });
 const TITLE = card("title", "title");
 const GOLD = card("gold", "gold");

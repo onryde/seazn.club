@@ -49,6 +49,14 @@ export interface SponsorCard {
   name: string;
   logoUrl: string | null;
   tier: SponsorTier;
+  /** The sponsor's `on_stream` tick (V483), read off the row by the card source (S5) for BOTH lists. R4 S7: the scene
+   *  carousel shows ticked cards only (spec §3.4), and `plan.cards` also carries unticked cards an airing still names,
+   *  so the page cannot tell the two apart without it. Every card in `PlanInput.cards` must carry `true`
+   *  (`SponsorPlanInputError` otherwise); an `assignedCards` entry carries whichever the row says. */
+  onStream: boolean;
+  /** Owner ruling R7: the code `sponsor_short_codes` minted for (sponsor, fixture), which the card prints as
+   *  `seazn.club/s/<code>`. Absent ⇒ the card prints nothing link-like (a sponsor with no URL gets none). S5 mints it. */
+  shortCode?: string;
 }
 export interface SponsorPlanAiring {
   momentId: string;
@@ -241,6 +249,9 @@ function checkInput(i: PlanInput): void {
   // Across the two lists the same card may appear in both (a ticked sponsor that is also assigned).
   const tickedCard = new Map<string, string>();
   for (const c of i.cards) {
+    // R4 S7: `cards` is the ticked list, and the carousel reads `onStream` off `plan.cards` to find it again. An
+    // unticked card here would air in the rotation AND on the carousel.
+    if (c.onStream !== true) throw new SponsorPlanInputError(`cards: ${c.id} is not ticked (onStream ${String(c.onStream)})`);
     if (tickedCard.has(c.sponsorId)) throw new SponsorPlanInputError(`cards: sponsor ${c.sponsorId} has two cards`);
     tickedCard.set(c.sponsorId, c.id);
   }

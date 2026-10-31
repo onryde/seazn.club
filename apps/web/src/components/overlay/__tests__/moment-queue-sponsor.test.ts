@@ -43,7 +43,7 @@ const m = (seq: number, kind = "goal", holdMs?: number): OverlayMoment => ({
   ...(holdMs === undefined ? {} : { holdMs }),
 });
 
-const TITLE: SponsorCard = { id: "card-title", sponsorId: "sponsor-title", name: "Title sponsor", logoUrl: null, tier: "title" };
+const TITLE: SponsorCard = { id: "card-title", sponsorId: "sponsor-title", name: "Title sponsor", logoUrl: null, tier: "title", onStream: true };
 const OVER_END: BreakDecl = { kind: "over_end", size: "minor" }; // engine 1.1.0 cricket.ts:4697
 const INNINGS_BREAK: BreakDecl = { kind: "innings_break", size: "major" }; // engine 1.1.0 cricket.ts:4698
 
