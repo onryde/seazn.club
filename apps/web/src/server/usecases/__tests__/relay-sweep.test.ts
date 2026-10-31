@@ -52,14 +52,38 @@ import { ORPHAN_FRAME_GRACE_MS } from "@/server/sponsors/airings";
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
-// R4 S9 step 7d: the orphan-frame purge removes objects from the private frames bucket. The bucket, faked: every remove
-// is kept (bucket and paths) and answers success.
-const frameStore = vi.hoisted(() => ({ removes: [] as { bucket: string; paths: string[] }[] }));
+// R4 S9 step 7d: the frame purge removes objects from the private frames bucket, and the sweep asks whether that bucket
+// is public. The bucket, faked: every remove is kept (bucket and paths) and answers success; `getBucket` answers
+// `bucketPublic` (null: the bucket cannot be read), and every bucket asked about is kept.
+const frameStore = vi.hoisted(() => ({
+  removes: [] as { bucket: string; paths: string[] }[],
+  bucketPublic: false as boolean | null,
+  bucketsAsked: [] as string[],
+}));
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: () => ({
-    storage: { from: (bucket: string) => ({ async remove(paths: string[]) { frameStore.removes.push({ bucket, paths: [...paths] }); return { data: [], error: null }; } }) },
+    storage: {
+      from: (bucket: string) => ({ async remove(paths: string[]) { frameStore.removes.push({ bucket, paths: [...paths] }); return { data: [], error: null }; } }),
+      async getBucket(id: string) {
+        frameStore.bucketsAsked.push(id);
+        return frameStore.bucketPublic === null
+          ? { data: null, error: { message: "Bucket not found" } }
+          : { data: { id, name: id, public: frameStore.bucketPublic }, error: null };
+      },
+    },
   }),
 }));
+
+// R4 S9 review m7: a step-7d purge that THROWS (the database refusing it) — the real purge otherwise.
+const purgeFault = vi.hoisted(() => ({ error: null as Error | null }));
+vi.mock("@/server/sponsors/airings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/sponsors/airings")>();
+  return {
+    ...actual,
+    purgeOrphanFrames: (...a: Parameters<typeof actual.purgeOrphanFrames>) =>
+      purgeFault.error ? Promise.reject(purgeFault.error) : actual.purgeOrphanFrames(...a),
+  };
+});
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -343,6 +367,47 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     expect(frameStore.removes.slice(removes)).toEqual([{ bucket: SPONSOR_FRAMES_BUCKET, paths: [orphan.path] }]);
     const left = await sql<{ moment_id: string }[]>`select moment_id from sponsor_airing_frames where session_id = ${r.sessionId}`;
     expect(left.map((x) => x.moment_id)).toEqual([claimed.id]);
+  });
+
+  it("R4 S9 step 7d (review m7): a purge that THROWS is counted (framePurgesFailed 1) and reported, and the sweep still runs step 8 — its storage snapshot is written", async () => {
+    const r = await rig();
+    sentry.captureError.mockClear();
+    const boom = Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" });
+    purgeFault.error = boom;
+    let res: Awaited<ReturnType<typeof sweep>>;
+    try {
+      res = await sweep(r);
+    } finally {
+      purgeFault.error = null;
+    }
+    expect(res).toMatchObject({ framesPurged: 0, framePurgesFailed: 1 });
+    expect(sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === "relay.sweep.sponsor_frames")).toEqual([[boom, { route: "relay.sweep.sponsor_frames" }]]);
+    const snaps = await sql<{ n: number }[]>`select count(*)::int as n from stream_storage_snapshots where source = 'sweep' and taken_at = ${r.deps.now()}`;
+    expect(snaps[0]!.n, "step 8 ran after the failed step 7d").toBe(1);
+    // The next pass, the fault gone: nothing counted.
+    expect(await sweep(r)).toMatchObject({ framePurgesFailed: 0 });
+  });
+
+  it("R4 S9 step 7d (review m9): the sweep asks the frames bucket whether it is public — `true` raises the alarm (reported), `false` is silent, an unreadable bucket is a warning only (null)", async () => {
+    const r = await rig();
+    const alarms = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === "relay.sweep.sponsor_frames_bucket");
+    const cases: Array<[boolean | null, boolean | null, number]> = [[false, false, 0], [true, true, 1], [null, null, 0]];
+    let checked = 0;
+    try {
+      for (const [answer, reported, raised] of cases) {
+        frameStore.bucketPublic = answer;
+        frameStore.bucketsAsked.length = 0;
+        sentry.captureError.mockClear();
+        const res = await sweep(r);
+        expect({ answer, framesBucketPublic: res.framesBucketPublic }).toEqual({ answer, framesBucketPublic: reported });
+        expect(frameStore.bucketsAsked, "the frames bucket is the one asked").toEqual([SPONSOR_FRAMES_BUCKET]);
+        expect({ answer, alarms: alarms().length }).toEqual({ answer, alarms: raised });
+        checked++;
+      }
+    } finally {
+      frameStore.bucketPublic = false;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("ORPHANS: a Machine with no session, one whose metadata names no session at all, and one whose session is terminal are destroyed — the terminal one through the shared forceDestroy, on EVERY pass (A22(a)); a live session's Machine is kept", async () => {
