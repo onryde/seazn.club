@@ -674,27 +674,38 @@ describe.skipIf(!HAS_DB)("a deleted fixture takes its queued invites with it (G-
     expect(await fixtureIdsOfStage(r.stageId), "premise: the boards are gone").toEqual([]);
   });
 
-  it("undoing the generation (the history step that deletes the boards) ends the round's queued invites fixture_deleted", async () => {
+  // W3 T5 (#835, rule X-SW-28): Undo of the Pair now clears the round's seats through the same `clearSwissFixtureSeats` an
+  // Unpair uses, so it ends the queued invites `round_voided` with every board left standing. This case used to assert the
+  // opposite — "the first [step] only unseats" while every invite stayed queued — which was the #835 defect itself: the
+  // Pair's Undo did nothing at all, and the invites survived until the step that deleted the boards.
+  it("undoing the Pair ends the round's queued invites round_voided and keeps the boards; the step that deletes them ends nothing more", async () => {
     const s = await openedSwiss(4);
     const before = await expectQueuedRows(s.orgId, 4);
     const boards = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${s.stageId}`)[0]!.n;
     const shells = await boards();
     expect(shells, "premise: the round's shells exist").toBeGreaterThan(0);
 
-    // The ledger is: shells minted, the round seated, the schedule published, the division started. Undo walks it back; the step
-    // that DELETES the boards is the second generation's (the first one only unseats).
+    // The ledger is: shells minted, the round seated, the schedule published, the division started. Undo walks it back
+    // newest-first; the first step that touches an invite is the Pair's.
     let steps = 0;
-    while ((await boards()) === shells && steps < 5) {
+    while ((await rowsOf(s.orgId)).every((r) => r.status === "queued") && steps < 5) {
       await undoDivision(s.owner, s.divisionId);
       steps += 1;
-      if ((await boards()) === shells) {
-        expect((await rowsOf(s.orgId)).every((r) => r.status === "queued"), `step ${steps} deleted no board, so no invite ended`).toBe(true);
-      }
+    }
+    expect(await boards(), "the Pair's Undo keeps every board").toBe(shells);
+    const voided = await rowsOf(s.orgId);
+    expect(voided.map((x) => x.id)).toEqual(before.map((x) => x.id));
+    expect(expectVoided(voided, ROUND_VOIDED)).toBe(before.length);
+
+    // Then the generation that minted the shells: its Undo deletes the boards, and finds no queued invite left to end.
+    while ((await boards()) === shells && steps < 10) {
+      await undoDivision(s.owner, s.divisionId);
+      steps += 1;
     }
     expect(await boards(), "premise: an undo step deleted the boards").toBeLessThan(shells);
     const after = await rowsOf(s.orgId);
     expect(after.map((x) => x.id)).toEqual(before.map((x) => x.id));
-    expect(expectVoided(after, FIXTURE_DELETED)).toBe(before.length);
+    expect(expectVoided(after, ROUND_VOIDED), "already ended; the delete re-ends none").toBe(before.length);
   });
 
   it("deleting a competition ends the queued invites of its boards fixture_deleted, after its delete and in the same transaction, naming boards read before it (T6 review m3)", async () => {

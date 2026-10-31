@@ -31,11 +31,16 @@ import { refuseOwnFormatLoss } from "./fixture-override-guards";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
-import { recomputeStandings } from "@/server/engine-db";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
-import { clearSwissFixtureSeats, generateStageFixtures, wireCrossFeeds } from "./stages";
+import {
+  clearSwissFixtureSeats,
+  generateStageFixtures,
+  lockSwissBoardAppends,
+  refoldStageTable,
+  wireCrossFeeds,
+} from "./stages";
 import { swissRefusal } from "./swiss-refusal";
 import { DEPARTED_STATUSES } from "./entrants";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
@@ -762,6 +767,9 @@ async function stepWrite(
     const unpairedStageIds: string[] = [];
     const seatedIds = direction === "undo" ? pairNextSeatedIds(ledger.find((e) => e.seq === targetSeq)) : [];
     if (seatedIds.length > 0) {
+      // Review m1: every seated board's append lock (`fixture:`), sorted, after this step's `division:` lock and
+      // before the read below — a scorer's first event is either seen by it or waits and finds the seats gone.
+      await lockSwissBoardAppends(tx, seatedIds);
       const [started] = await tx<{ id: string }[]>`
         select f.id from fixtures f where f.id in ${tx(seatedIds)} and ${fixtureHasResultSql(tx, "f")} limit 1`;
       if (started) throw swissRefusal("SWISS_UNDO_ROUND_STARTED", { fixtureId: started.id });
@@ -855,9 +863,11 @@ async function stepWrite(
   }
   // A bye award (and its removal) never goes through appendEvent, so the stored table would keep the cleared bye's
   // points until the next scored match. Refold from the cleared rows, as Unpair does — `"drop"`: a stage left seating
-  // nobody has no table, so the stored one goes and the page reads "No standings yet".
+  // nobody has no table, so the stored one goes and the page reads "No standings yet". Best-effort (review m3): the
+  // Undo has committed, so a refold that throws is logged (`refoldStageTable`), never a 500 the organiser would retry
+  // into undoing one step MORE.
   for (const stageId of write.unpairedStageIds) {
-    await recomputeStandings(auth.orgId, stageId, undefined, { emptyFold: "drop" });
+    await refoldStageTable(auth.orgId, { id: stageId, kind: "swiss" }, "drop");
   }
   return write;
 }

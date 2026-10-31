@@ -2394,6 +2394,20 @@ async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string[]): Pr
   }
 }
 
+/**
+ * W3 T5 fix round 1 (review m1): the append lock of every board a Swiss clear is about to judge — the SAME
+ * `fixture:<id>` advisory lock every score append takes (append-event.ts) — in sorted id order, held to commit. Taken
+ * AFTER the caller's `division:` lock and BEFORE its "nothing recorded" read: the one lock order (`division:` →
+ * stage-seats → `fixture:`, append-event.ts). Scoring serialises on the fixture, never the division, and is not gated
+ * on the division's phase, so without it a first event committing between that read and the clear left its events on
+ * a seatless shell. With it a scorer in flight either commits first (and the read refuses the clear) or waits and then
+ * finds the seats gone (WRONG_PHASE). Sorted, so two clears over overlapping boards take them in one order. Every
+ * caller of `clearSwissFixtureSeats` takes it: the pre-Start entrant delete, Unpair and Undo of Pair next.
+ */
+export async function lockSwissBoardAppends(tx: Tx, ids: readonly string[]): Promise<void> {
+  for (const id of [...ids].sort()) await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
+}
+
 export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
   // Online play (T19, controller rulings Q1 + pre-review 2026-10-10). A
@@ -2489,6 +2503,9 @@ export async function unseatSwissRoundsSeatingEntrant(
       );
     }
     const ids = inRound.map((f) => f.id);
+    // Review m1 (W3 T5 fix round 1): the boards' append locks before the evidence read below, so a first event in
+    // flight is either seen by it or finds the seats gone.
+    await lockSwissBoardAppends(tx, ids);
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
       where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
@@ -2565,6 +2582,9 @@ export async function unpairSwissRound(
     // the one thing it holds, and `fixtureEvidenceSql` exempts it by name
     // (`systemByeSql`), so this guard reads the bye exactly as before.
     const ids = inRound.map((f) => f.id);
+    // Review m1 (W3 T5 fix round 1): the boards' append locks before the evidence read below, so a first event in
+    // flight is either seen by it or finds the seats gone.
+    await lockSwissBoardAppends(tx, ids);
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
       where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})

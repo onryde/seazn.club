@@ -10,20 +10,37 @@
 // Every DB case runs for badminton AND chess (boardgame) through the same body; expected values are read from the
 // rulebook's own sources — the engine's resolver for the bye's frozen cfg, the plan's interface table for the barrier
 // codes — never from the history code under test. Seats are the assertion, never a shell count (brief trap 2).
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+// Review m3 (W3 T5 fix round 1): the Undo's post-commit table refold made to throw on demand. Off by default, so every
+// other case folds for real; the same importOriginal pass-through generate-refold-best-effort.test.ts uses.
+const refold = vi.hoisted(() => ({ fail: false, calls: 0 }));
+vi.mock("@/server/engine-db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/engine-db")>();
+  return {
+    ...actual,
+    recomputeStandings: async (...args: Parameters<typeof actual.recomputeStandings>) => {
+      refold.calls++;
+      if (refold.fail) throw new Error("test: a rank-time refusal");
+      return actual.recomputeStandings(...args);
+    },
+  };
+});
 import { randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
+import { log } from "@/server/logger";
 import { canonicalJson } from "@/lib/canonical-json";
 import { SWISS_REFUSALS, type SwissRefusalCode } from "@/lib/swiss-refusals";
 import { builtinModules } from "@seazn/engine/sports";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { LedgerEvent } from "@seazn/engine/history";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { appendEventInTx } from "@/server/engine-db/append-event";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { resolveModule } from "@/server/engine-db/registry";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, deleteEntrant } from "../entrants";
 import {
   UNDO_BARRIER_TYPES,
   createCheckpoint,
@@ -33,10 +50,10 @@ import {
   undoBarrierRefusal,
   undoDivision,
 } from "../history";
-import { startDivision } from "../schedule";
+import { moveFixture, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { putStageRules } from "../stage-rules";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, unpairSwissRound } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 import { movingFragment } from "./_stage-probe";
@@ -336,6 +353,28 @@ for (const s of SPORTS) {
       expect(await ledgerState(rig.divisionId), "a refused Undo appends nothing and keeps the watermark").toEqual(before);
     }, 120_000);
 
+    it(`X-SW-28 a start taken back (core.void) still refuses SWISS_UNDO_ROUND_STARTED (${s.sport})`, async () => {
+      // The expected answer is `fixtureHasResultSql`'s documented meaning, not this code path: "anything recorded at
+      // all (`fixtureEvidenceSql` — a start taken back leaves `scheduled` behind, and its events)". A voided start
+      // walks the STATUS back to scheduled; its events stay, so the board still holds a result and the round its seats.
+      const rig = await swissRig(s, 5, 2, true);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
+      const board = roundOf(await rowsOf(rig.stageId), 1).find((f) => !isBye(f))!;
+      await scoreEvent(rig.auth, board.id, { expected_seq: 0, type: "core.start", payload: {} });
+      const [start] = await sql<{ id: string }[]>`
+        select id from score_events where fixture_id = ${board.id} and type = 'core.start'`;
+      await scoreEvent(rig.auth, board.id, { expected_seq: 1, type: "core.void", payload: { event_id: start!.id } });
+      const voided = await rowsOf(rig.stageId);
+      expect(voided.find((f) => f.id === board.id)!.status, "premise: the void walked the status back").toBe("scheduled");
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${board.id}`;
+      expect(n, "premise: the start and its void stay on the ledger").toBe(2);
+      const before = await ledgerState(rig.divisionId);
+
+      await expect(undoDivision(rig.auth, rig.divisionId)).rejects.toMatchObject(refusal("SWISS_UNDO_ROUND_STARTED"));
+      expect(seatState(await rowsOf(rig.stageId)), "a refused Undo clears nothing").toEqual(seatState(voided));
+      expect(await ledgerState(rig.divisionId)).toEqual(before);
+    }, 120_000);
+
     it(`X-SW-28 Redo after Undo seats round 1 again (${s.sport})`, async () => {
       const rig = await swissRig(s, 5, 2, false); // pre-Start: the stage's format is still the organiser's
       await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
@@ -520,8 +559,153 @@ for (const s of SPORTS) {
       );
       expect(seatState(await rowsOf(rig.stageId)), "the refused restore cleared nothing").toEqual(seatState(seated));
     }, 120_000);
+
+    it(`restore that commits a step and then reaches a barrier keeps that step and refuses by name (${s.sport})`, async () => {
+      // Restore is a loop of Undos, each its own commit ("the steps that committed stay committed"). Pinned: a
+      // reversible edit made AFTER the barrier is walked back, then the next step — the Pair, behind the barrier —
+      // refuses SWISS_LATE_ENTRY_NOT_UNDOABLE. The round stays seated; exactly one inverse event lands.
+      const rig = await swissRig(s, 5, 2, false);
+      const cp = await createCheckpoint(rig.auth, rig.divisionId, "Before pairing");
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
+      await appendLedgerRow(rig.divisionId, "swiss_late_entry", {
+        stage_id: rig.stageId,
+        entrant_id: rig.entrants[0],
+        case: "c",
+        round: 2,
+        source: "organiser",
+      });
+      const board = roundOf(await rowsOf(rig.stageId), 1).find((f) => !isBye(f))!;
+      const AT = "2030-06-21T10:00:00.000Z";
+      await moveFixture(rig.auth, board.id, { scheduled_at: AT }); // a reversible edit after the barrier
+      const timeOf = async () =>
+        (await sql<{ at: Date | null }[]>`select scheduled_at as at from fixtures where id = ${board.id}`)[0]!.at?.toISOString() ?? null;
+      expect(await timeOf(), "premise: the move landed").toBe(AT);
+      const seated = await rowsOf(rig.stageId);
+      const before = await ledgerState(rig.divisionId);
+
+      await expect(restoreCheckpoint(rig.auth, rig.divisionId, cp.id, true)).rejects.toMatchObject(
+        refusal("SWISS_LATE_ENTRY_NOT_UNDOABLE"),
+      );
+      expect(await timeOf(), "the step before the barrier committed: the move is undone").toBeNull();
+      expect(seatState(await rowsOf(rig.stageId)), "the Pair behind the barrier is not undone").toEqual(seatState(seated));
+      const after = await ledgerState(rig.divisionId);
+      expect(after.events, "exactly one inverse event committed").toBe(before.events + 1);
+    }, 120_000);
   });
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Review m3 (W3 T5 fix round 1): the table refold after the Undo commits is best-effort.
+// Single-sport: the refold's failure handling is the usecase's (sport-agnostic).
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe.runIf(HAS_DB)("W3 T5 a refold that throws after the Undo committed", () => {
+  it("leaves the Undo committed and answered, the seats cleared, and logs the refusal", async () => {
+    const rig = await swissRig(SPORTS[0], 5, 2, false);
+    await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
+    const before = await ledgerState(rig.divisionId);
+    const errors = vi.spyOn(log, "error");
+    refold.fail = true;
+    refold.calls = 0;
+    try {
+      await expect(undoDivision(rig.auth, rig.divisionId), "a committed Undo never answers with a 500").resolves.toBeDefined();
+      expect(refold.calls, "premise: the Undo tried its refold").toBe(1);
+    } finally {
+      refold.fail = false;
+    }
+    expectRoundCleared(roundOf(await rowsOf(rig.stageId), 1), "after the Undo whose refold threw");
+    expect((await ledgerState(rig.divisionId)).events, "the inverse event committed").toBe(before.events + 1);
+    expect(
+      errors.mock.calls.some(([o]) => (o as { event?: string })?.event === "stage_table_refold_failed"),
+      "the refusal is logged",
+    ).toBe(true);
+    errors.mockRestore();
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Review m1 (W3 T5 fix round 1): every Swiss clear holds each board's append lock across its "nothing recorded" read.
+// Single-sport: the lock is the fixture's append lock (append-event.ts), which reads no sport field.
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe.runIf(HAS_DB)("W3 T5 a Swiss clear waits for a first event in flight, then refuses it by name", () => {
+  /** A scorer's first event on `boardId`, stopped INSIDE its transaction right after it took the board's append lock
+   *  (`fixture:<id>`, as append-event.ts does). The clear runs meanwhile. Deterministic, never a sleep race: the
+   *  scorer is released only once Postgres reports the clear blocked on the scorer's backend
+   *  (`pg_blocking_pids`) — or once the clear has finished without ever waiting, which is the defect. Released, the
+   *  real append core (`appendEventInTx`, re-entering the same lock) commits the start. */
+  async function againstAScorerInFlight(rig: Rig, boardId: string, clear: () => Promise<unknown>) {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let holding!: (pid: number) => void;
+    const held = new Promise<number>((r) => (holding = r));
+    const scorer = withTenant(rig.auth.orgId, async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + boardId}))`;
+      const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      holding(pid);
+      await gate;
+      await appendEventInTx(tx, rig.auth.orgId, boardId, 0, { type: "core.start", payload: {} });
+    }).then(
+      () => "committed" as const,
+      (e: unknown) => e,
+    );
+    const pid = await held;
+    let settled = false;
+    const cleared = clear().then(
+      () => "resolved" as const,
+      (e: unknown) => e,
+    );
+    void cleared.then(() => (settled = true));
+    let blocked = false;
+    for (let i = 0; i < 400 && !settled && !blocked; i++) {
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity where ${pid}::int = any(pg_blocking_pids(pid))`;
+      blocked = n > 0;
+      if (!blocked) await new Promise((r) => setTimeout(r, 25));
+    }
+    release();
+    return { blocked, scorer: await scorer, cleared: await cleared };
+  }
+
+  it("X-SW-28 Undo of Pair next: the start commits first and the Undo refuses SWISS_UNDO_ROUND_STARTED", async () => {
+    const rig = await swissRig(SPORTS[0], 5, 2, true);
+    await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
+    const paired = await rowsOf(rig.stageId);
+    const board = roundOf(paired, 1).find((f) => !isBye(f))!;
+    const out = await againstAScorerInFlight(rig, board.id, () => undoDivision(rig.auth, rig.divisionId));
+    expect(out.blocked, "the Undo waited on the board's append lock").toBe(true);
+    expect(out.scorer, "the first event committed").toBe("committed");
+    expect(out.cleared).toMatchObject(refusal("SWISS_UNDO_ROUND_STARTED"));
+    const after = roundOf(await rowsOf(rig.stageId), 1);
+    expect(after.map((f) => [f.home_entrant_id, f.away_entrant_id]), "the round keeps its seats").toEqual(
+      roundOf(paired, 1).map((f) => [f.home_entrant_id, f.away_entrant_id]),
+    );
+  }, 120_000);
+
+  it("Unpair: the start commits first and the Unpair refuses STAGE_NOT_READY", async () => {
+    const rig = await swissRig(SPORTS[0], 5, 2, true);
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const board = roundOf(await rowsOf(rig.stageId), 1).find((f) => !isBye(f))!;
+    const out = await againstAScorerInFlight(rig, board.id, () => unpairSwissRound(rig.auth, rig.stageId));
+    expect(out.blocked, "the Unpair waited on the board's append lock").toBe(true);
+    expect(out.scorer).toBe("committed");
+    expect(out.cleared).toEqual(expect.objectContaining({ code: "STAGE_NOT_READY" }));
+    expectRoundSeated(roundOf(await rowsOf(rig.stageId), 1), "after the refused Unpair");
+  }, 120_000);
+
+  it("the pre-Start entrant delete: the start commits first and the delete refuses STAGE_NOT_READY", async () => {
+    const rig = await swissRig(SPORTS[0], 5, 2, false);
+    await generateStageFixtures(rig.auth, rig.stageId);
+    const board = roundOf(await rowsOf(rig.stageId), 1).find((f) => !isBye(f))!;
+    const leaving = board.home_entrant_id!;
+    const out = await againstAScorerInFlight(rig, board.id, () => deleteEntrant(rig.auth, leaving));
+    expect(out.blocked, "the delete waited on the board's append lock").toBe(true);
+    expect(out.scorer).toBe("committed");
+    expect(out.cleared).toEqual(expect.objectContaining({ code: "STAGE_NOT_READY" }));
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where id = ${leaving}`;
+    expect(n, "the entrant is still there").toBe(1);
+  }, 120_000);
+});
 
 // ---------------------------------------------------------------------------------------------------------------------
 // A replayed placement never lands on a bye shell (X-SW-29; T3 review m3's second half).
@@ -534,9 +718,10 @@ describe.runIf(HAS_DB)("W3 T5 Undo and Redo never put a slot on a Swiss bye shel
     const rig = await swissRig(SPORTS[0], 5, 2, false);
     const rows = await rowsOf(rig.stageId);
     const bye = rows.find((f) => f.ext_key === "sw-r2-bye")!;
+    const bye1 = rows.find((f) => f.ext_key === "sw-r1-bye")!;
     const [b1, b2] = roundOf(rows, 2).filter((f) => !isBye(f));
-    expect([bye, b1, b2].every(Boolean), "rig: round 2 has a bye shell and two boards").toBe(true);
-    return { rig, bye: bye.id, b1: b1!.id, b2: b2!.id };
+    expect([bye, bye1, b1, b2].every(Boolean), "rig: rounds 1 and 2 have bye shells, round 2 two boards").toBe(true);
+    return { rig, bye: bye.id, bye1: bye1.id, b1: b1!.id, b2: b2!.id };
   }
   const slotOf = async (id: string) => {
     const [f] = await sql<{ scheduled_at: Date | null; court_id: string | null; venue_id: string | null }[]>`
@@ -552,42 +737,58 @@ describe.runIf(HAS_DB)("W3 T5 Undo and Redo never put a slot on a Swiss bye shel
     await sql`update divisions set edit_watermark = null where id = ${divisionId}`;
   }
 
+  /** A court a pre-uuid ledger row names by label: history writes the time and leaves `court_id` alone (the replays'
+   *  second branch, `resolveCourtWrite` → `write: false`). Each case below drives BOTH branches (review m6). */
+  const LEGACY_COURT = "Court 3";
+
   it("X-SW-29 Redo of a pre-T3 schedule_applied places the board and leaves the bye unplaced", async () => {
-    const { rig, bye, b1 } = await shells();
+    const { rig, bye, bye1, b1, b2 } = await shells();
     const empty = { at: null, court: null };
     await legacyRow(rig.divisionId, "schedule_applied", {
       moves: [
         { fixture: bye, from: empty, to: { at: AT(9), court: null } },
         { fixture: b1, from: empty, to: { at: AT(10), court: null } },
+        { fixture: bye1, from: empty, to: { at: AT(7), court: LEGACY_COURT } },
+        { fixture: b2, from: empty, to: { at: AT(8), court: LEGACY_COURT } },
       ],
     });
     await undoDivision(rig.auth, rig.divisionId);
     await redoDivision(rig.auth, rig.divisionId);
     expect((await slotOf(b1)).at, "positive pair: the Redo replays the board's placement").toBe(AT(10));
+    expect((await slotOf(b2)).at, "positive pair, legacy court: the time is replayed").toBe(AT(8));
     expect(await slotOf(bye), "the bye shell takes no slot from the replay").toEqual(NONE);
+    expect(await slotOf(bye1), "nor through a legacy court").toEqual(NONE);
   }, 120_000);
 
   it("X-SW-29 Undo of a pre-T3 schedule_edited puts the board back and leaves the bye unplaced", async () => {
-    const { rig, bye, b1 } = await shells();
+    const { rig, bye, bye1, b1, b2 } = await shells();
+    const legacy = (h: number) => ({ at: AT(h), court: LEGACY_COURT });
     await legacyRow(rig.divisionId, "schedule_edited", { fixture: b1, from: { at: AT(11), court: null }, to: { at: AT(12), court: null } });
     await legacyRow(rig.divisionId, "schedule_edited", { fixture: bye, from: { at: AT(11), court: null }, to: { at: AT(12), court: null } });
-    await undoDivision(rig.auth, rig.divisionId); // the bye's move: puts AT(11) back — refused at the row
-    await undoDivision(rig.auth, rig.divisionId); // the board's move
+    await legacyRow(rig.divisionId, "schedule_edited", { fixture: b2, from: legacy(15), to: legacy(16) });
+    await legacyRow(rig.divisionId, "schedule_edited", { fixture: bye1, from: legacy(15), to: legacy(16) });
+    for (let i = 0; i < 4; i++) await undoDivision(rig.auth, rig.divisionId); // newest first: bye1, b2, bye, b1
     expect((await slotOf(b1)).at, "positive pair: the Undo puts the board's time back").toBe(AT(11));
+    expect((await slotOf(b2)).at, "positive pair, legacy court: the time goes back").toBe(AT(15));
     expect(await slotOf(bye), "the bye shell takes no slot from the Undo").toEqual(NONE);
+    expect(await slotOf(bye1), "nor through a legacy court").toEqual(NONE);
   }, 120_000);
 
   it("X-SW-29 Undo of a pre-T3 schedule_cleared restores the board's slot and leaves the bye unplaced", async () => {
-    const { rig, bye, b2 } = await shells();
+    const { rig, bye, bye1, b1, b2 } = await shells();
     await legacyRow(rig.divisionId, "schedule_cleared", {
       scope: { excludeLocked: true },
       cleared: [
         { id: bye, at: AT(13), court: null },
         { id: b2, at: AT(14), court: null },
+        { id: bye1, at: AT(17), court: LEGACY_COURT },
+        { id: b1, at: AT(18), court: LEGACY_COURT },
       ],
     });
     await undoDivision(rig.auth, rig.divisionId); // schedule_restored
     expect((await slotOf(b2)).at, "positive pair: the restore puts the board's slot back").toBe(AT(14));
+    expect((await slotOf(b1)).at, "positive pair, legacy court: the time goes back").toBe(AT(18));
     expect(await slotOf(bye), "the bye shell takes no slot from the restore").toEqual(NONE);
+    expect(await slotOf(bye1), "nor through a legacy court").toEqual(NONE);
   }, 120_000);
 });

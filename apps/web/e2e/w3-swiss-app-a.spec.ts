@@ -507,8 +507,13 @@ test.describe("X-SW-28 Undo clears a paired round", () => {
     await page.goto(await divisionPath(request, divisionId, "/schedule?tab=history"));
     const undo = page.getByTestId("history-undo");
     await expect(undo).toBeEnabled({ timeout: 20_000 });
+    // Review m4: wait on the Undo's own answer before judging the panel. A no-error check read before the request
+    // returns passes on a refusal that has not rendered yet.
+    const undone = page.waitForResponse(
+      (r) => r.url().endsWith(`/api/v1/divisions/${divisionId}/undo`) && r.request().method() === "POST",
+    );
     await undo.click();
-    await expect(page.getByTestId("history-error")).toHaveCount(0);
+    expect((await undone).status(), "the Undo is answered 200").toBe(200);
 
     // The seats are empty and the shells stay: same ids, nobody seated, nothing decided.
     await expect
@@ -516,6 +521,8 @@ test.describe("X-SW-28 Undo clears a paired round", () => {
         timeout: 20_000,
       })
       .toBe(0);
+    // After the answer and the cleared seats: the panel shows no refusal.
+    await expect(page.getByTestId("history-error")).toHaveCount(0);
     const after = await round1();
     expect(after.map((f) => f.id).sort(), "Undo keeps every shell").toEqual(paired.map((f) => f.id).sort());
 
