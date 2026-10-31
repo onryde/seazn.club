@@ -69,7 +69,7 @@ describe("a throwaway template reaches every reader with no other edit", () => {
   });
 
   it("the gallery's cell source: exactly the declared probe cells, all badminton", async () => {
-    const { galleryCells, GALLERY_CAROUSEL_SPORTS, GALLERY_MOMENT_SAMPLES, GALLERY_SNAPSHOT_KINDS, GALLERY_SPONSOR_FACE_SPORTS } =
+    const { galleryCells, GALLERY_CAROUSEL_SPORTS, GALLERY_MOMENT_SAMPLES, GALLERY_SNAPSHOT_KINDS, GALLERY_SPONSOR_FACE_SPORTS, GALLERY_SPONSOR_CARDS } =
       await import("../gallery-matrix");
     const { OVERLAY_SCENES, SPONSOR_CAROUSEL_SCENES } = await import("../overlay-scenes");
     const cells = galleryCells(REG, VARIANTS).filter((c) => c.templateId === "probe");
@@ -85,7 +85,7 @@ describe("a throwaway template reaches every reader with no other edit", () => {
     expect(plain).toHaveLength(OVERLAY_SCENES.length * GALLERY_SNAPSHOT_KINDS.length);
     expect(moment).toHaveLength(badmintonSamples * firing);
     expect(variant).toHaveLength(VARIANTS.length);
-    const faces = (GALLERY_SPONSOR_FACE_SPORTS as readonly string[]).includes("badminton") ? 2 : 1;
+    const faces = (GALLERY_SPONSOR_FACE_SPORTS as readonly string[]).includes("badminton") ? GALLERY_SPONSOR_CARDS.length : 1;
     expect(sponsor.map((c) => c.sponsorSlot).sort()).toEqual(Object.keys(H.probeSlots).flatMap((k) => Array(faces).fill(k)).sort());
     expect(carousel).toHaveLength((GALLERY_CAROUSEL_SPORTS as readonly string[]).includes("badminton") ? carouselScenes : 0);
     expect(badmintonSamples * firing, "anti-vacuity: badminton has firing moment samples").toBeGreaterThan(0);

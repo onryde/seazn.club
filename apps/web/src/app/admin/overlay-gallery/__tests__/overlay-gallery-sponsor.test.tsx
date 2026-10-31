@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { OVERLAY_TEMPLATES, type CanvasBox } from "@/components/overlay/template-registry";
-import { GALLERY_SPONSOR_CARDS, type GalleryCell } from "@/components/overlay/gallery-matrix";
+import { GALLERY_SPONSOR_CARDS, GALLERY_SPONSOR_WITNESS_ID, type GalleryCell } from "@/components/overlay/gallery-matrix";
 import { SPONSOR_CAROUSEL_SCENES } from "@/components/overlay/overlay-scenes";
 import { sponsorShortLinkText } from "@/lib/sponsor-clicks";
 
@@ -59,6 +59,7 @@ describe("the gallery's sponsor cells draw the card in the template's declared s
     expect(sponsorShortLinkText(GALLERY_SPONSOR_CARDS[0]!.shortCode), "premise: the title card prints a short link").not.toBeNull();
     let checked = 0;
     let plainFaces = 0;
+    let witnessFaces = 0;
     for (const cell of cells) {
       const own = GALLERY_SPONSOR_CARDS.find((c) => c.id === cell.sponsorCard);
       expect(own, `${cell.key}: a gallery card`).toBeDefined();
@@ -80,6 +81,12 @@ describe("the gallery's sponsor cells draw the card in the template's declared s
         plainFaces++;
         expect(fig, "its caption says so").toContain("Sponsor card without logo or link");
       }
+      // Round 2: the witness (the longest name allowed) is captioned as such, and its face is marked for check 9.
+      if (own!.id === GALLERY_SPONSOR_WITNESS_ID) {
+        witnessFaces++;
+        expect(fig, "its caption says so").toContain("Sponsor card with the longest name allowed");
+        expect(fig).toContain('data-sponsor-face="witness"');
+      }
       // The card is not ALSO drawn as a slab in the moment slot.
       expect(fig, `${cell.key}: no slab`).not.toContain('data-testid="overlay-moment"');
       checked++;
@@ -87,6 +94,7 @@ describe("the gallery's sponsor cells draw the card in the template's declared s
     console.log(`sponsor-slot cells drawn and checked: ${checked} (plain face: ${plainFaces})`);
     expect(checked, "anti-vacuity").toBeGreaterThan(0);
     expect(plainFaces, "anti-vacuity (m3): the plain face is drawn").toBeGreaterThan(0);
+    expect(witnessFaces, "anti-vacuity (round 2): the witness is drawn").toBeGreaterThan(0);
     expect(byKey.size).toBe(checked);
   });
 

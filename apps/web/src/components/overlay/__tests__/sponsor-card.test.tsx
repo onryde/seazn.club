@@ -13,6 +13,11 @@ import { SCENE_CAROUSEL_MS, type SponsorCard } from "@/lib/sponsor-plan";
 import { SPONSOR_SHORT_CODE_ALPHABET, SPONSOR_SHORT_CODE_MAX_LENGTH } from "@/lib/sponsor-short-code";
 import { OVERLAY_TEMPLATES } from "../template-registry";
 import { SponsorCardView, SponsorCarousel, carouselMemoryStore, carouselMomentId } from "../sponsor-card";
+import { GALLERY_SPONSOR_CARDS, GALLERY_SPONSOR_WITNESS_ID } from "../gallery-matrix";
+import { openFace, textWidth } from "@/components/public-site/__tests__/font-advance";
+import { CreateSponsor } from "@/server/api-v1/schemas";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const NAME_43 = "Northbridge Athletic Football & Social Club";
 const card = (over: Partial<SponsorCard> = {}): SponsorCard => ({
@@ -93,6 +98,21 @@ describe("the stylesheet: truncation chain and the 43-character name (Review Foc
     const found = RULES.filter((r) => r.selector === selector).map((r) => declaredValue(r, prop)).filter((v) => v !== undefined);
     return found.at(-1);
   };
+  /** A declaration the budget tests NEED: refused by name when the reader cannot see it, never read as 0. */
+  const need = (selector: string, prop: string): string => {
+    const v = value(selector, prop);
+    if (v === undefined) throw new Error(`${selector} declares no ${prop} the reader can see`);
+    return v;
+  };
+
+  // Fix round 2: the reader (`_globals-css.ts`) splits a block on `;`, so a comment glued to a declaration hides it —
+  // round 1's stack budget read the card's padding as 0 that way. No sponsor rule's block may hold one.
+  it("no .ovl-sponsor* rule block holds a comment (the reader would lose the declaration it is glued to)", () => {
+    const sponsor = RULES.filter((r) => r.selector.includes(".ovl-sponsor"));
+    expect(sponsor.filter((r) => r.declarations.includes("/*")).map((r) => r.selector)).toEqual([]);
+    console.log(`sponsor rule blocks checked: ${sponsor.length}`);
+    expect(sponsor.length, "anti-vacuity").toBeGreaterThan(5);
+  });
 
   it("min-width: 0 on the card, its text column and the name — every flex ancestor of the name", () => {
     let checked = 0;
@@ -146,12 +166,12 @@ describe("the stylesheet: truncation chain and the 43-character name (Review Foc
   });
 
   it("the lower third's stack fits the SHORTEST declared lower-third slot; the banner's two-line stack the shortest banner", () => {
-    const px = (sel: string, prop: string) => parseFloat(value(sel, prop) ?? "0");
+    const px = (sel: string, prop: string) => parseFloat(need(sel, prop));
     const pad = (sel: string) => {
-      const parts = (value(sel, "padding") ?? "0").split(/\s+/).map(parseFloat);
+      const parts = need(sel, "padding").split(/\s+/).map(parseFloat);
       return { top: parts[0]!, bottom: parts[2] ?? parts[0]! };
     };
-    const lineOf = (sel: string, nameSel = sel) => px(nameSel, "font-size") * Number(value(sel, "line-height"));
+    const lineOf = (sel: string, nameSel = sel) => px(nameSel, "font-size") * Number(need(sel, "line-height"));
     const slots = Object.values(OVERLAY_TEMPLATES);
     const lowest = Math.min(...slots.map((t) => t.sponsorSlots.lower_third.height));
     const lowestBanner = Math.min(...slots.map((t) => t.sponsorSlots.banner.height));
@@ -173,6 +193,79 @@ describe("the stylesheet: truncation chain and the 43-character name (Review Foc
     expect(lower).toBeLessThanOrEqual(lowest);
     expect(px(".ovl-sponsor-logo", "height"), "the plate fits too").toBeLessThanOrEqual(lowest - lp.top - lp.bottom);
     expect(banner).toBeLessThanOrEqual(lowestBanner);
+  });
+
+  // Fix round 2 (CI check 9's anti-vacuity): whether a name is cut is a property of the FONT and the declared slots, so it
+  // is derived here from both — never from the page. The face is the committed Barlow Condensed file at the weight
+  // `.ovl-sponsor-name` declares (the build's own face; font-advance.ts). That reader applies no kerning, and kerning
+  // only narrows (fontkit, 2026-10-31: 2 px off the 43-character name, 7 px off the witness), so its widths are
+  // over-estimates: safe as they stand for "fits"; for "cannot fit" they must clear the column by a margin
+  // (CUT_MARGIN, 25%) that dwarfs any kerning.
+  it("from the font: the 43-character name fits WHOLE on every slot; the witness (the longest name allowed) fits none", () => {
+    const CUT_MARGIN = 1.25;
+    const four = (sel: string) => {
+      const v = need(sel, "padding").split(/\s+/).map(parseFloat);
+      const [top, right = top, bottom = top, left = right] = v;
+      return { top: top!, right: right!, bottom: bottom!, left: left! };
+    };
+    const px = (sel: string, prop: string) => parseFloat(need(sel, prop));
+    const NAME = ".ovl-sponsor-name";
+    const B = '.ovl-sponsor-card[data-style="banner"]';
+    const weight = Number(need(NAME, "font-weight"));
+    const FONTS = join(dirname(fileURLToPath(import.meta.url)), "../../../../assets/fonts");
+    const face = openFace(join(FONTS, "BarlowCondensed-Bold.ttf"), "Barlow Condensed Bold");
+    expect(face.weightClass, "the face the name declares").toBe(weight);
+    expect(value(NAME, "font-family"), "premise: the name is set in Barlow").toMatch(/--font-barlow/);
+    const size = px(NAME, "font-size");
+    const tracking = parseFloat(need(NAME, "letter-spacing")); // em
+    expect(need(NAME, "letter-spacing")).toMatch(/em$/);
+    const width = (text: string) => textWidth(face, text, size, tracking);
+    const space = width(" ");
+    /** Lines a greedy word wrap needs at `column` — an over-estimate's own count, so "≤ n" here is "fits in n". */
+    const linesAt = (text: string, column: number) => {
+      let lines = 1;
+      let line = "";
+      for (const word of text.split(" ")) {
+        const next = line === "" ? word : `${line} ${word}`;
+        if (line !== "" && width(next) > column) {
+          lines++;
+          line = word;
+        } else line = next;
+      }
+      return lines;
+    };
+
+    const title = GALLERY_SPONSOR_CARDS[0]!;
+    const witness = GALLERY_SPONSOR_CARDS.find((c) => c.id === GALLERY_SPONSOR_WITNESS_ID)!;
+    expect([...title.name], "the brief's realistic name").toHaveLength(43);
+    // The witness is the longest name an organiser can enter: CreateSponsor takes it, and nothing one character longer.
+    expect(CreateSponsor.shape.name.safeParse(witness.name).success).toBe(true);
+    expect(CreateSponsor.shape.name.safeParse(`${witness.name}x`).success, "the witness is AT the cap").toBe(false);
+
+    const card = four(".ovl-sponsor-card");
+    const banner = four(B);
+    const plate = px(".ovl-sponsor-logo", "width");
+    expect(px(".ovl-sponsor-mono", "width"), "the monogram is the plate's width too").toBe(plate);
+    let checked = 0;
+    for (const t of Object.values(OVERLAY_TEMPLATES)) {
+      // The lower third: one line, beside the plate. The banner: the panel's width, two lines before the clamp.
+      const lowerColumn = t.sponsorSlots.lower_third.width - card.left - card.right - plate - px(".ovl-sponsor-card", "gap");
+      const bannerColumn = t.sponsorSlots.banner.width - banner.left - banner.right;
+      const clamp = Number(need(`${B} ${NAME}`, "-webkit-line-clamp"));
+      expect(width(title.name), `${t.id}: the title fits the lower third whole`).toBeLessThan(lowerColumn);
+      expect(linesAt(title.name, bannerColumn), `${t.id}: the title fits the banner in ${clamp} lines`).toBeLessThanOrEqual(clamp);
+      expect(width(witness.name), `${t.id}: the witness overflows the lower third`).toBeGreaterThan(CUT_MARGIN * lowerColumn);
+      // `clamp` lines hold at most clamp × column of text, plus the spaces their breaks swallow.
+      expect(width(witness.name) - (clamp - 1) * space, `${t.id}: the witness needs more than ${clamp} banner lines`).toBeGreaterThan(
+        CUT_MARGIN * clamp * bannerColumn,
+      );
+      console.log(
+        `${t.id}: title ${width(title.name).toFixed(1)}px, witness ${width(witness.name).toFixed(1)}px; ` +
+          `lower-third column ${lowerColumn}px, banner column ${bannerColumn}px × ${clamp} lines`,
+      );
+      checked++;
+    }
+    expect(checked, "anti-vacuity: templates").toBeGreaterThan(0);
   });
 });
 

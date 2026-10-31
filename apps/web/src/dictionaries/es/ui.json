@@ -6367,6 +6367,7 @@
   "admin.overlayGallery.sceneCaption": "Escena: {scene}",
   "admin.overlayGallery.sponsorCard": "Tarjeta de patrocinador: {slot}",
   "admin.overlayGallery.sponsorCardPlain": "Tarjeta de patrocinador sin logotipo ni enlace: {slot}",
+  "admin.overlayGallery.sponsorCardLongest": "Tarjeta de patrocinador con el nombre más largo permitido: {slot}",
   "admin.overlayGallery.sponsorSlot.lowerThird": "Rótulo inferior",
   "admin.overlayGallery.sponsorSlot.banner": "Banner",
   "admin.overlayGallery.sponsorCarousel": "Carrusel de patrocinadores",

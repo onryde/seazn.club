@@ -2355,6 +2355,12 @@ body {
   pointer-events: none;
   z-index: 2;
 }
+/* The lower third's card, 120 tall: 10 + (57.6 name + 2 + 36 link) + 10 = 115.6, and the 88 px plate. Each line is as
+   tall as Barlow Condensed's content area (ascent 1.0 + descent 0.2 = 1.2em), so no glyph overflows its line box: a
+   shorter line-height lets the descenders out, the name's own `overflow: hidden` clips them, and its scroll box
+   outgrows its client box (gallery check 9 read every lower-third name as cut vertically at 1.05). Comments stay
+   OUTSIDE the sponsor rules' blocks: the test reader splits a block on `;`, and a comment glued to a declaration
+   hides it (sponsor-card.test.tsx refuses one). */
 .ovl-sponsor-card {
   position: relative;
   display: flex;
@@ -2362,10 +2368,6 @@ body {
   gap: 24px;
   flex: 1 1 auto;
   min-width: 0;
-  /* 120 tall: 10 + (57.6 name + 2 + 36 link) + 10 = 115.6, and the 88 px plate. Each line is as tall as Barlow
-     Condensed's content area (ascent 1.0 + descent 0.2 = 1.2em), so no glyph overflows its line box: a shorter
-     line-height lets the descenders out, the name's own `overflow: hidden` clips them, and its scroll box outgrows
-     its client box (gallery check 9 read every lower-third name as cut vertically at 1.05). */
   padding: 10px 32px 10px 40px;
   border-radius: 12px;
   overflow: hidden;

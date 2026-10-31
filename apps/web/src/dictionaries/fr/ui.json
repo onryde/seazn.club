@@ -6367,6 +6367,7 @@
   "admin.overlayGallery.sceneCaption": "Scène : {scene}",
   "admin.overlayGallery.sponsorCard": "Carte du sponsor : {slot}",
   "admin.overlayGallery.sponsorCardPlain": "Carte du sponsor sans logo ni lien : {slot}",
+  "admin.overlayGallery.sponsorCardLongest": "Carte du sponsor avec le nom le plus long autorisé : {slot}",
   "admin.overlayGallery.sponsorSlot.lowerThird": "Bandeau inférieur",
   "admin.overlayGallery.sponsorSlot.banner": "Bannière",
   "admin.overlayGallery.sponsorCarousel": "Carrousel des sponsors",

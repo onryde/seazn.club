@@ -189,6 +189,9 @@ export interface GalleryCell {
   carousel: boolean;
 }
 
+/** Fix round 2: the gallery card whose name is too long for any slot — the ellipsis's and the clamp's witness. */
+export const GALLERY_SPONSOR_WITNESS_ID = "gallery-card-witness";
+
 /** R4 S7: the gallery's sponsor cards. The title carries the brief's realistic 43-character name, a logo and a short code
  *  — every part of the card's face at its longest; the gold has neither logo nor code (the monogram, no link). */
 export const GALLERY_SPONSOR_CARDS: readonly SponsorCard[] = [
@@ -204,10 +207,27 @@ export const GALLERY_SPONSOR_CARDS: readonly SponsorCard[] = [
     shortCode: "NB7K",
   },
   { id: "gallery-card-gold", sponsorId: "gallery-sponsor-gold", name: "Harbourside Building Supplies", logoUrl: null, tier: "gold", onStream: true },
+  // Fix round 2: the CUT witness. The 43-character name fits whole on every slot (758 px of Barlow Condensed Bold at
+  // 48 px in the lower third's 816 px text column; two lines in the banner's 480), so the ellipsis and the clamp need a
+  // name that cannot fit: the longest an organiser can enter (`CreateSponsor.name`, 80 characters) — 1448 px, so one
+  // line overflows the lower third and the banner wraps to four lines against its two. Every face part at its longest:
+  // a logo and an 8-character code. `sponsor-card.test.tsx` derives both claims from the font and the declared slots.
+  {
+    id: GALLERY_SPONSOR_WITNESS_ID,
+    sponsorId: "gallery-sponsor-witness",
+    name: "The Northbridge and District Amateur Football, Cricket, Hockey and Bowling Trust",
+    logoUrl: `data:image/svg+xml,${encodeURIComponent(
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='#1f4d2b'/><circle cx='32' cy='32' r='16' fill='#f2f2f2'/></svg>",
+    )}`,
+    tier: "silver",
+    onStream: true,
+    shortCode: "WTN8X3QR",
+  },
 ];
 
-/** Fix round 1 (m3): the sports whose sponsor cells ALSO pin the plain face — the gold card, no logo (the monogram) and
- *  no short code (no link) — the two templates' defaults, as for result variants. */
+/** Fix round 1 (m3) and round 2: the sports whose sponsor cells pin EVERY gallery card, not only the title — the gold
+ *  card's plain face (no logo, so the monogram; no short code, so no link) and the witness's cut name — the two
+ *  templates' defaults, as for result variants. */
 export const GALLERY_SPONSOR_FACE_SPORTS = GALLERY_RESULT_VARIANT_SPORTS;
 
 /** The REAL planner's plan for a gallery sponsor cell: one break at the sample seq (41) whose size is the slot's look
@@ -245,8 +265,9 @@ export function gallerySponsorPlan(style: SponsorStyle | null, cardId: string = 
  * true (snapshot "live"; decision 8). A scene with `momentsFire: false` gets none.
  * Variant cells: every non-retired template suiting the variant's sport × variant (scene "live", snapshot "ended").
  * Sponsor cells (R4 S7, spec 2026-10-27 §3.5): every non-retired template suiting the sport × sport × each slot the
- * template DECLARES (scene "live", snapshot "live"), pinning the title card's full face; for `faceSports`, a second
- * cell per slot pins the gold card's plain face (no logo, no link; fix round 1, m3).
+ * template DECLARES (scene "live", snapshot "live"), pinning the title card's full face; for `faceSports`, one more
+ * cell per slot per other gallery card: the gold's plain face (no logo, no link; fix round 1, m3) and the witness's
+ * cut name (fix round 2).
  * Carousel cells (R4 S7): every non-retired template suiting a carousel sport × each scene in `scenes` that carries the
  * carousel (`SPONSOR_CAROUSEL_SCENES`); Starting soon reads the warming snapshot, any other the live one.
  */
@@ -282,7 +303,7 @@ export function galleryMatrix(
         }
       }
       for (const slot of Object.keys(def.sponsorSlots) as SponsorStyle[]) {
-        const faces = [GALLERY_SPONSOR_CARDS[0]!, ...((faceSports as readonly string[]).includes(sportKey) ? [GALLERY_SPONSOR_CARDS[1]!] : [])];
+        const faces = (faceSports as readonly string[]).includes(sportKey) ? GALLERY_SPONSOR_CARDS : [GALLERY_SPONSOR_CARDS[0]!];
         for (const [i, face] of faces.entries()) {
           cells.push({
             key: `${def.id}|${sportKey}|live|sponsor|${slot}${i === 0 ? "" : `|${face.tier}`}`,
