@@ -5,11 +5,13 @@
 /** The 409 refusals of POST/DELETE /api/v1/fixtures/{id}/call and POST …/call/preview. Each rides the v1 error envelope
  *  as `error.code`, with its details as sibling fields of `error`:
  *  - PLAYER_BUSY  `{ person_name, court_name }`: a player of the match (person-level: a doubles partner counts) is in a match
- *                 that is playing, or called, on another court;
+ *                 that is playing, or called, on another court. For a side with no roster (a name-only team or player)
+ *                 the side itself counts, and `person_name` is the entrant's name;
  *  - COURT_BUSY   `{ court_name, competition_name }`: the target court has a match playing or called, from any competition;
  *  - NOT_CALLABLE `{ status }`: the match is not unstarted (`status` is its fixture status), or a side is still to be decided
  *                 (`status` is `"tbd_entrant"`);
- *  - NOT_CALLED   no details: Undo call on a match that is not called. */
+ *  - NOT_CALLED   no details: Undo call on a match that is not called, or whose call no longer holds (the board has moved
+ *                 it since). */
 export const CALL_REFUSAL = {
   PLAYER_BUSY: "PLAYER_BUSY",
   COURT_BUSY: "COURT_BUSY",

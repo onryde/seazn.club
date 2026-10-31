@@ -10,8 +10,14 @@
 //  - the preview lists the target court's queue pushed later (estimate = max(planned, end of the match before)), a rest gap below
 //    the division's declared minimum, and a queue running past the court's hours.
 //
-// Sport-agnostic on purpose (one sport, generic): the call path reads no sport column. It writes a court and a time and judges
-// persons and courts, which every sport shares; the court noun per sport is A2/A3's sweep.
+// The call path reads no sport column, but sports differ in the one thing it judges: who plays. A doubles pair is two rostered
+// persons; a football team may be a NAME with no roster at all (members are optional). So the person check is swept on the
+// generic doubles rig, and a memberless football league has its own case (the entrant check). The court noun per sport is
+// A2/A3's sweep.
+//
+// Review 1 (fix round 1): a call is a schedule edit on the division's ledger (one `schedule_edited`, seq bumped, so a stale
+// board is refused), it holds only while the match is exactly where the call put it, and it does not honour the schedule
+// freeze (controller ruling R-m3).
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
 import { afterAll, describe, expect, it } from "vitest";
@@ -26,6 +32,7 @@ import {
   callRows,
   iso,
   labelOf,
+  ledgerOf,
   person,
   place,
   seedCompetition,
@@ -282,6 +289,57 @@ describe.skipIf(!HAS_DB)("callFixtureToCourt", () => {
     expect(await slotOf(b.id)).toMatchObject({ court_id: day.courts.c1 });
   });
 
+  it("a call the board has since moved to a LATER time on the same court holds neither that court nor its players", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const a = between(day.comp, p1, p2);
+    await place(day, a.id, 45, day.courts.c1); // Court 1's own next match…
+    await callFixtureToCourt(day.auth, a.id, day.courts.c1, at(31)); // …called early
+    await moveFixture(day.auth, a.id, { scheduled_at: iso(120), court_id: day.courts.c1 }); // …and put back later by the board
+    expect(await callRows(a.id)).toHaveLength(1);
+
+    // Ann & Bob (P1) and Cat & Dan (P2) are in `a`, which is no longer called: their other matches can be.
+    const p1Other = between(day.comp, p1, p3);
+    await callFixtureToCourt(day.auth, p1Other.id, day.courts.c3, at(32));
+    expect(await slotOf(p1Other.id)).toMatchObject({ court_id: day.courts.c3, scheduled_at: iso(32) });
+    // And Court 1, where `a` now only waits its planned turn, takes a call.
+    const p2Other = between(day.comp, p2, p4);
+    await callFixtureToCourt(day.auth, p2Other.id, day.courts.c1, at(33));
+    expect(await slotOf(p2Other.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(33) });
+  });
+
+  it("another sport — football teams with no roster: a team playing, or called, on another court refuses PLAYER_BUSY by the team's name", async () => {
+    const day = await seedDay();
+    const league = await seedCompetition(day.auth, "Sunday League", [], {
+      courts: [day.courts.c1, day.courts.c2, day.courts.c3],
+      teams: ["Rovers", "United", "City", "Athletic"],
+    });
+    const team = (n: string) => league.pairs.find((p) => p.name === n)!;
+    expect(league.pairs.map((p) => p.people.length)).toEqual([0, 0, 0, 0]); // no roster: the person check sees nobody
+    const playing = between(league, team("Rovers"), team("United"));
+    await place(day, playing.id, 0, day.courts.c2);
+    await setStatus(playing.id, "in_play");
+
+    const roversCity = between(league, team("Rovers"), team("City"));
+    const inPlay = await refusal(callFixtureToCourt(day.auth, roversCity.id, day.courts.c3, at(31)));
+    expect(inPlay.status).toBe(409);
+    expect(inPlay.code).toBe("PLAYER_BUSY");
+    expect(inPlay.extra).toEqual({ person_name: "Rovers", court_name: "Court 2" });
+    expect(await callRows(roversCity.id)).toEqual([]);
+
+    // Over. Rovers v City is called onto Court 3, and Rovers' other match cannot go on Court 1 while they are called there.
+    await setStatus(playing.id, "decided");
+    await callFixtureToCourt(day.auth, roversCity.id, day.courts.c3, at(32));
+    const roversAthletic = between(league, team("Rovers"), team("Athletic"));
+    const called = await refusal(callFixtureToCourt(day.auth, roversAthletic.id, day.courts.c1, at(33)));
+    expect(called.code).toBe("PLAYER_BUSY");
+    expect(called.extra).toEqual({ person_name: "Rovers", court_name: "Court 3" });
+    // A match of two free teams goes on Court 1.
+    const free = between(league, team("United"), team("Athletic"));
+    await callFixtureToCourt(day.auth, free.id, day.courts.c1, at(34));
+    expect(await slotOf(free.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(34) });
+  });
+
   it("refuses NOT_CALLABLE for every status but `scheduled` (the DB's own status domain), and for a TBD side", async () => {
     const day = await seedDay();
     const { p1, p2 } = pairs(day);
@@ -437,6 +495,53 @@ describe.skipIf(!HAS_DB)("undoCall", () => {
     });
   });
 
+  it("call → board move → re-call → Undo: the Undo goes back to where the BOARD left the match, not to the slot before the first call", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    await place(day, f.id, 120, day.courts.c2);
+
+    await callFixtureToCourt(day.auth, f.id, day.courts.c1, at(31));
+    await moveFixture(day.auth, f.id, { scheduled_at: iso(200), court_id: day.courts.c3 }); // the board ends the call
+    await callFixtureToCourt(day.auth, f.id, day.courts.c1, at(40));
+    expect(await callRows(f.id)).toMatchObject([
+      { court_id: day.courts.c1, called_at: iso(40), prev_court_id: day.courts.c3, prev_venue_id: day.venues.hallB, prev_scheduled_at: iso(200) },
+    ]);
+
+    await undoCall(day.auth, f.id);
+    expect(await slotOf(f.id)).toEqual({
+      court_id: day.courts.c3,
+      venue_id: day.venues.hallB,
+      scheduled_at: iso(200),
+      status: "scheduled",
+    });
+    expect(await callRows(f.id)).toEqual([]);
+  });
+
+  it("refuses NOT_CALLED on a call the board has moved since — to another court, or later on the same one — and leaves the board's edit", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const cases = [
+      { f: between(day.comp, p1, p2), move: { scheduled_at: iso(200), court_id: day.courts.c3 } },
+      { f: between(day.comp, p3, p4), move: { scheduled_at: iso(150), court_id: day.courts.c2 } }, // called to Court 2, later there
+    ];
+    await place(day, cases[0]!.f.id, 120, day.courts.c2);
+    await callFixtureToCourt(day.auth, cases[0]!.f.id, day.courts.c1, at(31));
+    await callFixtureToCourt(day.auth, cases[1]!.f.id, day.courts.c2, at(32));
+    let checked = 0;
+    for (const { f, move } of cases) {
+      await moveFixture(day.auth, f.id, move);
+      const before = await ledgerOf(day.comp.divisionId, f.id);
+      const err = await refusal(undoCall(day.auth, f.id));
+      expect(err.status).toBe(409);
+      expect(err.code).toBe("NOT_CALLED");
+      expect(await slotOf(f.id)).toMatchObject({ court_id: move.court_id, scheduled_at: move.scheduled_at });
+      expect(await ledgerOf(day.comp.divisionId, f.id)).toEqual(before); // a refusal writes nothing on the ledger
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("refuses NOT_CALLABLE once the called match has started, and leaves it where it is playing", async () => {
     const day = await seedDay();
     const { p1, p2 } = pairs(day);
@@ -453,6 +558,86 @@ describe.skipIf(!HAS_DB)("undoCall", () => {
     });
     expect(await slotOf(f.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(31), status: "in_play" });
     expect(await callRows(f.id)).toHaveLength(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a call on the division's ledger", () => {
+  it("a call and its Undo each append exactly one schedule_edited (from/to with the venue) and move the division's seq on by one", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    await place(day, f.id, 120, day.courts.c2);
+    const before = await ledgerOf(day.comp.divisionId, f.id);
+    expect(before.edits).toEqual([]);
+
+    await callFixtureToCourt(day.auth, f.id, day.courts.c3, at(31));
+    const called = await ledgerOf(day.comp.divisionId, f.id);
+    expect(called.seq).toBe(before.seq + 1);
+    expect(called.edits).toEqual([
+      {
+        seq: before.seq + 1,
+        from: { at: iso(120), court: day.courts.c2, venue: day.venues.hallA, locked: false },
+        to: { at: iso(31), court: day.courts.c3, venue: day.venues.hallB, locked: false },
+      },
+    ]);
+
+    await undoCall(day.auth, f.id);
+    const undone = await ledgerOf(day.comp.divisionId, f.id);
+    expect(undone.seq).toBe(before.seq + 2);
+    expect(undone.edits).toEqual([
+      called.edits[0],
+      {
+        seq: before.seq + 2,
+        from: { at: iso(31), court: day.courts.c3, venue: day.venues.hallB, locked: false },
+        to: { at: iso(120), court: day.courts.c2, venue: day.venues.hallA, locked: false },
+      },
+    ]);
+  });
+
+  it("a board loaded before a call, or before its Undo, is refused as stale (SEQ_CONFLICT) instead of writing over it; a refused call moves nothing", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    const x = between(day.comp, p3, p4);
+    await place(day, x.id, 120, day.courts.c2);
+
+    const loaded = (await ledgerOf(day.comp.divisionId, f.id)).seq;
+    await callFixtureToCourt(day.auth, f.id, day.courts.c1, at(31));
+    await expect(
+      moveFixture(day.auth, f.id, { scheduled_at: iso(200), court_id: day.courts.c3, expected_seq: loaded }),
+    ).rejects.toMatchObject({ code: "SEQ_CONFLICT" });
+    expect(await slotOf(f.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(31) });
+
+    // A refused call (Court 1 is called) leaves the seq where it was.
+    const reloaded = (await ledgerOf(day.comp.divisionId, x.id)).seq;
+    expect((await refusal(callFixtureToCourt(day.auth, x.id, day.courts.c1, at(32)))).code).toBe("COURT_BUSY");
+    expect((await ledgerOf(day.comp.divisionId, x.id)).seq).toBe(reloaded);
+
+    await undoCall(day.auth, f.id);
+    await expect(
+      moveFixture(day.auth, x.id, { scheduled_at: iso(150), court_id: day.courts.c2, expected_seq: reloaded }),
+    ).rejects.toMatchObject({ code: "SEQ_CONFLICT" });
+    const fresh = (await ledgerOf(day.comp.divisionId, x.id)).seq;
+    expect(fresh).toBe(reloaded + 1);
+    await moveFixture(day.auth, x.id, { scheduled_at: iso(150), court_id: day.courts.c2, expected_seq: fresh });
+    expect(await slotOf(x.id)).toMatchObject({ court_id: day.courts.c2, scheduled_at: iso(150) });
+  });
+
+  it("is not refused on a frozen division (the freeze guards planning; the day must still run) — the board's own move is", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    await place(day, f.id, 120, day.courts.c2);
+    await sql`update divisions set schedule_locked = true where id = ${day.comp.divisionId}`;
+
+    const frozen = await refusal(moveFixture(day.auth, f.id, { scheduled_at: iso(31), court_id: day.courts.c1 }));
+    expect(frozen.status).toBe(422);
+    expect(frozen.code).toBe("SCHEDULE_LOCKED");
+
+    await callFixtureToCourt(day.auth, f.id, day.courts.c1, at(31));
+    expect(await slotOf(f.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(31) });
+    await undoCall(day.auth, f.id);
+    expect(await slotOf(f.id)).toMatchObject({ court_id: day.courts.c2, scheduled_at: iso(120) });
   });
 });
 

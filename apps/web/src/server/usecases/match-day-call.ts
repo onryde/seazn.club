@@ -12,15 +12,22 @@ import "server-only";
 //  - the match is not unstarted, or a side is still to be decided (NOT_CALLABLE);
 //  - the target court has a match playing, or a live call, from ANY competition: courts are org-level (COURT_BUSY);
 //  - a PERSON of the match is in a match playing, or called, on another court. Person-level, so a doubles partner counts,
-//    and resolved through the scheduler's own `peopleByEntrant` + `peopleOf` (PLAYER_BUSY).
+//    and resolved through the scheduler's own `peopleByEntrant` + `peopleOf` (PLAYER_BUSY). And, for a side with no roster
+//    (a name-only team or player: members are optional), the ENTRANT itself in such a match (PLAYER_BUSY, the entrant's name).
 //
-// "A live call" is a `fixture_calls` row whose fixture is still unstarted AND still on the court it was called to. The status,
-// not the row, says whether a call still holds: a called match the scorer started, or one that ended, keeps its row and holds
-// nothing as a call (a playing match holds its court as playing). A call that a board edit has since moved off its court holds
-// that court no longer either.
+// "A live call" is a `fixture_calls` row whose fixture is still unstarted AND still exactly where the call put it: on the court
+// it was called to, at the time it was called (`liveCallSql`). The status, not the row, says whether a call still holds: a called
+// match the scorer started, or one that ended, keeps its row and holds nothing as a call (a playing match holds its court as
+// playing). A call that a board edit has since moved — to another court, or to a later time on the same one — holds nothing.
+//
+// A call and its Undo are schedule edits like any other on the division's ledger: under the division lock, each appends one
+// `schedule_edited` (the shape moveFixture writes, so history can undo it) and bumps `divisions.seq`, so a board or an AI plan
+// loaded before the call is refused as stale instead of writing over it. They do NOT honour the division's schedule freeze
+// (`schedule_locked`): the freeze guards planning edits, and the day must still run.
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { appendDivisionEvent } from "@/server/engine-db";
 import {
   CALL_REFUSAL,
   TBD_ENTRANT,
@@ -58,32 +65,85 @@ interface CallTarget {
   court_id: string | null;
   venue_id: string | null;
   scheduled_at: Date | null;
+  schedule_locked: boolean;
 }
 
 function refuse(code: CallRefusalCode, message: string, details?: Record<string, unknown>): never {
   throw new HttpError(409, message, code, details);
 }
 
-/** The fixture, with its competition. `lock` serialises every call and Undo in the org (one advisory lock) and locks the row:
- *  the busy reads below decide a write, and two calls racing onto one court, or one player onto two courts, would each read
- *  the other as absent. The preview writes nothing and takes no lock. */
+/**
+ * The ONE test of whether a call still holds, over `fixture_calls fc` joined to its fixture as `g`: the match is unstarted and
+ * still exactly where the call put it, on the called court at the called time (a call writes `fixtures.scheduled_at` and
+ * `called_at` from the same instant). A board edit that moves it anywhere else, a later time on the same court included, ends
+ * the call. Match Day's read model asks this same question (spec §7, task A2).
+ */
+export function liveCallSql(tx: Tx) {
+  return tx`(g.status = ${MOVABLE_STATUS} and g.court_id = fc.court_id and g.scheduled_at = fc.called_at)`;
+}
+
+/** The fixture, with its competition. `lock` takes the locks a call or an Undo writes under, in the board's own order: the
+ *  DIVISION lock first (moveFixture and applySchedule take it before they write a fixture row, so the reverse order here would
+ *  deadlock against them), then one lock per org that serialises every call and Undo across divisions (the busy reads below
+ *  decide a write, and two calls racing onto one court, or one player onto two courts, would each read the other as absent),
+ *  then the row. A fixture's division never changes, so reading it before the lock is safe. The preview writes nothing and
+ *  takes no lock. */
 async function readFixture(tx: Tx, orgId: string, fixtureId: string, lock: boolean): Promise<CallTarget> {
-  if (lock) await tx`select pg_advisory_xact_lock(hashtext(${"match_day_call:" + orgId}))`;
+  if (lock) {
+    const [d] = await tx<{ division_id: string }[]>`select division_id from fixtures where id = ${fixtureId}`;
+    if (!d) throw new HttpError(404, "fixture not found");
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + d.division_id}))`;
+    await tx`select pg_advisory_xact_lock(hashtext(${"match_day_call:" + orgId}))`;
+  }
   const rows = lock
     ? await tx<CallTarget[]>`
         select f.id, f.division_id, d.competition_id, f.status, f.home_entrant_id, f.away_entrant_id,
-               f.court_id, f.venue_id, f.scheduled_at
+               f.court_id, f.venue_id, f.scheduled_at, f.schedule_locked
           from fixtures f join divisions d on d.id = f.division_id
          where f.id = ${fixtureId}
            for update of f`
     : await tx<CallTarget[]>`
         select f.id, f.division_id, d.competition_id, f.status, f.home_entrant_id, f.away_entrant_id,
-               f.court_id, f.venue_id, f.scheduled_at
+               f.court_id, f.venue_id, f.scheduled_at, f.schedule_locked
           from fixtures f join divisions d on d.id = f.division_id
          where f.id = ${fixtureId}`;
   const [f] = rows;
   if (!f) throw new HttpError(404, "fixture not found");
   return f;
+}
+
+/** The fixture's call row, if any, and whether it still holds (`liveCallSql`). */
+async function readCall(
+  tx: Tx,
+  fixtureId: string,
+): Promise<
+  | { live: boolean; prev_court_id: string | null; prev_venue_id: string | null; prev_scheduled_at: Date | null }
+  | undefined
+> {
+  const [row] = await tx<
+    { live: boolean; prev_court_id: string | null; prev_venue_id: string | null; prev_scheduled_at: Date | null }[]
+  >`
+    select ${liveCallSql(tx)} as live, fc.prev_court_id, fc.prev_venue_id, fc.prev_scheduled_at
+      from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+     where fc.fixture_id = ${fixtureId}`;
+  return row;
+}
+
+/** A call or its Undo on the division's ledger, as moveFixture records a board move: one `schedule_edited` (from/to with the
+ *  venue, which history's Undo needs for a venue-only slot, and the pin unchanged) and `divisions.seq` bumped to it, so a writer
+ *  holding the pre-call seq fails `assertFreshSeq`. Under the division lock (`readFixture`). */
+async function recordScheduleEdit(
+  tx: Tx,
+  f: CallTarget,
+  to: { at: Date | null; court: string | null; venue: string | null },
+): Promise<void> {
+  const at = (d: Date | null) => (d === null ? null : iso(new Date(d).getTime()));
+  const seq = await appendDivisionEvent(tx, f.division_id, "schedule_edited", {
+    fixture: f.id,
+    from: { at: at(f.scheduled_at), court: f.court_id, venue: f.venue_id, locked: f.schedule_locked },
+    to: { at: at(to.at), court: to.court, venue: to.venue, locked: f.schedule_locked },
+  });
+  await tx`update divisions set seq = ${seq} where id = ${f.division_id}`;
 }
 
 /** The target court, which must be this org's (RLS) and not archived. */
@@ -115,9 +175,9 @@ async function assertCallable(tx: Tx, f: CallTarget, courtId: string, courtNames
           from fixtures f
          where f.court_id = ${courtId} and f.status = ${IN_PLAY} and f.id <> ${f.id}
         union all
-        select f.id, f.division_id, 1 as rank
-          from fixture_calls fc join fixtures f on f.id = fc.fixture_id
-         where fc.court_id = ${courtId} and f.court_id = fc.court_id and f.status = ${MOVABLE_STATUS} and f.id <> ${f.id}
+        select g.id, g.division_id, 1 as rank
+          from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+         where fc.court_id = ${courtId} and ${liveCallSql(tx)} and g.id <> ${f.id}
       ) b
       join divisions d on d.id = b.division_id
       join competitions c on c.id = d.competition_id
@@ -131,9 +191,17 @@ async function assertCallable(tx: Tx, f: CallTarget, courtId: string, courtNames
     });
   }
 
-  // The players, person by person: a doubles partner on another court is a person of THIS match even when the match they are
-  // in shares no entrant with it.
-  const people = await peopleByEntrant(tx, [f.home_entrant_id, f.away_entrant_id]);
+  await assertPeopleFree(tx, f, courtNames);
+  await assertEntrantsFree(tx, f, courtNames);
+}
+
+/** PLAYER_BUSY, person by person: a doubles partner on another court is a person of THIS match even when the match they are in
+ *  shares no entrant with it. Sees only rostered sides (`entrant_members`); `assertEntrantsFree` covers the rest. */
+async function assertPeopleFree(tx: Tx, f: CallTarget, courtNames: ReadonlyMap<string, string>): Promise<void> {
+  const people = await peopleByEntrant(
+    tx,
+    [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null),
+  );
   const mine = peopleOf(f, people);
   if (mine.length === 0) return;
   const theirs = await tx<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null; court_id: string | null }[]>`
@@ -148,7 +216,7 @@ async function assertCallable(tx: Tx, f: CallTarget, courtId: string, courtNames
     union all
     select g.id, g.home_entrant_id, g.away_entrant_id, fc.court_id, 1 as rank
       from fixture_calls fc join fixtures g on g.id = fc.fixture_id
-     where g.status = ${MOVABLE_STATUS} and g.court_id = fc.court_id and g.id <> ${f.id}
+     where ${liveCallSql(tx)} and g.id <> ${f.id}
        and (g.home_entrant_id in (select entrant_id from entrants_of_mine)
             or g.away_entrant_id in (select entrant_id from entrants_of_mine))
      order by rank, id`;
@@ -175,10 +243,44 @@ async function assertCallable(tx: Tx, f: CallTarget, courtId: string, courtNames
   });
 }
 
+/** PLAYER_BUSY, entrant by entrant: a side of this match that is itself in a match playing, or called, elsewhere. In ADDITION to
+ *  the person check, for the side that check cannot see: a roster is optional (a name-only team or player has no members), and
+ *  such a side is still one set of people who cannot be on two courts. Named by the entrant's own name. */
+async function assertEntrantsFree(tx: Tx, f: CallTarget, courtNames: ReadonlyMap<string, string>): Promise<void> {
+  const sides = [f.home_entrant_id, f.away_entrant_id].filter((e): e is string => e !== null);
+  if (sides.length === 0) return;
+  const [busy] = await tx<{ entrant_name: string; court_id: string | null }[]>`
+    select e.display_name as entrant_name, b.court_id
+      from (
+        select g.home_entrant_id, g.away_entrant_id, g.court_id, 0 as rank
+          from fixtures g
+         where g.status = ${IN_PLAY} and g.id <> ${f.id}
+           and (g.home_entrant_id in ${tx(sides)} or g.away_entrant_id in ${tx(sides)})
+        union all
+        select g.home_entrant_id, g.away_entrant_id, fc.court_id, 1 as rank
+          from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+         where ${liveCallSql(tx)} and g.id <> ${f.id}
+           and (g.home_entrant_id in ${tx(sides)} or g.away_entrant_id in ${tx(sides)})
+      ) b
+      join entrants e on e.id in (b.home_entrant_id, b.away_entrant_id) and e.id in ${tx(sides)}
+     order by b.rank, e.display_name, e.id
+     limit 1`;
+  if (!busy) return;
+  const busyCourtName = busy.court_id !== null ? (courtNames.get(busy.court_id) ?? null) : null;
+  refuse(CALL_REFUSAL.PLAYER_BUSY, `${busy.entrant_name} is on ${busyCourtName ?? "another court"}`, {
+    person_name: busy.entrant_name,
+    court_name: busyCourtName,
+  });
+}
+
 /**
  * Call a match onto a court, now. Writes the fixture's court, its venue (the court's, never the caller's) and `scheduled_at`
- * directly, and records the slot it held before, for Undo call. Calling a match that is already called moves it to the new
- * court and keeps the FIRST previous slot, so one Undo always takes it back to where it was before Match Day touched it.
+ * directly, and records the slot it held before, for Undo call. Calling a match whose call still holds moves it to the new
+ * court and keeps the FIRST previous slot, so one Undo always takes it back to where it was before Match Day touched it. A call
+ * that no longer holds (the board has moved the match since) is history: the slot recorded is the one the board left.
+ *
+ * Deliberately NOT refused on a frozen division (`schedule_locked`, moveFixture's 422 SCHEDULE_LOCKED): the freeze guards
+ * planning edits, and the day must still run (controller ruling R-m3, 2026-10-31).
  */
 export async function callFixtureToCourt(
   auth: AuthCtx,
@@ -192,6 +294,10 @@ export async function callFixtureToCourt(
     const courtNames = await courtNamesById(tx);
     await assertCallable(tx, f, court.id, courtNames);
 
+    const held = await readCall(tx, f.id);
+    const prev = held?.live
+      ? { court: held.prev_court_id, venue: held.prev_venue_id, at: held.prev_scheduled_at }
+      : { court: f.court_id, venue: f.venue_id, at: f.scheduled_at };
     await tx`
       update fixtures set court_id = ${court.id}, venue_id = ${court.venue_id}, scheduled_at = ${now}
        where id = ${f.id}`;
@@ -199,9 +305,12 @@ export async function callFixtureToCourt(
       insert into fixture_calls
         (fixture_id, org_id, court_id, called_at, called_by, prev_court_id, prev_venue_id, prev_scheduled_at)
       values
-        (${f.id}, ${auth.orgId}, ${court.id}, ${now}, ${auth.userId}, ${f.court_id}, ${f.venue_id}, ${f.scheduled_at})
+        (${f.id}, ${auth.orgId}, ${court.id}, ${now}, ${auth.userId}, ${prev.court}, ${prev.venue}, ${prev.at})
       on conflict (fixture_id) do update
-        set court_id = excluded.court_id, called_at = excluded.called_at, called_by = excluded.called_by`;
+        set court_id = excluded.court_id, called_at = excluded.called_at, called_by = excluded.called_by,
+            prev_court_id = excluded.prev_court_id, prev_venue_id = excluded.prev_venue_id,
+            prev_scheduled_at = excluded.prev_scheduled_at`;
+    await recordScheduleEdit(tx, f, { at: now, court: court.id, venue: court.venue_id });
     return { divisionId: f.division_id, competitionId: f.competition_id };
   });
   // The called match's court and time changed: drop its public cache keys and refresh open boards, as every schedule write does.
@@ -212,6 +321,8 @@ export async function callFixtureToCourt(
 /**
  * Undo call: the match goes back to the court, venue and time it had before it was called, nulls included (a match that had no
  * court has none again), and the call is gone. Refused once the match has started: a playing match stays where it is playing.
+ * Refused NOT_CALLED when the call no longer holds (the board has moved the match since): the board's edit is the match's place
+ * now, and Undo call must not write over it. Like the call, not refused on a frozen division.
  */
 export async function undoCall(
   auth: AuthCtx,
@@ -219,15 +330,16 @@ export async function undoCall(
 ): Promise<{ fixture_id: string; court_id: string | null; scheduled_at: string | null }> {
   const out = await withTenant(auth.orgId, async (tx) => {
     const f = await readFixture(tx, auth.orgId, fixtureId, true);
-    const [call] = await tx<{ prev_court_id: string | null; prev_venue_id: string | null; prev_scheduled_at: Date | null }[]>`
-      select prev_court_id, prev_venue_id, prev_scheduled_at from fixture_calls where fixture_id = ${f.id}`;
+    const call = await readCall(tx, f.id);
     if (!call) refuse(CALL_REFUSAL.NOT_CALLED, "this match is not called");
     assertUnstarted(f);
+    if (!call.live) refuse(CALL_REFUSAL.NOT_CALLED, "this match has been moved since it was called");
     await tx`
       update fixtures
          set court_id = ${call.prev_court_id}, venue_id = ${call.prev_venue_id}, scheduled_at = ${call.prev_scheduled_at}
        where id = ${f.id}`;
     await tx`delete from fixture_calls where fixture_id = ${f.id}`;
+    await recordScheduleEdit(tx, f, { at: call.prev_scheduled_at, court: call.prev_court_id, venue: call.prev_venue_id });
     return {
       divisionId: f.division_id,
       competitionId: f.competition_id,

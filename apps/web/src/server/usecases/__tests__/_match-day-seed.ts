@@ -63,30 +63,40 @@ export async function person(orgId: string, fullName: string): Promise<Person> {
 }
 
 /** A competition with one generic doubles division: one pair per roster, a round robin between them, the given schedule
- *  settings. `matchMinutes` and `minRest` are the division's own (`schedule_settings.config`). */
+ *  settings. `matchMinutes` and `minRest` are the division's own (`schedule_settings.config`). With `teams`, a FOOTBALL
+ *  division instead, of name-only teams with NO roster (members are optional): one per name, `rosters` ignored. */
 export async function seedCompetition(
   auth: AuthCtx,
   label: string,
   rosters: Person[][],
-  opts: { courts: string[]; matchMinutes?: number; minRest?: number },
+  opts: { courts: string[]; matchMinutes?: number; minRest?: number; teams?: string[] },
 ): Promise<Comp> {
   const name = `${label} ${randomUUID().slice(0, 6)}`;
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name, visibility: "public", branding: {} });
-  const division = await createDivision(auth, comp.id, {
-    name: "Doubles",
-    sport_key: "generic",
-    variant_key: "score",
-    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
-  });
+  const division = await createDivision(
+    auth,
+    comp.id,
+    opts.teams !== undefined
+      ? { name: "Teams", sport_key: "football", variant_key: "11-a-side", config: {} }
+      : {
+          name: "Doubles",
+          sport_key: "generic",
+          variant_key: "score",
+          config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        },
+  );
+  if (opts.teams !== undefined) rosters = opts.teams.map(() => []);
   await createEntrants(
     auth,
     division.id,
-    rosters.map((people, i) => ({
-      kind: "pair" as const,
-      display_name: people.map((p) => p.name.split(" ")[0]).join(" & "),
-      seed: i + 1,
-      members: people.map((p) => ({ person_id: p.id, is_captain: false, roles: [] })),
-    })),
+    opts.teams !== undefined
+      ? opts.teams.map((team, i) => ({ kind: "team" as const, display_name: team, seed: i + 1, members: [] }))
+      : rosters.map((people, i) => ({
+          kind: "pair" as const,
+          display_name: people.map((p) => p.name.split(" ")[0]).join(" & "),
+          seed: i + 1,
+          members: people.map((p) => ({ person_id: p.id, is_captain: false, roles: [] })),
+        })),
   );
   const entrants = await sql<{ id: string; display_name: string; seed: number }[]>`
     select id, display_name, seed from entrants where division_id = ${division.id} order by seed`;
@@ -210,4 +220,20 @@ export async function callRows(fixtureId: string): Promise<CallRow[]> {
     called_at: r.called_at.toISOString(),
     prev_scheduled_at: r.prev_scheduled_at === null ? null : r.prev_scheduled_at.toISOString(),
   }));
+}
+
+export interface ScheduleEdit {
+  seq: number;
+  from: { at: string | null; court: string | null; venue: string | null; locked: boolean };
+  to: { at: string | null; court: string | null; venue: string | null; locked: boolean };
+}
+
+/** The division's ledger: its `seq` watermark, and every `schedule_edited` naming the fixture, in order. */
+export async function ledgerOf(divisionId: string, fixtureId: string): Promise<{ seq: number; edits: ScheduleEdit[] }> {
+  const [d] = await sql<{ seq: string | number }[]>`select seq from divisions where id = ${divisionId}`;
+  const rows = await sql<{ seq: number; payload: { from: ScheduleEdit["from"]; to: ScheduleEdit["to"] } }[]>`
+    select seq, payload from division_events
+     where division_id = ${divisionId} and type = 'schedule_edited' and payload->>'fixture' = ${fixtureId}
+     order by seq`;
+  return { seq: Number(d!.seq), edits: rows.map((r) => ({ seq: Number(r.seq), from: r.payload.from, to: r.payload.to })) };
 }

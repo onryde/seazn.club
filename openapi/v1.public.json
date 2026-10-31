@@ -34575,7 +34575,7 @@
     },
     "/api/v1/fixtures/{id}/call": {
       "post": {
-        "summary": "Match Day: call the match onto a free court NOW. Writes only this match's court, venue (the court's) and time; every other match keeps its planned time, so a planned, not-started match on the court does not block the call. The slot it held before is kept for Undo call; calling a called match to another court moves it and keeps that first slot. 409 PLAYER_BUSY (`person_name`, `court_name`): a player of the match — a doubles partner counts — is in a match playing, or called, on another court. 409 COURT_BUSY (`court_name`, `competition_name`): the court has a match playing or called, from any competition of the organisation. 409 NOT_CALLABLE (`status`): the match is not unstarted (its status), or a side is still to be decided (`tbd_entrant`). 404 when the court is not the organisation's or is archived",
+        "summary": "Match Day: call the match onto a free court NOW. Writes only this match's court, venue (the court's) and time, recorded on the division's history like a board move (the division's seq moves on; its schedule freeze does not apply); every other match keeps its planned time, so a planned, not-started match on the court does not block the call. The slot it held before is kept for Undo call; calling a called match to another court moves it and keeps that first slot. 409 PLAYER_BUSY (`person_name`, `court_name`): a player of the match — a doubles partner counts — is in a match playing, or called, on another court; for a side with no roster, the side itself, named by `person_name`. 409 COURT_BUSY (`court_name`, `competition_name`): the court has a match playing or called, from any competition of the organisation. 409 NOT_CALLABLE (`status`): the match is not unstarted (its status), or a side is still to be decided (`tbd_entrant`). 404 when the court is not the organisation's or is archived",
         "tags": [
           "fixtures"
         ],
@@ -34862,7 +34862,7 @@
         ]
       },
       "delete": {
-        "summary": "Match Day: Undo call. The match goes back to the court, venue and time it had before it was called — none, when it had none. 409 NOT_CALLED when the match is not called; 409 NOT_CALLABLE (`status`) once it has started",
+        "summary": "Match Day: Undo call. The match goes back to the court, venue and time it had before it was called — none, when it had none. 409 NOT_CALLED when the match is not called, or the board has moved it since; 409 NOT_CALLABLE (`status`) once it has started",
         "tags": [
           "fixtures"
         ],
