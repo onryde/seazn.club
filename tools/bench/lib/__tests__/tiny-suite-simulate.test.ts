@@ -3760,13 +3760,13 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
   // ---------------------------------------------------------------------------
   it("refuses a stageRef-less stream in a multi-stage division, while a stageRef-carrying sibling in the SAME division still folds", async () => {
     const { transport, sql, calls } = fakeServer();
-    // `rr-r2-c1` is the middle of d-tiny's three league legs and the ONLY one
-    // whose events include a PERSON-ATTRIBUTED `generic.score` (the other two
-    // are `[core.start, generic.result]` / `[core.start, generic.score with
-    // no person, core.forfeit]` — W2b ruling 113 plays rr-r3-c1's point
-    // before its retirement) — a signature no other d-tiny stream shares, so
-    // its presence/absence on the wire is checked by EVENT SHAPE, not by a
-    // fragile total count.
+    // `rr-r2-c1` is the middle of d-tiny's three league legs. Its scores are
+    // told apart from rr-r3-c1's by FIXTURE, not by payload shape: the other
+    // two legs are `[core.start, generic.result]` / `[core.start,
+    // generic.score, core.forfeit]` (W2b ruling 113 plays rr-r3-c1's point
+    // before its retirement), and since bench run 41208936894 rr-r3-c1's
+    // point names Ana exactly as rr-r2-c1's do (see that stream's note in
+    // build-packs/_tiny.ts), so attribution no longer separates them.
     const packPath = await writeMutatedTinyPack((raw) => {
       const stream = raw.streams.find(
         (st) => st.divisionRef === "d-tiny" && st.fixtureExtKey === "rr-r2-c1",
@@ -3800,16 +3800,22 @@ describe("runPackSuite — B07a T7 play-mode dispatch", () => {
     // only reach the wire through the single-event route below, never
     // through an import call.
     const postedTypes = packEventPostCalls(calls).map((c) => (c.body as { type: string }).type);
-    // The refused direction: `rr-r2-c1`'s own attributed `generic.score`
-    // events (its only signature among d-tiny's OWN streams — `rr-r1-c1`/
-    // `se-r0-i0` carry no score, `rr-r3-c1`'s one point names no person)
-    // never reached the wire. A silent fold-in (the pre-Task-7 shape:
-    // "folded into the first stage anyway") would leak them here instead.
+    // The refused direction: none of `rr-r2-c1`'s own `generic.score` events
+    // reached the wire. `rr-r1-c1`/`se-r0-i0` carry no score, and rr-r3-c1 is
+    // the only d-tiny leg that ends in a `core.forfeit`, so every score that
+    // DID post must have gone to the fixture that forfeit went to. A silent
+    // fold-in (the pre-Task-7 shape: "folded into the first stage anyway")
+    // would post rr-r2-c1's scores to its own, different fixture.
     const scores = packEventPostCalls(calls).filter((c) => (c.body as { type: string }).type === "generic.score");
-    const attributed = scores.filter((c) => (c.body as { payload?: { person?: unknown } }).payload?.person !== undefined);
-    expect(attributed).toEqual([]);
+    const forfeitFixtures = new Set(
+      packEventPostCalls(calls)
+        .filter((c) => (c.body as { type: string }).type === "core.forfeit")
+        .map((c) => c.path),
+    );
+    expect(forfeitFixtures.size, "rr-r3-c1's forfeit posted to exactly one fixture").toBe(1);
+    expect(scores.filter((c) => !forfeitFixtures.has(c.path))).toEqual([]);
     // Its positive pair: the matcher sees a generic.score at all — rr-r3-c1's
-    // unattributed point did reach the wire (else the line above is vacuous).
+    // own point did reach the wire (else the line above is vacuous).
     expect(scores.length, "rr-r3-c1's own point posted").toBe(1);
     // The legitimate direction, same division, same run: d-tiny's OTHER two
     // league streams still carry an explicit `stageRef` and still fold

@@ -760,7 +760,9 @@ describe("D6 — a mis-transcribed scorer stays invisible to stage 0, but reds t
     expect(after.warnings.some((w) => w.code === "leaderboards.not_derived")).toBe(true);
 
     // The pack's OWN `expected.leaderboards` is UNCHANGED by the mutation —
-    // p-ana:2, p-bo:1 "scores", the real historical fact.
+    // p-ana:3, p-bo:1 "scores", the real historical fact (rr-r2-c1's three
+    // scoring events plus rr-r3-c1's one, which names Ana since bench run
+    // 41208936894; see that stream's note in build-packs/_tiny.ts).
     const board = after.pack.expected.leaderboards.find((l) => l.divisionRef === "d-tiny" && l.metricKey === "scores");
     if (board === undefined) throw new Error("test fixture assumption broken: no d-tiny/scores leaderboard");
     const expectedEntries: ExpectedLeaderboardEntry[] = board.entries.map((e) => ({
@@ -769,19 +771,20 @@ describe("D6 — a mis-transcribed scorer stays invisible to stage 0, but reds t
       count: e.count,
     }));
     expect(expectedEntries).toEqual([
-      { personId: "p-ana", name: "Ana Alvarez", count: 2 },
+      { personId: "p-ana", name: "Ana Alvarez", count: 3 },
       { personId: "p-bo", name: "Bo Baptiste", count: 1 },
     ]);
 
     // What the LIVE product would actually derive from the MUTATED stream —
-    // p-ana now credited with THREE scoring events, p-bo with zero. This
+    // p-ana now credited with FOUR scoring events (all three of rr-r2-c1's
+    // and rr-r3-c1's one), p-bo with zero. This
     // stands in for a real fetch against `divisionPlayerStats`; it is
     // constructed independently of `pack.expected`, never re-read from it a
     // second time, which is the whole point of D6.
     const liveDerivedActual: DivisionPlayerStatsWire = {
       metrics: [{ key: "scores", label: "Scores" }],
       rows: [
-        { person_id: "p-ana", full_name: "Ana Alvarez", stats: { scores: 3 } },
+        { person_id: "p-ana", full_name: "Ana Alvarez", stats: { scores: 4 } },
         { person_id: "p-bo", full_name: "Bo Baptiste", stats: { scores: 0 } },
       ],
       requires_detailed_scoring: false,

@@ -527,7 +527,8 @@
           "type": "generic.score",
           "payload": {
             "by": "@e-alpha",
-            "points": 1
+            "points": 1,
+            "person": "@p-ana"
           }
         },
         {
@@ -1472,7 +1473,7 @@
           {
             "person": "p-ana",
             "name": "Ana Alvarez",
-            "count": 2
+            "count": 3
           },
           {
             "person": "p-bo",
@@ -1488,7 +1489,7 @@
           {
             "person": "p-ana",
             "name": "Ana Alvarez",
-            "count": 2
+            "count": 3
           },
           {
             "person": "p-bo",
@@ -1535,13 +1536,13 @@
         "person": "p-ana",
         "name": "Ana Alvarez",
         "metricKey": "scores",
-        "count": 3
+        "count": 4
       },
       {
         "person": "p-ana",
         "name": "Ana Alvarez",
         "metricKey": "points",
-        "count": 3
+        "count": 4
       }
     ],
     "suspensions": [
