@@ -503,15 +503,15 @@ const CACHE_SITES: Record<string, { via: "cachedIfFound" | "unstable_cache"; fil
   "discovery-week": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
   "discovery-dir": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
   "discovery-sports": { via: "unstable_cache", file: "server/public-site/discovery.ts", why: "a list; empty is a real state" },
-  "overlay-fold-v4": {
+  "overlay-fold-v5": {
     via: "unstable_cache",
     file: "server/overlay/load.ts",
     why: "folded after the fixture is found, keyed on its last_seq; a null fold = no events yet",
   },
-  "overlay-fold-relay-v4": {
+  "overlay-fold-relay-v5": {
     via: "unstable_cache",
     file: "server/overlay/load.ts",
-    why: "R2005: the relay door's own fold namespace, behind relayPageAccess; the same never-null fold as overlay-fold-v4",
+    why: "R2005: the relay door's own fold namespace, behind relayPageAccess; the same never-null fold as overlay-fold-v5",
   },
 };
 

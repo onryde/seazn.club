@@ -36,7 +36,8 @@ import {
   type SquadState,
 } from "@seazn/engine/core";
 import { admittedLevelWithdrawal } from "@/lib/level-withdrawal";
-import type { AnySportModule } from "@seazn/engine/sport";
+import { breakSizeOf, type AnySportModule } from "@seazn/engine/sport";
+import type { BreakOpened } from "@/lib/sponsor-plan";
 import { activeInnings, deriveCricketScorecard } from "@seazn/engine/sports/cricket";
 import {
   highlightsFromScorecard,
@@ -408,16 +409,22 @@ function batterFigures(
 export interface DerivedReplay {
   bySeq: Map<number, RecentDerived>;
   /** False when the module refused the ledger part-way: annotations beyond that
-   *  point are ABSENT, not proven not to exist.
-   *
-   *  PRODUCTION REPORTS IT THROUGH THE `log.warn` BELOW, not through this
-   *  field: `load.ts` destructures `{ bySeq }` and nothing reads `complete` off
-   *  a live request. It is here for the TESTS, which assert the refusal is
-   *  detected at all — an empty catch would make a fixture that loses every
-   *  set-won annotation indistinguishable from one that had none to lose, and
-   *  a warn line is not something a unit test can hold on to. Stated plainly
-   *  rather than left reading as a production signal it is not. */
+   *  point are ABSENT, not proven not to exist. Reported through the `log.warn`
+   *  below as well; the overlay's moments read `bySeq` alone. */
   complete: boolean;
+  /**
+   * R4 sponsors on stream (spec 2026-10-27 §3.1, §3.2): every natural break the WHOLE fixture's surviving events opened,
+   * ascending seq, each sized by the sport's own declaration (`breakSizeOf`). The sponsor planner's `breaks` input: the
+   * Normal dial counts every minor of the fixture (plan P2), so this is not limited to the `recent` window. Empty for a
+   * sport that declares none (boardgame, carrom, generic).
+   */
+  breaks: BreakOpened[];
+  /**
+   * True only when `breaks` is the WHOLE fixture's: the replay ran to the end AND every `opensAt` answered. A break
+   * missing from an incomplete list is unproven, not undone, so the sponsor writer deletes nothing on it (ruling R3).
+   * An `opensAt` that throws costs the breaks only — never the set-won and point-state annotations above.
+   */
+  breaksComplete: boolean;
 }
 
 export function replayDerived(args: {
@@ -434,9 +441,13 @@ export function replayDerived(args: {
   // separately, which could disagree with what was folded.
   const sides: readonly [string, string] = [lineups.home.entrantId, lineups.away.entrantId];
   const bySeq = new Map<number, RecentDerived>();
+  const breaks: BreakOpened[] = [];
   const active = resolveVoids(args.active);
   const inWindow = new Set(recentWindow(active, args.window).map((e) => e.seq));
-  if (inWindow.size === 0) return { bySeq, complete: true };
+  // No module event survives, so none was applied and none opened a break (`opensAt` is asked of applied events only).
+  if (inWindow.size === 0) return { bySeq, complete: true, breaks, breaksComplete: true };
+  const natural = module.naturalBreaks;
+  let breaksFailed = false;
   // The probe is the expensive half (one `apply` per side per event), and it is
   // only needed inside the window — plus ONE event before it, so the window's
   // first entry knows whether its point state is a transition or a continuation.
@@ -484,7 +495,23 @@ export function replayDerived(args: {
         }
         continue;
       }
+      const before = state;
       state = module.apply(state as never, event as never, { strict: false, squads });
+      if (natural !== undefined && !breaksFailed) {
+        // The REAL envelope and the states either side of `apply` (cricket reads `ev.type`). Isolated: a throw here (an
+        // engine bug, or a kind the sport never declared — `breakSizeOf` refuses it) stops the BREAKS, not the replay.
+        try {
+          for (const kind of natural.opensAt(event as never, before as never, state as never)) {
+            breaks.push({ seq: event.seq, at: event.recordedAt, kind, size: breakSizeOf(natural as never, kind) });
+          }
+        } catch (err) {
+          breaksFailed = true;
+          log.warn(
+            { sportKey, seq: event.seq, err: err instanceof Error ? err.message : String(err) },
+            "overlay: natural breaks stopped; sponsor breaks beyond this seq are absent",
+          );
+        }
+      }
       const summary = summarise();
 
       const point =
@@ -515,7 +542,7 @@ export function replayDerived(args: {
       "overlay: derived replay stopped; set-won and point-state beyond this seq are absent",
     );
   }
-  return { bySeq, complete };
+  return { bySeq, complete, breaks, breaksComplete: complete && !breaksFailed };
 }
 
 /**

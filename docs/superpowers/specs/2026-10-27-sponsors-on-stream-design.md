@@ -98,10 +98,14 @@ naturalBreaks?: {
   get sponsors through the scene carousel, §3.4).
 - Starting kinds for the builder to **verify against each sport's own events and laws** (they are a hypothesis, not a
   table to copy into code or tests): cricket `over_end` (minor), `innings_break` (major) · football `half_time`,
-  `period_end` (major), `after_goal` (minor) · hockey `quarter_end` / `half_time` (major), `after_goal` (minor) · ice
-  hockey `period_end` (major), `after_goal` (minor) · tennis `changeover` (minor), `set_end` (major) · badminton
-  `interval` (minor), `game_end` (major) · table tennis `timeout` (minor), `game_end` (major) · volleyball `timeout`
-  (minor), `set_end` (major).
+  `period_end`, `shootout_break` (major), `after_goal` (minor) · hockey `quarter_end` / `half_time` /
+  `shootout_break` (major), `after_goal` (minor) · ice hockey `period_end`, `shootout_break` (major), `after_goal`
+  (minor) · tennis `changeover` (minor), `set_end` (major) · badminton `interval` (minor), `game_end` (major) · table
+  tennis `timeout` (minor), `game_end` (major) · volleyball `timeout` (minor), `set_end` (major).
+- *As built (engine 1.1.0, verified by S5 against `builtinModules`):* the list above is exactly what the eight modules
+  declare (21 sport/kind pairs). `shootout_break` is ONE kind shared by football, hockey and ice hockey — the pause
+  before a shoot-out, a major (PO ruling, S1/S2). S5's replay sweep over generated streams reached 17 of the 21 pairs;
+  hockey's shoot-out break is pinned by a real FIH shoot-out ledger instead.
 - Lives in each sport's own file (no value import from `competition/`; gate `engine:boundary`).
 - Tests: a sweep over `builtinModules` asserts every declared kind is reachable by a real event sequence and reports
   its counts (modules with breaks, kinds reached; 0 = fail); `opensAt` returns `[]` on an undo-restored state; a
