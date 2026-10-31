@@ -26,7 +26,7 @@
 - **Mutate every new guard once.** Do it by hand, one guard at a time: delete it, or revert it to today's line. Confirm a named test reds, then restore. Record each as `mutation: <guard> → <test name> red` in the task's commit body. Two guards that cover for each other are mutated separately.
 - **Sequence tests, every task:** a **second call**, an **empty input**, **after a withdrawal or void**, and **another sport** (use `forEachSport` from `src/testkit/for-each-sport.ts`). A single-sport test carries a one-line `// single-sport: <reason>`, or `pnpm single-sport --check --against origin/main` reds.
 - **Rule rows** (`rules/README.md` grammar). Header `| id | rule | citation | status | enforced at | proved by |`. Every path is written `packages/engine/...` (`ENGINE_ROW_PREFIX`, `test/rules-reference.ts:55`), even in this repo. Status is `signed <ruling> 2026-10-31` or `deviation <ruling> 2026-10-31`. The id is a whole token in an `it(`/`describe(` title of every listed proof file. A row lands in the SAME commit as the code that makes it true, never ahead of it. Cross-sport Swiss ids are `X-SW-<n>`. **Never put `-KO-` in an id.** Re-check that an id is unused (`grep -a "<id> " rules/*.md`) before writing it. Verify with the engine checker: `npx vitest run ... test/rules-reference.test.ts`.
-- **Allocated ids (Engine PR):** X-SW-1 … X-SW-9 in `rules/cross-sport.md`. Sport chain rows: BD-TB-2, TT-TB-2, VB-TB-3, TN-TB-3, FB-TB-5, HK-TB-3, IH-TB-3, CK-TB-2, CA-TB-2, GN-TB-2, BG-TB-4 (verified unused at c612f51).
+- **Allocated ids (Engine PR):** X-SW-1 … X-SW-11 in `rules/cross-sport.md`. Sport chain rows: BD-TB-2, TT-TB-2, VB-TB-3, TN-TB-3, FB-TB-5, HK-TB-3, IH-TB-3, CK-TB-2, CA-TB-2, GN-TB-2, BG-TB-4 (verified unused at c612f51).
 - **Ruling numbers:** 250 (late entry), 251 (byes and missed rounds, `byeScore`), 252 (rulebook signed per rec: RB3-1, -4, -6, -8, -11). Do not invent a ruling. A rule with no ruling is a finding for the orchestrator, not a row.
 - **Live divisions:** stage pins (`X-TB-2`, `pinStageTableRules`) keep the nine live badminton Swiss divisions on their pinned chain and rule. Rounds already paired keep their pairings. Nothing in this PR re-pairs a past round.
 - **Changeset: `major`.** The `pairRound` return type and `SwissGame`/`buildSwissTable` change the API, and boardgame's FOLD_EPOCH rises (Task 6). One changeset file per PR: `.changeset/w3-swiss-engine.md`.
@@ -61,6 +61,19 @@ export function pairRound(
   standings: readonly SwissStanding[], history: SwissHistory,
   constraints?: SwissConstraints, budget?: number,   // budget defaults to SWISS_SEARCH_BUDGET
 ): SwissPairResult;
+export interface SwissConstraints {
+  chess?: boolean;
+  pairing?: "fold" | "rank_adjacent";
+  /** Task 4b (RB3-4, X-SW-10): pairRound PREFERS a legal pairing after which the next round is still pairable. The app
+   *  sets it when the stage's rounds exceed the safe maximum ⌊n/2⌋ and this is not the last round. */
+  lookAhead?: boolean;
+  /** Task 4c (RB3-10, X-SW-11): only when pairing the stage's LAST round, the most points an entrant could hold before
+   *  it ((rounds − 1) × win, in the standings' score units). An entrant whose score is over half of it is a topscorer
+   *  (FIDE C.04.3 A.6). */
+  finalRoundMaxScore?: number;
+}
+// SwissRound gains `nextRound?: "pairable" | "unpairable" | "unknown"`, present iff `lookAhead` was set. The app warns
+// on anything but "pairable". It is never a refusal.
 // SwissConstraints loses `byeScore` (Task 6). `history.colours` is now read for NON-chess too, as home = "W" /
 // away = "B" (soft alternation, Task 4). The app's swissGen already sends it for every sport.
 // A refusal writes nothing: no bye, no pairing. Never seat anything from a refusal.
@@ -99,7 +112,7 @@ Other consumer-visible changes, none of which needs a call-site change:
 
 | Task | Moves a golden corpus? | FOLD_EPOCH | FOLD_MINOR | Why |
 |---|---|---|---|---|
-| 1–4 pairing | no: scheduling is not folded | — | — | `pairRound` is not in any corpus |
+| 1–4c pairing | no: scheduling is not folded | — | — | `pairRound` is not in any corpus |
 | 5 bye payout | no: `payout` is the competition layer. No golden stream records a bye or calls `payout` (`grep -an "payout\|\"bye\"" src/testkit/golden*.ts` is empty) | — | — | module `standingsDelta` is unchanged |
 | 6 `byeScore` removed | **yes**: 181 recorded boardgame states embed `\"byeScore\":2` | **boardgame 4 → 5** | boardgame stays 0 | precedent: W2e T12 deleted generic's inert `progressScore` the same way and took a MAJOR (`fold-epoch.ts:48`). A config change re-records the stream (GOLDEN-POLICY "Owes": major) |
 | 7–10 tie-breaks, defaults | no: rank-time only | — | — | |
@@ -356,6 +369,125 @@ it("X-SW-4 soft: three homes running is still paired outside chess (no hard limi
   - proved by: `packages/engine/src/scheduling/swiss-w3.test.ts`
 
   Commit `feat(swiss): soft home/away alternation outside chess (SW-L5, X-SW-4)`.
+
+---
+
+### Task 4b: One-round look-ahead above the safe maximum (RB3-4 prevention; X-SW-10)
+
+**Choice: `pairRound` prefers; there is no separate predicate.** The look-ahead runs inside the same search and costs one existence check per candidate pairing (rulebook §3.3). It reports its verdict on the result so the app can warn.
+
+**Files:**
+- Modify: `src/scheduling/swiss.ts` (`SwissConstraints.lookAhead`, `SwissRound.nextRound`, a leaf check in the pairing search)
+- Test: `src/scheduling/swiss-w3.test.ts` (`describe("X-SW-10 …")`)
+- Modify: `rules/cross-sport.md` (append X-SW-10)
+
+**Interfaces:**
+- Consumes: Tasks 1–2 (search, budget, bye retry).
+- Produces:
+  - `SwissConstraints.lookAhead?: boolean`;
+  - `SwissRound.nextRound?: "pairable" | "unpairable" | "unknown"`, present iff `lookAhead` is set.
+- Rule:
+  - "Next round pairable" means the same field, with `played` plus this round's boards, and `byes` plus this round's bye. For chess, the colours include this round's assignment.
+  - The test is existence only: for an odd field, some eligible entrant whose removal leaves a perfect matching under P-A1/P-A5.
+  - With `lookAhead`, every complete candidate the search reaches (score-group pass, then fallback, in today's preference order) is accepted only if the next round is pairable.
+  - If none is, return the FIRST legal candidate with `nextRound: "unpairable"`. It is a soft preference and never a refusal.
+  - If the budget runs out first, return the first legal candidate with `"unknown"`.
+  - Without `lookAhead`, nothing changes and `nextRound` is absent.
+
+- [ ] **Step 1: Write the failing tests.** Example S6 was found by brute force over 6 entrants. Rounds 1–2 played a 6-cycle: R1 {p0-p1, p2-p3, p4-p5}, R2 {p0-p5, p1-p2, p3-p4}. All scores are 0.
+  - For round 3, today's fold picks the three "diameters" p0-p3, p1-p4, p2-p5.
+  - The unplayed remainder is then two triangles {p0,p2,p4} and {p1,p3,p5}, so round 4 has no perfect matching. That is the rulebook §3.1 audit case: 6 entrants and 5 rounds dead-end.
+  - {p0-p2, p1-p4, p3-p5} keeps round 4 pairable.
+
+```ts
+const S6 = { played: new Set([["p0","p1"],["p2","p3"],["p4","p5"],["p0","p5"],["p1","p2"],["p3","p4"]].map(([a, b]) => pairKey(a, b))) };
+it("X-SW-10 empty case first: without lookAhead the result carries no nextRound", () => {
+  expect("nextRound" in (pairRound(st(["p0","p1","p2","p3","p4","p5"]), S6) as object)).toBe(false);
+});
+it("X-SW-10 above the safe maximum, round 3 of 6 entrants is paired so that round 4 still pairs (rulebook §3.3 prevention)", () => {
+  const r = pairRound(st(["p0","p1","p2","p3","p4","p5"]), S6, { lookAhead: true });
+  expect(r.ok && r.nextRound).toBe("pairable");
+  const after = new Set([...S6.played, ...(r.ok ? r.pairings.map((p) => pairKey(p.home, p.away)) : [])]);
+  expect(perfectMatchingExists(["p0","p1","p2","p3","p4","p5"], after)).toBe(true); // the test's own oracle; differential: today's choice leaves none
+});
+it("X-SW-10 when no pairing keeps the next round alive it still pairs, and says so: 4 entrants, round 3 → nextRound 'unpairable'", () => {
+  // R1 {a-b, c-d}, R2 {a-c, b-d}: round 3 is forced {a-d, b-c}; a round 4 cannot exist (even hard maximum n−1 = 3)
+  const r = pairRound(st(["a","b","c","d"]), { played: new Set([pairKey("a","b"), pairKey("c","d"), pairKey("a","c"), pairKey("b","d")]) }, { lookAhead: true });
+  expect(r).toMatchObject({ ok: true, nextRound: "unpairable" });
+});
+it("X-SW-10 odd field: the next round's bye eligibility counts this round's bye (5 entrants, counted over seeds)", …);
+it("X-SW-10 second call is identical; chess on reads this round's colours into the next-round check", …);
+it("X-SW-10 an exhausted budget during the look-ahead returns the first legal pairing with nextRound 'unknown'", …);
+```
+  - Move `perfectMatchingExists` from `swiss.test.ts` into a small test helper both files import: `src/scheduling/swiss-oracle.test-helper.ts`.
+  - Also extend Task 3's simulate-based invariant with `lookAhead: true` for n 6–12 over 5 rounds. Count `rounds > 0`, and count `nextRound === "pairable"` cases > 0.
+- [ ] **Step 2: Run, expect FAIL** (`src/scheduling/swiss-w3.test.ts`). **Step 3: Implement** as specified.
+- [ ] **Step 4: Run, expect PASS:** `src/scheduling/swiss-w3.test.ts src/scheduling/swiss.test.ts src/testkit/simulation.test.ts`, plus tsc and eslint.
+- [ ] **Step 5: Mutate** one at a time:
+  - (a) Delete the leaf check → the S6 test reds (the diameters come back).
+  - (b) Hard-code `nextRound: "pairable"` → the 4-entrant test reds.
+  - (c) Drop this round's bye from the next-round eligibility → the odd-field test reds.
+- [ ] **Step 6: Write row X-SW-10:**
+  - rule: "When a Swiss stage plays more rounds than the safe maximum ⌊n/2⌋, each round but the last is paired, where a choice exists, so that the next round can still be paired legally; when no choice can, the round is still paired and the organiser is told the next one may not pair."
+  - citation: "product rule, rulebook §3.3 and RB3-4 (not a FIDE criterion)"
+  - status: `signed 252 2026-10-31`
+  - enforced at: `packages/engine/src/scheduling/swiss.ts` (the app's warning is added at close-out)
+  - proved by: `packages/engine/src/scheduling/swiss-w3.test.ts`
+- [ ] **Step 7: Commit** `feat(swiss): one-round look-ahead above the safe maximum (RB3-4, X-SW-10)`.
+
+---
+
+### Task 4c: Topscorer colour exception in the final round (RB3-10; FIDE C.04.3 A.6 and [C3]; X-SW-11)
+
+**Files:**
+- Modify: `src/scheduling/swiss.ts:82-88` (`canTake`), `:181-186` (`colourLegal`), `:299-331` (`assignColours`)
+- Test: `src/scheduling/swiss-w3.test.ts` (`describe("X-SW-11 …")`)
+- Modify: `rules/cross-sport.md` (append X-SW-11)
+
+**Interfaces:**
+- Consumes: `SwissConstraints.finalRoundMaxScore?: number`. The app sets it only when pairing the stage's last round, as (rounds − 1) × the win in its pairing score units.
+- Rule (A3):
+  - A topscorer is an entrant whose score is **over** 50% of `finalRoundMaxScore` (A.6).
+  - The hard colour limits (|W−B| ≤ 2, never three in a row; [C3] "non-topscorers with the same absolute colour preference shall not meet") bind only a board where BOTH sides are non-topscorers. A board with a topscorer is colour-legal whatever the history.
+  - Assignment on an exempt board: if exactly one assignment keeps the non-topscorer within its limits, use it. Otherwise use today's preference order (`preferredColour`, the larger imbalance, the upper board).
+  - When `finalRoundMaxScore` is absent, nothing changes. A value that is not finite or is ≤ 0 throws `CONFIG_INVALID`.
+
+- [ ] **Step 1: Write the failing tests** (chess on; a and b each played White twice running, so both have an absolute preference for Black):
+
+```ts
+const ww = new Map([["a", ["W","W"] as Colour[]], ["b", ["W","W"] as Colour[]]]);
+const at = (sa: number, sb: number) => [{ entrantId: "a", score: sa, rank: 1 }, { entrantId: "b", score: sb, rank: 2 }];
+it("X-SW-11 empty case first: no finalRoundMaxScore → the colour limits bind as before (refused 'colour')", () => {
+  expect(pairRound(at(3, 3), { played: new Set(), colours: ww }, { chess: true })).toMatchObject({ ok: false, reason: "colour" });
+});
+it("X-SW-11 two topscorers (3 > ½·4) may meet in the final round despite the same absolute preference (C.04.3 [C3])", () => {
+  expect(pairRound(at(3, 3), { played: new Set(), colours: ww }, { chess: true, finalRoundMaxScore: 4 })).toMatchObject({ ok: true }); // differential: today refused
+});
+it("X-SW-11 two non-topscorers (1, 1) stay refused in the final round", () => {
+  expect(pairRound(at(1, 1), { played: new Set(), colours: ww }, { chess: true, finalRoundMaxScore: 4 })).toMatchObject({ ok: false, reason: "colour" });
+});
+it("X-SW-11 exactly half is not a topscorer (A.6 'over 50%'): 2 and 2 of 4 are refused", …);
+it("X-SW-11 a topscorer v a non-topscorer: the non-topscorer keeps its limit (b, score 1, gets Black; a takes a third White)", () => {
+  const r = pairRound(at(3, 1), { played: new Set(), colours: ww }, { chess: true, finalRoundMaxScore: 4 });
+  expect(r.ok && r.pairings).toEqual([{ home: "a", away: "b" }]);
+});
+it("X-SW-11 non-chess is unaffected (no hard colour limit to relax); a second call is identical", …);
+it("X-SW-11 a non-finite or non-positive finalRoundMaxScore is CONFIG_INVALID", …);
+```
+  - Extend Task 3's chess existence oracle with a final-round variant: random `finalRoundMaxScore`, and colour-compatibility exempting any pair that has a topscorer. Count its cases > 0.
+- [ ] **Step 2: Run, expect FAIL.** **Step 3: Implement.** **Step 4: Run, expect PASS:** `src/scheduling/swiss-w3.test.ts src/scheduling/swiss.test.ts`, plus tsc and eslint.
+- [ ] **Step 5: Mutate** one at a time:
+  - (a) Remove the exemption → the two-topscorers test reds.
+  - (b) Exempt every final-round board → the non-topscorers test reds.
+  - (c) `>` → `>=` → the exactly-half test reds.
+  - (d) Drop the "keep the non-topscorer's limit" assignment → the mixed test reds.
+- [ ] **Step 6: Write row X-SW-11:**
+  - rule: "With chess colours on, in the final round of a Swiss stage a board with a topscorer (over half the maximum possible score before that round) is exempt from the colour limits; two non-topscorers with the same absolute colour preference still never meet, and on an exempt board the non-topscorer keeps its limit where it can."
+  - citation: "FIDE C.04.3 (1 Feb 2026) A.6, [C3]; rulebook RB3-10"
+  - status: `signed 252 2026-10-31`
+  - enforced at: `packages/engine/src/scheduling/swiss.ts`
+  - proved by: `packages/engine/src/scheduling/swiss-w3.test.ts`
+- [ ] **Step 7: Commit** `feat(swiss): topscorer colour exception in the final round (RB3-10, X-SW-11)`.
 
 ---
 
@@ -727,7 +859,7 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
   - `pnpm schema:snapshot && git status --porcelain -- ':(glob)src/sports/**/*.schema.json'` (empty)
   - `pnpm mutation:floor --check-file-against origin/main`
   - `pnpm exec eslint --max-warnings 0 $(git diff --name-only origin/main -- '*.ts')`
-  - Every test file touched in Tasks 1–10, in ONE JSON-reported run, plus `test/rules-reference.test.ts`.
+  - Every test file touched in Tasks 1–10 (4b and 4c included), in ONE JSON-reported run, plus `test/rules-reference.test.ts`.
 
   Paste the raw counts into the PR body. A stryker sizing drift is the known red (`AGENTS.md` "Known red"). Record it, and name the follow-up re-measure PR (the #1054 / engine #5 pattern). Do not run Stryker.
 - [ ] **Step 2: Live-division check** (design §7; the orchestrator runs it).
@@ -750,7 +882,7 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
   - Step 2's line;
   - Step 3's list;
   - a link to the paired app PR once open;
-  - exactly this line: `Matrix rows: swiss, swiss_playoff, swiss_knockout × football, cricket, boardgame, carrom, generic, volleyball, badminton, tabletennis, tennis, icehockey, hockey (33 cells) — pairing refusal and legality, art. 16 tie-breaks, bye = win points, Swiss default chains; rule rows X-SW-1..9, BD-TB-2, TT-TB-2, VB-TB-3, TN-TB-3, FB-TB-5, HK-TB-3, IH-TB-3, CK-TB-2, CA-TB-2, GN-TB-2, BG-TB-4`
+  - exactly this line: `Matrix rows: swiss, swiss_playoff, swiss_knockout × football, cricket, boardgame, carrom, generic, volleyball, badminton, tabletennis, tennis, icehockey, hockey (33 cells) — pairing refusal and legality, art. 16 tie-breaks, bye = win points, Swiss default chains; rule rows X-SW-1..11, BD-TB-2, TT-TB-2, VB-TB-3, TN-TB-3, FB-TB-5, HK-TB-3, IH-TB-3, CK-TB-2, CA-TB-2, GN-TB-2, BG-TB-4`
   - the attribution: `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
 
   Hand back after the push. The orchestrator watches CI.
@@ -770,33 +902,33 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
 
 | Suggested id | Rule (§12) | Status |
 |---|---|---|
-| X-SW-10 | Late entry after pairing: cases (a) re-pair if nothing in the round started, keeping every slot's time and court; (b) play the bye holder; (c) next round | `deviation 250 2026-10-31` (FIDE C.04.2 4.4) |
-| X-SW-11 | Automatic arrivals after Start always take case (c) | signed 250 |
-| X-SW-12 | No round left: "Add a round" while running; "This Swiss is over" after | signed 250 |
-| X-SW-13 | Unplayed pairs (double walkover) may meet again; a walkover winner stays bye-ineligible | signed 252 (RB3-2, RB3-14) |
-| X-SW-14 | Round count guidance; warn above ⌊n/2⌋; refuse above n−1 (even) / n (odd) | signed 252 (RB3-3) |
-| X-SW-15 | Rounds per stage, editable until the first fixture starts; then only Finish / Add a round | signed 252 (RB3-5, #838) |
-| X-SW-16 | Requested ½/0 byes deferred (⛔ with guidance) | signed 252 (RB3-7(c)) |
-| X-SW-17 | Pairing score groups use the stage's table points | signed 252 (RB3-9) |
+| X-SW-12 | Late entry after pairing: cases (a) re-pair if nothing in the round started, keeping every slot's time and court; (b) play the bye holder; (c) next round | `deviation 250 2026-10-31` (FIDE C.04.2 4.4) |
+| X-SW-13 | Automatic arrivals after Start always take case (c) | signed 250 |
+| X-SW-14 | No round left: "Add a round" while running; "This Swiss is over" after | signed 250 |
+| X-SW-15 | Unplayed pairs (double walkover) may meet again; a walkover winner stays bye-ineligible | signed 252 (RB3-2, RB3-14) |
+| X-SW-16 | Round count guidance; warn above ⌊n/2⌋; refuse above n−1 (even) / n (odd) | signed 252 (RB3-3) |
+| X-SW-17 | Rounds per stage, editable until the first fixture starts; then only Finish / Add a round | signed 252 (RB3-5, #838) |
+| X-SW-18 | Requested ½/0 byes deferred (⛔ with guidance) | signed 252 (RB3-7(c)) |
+| X-SW-19 | Pairing score groups use the stage's table points | signed 252 (RB3-9) |
 | BG-SW-1 (`rules/boardgame.md`) | Chess colours on by default for boardgame Swiss; round-1 colour by lot | signed 252 (RB3-10) |
-| X-SW-18 | Rank-adjacent from round 2 in swiss_playoff / swiss_knockout | `deviation 252` (RB3-12) |
-| X-SW-19 | "Add match" refused on a Swiss stage | signed 252 (RB3-15 A) |
-| X-SW-20 | Seeded random draw for an unseeded round 1 | signed 252 (RB3-16) |
-| X-SW-21 | Disqualification = withdrawal from that moment; annulment separate | signed 252 (RB3-17) |
-| X-SW-22 | Cut-line ties: flag-and-pick / visible lots, no play-off game | signed 252 (RB3-18) |
-| X-SW-23 | Correction after the bracket started: bracket stands, desk warns | signed 252 (RB3-19) |
-| X-SW-24 | "Finish the Swiss now" | signed 252 (RB3-20) |
-| X-SW-25 | Correction after the next round is paired: published pairing stands, standings recompute | signed 252 (RB3-21) |
-| X-SW-26 | Undo of Pair next clears seats if no result, else a named refusal; Add late player has no Undo | signed 252 (RB3-22; design §10.8) |
-| X-SW-27 | A bye shell is never on a court and never printed | signed 252 (RB3-23) |
-| X-SW-28 | Manual board swap in rounds ≥ 2 blocked with guidance | signed 252 (RB3-25) |
+| X-SW-20 | Rank-adjacent from round 2 in swiss_playoff / swiss_knockout | `deviation 252` (RB3-12) |
+| X-SW-21 | "Add match" refused on a Swiss stage | signed 252 (RB3-15 A) |
+| X-SW-22 | Seeded random draw for an unseeded round 1 | signed 252 (RB3-16) |
+| X-SW-23 | Disqualification = withdrawal from that moment; annulment separate | signed 252 (RB3-17) |
+| X-SW-24 | Cut-line ties: flag-and-pick / visible lots, no play-off game | signed 252 (RB3-18) |
+| X-SW-25 | Correction after the bracket started: bracket stands, desk warns | signed 252 (RB3-19) |
+| X-SW-26 | "Finish the Swiss now" | signed 252 (RB3-20) |
+| X-SW-27 | Correction after the next round is paired: published pairing stands, standings recompute | signed 252 (RB3-21) |
+| X-SW-28 | Undo of Pair next clears seats if no result, else a named refusal; Add late player has no Undo | signed 252 (RB3-22; design §10.8) |
+| X-SW-29 | A bye shell is never on a court and never printed | signed 252 (RB3-23) |
+| X-SW-30 | Manual board swap in rounds ≥ 2 blocked with guidance | signed 252 (RB3-25) |
 | X-RB-1 (re-check unused) | Rebuild keeps every fixture's time and court and deletes and regenerates in one transaction (any format) | design G3 (#840): cite the ruling the app PR records; if none exists, raise it, do not write the row |
 
-- [ ] **Step 2: Amend the engine rows** X-SW-3 (the desk refusal and its recovery) and X-SW-8 (`swissGen`'s implicit-bye fix to 0) by appending the app's enforced-at and proved-by paths.
+- [ ] **Step 2: Amend the engine rows** X-SW-3 (the desk refusal and its recovery), X-SW-10 (the desk warning on `nextRound`) and X-SW-8 (`swissGen`'s implicit-bye fix to 0) by appending the app's enforced-at and proved-by paths.
 - [ ] **Step 3: Verify.**
   - Engine side: `npx vitest run ... test/rules-reference.test.ts` (engine paths; it skips app paths).
   - App side: the app's `scripts/__tests__/rules-reference.test.ts` checks the app paths. It runs only once the app is bumped to a release containing these rows, so note in the PR body that a follow-up app bump PR owes that run green.
-- [ ] **Step 4: Changeset and PR.** `pnpm changeset --empty`. Commit `docs(rules): W3 close-out rows (X-SW-10..28, BG-SW-1, X-RB-1)`. The PR body has `Matrix rows: none — rule rows only; code landed in seazn.club #<app PRs>` and the attribution line. Hand back.
+- [ ] **Step 4: Changeset and PR.** `pnpm changeset --empty`. Commit `docs(rules): W3 close-out rows (X-SW-12..30, BG-SW-1, X-RB-1)`. The PR body has `Matrix rows: none — rule rows only; code landed in seazn.club #<app PRs>` and the attribution line. Hand back.
 
 ---
 
@@ -812,7 +944,7 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
   - SW-M6 → T5.
   - SW-M8 → T6.
   - Rows → in each task.
-  - §4's missed rounds → T7. §7 live check → T11. §12 Engine PR lines → X-SW-1..9 + sport rows. §12 Close-out lines → T12.
-  - Not planned, flagged instead: RB3-4's one-round look-ahead above the safe maximum, and RB3-10's topscorer exception (A3 [C3]). Neither is assigned in spec §6 or §12.
+  - §4's missed rounds → T7. §7 live check → T11. §12 Engine PR lines → X-SW-1..11 + sport rows. §12 Close-out lines → T12.
+  - RB3-4's one-round look-ahead → T4b (X-SW-10). RB3-10's topscorer exception → T4c (X-SW-11). Spec §6/§12 assigned neither; the orchestrator placed both in the engine PR on 2026-10-31.
 - **Types.** `SwissPairResult`, `SwissRefusal` and `UnplayedRound` are consistent T1→T3 and T7→T8. `swissDrawPoints` is defined in T7 and used in T7–T8. `unplayedSidesOf` is defined in T8. `opp_diff` is defined in T9 and used in T10.
 - **Seams.** Two new inputs (`TableFixture.unplayed`, `TableStage.swissAbsentRounds`) have no producer until the app plan fills them. Until then art. 16 forfeits and absences are inert in production: the inert-seam class. The app plan must drive them through `loadStageInputs` → `completeTableStage`. This PR's tests drive the engine consumer only.
