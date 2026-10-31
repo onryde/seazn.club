@@ -40,7 +40,7 @@ import { SPONSOR_CAROUSEL_SCENES, momentsFireIn, type SceneId } from "./overlay-
 import { OverlaySceneBackdrop, phaseForScene, sceneFor } from "./overlay-scene";
 import { useProgrammePhase } from "./use-programme-phase";
 import { useCompositorSignals } from "./use-compositor-signals";
-import { SponsorCardView, SponsorCarousel } from "./sponsor-card";
+import { SponsorCardView, SponsorCarousel, carouselMemoryStore } from "./sponsor-card";
 
 export interface OverlayStageProps {
   fixtureId: string;
@@ -101,8 +101,11 @@ export interface OverlayStageProps {
 }
 
 /** The card layout's inputs, as the inline custom properties `.ovl-slate-content` reads (R2007 step 9b, decision G2):
- *  the template's declared box and the region `cardRegionFor` leaves beside it, in canvas px. */
-function cardLayoutVars(box: CanvasBox, region: CanvasBox | null): Record<string, string> {
+ *  the template's declared box and the region `cardRegionFor` leaves beside it, in canvas px. R4 S7: `brand` is the
+ *  region the slate's brand mark keeps its corner of — the template's WHOLE card region, even while the scene carousel
+ *  moves the card into the strip beside its banner (`region`): a card that fills a narrowed strip reaches the strip's
+ *  top-right corner, where the brand would sit on it (gallery check 4, bar × carousel). */
+function cardLayoutVars(box: CanvasBox, region: CanvasBox | null, brand: CanvasBox | null): Record<string, string> {
   const px = (n: number) => `${n}px`;
   return {
     "--ovl-safe-x": px(box.x),
@@ -117,6 +120,9 @@ function cardLayoutVars(box: CanvasBox, region: CanvasBox | null): Record<string
           "--ovl-card-w": px(region.width),
           "--ovl-card-h": px(region.height),
         }),
+    ...(brand === null
+      ? {}
+      : { "--ovl-brand-x": px(brand.x), "--ovl-brand-y": px(brand.y), "--ovl-brand-w": px(brand.width) }),
   };
 }
 
@@ -268,6 +274,10 @@ export function OverlayStage(props: OverlayStageProps) {
     showMatchCard && cardRegion !== null ? cardRegionBeside(cardRegion, template.sponsorSlots.banner) : cardRegion;
   const showCarousel = carouselScene !== null && ticked.length > 0 && (!showMatchCard || carouselRegion !== null);
   const layoutRegion = showCarousel ? carouselRegion : cardRegion;
+  // Fix round 1 (I1): the carousel unmounts whenever its scene leaves or a poll carries no plan, so ITS reducer cannot
+  // remember the rotation. The stage is mounted for the page's life: it holds the memory, and each mount resumes from
+  // it — the next card, and never a start inside a 10 s bucket a showing on this page already used (one id, one card).
+  const [carouselMemory] = useState(carouselMemoryStore);
 
   // Moments first, then end-of-over (so OUT precedes the over card), then toss
   // (only when the match card is NOT up — card owns warming openers).
@@ -310,6 +320,8 @@ export function OverlayStage(props: OverlayStageProps) {
     reducedMotion,
     discard: !momentsFireIn(decision.scene),
     sponsorLines: compositor,
+    // Ruling m4: no break card over a match card (a scene's or the slate's); the carousel is the scene's sponsor path.
+    holdSponsors: showMatchCard,
   });
   // A pinned moment (the gallery's moment cells) replaces the queue's, held in the fully-shown phase.
   const moment = props.pinnedMoment ?? queued.current;
@@ -365,7 +377,7 @@ export function OverlayStage(props: OverlayStageProps) {
   const Theme = template.component;
   const canvasStyle = {
     ...sportThemeStyle(props.sportKey),
-    ...cardLayoutVars(template.sceneCardSafeArea, layoutRegion),
+    ...cardLayoutVars(template.sceneCardSafeArea, layoutRegion, cardRegion),
     transform: `scale(${scale})`,
   } as React.CSSProperties;
 
@@ -464,7 +476,13 @@ export function OverlayStage(props: OverlayStageProps) {
             className="ovl-sponsor-slot"
             style={sponsorSlotVars(template.sponsorSlots.banner)}
           >
-            <SponsorCarousel cards={ticked} scene={carouselScene} host={compositor ? COMPOSITOR_HOST : null} yielding={moment !== null} />
+            <SponsorCarousel
+              cards={ticked}
+              scene={carouselScene}
+              host={compositor ? COMPOSITOR_HOST : null}
+              yielding={moment !== null}
+              memory={carouselMemory}
+            />
           </div>
         ) : null}
         <div

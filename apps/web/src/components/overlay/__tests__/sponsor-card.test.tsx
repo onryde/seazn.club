@@ -11,7 +11,8 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { declaredValue, parseCss, readGlobalsCss } from "@/components/v2/scorepad/v3/__tests__/_globals-css";
 import { SCENE_CAROUSEL_MS, type SponsorCard } from "@/lib/sponsor-plan";
 import { SPONSOR_SHORT_CODE_ALPHABET, SPONSOR_SHORT_CODE_MAX_LENGTH } from "@/lib/sponsor-short-code";
-import { SponsorCardView, SponsorCarousel, carouselMomentId } from "../sponsor-card";
+import { OVERLAY_TEMPLATES } from "../template-registry";
+import { SponsorCardView, SponsorCarousel, carouselMemoryStore, carouselMomentId } from "../sponsor-card";
 
 const NAME_43 = "Northbridge Athletic Football & Social Club";
 const card = (over: Partial<SponsorCard> = {}): SponsorCard => ({
@@ -114,6 +115,65 @@ describe("the stylesheet: truncation chain and the 43-character name (Review Foc
     expect(value(".ovl-sponsor-slot", "left")).toBe("var(--ovl-sponsor-x)");
     expect(value(".ovl-sponsor-slot", "width")).toBe("var(--ovl-sponsor-w)");
   });
+
+  // Fix round 1 (m7): the readability floor (spec 2026-10-15 §4.5, D9 — 30 px at 1080), read off EVERY sponsor rule
+  // that declares a font-size, and required of each class that carries text, so no text inherits a smaller size.
+  it("every .ovl-sponsor-* rule that declares a font-size declares at least 30 px; each text class declares one", () => {
+    const FLOOR_PX = 30;
+    const sized = RULES.filter((r) => r.selector.includes(".ovl-sponsor") && declaredValue(r, "font-size") !== undefined);
+    for (const r of sized) {
+      const size = declaredValue(r, "font-size")!;
+      expect(size, `${r.selector}: a px size`).toMatch(/^\d+(\.\d+)?px$/);
+      expect(parseFloat(size), r.selector).toBeGreaterThanOrEqual(FLOOR_PX);
+    }
+    for (const text of [".ovl-sponsor-name", ".ovl-sponsor-link", ".ovl-sponsor-mono"]) {
+      expect(value(text, "font-size"), `${text} declares its own size`).toBeDefined();
+    }
+    console.log(`sponsor font-size rules checked: ${sized.length}`);
+    expect(sized.length, "anti-vacuity").toBeGreaterThanOrEqual(3);
+    // No `font:` shorthand could set a size this reader does not see.
+    expect(RULES.filter((r) => r.selector.includes(".ovl-sponsor") && declaredValue(r, "font") !== undefined)).toEqual([]);
+  });
+
+  // Fix round 1 (CI check 9): Barlow Condensed's content area is ascent 1000 + descent 200 per 1000 units per em
+  // (hhea and OS/2 typo metrics, read from the font file 2026-10-31) = 1.2em. A shorter line-height lets the glyphs out
+  // of the line box, the name's `overflow: hidden` clips its descenders, and its scroll box outgrows its client box.
+  const BARLOW_CONTENT_EM = (1000 + 200) / 1000;
+  it("the name's and the link's line-height holds Barlow's whole content area (1.2em), so no descender is clipped", () => {
+    for (const sel of [".ovl-sponsor-name", ".ovl-sponsor-link"]) {
+      expect(Number(value(sel, "line-height")), sel).toBeGreaterThanOrEqual(BARLOW_CONTENT_EM);
+    }
+  });
+
+  it("the lower third's stack fits the SHORTEST declared lower-third slot; the banner's two-line stack the shortest banner", () => {
+    const px = (sel: string, prop: string) => parseFloat(value(sel, prop) ?? "0");
+    const pad = (sel: string) => {
+      const parts = (value(sel, "padding") ?? "0").split(/\s+/).map(parseFloat);
+      return { top: parts[0]!, bottom: parts[2] ?? parts[0]! };
+    };
+    const lineOf = (sel: string, nameSel = sel) => px(nameSel, "font-size") * Number(value(sel, "line-height"));
+    const slots = Object.values(OVERLAY_TEMPLATES);
+    const lowest = Math.min(...slots.map((t) => t.sponsorSlots.lower_third.height));
+    const lowestBanner = Math.min(...slots.map((t) => t.sponsorSlots.banner.height));
+
+    const lp = pad(".ovl-sponsor-card");
+    const lower = lp.top + lineOf(".ovl-sponsor-name") + px(".ovl-sponsor-text", "gap") + lineOf(".ovl-sponsor-link") + lp.bottom;
+    const B = '.ovl-sponsor-card[data-style="banner"]';
+    const bp = pad(B);
+    const banner =
+      bp.top +
+      px(`${B} .ovl-sponsor-logo`, "height") +
+      px(B, "gap") +
+      2 * lineOf(".ovl-sponsor-name") +
+      px(`${B} .ovl-sponsor-text`, "gap") +
+      lineOf(".ovl-sponsor-link") +
+      bp.bottom;
+    console.log(`lower third stack ${lower}px in ${lowest}px; banner stack ${banner}px in ${lowestBanner}px (templates: ${slots.length})`);
+    expect(slots.length, "anti-vacuity").toBeGreaterThan(0);
+    expect(lower).toBeLessThanOrEqual(lowest);
+    expect(px(".ovl-sponsor-logo", "height"), "the plate fits too").toBeLessThanOrEqual(lowest - lp.top - lp.bottom);
+    expect(banner).toBeLessThanOrEqual(lowestBanner);
+  });
 });
 
 // ── the carousel's timer ─────────────────────────────────────────────────────────────────────────────────────────
@@ -144,7 +204,11 @@ const parse = (line: string) => {
 };
 
 describe("SponsorCarousel — 10 s each, in carousel order, lines at the compositor only", () => {
-  const base: CarouselProps = { cards: [SILVER, GOLD, TITLE], scene: "starting", host: "compositor", yielding: false };
+  // A fresh memory box per test: the stage's ref, which outlives every carousel mount.
+  let base: CarouselProps;
+  beforeEach(() => {
+    base = { cards: [SILVER, GOLD, TITLE], scene: "starting", host: "compositor", yielding: false, memory: carouselMemoryStore() };
+  });
 
   it("the first card (title) shows at mount, then gold at 10 s, then silver, wrapping — one start and one end each", async () => {
     const island = renderIsland<CarouselProps>(SponsorCarousel, base);
@@ -240,5 +304,71 @@ describe("SponsorCarousel — 10 s each, in carousel order, lines at the composi
     await vi.advanceTimersByTimeAsync(0);
     empty.unmount();
     expect(lines).toEqual([]);
+  });
+});
+
+describe("fix round 1, I1 — the rotation survives a remount (the stage keeps its memory)", () => {
+  it("unmount at 12 s, remount at 15 s (same memory): no start before 20 s, then the NEXT card (silver, not the title); every id distinct", async () => {
+    const memory = carouselMemoryStore();
+    const props: CarouselProps = { cards: [SILVER, GOLD, TITLE], scene: "reconnecting", host: "compositor", yielding: false, memory };
+    const first = renderIsland<CarouselProps>(SponsorCarousel, props);
+    await vi.advanceTimersByTimeAsync(12_000); // title 0–10 s, gold from 10 s
+    expect(shown(first)).toBe("card-g");
+    first.unmount();
+    await vi.advanceTimersByTimeAsync(3_000);
+    const second = renderIsland<CarouselProps>(SponsorCarousel, props);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown(second), "15 s: still inside gold's bucket — nothing starts").toBeNull();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(shown(second), "19.999 s").toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(shown(second), "20 s: the rotation goes on").toBe("card-s");
+    const starts = lines.map(parse).filter((l) => l.prefix === "seazn:sponsor:start");
+    expect(starts.map((l) => l.body.cardId)).toEqual(["card-t", "card-g", "card-s"]);
+    expect(new Set(starts.map((l) => l.body.momentId)).size, "three showings, three ids").toBe(3);
+    const ends = lines.map(parse).filter((l) => l.prefix === "seazn:sponsor:end");
+    expect(ends.map((l) => [l.body.momentId, l.body.cutShort])).toEqual([
+      [starts[0]!.body.momentId, false],
+      [starts[1]!.body.momentId, true], // the unmount cut gold
+    ]);
+  });
+
+  it("the empty case: a first mount with the initial memory starts the title at once", async () => {
+    const island = renderIsland<CarouselProps>(SponsorCarousel, {
+      cards: [GOLD, TITLE],
+      scene: "starting",
+      host: null,
+      yielding: false,
+      memory: carouselMemoryStore(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown(island)).toBe("card-t");
+  });
+});
+
+describe("fix round 1, m2 — a line sponsorLine refuses is dropped at the emit site, warned once, never thrown", () => {
+  it("two cards whose start bodies are over 512 bytes: no line for either, ONE warning, the overlay keeps rotating, the next card logs", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const LONG_T = card({ id: `t${"x".repeat(600)}`, sponsorId: "s-lt", name: "Long Title", tier: "title" });
+    const LONG_G = card({ id: `g${"x".repeat(600)}`, sponsorId: "s-lg", name: "Long Gold", tier: "gold" });
+    const island = renderIsland<CarouselProps>(SponsorCarousel, {
+      cards: [LONG_T, LONG_G, SILVER],
+      scene: "starting",
+      host: "compositor",
+      yielding: false,
+      memory: carouselMemoryStore(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown(island), "the card still shows").toBe(LONG_T.id);
+    await vi.advanceTimersByTimeAsync(SCENE_CAROUSEL_MS);
+    expect(shown(island)).toBe(LONG_G.id);
+    await vi.advanceTimersByTimeAsync(SCENE_CAROUSEL_MS);
+    expect(shown(island)).toBe("card-s");
+    expect(warn, "one warning for the mount").toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toContain("sponsor proof-of-play line was dropped");
+    // No start was logged for either long card, so no end either: the only line is silver's start.
+    expect(lines.map(parse).map((l) => [l.prefix, l.body.cardId])).toEqual([["seazn:sponsor:start", "card-s"]]);
+    island.unmount();
+    expect(lines.map(parse).map((l) => l.prefix)).toEqual(["seazn:sponsor:start", "seazn:sponsor:end"]);
   });
 });

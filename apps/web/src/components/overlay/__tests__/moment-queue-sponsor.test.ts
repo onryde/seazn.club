@@ -65,6 +65,8 @@ const enqueue = (s: MomentQueueState, moments: readonly OverlayMoment[], now: nu
 const tick = (s: MomentQueueState, now: number, foldMs = F) => reduce(s, { type: "tick", now, foldMs, holdMs: H });
 const skip = (s: MomentQueueState, momentId: string, now: number, foldMs = F) =>
   reduce(s, { type: "skip", momentId, now, foldMs });
+const holdCards = (s: MomentQueueState, hold: boolean, now: number, foldMs = F) =>
+  reduce(s, { type: "holdSponsors", hold, now, foldMs });
 const ids = (list: readonly OverlayMoment[]) => list.map(momentIdOf);
 
 interface Airing {
@@ -523,6 +525,79 @@ describe("badminton game end (another sport: a set-won slab before the game_end 
 
 // ── the model: invariants after EVERY step of random action sequences (TEST-STRATEGY rule 10) ────────────────────────
 
+describe("rule 4 (fix round 1, ruling m4) — while a match card is up, sponsor cards WAIT; the stale cut drops the late ones", () => {
+  it("the empty case: holding and releasing an idle, empty queue airs nothing; a repeated hold is no state change", () => {
+    const held = holdCards(INITIAL, true, 0);
+    expect(held.holdSponsors).toBe(true);
+    expect(held.current).toBeNull();
+    expect(holdCards(held, true, 50), "same flag: the same state (no re-render, no timer)").toBe(held);
+    const released = holdCards(held, false, 100);
+    expect(released.current).toBeNull();
+    expect(released.queue).toEqual([]);
+    expect(holdCards(INITIAL, false, 0)).toBe(INITIAL);
+  });
+
+  it("a card arriving under the hold waits (queued, timed, seen); a score moment arriving after it still airs at once", () => {
+    let s = holdCards(INITIAL, true, 0);
+    s = enqueue(s, [sp(8)], 1_000);
+    expect(s.current, "the card does not air").toBeNull();
+    expect(ids(s.queue)).toEqual([momentIdOf(sp(8))]);
+    expect(s.queuedAt[momentIdOf(sp(8))]).toBe(1_000);
+    expect(s.deadline, "no timer for a waiting card").toBeNull();
+    s = enqueue(s, [m(9, "goal")], 2_000);
+    expect(s.current && momentIdOf(s.current), "score first, hold or no hold").toBe("9:goal");
+    // The goal runs out; the promotion behind it skips the held card.
+    const { state } = airTimeline(s, 2_000);
+    expect(ids(state.queue), "still waiting after the goal").toEqual([momentIdOf(sp(8))]);
+  });
+
+  it(`released within SPONSOR_STALE_MS of its arrival the card airs at once; released after it, it is dropped and stays seen`, () => {
+    const queued = enqueue(holdCards(INITIAL, true, 0), [sp(8)], 1_000);
+    const fresh = holdCards(queued, false, 1_000 + SPONSOR_STALE_MS);
+    expect(fresh.current && momentIdOf(fresh.current), "exactly the limit: airs").toBe(momentIdOf(sp(8)));
+    expect(fresh.phase).toBe("in");
+    expect(fresh.deadline).toBe(1_000 + SPONSOR_STALE_MS + F);
+    const late = holdCards(queued, false, 1_000 + SPONSOR_STALE_MS + 1);
+    expect(late.current, "1 ms past: never airs").toBeNull();
+    expect(late.queue).toEqual([]);
+    expect(late.seen).toContain(momentIdOf(sp(8)));
+    expect(enqueue(late, [sp(8)], 1_000 + SPONSOR_STALE_MS + 2_000), "a re-sent window cannot queue it again").toBe(late);
+  });
+
+  it("a card ON AIR when the match card comes up folds off early and is cut short — in or hold; one already folding out is left alone", () => {
+    let checked = 0;
+    for (const phase of ["in", "hold"] as const) {
+      let s = enqueue(INITIAL, [sp(8)], 0);
+      if (phase === "hold") s = tick(s, F);
+      expect(s.phase).toBe(phase);
+      const cut = holdCards(s, true, 500);
+      expect(cut.phase, phase).toBe("out");
+      expect(cut.deadline).toBe(500 + F);
+      expect(cut.cutShort).toEqual([momentIdOf(sp(8))]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    let s = enqueue(INITIAL, [sp(8)], 0);
+    s = tick(tick(s, F), F + SPONSOR_STYLE_BY_SIZE.minor.holdMs);
+    expect(s.phase, "premise: folding out on its own").toBe("out");
+    const left = holdCards(s, true, F + SPONSOR_STYLE_BY_SIZE.minor.holdMs + 10);
+    expect(left.phase).toBe("out");
+    expect(left.deadline).toBe(s.deadline);
+    expect(left.cutShort).toEqual([]);
+  });
+
+  it("a SCORE moment on air is untouched by the hold, and after it the queue idles on the held card", () => {
+    let s = enqueue(INITIAL, [m(9, "goal"), sp(8)], 0);
+    const held = holdCards(s, true, 100);
+    expect(held.current).toBe(s.current);
+    expect(held.phase).toBe(s.phase);
+    expect(held.deadline).toBe(s.deadline);
+    s = airTimeline(held, 100).state;
+    expect(s.current).toBeNull();
+    expect(ids(s.queue)).toEqual([momentIdOf(sp(8))]);
+  });
+});
+
 describe("model — a sponsor never delays, covers or eats a score moment", () => {
   it("holds over random sequences of enqueue / tick / sync / skip / flush / discard (seeded)", () => {
     const score = [m(1, "goal"), m(2, "six"), m(3, "four"), m(4, "wicket")];
@@ -530,7 +605,18 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
     const pool = [...score, ...cards];
     const isSponsor = (x: OverlayMoment) => x.priority === "sponsor";
     const cardIds = new Set(ids(cards));
-    const counts = { steps: 0, cuts: 0, skipCuts: 0, undoCuts: 0, staleDrops: 0, sponsorAired: 0, scoreAired: 0, reoffered: 0 };
+    const counts = {
+      steps: 0,
+      cuts: 0,
+      skipCuts: 0,
+      undoCuts: 0,
+      holdCuts: 0,
+      heldSteps: 0,
+      staleDrops: 0,
+      sponsorAired: 0,
+      scoreAired: 0,
+      reoffered: 0,
+    };
 
     type Step =
       | { op: "enqueue"; dt: number; moments: OverlayMoment[] }
@@ -540,7 +626,9 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
       /** `target === pool.length`: whatever is on air (the console skips the card it sees). */
       | { op: "skip"; dt: number; target: number }
       | { op: "flush" }
-      | { op: "discard"; moments: OverlayMoment[] };
+      | { op: "discard"; moments: OverlayMoment[] }
+      /** Rule 4: the stage's match card came up or went. */
+      | { op: "hold"; dt: number; hold: boolean };
     const dt = fc.integer({ min: 0, max: 12_000 });
     // Score-only, card-only and mixed polls, so a card on air is often met by a score moment AND often left alone.
     const batch = fc.oneof(
@@ -556,6 +644,7 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
       { weight: 2, arbitrary: fc.record({ op: fc.constant("skip" as const), dt, target: fc.nat({ max: pool.length }) }) },
       { weight: 1, arbitrary: fc.constant({ op: "flush" as const }) },
       { weight: 1, arbitrary: fc.record({ op: fc.constant("discard" as const), moments: fc.subarray(pool, { minLength: 1 }) }) },
+      { weight: 2, arbitrary: fc.record({ op: fc.constant("hold" as const), dt, hold: fc.boolean() }) },
     );
 
     fc.assert(
@@ -581,7 +670,9 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
                     ? { type: "skip", momentId: st.target === pool.length ? (s.current === null ? "none" : momentIdOf(s.current)) : momentIdOf(pool[st.target]!), now, foldMs }
                     : st.op === "flush"
                       ? { type: "flush" }
-                      : { type: "discard", moments: st.moments };
+                      : st.op === "hold"
+                        ? { type: "holdSponsors", hold: st.hold, now, foldMs }
+                        : { type: "discard", moments: st.moments };
           const prev = s;
           s = reduce(prev, action);
           counts.steps++;
@@ -625,6 +716,11 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
               airedCards.add(id);
             } else counts.scoreAired++;
           }
+          // I10 (rule 4) — while the match card is up, no card is folding in or holding.
+          if (s.holdSponsors && s.current !== null && isSponsor(s.current)) {
+            expect(s.phase, "a card airs over the match card").toBe("out");
+            counts.heldSteps++;
+          }
           // I6 — the waits are exactly the queued cards'.
           expect(Object.keys(s.queuedAt).sort()).toEqual(ids(s.queue.filter(isSponsor)).sort());
           // I9 — each card is cut short at most once (it airs at most once).
@@ -634,9 +730,10 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
           if (gained.length > 0) {
             expect(gained).toEqual([momentIdOf(prev.current!)]);
             expect(isSponsor(prev.current!) && prev.phase !== "out").toBe(true);
-            expect(["enqueue", "skip", "sync"]).toContain(action.type);
+            expect(["enqueue", "skip", "sync", "holdSponsors"]).toContain(action.type);
             if (action.type === "enqueue") counts.cuts++;
             else if (action.type === "skip") counts.skipCuts++;
+            else if (action.type === "holdSponsors") counts.holdCuts++;
             else counts.undoCuts++;
           }
           if (action.type === "tick") {

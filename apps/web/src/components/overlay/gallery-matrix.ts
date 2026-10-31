@@ -183,6 +183,8 @@ export interface GalleryCell {
   resultStatus: string | null;
   /** R4 S7: a sponsor card pinned in this slot (scene "live", snapshot "live"); null otherwise. */
   sponsorSlot: SponsorStyle | null;
+  /** R4 S7: WHICH gallery card a sponsor cell pins (`GALLERY_SPONSOR_CARDS`); null on every other cell. */
+  sponsorCard: string | null;
   /** R4 S7: the scene carousel's cell (a carousel scene, its cards and no airing). */
   carousel: boolean;
 }
@@ -204,10 +206,15 @@ export const GALLERY_SPONSOR_CARDS: readonly SponsorCard[] = [
   { id: "gallery-card-gold", sponsorId: "gallery-sponsor-gold", name: "Harbourside Building Supplies", logoUrl: null, tier: "gold", onStream: true },
 ];
 
+/** Fix round 1 (m3): the sports whose sponsor cells ALSO pin the plain face — the gold card, no logo (the monogram) and
+ *  no short code (no link) — the two templates' defaults, as for result variants. */
+export const GALLERY_SPONSOR_FACE_SPORTS = GALLERY_RESULT_VARIANT_SPORTS;
+
 /** The REAL planner's plan for a gallery sponsor cell: one break at the sample seq (41) whose size is the slot's look
- *  (`SPONSOR_STYLE_BY_SIZE`), so the airing is exactly what a broadcast would draw there. `null` style: the carousel's
- *  plan — the cards, no airing. Refuses by name when the planner plans otherwise. */
-export function gallerySponsorPlan(style: SponsorStyle | null): SponsorPlan {
+ *  (`SPONSOR_STYLE_BY_SIZE`), so the airing is exactly what a broadcast would draw there — naming `cardId` (default: the
+ *  title, the first gallery card), the only card ticked. `null` style: the carousel's plan — every card, no airing.
+ *  Refuses by name when the planner plans otherwise. */
+export function gallerySponsorPlan(style: SponsorStyle | null, cardId: string = GALLERY_SPONSOR_CARDS[0]!.id): SponsorPlan {
   const size = (Object.keys(SPONSOR_STYLE_BY_SIZE) as (keyof typeof SPONSOR_STYLE_BY_SIZE)[]).find(
     (k) => SPONSOR_STYLE_BY_SIZE[k].style === style,
   );
@@ -215,7 +222,7 @@ export function gallerySponsorPlan(style: SponsorStyle | null): SponsorPlan {
     breaks: size === undefined ? [] : [{ seq: 41, at: AT, kind: size === "major" ? "innings_break" : "over_end", size }],
     windowSeqs: size === undefined ? [] : [41],
     settings: { enabled: true, frequency: "busy" },
-    cards: GALLERY_SPONSOR_CARDS,
+    cards: size === undefined ? GALLERY_SPONSOR_CARDS : GALLERY_SPONSOR_CARDS.filter((c) => c.id === cardId),
     assignedCards: [],
     assigned: [],
     operatorLog: [],
@@ -226,6 +233,9 @@ export function gallerySponsorPlan(style: SponsorStyle | null): SponsorPlan {
   if (plan === null || plan.airings.length !== (size === undefined ? 0 : 1)) {
     throw new Error(`overlay gallery: the planner planned ${plan?.airings.length ?? "no plan"} airing(s) for ${String(style)}`);
   }
+  if (size !== undefined && plan.airings[0]!.cardId !== cardId) {
+    throw new Error(`overlay gallery: no gallery card ${cardId} aired for ${String(style)}`);
+  }
   return plan;
 }
 
@@ -235,7 +245,8 @@ export function gallerySponsorPlan(style: SponsorStyle | null): SponsorPlan {
  * true (snapshot "live"; decision 8). A scene with `momentsFire: false` gets none.
  * Variant cells: every non-retired template suiting the variant's sport × variant (scene "live", snapshot "ended").
  * Sponsor cells (R4 S7, spec 2026-10-27 §3.5): every non-retired template suiting the sport × sport × each slot the
- * template DECLARES (scene "live", snapshot "live").
+ * template DECLARES (scene "live", snapshot "live"), pinning the title card's full face; for `faceSports`, a second
+ * cell per slot pins the gold card's plain face (no logo, no link; fix round 1, m3).
  * Carousel cells (R4 S7): every non-retired template suiting a carousel sport × each scene in `scenes` that carries the
  * carousel (`SPONSOR_CAROUSEL_SCENES`); Starting soon reads the warming snapshot, any other the live one.
  */
@@ -246,6 +257,7 @@ export function galleryMatrix(
   samples: readonly MomentSample[],
   variants: readonly ResultVariant[],
   carouselSports: readonly string[],
+  faceSports: readonly string[] = [],
 ): GalleryCell[] {
   const cells: GalleryCell[] = [];
   // `scene.id` is a SceneId for every shipped scene; a test may pass its own scene list to prove the momentsFire rule,
@@ -264,22 +276,27 @@ export function galleryMatrix(
             momentSampleId: null,
             resultStatus: null,
             sponsorSlot: null,
+            sponsorCard: null,
             carousel: false,
           });
         }
       }
       for (const slot of Object.keys(def.sponsorSlots) as SponsorStyle[]) {
-        cells.push({
-          key: `${def.id}|${sportKey}|live|sponsor|${slot}`,
-          templateId: def.id,
-          sportKey,
-          scene: "live",
-          snapshot: "live",
-          momentSampleId: null,
-          resultStatus: null,
-          sponsorSlot: slot,
-          carousel: false,
-        });
+        const faces = [GALLERY_SPONSOR_CARDS[0]!, ...((faceSports as readonly string[]).includes(sportKey) ? [GALLERY_SPONSOR_CARDS[1]!] : [])];
+        for (const [i, face] of faces.entries()) {
+          cells.push({
+            key: `${def.id}|${sportKey}|live|sponsor|${slot}${i === 0 ? "" : `|${face.tier}`}`,
+            templateId: def.id,
+            sportKey,
+            scene: "live",
+            snapshot: "live",
+            momentSampleId: null,
+            resultStatus: null,
+            sponsorSlot: slot,
+            sponsorCard: face.id,
+            carousel: false,
+          });
+        }
       }
     }
   }
@@ -296,6 +313,7 @@ export function galleryMatrix(
           momentSampleId: sample.id,
           resultStatus: null,
           sponsorSlot: null,
+          sponsorCard: null,
           carousel: false,
         });
       }
@@ -312,6 +330,7 @@ export function galleryMatrix(
         momentSampleId: null,
         resultStatus: variant.status,
         sponsorSlot: null,
+        sponsorCard: null,
         carousel: false,
       });
     }
@@ -329,6 +348,7 @@ export function galleryMatrix(
           momentSampleId: null,
           resultStatus: null,
           sponsorSlot: null,
+          sponsorCard: null,
           carousel: true,
         });
       }
@@ -340,5 +360,13 @@ export function galleryMatrix(
 /** The gallery's ONE cell source (review I3): `galleryMatrix` over the shipped sports, scenes and samples. The page
  *  calls it with `OVERLAY_TEMPLATES`, and the extensibility test with a probe registry. */
 export function galleryCells(registry: TemplateRegistry, variants: readonly ResultVariant[]): GalleryCell[] {
-  return galleryMatrix(registry, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, variants, GALLERY_CAROUSEL_SPORTS);
+  return galleryMatrix(
+    registry,
+    OVERLAY_SPORT_KEYS,
+    OVERLAY_SCENES,
+    GALLERY_MOMENT_SAMPLES,
+    variants,
+    GALLERY_CAROUSEL_SPORTS,
+    GALLERY_SPONSOR_FACE_SPORTS,
+  );
 }

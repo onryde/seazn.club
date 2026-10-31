@@ -14,7 +14,14 @@
 // `source: "scene"`. Like the moment queue, every rule is a pure function here (`carouselStep`,
 // `carouselLines`) and the component is a reducer, ONE `setTimeout` to the next deadline, and the console.
 import { useEffect, useReducer, useRef } from "react";
-import { COMPOSITOR_HOST, sponsorLine, type SponsorEndBody, type SponsorStartBody } from "@/lib/overlay-compositor";
+import {
+  COMPOSITOR_HOST,
+  droppingSponsorLine,
+  sponsorLine,
+  type SponsorEndBody,
+  type SponsorLineBuilder,
+  type SponsorStartBody,
+} from "@/lib/overlay-compositor";
 import { sponsorShortLinkText } from "@/lib/sponsor-clicks";
 import { SCENE_CAROUSEL_MS, type SponsorCard, type SponsorStyle } from "@/lib/sponsor-plan";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
@@ -67,7 +74,10 @@ export function carouselOrder(cards: readonly SponsorCard[]): SponsorCard[] {
 }
 
 /** P5: `scene:<sceneId>:<floor(startedAtMs/10000)>` — P5's 10 000 is `SCENE_CAROUSEL_MS`, the showing's own length, so
- *  two showings (which start at least one showing apart, `carouselStep`) never share an id. */
+ *  two showings that start at least one showing apart never share an id. `carouselStep` holds that within one mount;
+ *  ACROSS mounts (a Reconnecting re-entry, a poll with a null plan) it holds only because the stage keeps the rotation's
+ *  memory (`CarouselMemory`) and every mount resumes from it — a fresh carousel at `next: 0, notBefore: null` would
+ *  start again inside a bucket a cut showing had already used, under the same id and another card. */
 export function carouselMomentId(scene: string, startedAtMs: number): string {
   return `scene:${scene}:${Math.floor(startedAtMs / SCENE_CAROUSEL_MS)}`;
 }
@@ -87,6 +97,44 @@ export interface CarouselState {
   ended: { momentId: string; cutShort: boolean } | null;
 }
 export const CAROUSEL_INITIAL: CarouselState = { next: 0, notBefore: null, showing: null, ended: null };
+
+/** What the carousel must not forget across a remount, held by the always-mounted stage: the next card's index, and
+ *  the earliest instant a new showing may start — past the 10 s bucket of every showing already started on this page,
+ *  including one still on air when the carousel unmounted (it ran short, and its bucket is spent). */
+export interface CarouselMemory {
+  next: number;
+  notBefore: number | null;
+}
+export const CAROUSEL_MEMORY_INITIAL: CarouselMemory = { next: 0, notBefore: null };
+
+/** The memory a state leaves behind. A showing on air spends its own bucket: nothing may start before its end. */
+export function carouselMemoryOf(state: CarouselState): CarouselMemory {
+  return {
+    next: state.next,
+    notBefore: state.showing !== null ? state.showing.startedAt + SCENE_CAROUSEL_MS : state.notBefore,
+  };
+}
+
+/** A mount's starting state: the rotation goes on where the last mount left it. */
+export function carouselResume(memory: CarouselMemory): CarouselState {
+  return { ...CAROUSEL_INITIAL, next: memory.next, notBefore: memory.notBefore };
+}
+
+/** Where the stage keeps a `CarouselMemory` for the page's life: read once when a carousel mounts, written by its
+ *  effects. A store with methods rather than a ref, because the mount reads it while rendering (its reducer's start). */
+export interface CarouselMemoryStore {
+  read(): CarouselMemory;
+  write(memory: CarouselMemory): void;
+}
+export function carouselMemoryStore(): CarouselMemoryStore {
+  let held = CAROUSEL_MEMORY_INITIAL;
+  return {
+    read: () => held,
+    write: (memory) => {
+      held = memory;
+    },
+  };
+}
 export interface CarouselInput {
   now: number;
   /** The ticked cards' ids, in `carouselOrder`. */
@@ -136,6 +184,7 @@ export function carouselLines(
   onAir: string | null,
   state: CarouselState,
   at: string,
+  build: SponsorLineBuilder = sponsorLine,
 ): { onAir: string | null; lines: string[] } {
   const lines: string[] = [];
   const showing = state.showing;
@@ -144,7 +193,8 @@ export function carouselLines(
     // A showing that left without the reducer saying how ran short.
     const cutShort = state.ended?.momentId === tracked ? state.ended.cutShort : true;
     const end: SponsorEndBody = { momentId: tracked, at, cutShort };
-    lines.push(sponsorLine("end", end));
+    const line = build("end", end);
+    if (line !== null) lines.push(line);
     tracked = null;
   }
   if (tracked === null && showing !== null) {
@@ -156,8 +206,12 @@ export function carouselLines(
       breakKind: null,
       at,
     };
-    lines.push(sponsorLine("start", start));
-    tracked = showing.momentId;
+    // A start the builder drops is never tracked, so no end can follow it: S8 sees neither half of the pair.
+    const line = build("start", start);
+    if (line !== null) {
+      lines.push(line);
+      tracked = showing.momentId;
+    }
   }
   return { onAir: tracked, lines };
 }
@@ -165,9 +219,19 @@ export function carouselLines(
 const reduce = (state: CarouselState, input: CarouselInput) => carouselStep(state, input);
 
 /** The carousel's reducer and its ONE timer, armed to `carouselDeadline` (as `useMomentQueue`'s). A fresh card array
- *  arrives with every poll, so the effects key on `key` (the ids), never the array. */
-function useCarousel(order: readonly string[], key: string, yielding: boolean, scene: string): CarouselState {
-  const [state, dispatch] = useReducer(reduce, CAROUSEL_INITIAL);
+ *  arrives with every poll, so the effects key on `key` (the ids), never the array. The reducer starts from the stage's
+ *  `memory` and writes it back on every state, so a remount resumes the rotation instead of restarting it. */
+function useCarousel(
+  order: readonly string[],
+  key: string,
+  yielding: boolean,
+  scene: string,
+  memory: CarouselMemoryStore,
+): CarouselState {
+  const [state, dispatch] = useReducer(reduce, memory, (m) => carouselResume(m.read()));
+  useEffect(() => {
+    memory.write(carouselMemoryOf(state));
+  }, [memory, state]);
   useEffect(() => {
     const now = Date.now();
     dispatch({ now, order, yielding, scene });
@@ -189,18 +253,21 @@ export function SponsorCarousel(p: {
   scene: string;
   host: typeof COMPOSITOR_HOST | null;
   yielding: boolean;
+  /** The rotation's memory across mounts, owned by the always-mounted stage (`carouselMemoryStore()`). */
+  memory: CarouselMemoryStore;
 }) {
   const ordered = carouselOrder(p.cards);
   const order = ordered.map((c) => c.id);
-  const state = useCarousel(order, order.join(","), p.yielding, p.scene);
+  const state = useCarousel(order, order.join(","), p.yielding, p.scene, p.memory);
 
-  // Proof of play at the compositor only. A mutable box the effects own: read and written only inside them.
+  // Proof of play at the compositor only. A mutable box the effects own: read and written only inside them. A line
+  // `sponsorLine` refuses is dropped with one warning per mount (`droppingSponsorLine`), never thrown into the tree.
   const logging = p.host === COMPOSITOR_HOST;
-  const live = useRef<{ onAir: string | null }>({ onAir: null });
+  const live = useRef<{ onAir: string | null; build: SponsorLineBuilder }>({ onAir: null, build: droppingSponsorLine() });
   useEffect(() => {
     if (!logging) return;
     const box = live.current;
-    const step = carouselLines(box.onAir, state, new Date().toISOString());
+    const step = carouselLines(box.onAir, state, new Date().toISOString(), box.build);
     box.onAir = step.onAir;
     for (const line of step.lines) console.info(line);
   }, [logging, state]);
@@ -210,7 +277,8 @@ export function SponsorCarousel(p: {
     return () => {
       if (box.onAir === null) return;
       const end: SponsorEndBody = { momentId: box.onAir, at: new Date().toISOString(), cutShort: true };
-      console.info(sponsorLine("end", end));
+      const line = box.build("end", end);
+      if (line !== null) console.info(line);
       box.onAir = null;
     };
   }, []);

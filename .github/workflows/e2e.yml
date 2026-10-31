@@ -105,6 +105,16 @@ on:
         description: "PR number to run the e2e suite against (empty = main)"
         required: false
         type: string
+      # R4 S7 fix round 1 (E): OFF unless asked for. On, the `parallel heavy` leg (the one that runs
+      # overlay-gallery.spec.ts) also runs the overlay readability capture harness with GALLERY_DIR +
+      # OVERLAY_GALLERY=1 and uploads the crops as the `overlay-gallery-captures` artifact, so a sign-off can
+      # look at the staff gallery's pictures without a local server. Off (and on every `push`, where
+      # `inputs` is empty), both steps below are skipped by their `if:` and nothing else changes.
+      overlay_gallery_captures:
+        description: "Also capture the overlay gallery (heavy leg) and upload it as an artifact"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-${{ inputs.pr || github.ref }}
@@ -1277,6 +1287,36 @@ jobs:
           # actually wanted to read.
           name: playwright-report-${{ matrix.slug }}
           path: apps/web/playwright-report
+          retention-days: 7
+
+      # Opt-in (the `overlay_gallery_captures` dispatch input; never on a push). One leg only, so the artifact name is
+      # unique. `!cancelled()`, not `always()`: a red spec step must not cost the pictures, but a cancelled run owes
+      # none. The step's own timeout keeps the job inside its 20-minute cap. The harness writes into GALLERY_DIR and
+      # its last test refuses a missing, empty or byte-identical capture (AGENTS.md class 10).
+      - name: Overlay gallery captures (opt-in)
+        id: overlay_captures
+        if: ${{ !cancelled() && inputs.overlay_gallery_captures && matrix.slug == 'parallel-heavy' }}
+        timeout-minutes: 7
+        run: |
+          mkdir -p "$GALLERY_DIR"
+          npx playwright test --project=gallery e2e/overlay-readability.capture.ts
+          shots=$(find "$GALLERY_DIR" -name '*.png' | wc -l | tr -d ' ')
+          echo "overlay gallery captures: $shots"
+          if [ "$shots" -eq 0 ]; then echo "::error::the capture step wrote no screenshots"; exit 1; fi
+        working-directory: apps/web
+        env:
+          # The job-level env (the dummy JWK, E2E_PROD_TARGET, the database) reaches this step as it is.
+          PLAYWRIGHT_BASE: http://localhost:3000
+          GALLERY_DIR: ${{ github.workspace }}/overlay-gallery-captures
+          OVERLAY_GALLERY: "1"
+
+      - name: Upload overlay gallery captures (opt-in)
+        if: ${{ !cancelled() && inputs.overlay_gallery_captures && matrix.slug == 'parallel-heavy' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-gallery-captures
+          path: overlay-gallery-captures
+          if-no-files-found: error
           retention-days: 7
 
       - name: Dev server log (on failure)

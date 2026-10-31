@@ -359,7 +359,10 @@ export function planSponsors(i: PlanInput): SponsorPlanResult {
     airings.push({ momentId, seq: b.seq, cardId: c.id, style: a.style, holdMs: a.holdMs, breakKind: b.kind });
     if (!cardIds.has(c.id)) {
       cardIds.add(c.id);
-      cards.push(c);
+      // Fix round 1 (m1): a card that reaches `plan.cards` only through an airing is NOT ticked — whatever its input
+      // row said — so the carousel (which reads `onStream`) can never rotate it. Normalised, never refused: the airing
+      // it is here for must still show.
+      cards.push({ ...c, onStream: false });
     }
   }
 

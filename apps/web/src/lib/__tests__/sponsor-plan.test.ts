@@ -677,11 +677,19 @@ describe("planSponsors — the sequence", () => {
       // and the plan carries that card so the page can draw it.
       expect(r.plan!.airings.find((x) => x.momentId === goldMoment.momentId)?.cardId).toBe(GOLD.id);
       expect(r.plan!.cards.map((c) => c.id)).toEqual([TITLE.id, GOLD.id]);
+      // Fix round 1 (m1): gold reaches the plan only through its airing, so it is UNTICKED there — even though the
+      // assigned row handed in says `onStream: true` — and the carousel (which reads `onStream`) never rotates it.
+      expect(assignedCardsFor(assigned, [TITLE]).find((c) => c.id === GOLD.id)?.onStream, "premise: the input row says ticked").toBe(true);
+      expect(r.plan!.cards.map((c) => [c.id, c.onStream])).toEqual([
+        [TITLE.id, true],
+        [GOLD.id, false],
+      ]);
     }
     expect(assigned.filter((a) => a.momentId === goldMoment.momentId)).toEqual([goldMoment]);
     // Gold is ticked again: its frozen break still names gold.
     const back = poll(6, [TITLE, GOLD]);
     expect(back.plan!.airings.find((x) => x.momentId === goldMoment.momentId)?.cardId).toBe(GOLD.id);
+    expect(back.plan!.cards.find((c) => c.id === GOLD.id)?.onStream, "ticked again: in the ticked list, so ticked").toBe(true);
   });
 
   it("a deleted sponsor (its assignment's sponsorId goes null) drops from airings; nothing is re-handed and later positions do not move", () => {
@@ -731,7 +739,8 @@ describe("planSponsors — the sequence", () => {
     expect(planSponsors(input({ ...at, cards: [GOLD], assignedCards: [GOLD] })).newAssignments).toHaveLength(1);
     const r = planSponsors(input({ ...at, cards: [], assignedCards: [GOLD] }));
     expect(r.plan).toEqual({
-      cards: [GOLD],
+      // Fix round 1 (m1): here only through its airing — so unticked in the plan, whatever the assigned row said.
+      cards: [{ ...GOLD, onStream: false }],
       airings: [{ momentId: goldRow.momentId, seq: 1, cardId: GOLD.id, style: "banner", holdMs: 15 * SEC, breakKind: SET_END.kind }],
     });
     expect(r.newAssignments).toEqual([]);
