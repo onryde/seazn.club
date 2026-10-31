@@ -39,6 +39,19 @@ const ASSIGNMENT_SOURCES = ["rotation", "operator"];
 const AIRING_SOURCES = ["rotation", "scene", "operator"];
 const STYLES = ["lower_third", "banner"];
 const CLICK_SOURCES = ["match", "stream", "site", "unknown"];
+/** Every FK whose parent the app deletes (a sponsor, a fixture, a session, a competition). Each delete walks it, so each
+ *  has an index led by that column (V483 header). */
+const WALKED_FKS = [
+  "sponsor_stream_settings.competition_id",
+  "sponsor_assignments.fixture_id", "sponsor_assignments.sponsor_id",
+  "sponsor_airings.sponsor_id", "sponsor_airings.fixture_id", "sponsor_airings.session_id",
+  "sponsor_airing_frames.session_id",
+  "sponsor_clicks.sponsor_id", "sponsor_clicks.fixture_id",
+  "sponsor_report_links.sponsor_id", "sponsor_report_links.competition_id",
+  "sponsor_short_codes.sponsor_id", "sponsor_short_codes.fixture_id",
+];
+/** Unindexed by design: organizations and users are deleted rarely and by staff, and each such delete scans a table once. */
+const UNINDEXED_PARENTS = new Set(["organizations", "users"]);
 /** F6: Connect stores no viewer counts, so the airing carries none of these. */
 const F6_DROPPED = ["viewers", "video_id", "youtube_refreshed_at"];
 
@@ -82,12 +95,16 @@ async function emptyCompetition(w: Pick<World, "orgId">): Promise<string> {
   return row!.id;
 }
 
-type AssignmentOpts = { fixture: string; moment?: string; sponsor?: string | null; source: string; position: number | null; style?: string };
+type AssignmentOpts = {
+  fixture: string; moment?: string; sponsor?: string | null; source: string; position: number | null; style?: string;
+  /** The assign-time name snapshot (S5 writes it). `null` sends an explicit NULL, to reach the NOT NULL. */
+  name?: string | null;
+};
 function assignment(w: Pick<World, "orgId">, o: AssignmentOpts) {
   return sql`
-    insert into sponsor_assignments (fixture_id, moment_id, org_id, seq, sponsor_id, position, source, break_kind, style, hold_ms)
-    values (${o.fixture}, ${o.moment ?? `m-${uniq()}`}, ${w.orgId}, 7, ${o.sponsor ?? null}, ${o.position}, ${o.source},
-            'over_end', ${o.style ?? "lower_third"}, 8000)`;
+    insert into sponsor_assignments (fixture_id, moment_id, org_id, seq, sponsor_id, sponsor_name, position, source, break_kind, style, hold_ms)
+    values (${o.fixture}, ${o.moment ?? `m-${uniq()}`}, ${w.orgId}, 7, ${o.sponsor ?? null}, ${o.name === undefined ? "Acme" : o.name},
+            ${o.position}, ${o.source}, 'over_end', ${o.style ?? "lower_third"}, 8000)`;
 }
 
 type AiringOpts = { sponsor: string | null; name?: string; fixture: string | null; session: string | null; moment?: string; source?: string; style?: string };
@@ -292,6 +309,16 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
     await expect(assignment(w, { fixture: f, source: "operator", position: null, style: "fullscreen" })).rejects.toMatchObject(refusedBy("23514", "sponsor_assignments_style_check"));
   });
 
+  it("an assignment carries its sponsor's name, snapshotted at assign time: a row without one is refused, a row with one reads it back", async () => {
+    const w = await world();
+    const f = w.fixtureIds[0]!;
+    await expect(assignment(w, { fixture: f, source: "operator", position: null, name: null })).rejects.toMatchObject({ code: "23502", column_name: "sponsor_name" });
+    const moment = `m-${uniq()}`;
+    await expect(assignment(w, { fixture: f, moment, source: "operator", position: null, name: "Snapshot Ltd" })).resolves.toBeTruthy();
+    const [row] = await sql<{ sponsor_name: string }[]>`select sponsor_name from sponsor_assignments where fixture_id = ${f} and moment_id = ${moment}`;
+    expect(row).toEqual({ sponsor_name: "Snapshot Ltd" });
+  });
+
   // ---- sponsor_airings / frames -----------------------------------------------------------------------------------
   it("a second airing for the same (session, moment) is refused; the same moment on another session, or another moment, is a new airing", async () => {
     const w = await world();
@@ -379,28 +406,30 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
     expect(left).toEqual([{ fixture_id: f2 }]);
   });
 
-  it("R16: deleting a competition keeps a link scoped to it (competition null); deleting its author nulls created_by", async () => {
+  it("R16 (revised): deleting a competition deletes the link scoped to it — a scoped bearer link never widens to org-wide — while the same sponsor's org-wide link survives; deleting the author nulls created_by (MUTATE: competition_id back to set null)", async () => {
     const w = await world();
     const comp = await emptyCompetition(w);
     const user = await rigUser();
     const sp = await sponsor(w);
-    const id = await reportLink(w, { sponsor: sp, competition: comp, createdBy: user });
+    const scoped = await reportLink(w, { sponsor: sp, competition: comp, createdBy: user });
+    const orgWide = await reportLink(w, { sponsor: sp, competition: null, createdBy: user });
     await sql`delete from competitions where id = ${comp}`;
+    expect(await sql`select 1 from sponsor_report_links where id = ${scoped}`, "the scoped link").toHaveLength(0);
     await sql`delete from users where id = ${user}`;
-    const [row] = await sql<{ competition_id: string | null; created_by: string | null }[]>`
-      select competition_id, created_by from sponsor_report_links where id = ${id}`;
-    expect(row).toEqual({ competition_id: null, created_by: null });
+    const rows = await sql<{ id: string; competition_id: string | null; created_by: string | null }[]>`
+      select id, competition_id, created_by from sponsor_report_links where sponsor_id = ${sp}`;
+    expect(rows).toEqual([{ id: orgWide, competition_id: null, created_by: null }]);
   });
 
   // ---- deleting a sponsor (through the real deleter, as app_user) ---------------------------------------------------
-  it("deleting a sponsor sets the airing's and assignment's sponsor_id null and keeps sponsor_name; it deletes its clicks, links and short codes", async () => {
+  it("deleting a sponsor sets the airing's and assignment's sponsor_id null and both keep sponsor_name; it deletes its clicks, links and short codes", async () => {
     const w = await world();
     const f = w.fixtureIds[0]!;
     const s = await w.session(f);
     const gone = await sponsor(w, "Gone & Co");
     const kept = await sponsor(w, "Kept plc");
     const airingId = await airing(w, { sponsor: gone, name: "Gone & Co", fixture: f, session: s });
-    await assignment(w, { fixture: f, moment: "m-gone", sponsor: gone, source: "rotation", position: 1 });
+    await assignment(w, { fixture: f, moment: "m-gone", sponsor: gone, name: "Gone & Co", source: "rotation", position: 1 });
     await click(w, { sponsor: gone, fixture: f });
     await reportLink(w, { sponsor: gone });
     await shortCode(w, { sponsor: gone, fixture: f });
@@ -413,9 +442,10 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
 
     const [a] = await sql<{ sponsor_id: string | null; sponsor_name: string }[]>`select sponsor_id, sponsor_name from sponsor_airings where id = ${airingId}`;
     expect(a).toEqual({ sponsor_id: null, sponsor_name: "Gone & Co" });
-    const [asg] = await sql<{ sponsor_id: string | null; position: number }[]>`
-      select sponsor_id, position from sponsor_assignments where fixture_id = ${f} and moment_id = 'm-gone'`;
-    expect(asg).toEqual({ sponsor_id: null, position: 1 });
+    // The assignment keeps its assign-time name snapshot, so an airing START for this card (S8) still has a name.
+    const [asg] = await sql<{ sponsor_id: string | null; sponsor_name: string; position: number }[]>`
+      select sponsor_id, sponsor_name, position from sponsor_assignments where fixture_id = ${f} and moment_id = 'm-gone'`;
+    expect(asg).toEqual({ sponsor_id: null, sponsor_name: "Gone & Co", position: 1 });
     for (const table of ["sponsor_clicks", "sponsor_report_links", "sponsor_short_codes"]) {
       const [gn] = await sql<{ n: number }[]>`select count(*)::int as n from ${sql(table)} where sponsor_id = ${gone}`;
       const [kn] = await sql<{ n: number }[]>`select count(*)::int as n from ${sql(table)} where sponsor_id = ${kept}`;
@@ -554,20 +584,23 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
   it("RLS writes: the console's two tables refuse a row for another org; the privileged-written five refuse every app_user insert (count reported)", async () => {
     const a = await world();
     const b = await world();
-    // Tenant-written: org B may write its own settings row and may not write org A's.
+    // Tenant-written: org B may write its own settings row and its own link, and may write neither for org A.
     await expect(withTenant(b.orgId, (tx) => tx`insert into sponsor_stream_settings (org_id) values (${b.orgId})`)).resolves.toBeTruthy();
     await expect(withTenant(b.orgId, (tx) => tx`insert into sponsor_stream_settings (org_id) values (${a.orgId})`)).rejects.toMatchObject({ code: "42501" });
     const sp = await sponsor(b);
-    await expect(withTenant(b.orgId, (tx) => tx`
+    const spA = await sponsor(a);
+    const link = (org: string, sponsorId: string) => withTenant(b.orgId, (tx) => tx`
       insert into sponsor_report_links (org_id, sponsor_id, from_date, to_date, token_hash)
-      values (${b.orgId}, ${sp}, '2026-01-01', '2026-01-31', ${randomBytes(32)})`)).resolves.toBeTruthy();
+      values (${org}, ${sponsorId}, '2026-01-01', '2026-01-31', ${randomBytes(32)})`);
+    await expect(link(b.orgId, sp)).resolves.toBeTruthy();
+    await expect(link(a.orgId, spA)).rejects.toMatchObject({ code: "42501" });
     // Privileged-written: no insert grant to app_user at all (the overlay path, the relay and /s/ write on `sql`).
     const f = b.fixtureIds[0]!;
     const s = await b.session(f);
     const attempts: Record<string, () => Promise<unknown>> = {
       sponsor_assignments: () => withTenant(b.orgId, (tx) => tx`
-        insert into sponsor_assignments (fixture_id, moment_id, org_id, seq, position, source, break_kind, style, hold_ms)
-        values (${f}, 'm', ${b.orgId}, 1, 1, 'rotation', 'over_end', 'banner', 8000)`),
+        insert into sponsor_assignments (fixture_id, moment_id, org_id, seq, sponsor_name, position, source, break_kind, style, hold_ms)
+        values (${f}, 'm', ${b.orgId}, 1, 'X', 1, 'rotation', 'over_end', 'banner', 8000)`),
       sponsor_airings: () => withTenant(b.orgId, (tx) => tx`
         insert into sponsor_airings (org_id, sponsor_name, moment_id, source, style, started_at)
         values (${b.orgId}, 'X', 'm', 'scene', 'banner', now())`),
@@ -586,27 +619,47 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
     expect(refused, "privileged-only tables checked").toBe(NEW_TABLES.length - TENANT_WRITTEN.size);
   });
 
-  it("the declared indexes exist — the brief's two, and one per foreign key a delete walks (count reported)", async () => {
+  it("the brief's two composite indexes exist (count reported)", async () => {
     const wanted: Array<[string, string]> = [
       ["sponsor_airings", "(org_id, sponsor_id, started_at)"],
       ["sponsor_clicks", "(sponsor_id, at)"],
-      ["sponsor_airings", "(sponsor_id)"],
-      ["sponsor_airings", "(fixture_id)"],
-      ["sponsor_assignments", "(sponsor_id)"],
-      ["sponsor_clicks", "(fixture_id)"],
-      ["sponsor_report_links", "(sponsor_id)"],
-      ["sponsor_report_links", "(competition_id)"],
-      ["sponsor_stream_settings", "(competition_id)"],
-      ["sponsor_short_codes", "(fixture_id)"],
     ];
     const defs = await sql<{ tablename: string; indexdef: string }[]>`
       select tablename, indexdef from pg_indexes where schemaname = current_schema() and tablename in ${sql(NEW_TABLES as unknown as string[])}`;
     let found = 0;
     for (const [table, cols] of wanted) {
-      const hit = defs.some((d) => d.tablename === table && d.indexdef.includes(`USING btree ${cols}`));
-      expect(hit, `${table} ${cols}`).toBe(true);
+      expect(defs.some((d) => d.tablename === table && d.indexdef.includes(`USING btree ${cols}`)), `${table} ${cols}`).toBe(true);
       found++;
     }
     expect(found).toBe(wanted.length);
+  });
+
+  it("every foreign key to a parent the app deletes has an index led by its column; org and user keys are the only unindexed ones (counts reported; MUTATE: drop sponsor_clicks_fixture_idx)", async () => {
+    // Read from the catalogue: every FK the new tables declare, its parent, and whether some index LEADS with it (a
+    // partial `where col is not null` index serves the delete's `col = $1` too).
+    const fks = await sql<{ tbl: string; col: string; parent: string; cols: number; indexed: boolean }[]>`
+      select t.relname as tbl, a.attname as col, p.relname as parent, cardinality(c.conkey) as cols,
+             exists (select 1 from pg_index i where i.indrelid = c.conrelid and i.indkey[0] = c.conkey[1]) as indexed
+        from pg_constraint c
+        join pg_class t on t.oid = c.conrelid
+        join pg_namespace n on n.oid = t.relnamespace
+        join pg_class p on p.oid = c.confrelid
+        join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+       where c.contype = 'f' and n.nspname = current_schema() and t.relname in ${sql(NEW_TABLES as unknown as string[])}`;
+    expect(fks.every((k) => k.cols === 1), "every key is single-column").toBe(true);
+    const unclassified = fks.filter((k) => !UNINDEXED_PARENTS.has(k.parent) && !WALKED_FKS.includes(`${k.tbl}.${k.col}`));
+    expect(unclassified.map((k) => `${k.tbl}.${k.col} → ${k.parent}`), "an FK nobody classified").toEqual([]);
+    const walked = fks.filter((k) => !UNINDEXED_PARENTS.has(k.parent));
+    expect(walked.map((k) => `${k.tbl}.${k.col}`).sort(), "the walked keys are the declared list").toEqual([...WALKED_FKS].sort());
+    let checked = 0;
+    for (const k of walked) {
+      expect({ fk: `${k.tbl}.${k.col}`, indexed: k.indexed }).toEqual({ fk: `${k.tbl}.${k.col}`, indexed: true });
+      checked++;
+    }
+    expect(checked, "walked FKs checked").toBe(WALKED_FKS.length);
+    expect(checked).toBeGreaterThan(0);
+    // The excluded side: one org key per table, plus settings.updated_by and report_links.created_by.
+    const excluded = fks.filter((k) => UNINDEXED_PARENTS.has(k.parent)).map((k) => `${k.tbl}.${k.col}`).sort();
+    expect(excluded).toEqual([...NEW_TABLES.map((t) => `${t}.org_id`), "sponsor_report_links.created_by", "sponsor_stream_settings.updated_by"].sort());
   });
 });

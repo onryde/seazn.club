@@ -17,7 +17,9 @@
 --     foreign-key actions run as the table owner.
 --
 -- Deletes never take proof of display with them (ruling R16): an airing outlives its sponsor, fixture and session
--- (all set null; the report reads sponsor_name). Every foreign key a delete walks has an index.
+-- (all set null; the report reads sponsor_name). Every foreign key to a parent the app deletes (a sponsor, a fixture,
+-- a session, a competition) has an index led by its column. The org_id and user (updated_by, created_by) keys carry
+-- none beyond what a table's own keys give: those deletes are rare and staff-only, and each scans a table once.
 
 alter table sponsors add column on_stream boolean not null default false;
 
@@ -45,13 +47,15 @@ grant select, insert, update, delete on sponsor_stream_settings to app_user;
 
 -- Which card a break got (plan P3), written on the overlay read path the first time a served plan hands a break its
 -- card. One row per break. A rotation row holds the org's cycle position (max + 1, gaps allowed: F9); an operator row
--- never does.
+-- never does. sponsor_name is snapshotted at assign time (every assignment is made with a sponsor), so an airing start
+-- for a card whose sponsor was since deleted still has a name to record (S8).
 create table sponsor_assignments (
   fixture_id         uuid not null references fixtures(id) on delete cascade,
   moment_id          text not null,
   org_id             uuid not null references organizations(id) on delete cascade,
   seq                int  not null,
   sponsor_id         uuid null references sponsors(id) on delete set null,
+  sponsor_name       text not null,
   position           int  null,
   source             text not null,
   break_kind         text not null,
@@ -146,12 +150,13 @@ create policy sponsor_clicks_tenant on sponsor_clicks for all to app_user
 grant select on sponsor_clicks to app_user;
 
 -- A shareable report link (S13). The token (32 random bytes) is shown once as a URL; only its hash is stored. Revoke
--- sets revoked_at. A link scoped to a competition that is later deleted keeps working org-wide (R16, set null).
+-- sets revoked_at. A link scoped to a competition dies with it (R16, revised): a bearer link must never widen from one
+-- competition to the whole org, which a set null would do.
 create table sponsor_report_links (
   id             uuid primary key default gen_random_uuid(),
   org_id         uuid not null references organizations(id) on delete cascade,
   sponsor_id     uuid not null references sponsors(id) on delete cascade,
-  competition_id uuid null references competitions(id) on delete set null,
+  competition_id uuid null references competitions(id) on delete cascade,
   from_date      date not null,
   to_date        date not null,
   token_hash     bytea not null,
