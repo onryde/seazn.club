@@ -345,7 +345,7 @@ function rootManifest(): {
 }
 
 describe("toolchain: pnpm workspace", () => {
-  it("declares the workspace and uses the registry alias", () => {
+  it("declares the workspace and uses a caret range on the registry alias", () => {
     const ws = readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8");
     expect(ws).toContain("apps/*");
     expect(ws).toContain("packages/*");
@@ -353,8 +353,12 @@ describe("toolchain: pnpm workspace", () => {
       readFileSync(join(REPO_ROOT, "apps/web/package.json"), "utf8"),
     ) as { dependencies: Record<string, string> };
     // Engine split 2b (A1): the engine is the registry package @onryde/seazn-engine from GitHub Packages, consumed under the
-    // @seazn/engine alias (scripts/__tests__/registry-install.test.ts pins every consumer).
-    expect(web.dependencies["@seazn/engine"]).toBe("npm:@onryde/seazn-engine@^1.0.0");
+    // @seazn/engine alias (scripts/__tests__/registry-install.test.ts pins every consumer). The pin is a caret range on the
+    // alias, never `workspace:`/`link:`/`file:`, a tag or a 0.0.0-pr snapshot; which release is the engine-release bump's
+    // business, so no version is typed here. Consistency with the other five consumers rides the root manifest, the reference.
+    const spec = web.dependencies["@seazn/engine"];
+    expect(spec, "apps/web names the engine alias").toMatch(/^npm:@onryde\/seazn-engine@\^\d+\.\d+\.\d+$/);
+    expect(spec, "apps/web carries the root manifest's specifier").toBe(rootManifest().dependencies?.["@seazn/engine"]);
   });
 
   /**

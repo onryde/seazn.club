@@ -10,7 +10,11 @@ import { afterEach, describe, expect, it } from "vitest";
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const SCOPED = "@onryde/seazn-engine";
 const ALIAS = "@seazn/engine";
-const SPEC = `npm:${SCOPED}@^1.0.0`; // engine split 2b (A1): the registry alias, as scripts/__tests__/registry-install.test.ts pins
+/** Engine split 2b (A1): the registry alias at a caret range on one full release, as scripts/__tests__/registry-install.test.ts pins. Which release is the engine-release bump's business. */
+const SPEC_SHAPE = /^npm:@onryde\/seazn-engine@\^\d+\.\d+\.\d+$/;
+const WANT_SHAPE = `a caret range on the registry alias (npm:${SCOPED}@^X.Y.Z)`;
+/** The scratch repos' own release: deliberately not the one the real tree is on, so a scan that judged the VALUE would fail here. */
+const SPEC = `npm:${SCOPED}@^7.8.9`;
 const FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] as const;
 /** Engine split 2b (reverse inventory row 14, I): the engine is the installed package, linked under its alias. */
 const INSTALLED_ENGINE_MANIFEST = "node_modules/@seazn/engine/package.json";
@@ -45,13 +49,15 @@ function manifestPaths(root: string): string[] {
 
 /**
  * Judges every dependency field of every manifest, each separately (a `??` across fields lets a correct one shadow a stale one):
- * a field naming the alias must hold exactly SPEC, and no field may name the scoped package.
+ * a field naming the alias must hold a caret range on the registry alias (SPEC_SHAPE), every such field must hold the IDENTICAL
+ * specifier (the first one judged, the root manifest's, is the reference), and no field may name the scoped package.
  */
 function scan(root: string): { manifests: string[]; consumers: string[]; checked: number; problems: string[] } {
   const manifests = manifestPaths(root);
   const consumers = new Set<string>();
   const problems: string[] = [];
   let checked = 0;
+  let reference: { where: string; spec: string } | undefined;
   for (const p of manifests) {
     const m = JSON.parse(readFileSync(path.join(root, p), "utf8")) as Manifest;
     for (const field of FIELDS) {
@@ -60,7 +66,11 @@ function scan(root: string): { manifests: string[]; consumers: string[]; checked
       if (ALIAS in deps) {
         consumers.add(p);
         checked++;
-        if (deps[ALIAS] !== SPEC) problems.push(`${p}: ${field}["${ALIAS}"] is ${JSON.stringify(deps[ALIAS])}, want ${JSON.stringify(SPEC)}`);
+        const spec = deps[ALIAS];
+        const where = `${p}: ${field}["${ALIAS}"]`;
+        if (typeof spec !== "string" || !SPEC_SHAPE.test(spec)) problems.push(`${where} is ${JSON.stringify(spec)}, want ${WANT_SHAPE}`);
+        else if (reference === undefined) reference = { where, spec };
+        else if (spec !== reference.spec) problems.push(`${where} is ${JSON.stringify(spec)}, but ${reference.where} is ${JSON.stringify(reference.spec)} — every consumer carries the identical specifier`);
       }
     }
   }
@@ -108,19 +118,60 @@ describe("engine package identity", () => {
     it("follows pnpm-workspace.yaml, not a typed list: a stale consumer under a glob the repo did not have before is found, and ignored when the glob is absent", () => {
       const stale: Manifest = { dependencies: { [ALIAS]: "workspace:*" } };
       const withGlob = scan(scratchRepo(["apps/*", "libs/*"], { ".": good, "apps/a": good, "libs/stale": stale }));
-      expect(withGlob.problems).toEqual([`libs/stale/package.json: dependencies["${ALIAS}"] is "workspace:*", want "${SPEC}"`]);
+      expect(withGlob.problems).toEqual([`libs/stale/package.json: dependencies["${ALIAS}"] is "workspace:*", want ${WANT_SHAPE}`]);
       const without = scan(scratchRepo(["apps/*"], { ".": good, "apps/a": good, "libs/stale": stale }));
       expect(without.problems, "the glob is not declared, so pnpm does not treat libs/stale as a workspace").toEqual([]);
     });
 
     it("judges a stale devDependencies even when dependencies is correct (no ?? shadowing)", () => {
       const root = scratchRepo(["apps/*"], { ".": good, "apps/a": { dependencies: { [ALIAS]: SPEC }, devDependencies: { [ALIAS]: "workspace:*" } } });
-      expect(scan(root).problems).toEqual([`apps/a/package.json: devDependencies["${ALIAS}"] is "workspace:*", want "${SPEC}"`]);
+      expect(scan(root).problems).toEqual([`apps/a/package.json: devDependencies["${ALIAS}"] is "workspace:*", want ${WANT_SHAPE}`]);
     });
 
     it.each(FIELDS)("judges a stale %s", (field) => {
       const root = scratchRepo(["apps/*"], { ".": good, "apps/a": { [field]: { [ALIAS]: "*" } } });
-      expect(scan(root).problems).toEqual([`apps/a/package.json: ${field}["${ALIAS}"] is "*", want "${SPEC}"`]);
+      expect(scan(root).problems).toEqual([`apps/a/package.json: ${field}["${ALIAS}"] is "*", want ${WANT_SHAPE}`]);
+    });
+
+    it("accepts any caret release, not a typed one", () => {
+      for (const v of ["^1.0.0", "^1.1.0", "^2.13.7", "^0.4.2"]) {
+        const spec = `npm:${SCOPED}@${v}`;
+        const r = scan(scratchRepo(["apps/*"], { ".": { dependencies: { [ALIAS]: spec } }, "apps/a": { dependencies: { [ALIAS]: spec } } }));
+        expect(r.checked, `${v}: entries judged`).toBe(2);
+        expect(r.problems, v).toEqual([]);
+      }
+    });
+
+    it.each([
+      ["workspace:*"], ["link:../engine"], ["file:../engine"], ["latest"], ["*"], ["^7.8.9"],
+      [`npm:${SCOPED}@0.0.0-pr6.abc`], [`npm:${SCOPED}@^7.8.9-beta.1`], [`npm:${SCOPED}@~7.8.9`], [`npm:${SCOPED}@7.8.9`], [`npm:${SCOPED}@^7.8`], [`npm:${SCOPED}@latest`], ["npm:@other/pkg@^7.8.9"],
+    ])("refuses %s as the engine specifier", (spec) => {
+      const r = scan(scratchRepo(["apps/*"], { ".": good, "apps/a": { dependencies: { [ALIAS]: spec } } }));
+      expect(r.checked).toBe(2);
+      expect(r.problems).toEqual([`apps/a/package.json: dependencies["${ALIAS}"] is ${JSON.stringify(spec)}, want ${WANT_SHAPE}`]);
+    });
+
+    it("refuses every consumer when the whole tree is on a non-release specifier", () => {
+      const bad: Manifest = { dependencies: { [ALIAS]: `npm:${SCOPED}@0.0.0-pr6.abc` } };
+      const r = scan(scratchRepo(["apps/*"], { ".": bad, "apps/a": bad, "apps/b": bad }));
+      expect(r.checked).toBe(3);
+      expect(r.problems.length, "one problem per consumer").toBe(3);
+    });
+
+    it("refuses one consumer on a different release while the others agree, whichever one it is", () => {
+      const other: Manifest = { dependencies: { [ALIAS]: `npm:${SCOPED}@^7.9.0` } };
+      const apps = scan(scratchRepo(["apps/*"], { ".": good, "apps/a": good, "apps/b": other }));
+      expect(apps.checked).toBe(3);
+      expect(apps.problems).toEqual([`apps/b/package.json: dependencies["${ALIAS}"] is "npm:${SCOPED}@^7.9.0", but package.json: dependencies["${ALIAS}"] is "${SPEC}" — every consumer carries the identical specifier`]);
+      // The odd one out is the root: the reference is the first judged, so both siblings are the ones named.
+      const root = scan(scratchRepo(["apps/*"], { ".": other, "apps/a": good, "apps/b": good }));
+      expect(root.problems.length).toBe(2);
+      expect(root.problems.every((x) => x.includes("every consumer carries the identical specifier"))).toBe(true);
+    });
+
+    it("refuses two fields of one manifest on different releases (no ?? shadowing)", () => {
+      const root = scratchRepo(["apps/*"], { ".": good, "apps/a": { dependencies: { [ALIAS]: SPEC }, devDependencies: { [ALIAS]: `npm:${SCOPED}@^7.9.0` } } });
+      expect(scan(root).problems).toEqual([`apps/a/package.json: devDependencies["${ALIAS}"] is "npm:${SCOPED}@^7.9.0", but package.json: dependencies["${ALIAS}"] is "${SPEC}" — every consumer carries the identical specifier`]);
     });
 
     it.each(FIELDS)("refuses the scoped name as a key in %s", (field) => {
