@@ -302,12 +302,12 @@ One plan, delivered in phases. Each phase ships on its own.
      started.
   9. Fixtures are visible without the extra click. **Owner direction, 2026-10-31:** the stage
      card header gets buttons in its **top-right**: **Match format** (rules), **Points** and
-     **Tie-breaks**, plus the stage's other actions. Each opens its section in a panel or
-     sheet: read-only once locked, editable before. Rules, points and tie-breaks no longer fill
-     the card body. The body shows the one-line summary and the stage's fixtures (run sheet)
-     directly. Points and Tie-breaks appear only for table stages, as today. On a phone the
-     buttons collapse into one "Stage settings" menu, so the header doesn't wrap at 320.
-
+     **Tie-breaks**, plus a stage-actions menu. Each one **expands inline under the header**
+     (owner picked inline over a side sheet, "so that we can reuse the component here and division
+     builder"). Several panels can be open at once. They're read-only once the stage has
+     started, editable before. The body shows the one-line summary and the stage's fixtures
+     directly. Points and Tie-breaks appear only for table stages. On a phone the buttons
+     collapse into one "Stage settings" menu.
   10. **One component per concern, reused everywhere** (owner 2026-10-31: "single component for
       each and reuse in builder, fixture and match pages"). There are three components:
       - **Match format** (rules)
@@ -333,11 +333,40 @@ One plan, delivered in phases. Each phase ships on its own.
       **division-level tie-break editor moves into scope**. It gives "Use the division's order"
       a control that sets it. Both forms take field ranges from one source (Phase D), so Legs,
       Rounds and Qualify can no longer disagree.
-  Because this is a UI change, the header-button layout is **mocked (desktop 1280 + phone 320)
-  and signed off by the owner before build** (house rule), with a second variant for the
-  panel: a side sheet vs an inline expand under the header.
+  Mock signed off 2026-10-31 (`.superpowers/brainstorm/7863-1793444283/content/stage-card.html`,
+  option 2). The owner raised no objection to its wording and button calls:
+  - "Win 2 · Loss 0";
+  - one head-to-head sentence;
+  - "Game difference" for badminton;
+  - "Locked: the stage has started";
+  - Generate fixtures hidden once the stage starts;
+  - Complete stage waits until every match is played.
+
+  The built screens still get the 1280 / 768 / 320 screenshot sign-off.
+  11. **Vocabulary (owner, 2026-10-31):**
+      - **Format** = structure (league, Swiss, knockout, playoff). It **stays in division
+        Settings**, with "rebuild stages".
+      - **Rules** = how a match is played, plus Points and Tie-breaks. Rules **leave Settings**.
+  12. **Division rules strip** at the top of the Fixtures tab, above the stage cards. It's the
+      division-wide default (owner: keep it) that stages use unless changed. It uses the same three
+      components with the same inline panels. A stage that differs says so in its summary line.
+  13. **Settings clean-up** (owner screenshot 15:19). Remove the Match rules block, which has these
+      defects:
+      - the lock line repeated six times;
+      - badminton labelled "Best of (sets)" / "Points to win a set";
+      - "Structure: League (league) · edit stages on the Fixtures tab";
+      - "Save match rules" shown with every field locked.
+
+      Also remove "Standings points" from Settings. **Entrant kinds** (Individual / Pair / Team,
+      default kind, squad numbers / captain) **move to the Entrants tab**. **Advanced overrides
+      (JSON) is hidden** (owner: "we don't need").
+
 - **Phase D — Builder vs Settings field alignment.** The same field must take the same values in
-  the division builder and in Settings:
+  the division builder and in Settings. **Legs (owner, 2026-10-31): 1 or 2 only ("Once" / "Home &
+  away") in the builder, Settings and the server validator** (today the validator allows max 8).
+  Staging check, 2026-10-31: 62 stages have legs=1, 1 has legs=2, none has more. Production must
+  be audited before the validator is tightened. Any row over 2 is surfaced loudly, never silently
+  clamped. Today's disagreements:
   - Legs: 1–2 vs 1–4.
   - Rounds: minimum 1 vs 3.
   - Qualify: a fixed select vs any number from 2 to 32.
