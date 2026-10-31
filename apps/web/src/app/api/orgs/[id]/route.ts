@@ -18,6 +18,7 @@ import { isValidIana } from "@/lib/tz";
 import { hasLocale } from "@/lib/i18n-constants";
 import { isRegistrationCurrency } from "@/lib/currency";
 import { EDITOR_ROLES, renameOrgSchema, type Organization } from "@/lib/types";
+import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
 import { z } from "zod";
 
 const orgPatchSchema = z.union([
@@ -72,7 +73,8 @@ const orgPatchSchema = z.union([
       .array(
         z.object({
           name: z.string().min(1).max(80),
-          url: z.string().url().max(500).nullish(),
+          // http(s) only (R4 S10 fix round 1, m1): a blob slot has no row, so the boards link it STRAIGHT out.
+          url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
           logo: z.string().max(500).nullish(),
         }),
       )

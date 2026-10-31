@@ -28,6 +28,7 @@ import { PointsRule } from "@seazn/engine/competition";
 // resolution, so a `@/...` import throws ERR_MODULE_NOT_FOUND there even
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
+import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "../../lib/sponsor-clicks.ts";
 import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
 // W3 T18 (RB3-7(c)): the sentence a requested half/zero bye is refused with — the table's own constant (client-safe and
 // strip-types-safe: its only import is `import type`), so this schema, `http.ts`'s reader and the table row say one thing.
@@ -5160,7 +5161,8 @@ export const Sponsor = z.object({
 
 export const CreateSponsor = z.object({
   name: z.string().min(1).max(80),
-  url: z.string().url().max(500).nullish(),
+  // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`.
+  url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
   tier: SponsorTier.default("partner"),
   competition_id: Uuid.nullish(),

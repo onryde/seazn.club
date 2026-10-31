@@ -184,6 +184,58 @@ describe.skipIf(!HAS_DB)("sponsors usecase", () => {
     const rows = await resolveSponsors(auth.orgId);
     expect(rows.map((s) => s.name)).toEqual(["New Row"]);
   });
+
+  // R4 S10 fix round 1, m6: "no rows AT ALL", as the doc says — never "no ACTIVE rows". V283 backfilled the blobs into
+  // rows but never cleared them, so falling back on zero active rows brought every withdrawn sponsor back, untracked.
+  it("m6: withdrawn sponsors never resurrect from the blob — rows that exist but none active resolve to NOTHING", async () => {
+    const { auth } = await seedOrg("community");
+    await sql`
+      update organizations
+      set branding = ${sql.json({ sponsors: [{ name: "Old Faithful", url: "https://of.example" }] } as never)}
+      where id = ${auth.orgId}`;
+    // The positive pair first: an org with no rows at all reads its blob.
+    expect((await resolveSponsors(auth.orgId)).map((s) => [s.id, s.name])).toEqual([[null, "Old Faithful"]]);
+
+    const row = await createSponsor(auth, { name: "Backfilled", tier: "partner", status: "active" });
+    expect((await resolveSponsors(auth.orgId)).map((s) => s.name)).toEqual(["Backfilled"]);
+    // Withdrawn (both ways a row stops showing): the board is EMPTY, not the blob.
+    let checked = 0;
+    for (const status of ["inactive", "pending"] as const) {
+      await patchSponsor(auth, row.id, { status });
+      expect(await resolveSponsors(auth.orgId), status).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // Reactivated: the row again, still no blob.
+    await patchSponsor(auth, row.id, { status: "active" });
+    expect((await resolveSponsors(auth.orgId)).map((s) => s.name)).toEqual(["Backfilled"]);
+    // Deleted — the org has no rows at all again, so the blob is all it has.
+    await deleteSponsor(auth, row.id);
+    expect((await resolveSponsors(auth.orgId)).map((s) => s.name)).toEqual(["Old Faithful"]);
+  });
+
+  it("m6: an org whose rows all belong to ANOTHER competition shows nothing on this one — not the blob", async () => {
+    const { auth } = await seedOrg("pro");
+    const [mine, theirs] = await Promise.all(
+      ["Mine Cup", "Theirs Cup"].map((name) =>
+        createCompetition(auth, { ends_on: "2030-12-31", name: `${name} ${randomUUID().slice(0, 6)}`, visibility: "public", branding: {} }),
+      ),
+    );
+    await sql`
+      update organizations
+      set branding = ${sql.json({ sponsors: [{ name: "Blob Relic" }] } as never)}
+      where id = ${auth.orgId}`;
+    // The competition's OWN blob is under the same rule as the org's.
+    await sql`
+      update competitions
+      set branding = ${sql.json({ sponsors: [{ name: "Comp Blob Relic" }] } as never)}
+      where id = ${mine!.id}`;
+    // Positive pair first: with no rows at all, both blobs read — the competition's first.
+    expect((await resolveSponsors(auth.orgId, mine!.id)).map((s) => s.name)).toEqual(["Comp Blob Relic", "Blob Relic"]);
+    await createSponsor(auth, { name: "Their Gold", tier: "gold", status: "active", competition_id: theirs!.id });
+    expect(await resolveSponsors(auth.orgId, mine!.id)).toEqual([]);
+    expect((await resolveSponsors(auth.orgId, theirs!.id)).map((s) => s.name)).toEqual(["Their Gold"]);
+  });
 });
 
 afterAll(async () => {
