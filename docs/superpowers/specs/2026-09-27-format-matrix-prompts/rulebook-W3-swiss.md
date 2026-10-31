@@ -1,6 +1,6 @@
 # Rulebook W3 — Swiss (swiss, swiss_playoff, swiss_knockout × 11 sports)
 
-> **DRAFT — recommendations only; nothing here is an owner ruling until signed (_INDEX.md)**
+> **SIGNED 2026-10-31 by owner ruling 252 ("all per rec"), with RB3-13 superseded by ruling 250, RB3-7(a) by ruling 251, and RB3-7(b) settled by the W3 design §5.** Code facts below are from 2026-09-27; re-pinned in `.superpowers/handoff/2026-10-31-w3/`.
 
 - **Date:** 2026-09-27 · **Wave:** W3 (design §8) · **Rows:** `swiss`, `swiss_playoff`
   (swiss → page_playoff, top 4), `swiss_knockout` (swiss → knockout, top q) × football,
