@@ -1,5 +1,7 @@
 import Link from "@/components/ui/console-link";
-import { t, plural } from "@/lib/i18n";
+// The pure runtime, not `@/lib/i18n` (server-only): Match Day's client shell renders this same list (task A4) — reused, never
+// copied. Only `t`/`plural` were ever read from there, and `@/lib/i18n` re-exports them from this module.
+import { t, plural } from "@/lib/i18n-runtime";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { ATTENTION_SEVERITY, type Attention, type DrawDoor, type Severity } from "@/lib/division-phase";

@@ -43,6 +43,8 @@ import { dayTable, divisionDays, IN_PLAY, liveCallSql, targetCourt, todayIn, who
 import { courtNamesById, loadSettings, MOVABLE_STATUS } from "./schedule";
 import { openStreamStates } from "./stream-sessions";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
+import { log } from "@/server/logger";
+import { liveSessionVideos } from "@/server/youtube/parts";
 
 type Tx = postgres.TransactionSql;
 type Serving = MatchDayFixture["serving"];
@@ -361,7 +363,15 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
   return { comp, tz, day, courts, noCourt, courtNames };
 }
 
-function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">, serving: Serving = null): MatchDayFixture {
+/** What only a playing court's match carries: who serves (S1), the desk's scorer attention, and its live stream's video (A4). */
+interface PlayingExtras {
+  serving: Serving;
+  scorer_attention: MatchDayFixture["scorer_attention"];
+  live_video: MatchDayFixture["live_video"];
+}
+const NO_EXTRAS: PlayingExtras = { serving: null, scorer_attention: null, live_video: null };
+
+function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">, extras: PlayingExtras = NO_EXTRAS): MatchDayFixture {
   return {
     id: r.id,
     division_id: r.division_id,
@@ -376,14 +386,16 @@ function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">,
     away_entrant_id: r.away_entrant_id,
     headline: r.headline,
     summary: r.summary ?? null,
-    serving,
+    serving: extras.serving,
     started_at: r.status === IN_PLAY ? iso(r.started_at) : null,
     called_at: iso(r.called_at),
     stream: streams[r.id] ?? null,
+    scorer_attention: extras.scorer_attention,
+    live_video: extras.live_video,
   };
 }
 
-function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, serving: ReadonlyMap<string, Serving>): MatchDayCourt {
+function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, extras: (fixtureId: string) => PlayingExtras): MatchDayCourt {
   const queue: MatchDayQueued[] = c.queue.map((q) => ({
     ...fixtureView(q.row, streams),
     planned_at: q.planned_at.toISOString(),
@@ -395,7 +407,7 @@ function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, s
     venue_name: c.venue_name,
     sport_noun: venueNoun(c.current?.sport_key ?? c.queue[0]?.row.sport_key ?? c.candidate_sport),
     state: c.state,
-    current: c.current === null ? null : fixtureView(c.current, streams, serving.get(c.current.id) ?? null),
+    current: c.current === null ? null : fixtureView(c.current, streams, extras(c.current.id)),
     in_use_by: c.in_use_by,
     free_since: iso(c.free_since),
     queue,
@@ -414,11 +426,20 @@ export async function getMatchDay(
 ): Promise<MatchDayView> {
   const { board, fixturesToday, serving } = await withTenant(auth.orgId, async (tx) => {
     const board = await readBoard(tx, competitionId, now, { noCourt: false });
-    // Who serves, on this competition's playing courts only, for a sport whose engine reads a serve (S1).
+    // Who serves, on this competition's playing courts only, for a sport whose engine reads a serve (S1). One match whose fold
+    // throws (a side whose entrant went: `loadFoldInputs`' WRONG_PHASE) says nothing about who serves — `null`, logged — and
+    // never takes the rest of the board down with it (A3 carry-in). A savepoint, so a statement it failed cannot abort the
+    // tenant transaction the reads below still need.
     const serving = new Map<string, Serving>();
     for (const c of board.courts) {
       if (c.state === "playing" && c.current !== null && sportReadsServe(c.current.sport_key)) {
-        serving.set(c.current.id, await servingSideOf(tx, c.current.id));
+        const fixtureId = c.current.id;
+        try {
+          serving.set(fixtureId, await tx.savepoint((sp) => servingSideOf(sp, fixtureId)));
+        } catch (err) {
+          log.warn({ err, fixtureId, competitionId }, "match-day: serve fold failed; serving left unknown");
+          serving.set(fixtureId, null);
+        }
       }
     }
     return { board, fixturesToday: await countFixturesToday(tx, competitionId, now), serving };
@@ -441,15 +462,33 @@ export async function getMatchDay(
     locale,
   );
   let resultsOwed = 0;
+  // The desk's scorer attentions, by match (A4): the same `Attention` rows `needsYouItems` turns into Needs-you rows, so a court's
+  // mark and the list's row are one fact. A match never raises both kinds (division-phase.ts).
+  const scorerAttention = new Map<string, MatchDayFixture["scorer_attention"]>();
   for (const d of desk.divisions.values()) {
-    for (const a of d.attention) if (a.kind === "result_missing") resultsOwed += a.count;
+    for (const a of d.attention) {
+      if (a.kind === "result_missing") resultsOwed += a.count;
+      if (a.kind === "no_scorer" || a.kind === "not_recording") for (const id of a.fixtureIds) scorerAttention.set(id, a.kind);
+    }
   }
+  // The preview's video (A4, §6.2): asked for the playing matches whose stream is live, and only those.
+  const liveIds = board.courts.flatMap((c) => (c.state === "playing" && c.current !== null && streams[c.current.id] === "live" ? [c.current.id] : []));
+  const videos = await liveSessionVideos(auth.orgId, liveIds);
+  const extras = (fixtureId: string): PlayingExtras => {
+    const video = videos[fixtureId];
+    return {
+      serving: serving.get(fixtureId) ?? null,
+      scorer_attention: scorerAttention.get(fixtureId) ?? null,
+      // Fails closed, as `mayEmbedReplay` does: only a broadcast positively NOT made for kids reads false.
+      live_video: video === undefined ? null : { url: video.url, made_for_kids: video.madeForKids !== false },
+    };
+  };
   return {
     competition_id: competitionId,
     date: board.day,
     tz: board.tz,
     now: now.toISOString(),
-    courts: board.courts.map((c) => courtView(c, streams, serving)),
+    courts: board.courts.map((c) => courtView(c, streams, extras)),
     needs_you: needs,
     results_owed: resultsOwed,
     fixtures_today: fixturesToday,

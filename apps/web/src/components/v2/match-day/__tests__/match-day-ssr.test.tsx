@@ -31,8 +31,13 @@ import {
   isCandidateList,
   isLive,
   isMatchDayView,
+  courtScorerAttention,
+  needsYouButtonParts,
+  needsYouOrder,
+  needsYouTone,
   primaryCandidateId,
   REFUSAL_CODES,
+  streamPreviewOf,
   refusalMessage,
   resolveFocus,
   sharedNoun,
@@ -41,7 +46,12 @@ import { CourtList } from "@/components/v2/match-day/court-list";
 import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
 import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CallSheetBody } from "@/components/v2/match-day/call-sheet";
-import { MatchDayShell } from "@/components/v2/match-day/match-day-shell";
+import { DotLine, MatchDayShell } from "@/components/v2/match-day/match-day-shell";
+import { NeedsYou, needsYouItems, type NeedsYouItem } from "@/components/v2/desk/needs-you";
+import { ATTENTION_SEVERITY, type Attention } from "@/lib/division-phase";
+import type { CompetitionDesk } from "@/server/usecases/competition-desk";
+import { SCORER_ATTENTIONS } from "@/lib/match-day/types";
+import { youtubeVideoId, youtubeWatchUrl } from "@/lib/youtube";
 
 const dict = en as Dict;
 const DICTS = { en, es, fr, nl } as Record<string, Dict>;
@@ -143,6 +153,7 @@ const ctx: MatchDayCtx = {
   tz: "Europe/London",
   dict,
   scoreDict: publicEn as Dict,
+  viewerPlan: "pro",
 };
 
 const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
@@ -163,6 +174,8 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
   started_at: "2026-10-31T11:20:00.000Z",
   called_at: null,
   stream: null,
+  scorer_attention: null,
+  live_video: null,
   ...o,
 });
 
@@ -768,6 +781,7 @@ describe("the header, the filter and the poll's cadence", () => {
         initial={view([court({ sport_noun: "pitch" }), court({ court_id: "c-2", sport_noun: "pitch", state: "free", current: null })])}
         dict={dict}
         scoreDict={publicEn as Dict}
+        viewerPlan="pro"
       />,
     );
     expect(html).toContain(t(dict, "matchDay.title", { date: "Saturday 31 Oct" }));
@@ -790,6 +804,7 @@ describe("the header, the filter and the poll's cadence", () => {
         initial={view([court(), court({ court_id: "c-5", state: "free", current: null })])}
         dict={dict}
         scoreDict={publicEn as Dict}
+        viewerPlan="pro"
       />,
     );
     const tagOf = (testId: string) => html.match(new RegExp(`<[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? "";
@@ -881,5 +896,295 @@ describe("refusals in organiser words, every locale", () => {
     );
     expect(refusalMessage(dict, CALL_REFUSAL.NOT_CALLABLE, { status: TBD_ENTRANT })).toBe(t(dict, "matchDay.refusal.NOT_CALLABLE.tbd"));
     expect(refusalMessage(dict, "SOMETHING_NEW")).toBe(t(dict, "matchDay.refusal.other"));
+  });
+});
+
+// ---- Task A4: Needs you in the header, the scorer QR, the court marks and the stream preview ------------------------------
+
+/** One `Attention` of every kind the desk declares. A `Record` over the kinds, so a kind added to lib/division-phase.ts is a
+ *  compile error here until the sweep below covers it. */
+const ONE_OF_EACH: { [K in Attention["kind"]]: Extract<Attention, { kind: K }> } = {
+  needs_draw: { kind: "needs_draw", stageName: "Knockout", door: "compute" },
+  needs_fixtures: { kind: "needs_fixtures", stageName: "Plate" },
+  needs_decision: { kind: "needs_decision", count: 1, fixtureIds: ["f-dec"] },
+  no_scorer: { kind: "no_scorer", count: 1, fixtureIds: ["f-ns"], minutesSinceKickoff: 12 },
+  not_recording: { kind: "not_recording", count: 1, fixtureIds: ["f-nr"], minutesSinceKickoff: 20 },
+  unscheduled: { kind: "unscheduled", count: 2 },
+  result_missing: { kind: "result_missing", count: 3, fixtureIds: ["f-r1", "f-r2", "f-r3"] },
+  bans_waiting: { kind: "bans_waiting", count: 1 },
+  registrations_waiting: { kind: "registrations_waiting", count: 4 },
+};
+/** The kinds, from the desk's own declaration (`ATTENTION_SEVERITY` is a Record over every kind), never a list typed here. */
+const KINDS = Object.keys(ATTENTION_SEVERITY) as Attention["kind"][];
+
+/** The desk's Needs-you rows for a division carrying `attention`, built by the desk's own `needsYouItems` (the rows Match Day's
+ *  view carries, translated server-side). */
+function deskRows(attention: Attention[], d: Dict = dict): NeedsYouItem[] {
+  const names = { home: "Zara Khan", away: "Ella Brooks", fixture_no: 7 };
+  const fixture_names = Object.fromEntries(attention.flatMap((a) => ("fixtureIds" in a ? a.fixtureIds : [])).map((id) => [id, names]));
+  const desk = { divisions: new Map([["d-u14", { attention, fixture_names }]]) } as unknown as CompetitionDesk;
+  return needsYouItems(d, desk, [{ id: "d-u14", name: "Girls U14", slug: "girls-u14" }], "acme", "safe-badminton", "en");
+}
+
+const shellHtml = (v: MatchDayView) =>
+  renderToStaticMarkup(
+    <MatchDayShell
+      competitionId="comp-1"
+      competitionName="Safe Badminton 2026"
+      orgSlug="acme"
+      compSlug="safe-badminton"
+      locale="en"
+      divisions={[]}
+      initial={v}
+      dict={dict}
+      scoreDict={publicEn as Dict}
+      viewerPlan="pro"
+    />,
+  );
+const tagWith = (html: string, testId: string) => html.match(new RegExp(`<[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? "";
+
+describe("A4 — Needs you, behind the header's attention button", () => {
+  it("EMPTY CASE FIRST: nothing needs the organiser — no button and no list", () => {
+    const html = shellHtml(view([court()]));
+    expect(html).not.toContain('data-testid="md-needs-you-toggle"');
+    expect(html).not.toContain('data-testid="md-needs-you"');
+    expect(needsYouTone([])).toBeNull();
+  });
+
+  it("the button reads 'N need you · M results owed' (the list's own row count; the desk's result_missing count), closed at first", () => {
+    const rows = deskRows([ONE_OF_EACH.no_scorer, ONE_OF_EACH.result_missing, ONE_OF_EACH.unscheduled]);
+    expect(rows).toHaveLength(3);
+    const html = shellHtml({ ...view([court()]), needs_you: rows, results_owed: 3 });
+    const toggle = html.slice(html.indexOf('data-testid="md-needs-you-toggle"'), html.indexOf("</button>", html.indexOf('data-testid="md-needs-you-toggle"')));
+    expect(toggle).toContain(`>${plural(dict, "matchDay.needsYou.count", 3, "en")}<`);
+    expect(toggle).toContain(`>${plural(dict, "matchDay.needsYou.owed", 3, "en")}<`);
+    // Its tone is its most urgent row's: a red no_scorer row (the desk's declared severity) makes it red.
+    expect(tagWith(html, "md-needs-you-toggle")).toContain(`data-severity="${ATTENTION_SEVERITY.no_scorer}"`);
+    expect(tagWith(html, "md-needs-you-toggle")).toContain('aria-expanded="false"');
+    // Closed: the list's box is there for aria-controls, hidden and empty.
+    expect(tagWith(html, "md-needs-you")).toContain('hidden=""');
+    expect(html).not.toContain('data-testid="desk-needs-you"');
+    // aria-controls names the list's box.
+    const controls = /aria-controls="([^"]+)"/.exec(tagWith(html, "md-needs-you-toggle"))?.[1];
+    expect(controls).toBeTruthy();
+    expect(tagWith(html, "md-needs-you")).toContain(`id="${controls}"`);
+  });
+
+  it("no result owed: the button names the rows only; one row reads in the singular", () => {
+    const one = needsYouButtonParts(dict, { needs_you: deskRows([ONE_OF_EACH.unscheduled]), results_owed: 0 }, "en");
+    expect(one).toEqual([plural(dict, "matchDay.needsYou.count", 1, "en")]);
+    expect(one[0]).not.toBe(plural(dict, "matchDay.needsYou.count", 2, "en"));
+  });
+
+  it("results owed come FIRST (spec §6.3), every other row after them in the desk's own order — and each owed row says Enter result", () => {
+    const desk = deskRows([ONE_OF_EACH.no_scorer, ONE_OF_EACH.unscheduled, ONE_OF_EACH.result_missing, ONE_OF_EACH.registrations_waiting]);
+    // Premise: the desk's own order does NOT put the owed row first (a red row outranks it), so the order below is Match Day's.
+    expect(desk[0]!.kind).not.toBe("result_missing");
+    const ordered = needsYouOrder(desk);
+    expect(ordered.map((r) => r.kind)).toEqual([
+      "result_missing",
+      ...desk.filter((r) => r.kind !== "result_missing").map((r) => r.kind),
+    ]);
+    const html = renderToStaticMarkup(<NeedsYou dict={dict} items={ordered} />);
+    const order = [...html.matchAll(/data-attention="([a-z_]+)"/g)].map((m) => m[1]);
+    expect(order[0]).toBe("result_missing");
+    const owed = html.slice(html.indexOf('data-attention="result_missing"'), html.indexOf("data-attention=", html.indexOf('data-attention="result_missing"') + 1));
+    expect(owed).toContain(t(dict, "desk.needsYou.result_missing.action"));
+    // The empty list orders to an empty list.
+    expect(needsYouOrder([])).toEqual([]);
+  });
+
+  it("SWEEP — every Attention kind the desk declares renders in Match Day's list, exactly once (count reported; zero fails)", () => {
+    const rows = deskRows(KINDS.map((k) => ONE_OF_EACH[k]));
+    const html = renderToStaticMarkup(<NeedsYou dict={dict} items={needsYouOrder(rows)} />);
+    let checked = 0;
+    for (const kind of KINDS) {
+      expect(html.split(`data-attention="${kind}"`).length - 1, kind).toBe(1);
+      checked++;
+    }
+    console.info(`[A4 sweep] Attention kinds rendered in the Match Day list: ${checked} of ${KINDS.length}`);
+    expect(checked).toBeGreaterThan(0);
+    expect(checked).toBe(KINDS.length);
+    // Every row's copy is a sentence, never a key.
+    expect(html).not.toMatch(/desk\.needsYou\./);
+  });
+});
+
+describe("A4 — the scorer's QR on a called or playing court", () => {
+  it("playing and called: the console's Remote scoring panel, embedded, under the court's own heading for it", () => {
+    let checked = 0;
+    for (const c of [
+      court(),
+      court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) }),
+    ]) {
+      const html = focus(c);
+      const at = html.indexOf('data-testid="md-scorer"');
+      expect(at, c.state).toBeGreaterThan(-1);
+      const section = html.slice(at, html.indexOf("</section>", html.indexOf('data-role="device-link-panel"', at)));
+      expect(section, c.state).toContain(`>${t(dict, "dlink.title")}<`);
+      expect(section, c.state).toContain('data-role="device-link-panel"');
+      // Embedded: no card of its own and no second "Remote scoring" heading inside it.
+      expect(section.split(`>${t(dict, "dlink.title")}<`).length - 1, c.state).toBe(1);
+      expect(section, c.state).toContain('data-testid="device-link-mint"');
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("free and in use elsewhere: no scorer QR (nothing to score here) — decided by the court's STATE, not by whether a match rode along", () => {
+    for (const c of [
+      court({ state: "free", current: null }),
+      court({ state: "in_use_elsewhere", current: null, in_use_by: "Winter Open" }),
+      // The wire never sends a match with these states (types.ts); the gate is the state, so it does not lean on that.
+      court({ state: "free", current: fx() }),
+      court({ state: "in_use_elsewhere", current: fx(), in_use_by: "Winter Open" }),
+    ]) {
+      const html = focus(c);
+      expect(html, c.state).not.toContain('data-testid="md-scorer"');
+      expect(html, c.state).not.toContain('data-role="device-link-panel"');
+    }
+  });
+});
+
+describe("A4 — no_scorer / not_recording mark the affected court's row", () => {
+  const rowOf = (c: MatchDayCourt) => renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} onSelect={() => {}} />);
+
+  it("EMPTY CASE FIRST: a playing court with no attention carries no mark", () => {
+    const html = rowOf(court());
+    expect(html).not.toContain("data-md-scorer=");
+    expect(html).not.toContain('data-scorer="');
+  });
+
+  it("each scorer kind marks its court's row, in its own words and the desk's declared severity, in every locale (count reported)", () => {
+    let checked = 0;
+    for (const kind of SCORER_ATTENTIONS) {
+      for (const [locale, d] of Object.entries(DICTS)) {
+        const html = renderToStaticMarkup(
+          <CourtList courts={[court({ current: fx({ scorer_attention: kind }) })]} selectedId={null} dict={d} onSelect={() => {}} />,
+        );
+        expect(html, `${locale} ${kind}`).toContain(`data-scorer="${kind}"`);
+        expect(html, `${locale} ${kind}`).toContain(`data-md-scorer="${kind}"`);
+        expect(html, `${locale} ${kind}`).toContain(`data-severity="${ATTENTION_SEVERITY[kind]}"`);
+        expect(html, `${locale} ${kind}`).toContain(`>${esc(t(d, `matchDay.scorer.${kind}`))}<`);
+        expect(html, `${locale} ${kind}`).not.toMatch(/matchDay\.scorer\./);
+        checked++;
+      }
+    }
+    console.info(`[A4 sweep] scorer marks checked: ${checked} (${SCORER_ATTENTIONS.length} kinds × ${Object.keys(DICTS).length} locales)`);
+    expect(checked).toBe(SCORER_ATTENTIONS.length * 4);
+    // The two kinds read differently (else the mark could not tell the organiser which it is).
+    expect(t(dict, "matchDay.scorer.no_scorer")).not.toBe(t(dict, "matchDay.scorer.not_recording"));
+  });
+
+  it("only a PLAYING court carries a mark (only a match in play can be unscored)", () => {
+    for (const state of ["called", "free", "in_use_elsewhere"] as const) {
+      const c = court({ state, current: fx({ scorer_attention: "no_scorer" }) });
+      expect(courtScorerAttention(c), state).toBeNull();
+      expect(rowOf(c), state).not.toContain("data-md-scorer=");
+    }
+    expect(courtScorerAttention(court({ current: fx({ scorer_attention: "not_recording" }) }))).toBe("not_recording");
+  });
+
+  it("the focused court's QR heading carries the same mark", () => {
+    const html = focus(court({ current: fx({ scorer_attention: "no_scorer" }) }));
+    const scorer = html.slice(html.indexOf('data-testid="md-scorer"'));
+    expect(scorer.slice(0, scorer.indexOf('data-role="device-link-panel"'))).toContain('data-md-scorer="no_scorer"');
+  });
+});
+
+describe("A4 — a playing court with a live stream shows its preview; any other shows the scoreboard (never an empty video box)", () => {
+  const VIDEO = "dQw4w9WgXcQ";
+  const live = (o: Partial<MatchDayFixture> = {}) =>
+    goldenCourt("badminton", BADMINTON!, {
+      stream: "live",
+      serving: "away",
+      live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false },
+      ...o,
+    });
+
+  it("live, on a YouTube video that may be embedded: 'Live on YouTube', the click-to-play facade on the video's thumbnail, the score under it", () => {
+    expect(BADMINTON).not.toBeNull();
+    const html = focus(live());
+    expect(html).toContain('data-testid="md-stream-preview"');
+    expect(html).not.toContain('data-testid="md-scoreboard"');
+    const preview = html.slice(html.indexOf('data-testid="md-stream-preview"'));
+    expect(preview).toContain(`>${t(dict, "stream.youtube.link.live")}<`);
+    expect(preview).toContain('data-testid="replay-facade"');
+    expect(preview).toContain(`/vi/${VIDEO}/hqdefault.jpg`);
+    // Nothing loads from YouTube until a tap: no player in the first paint.
+    expect(preview).not.toMatch(/<iframe/);
+    // Named as the court's live stream, not a replay.
+    expect(preview).toContain(`aria-label="${esc(t(dict, "matchDay.preview.label", { court: "Court 3" }))}"`);
+    // The score under the picture, by Match Day's rule (games won, the current game's points), and who serves.
+    const score = preview.slice(preview.indexOf('data-testid="md-preview-score"'));
+    expect(score).toContain(`>${gamesWon(BADMINTON!)}<`);
+    const open = setsOf(BADMINTON!).find((x) => !x.closed)!;
+    expect(score).toContain(`>${open.home}–${open.away}<`);
+    expect(score).toContain(`${esc(AWAY.name)} `);
+    // The stream panel is one tap away.
+    expect(preview).toContain(`href="${routes.fixture("acme", "safe-badminton", "girls-u14", 7)}?stream=open"`);
+    expect(preview).toContain(`>${t(dict, "matchDay.stream.settings")}<`);
+  });
+
+  it("every case with nothing to embed falls back to the C1 scoreboard, with no video box (count reported)", () => {
+    const cases: [string, MatchDayCourt][] = [
+      ["live, pasted key (no video)", live({ live_video: null })],
+      ["live, made for kids", live({ live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: true } })],
+      ["live, not a YouTube video address", live({ live_video: { url: "https://example.com/watch?v=dQw4w9WgXcQ", made_for_kids: false } })],
+      ["waiting for the phone", live({ stream: "waiting" })],
+      ["no stream", live({ stream: null })],
+    ];
+    let checked = 0;
+    for (const [name, c] of cases) {
+      const html = focus(c);
+      expect(html, name).not.toContain('data-testid="md-stream-preview"');
+      expect(html, name).toContain('data-testid="md-scoreboard"');
+      expect(html, name).not.toMatch(/<iframe|<video|data-testid="replay-box"|data-testid="replay-facade"/);
+      checked++;
+    }
+    console.info(`[A4 sweep] preview fallbacks checked: ${checked}`);
+    expect(checked).toBe(cases.length);
+  });
+
+  it("streamPreviewOf: the part only for a live stream on an embeddable YouTube video", () => {
+    expect(youtubeVideoId(youtubeWatchUrl(VIDEO))).toBe(VIDEO);
+    expect(streamPreviewOf({ stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } })).toEqual({
+      partNo: 1,
+      url: youtubeWatchUrl(VIDEO),
+      madeForKids: false,
+    });
+    expect(streamPreviewOf({ stream: "live", live_video: null })).toBeNull();
+    expect(streamPreviewOf({ stream: "live", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: true } })).toBeNull();
+    expect(streamPreviewOf({ stream: "waiting", live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } })).toBeNull();
+    expect(streamPreviewOf({ stream: null, live_video: { url: youtubeWatchUrl(VIDEO), made_for_kids: false } })).toBeNull();
+  });
+});
+
+describe("A3 carry-in — a middle-dot line never leaves a dot dangling", () => {
+  it("the header: the competition on its own line, the counts as dot-led parts in a box that clips the dot of a part starting a line", () => {
+    const html = shellHtml(view([court(), court({ court_id: "c-2", state: "free", current: null })]));
+    const header = html.slice(html.indexOf('data-testid="md-header"'), html.indexOf("</header>"));
+    // No stand-alone separator between the competition and the counts (the dangling dot of the 320 screenshot).
+    expect(header).not.toMatch(/<span aria-hidden="true">·<\/span>/);
+    const counts = header.slice(header.indexOf('data-testid="md-counts"'));
+    const box = tagWith(header, "md-counts");
+    expect(box).toMatch(/[\s"]overflow-hidden[\s"]/);
+    // Every dot is inside its part, in front of it, and the part is pulled left by exactly the dot's width.
+    const partsHtml = counts.split("data-dot-part").slice(1);
+    expect(partsHtml).toHaveLength(3);
+    for (const part of partsHtml) {
+      const w = /-ml-\[([\d.]+em)\]/.exec(part)?.[1];
+      const dot = /data-dot="true" class="[^"]*w-\[([\d.]+em)\]/.exec(part)?.[1] ?? /data-dot="" class="[^"]*w-\[([\d.]+em)\]/.exec(part)?.[1];
+      expect(w).toBeDefined();
+      expect(dot).toBe(w);
+    }
+    const gap = /gap-x-\[([\d.]+em)\]/.exec(box)?.[1];
+    expect(gap).toBe(/-ml-\[([\d.]+em)\]/.exec(partsHtml[0]!)?.[1]);
+  });
+
+  it("DotLine renders each part once, in order, with one dot each", () => {
+    const html = renderToStaticMarkup(<DotLine parts={["a", "b", "c"]} />);
+    expect([...html.matchAll(/>([abc])</g)].map((m) => m[1])).toEqual(["a", "b", "c"]);
+    expect(html.split(">·<").length - 1).toBe(3);
   });
 });

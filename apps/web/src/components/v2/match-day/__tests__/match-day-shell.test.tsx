@@ -35,6 +35,7 @@ import type { MatchDayCourt, MatchDayView } from "@/lib/match-day/types";
 import { CourtFocus } from "../court-focus";
 import { CourtList } from "../court-list";
 import { MatchDayShell, type MatchDayShellProps } from "../match-day-shell";
+import { NeedsYou, type NeedsYouItem } from "@/components/v2/desk/needs-you";
 
 const court = (id: string, name: string, o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   court_id: id,
@@ -73,6 +74,7 @@ const props = (initial: MatchDayView): MatchDayShellProps => ({
   initial,
   dict: en as Dict,
   scoreDict: publicEn as Dict,
+  viewerPlan: "pro",
 });
 
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -147,5 +149,54 @@ describe("M6b — a phone that lost its court goes back to the list, and stays t
     expect(p.focus!.hiddenOnPhone).toBe(true);
     expect(p.listHiddenOnPhone).toBe(false);
     expect(net.calls).toHaveLength(2);
+  });
+});
+
+describe("A4 — Needs you opens from the header's button, results owed first, and follows the poll", () => {
+  const row = (kind: NeedsYouItem["kind"], severity: NeedsYouItem["severity"], key = kind): NeedsYouItem => ({
+    key,
+    kind,
+    severity,
+    title: `${kind} title`,
+    sub: `${kind} sub`,
+    action: { label: `${kind} action`, href: `/x/${kind}` },
+  });
+  /** The desk's order: severity first (needs-you.tsx), so the red no_scorer row arrives before the amber owed one. */
+  const desk = [row("no_scorer", "red"), row("unscheduled", "amber"), row("result_missing", "amber"), row("registrations_waiting", "slate")];
+  const toggleOf = (tree: ReactElement[]) => tree.find((e) => propsOf(e)["data-testid"] === "md-needs-you-toggle");
+  const listOf = (tree: ReactElement[]) => tree.find((e) => e.type === NeedsYou);
+  const boxOf = (tree: ReactElement[]) => tree.find((e) => propsOf(e)["data-testid"] === "md-needs-you");
+
+  it("EMPTY CASE FIRST: no rows — no button, no list", () => {
+    const island = renderIsland(MatchDayShell, props(view([C1], "2026-10-31T11:00:00.000Z")));
+    expect(toggleOf(island.tree())).toBeUndefined();
+    expect(listOf(island.tree())).toBeUndefined();
+  });
+
+  it("closed at first; a tap opens the desk's own list with the owed rows FIRST; a poll moves the list; a second tap closes it", async () => {
+    const island = renderIsland(MatchDayShell, props({ ...view([C1], "2026-10-31T11:00:00.000Z"), needs_you: desk, results_owed: 2 }));
+    let tree = island.tree();
+    expect(propsOf(toggleOf(tree)!)["aria-expanded"]).toBe(false);
+    expect(propsOf(boxOf(tree)!).hidden).toBe(true);
+    expect(listOf(tree)).toBeUndefined();
+
+    (propsOf(toggleOf(tree)!).onClick as () => void)();
+    tree = island.tree();
+    expect(propsOf(toggleOf(tree)!)["aria-expanded"]).toBe(true);
+    expect(propsOf(boxOf(tree)!).hidden).toBe(false);
+    const items = propsOf(listOf(tree)!).items as NeedsYouItem[];
+    expect(items.map((i) => i.kind)).toEqual(["result_missing", "no_scorer", "unscheduled", "registrations_waiting"]);
+
+    // The poll brings a day where the owed result was entered: the open list follows it.
+    net.next = { ...view([C1], "2026-10-31T11:00:30.000Z"), needs_you: desk.filter((r) => r.kind !== "result_missing"), results_owed: 0 };
+    poll.tick!();
+    await settle();
+    tree = island.tree();
+    expect((propsOf(listOf(tree)!).items as NeedsYouItem[]).map((i) => i.kind)).toEqual(["no_scorer", "unscheduled", "registrations_waiting"]);
+
+    (propsOf(toggleOf(tree)!).onClick as () => void)();
+    tree = island.tree();
+    expect(propsOf(toggleOf(tree)!)["aria-expanded"]).toBe(false);
+    expect(listOf(tree)).toBeUndefined();
   });
 });

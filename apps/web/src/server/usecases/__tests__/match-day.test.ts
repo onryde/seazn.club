@@ -26,6 +26,7 @@
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
 import { afterAll, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { foldMatchWithStoppage, initSquads, summaryOf, type EventEnvelope } from "@seazn/engine/core";
 import { resolvePositions } from "@seazn/engine/sport";
 import { badminton, setBasedServeContext, type SetBasedState } from "@seazn/engine/sports/setbased";
@@ -37,8 +38,9 @@ import uiFr from "@/dictionaries/fr/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { venueNoun } from "@/lib/venue";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
-import type { MatchDayCandidate, MatchDayCourt, MatchDayView } from "@/lib/match-day/types";
-import { rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
+import { apiSessionOnTarget, rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { youtubeWatchUrl } from "@/lib/youtube";
 import { appendEvent } from "@/server/engine-db/append-event";
 import { createCompetition } from "../competitions";
 import { getCompetitionDesk } from "../competition-desk";
@@ -191,6 +193,30 @@ async function record(day: Day, f: { id: string; home: string; away: string }, e
       : (await sql<{ id: string }[]>`select id from score_events where fixture_id = ${f.id} order by seq offset ${e.voids} limit 1`)[0]!.id;
     await appendEvent(day.orgId, f.id, i, { type: e.type, payload: seat(e.payload), ...(voids === undefined ? {} : { voids }) });
   }
+}
+
+/** An accepted official on the match: the desk's "has a scorer" (competition-desk.ts reads fixture_officials, any role). */
+async function nominate(day: Day, fixtureId: string): Promise<void> {
+  const [p] = await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${day.orgId}, 'Una Umpire') returning id`;
+  const [o] = await sql<{ id: string }[]>`
+    insert into officials (org_id, person_id, display_name, role_keys) values (${day.orgId}, ${p!.id}, 'Una Umpire', ${sql.json(["umpire"])})
+    returning id`;
+  await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+            values (${day.orgId}, ${fixtureId}, ${o!.id}, 'umpire', 'accepted')`;
+}
+
+/** A session in `state` on a connected channel (`rigApiTarget`), streaming into a YouTube broadcast YouTube has given an id —
+ *  the shape Go live leaves (session-video-url.test.ts drives the real one); written raw, since only the READ is under test.
+ *  Returns the broadcast's YouTube id. */
+async function onYouTube(day: Day, fixtureId: string, state: string, madeForKids: boolean): Promise<string> {
+  const { targetId, connectionId } = await rigApiTarget(day.orgId, `Cam ${randomUUID().slice(0, 6)}`);
+  const sessionId = await apiSessionOnTarget(day.orgId, fixtureId, targetId, state);
+  const ytId = `v${randomUUID().replace(/-/g, "").slice(0, 10)}`;
+  const [b] = await sql<{ id: string }[]>`
+    insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id)
+    values (${madeForKids}, ${day.orgId}, ${connectionId}, ${fixtureId}, 'Match', 'unlisted', 'live', ${ytId}) returning id`;
+  await sql`update fixture_stream_sessions set youtube_broadcast_id = ${b!.id} where id = ${sessionId}`;
+  return ytId;
 }
 
 function courtOf(view: MatchDayView, courtId: string): MatchDayCourt {
@@ -365,6 +391,10 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       started_at: iso(5),
       called_at: null,
       stream: "live",
+      // A4: its live session is on a PASTED key (`rigTarget`), which names no YouTube video — no preview source; and it has a
+      // ledger, so no scorer attention.
+      scorer_attention: null,
+      live_video: null,
     });
     // Held until max(now 20, kick-off 5 + 30) = 35. f13: max(30, 35) = 35, ends 65; f24: max(90, 65) = 90.
     expect(queueOf(c1)).toEqual([
@@ -412,14 +442,15 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
   });
 
   it("S1 — a playing set-sport match says who serves next, as the engine's own serve reader says it over the ledger: after a void too; a non-set sport, a queued match: null", async () => {
-    // Two moments of game 2, found in the recorded stream (never picked by hand): one where the engine names AWAY, and one
-    // where the last rally put HOME to serve and its void hands the serve back to AWAY — the void must move the answer.
+    // Two moments of game 2, found in the recorded stream (never picked by hand): one where the engine names HOME, and one
+    // where the last rally put HOME to serve and its void hands the serve back to AWAY — the void must move the answer. One of
+    // each side (A3 carry-in): an answer that is always "away", or always "home", reds one of the two courts.
     const rallyEnds = BWF.events.flatMap((e, i) => (e.type === "badminton.rally" && i > BWF.events.findIndex((x) => x.type === "badminton.game.summary") ? [i + 1] : []));
-    const plainK = [...rallyEnds].reverse().find((k) => engineSays(BWF.events.slice(0, k)).serving === "away");
+    const plainK = [...rallyEnds].reverse().find((k) => engineSays(BWF.events.slice(0, k)).serving === "home");
     const voidK = [...rallyEnds].reverse().find(
       (k) => engineSays(BWF.events.slice(0, k)).serving === "home" && engineSays([...BWF.events.slice(0, k), voidOf(k - 1)]).serving === "away",
     );
-    expect(plainK, "a moment of game 2 the engine gives to away").toBeDefined();
+    expect(plainK, "a moment of game 2 the engine gives to home").toBeDefined();
     expect(voidK, "a home rally whose void hands the serve back").toBeDefined();
     const plain = BWF.events.slice(0, plainK);
     const voided = [...BWF.events.slice(0, voidK), voidOf(voidK! - 1)];
@@ -451,12 +482,135 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       checked++;
     }
     expect(checked).toBe(2);
-    expect(courtOf(view, day.courts.c1).current!.serving).toBe("away");
+    expect(courtOf(view, day.courts.c1).current!.serving).toBe("home");
     expect(courtOf(view, day.courts.c2).current!.serving).toBe("away");
     const generic = courtOf(view, day.courts.c3);
     expect(generic.current!.id).toBe(f12.id);
     expect(generic.current!.serving).toBeNull();
     expect(generic.queue.map((q) => [q.id, q.serving])).toEqual([[f34.id, null]]);
+  });
+
+  it("S1 guard — one playing match whose fold throws leaves the rest of the board intact: its `serving` is null, every other court reads as before", async () => {
+    // The throw is a real one the fold makes on a real shape: a side whose entrant row went (the fixtures FK is `on delete set
+    // null`), which `loadFoldInputs` refuses with WRONG_PHASE "unassigned_entrant" (server/engine-db/fold.ts). Before the guard it
+    // escaped `getMatchDay` and the whole board answered 500.
+    const rallyEnds = BWF.events.flatMap((e, i) => (e.type === "badminton.rally" && i > BWF.events.findIndex((x) => x.type === "badminton.game.summary") ? [i + 1] : []));
+    const k = [...rallyEnds].reverse().find((n) => engineSays(BWF.events.slice(0, n)).serving !== null);
+    expect(k, "a moment of game 2 the engine has a server for").toBeDefined();
+    const events = BWF.events.slice(0, k);
+
+    const day = await seedDay();
+    const [fGood, fBroken] = await badmintonFixtures(day, day.courts.c1);
+    await place(day, fGood!.id, 0, day.courts.c1);
+    await place(day, fBroken!.id, 0, day.courts.c2);
+    await record(day, fGood!, events);
+    await record(day, fBroken!, events);
+    // A generic match called onto court 3: a court of another state, which must survive too.
+    const { p1, p2 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    await place(day, f12.id, 30, day.courts.c3);
+    await callFixtureToCourt(day.auth, f12.id, day.courts.c3, at(5));
+    const before = await getMatchDay(day.auth, day.comp.id, at(5));
+    expect(courtOf(before, day.courts.c2).current!.serving, "premise: the fold reads a server before the break").not.toBeNull();
+
+    await sql`update fixtures set away_entrant_id = null where id = ${fBroken!.id}`;
+    const view = await getMatchDay(day.auth, day.comp.id, at(5));
+
+    const broken = courtOf(view, day.courts.c2);
+    expect(broken.state).toBe("playing");
+    expect(broken.current!.id).toBe(fBroken!.id);
+    expect(broken.current!.serving).toBeNull();
+    // Every other court as the board read it before the break, field for field.
+    let checked = 0;
+    for (const c of before.courts) {
+      if (c.court_id === day.courts.c2) continue;
+      expect(courtOf(view, c.court_id), c.court_name).toEqual(c);
+      checked++;
+    }
+    expect(checked, "courts compared").toBeGreaterThanOrEqual(2);
+    expect(courtOf(view, day.courts.c1).current!.serving).toBe(engineSays(events).serving);
+    expect(courtOf(view, day.courts.c3).state).toBe("called");
+  });
+
+  it("A4 — a playing match carries the desk's own scorer attention: no scorer (nobody nominated), not recording (the nominee silent past the grace); a match with a ledger, and every queued one, none — each mark is a Needs-you row of the same kind", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    const f34 = between(day.comp, p3, p4);
+    const f13 = between(day.comp, p1, p3);
+    const f24 = between(day.comp, p2, p4);
+    // A started division: a division still in `setup` raises no live-activity row at all (division-phase.ts's gate).
+    await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+    // In play with nothing recorded (a status the console's Start can leave before the first event), 40 minutes past kick-off.
+    await place(day, f12.id, -40, day.courts.c1);
+    await setStatus(f12.id, "in_play");
+    await place(day, f34.id, -40, day.courts.c2);
+    await setStatus(f34.id, "in_play");
+    await nominate(day, f34.id);
+    // In play with a ledger, and a match queued behind it.
+    await place(day, f13.id, -10, day.courts.c3);
+    await start(day, f13.id, -10);
+    await place(day, f24.id, 30, day.courts.c3);
+
+    // The authority: the desk's own attention rows, by match.
+    const desk = await getCompetitionDesk(day.auth, day.comp.id, at(0));
+    const deskKind = new Map<string, string>();
+    for (const d of desk.divisions.values()) {
+      for (const a of d.attention) if (a.kind === "no_scorer" || a.kind === "not_recording") for (const id of a.fixtureIds) deskKind.set(id, a.kind);
+    }
+    expect(deskKind.get(f12.id), "premise: the desk says nobody is scoring f12").toBe("no_scorer");
+    expect(deskKind.get(f34.id), "premise: the desk says f34's scorer is silent").toBe("not_recording");
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(0));
+    let checked = 0;
+    for (const [court, f] of [[day.courts.c1, f12], [day.courts.c2, f34], [day.courts.c3, f13]] as const) {
+      const current = courtOf(view, court).current!;
+      expect(current.id).toBe(f.id);
+      expect(current.scorer_attention, court).toBe(deskKind.get(f.id) ?? null);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(courtOf(view, day.courts.c3).queue.map((q) => [q.id, q.scorer_attention])).toEqual([[f24.id, null]]);
+    // One fact, two places: each kind on a court is a row of the list, naming that match's console.
+    for (const kind of ["no_scorer", "not_recording"] as const) {
+      expect(view.needs_you.filter((r) => r.kind === kind), kind).toHaveLength(1);
+    }
+  });
+
+  it("A4 — a playing match whose stream is LIVE carries the YouTube video it streams into, with that broadcast's made-for-kids stamp; a pasted key, a stream still warming: none", async () => {
+    const day = await seedDay();
+    const c4 = await addCourt(day, "hallA", "Court 4", 3);
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    const f34 = between(day.comp, p3, p4);
+    const f13 = between(day.comp, p1, p3);
+    const f24 = between(day.comp, p2, p4);
+    for (const [f, c] of [[f12, day.courts.c1], [f34, day.courts.c2], [f13, day.courts.c3], [f24, c4]] as const) {
+      await place(day, f.id, -10, c);
+      await start(day, f.id, -10);
+    }
+    // EMPTY CASE FIRST: a live stream on a pasted key names no video.
+    await sessionOnTarget(day.orgId, f13.id, await rigTarget(day.orgId, "Pasted cam"), "live");
+    const open = await onYouTube(day, f12.id, "live", false);
+    const kids = await onYouTube(day, f34.id, "live", true);
+    await onYouTube(day, f24.id, "warming", false);
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(0));
+    const expected: [string, string, MatchDayFixture["live_video"], string][] = [
+      [day.courts.c1, f12.id, { url: youtubeWatchUrl(open), made_for_kids: false }, "live"],
+      [day.courts.c2, f34.id, { url: youtubeWatchUrl(kids), made_for_kids: true }, "live"],
+      [day.courts.c3, f13.id, null, "live"],
+      [c4, f24.id, null, "waiting"],
+    ];
+    let checked = 0;
+    for (const [court, id, video, stream] of expected) {
+      const current = courtOf(view, court).current!;
+      expect(current.id).toBe(id);
+      expect(current.stream, court).toBe(stream);
+      expect(current.live_video, court).toEqual(video);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("what holds a court ends no earlier than now: an overrunning match holds it until now; a called match for a match length from now", async () => {

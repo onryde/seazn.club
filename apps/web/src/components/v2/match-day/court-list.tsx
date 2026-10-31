@@ -3,10 +3,15 @@
 // ONLY while that court's match is live (§6.2: no badge otherwise, so a venue that never streams never sees one). On a phone
 // this list is the home screen and a row opens its court full-screen; from md it is the left column and a row focuses its
 // court on the right.
+//
+// A court whose playing match nobody is scoring carries the desk's mark for it (task A4, §9: "`no_scorer` / `not_recording` also
+// mark the affected court's row"), the same fact as the Needs-you row, so the organiser sees WHICH court from the list.
+import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MatchDayCourt } from "@/lib/match-day/types";
-import { compactScore, matchLabel, scoreLine } from "@/lib/match-day/view";
+import { compactScore, courtScorerAttention, matchLabel, scoreLine } from "@/lib/match-day/view";
+import { ScorerMark } from "./scorer-mark";
 
 /** The state dot: green while playing, amber while called, an open ring while free, grey while another competition has it. */
 const DOT: Record<MatchDayCourt["state"], string> = {
@@ -32,6 +37,7 @@ export function CourtList({
       {courts.map((c) => {
         const selected = c.court_id === selectedId;
         const score = c.state === "playing" && c.current !== null ? scoreLine(c.current) : null;
+        const scorer = courtScorerAttention(c);
         return (
           <li key={c.court_id}>
             <button
@@ -39,6 +45,7 @@ export function CourtList({
               data-testid="md-court-row"
               data-court-id={c.court_id}
               data-state={c.state}
+              data-scorer={scorer ?? undefined}
               aria-current={selected ? "true" : undefined}
               onClick={() => onSelect(c.court_id)}
               className={`grid min-h-14 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 text-left transition hover:bg-purple-50/60 ${
@@ -68,6 +75,11 @@ export function CourtList({
                     {compactScore(score)}
                   </span>
                 ) : null}
+                {scorer !== null && (
+                  <span className="mt-1 flex min-w-0">
+                    <ScorerMark dict={dict} kind={scorer} severity={ATTENTION_SEVERITY[scorer]} />
+                  </span>
+                )}
               </span>
               <span className="shrink-0 text-right">
                 {c.state === "called" ? (

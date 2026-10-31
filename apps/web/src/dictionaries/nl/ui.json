@@ -7156,5 +7156,13 @@
   "matchDay.focus.noScore": "Nog geen score genoteerd",
   "matchDay.focus.left": "{court} staat niet meer in deze lijst.",
   "matchDay.focus.pick": "Kies er een uit de lijst.",
-  "matchDay.notice.dismiss": "Sluiten"
+  "matchDay.notice.dismiss": "Sluiten",
+  "matchDay.needsYou.count.one": "{count} vraagt om jou",
+  "matchDay.needsYou.count.other": "{count} vragen om jou",
+  "matchDay.needsYou.owed.one": "{count} uitslag open",
+  "matchDay.needsYou.owed.other": "{count} uitslagen open",
+  "matchDay.scorer.no_scorer": "Geen scorer",
+  "matchDay.scorer.not_recording": "Nog niets geregistreerd",
+  "matchDay.preview.label": "Livestream op {court}",
+  "matchDay.stream.settings": "Streaminstellingen"
 }

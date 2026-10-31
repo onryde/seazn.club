@@ -3357,6 +3357,43 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "scorer_attention": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "no_scorer",
+                                              "not_recording"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "live_video": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "url": {
+                                                "type": "string"
+                                              },
+                                              "made_for_kids": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "url",
+                                              "made_for_kids"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
@@ -3376,7 +3413,9 @@
                                       "serving",
                                       "started_at",
                                       "called_at",
-                                      "stream"
+                                      "stream",
+                                      "scorer_attention",
+                                      "live_video"
                                     ],
                                     "additionalProperties": false
                                   },
@@ -3581,6 +3620,43 @@
                                         }
                                       ]
                                     },
+                                    "scorer_attention": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "no_scorer",
+                                            "not_recording"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "live_video": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "url": {
+                                              "type": "string"
+                                            },
+                                            "made_for_kids": {
+                                              "type": "boolean"
+                                            }
+                                          },
+                                          "required": [
+                                            "url",
+                                            "made_for_kids"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
                                     "planned_at": {
                                       "type": "string",
                                       "format": "date-time",
@@ -3610,6 +3686,8 @@
                                     "started_at",
                                     "called_at",
                                     "stream",
+                                    "scorer_attention",
+                                    "live_video",
                                     "planned_at",
                                     "estimated_at"
                                   ],
@@ -3748,7 +3826,12 @@
                           "serving": "home",
                           "started_at": "2026-08-01T09:00:00Z",
                           "called_at": "2026-08-01T09:00:00Z",
-                          "stream": "live"
+                          "stream": "live",
+                          "scorer_attention": "no_scorer",
+                          "live_video": {
+                            "url": null,
+                            "made_for_kids": null
+                          }
                         },
                         "in_use_by": "example",
                         "free_since": "2026-08-01T09:00:00Z",
@@ -3775,6 +3858,11 @@
                             "started_at": "2026-08-01T09:00:00Z",
                             "called_at": "2026-08-01T09:00:00Z",
                             "stream": "live",
+                            "scorer_attention": "no_scorer",
+                            "live_video": {
+                              "url": null,
+                              "made_for_kids": null
+                            },
                             "planned_at": "2026-08-01T09:00:00Z",
                             "estimated_at": "2026-08-01T09:00:00Z"
                           }
@@ -4165,6 +4253,43 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "scorer_attention": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "no_scorer",
+                                      "not_recording"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "live_video": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "url": {
+                                        "type": "string"
+                                      },
+                                      "made_for_kids": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "url",
+                                      "made_for_kids"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -4184,7 +4309,9 @@
                               "serving",
                               "started_at",
                               "called_at",
-                              "stream"
+                              "stream",
+                              "scorer_attention",
+                              "live_video"
                             ],
                             "additionalProperties": false
                           },
@@ -4299,7 +4426,12 @@
                         "serving": "home",
                         "started_at": "2026-08-01T09:00:00Z",
                         "called_at": "2026-08-01T09:00:00Z",
-                        "stream": "live"
+                        "stream": "live",
+                        "scorer_attention": "no_scorer",
+                        "live_video": {
+                          "url": "example",
+                          "made_for_kids": true
+                        }
                       },
                       "source": "this_court",
                       "from_court_name": "example",

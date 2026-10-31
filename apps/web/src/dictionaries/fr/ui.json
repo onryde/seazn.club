@@ -7156,5 +7156,13 @@
   "matchDay.focus.noScore": "Aucun score enregistré pour l'instant",
   "matchDay.focus.left": "{court} n'est plus dans cette liste.",
   "matchDay.focus.pick": "Choisissez-en un dans la liste.",
-  "matchDay.notice.dismiss": "Fermer"
+  "matchDay.notice.dismiss": "Fermer",
+  "matchDay.needsYou.count.one": "{count} à traiter",
+  "matchDay.needsYou.count.other": "{count} à traiter",
+  "matchDay.needsYou.owed.one": "{count} résultat manquant",
+  "matchDay.needsYou.owed.other": "{count} résultats manquants",
+  "matchDay.scorer.no_scorer": "Sans marqueur",
+  "matchDay.scorer.not_recording": "Rien d'enregistré",
+  "matchDay.preview.label": "Diffusion en direct sur {court}",
+  "matchDay.stream.settings": "Réglages de la diffusion"
 }

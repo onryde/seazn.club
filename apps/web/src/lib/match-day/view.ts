@@ -6,8 +6,10 @@ import { plural, t } from "@/lib/i18n-runtime";
 import { fmtPublicTime } from "@/lib/format";
 import type { VenueNoun } from "@/lib/venue";
 import { setBreakdown } from "@/lib/public-site";
+import type { Attention, Severity } from "@/lib/division-phase";
+import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallWarning } from "./call";
-import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "./types";
+import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView, NeedsYouItem, ScorerAttention } from "./types";
 
 /**
  * A playing match's score as Match Day shows it (spec §6.2 "games or sets won in large type, current points beside them";
@@ -208,4 +210,53 @@ export function warningText(dict: Dict, w: CallWarning, locale: Locale, tz: stri
     case "past_day_end":
       return t(dict, "matchDay.sheet.warn.pastDayEnd", { court: w.court_name, time: fmtPublicTime(locale, tz, w.until) });
   }
+}
+
+// ---- Needs you, the scorer marks and the stream preview (task A4) ----------------------------------------------------------
+
+/** The kinds Match Day lists FIRST (spec §6.3: "Results owed come first, with Enter result on each"; §9 "Results owed are counted
+ *  first"). Every other row keeps the desk's own order after them (severity, then the desk's kind order: needs-you.tsx). */
+export const NEEDS_YOU_FIRST: readonly Attention["kind"][] = ["result_missing"];
+
+/** The Needs-you list as Match Day shows it: the `NEEDS_YOU_FIRST` rows, then the rest, each group in the order it arrived. */
+export function needsYouOrder(items: readonly NeedsYouItem[]): NeedsYouItem[] {
+  const first = items.filter((i) => NEEDS_YOU_FIRST.includes(i.kind));
+  return [...first, ...items.filter((i) => !NEEDS_YOU_FIRST.includes(i.kind))];
+}
+
+const SEVERITY_RANK: readonly Severity[] = ["red", "amber", "slate"];
+
+/** The header button's tone: its most urgent row's severity; null for an empty list (no button). */
+export function needsYouTone(items: readonly Pick<NeedsYouItem, "severity">[]): Severity | null {
+  let best: Severity | null = null;
+  for (const i of items) if (best === null || SEVERITY_RANK.indexOf(i.severity) < SEVERITY_RANK.indexOf(best)) best = i.severity;
+  return best;
+}
+
+/** The header button's words (§6.3, "11 need you · 3 results owed"): how many rows the list holds — the list's own count — and,
+ *  when any, how many matches owe a result. Parts, so the page can join them without a separator left dangling on a wrap. */
+export function needsYouButtonParts(
+  dict: Dict,
+  view: Pick<MatchDayView, "needs_you" | "results_owed">,
+  locale: Locale,
+): string[] {
+  const parts = [plural(dict, "matchDay.needsYou.count", view.needs_you.length, locale)];
+  if (view.results_owed > 0) parts.push(plural(dict, "matchDay.needsYou.owed", view.results_owed, locale));
+  return parts;
+}
+
+/** A court's scorer mark (§9: "`no_scorer` / `not_recording` also mark the affected court's row"): the desk's attention for the
+ *  match playing on it. Only a match in play can carry one, so a court in any other state has none. */
+export function courtScorerAttention(court: Pick<MatchDayCourt, "state" | "current">): ScorerAttention | null {
+  return court.state === "playing" ? (court.current?.scorer_attention ?? null) : null;
+}
+
+/** The playing court's stream preview (§6.2 "Playing, stream live"; §8 Phase 1): the YouTube video its live stream goes into, as
+ *  a replay part the public page's player plays — only when the stream is live, the address is provably a video, and the
+ *  broadcast may be embedded (`mayEmbedReplay`: positively not made for kids; DP III.E.4.j). Otherwise null, and the court shows
+ *  its scoreboard (C1) — never an empty video box (§5). */
+export function streamPreviewOf(f: Pick<MatchDayFixture, "stream" | "live_video">): PublicReplayPart | null {
+  if (f.stream !== "live" || f.live_video === null) return null;
+  const part: PublicReplayPart = { partNo: 1, url: f.live_video.url, madeForKids: f.live_video.made_for_kids };
+  return mayEmbedReplay(part) && youtubeVideoId(part.url) !== null ? part : null;
 }

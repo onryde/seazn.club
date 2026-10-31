@@ -1,12 +1,17 @@
 "use client";
 // Match Day's focused court (spec 2026-10-31 §6.2, task A3), one panel per state:
-//  - playing: the sport's scoreboard (court-scoreboard.tsx), its stream in the corner, Open pad, the queue;
-//  - called: "Called: waiting for players", the match, Undo call (A1's DELETE …/call), the queue;
+//  - playing: its live stream's preview when it has one to show (court-stream-preview.tsx, task A4), else the sport's scoreboard
+//    (court-scoreboard.tsx) with its stream in the corner; Open pad, the scorer's QR, the queue;
+//  - called: "Called: waiting for players", the match, Undo call (A1's DELETE …/call), the scorer's QR, the queue;
 //  - free: "Court 5 is free" and the candidates (candidate-list.tsx);
 //  - in use by another competition: greyed, named, nothing to press.
 // On a phone it is a full screen of its own with "‹ All courts" back; from md it is the right-hand column.
 // A refused call or undo is held ABOVE the state panels (`notice`, kept by the shell per court): the refusal triggers a
 // refresh, and the refresh can change the court's state and unmount the panel that was refused (review M5).
+//
+// The scorer's QR (spec §2, §9: "Match Day … now shows the scorer QR for a called or live match"; task A4) is the console's own
+// Remote scoring panel (`DeviceLinkPanel`, embedded): the same per-match link, ENSURE'd — showing it never kills a printed sheet.
+// Keyed by the match, so another court's match never shows the last one's link.
 import { useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -14,11 +19,16 @@ import { fmtPublicTime } from "@/lib/format";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
+import type { ViewerPlan } from "@/lib/viewer-plan";
+import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
-import { matchLabel } from "@/lib/match-day/view";
+import { courtScorerAttention, matchLabel, streamPreviewOf } from "@/lib/match-day/view";
+import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { FreeCourt } from "./candidate-list";
 import { failureMessage } from "./call-sheet";
 import { CourtScoreboard } from "./court-scoreboard";
+import { CourtStreamPreview } from "./court-stream-preview";
+import { ScorerMark } from "./scorer-mark";
 
 /** What every Match Day panel reads: where it is, who reads it, and in which zone its times print. */
 export interface MatchDayCtx {
@@ -32,6 +42,8 @@ export interface MatchDayCtx {
   dict: Dict;
   /** The `public` dictionary's scoreboard keys, for `LiveScoreBody`. */
   scoreDict: Dict;
+  /** The organisation's plan class: the scorer QR's paywall copy (`DeviceLinkPanel`). */
+  viewerPlan: ViewerPlan;
 }
 
 /** The match's console page: its pad and its per-match stream panel. */
@@ -72,6 +84,7 @@ export function CourtFocus({
 }) {
   const { dict } = ctx;
   const f = court.current;
+  const preview = court.state === "playing" && f !== null ? streamPreviewOf(f) : null;
   return (
     <section
       data-testid="md-focus"
@@ -124,16 +137,30 @@ export function CourtFocus({
       {court.state === "playing" && f !== null && (
         <>
           <MatchLine ctx={ctx} fixture={f} />
-          <CourtScoreboard
-            fixture={f}
-            courtName={court.court_name}
-            streamHref={`${fixtureHref(ctx, f)}?stream=open`}
-            dict={dict}
-            scoreDict={ctx.scoreDict}
-          />
+          {preview !== null ? (
+            <CourtStreamPreview
+              fixture={f}
+              part={preview}
+              courtName={court.court_name}
+              streamHref={`${fixtureHref(ctx, f)}?stream=open`}
+              dict={dict}
+              scoreDict={ctx.scoreDict}
+            />
+          ) : (
+            <CourtScoreboard
+              fixture={f}
+              courtName={court.court_name}
+              streamHref={`${fixtureHref(ctx, f)}?stream=open`}
+              dict={dict}
+              scoreDict={ctx.scoreDict}
+            />
+          )}
         </>
       )}
       {court.state === "called" && f !== null && <CalledPanel ctx={ctx} fixture={f} onChanged={onChanged} onRefused={onRefused} />}
+      {f !== null && (court.state === "playing" || court.state === "called") && (
+        <ScorerPanel ctx={ctx} fixture={f} attention={courtScorerAttention(court)} />
+      )}
       {court.state === "free" && (
         <FreeCourt
           key={court.court_id}
@@ -225,6 +252,31 @@ function CalledPanel({
         className="btn mt-4 min-h-11 border border-white/30 text-court-ink hover:bg-white/10"
       >{busy ? t(dict, "matchDay.called.undoing") : t(dict, "matchDay.called.undo")}</button>
     </div>
+  );
+}
+
+/** The match's scorer link as a QR (the console's Remote scoring panel, embedded), under the court's own heading for it — with the
+ *  court's scorer mark beside the heading while the desk says nobody is scoring (§9). */
+function ScorerPanel({
+  ctx,
+  fixture,
+  attention,
+}: {
+  ctx: MatchDayCtx;
+  fixture: MatchDayFixture;
+  attention: ReturnType<typeof courtScorerAttention>;
+}) {
+  const { dict } = ctx;
+  return (
+    <section data-testid="md-scorer" aria-labelledby={`md-scorer-${fixture.id}`} className="min-w-0">
+      <div className="mb-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+        <h3 id={`md-scorer-${fixture.id}`} className="text-xs font-semibold text-slate-600">
+          {t(dict, "dlink.title")}
+        </h3>
+        {attention !== null && <ScorerMark dict={dict} kind={attention} severity={ATTENTION_SEVERITY[attention]} />}
+      </div>
+      <DeviceLinkPanel key={fixture.id} fixtureId={fixture.id} sportKey={fixture.sport_key} embedded viewerPlan={ctx.viewerPlan} />
+    </section>
   );
 }
 

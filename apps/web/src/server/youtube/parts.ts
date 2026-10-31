@@ -22,6 +22,7 @@ import "server-only";
 // A part is `{ partNo, url }` (the public read adds `madeForKids`, V482). The url is the video's watch URL: a broadcast id is also its video id. Only `complete` rows count - a
 // failed, open or ending broadcast is not a replay yet (V479's check: a complete row always has a finish time and a video id).
 import { sql } from "@/lib/db";
+import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { youtubeWatchUrl, type OrganiserReplayPart, type PublicReplayPart, type ReplayPart } from "@/lib/youtube";
 
 export type { OrganiserReplayPart, PublicReplayPart, ReplayPart };
@@ -68,4 +69,25 @@ export async function sessionVideoUrl(orgId: string, sessionId: string): Promise
       join youtube_broadcasts b on b.id = s.youtube_broadcast_id and b.org_id = s.org_id
      where s.id = ${sessionId} and s.org_id = ${orgId} and b.yt_broadcast_id is not null and b.state <> 'failed'`;
   return row ? youtubeWatchUrl(row.video_id) : null;
+}
+
+/** Match Day's stream preview (task A4, spec §6.2 "Playing, stream live" / §8 Phase 1): for each of these fixtures, the video its
+ *  LATEST open session streams into, with that broadcast's own made-for-kids stamp - or nothing. "Latest open" is the very session
+ *  `openStreamStates` reads (latest by creation among `ACTIVE_STATES`), so the preview and the court's Live badge speak about one
+ *  session; its video is `sessionVideoUrl`'s rule (its own broadcast, once YouTube gave it an id, not failed). A pasted key names no
+ *  broadcast, so its fixture is absent. Org-scoped on both rows. The caller decides whether a part may be embedded
+ *  (`mayEmbedReplay`). */
+export async function liveSessionVideos(orgId: string, fixtureIds: readonly string[]): Promise<Record<string, PublicReplayPart>> {
+  if (fixtureIds.length === 0) return {};
+  const rows = await sql<{ fixture_id: string; video_id: string; made_for_kids: boolean }[]>`
+    select s.fixture_id, b.yt_broadcast_id as video_id, b.made_for_kids
+      from (select distinct on (fixture_id) fixture_id, org_id, youtube_broadcast_id
+              from fixture_stream_sessions
+             where org_id = ${orgId} and fixture_id in ${sql([...fixtureIds])} and state in ${sql([...ACTIVE_STATES])}
+             order by fixture_id, created_at desc) s
+      join youtube_broadcasts b on b.id = s.youtube_broadcast_id and b.org_id = s.org_id
+     where b.yt_broadcast_id is not null and b.state <> 'failed'`;
+  const out: Record<string, PublicReplayPart> = {};
+  for (const r of rows) out[r.fixture_id] = { partNo: 1, url: youtubeWatchUrl(r.video_id), madeForKids: r.made_for_kids };
+  return out;
 }

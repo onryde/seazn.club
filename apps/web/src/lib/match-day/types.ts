@@ -2,9 +2,16 @@
 // read model (server/usecases/match-day.ts), its two GET routes and the Match Day UI share them, and client code must not
 // import from server/**. Type-only imports only (eslint.config.mjs refuses a value import of @/server/** here).
 import type { NeedsYouItem } from "@/components/v2/desk/needs-you";
+import type { Attention } from "@/lib/division-phase";
 import type { VenueNoun } from "@/lib/venue";
 
 export type { NeedsYouItem, VenueNoun };
+
+/** The two Needs-you kinds that are about ONE match's scorer (task A4; spec §9 "`no_scorer` / `not_recording` also mark the
+ *  affected court's row"): a match in play with nothing recorded and nobody nominated, or with a nominated scorer silent past the
+ *  grace. The desk's own `Attention` kinds, never a copy: lib/division-phase.ts decides them, and one match never raises both. */
+export type ScorerAttention = Extract<Attention["kind"], "no_scorer" | "not_recording">;
+export const SCORER_ATTENTIONS = ["no_scorer", "not_recording"] as const satisfies readonly ScorerAttention[];
 
 /** What a court is doing now, from the fixtures' STATUS — never from the presence of a call row:
  *  - playing: one of THIS competition's matches is `in_play` on it;
@@ -55,6 +62,13 @@ export interface MatchDayFixture {
   called_at: string | null;
   /** The match's stream session, as a person reads it; null when it has none up. */
   stream: "live" | "waiting" | null;
+  /** The competition desk's scorer attention for this match (`ScorerAttention`, the same rows Needs you lists); null when it has
+   *  none. Only a match in play can carry one. */
+  scorer_attention: ScorerAttention | null;
+  /** While its stream is live: the YouTube video that stream goes into (a YouTube Connect broadcast, `liveSessionVideos`) and that
+   *  broadcast's own made-for-kids stamp — the Match Day preview's source (spec §6.2). Null for any match whose stream is not live,
+   *  and for a live stream that names no YouTube video (a pasted key). Set on a playing court's match only. */
+  live_video: { url: string; made_for_kids: boolean } | null;
 }
 
 /** A match waiting in a court's queue. `planned_at` is its planned time, which a call never changes (owner ruling B);

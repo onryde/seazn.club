@@ -1,6 +1,6 @@
 // A made-for-kids replay is never embedded (owner 2026-10-29; Google YouTube API Services Developer Policies III.E.4.j). The rule lives
 // in ONE predicate (`mayEmbedReplay`, lib/youtube.ts) and ONE component that builds an iframe and a thumbnail request from it
-// (components/public-site/match-centre/replay-embed.tsx), mounted on ONE page (the public match page). The organiser's panel
+// (components/public-site/match-centre/replay-embed.tsx), mounted on the public match page and Match Day's live preview. The organiser's panel
 // (components/v2/fixture-stream-panel.tsx) draws links only - controller ruling R6, verified here rather than asserted.
 //
 // A SWEEP OF THE SOURCE, because the failure it guards is a surface added tomorrow that embeds a YouTube video without going through the
@@ -67,10 +67,18 @@ describe("the YouTube player and thumbnail are built in one place, and that plac
     expect(embed.text, "and it asks the rule").toMatch(/\bmayEmbedReplay\(/);
   });
 
-  it("the component is mounted by the public match page only; the organiser's panel imports neither it nor the builders", () => {
+  it("the component is mounted by the public match page and Match Day's live preview only; the organiser's panel imports neither it nor the builders", () => {
     const all = files();
-    const mounts = all.filter((f) => /<ReplayEmbed\b/.test(f.text)).map((f) => f.rel);
-    expect(mounts).toEqual(["app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx"]);
+    const mounts = all.filter((f) => /<ReplayEmbed\b/.test(f.text)).map((f) => f.rel).sort();
+    // Match Day (task A4, controller ruling: a playing court's live stream shows its preview, spec 2026-10-31 §6.2/§8) mounts the same
+    // component, so the made-for-kids rule and the tap-to-play facade come with it; its caller asks the rule first as well
+    // (lib/match-day/view.ts `streamPreviewOf`).
+    expect(mounts).toEqual([
+      "app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx",
+      "components/v2/match-day/court-stream-preview.tsx",
+    ]);
+    const preview = all.find((f) => f.rel === "lib/match-day/view.ts");
+    expect(preview?.text, "Match Day decides with the same rule before it mounts the player").toMatch(/\bmayEmbedReplay\(/);
     const panel = all.find((f) => f.rel === "components/v2/fixture-stream-panel.tsx");
     expect(panel, "premise: the organiser's panel was found").toBeDefined();
     expect(panel!.text).not.toMatch(/replay-embed|youtubeEmbedUrl|youtubeThumbnailUrl|<iframe/);

@@ -6,6 +6,8 @@ export const dynamic = "force-dynamic";
 import { notFound } from "next/navigation";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getMatchDay } from "@/server/usecases/match-day";
+import { orgPlanKey } from "@/lib/entitlements";
+import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listDivisions } from "@/server/usecases/divisions";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary } from "@/lib/i18n";
@@ -18,11 +20,12 @@ export default async function MatchDayPage({ params }: { params: Promise<{ orgSl
   if (!page.canEdit) notFound();
   const id = page.competition.id;
   const locale = await resolveLocale();
-  const [ui, pub, view, divisions] = await Promise.all([
+  const [ui, pub, view, divisions, planKey] = await Promise.all([
     getDictionary(locale, "ui"),
     getDictionary(locale, "public"),
     getMatchDay(page.auth, id, new Date(), { locale }),
     listDivisions(page.auth, id),
+    orgPlanKey(page.auth.orgId),
   ]);
   return (
     <main className="mx-auto max-w-6xl px-4 py-6 md:py-8">
@@ -34,9 +37,12 @@ export default async function MatchDayPage({ params }: { params: Promise<{ orgSl
         locale={locale}
         divisions={divisions.map((d) => ({ id: d.id, name: d.name }))}
         initial={view}
-        // Only the keys the island renders cross to the client, never the whole dictionary.
-        dict={pickDictPrefixes(ui, ["matchDay."])}
+        // Only the keys the island renders cross to the client, never the whole dictionary: its own, the Needs-you list's title
+        // (`NeedsYou`, reused; its rows arrive translated), the scorer QR's heading (the console's own "Remote scoring") and the
+        // preview's "Live on YouTube" (the fixture page's words for the same stream).
+        dict={pickDictPrefixes(ui, ["matchDay.", "desk.needsYou.title", "dlink.title", "stream.youtube.link.live"])}
         scoreDict={pickDictPrefixes(pub, ["matchCentre.", "forfeit."])}
+        viewerPlan={viewerPlanFrom(planKey)}
       />
     </main>
   );

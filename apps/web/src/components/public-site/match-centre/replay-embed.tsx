@@ -176,10 +176,12 @@ export interface ReplayStageProps {
   onFrameLoad: () => void;
   /** The "Open on YouTube" link, so focus can be handed to it when the player gives up (`focusTarget`). */
   openRef?: RefObject<HTMLAnchorElement | null>;
+  /** The player's accessible title, when it is not a replay (Match Day's live preview, task A4). Default: the replay's. */
+  playerTitle?: string;
 }
 
 /** Everything under the tab rail for one part: the 16:9 box (a facade, or the player) or the fallback note, then the link. */
-export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, onFrameLoad, openRef }: ReplayStageProps) {
+export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, onFrameLoad, openRef, playerTitle }: ReplayStageProps) {
   const t = useMsg();
   // A part that may not be embedded is the link-out card, whatever mode it was told it is in: the stage is what builds an iframe and a
   // thumbnail request, so it does not lean on the state having been right (the state's own rule is the same predicate).
@@ -203,7 +205,7 @@ export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, 
             <iframe
               ref={iframeRef}
               src={youtubeEmbedUrl(videoId!, pageOrigin)}
-              title={multi ? t("streaming.youtube.replay.playerTitlePart", { n: part.partNo }) : t("streaming.youtube.replay.playerTitle")}
+              title={playerTitle ?? (multi ? t("streaming.youtube.replay.playerTitlePart", { n: part.partNo }) : t("streaming.youtube.replay.playerTitle"))}
               allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
               allowFullScreen
               referrerPolicy="strict-origin-when-cross-origin"
@@ -245,7 +247,15 @@ export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, 
   );
 }
 
-function ReplayPlayer({ parts }: { parts: readonly PublicReplayPart[] }) {
+/** What a caller that is not the match page's replay names differently (Match Day's live preview, task A4): the region, the
+ *  player's title and the spacing around it. Each defaults to the replay card's. */
+export interface ReplayEmbedLabels {
+  region?: string;
+  playerTitle?: string;
+  className?: string;
+}
+
+function ReplayPlayer({ parts, labels = {} }: { parts: readonly PublicReplayPart[]; labels?: ReplayEmbedLabels }) {
   const t = useMsg();
   const base = useId();
   const [state, dispatch] = useReducer(replayReducer, parts, initialReplayState);
@@ -312,11 +322,25 @@ function ReplayPlayer({ parts }: { parts: readonly PublicReplayPart[] }) {
   };
 
   const stage = (
-    <ReplayStage part={part} mode={mode} multi={multi} pageOrigin={pageOrigin} onPlay={onPlay} iframeRef={iframeRef} onFrameLoad={onFrameLoad} openRef={openRef} />
+    <ReplayStage
+      part={part}
+      mode={mode}
+      multi={multi}
+      pageOrigin={pageOrigin}
+      onPlay={onPlay}
+      iframeRef={iframeRef}
+      onFrameLoad={onFrameLoad}
+      openRef={openRef}
+      {...(labels.playerTitle === undefined ? {} : { playerTitle: labels.playerTitle })}
+    />
   );
 
   return (
-    <section data-testid="replay-embed" aria-label={t("streaming.youtube.replay.region")} className="mt-4 border-t border-white/10 pt-4">
+    <section
+      data-testid="replay-embed"
+      aria-label={labels.region ?? t("streaming.youtube.replay.region")}
+      className={labels.className ?? "mt-4 border-t border-white/10 pt-4"}
+    >
       {multi ? (
         <>
           <div role="tablist" aria-label={t("streaming.youtube.replay.tabs")} className="mb-3 flex flex-wrap gap-2">
@@ -356,8 +380,8 @@ function ReplayPlayer({ parts }: { parts: readonly PublicReplayPart[] }) {
 /** The replay inside the match card. Takes the parts the page decided to list (`replayPlan`) and re-checks each is a YouTube address:
  *  this component builds an iframe and a link from the address, so it does not lean on its caller having filtered. Nothing to show
  *  renders nothing. Keyed by the list, so a refreshed page with different parts starts clean rather than pointing at a stale index. */
-export function ReplayEmbed({ parts }: { parts: readonly PublicReplayPart[] }) {
+export function ReplayEmbed({ parts, labels }: { parts: readonly PublicReplayPart[]; labels?: ReplayEmbedLabels }) {
   const shown = parts.filter((p) => isYoutubeUrl(p.url));
   if (shown.length === 0) return null;
-  return <ReplayPlayer key={shown.map((p) => p.url).join(" ")} parts={shown} />;
+  return <ReplayPlayer key={shown.map((p) => p.url).join(" ")} parts={shown} {...(labels === undefined ? {} : { labels })} />;
 }

@@ -7156,5 +7156,13 @@
   "matchDay.focus.noScore": "No score recorded yet",
   "matchDay.focus.left": "{court} is no longer on this list.",
   "matchDay.focus.pick": "Pick one from the list.",
-  "matchDay.notice.dismiss": "Dismiss"
+  "matchDay.notice.dismiss": "Dismiss",
+  "matchDay.needsYou.count.one": "{count} needs you",
+  "matchDay.needsYou.count.other": "{count} need you",
+  "matchDay.needsYou.owed.one": "{count} result owed",
+  "matchDay.needsYou.owed.other": "{count} results owed",
+  "matchDay.scorer.no_scorer": "No scorer",
+  "matchDay.scorer.not_recording": "Nothing recorded yet",
+  "matchDay.preview.label": "Live stream on {court}",
+  "matchDay.stream.settings": "Stream settings"
 }

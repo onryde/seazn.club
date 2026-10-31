@@ -136,6 +136,8 @@ const fixture = (id: string) => ({
   started_at: null,
   called_at: null,
   stream: null,
+  scorer_attention: null,
+  live_video: null,
 });
 const cand = (
   id: string,

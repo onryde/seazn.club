@@ -7,7 +7,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { VENUE_NOUNS } from "@/lib/venue";
-import { MatchDayCandidate, MatchDayCourt, MatchDayView } from "@/server/api-v1/schemas";
+import { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/server/api-v1/schemas";
+import { SCORER_ATTENTIONS } from "@/lib/match-day/types";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { T0, between, place, seedDay, type Day } from "@/server/usecases/__tests__/_match-day-seed";
 import { GET as matchDayRoute } from "@/app/api/v1/competitions/[id]/match-day/route";
@@ -28,6 +29,10 @@ const ctx = (id: string) => ({ params: Promise.resolve({ id }) });
 
 it("the published court-noun enum is lib/venue.ts's VENUE_NOUNS", () => {
   expect(MatchDayCourt.shape.sport_noun.options).toEqual([...VENUE_NOUNS]);
+});
+
+it("A4 — the published scorer-attention enum is lib/match-day/types.ts's SCORER_ATTENTIONS (the desk's own kinds)", () => {
+  expect(MatchDayFixture.shape.scorer_attention.unwrap().options).toEqual([...SCORER_ATTENTIONS]);
 });
 
 describe.skipIf(!HAS_DB)("/api/v1/competitions/{id}/match-day", () => {

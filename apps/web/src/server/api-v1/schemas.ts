@@ -1661,6 +1661,10 @@ export const MatchDayFixture = z.object({
   started_at: z.iso.datetime({ offset: true }).nullable(),
   called_at: z.iso.datetime({ offset: true }).nullable(),
   stream: z.enum(["live", "waiting"]).nullable(),
+  // The desk's scorer attention for the match (in play, nothing recorded: nobody nominated, or the nominee silent past the grace).
+  scorer_attention: z.enum(["no_scorer", "not_recording"]).nullable(),
+  // While its stream is live: the YouTube video the stream goes into and that broadcast's made-for-kids stamp; null otherwise.
+  live_video: z.object({ url: z.string(), made_for_kids: z.boolean() }).nullable(),
 });
 
 export const MatchDayCourt = z.object({
