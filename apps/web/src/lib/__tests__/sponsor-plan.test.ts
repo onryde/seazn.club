@@ -65,6 +65,13 @@ const cardOfSponsor = (sponsorId: string | null): SponsorCard | undefined => ALL
 
 const on = (frequency: SponsorFrequency): PlanInput["settings"] => ({ enabled: true, frequency });
 
+/** What S5 loads as `assignedCards`: the current card of every sponsor this fixture's assignments name, ticked or not
+ *  (a deleted sponsor's row is gone, so its null id has none). A ticked sponsor's card is the ticked one. */
+const assignedCardsFor = (assigned: readonly SponsorAssignment[], ticked: readonly SponsorCard[]): SponsorCard[] =>
+  [...new Set(assigned.flatMap((a) => (a.sponsorId === null ? [] : [a.sponsorId])))].map(
+    (id) => ticked.find((c) => c.sponsorId === id) ?? cardOfSponsor(id)!,
+  );
+
 // Synthetic declarations (shape only — see the header).
 const OVER_END: BreakDecl = { kind: "over_end", size: "minor" };
 const INNINGS_BREAK: BreakDecl = { kind: "innings_break", size: "major" };
@@ -79,6 +86,7 @@ function input(over: Partial<PlanInput> = {}): PlanInput {
     windowSeqs: [],
     settings: on("busy"),
     cards: [TITLE, GOLD, SILVER],
+    assignedCards: [],
     assigned: [],
     operatorLog: [],
     nextPosition: 0,
@@ -146,6 +154,7 @@ function liveMatch(o: {
       windowSeqs: range(Math.max(1, b.seq - (o.window ?? 50) + 1), b.seq),
       settings: (o.settings ?? (() => on("busy")))(b.seq),
       cards: o.cards(b.seq),
+      assignedCards: assignedCardsFor(assigned, o.cards(b.seq)),
       assigned: [...assigned],
       operatorLog: o.operatorLog ?? [],
       nextPosition: nextPositionOf(assigned, o.startPosition),
@@ -157,7 +166,12 @@ function liveMatch(o: {
     const known = new Set(assigned.map((a) => a.momentId));
     for (const a of r.newAssignments) expect(known.has(a.momentId), `seq ${b.seq}: re-targets ${a.momentId}`).toBe(false);
     const persisted = [...assigned, ...r.newAssignments];
-    const again = planSponsors({ ...inp, assigned: persisted, nextPosition: nextPositionOf(persisted, o.startPosition) });
+    const again = planSponsors({
+      ...inp,
+      assigned: persisted,
+      assignedCards: assignedCardsFor(persisted, inp.cards),
+      nextPosition: nextPositionOf(persisted, o.startPosition),
+    });
     expect(again.newAssignments, `seq ${b.seq}: re-poll assigns nothing`).toEqual([]);
     expect(again.plan, `seq ${b.seq}: re-poll keeps the plan`).toEqual(r.plan);
     for (const air of r.plan?.airings ?? []) {
@@ -427,6 +441,53 @@ describe("planSponsors — the 90 s cooldown (R4)", () => {
   });
 });
 
+describe("planSponsors — the cooldown around a frozen card (R4, both directions)", () => {
+  it("a minor that becomes eligible (dial change) 5 s BEFORE a frozen card is thinned", () => {
+    // The major side (a major 5 s before a frozen card keeps its card) is "a choice already used by a LATER stored
+    // break…" below.
+    const b1 = brk(1, T0 + 30 * SEC, OVER_END);
+    const b2 = brk(2, T0 + 35 * SEC, INNINGS_BREAK);
+    // Light: only the major takes a card.
+    const light = planSponsors(input({ breaks: [b1, b2], windowSeqs: [1, 2], settings: on("light"), now: T0 + 36 * SEC }));
+    expect(seqsOf(light.newAssignments)).toEqual([2]);
+    // The dial goes to Busy: minor 1 is now eligible, fresh and in the window, but sits 5 s before a card.
+    const busy = planSponsors(
+      input({ breaks: [b1, b2], windowSeqs: [1, 2], assigned: light.newAssignments, nextPosition: 1, now: T0 + 41 * SEC }),
+    );
+    expect(busy.newAssignments).toEqual([]);
+    expect(seqsOf(busy.plan!.airings)).toEqual([2]);
+  });
+
+  it("the forward edge: a frozen card exactly 90 s after a new minor leaves it its card, 1 ms closer thins it", () => {
+    // Event times are the events' own; the planner does not order them against the poll's clock, so a frozen card
+    // can be put 90 s after a minor that is still fresh.
+    const frozenAt = (atMs: number): [BreakOpened, SponsorAssignment] => [
+      brk(2, atMs, SET_END),
+      {
+        momentId: sponsorMomentId(2, SET_END.kind),
+        seq: 2,
+        sponsorId: TITLE.sponsorId,
+        sponsorName: TITLE.name,
+        position: 0,
+        source: "rotation",
+        breakKind: SET_END.kind,
+        style: "banner",
+        holdMs: 15 * SEC,
+        operatorChoiceAt: null,
+      },
+    ];
+    const minor = brk(1, T0, OVER_END);
+    for (const [gap, expected] of [
+      [SPONSOR_COOLDOWN_MS, [1]],
+      [SPONSOR_COOLDOWN_MS - 1, []],
+    ] as const) {
+      const [b2, row] = frozenAt(T0 + gap);
+      const r = planSponsors(input({ breaks: [minor, b2], windowSeqs: [1, 2], assigned: [row], nextPosition: 1, now: T0 + SEC }));
+      expect(seqsOf(r.newAssignments), `gap ${gap}`).toEqual([...expected]);
+    }
+  });
+});
+
 // ── R2 ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe("planSponsors — which breaks get a NEW assignment (R2)", () => {
@@ -581,7 +642,7 @@ describe("planSponsors — the sequence", () => {
     expect(planSponsors(input({ breaks: [brk(5, T0, SET_END)], windowSeqs: [5], assigned: [a], now: T0 + 2 * SEC })).undone).toEqual([]);
   });
 
-  it("a sponsor unticked mid-match: frozen breaks keep it; later breaks never pick it", () => {
+  it("a sponsor unticked mid-match: frozen breaks keep it and still air its card; later breaks never pick it", () => {
     // Title + gold cycle title, gold, title, gold, title. Majors 30 s apart, polled 1 s after each, the window wide
     // enough to hold every break.
     const breaks = range(1, 6).map((seq) => brk(seq, T0 + (seq - 1) * 30 * SEC, SET_END));
@@ -593,6 +654,7 @@ describe("planSponsors — the sequence", () => {
           breaks: breaks.slice(0, seq),
           windowSeqs: window,
           cards,
+          assignedCards: assignedCardsFor(assigned, cards),
           assigned: [...assigned],
           nextPosition: nextPositionOf(assigned),
           now: Date.parse(breaks[seq - 1]!.at) + SEC,
@@ -610,8 +672,10 @@ describe("planSponsors — the sequence", () => {
       const r = poll(seq, [TITLE]);
       expect(r.newAssignments.map((a) => a.momentId)).not.toContain(goldMoment.momentId);
       expect(r.newAssignments.every((a) => a.sponsorId === TITLE.sponsorId)).toBe(true);
-      // Gold's frozen break is not handed to anyone else.
-      expect(r.plan!.airings.find((x) => x.momentId === goldMoment.momentId)).toBeUndefined();
+      // Spec §3.2: an untick applies only to breaks not yet assigned — gold's frozen break still airs gold's card,
+      // and the plan carries that card so the page can draw it.
+      expect(r.plan!.airings.find((x) => x.momentId === goldMoment.momentId)?.cardId).toBe(GOLD.id);
+      expect(r.plan!.cards.map((c) => c.id)).toEqual([TITLE.id, GOLD.id]);
     }
     expect(assigned.filter((a) => a.momentId === goldMoment.momentId)).toEqual([goldMoment]);
     // Gold is ticked again: its frozen break still names gold.
@@ -647,6 +711,33 @@ describe("planSponsors — the sequence", () => {
     expect(seqsOf(r.plan!.airings)).toEqual([2]);
   });
 
+  it("unticking the LAST ticked sponsor keeps its frozen in-window airings; new breaks get no card; nothing resolving at all ⇒ null", () => {
+    const goldRow: SponsorAssignment = {
+      momentId: sponsorMomentId(1, SET_END.kind),
+      seq: 1,
+      sponsorId: GOLD.sponsorId,
+      sponsorName: GOLD.name,
+      position: 0,
+      source: "rotation",
+      breakKind: SET_END.kind,
+      style: "banner",
+      holdMs: 15 * SEC,
+      operatorChoiceAt: null,
+    };
+    // Break 2 is fresh, in the window and eligible: with a ticked card it would take one.
+    const breaks = [brk(1, T0, SET_END), brk(2, T0 + 5 * SEC, SET_END)];
+    const at = { breaks, windowSeqs: [1, 2], assigned: [goldRow], nextPosition: 1, now: T0 + 6 * SEC };
+    expect(planSponsors(input({ ...at, cards: [GOLD], assignedCards: [GOLD] })).newAssignments).toHaveLength(1);
+    const r = planSponsors(input({ ...at, cards: [], assignedCards: [GOLD] }));
+    expect(r.plan).toEqual({
+      cards: [GOLD],
+      airings: [{ momentId: goldRow.momentId, seq: 1, cardId: GOLD.id, style: "banner", holdMs: 15 * SEC, breakKind: SET_END.kind }],
+    });
+    expect(r.newAssignments).toEqual([]);
+    // No ticked card and no assigned sponsor's card: nothing can resolve, so the rotation is off for this fixture.
+    expect(planSponsors(input({ ...at, cards: [], assignedCards: [] })).plan).toBeNull();
+  });
+
   it("frozen sequence: dial change, then tick/untick and a tier change — every earlier assignment keeps its sponsor; only later breaks move", () => {
     // 48 minors 100 s apart (never inside a cooldown). Phase 1 (seqs 1-12) Busy with title, gold, silver; phase 2
     // (13-24) the dial goes to Normal; phase 3 (25-36) silver is unticked and partner ticked; phase 4 (37-48) gold
@@ -667,19 +758,20 @@ describe("planSponsors — the sequence", () => {
     });
     expect(run.assigned.map((a) => a.sponsorId)).toEqual(expected);
     expect(run.assigned.map((a) => a.position)).toEqual(range(0, 23));
-    // Silver is never picked once unticked; the final plan still shows every earlier break whose sponsor is ticked,
-    // with the sponsor it was given.
+    // Silver is never picked once unticked; the final plan still shows every earlier break — silver's included — with
+    // the sponsor it was given.
     expect(run.assigned.filter((a) => a.seq > 24 && a.sponsorId === SILVER.sponsorId)).toEqual([]);
     const final = run.last!.plan!;
     const shown = new Map(final.airings.map((x) => [x.momentId, x.cardId]));
     let earlierChecked = 0;
     for (const a of run.assigned.filter((x) => x.seq <= 36)) {
       const c = cardOfSponsor(a.sponsorId)!;
-      if (c.sponsorId === SILVER.sponsorId) expect(shown.has(a.momentId)).toBe(false);
-      else expect(shown.get(a.momentId), `seq ${a.seq}`).toBe(c.id);
+      expect(shown.get(a.momentId), `seq ${a.seq}`).toBe(c.id);
       earlierChecked++;
     }
     expect(earlierChecked).toBe(20);
+    expect(run.assigned.filter((a) => a.seq <= 24 && a.sponsorId === SILVER.sponsorId).length, "silver had turns").toBeGreaterThan(0);
+    expect(final.cards.map((c) => c.id)).toContain(SILVER.id);
   });
 
   it("a frozen assignment wins over the dial, hidden graphics and the cooldown, airs as stored, and anchors the next cooldown", () => {
@@ -814,8 +906,8 @@ describe("planSponsors — play next", () => {
     const first = planSponsors(input({ breaks: [b1], windowSeqs: [1], operatorLog: log, now: T0 + 31 * SEC }));
     const op = first.newAssignments[0]!;
     expect([op.source, op.sponsorId]).toEqual(["operator", SILVER.sponsorId]);
-    // Break 1's event is undone; break 2 opens. With the undone row still stored (a partial replay kept it) and with
-    // it deleted, the choice is unconsumed and break 2 takes it.
+    // Break 1's event is undone; break 2 opens. Whether S5 still holds the undone row (it aired, so it is kept; or the
+    // delete has not run yet) or has deleted it, the row is not live, the choice is unused, and break 2 takes it.
     const b2 = brk(2, T0 + 60 * SEC, SET_END);
     for (const assigned of [[op], []]) {
       const r = planSponsors(input({ breaks: [b2], windowSeqs: [1, 2], operatorLog: log, assigned, now: T0 + 61 * SEC }));
@@ -849,6 +941,34 @@ describe("planSponsors — play next", () => {
   it("play next for a sponsor no longer ticked falls back to the rotation", () => {
     const run = liveMatch({ breaks: majors(1), cards: () => cards, operatorLog: [entry(T0, "next_sponsor_id", PARTNER.sponsorId)] });
     expect(summary(run.assigned)).toEqual([[1, "rotation", 0, cycle[0]]]);
+    // Still so when the unticked sponsor's card IS at hand (an earlier break of this match is assigned to it): an
+    // assigned card airs its own frozen break, it is never a pick.
+    const partnerRow: SponsorAssignment = {
+      momentId: sponsorMomentId(1, SET_END.kind),
+      seq: 1,
+      sponsorId: PARTNER.sponsorId,
+      sponsorName: PARTNER.name,
+      position: 0,
+      source: "rotation",
+      breakKind: SET_END.kind,
+      style: "banner",
+      holdMs: 15 * SEC,
+      operatorChoiceAt: null,
+    };
+    const r = planSponsors(
+      input({
+        breaks: [brk(1, T0, SET_END), brk(2, T0 + 30 * SEC, SET_END)],
+        windowSeqs: [1, 2],
+        cards,
+        assignedCards: [PARTNER],
+        assigned: [partnerRow],
+        operatorLog: [entry(T0 + 10 * SEC, "next_sponsor_id", PARTNER.sponsorId)],
+        nextPosition: 1,
+        now: T0 + 31 * SEC,
+      }),
+    );
+    expect(summary(r.newAssignments)).toEqual([[2, "rotation", 1, cycle[1]]]);
+    expect(r.plan!.airings.map((x) => x.cardId)).toEqual([PARTNER.id, cardOfSponsor(cycle[1]!)!.id]);
   });
 
   it("play next waits out a hidden break and a thinned minor: it takes the next break that gets a card", () => {
@@ -871,12 +991,42 @@ describe("planSponsors — play next", () => {
   });
 });
 
+describe("planSponsors — one Play next choice airs once", () => {
+  const cycle = oracleSponsors([TITLE, GOLD, SILVER]);
+  const log = [entry(T0 + 10 * SEC, "next_sponsor_id", SILVER.sponsorId)];
+  const summary = (as: SponsorAssignment[]) => as.map((a) => [a.seq, a.source, a.position, a.sponsorId]);
+
+  it("reviewer's probe: choice at 10 s; minor b1 30 s; major b2 35 s; Light gives b2 to the operator; dial → Busy; the poll at 41 s gives b1 nothing of the choice", () => {
+    const b1 = brk(1, T0 + 30 * SEC, OVER_END);
+    const b2 = brk(2, T0 + 35 * SEC, INNINGS_BREAK);
+    const light = planSponsors(input({ breaks: [b1, b2], windowSeqs: [1, 2], settings: on("light"), operatorLog: log, now: T0 + 36 * SEC }));
+    expect(summary(light.newAssignments)).toEqual([[2, "operator", null, SILVER.sponsorId]]);
+    const busy = planSponsors(
+      input({ breaks: [b1, b2], windowSeqs: [1, 2], operatorLog: log, assigned: light.newAssignments, now: T0 + 41 * SEC }),
+    );
+    expect(busy.newAssignments.filter((a) => a.source === "operator")).toEqual([]);
+  });
+
+  it("a choice already used by a LATER stored break is not used again by an earlier break that comes back (an undo voided)", () => {
+    // Major b1's event was undone when b2 took the choice; voiding the undo brings b1 back, 5 s before b2. A major is
+    // never thinned, so only the used choice stands between b1 and a second operator airing of the same pick.
+    const b1 = brk(1, T0 + 30 * SEC, SET_END);
+    const b2 = brk(2, T0 + 35 * SEC, SET_END);
+    const first = planSponsors(input({ breaks: [b2], windowSeqs: [1, 2], operatorLog: log, now: T0 + 36 * SEC }));
+    expect(summary(first.newAssignments)).toEqual([[2, "operator", null, SILVER.sponsorId]]);
+    const back = planSponsors(
+      input({ breaks: [b1, b2], windowSeqs: [1, 2], operatorLog: log, assigned: first.newAssignments, now: T0 + 41 * SEC }),
+    );
+    expect(summary(back.newAssignments)).toEqual([[1, "rotation", 0, cycle[0]]]);
+  });
+});
+
 // ── guards ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe("planSponsors — refused input (assumptions are guards)", () => {
   const ok = [brk(1, T0, OVER_END), brk(2, T0 + 100 * SEC, OVER_END)];
 
-  it("refuses breaks out of seq order, a repeated moment, an unparsable time, a bad cursor or clock, two cards for one sponsor, an unknown dial", () => {
+  it("refuses breaks out of seq order, a repeated moment, an unparsable time, a bad cursor or clock, two cards for one sponsor (in either list or across them), an unknown break size or dial", () => {
     const refused: [string, Partial<PlanInput>][] = [
       ["breaks out of seq order", { breaks: [ok[1]!, ok[0]!] }],
       ["a repeated moment", { breaks: [ok[0]!, { ...ok[0]! }] }],
@@ -886,6 +1036,9 @@ describe("planSponsors — refused input (assumptions are guards)", () => {
       ["a fractional cursor", { nextPosition: 1.5 }],
       ["no clock", { now: Number.NaN }],
       ["two cards for one sponsor", { cards: [GOLD, { ...GOLD, id: "card-gold-2" }] }],
+      ["two cards for one sponsor across ticked and assigned", { cards: [GOLD], assignedCards: [{ ...GOLD, id: "card-gold-2" }] }],
+      ["two assigned cards for one sponsor", { assignedCards: [PARTNER, { ...PARTNER, id: "card-partner-2" }] }],
+      ["a break size that is neither minor nor major", { breaks: [{ ...ok[0]!, size: "medium" as never }] }],
       ["an unknown dial", { breaks: ok, settings: { enabled: true, frequency: "often" as SponsorFrequency } }],
     ];
     let checked = 0;
@@ -894,8 +1047,10 @@ describe("planSponsors — refused input (assumptions are guards)", () => {
       checked++;
     }
     expect(checked).toBe(refused.length);
-    // The well-formed control passes, and one event may open two distinct kinds at one seq.
+    // The well-formed control passes (with a ticked card also among the assigned ones: the same card in both lists),
+    // and one event may open two distinct kinds at one seq.
     expect(() => planSponsors(input({ breaks: ok, windowSeqs: [1, 2], now: T0 + 101 * SEC }))).not.toThrow();
+    expect(() => planSponsors(input({ breaks: ok, assignedCards: [GOLD, PARTNER], windowSeqs: [1, 2], now: T0 + 101 * SEC }))).not.toThrow();
     const twoKinds = [brk(5, T0, SET_END), brk(5, T0, { kind: "match_point", size: "major" })];
     expect(planSponsors(input({ breaks: twoKinds, windowSeqs: [5], now: T0 + SEC })).newAssignments).toHaveLength(2);
   });
