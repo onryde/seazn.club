@@ -11,7 +11,7 @@
   },
 
   // Package tasks hash only their own package's files. These three tasks all
-  // read root-level sources that live outside apps/web and packages/engine:
+  // read root-level sources that live outside every package:
   //
   //   * apps/web `typecheck` is `tsc --noEmit && tsc -p ../../tsconfig.scripts.json`
   //     — the second half type-checks the whole of scripts/.
@@ -22,16 +22,14 @@
   "globalDependencies": ["tsconfig.scripts.json", "scripts/**", "tools/**"],
 
   "tasks": {
-    // apps/web is the only package with a build; the engine (package name
-    // @onryde/seazn-engine, consumed as `@seazn/engine` through the workspace
-    // alias `"@seazn/engine": "workspace:@onryde/seazn-engine@*"`) has no
-    // `build` script, so `^build` is a no-op edge that exists to keep the
-    // ordering correct if the engine ever gains one. Workspace consumers read
-    // src; the published tarball is dist, built by `build:dist` (engine-split
-    // §5.2), deliberately NOT named `build`: `typecheck` dependsOn `^build`, so a
-    // `build` script would put the emit into every turbo typecheck and build
-    // for work nothing in the workspace reads. The dependency graph (the alias
-    // edge) already makes an engine source change invalidate the web build.
+    // apps/web is the only package with a build; `^build` keeps the ordering
+    // correct if one of its workspace dependencies ever gains one. The engine is
+    // not a workspace package (engine split 2b): consumers install the registry
+    // package, `"@seazn/engine": "npm:@onryde/seazn-engine@^1.0.0"`, so it has no
+    // turbo task. turbo hashes a package's external dependencies as resolved in
+    // pnpm-lock.yaml (`hashOfExternalDependencies` in `--dry=json`), so an engine
+    // version change in the lock is what invalidates the web build and every
+    // consumer's typecheck and lint.
     "build": {
       "dependsOn": ["^build"],
       // .next/cache is Next's own incremental compiler cache and is restored

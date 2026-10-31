@@ -50,7 +50,9 @@ describe("toolchain: node floor", () => {
   });
 
   it("@types/node tracks the runtime major in every TS workspace", () => {
-    for (const ws of ["apps/web", "packages/engine", "apps/cron-worker"]) {
+    // Engine split 2b (reverse inventory row 1, I): the engine is the installed package; its published manifest carries its
+    // devDependencies, so its @types/node is read from there.
+    for (const ws of ["apps/web", "node_modules/@seazn/engine", "apps/cron-worker"]) {
       const pkg = JSON.parse(
         readFileSync(join(REPO_ROOT, ws, "package.json"), "utf8"),
       ) as { devDependencies?: Record<string, string> };
@@ -63,7 +65,7 @@ describe("toolchain: node floor", () => {
 });
 
 describe("toolchain: compile target", () => {
-  it("apps/web targets ES2022, matching the engine", () => {
+  it("apps/web targets ES2022", () => {
     const stripJsonComments = (s: string) =>
       s.replace(/^\s*\/\/.*$/gm, "");
     const web = JSON.parse(
@@ -71,13 +73,9 @@ describe("toolchain: compile target", () => {
         readFileSync(join(REPO_ROOT, "apps/web/tsconfig.json"), "utf8"),
       ),
     ) as { compilerOptions: { target: string } };
-    const engine = JSON.parse(
-      stripJsonComments(
-        readFileSync(join(REPO_ROOT, "packages/engine/tsconfig.json"), "utf8"),
-      ),
-    ) as { compilerOptions: { target: string } };
+    // Engine split 2b (reverse inventory row 1): the engine's tsconfig is not published, so the `matching the engine` comparison
+    // left with packages/engine. Engine twin owed: the engine repository has no ES2022 pin yet (2b review I1).
     expect(web.compilerOptions.target).toBe("ES2022");
-    expect(web.compilerOptions.target).toBe(engine.compilerOptions.target);
   });
 });
 
@@ -93,7 +91,7 @@ describe("toolchain: suppression policy", () => {
    */
   for (const cfg of [
     "apps/web/eslint.config.mjs",
-    "packages/engine/eslint.config.mjs",
+    // Engine split 2b: packages/engine/eslint.config.mjs left with the engine (its config is not published).
     // The two packages that copied the rule (engine split 1a-3 added the scheduler's; reference carried the same block).
     // Each is as strict as the engine's, and each was unpinned: a weakened copy would have gone unseen.
     "packages/scheduler/eslint.config.mjs",
@@ -142,7 +140,8 @@ describe("toolchain: which compiler gates types", () => {
 
   it("no typecheck script invokes bare tsc", () => {
     const offenders: string[] = [];
-    for (const p of ["package.json", "apps/web/package.json", "packages/engine/package.json"]) {
+    // The engine's scripts are read from its installed (published) manifest (engine split 2b, I).
+    for (const p of ["package.json", "apps/web/package.json", "node_modules/@seazn/engine/package.json"]) {
       const pkg = JSON.parse(readFileSync(join(REPO_ROOT, p), "utf8")) as {
         scripts?: Record<string, string>;
       };
@@ -346,16 +345,16 @@ function rootManifest(): {
 }
 
 describe("toolchain: pnpm workspace", () => {
-  it("declares the workspace and uses the workspace protocol", () => {
+  it("declares the workspace and uses the registry alias", () => {
     const ws = readFileSync(join(REPO_ROOT, "pnpm-workspace.yaml"), "utf8");
     expect(ws).toContain("apps/*");
     expect(ws).toContain("packages/*");
     const web = JSON.parse(
       readFileSync(join(REPO_ROOT, "apps/web/package.json"), "utf8"),
     ) as { dependencies: Record<string, string> };
-    // `"*"` makes pnpm hit the registry for a private package and fail with
-    // "No authorization header" — it must be the workspace protocol.
-    expect(web.dependencies["@seazn/engine"]).toBe("workspace:@onryde/seazn-engine@*");
+    // Engine split 2b (A1): the engine is the registry package @onryde/seazn-engine from GitHub Packages, consumed under the
+    // @seazn/engine alias (scripts/__tests__/registry-install.test.ts pins every consumer).
+    expect(web.dependencies["@seazn/engine"]).toBe("npm:@onryde/seazn-engine@^1.0.0");
   });
 
   /**
@@ -470,7 +469,8 @@ describe("toolchain: pnpm workspace", () => {
      * install with the same ERR_MODULE_NOT_FOUND. So the set is read from the engine, not typed here: every peer not marked
      * optional in `peerDependenciesMeta`. (fast-check and vitest are optional: only the testkit loads them.)
      */
-    const engine = JSON.parse(readFileSync(join(REPO_ROOT, "packages/engine/package.json"), "utf8")) as {
+    // Engine split 2b (reverse inventory row 1, I): the peers ship in the published manifest, read from the installed package.
+    const engine = JSON.parse(readFileSync(join(REPO_ROOT, "node_modules/@seazn/engine/package.json"), "utf8")) as {
       peerDependencies?: Record<string, string>;
       peerDependenciesMeta?: Record<string, { optional?: boolean }>;
     };

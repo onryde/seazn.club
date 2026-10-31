@@ -405,7 +405,8 @@ one, read its index first. Cross-programme sequencing and gates:
   Two rulings that bite immediately: the fidelity band scale is
   **closed at 0–3** (no tier 4, ever), and engine comments citing
   **"doc 14" point at a document that does not exist** — the scale's
-  semantics live in `packages/engine/src/sport/module.ts`, nowhere else.
+  semantics live in `src/sport/module.ts` of `onryde/seazn.club.engine`
+  (installed here as `@seazn/engine`), nowhere else.
 
 - **The competition page, the division ledger, the derived division phase,
   the fixtures tab as a run sheet** →

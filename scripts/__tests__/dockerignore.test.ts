@@ -111,7 +111,7 @@ describe(".dockerignore (ruling 56): the image's build context", () => {
     expect(sources).toEqual(expect.arrayContaining(["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "apps/web/package.json"]));
     const kept = [
       ...sources,
-      "packages/engine/src/competition/index.ts", "packages/reference/src/index.ts",
+      "packages/scheduler/src/index.ts", "packages/reference/src/index.ts",
       "apps/web/src/lib/format-templates.ts", "apps/web/src/server/api-v1/schemas.ts",
       // apps/web's `typecheck` runs tsconfig.scripts.json over scripts/ inside the image.
       "tsconfig.scripts.json", "scripts/lib/main-module.ts", "scripts/lib/crash-exit.ts", "scripts/lib/tools-import-guard.mjs", "scripts/reference-boundary.ts",

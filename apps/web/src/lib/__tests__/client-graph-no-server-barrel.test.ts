@@ -15,6 +15,11 @@
 // reaches grpc and is now CLIENT-IMPORTABLE — a recorded decision, pinned below rather than assumed — while
 // `@seazn/scheduler` and its `placement-client` subpath are what a client must never import. The derivation is the same;
 // only what it finds moved.
+//
+// Engine split 2b (reverse inventory row 2, I): the engine is the INSTALLED package (`@onryde/seazn-engine` under its `@seazn/engine`
+// alias), so its exports are read from the installed manifest and walked through its compiled `dist/` graph — what a bundle actually
+// loads. An export target there is a conditional object (`types`, `default`); the bundle loads `default`. The walker's `.ts` filter
+// learned `.js` for the same reason. The engine's own "no gRPC in src" half is the engine's (`test/runtime-deps.test.ts`).
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +28,7 @@ import { describe, expect, it } from "vitest";
 const SRC = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 /** Every workspace package whose `exports` can hand a client the gRPC client. */
 const PACKAGES = [
-  { scope: "@seazn/engine", dir: resolve(SRC, "../../../packages/engine") },
+  { scope: "@seazn/engine", dir: resolve(SRC, "../node_modules/@seazn/engine") },
   { scope: "@seazn/scheduler", dir: resolve(SRC, "../../../packages/scheduler") },
 ] as const;
 const BARREL = "@seazn/engine/scheduling";
@@ -57,8 +62,8 @@ function valueSpecifiers(text: string): string[] {
 function resolveLocal(from: string, spec: string): string | null {
   const base = spec.startsWith("@/") ? join(SRC, spec.slice(2)) : spec.startsWith(".") ? resolve(dirname(from), spec) : null;
   if (base === null) return null;
-  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts"), join(base, "index.tsx")]) {
-    if (existsSync(candidate) && statSync(candidate).isFile() && /\.tsx?$/.test(candidate)) return candidate;
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, join(base, "index.ts"), join(base, "index.tsx"), join(base, "index.js")]) {
+    if (existsSync(candidate) && statSync(candidate).isFile() && /\.(?:tsx?|js)$/.test(candidate)) return candidate;
   }
   return null;
 }
@@ -92,9 +97,11 @@ function walk(root: string): Map<string, string[]> {
 
 /** Every `<scope>/*` specifier a package exports, with its entry file (`./sports/*` expanded per sport). */
 function packageExports(scope: string, dir: string): Map<string, string> {
-  const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { exports: Record<string, string> };
+  const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { exports: Record<string, string | { default: string }> };
   const out = new Map<string, string>();
-  for (const [key, target] of Object.entries(pkg.exports)) {
+  for (const [key, conditional] of Object.entries(pkg.exports)) {
+    // A conditional target (the installed engine's `{ types, default }`) is loaded through `default`.
+    const target = typeof conditional === "string" ? conditional : conditional.default;
     if (!key.includes("*")) {
       out.set(`${scope}${key.slice(1)}`, join(dir, target));
       continue;
@@ -130,6 +137,11 @@ describe("no client module reaches the gRPC client (the scheduler package, or gr
   it("the forbidden list is derived from both packages' exports: the scheduler and its placement-client; the engine's scheduling barrel is client-importable since the solver port (D32h), as is every leaf", () => {
     expect(exportsChecked["@seazn/engine"], "engine exports read").toBeGreaterThan(20);
     expect(exportsChecked["@seazn/scheduler"], "scheduler exports read").toBeGreaterThanOrEqual(2);
+    // Anti-vacuity for the installed engine (engine split 2b): the walk follows its compiled `.js` graph past the entry file, so a
+    // "not forbidden" below is a walked answer, not an unread one.
+    const barrelEntry = packageExports("@seazn/engine", PACKAGES[0].dir).get(BARREL);
+    expect(barrelEntry, "the installed engine exports its scheduling barrel").toBeDefined();
+    expect(walk(barrelEntry!).size, "modules the walk reached from the engine's scheduling barrel").toBeGreaterThan(5);
     expect(forbidden.has(SCHEDULER), "the scheduler barrel reaches grpc").toBe(true);
     expect(forbidden.has(`${SCHEDULER}/placement-client`), "the scheduler's placement-client imports grpc").toBe(true);
     // D32h, a recorded decision: the solver port took the gRPC client out of the engine, so its scheduling barrel no

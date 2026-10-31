@@ -20,7 +20,9 @@ import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { STATUS_SET_LEDGER, type StatusSetClass } from "./status-set-ledger";
 
 const REPO = resolve(__dirname, "../../../../..");
-const ROOTS = ["apps/web/src", "packages/engine/src", "db/migration", "tools/matrix/lib", "scripts"];
+// Engine-split 2b (reverse inventory row 3): packages/engine/src left with the engine. No ledger row names an engine file, so the
+// engine's own fixture-status sets are its own vocabulary, unguarded by this sweep.
+const ROOTS = ["apps/web/src", "db/migration", "tools/matrix/lib", "scripts"];
 const LIT = new RegExp(`['"](${FIXTURE_STATUSES.join("|")})['"]`, "g");
 
 /** A "set" is a bracketed or parenthesised span holding ≥ 2 distinct fixture-status literals. Its anchor is the

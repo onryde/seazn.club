@@ -1563,12 +1563,14 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect(check).not.toMatch(/\bthrow\b/);
     // No event refuses through assertLineup: nothing outside its own definition (and the engine's tests) calls it,
     // so no lineup is required to post — a forfeit or a walkover needs none, and M1's hook is left alone.
-    const sources = ["apps/web/src", "packages/engine/src"].flatMap((root) => (readdirSync(resolve(REPO, root), { recursive: true }) as string[])
+    // (app half, owner ruling 2026-10-30 option A) The source scanned ["apps/web/src", "packages/engine/src"] and found its one caller,
+    // the engine's catalog: that half is onryde/seazn.club.engine's test/scenarios.test.ts. This half scans the product, where the
+    // source's expected callers hold no file.
+    const sources = ["apps/web/src"].flatMap((root) => (readdirSync(resolve(REPO, root), { recursive: true }) as string[])
       .filter((p) => /\.tsx?$/.test(p) && !/\.test\.tsx?$|__tests__/.test(p)).map((p) => `${root}/${p}`));
     expect(sources.length, "product and engine sources scanned").toBeGreaterThan(100);
     const callers = sources.filter((p) => /\bassertLineup\(/.test(read(p)));
-    expect(callers).toEqual(["packages/engine/src/sport/catalog.ts"]);
-    expect(read("packages/engine/src/sport/catalog.ts").match(/\bassertLineup\(/g)).toHaveLength(1);
+    expect(callers).toEqual([]);
   });
 
   it("the ZodError-branch pin tolerates comments and the named refusal, and rejects every way the 400 VALIDATION answer can break", () => {

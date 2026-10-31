@@ -10,9 +10,10 @@ import { afterEach, describe, expect, it } from "vitest";
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const SCOPED = "@onryde/seazn-engine";
 const ALIAS = "@seazn/engine";
-const SPEC = `workspace:${SCOPED}@*`;
+const SPEC = `npm:${SCOPED}@^1.0.0`; // engine split 2b (A1): the registry alias, as scripts/__tests__/registry-install.test.ts pins
 const FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] as const;
-const ENGINE_MANIFEST = "packages/engine/package.json";
+/** Engine split 2b (reverse inventory row 14, I): the engine is the installed package, linked under its alias. */
+const INSTALLED_ENGINE_MANIFEST = "node_modules/@seazn/engine/package.json";
 
 type Field = (typeof FIELDS)[number];
 type Manifest = { name?: string } & Partial<Record<Field, Record<string, string>>>;
@@ -51,7 +52,7 @@ function scan(root: string): { manifests: string[]; consumers: string[]; checked
   const consumers = new Set<string>();
   const problems: string[] = [];
   let checked = 0;
-  for (const p of manifests.filter((m) => m !== ENGINE_MANIFEST)) {
+  for (const p of manifests) {
     const m = JSON.parse(readFileSync(path.join(root, p), "utf8")) as Manifest;
     for (const field of FIELDS) {
       const deps = m[field] ?? {};
@@ -83,7 +84,7 @@ const good: Manifest = { dependencies: { [ALIAS]: SPEC } };
 
 describe("engine package identity", () => {
   it("is published under the GitHub owner's scope", () => {
-    expect((JSON.parse(readFileSync(path.join(ROOT, ENGINE_MANIFEST), "utf8")) as Manifest).name).toBe(SCOPED);
+    expect((JSON.parse(readFileSync(path.join(ROOT, INSTALLED_ENGINE_MANIFEST), "utf8")) as Manifest).name).toBe(SCOPED);
   });
 
   it("every workspace that depends on the engine imports it as @seazn/engine through the alias, in every dependency field", () => {

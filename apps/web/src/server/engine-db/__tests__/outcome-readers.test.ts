@@ -1,33 +1,30 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SETTLE_METHODS, settledMethod } from "@seazn/engine/core";
 
 // Finding 1 (W2a): a settle lives beside module state, so a fold's outcome is
 // `outcomeOf(module, folded)`. A bare `<module>.outcome(state)` on a FOLD
 // result silently drops a settle (class 1, the inert seam). Each remaining bare
 // call is listed with why it is not a fold result.
+//
+// Engine-split 2b (owner ruling 2026-10-30, option A): the engine left this repository, so the four tests below that scanned
+// `apps/web/src`, `packages/engine/src` and `tools/matrix/lib` together are SPLIT. This file holds each one's APP half, under the
+// original id and title, running the same assertion logic over the app's two roots; the engine half runs the same logic over the
+// engine's `src` in onryde/seazn.club.engine (`test/outcome-readers.test.ts`, titled " (engine half)"). What is split is the DATA,
+// never the logic: `ALLOWED`, the reader list and `NOT_A_LEDGER_REPLAY` keep exactly the source's apps/web and tools/matrix rows;
+// every threshold is the source's, except the I-1 floor, which is split between the halves (engine >= 1, app >= 2, source >= 3).
+// The golden-corpus settle allowance and its scan's teeth read only the engine and moved whole (E1).
 const REPO = resolve(__dirname, "../../../../../..");
-const ROOTS = ["apps/web/src", "packages/engine/src", "tools/matrix/lib"];
+const ROOTS = ["apps/web/src", "tools/matrix/lib"];
 // Any argument name (review Minor 2): `module.outcome(finalState)` drops a settle
 // exactly like `module.outcome(state)` does. Comments are stripped before
 // counting (they name the shape), and every allowed file declares HOW MANY bare
 // calls it holds, so a new one in an allowed file is caught too.
 const BARE = /\b[A-Za-z_$][\w$]*\.outcome\(/g;
 const ALLOWED: Readonly<Record<string, { calls: number; reason: string }>> = {
-  "packages/engine/src/core/events.ts": { calls: 3, reason: "the kernel itself: the decided flag, outcomeOf, and kernelOwnsEvent's settled-finalize test" },
   "apps/web/src/server/overlay/recent.ts": { calls: 2, reason: "a point-state PROBE over a stored module state, not a fold result; a settlement is never part of module state, so outcomeOf cannot apply (preflight C8)" },
   "apps/web/src/server/overlay/gallery-snapshots.ts": { calls: 1, reason: "R2007: the staff gallery's sample walk stops when the module decides its OWN state — a generator walk, not a fold; `walkToDecision` redraws every core type but the start — every type kernelOwnsEvent can claim — and a match-ending sanction (W2e X-SE-1), and refuses a generator that yields nothing else (tested), so no settle or withdrawal can be in it, and the snapshot it feeds is folded through foldFrom (outcomeOf)" },
   "apps/web/src/server/public-site/public-player-matches.ts": { calls: 1, reason: "W2b PF-1 off STORED rows (no fold): whether the module's own stored state held the level result a stored withdrawal award was admitted over (storedLevelWithdrawal); a settled fixture's outcome is a win and returns before the read" },
-  "packages/engine/src/core/sanction-ending.ts": { calls: 1, reason: "W2e X-SE-1 `matchEndFacts`: decided exactly as the fold decides, the module's outcome OR a settlement (`folded.settlement !== null`), for a caller outside the fold (the route, the pad) that already holds the folded result" },
-  "packages/engine/src/testkit/sanction-score.ts": { calls: 3, reason: "testkit: the X-SE-2 sweep (a sanction alone moves no score) walks the module's own generator with every core type but the start redrawn, so no settle is in it, and compares the MODULE's outcome before and after one sanction" },
-  "packages/engine/src/testkit/stoppages.ts": { calls: 1, reason: "testkit: module-level conformance, no settle in its streams" },
-  "packages/engine/src/testkit/conformance.ts": { calls: 5, reason: "testkit: module-level conformance, no settle in its streams" },
-  "packages/engine/src/testkit/simulation.ts": { calls: 3, reason: "testkit: simulation folds without settle" },
-  "packages/engine/src/testkit/scenarios.ts": { calls: 6, reason: "testkit: scenario builder; `played.state` comes from decidedStream, which drives module.apply with the module's own generated events — never a kernel-owned type" },
-  "packages/engine/src/testkit/golden-floor.ts": { calls: 1, reason: "golden floor (GF-1): the module-level outcome of a generator walk, to learn which outcome kinds a module can produce; no walk carries core.settle" },
-  "packages/engine/src/testkit/golden-floor-streams.ts": { calls: 1, reason: "golden floor (GF-1): the one bare read (`moduleOutcome`) of the module's outcome, to find a walk that is decided or a prefix that is still live; the settle story (GF-2 T3) reads the kernel's outcome through `effectiveToken`/`outcomeOf`, and the corpus scan below holds every settle stream to a settled win" },
-  "packages/engine/src/testkit/golden.ts": { calls: 1, reason: "the format-1 recorder (`moduleRecorder`) records the MODULE's outcome; format 2 and later (every committed corpus since GF-2; format 3 adds the player stats) record the effective outcome through outcomeOf in golden-overlay.ts. A stream carrying core.settle is guarded below, not assumed" },
 };
 const stripComments = (text: string): string => text.replace(/^\s*(\/\/|\*|\/\*).*$/gm, "");
 function walk(dir: string, out: string[]): string[] {
@@ -112,7 +109,7 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     for (const f of files) {
       const rel = relative(REPO, f);
       const text = stripComments(readFileSync(f, "utf8"));
-      if (/\boutcomeOf\(/.test(text) && rel !== "packages/engine/src/core/events.ts") readers.push(rel);
+      if (/\boutcomeOf\(/.test(text)) readers.push(rel);
       const calls = [...text.matchAll(BARE)].map((m) => text.slice(m.index, text.indexOf(")", m.index) + 1));
       scanned += calls.length;
       if (ALLOWED[rel] !== undefined) allowedSeen[rel] = calls.length;
@@ -135,20 +132,7 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
       "apps/web/src/server/engine-db/awarded-state.ts",
       "apps/web/src/server/engine-db/fold.ts",
       "apps/web/src/server/usecases/event-import.ts",
-      "packages/engine/src/sports/carrom/carrom.ts",
-      "packages/engine/src/sports/cricket/scorecard.ts",
-      "packages/engine/src/sports/generic/generic.ts",
-      "packages/engine/src/testkit/after-start-events.ts",
-      // GF-1 review fix 2: the floor's undo stream asks the EFFECTIVE outcome whether a mis-tapped forfeit decided the match
-      // and the void reopened it (`effectiveToken`) — the module's own outcome never sees a kernel forfeit.
-      "packages/engine/src/testkit/golden-floor-streams.ts",
-      // GF-1: the golden floor's `settleProbe` folds a settled ledger and reads its EFFECTIVE outcome through outcomeOf,
-      // to prove the settle exemption is still needed (the harness records the module's bare outcome instead).
-      "packages/engine/src/testkit/golden-floor.ts",
-      // GF-2 T1: the golden recorder's format 2 records the EFFECTIVE outcome of every prefix fold (`effectiveFacts`,
-      // `denseOverlay`), so a corpus pins what the server stores and the phone shows, not the module's bare answer.
-      "packages/engine/src/testkit/golden-overlay.ts",
-      "packages/engine/src/testkit/play-event.ts",
+      // (app half) the source's packages/engine/src readers are the engine half's
       "tools/matrix/lib/fold.ts",
       "tools/matrix/lib/model/ledger-fold.ts",
     ]);
@@ -166,7 +150,6 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
     const property: string[] = [];
     for (const f of files) {
       const rel = relative(REPO, f);
-      if (rel === "packages/engine/src/core/events.ts") continue; // the kernel defines the fold
       const text = readFileSync(f, "utf8").replace(/^\s*(\/\/|\*|\/\*).*$/gm, ""); // comments name the shape
       foldSites += [...text.matchAll(FOLD_CALL)].length;
       for (const m of text.matchAll(DIRECT)) property.push(`${rel}: ${m[0].slice(-40)}`);
@@ -190,86 +173,6 @@ describe("finding 1: every fold-outcome reader goes through outcomeOf", () => {
   it("every allowed file still exists and still holds a bare call (a stale entry is a failure)", () => {
     for (const rel of Object.keys(ALLOWED)) expect(stripComments(readFileSync(join(REPO, rel), "utf8")), rel).toMatch(BARE);
   });
-  type ScanCorpus = { format?: number; streams: { config: string; seed: number; outcome: string; events: { type: string; voids?: string }[] }[] };
-  /** One corpus read the way the allowance in golden.ts needs it: what it holds, what was actually checked, and what is wrong. */
-  const scanSettles = (file: string, corpus: ScanCorpus, settledMethods: readonly string[]) => {
-    const out = { streams: 0, settleStreams: 0, checked: 0, struck: 0, wrong: [] as string[] };
-    corpus.streams.forEach((stream, i) => {
-      out.streams++;
-      const settles = stream.events.map((e, k) => (e.type === "core.settle" ? k : -1)).filter((k) => k >= 0);
-      if (settles.length === 0) return;
-      out.settleStreams++;
-      const label = `${file}#${i} (${stream.config}#${stream.seed})`;
-      // a settle only ever reaches a corpus recorded by the format-2 recorder or a later one (format 3 is format 2 plus the player
-      // stats): the format-1 recorder would have written the module's answer
-      if ((corpus.format ?? 1) < 2) out.wrong.push(`${label}: carries core.settle in a format-${corpus.format ?? 1} corpus`);
-      // the settle in force at the end (no later void strikes it) decides the match: the recorded outcome is a settled win
-      const standing = settles.filter((k) => !stream.events.some((e) => e.voids === `e-${k}`));
-      out.struck += settles.length - standing.length;
-      if (standing.length === 0) return;
-      out.checked++;
-      const outcome = JSON.parse(stream.outcome) as { kind?: string; method?: string } | null;
-      if (outcome === null || outcome.kind !== "win" || !settledMethods.includes(outcome.method as string)) out.wrong.push(`${label}: ends on ${stream.outcome}, not a settled win`);
-    });
-    return out;
-  };
-
-  it("golden.ts's allowance holds: every corpus stream that carries core.settle is recorded by the format-2 recorder or a later one, and ends on a settled win (the reason is a guard, not a comment)", () => {
-    const SPORTS = join(REPO, "packages/engine/src/sports");
-    const settledMethods = SETTLE_METHODS.map(settledMethod);
-    let streams = 0;
-    let settleStreams = 0;
-    let checked = 0; // streams whose standing settle was read against the recorded outcome
-    let struck = 0; // settles a later void strikes (the "said again" half of every settle story)
-    const wrong: string[] = [];
-    const sports = new Set<string>();
-    for (const dir of readdirSync(SPORTS)) {
-      if (!statSync(join(SPORTS, dir)).isDirectory()) continue;
-      for (const file of readdirSync(join(SPORTS, dir)).filter((n) => n.endsWith(".golden.json"))) {
-        const read = scanSettles(file, JSON.parse(readFileSync(join(SPORTS, dir, file), "utf8")) as ScanCorpus, settledMethods);
-        streams += read.streams;
-        settleStreams += read.settleStreams;
-        checked += read.checked;
-        struck += read.struck;
-        wrong.push(...read.wrong);
-        if (read.settleStreams > 0) sports.add(file);
-      }
-    }
-    expect(streams).toBeGreaterThan(200);
-    expect(settleStreams, "a settle stream in every sport's corpus").toBeGreaterThanOrEqual(sports.size);
-    expect(sports.size, "every sport records a settle").toBeGreaterThanOrEqual(11);
-    // Anti-vacuity: a stream whose settle is struck and never said again is skipped, so a scan that skipped EVERY stream would
-    // read as clean. Every sport's settle story ends on a standing settle and strikes one on the way.
-    expect(checked, "a standing settle was actually checked in every sport").toBeGreaterThanOrEqual(sports.size);
-    expect(struck, "a struck settle in every sport").toBeGreaterThanOrEqual(sports.size);
-    expect(wrong).toEqual([]);
-  });
-
-  it("the settle scan has teeth: each way a settle stream can be wrong is reported, a struck-only settle is skipped, and a good stream is clean", () => {
-    const methods = SETTLE_METHODS.map(settledMethod);
-    const good = JSON.stringify({ kind: "win", method: methods[0] });
-    const stream = (outcome: string, events: { type: string; voids?: string }[]) => ({ config: "c", seed: 1, outcome, events });
-    const settle = { type: "core.settle" };
-    // control: a standing settle ending on a settled win in a format-2 corpus
-    const clean = scanSettles("f", { format: 2, streams: [stream(good, [settle])] }, methods);
-    expect(clean).toMatchObject({ settleStreams: 1, checked: 1, struck: 0, wrong: [] });
-    // the same stream in a format-3 corpus (GF-2 T4: format 2 plus the player stats) is as clean: a later format is the real recorder too
-    expect(scanSettles("f", { format: 3, streams: [stream(good, [settle])] }, methods), "format 3 is recorded by the effective-outcome recorder").toMatchObject({ settleStreams: 1, checked: 1, struck: 0, wrong: [] });
-    // struck then said again: both counted, the standing one checked
-    const again = scanSettles("f", { format: 2, streams: [stream(good, [settle, { type: "core.void", voids: "e-0" }, settle])] }, methods);
-    expect(again).toMatchObject({ settleStreams: 1, checked: 1, struck: 1, wrong: [] });
-    // struck and never said again: skipped, not judged (there is no standing settle to read)
-    const gone = scanSettles("f", { format: 2, streams: [stream("null", [settle, { type: "core.void", voids: "e-0" }])] }, methods);
-    expect(gone).toMatchObject({ settleStreams: 1, checked: 0, struck: 1, wrong: [] });
-    // each way to be wrong
-    expect(scanSettles("f", { format: 1, streams: [stream(good, [settle])] }, methods).wrong.join("|")).toContain("format-1 corpus");
-    expect(scanSettles("f", { streams: [stream(good, [settle])] }, methods).wrong.join("|"), "no format field is format 1").toContain("format-1 corpus");
-    expect(scanSettles("f", { format: 2, streams: [stream(JSON.stringify({ kind: "draw" }), [settle])] }, methods).wrong.join("|")).toContain("not a settled win");
-    expect(scanSettles("f", { format: 2, streams: [stream(JSON.stringify({ kind: "draw", method: methods[0] }), [settle])] }, methods).wrong.join("|"), "a settled METHOD on a result that is not a win").toContain("not a settled win");
-    expect(scanSettles("f", { format: 2, streams: [stream("null", [settle])] }, methods).wrong.join("|"), "no outcome at all").toContain("not a settled win");
-    expect(scanSettles("f", { format: 2, streams: [stream(JSON.stringify({ kind: "win", method: "abandoned" }), [settle])] }, methods).wrong.join("|"), "a win that is not a settled one").toContain("not a settled win");
-    expect(methods.length, "the engine declares its settled methods").toBeGreaterThan(0);
-  });
 });
 
 // W2a review I-1: two hand-rolled replay loops (the match-centre timeline, the
@@ -284,14 +187,7 @@ describe("review I-1: every module.apply replay loop skips what the kernel owns"
   const APPLY = /\.apply\(/g;
   const NOT_A_LEDGER_REPLAY: readonly { file: string; call?: string; reason: string }[] = [
     { file: "apps/web/src/server/overlay/recent.ts", call: "next = module.apply(", reason: "the point-state PROBE: one synthetic module event applied to a stored state, never a ledger event" },
-    { file: "packages/engine/src/history/history.ts", call: "REVERSIBLE[e.type]?.apply(", reason: "the DIVISION history ledger (schedule_applied, fixtures_generated, …): `REVERSIBLE[type].apply` folds schedule ops, never a match event — no sport module, no core.* type" },
     { file: "apps/web/src/server/overlay/gallery-snapshots.ts", call: "state = sportModule.apply(", reason: "the staff gallery's sample WALK (R2007): a module's own generated events, never a stored ledger — it records a sport event or the start and redraws every other core type, which is every type kernelOwnsEvent can claim (gallery-snapshots.test.ts sweeps CORE_EVENT_SCHEMAS)" },
-    { file: "packages/engine/src/testkit/helpers.ts", reason: "testkit: buildStream drives apply with a module's own events" },
-    { file: "packages/engine/src/testkit/sanction-score.ts", reason: "testkit: the X-SE-2 sweep drives apply with the module's own generated play (every core type but the start redrawn) and one synthetic sanction" },
-    { file: "packages/engine/src/testkit/conformance.ts", reason: "testkit: conformance drives apply with a module's own generated events" },
-    { file: "packages/engine/src/testkit/conformance-pad.ts", reason: "testkit: the registry/dispatch drift probe (one call, one message naming it)" },
-    { file: "packages/engine/src/testkit/simulation.ts", reason: "testkit: simulation drives apply with a module's own generated events" },
-    { file: "packages/engine/src/testkit/scenarios.ts", reason: "testkit: scenario builder drives apply with a module's own generated events" },
   ];
   it("each module.apply call either sits in a loop that consults kernelOwnsEvent before it, or is listed with its reason", () => {
     const files = ROOTS.flatMap((r) => walk(join(REPO, r), []));
@@ -316,7 +212,9 @@ describe("review I-1: every module.apply replay loop skips what the kernel owns"
     expect(unguarded, `${sites} .apply( call sites scanned`).toEqual([]);
     expect(sites).toBeGreaterThanOrEqual(guarded + NOT_A_LEDGER_REPLAY.length);
     // The kernel's own fold, the timeline and the overlay's recent replay — and every listed entry is still real.
-    expect(guarded).toBeGreaterThanOrEqual(3);
+    // (app half) The source's floor of 3 is split: the kernel's own fold is the engine half's (>= 1), the timeline and the
+    // overlay's recent replay are this half's (>= 2).
+    expect(guarded).toBeGreaterThanOrEqual(2);
     expect([...listedSeen].sort()).toEqual(NOT_A_LEDGER_REPLAY.map((x) => `${x.file}|${x.call ?? ""}`).sort());
   });
 });

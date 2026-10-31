@@ -1,9 +1,7 @@
-import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const read = (p: string) => readFileSync(resolve(REPO, p), "utf8");
@@ -57,35 +55,6 @@ const imageExempt = workspaces.filter((w) => ignoredBy(w) !== undefined);
 
 type Manifest = { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; scripts?: Record<string, string> };
 
-/**
- * Spawns turbo's own dry-run task graph for `pkg`'s lint and typecheck, and asserts each depends on an `@onryde/seazn-engine#` task
- * whose hashed inputs hold every file in `engineFiles`. Returns how many tasks it judged (anti-vacuity: callers pin it).
- */
-function engineInputsHashedBy(pkg: string, engineFiles: string[]): number {
-  const r = spawnSync(resolve(REPO, "node_modules", ".bin", "turbo"), ["run", "lint", "typecheck", `--filter=${pkg}`, "--dry=json"], {
-    cwd: REPO, encoding: "utf8", timeout: SPAWN_MS,
-    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TURBO_TELEMETRY_DISABLED: "1" },
-  });
-  expect(r.status, r.stderr).toBe(0);
-  const out = r.stdout;
-  type Task = { taskId: string; dependencies: string[]; inputs: Record<string, string> };
-  const tasks = (JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1)) as { tasks: Task[] }).tasks;
-  const byId = new Map(tasks.map((t) => [t.taskId, t]));
-  let judged = 0;
-  for (const id of [`${pkg}#lint`, `${pkg}#typecheck`]) {
-    const t = byId.get(id);
-    expect(t, `${id} missing from the turbo graph`).toBeDefined();
-    const engineDeps = (t?.dependencies ?? []).filter((d) => d.startsWith("@onryde/seazn-engine#"));
-    expect(engineDeps, `${id} does not depend on any @onryde/seazn-engine task`).not.toEqual([]);
-    for (const d of engineDeps) {
-      const inputs = Object.keys(byId.get(d)?.inputs ?? {});
-      for (const file of engineFiles) expect(inputs, `${d} does not hash ${file}`).toContain(file);
-    }
-    judged++;
-  }
-  return judged;
-}
-
 describe("workspace wiring (trap 2: a new package is invisible to the root chains)", () => {
   it("the workspace list comes from pnpm-workspace.yaml's globs, is non-empty and includes packages/reference", () => {
     // Every glob is the `<dir>/*` shape the enumeration expands; a new shape
@@ -95,7 +64,7 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     expect(globs).toContain("packages/*");
     expect(workspaces.length).toBeGreaterThan(2);
     expect(workspaces).toContain("packages/reference");
-    expect(workspaces).toContain("packages/engine");
+    // Engine split 2b (reverse inventory row 21): packages/engine is no longer a workspace (it is the registry package).
     // Ruling 56: the matrix harness is the tools/matrix workspace (@seazn/matrix), and the scheduler
     // bench followed it to tools/bench (@seazn/bench).
     expect(globs).toContain("tools/*");
@@ -163,9 +132,10 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
   });
   it("packages/reference: the engine is a DEV dependency (types only), and every devDependency it shares with the engine has the engine's range", () => {
     const ref = JSON.parse(read("packages/reference/package.json")) as Manifest;
-    const engine = JSON.parse(read("packages/engine/package.json")) as Manifest;
+    // Engine split 2b (I): the engine's devDependencies are read from its installed (published) manifest.
+    const engine = JSON.parse(read("packages/reference/node_modules/@seazn/engine/package.json")) as Manifest;
     expect(ref.dependencies?.["@seazn/engine"]).toBeUndefined();
-    expect(ref.devDependencies?.["@seazn/engine"]).toBe("workspace:@onryde/seazn-engine@*");
+    expect(ref.devDependencies?.["@seazn/engine"]).toBe("npm:@onryde/seazn-engine@^1.0.0"); // engine split 2b (A1): the registry alias
     let shared = 0;
     for (const [name, range] of Object.entries(ref.devDependencies ?? {})) {
       const theirs = engine.devDependencies?.[name];
@@ -184,16 +154,7 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     }
     expect(pkg.scripts["reference:boundary"]).toBe("node --experimental-strip-types --import ./scripts/lib/crash-exit.ts scripts/reference-boundary.ts");
   });
-  it("packages/reference: turbo keys its lint AND typecheck on the engine's inputs, so an engine type change is a cache miss (review M-4)", () => {
-    // The real consumer, spawned: turbo's own dry-run task graph. Both tasks
-    // read @seazn/engine/core types (tsc, and the type-aware lint), so each
-    // must depend on a task whose inputs hold the engine core sources.
-    expect(engineInputsHashedBy("@seazn/reference", ["src/core/types.ts", "src/core/index.ts"])).toBe(2);
-  }, spawnBudget(1));
-  it("packages/scheduler: turbo keys its lint AND typecheck on the engine's solver port, so an engine port change is a cache miss", () => {
-    // Engine split 1a-3/1a-4. The scheduler's type-aware lint and its tsc both read the port types the engine declares
-    // (`PlacementSolver`, `EngineLogger`, `SolveBuildInput` in `scheduling/solver-port.ts`, re-exported by the barrel). Without
-    // `packages/scheduler/turbo.json`'s `lint.dependsOn ["^build"]` an engine port change restores a stale green lint.
-    expect(engineInputsHashedBy("@seazn/scheduler", ["src/scheduling/solver-port.ts", "src/scheduling/index.ts"])).toBe(2);
-  }, spawnBudget(1));
+  // Engine split 2b (reverse inventory row 21): the two tests that held turbo's lint and typecheck of packages/reference and
+  // packages/scheduler to an `@onryde/seazn-engine#` task hashing the engine's sources left with the engine workspace. A registry
+  // dependency has no turbo task; turbo keys it through the lockfile instead (`hashOfExternalDependencies`).
 });

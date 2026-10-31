@@ -35,6 +35,11 @@ jobs:
   deploy-stg:
     name: Deploy (stg)
     runs-on: ubuntu-latest
+    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine (consumed as
+    # @seazn/engine) from GitHub Packages inside the image build below.
+    permissions:
+      contents: read
+      packages: read
     concurrency:
       group: deploy-stg
       # Staging is latest-wins: stacked merges to main supersede the deploy in
@@ -53,6 +58,8 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       # stripe-sync.ts and sync-sports.ts import postgres, stripe and
       # @seazn/engine/sports from the repo ROOT, so those three are root
       # PRODUCTION dependencies — --prod honours the section, unlike npm ci
@@ -71,6 +78,8 @@ jobs:
       # "what the deploy job's --prod install needs" test in
       # apps/web/src/__tests__/toolchain.test.ts is the gate.
       - run: pnpm install --frozen-lockfile --prod
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
 
       - name: Cache Flyway CLI
         uses: actions/cache@v4
@@ -172,6 +181,12 @@ jobs:
           build-args: |
             ${{ steps.flycfg.outputs.args }}
             SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
+          # The registry credential for the image's install RUN, as a BuildKit
+          # secret that the Dockerfile mounts at /root/.npmrc for that one RUN:
+          # never build-args (they land in the image history). The same one line
+          # ci.yml's container job writes for `docker build --secret`.
+          secrets: |
+            npmrc=//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}
 
       # --image, so no builder is involved at all: fly pulls the digest above.
       - name: Deploy the pushed image
@@ -182,6 +197,11 @@ jobs:
   deploy-cron-worker-stg:
     name: Deploy cron Worker (staging)
     runs-on: ubuntu-latest
+    # packages: read lets GITHUB_TOKEN fetch @onryde/seazn-engine for the install below (the filtered install does
+    # not need the engine today; every install authenticates, so a cron Worker that imports it never reds on main).
+    permissions:
+      contents: read
+      packages: read
     concurrency:
       group: deploy-cron-worker-stg
       cancel-in-progress: true
@@ -194,7 +214,11 @@ jobs:
         with:
           node-version: 26
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
       - run: pnpm install --frozen-lockfile --filter @seazn/cron-worker...
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - run: pnpm --filter @seazn/cron-worker test
       - name: wrangler deploy --env stg
         run: pnpm --filter @seazn/cron-worker exec wrangler deploy --env stg

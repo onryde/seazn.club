@@ -15,7 +15,9 @@ const REPO = realpathSync(resolve(dirname(fileURLToPath(import.meta.url)), "..",
 const STORE = `${REPO}${sep}node_modules${sep}.pnpm${sep}`;
 const MODEL_DIR = resolve(REPO, "tools", "matrix", "lib", "model");
 const pkg = JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { devDependencies?: Record<string, string> };
-const engine = JSON.parse(readFileSync(resolve(REPO, "packages", "engine", "package.json"), "utf8")) as { devDependencies?: Record<string, string> };
+// Engine split 2b (reverse inventory row 19, I): the engine is the installed package; its published manifest carries the
+// devDependencies its own properties run on, read from the repo root's link to it.
+const engine = JSON.parse(readFileSync(resolve(REPO, "node_modules", "@seazn", "engine", "package.json"), "utf8")) as { devDependencies?: Record<string, string> };
 
 describe("fast-check resolves from THIS checkout (Review Focus 2)", () => {
   it("is a root devDependency on the engine's own range", () => {

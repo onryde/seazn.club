@@ -170,10 +170,14 @@ export default defineConfig({
     // included) into .next/standalone, and vitest globbing those copies after
     // a local build segfaulted the run.
     exclude: ["**/node_modules/**", "**/dist/**", "e2e/**", "**/.next/**"],
-    // @seazn/engine and @seazn/scheduler ship TS source (workspace symlinks) — inline them so vitest
-    // transforms them instead of treating them as opaque external deps. The scheduler matters twice over: the
-    // wiring tests spy on its `solveBuild` through the module namespace, which only sees a module vitest owns.
-    server: { deps: { inline: [/@seazn\/engine/, /@seazn\/scheduler/] } },
+    // Inline the engine and @seazn/scheduler so vitest owns them instead of handing them to node as opaque
+    // external deps. Suites spy through their module namespaces (`vi.spyOn(await import("@seazn/engine/scheduling"),
+    // "validateAssignments")`, the scheduler's `solveBuild`) — a namespace node owns is frozen ESM, so the spy throws
+    // "Cannot redefine property" — and `vi.resetModules()` must hand a re-import a FRESH engine registry, which it
+    // cannot do for a module node has cached (module-client.test.ts: the duplicate boot). The matcher runs on the
+    // RESOLVED path: `@seazn/engine` is an alias for the registry package (npm:@onryde/seazn-engine, engine split 2b),
+    // so the path names `@onryde/seazn-engine` and never `@seazn/engine` — that is the pattern that must be here.
+    server: { deps: { inline: [/@onryde\/seazn-engine/, /@seazn\/scheduler/] } },
     coverage: {
       provider: "v8",
       // The v1 engine (pairing/standings/engine) was deleted at the PROMPT-15

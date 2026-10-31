@@ -355,7 +355,7 @@ job_smoke_db() {
   step "Sync sport catalog"                  nrun npm run sync:sports
 
   step "Repo-root scripts tests (real Postgres)" \
-    nrun ./packages/engine/node_modules/.bin/vitest run --reporter=default \
+    nrun ./node_modules/.bin/vitest run --reporter=default \
       --reporter=json --outputFile=vitest-results-scripts.json --testTimeout=30000 scripts/__tests__
   judge_vitest "$REPO/vitest-results-scripts.json" "scripts/__tests__"
 
