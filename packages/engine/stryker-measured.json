@@ -120,14 +120,14 @@
       }
     },
     "modules-2": {
-      "mutants": 572,
-      "wallSeconds": 1031,
-      "dryRunSeconds": 232,
-      "phaseSeconds": 774,
+      "mutants": 813,
+      "wallSeconds": 1429,
+      "dryRunSeconds": 238,
+      "phaseSeconds": 1154,
       "run": {
-        "id": 40984041723,
-        "job": 123830793342,
-        "sha": "499f6daf4"
+        "id": 41153891589,
+        "job": 124396404035,
+        "sha": "db07ec539"
       }
     },
     "modules-3": {
@@ -284,10 +284,15 @@
       "phaseSeconds": 5321
     },
     "sports-football-1": {
-      "mutants": 362,
-      "wallSeconds": 3668,
-      "dryRunSeconds": 104,
-      "phaseSeconds": 3538
+      "mutants": 435,
+      "wallSeconds": 7279,
+      "dryRunSeconds": 220,
+      "phaseSeconds": 7036,
+      "run": {
+        "id": 41153896891,
+        "job": 124396414709,
+        "sha": "db07ec539"
+      }
     },
     "sports-football-2": {
       "mutants": 393,
@@ -336,14 +341,14 @@
       "phaseSeconds": 13080
     },
     "sports-period-3": {
-      "mutants": 457,
-      "wallSeconds": 11626,
-      "dryRunSeconds": 262,
-      "phaseSeconds": 11335,
+      "mutants": 506,
+      "wallSeconds": 11971,
+      "dryRunSeconds": 255,
+      "phaseSeconds": 11688,
       "run": {
-        "id": 40984060343,
-        "job": 123830837903,
-        "sha": "499f6daf4"
+        "id": 41153902780,
+        "job": 124396433164,
+        "sha": "db07ec539"
       }
     },
     "sports-period-4": {
@@ -359,14 +364,14 @@
       "phaseSeconds": 5181
     },
     "sports-period-6": {
-      "mutants": 394,
-      "wallSeconds": 9223,
-      "dryRunSeconds": 187,
-      "phaseSeconds": 9002,
+      "mutants": 354,
+      "wallSeconds": 8708,
+      "dryRunSeconds": 244,
+      "phaseSeconds": 8435,
       "run": {
-        "id": 39405563513,
-        "job": 118574449251,
-        "sha": "99f86e0b3"
+        "id": 41153908682,
+        "job": 124396450463,
+        "sha": "db07ec539"
       }
     },
     "sports-period-7": {
@@ -444,16 +449,26 @@
       }
     },
     "sports-nested-1": {
-      "mutants": 242,
-      "wallSeconds": 2885,
-      "dryRunSeconds": 94,
-      "phaseSeconds": 2758
+      "mutants": 281,
+      "wallSeconds": 2949,
+      "dryRunSeconds": 121,
+      "phaseSeconds": 2803,
+      "run": {
+        "id": 41153914062,
+        "job": 124396462379,
+        "sha": "db07ec539"
+      }
     },
     "sports-nested-2": {
-      "mutants": 365,
-      "wallSeconds": 6174,
-      "dryRunSeconds": 187,
-      "phaseSeconds": 5952
+      "mutants": 473,
+      "wallSeconds": 7839,
+      "dryRunSeconds": 204,
+      "phaseSeconds": 7611,
+      "run": {
+        "id": 41153921831,
+        "job": 124396492073,
+        "sha": "db07ec539"
+      }
     },
     "sports-nested-3": {
       "mutants": 364,
