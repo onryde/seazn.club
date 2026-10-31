@@ -5,7 +5,9 @@
 // status and the English cannot drift apart between the throw site and the screen.
 //
 // Status: 422 when the request can never succeed as sent (re-sending it changes nothing), 409 when it is a state of the
-// stage the organiser resolves another way (the copy says which) — the house split `api-v1/http.ts` ENGINE_HTTP states.
+// stage the organiser resolves another way (the copy says which) — the split `usecases/stages.ts` already makes:
+// `assertFormatUnlocked`'s FORMAT_LOCKED is a 409, and a refusal of the stage's KIND is a 422 (`unpairSwissRound`'s
+// "unpair only exists on swiss stages", SWISS_PAIRING_NOT_SWISS).
 //
 // Client-safe AND strip-types-safe: no runtime import at all, and only `import type` for `MessageKey`, so
 // `api-v1/schemas.ts` (loaded by `scripts/openapi-gen.ts` under bare `node --experimental-strip-types`) may import it

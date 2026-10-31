@@ -52,6 +52,8 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
         expect(typeof text === "string" && text.trim() !== "", `${code}: ${locale}/ui.json has ${row.key}`).toBe(true);
         // A placeholder the English copy names and a locale drops (or invents) renders as a hole or a raw `{token}`.
         expect(placeholders(text!), `${code}: ${locale} placeholders match en`).toEqual(placeholders(en[row.key as keyof typeof en]));
+        // A locale that copied the English is untranslated copy on that reader's screen (T4 review minor).
+        if (locale !== "en") expect(text, `${code}: ${locale} is translated, not the English`).not.toBe(en[row.key as keyof typeof en]);
         checked++;
       }
       // One English sentence, not two: the desk's English is the server's English.

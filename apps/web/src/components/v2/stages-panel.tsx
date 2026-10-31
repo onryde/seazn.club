@@ -2180,7 +2180,7 @@ export { outcomeText } from "@/lib/outcome-text";
 
 // PROMPT-66 — inline ad-hoc match form. Two entrant selects + an optional
 // datetime; POSTs /stages/{id}/fixtures and refreshes. The server enforces the
-// stage-kind policy; this form only shows on league/group/swiss stages.
+// stage-kind policy; this form only shows on league/group stages.
 function AddMatchForm({
   msg,
   stageId,
