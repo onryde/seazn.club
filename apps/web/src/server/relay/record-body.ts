@@ -19,8 +19,9 @@ const TOO_LARGE = "the record is over 1000 lines or 1 MB";
 const tooLarge = (inflatedBytes = 0): RecordBody => ({ ok: false, code: "too_large", message: TOO_LARGE, inflatedBytes });
 const invalid = (message: string, inflatedBytes = 0): RecordBody => ({ ok: false, code: "invalid", message, inflatedBytes });
 
-/** The raw body, or null once it passes `cap` bytes (the rest is never read). */
-async function readCapped(body: ReadableStream<Uint8Array> | null, cap: number): Promise<Buffer | null> {
+/** The raw body, or null once it passes `cap` bytes (the rest is never read). `cap` itself is accepted. Exported for the
+ *  sponsor frame upload (R4 S9), which reads its JPEG under the same rule. */
+export async function readCapped(body: ReadableStream<Uint8Array> | null, cap: number): Promise<Buffer | null> {
   if (body === null) return Buffer.alloc(0);
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];

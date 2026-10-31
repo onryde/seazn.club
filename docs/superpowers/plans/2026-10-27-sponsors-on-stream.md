@@ -555,7 +555,7 @@ airings answers 200` (scripts/smoke.ts).
 - [ ] **Step 1: Failing tests.**
 ```ts
 it("a frame posted before its airing row exists is stored; the report join finds it once the row lands", …);   // Review Focus 3
-it("another session's token → 404 (opaque), nothing stored", …);
+it("another session's token → 401 (the relay verifier's, as the heartbeat), nothing stored", …);
 it("a non-JPEG body (bad magic bytes) or > 256 KiB → 413/415", …);
 it("a second frame for the same moment replaces the path, one row", …);
 ```
@@ -563,7 +563,7 @@ it("a second frame for the same moment replaces the path, one row", …);
 - [ ] **Step 5: Commit** `feat(sponsors): airing frame upload`.
 
 **Four types:** unit + regression; E2E via S14 (the report shows a seeded frame); smoke `relay: frame with a bad token
-→ 404`.
+→ 401`.
 
 ### Task S10: Click attribution
 

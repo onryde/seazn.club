@@ -37,6 +37,43 @@ export async function deleteStorageObject(storagePath: string): Promise<void> {
 }
 
 /**
+ * R4 S9 (preflight R10): the PRIVATE bucket the compositor's proof-of-play frames live in — the one bucket here that is
+ * not public. Ops creates it on stg and prod before the deploy (not Flyway); nothing ever builds a public URL into it, and
+ * every read is a short-lived signed URL (`signedReadUrl`). The three helpers below touch THIS bucket only, never `assets`.
+ */
+export const SPONSOR_FRAMES_BUCKET = "sponsor-frames";
+
+/** The longest a signed read may live: an hour. A report page signs its frames as it renders. */
+export const SIGNED_READ_MAX_TTL_SEC = 3600;
+
+/** Writes `bytes` at `path` in the private bucket, replacing any object already there. Throws on a storage error with the
+ *  provider's message only — never the bytes. */
+export async function putStorageObject(path: string, bytes: Uint8Array, contentType: string): Promise<void> {
+  const { error } = await supabaseAdmin()
+    .storage.from(SPONSOR_FRAMES_BUCKET)
+    .upload(path, bytes, { contentType, upsert: true });
+  if (error) throw new Error(`storage put failed: ${error.message}`);
+}
+
+/** A signed URL that reads `path` from the private bucket for `ttlSec` seconds: a whole number from 1 to
+ *  SIGNED_READ_MAX_TTL_SEC. Any other TTL is refused before the provider is asked (thrown, never repaired). */
+export async function signedReadUrl(path: string, ttlSec: number): Promise<string> {
+  if (!Number.isInteger(ttlSec) || ttlSec < 1 || ttlSec > SIGNED_READ_MAX_TTL_SEC) {
+    throw new RangeError(`signedReadUrl: ttlSec must be a whole number from 1 to ${SIGNED_READ_MAX_TTL_SEC}, got ${ttlSec}`);
+  }
+  const { data, error } = await supabaseAdmin().storage.from(SPONSOR_FRAMES_BUCKET).createSignedUrl(path, ttlSec);
+  if (error || !data) throw new Error(`storage sign failed: ${error?.message ?? "no URL"}`);
+  return data.signedUrl;
+}
+
+/** Removes objects from the private bucket. An empty list asks the provider nothing. Throws on a storage error. */
+export async function removeStorageObjects(paths: readonly string[]): Promise<void> {
+  if (paths.length === 0) return;
+  const { error } = await supabaseAdmin().storage.from(SPONSOR_FRAMES_BUCKET).remove([...paths]);
+  if (error) throw new Error(`storage remove failed: ${error.message}`);
+}
+
+/**
  * Player avatar storage path — scoped to org + tournament + player UUID.
  */
 export function playerAvatarPath(
