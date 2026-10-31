@@ -51,8 +51,12 @@ export async function w3SwissASuite(): Promise<void> {
   const position = (f: Fx) => `${f.pool_id ?? "-"}|${f.round_no}|${f.seq_in_round}`;
 
   /** A generic league of `names`, generated, with every fixture laid out on its own hour and alternating courts. Returns
-   *  the slot this suite wrote per position — the expected values, never read back from the code under test. */
+   *  the slot this suite wrote per position — the expected values, never read back from the code under test. Each league
+   *  takes its own day (13th, 14th; the Swiss check uses the 16th): the leagues share the venue's two courts, so a second
+   *  league on the same hours is refused by the double-booking gate (`SCHEDULE_CONFLICT`) and lays out only half. */
+  let leagues = 0;
   async function laidOutLeague(s: Session, label: string, names: string[]) {
+    const day = `2030-06-${13 + leagues++}`;
     const divId = v1data<{ id: string } | undefined>(
       await v1(s, `/api/v1/competitions/${comp?.id}/divisions`, "POST", {
         name: label,
@@ -74,13 +78,16 @@ export async function w3SwissASuite(): Promise<void> {
       (v1data<Fx[] | undefined>(await v1(s, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
     const laid = new Map<string, { scheduled_at: string; court_id: string }>();
     let placed = 0;
+    const refused: string[] = [];
     for (const [i, f] of (await fixtures()).entries()) {
-      const slot = { scheduled_at: `2030-06-15T${String(8 + i).padStart(2, "0")}:00:00.000Z`, court_id: courts[i % 2] ?? "" };
+      const slot = { scheduled_at: `${day}T${String(8 + i).padStart(2, "0")}:00:00.000Z`, court_id: courts[i % 2] ?? "" };
       const res = await v1(s, `/api/v1/fixtures/${f.id}`, "PATCH", { ...slot, venue_id: venueId });
-      if (res.status === 200) placed++;
-      laid.set(position(f), slot);
+      if (res.status === 200) {
+        placed++;
+        laid.set(position(f), slot);
+      } else refused.push(`${position(f)}: ${res.status} ${JSON.stringify(res.json).slice(0, 120)}`);
     }
-    return { divId, entrants, stageId, fixtures, laid, placed };
+    return { divId, entrants, stageId, fixtures, laid, placed, refused };
   }
 
   // Check 1 — a pre-Start withdrawal and a late registration: three entrants before and after, so every position
@@ -99,7 +106,7 @@ export async function w3SwissASuite(): Promise<void> {
     const ok = league.placed === 3 && res.status === 200 && after.length === 3 && kept === 3 && out?.slots?.kept === 3 && out.slots.freed === 0;
     w3Check(
       "w3a X-RB-1: a Rebuild keeps all 3 laid-out slots at their positions, and says so (slots.kept 3, freed 0)" +
-        (ok ? "" : ` — placed ${league.placed}, status ${res.status}, after ${after.length}, kept ${kept}, out ${JSON.stringify(out ?? res.json)}`),
+        (ok ? "" : ` — placed ${league.placed} (refused ${league.refused.join("; ")}), status ${res.status}, after ${after.length}, kept ${kept}, out ${JSON.stringify(out ?? res.json)}`),
       ok,
     );
   }
@@ -120,7 +127,7 @@ export async function w3SwissASuite(): Promise<void> {
       out?.slots?.freed === gone && out.slots.unscheduled === fresh && out.slots.kept === afterPositions.size - fresh;
     w3Check(
       `w3a X-RB-1: a shrinking Rebuild counts every slot whose position is gone in slots.freed (${gone} expected)` +
-        (ok ? "" : ` — placed ${league.placed}, status ${res.status}, fresh ${fresh}, out ${JSON.stringify(out ?? res.json)}`),
+        (ok ? "" : ` — placed ${league.placed} (refused ${league.refused.join("; ")}), status ${res.status}, fresh ${fresh}, out ${JSON.stringify(out?.slots ?? res.json)}`),
       ok,
     );
   }
