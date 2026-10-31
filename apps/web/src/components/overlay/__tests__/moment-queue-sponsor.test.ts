@@ -336,6 +336,15 @@ describe("skip — the console's Skip this card (C4 dispatches it; inert until t
     expect(s.cutShort).toEqual([momentIdOf(sp(8))]);
   });
 
+  it("the only card, skipped: once it has folded off and the queue idles, cutShort still names it (S7 reads it then)", () => {
+    let s = enqueue(INITIAL, [sp(8)], 0);
+    s = tick(s, F);
+    s = skip(s, momentIdOf(sp(8)), 1_000);
+    s = tick(s, 1_000 + F); // folded off; nothing queued
+    expect(s.current).toBeNull();
+    expect(s.cutShort).toEqual([momentIdOf(sp(8))]);
+  });
+
   it("refusals: a score moment is never skipped; an unknown id, a card already leaving, a second skip change nothing", () => {
     let s = enqueue(INITIAL, [m(1, "goal"), m(2, "six"), sp(8)], 0);
     expect(skip(s, "1:goal", 100), "the slab on air").toBe(s);
