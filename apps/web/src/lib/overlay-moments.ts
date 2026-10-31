@@ -29,6 +29,10 @@
 import { GAME_UNIT_SPORTS, disciplineLabel } from "@/lib/public-site";
 import type { OverlayMoment as W1OverlayMoment, OverlayMsg } from "@/lib/overlay-model";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
+import { sponsorMomentId, type SponsorPlan, type SponsorStyle } from "@/lib/sponsor-plan";
+
+/** R4 S6 (spec 2026-10-27 §3.4): the queue's one ordering rule. A score moment always outranks a sponsor moment. */
+export type MomentPriority = "score" | "sponsor";
 
 /**
  * Spec "Step two", plus `seq` — the React key and the queue's identity.
@@ -45,11 +49,55 @@ export interface OverlayMoment extends W1OverlayMoment {
    * How this graphic renders. Default / absent = W2 moment slab.
    * `endOfOver` and `toss` are structured cards (2026-09-12 design).
    */
-  graphic?: "slab" | "endOfOver" | "toss";
+  graphic?: "slab" | "endOfOver" | "toss" | "sponsor";
   /** Per-item hold override (toss uses 8s). Absent → queue default (`OVERLAY_MOMENT_HOLD_MS`). */
   holdMs?: number;
   /** Payload for `graphic: "endOfOver"`. */
   endOfOver?: import("@/lib/overlay-cricket").OverlayClosedOver;
+  /** R4 S6: what the queue ranks this moment as. ABSENT = "score": every moment built before sponsors existed (slabs,
+   *  the end-of-over card, the toss) is a score moment without saying so. Only `sponsorMoments` writes "sponsor". */
+  priority?: MomentPriority;
+  /** Payload for `graphic: "sponsor"` — the plan's card (`SponsorPlan.cards` by id), its style and its break. */
+  sponsor?: { cardId: string; style: SponsorStyle; breakKind: string };
+}
+
+/**
+ * R4 S6 (spec 2026-10-27 §3.4): the served sponsor plan's airings → moments for the SAME queue (scenario rule 1: "a
+ * sponsor card is just another moment kind"; no second pipeline).
+ *
+ * The kind is `sponsor.${breakKind}`, so the queue's `momentIdOf` (`${seq}:${kind}`) IS S4's `sponsorMomentId` — the
+ * id S7's proof-of-play lines carry and S8 joins to `sponsor_assignments` on. Each airing keeps its own `holdMs` (the
+ * size's declared hold), which the queue's per-item override already honours.
+ *
+ * TWO REFUSALS, each costing one card rather than the overlay: an airing whose card the plan does not carry has
+ * nothing to show, and an airing whose `momentId` is not the queue id would air under an id nothing can join to. The
+ * planner produces neither; the answer crosses the wire, so the page does not take that on trust.
+ *
+ * Order is the plan's (ascending seq — the planner's input contract). The stage owes the mount filter: like
+ * `momentsFor`'s `sinceSeq`, a page opened mid-stream must not air a card for a break it never saw (S7).
+ */
+export function sponsorMoments(plan: SponsorPlan): OverlayMoment[] {
+  if (plan === null) return [];
+  const cardById = new Map(plan.cards.map((c) => [c.id, c]));
+  const out: OverlayMoment[] = [];
+  for (const a of plan.airings) {
+    const card = cardById.get(a.cardId);
+    if (card === undefined) continue;
+    if (a.momentId !== sponsorMomentId(a.seq, a.breakKind)) continue;
+    out.push({
+      seq: a.seq,
+      kind: `sponsor.${a.breakKind}`,
+      graphic: "sponsor",
+      priority: "sponsor",
+      // The W1 shape requires a headline and a tone; the sponsor card (S7) renders its own face, so these are the
+      // card's name and the neutral slab tone, never painted as a slab.
+      headline: card.name,
+      tone: "led",
+      holdMs: a.holdMs,
+      sponsor: { cardId: a.cardId, style: a.style, breakKind: a.breakKind },
+    });
+  }
+  return out;
 }
 
 export type MomentRule = (
