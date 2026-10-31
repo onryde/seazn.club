@@ -160,6 +160,53 @@ async function openedLeague(fixtures: number): Promise<SeedOnlineChessRoundResul
   expect(out, "premise: the real open invited the round").toMatchObject({ opened: true });
   return r;
 }
+/** An online chess LEAGUE whose boards the REAL generator minted (`generateStageFixtures`), so the ledger's
+ *  `fixtures_generated` row names them and an Undo of it DELETES them (history.ts `fixtures_cleared`). Plus ONE board inserted
+ *  beside them in round 1 between two entrants added after the generation: no ledger row names it, so no Undo deletes it — the
+ *  positive pair. Round 1 is opened through the real open; the provider answers 503, so every invite stays `queued`. */
+async function openedGeneratedLeague(players = 4) {
+  const owner = await seedOwner();
+  const ownerUserId = owner.userId;
+  if (!ownerUserId) throw new Error("seedOwner returned a session with no userId");
+  const competition = await createCompetition(owner, {
+    name: "G-1 League",
+    visibility: "public",
+    branding: {},
+    starts_on: "2026-10-01",
+    ends_on: "2026-10-02",
+  });
+  const division = await createDivision(owner, competition.id, {
+    name: "Open",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
+  });
+  const entrant = async (name: string, seed?: number) => {
+    const p = await seedPlayer(owner.orgId, name, `g-${randomUUID().slice(0, 10)}`, true);
+    const [e] = await createEntrants(owner, division.id, [
+      { display_name: name, kind: "individual", ...(seed ? { seed } : {}), members: [{ person_id: p.personId, is_captain: false, roles: [] }] },
+    ]);
+    const [u] = await sql<{ email: string }[]>`select email from users where id = ${p.userId}`;
+    mail.retry.add(u!.email);
+    return e!.id;
+  };
+  for (let i = 0; i < players; i++) await entrant(`G${i + 1}`, i + 1);
+  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {}, progression: null });
+  await generateStageFixtures(owner, stage!.id);
+  const generated = (await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id} order by id`).map((f) => f.id);
+  const [{ seq }] = await sql<{ seq: number }[]>`
+    select coalesce(max(seq_in_round), 0)::int + 1 as seq from fixtures where stage_id = ${stage!.id} and round_no = 1`;
+  const [spared] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, home_entrant_id, away_entrant_id)
+    values (${stage!.id}, ${division.id}, ${owner.orgId}, 1, ${seq}, ${`g1-spared-${randomUUID().slice(0, 6)}`}, 'scheduled',
+            ${await entrant("Spare W")}, ${await entrant("Spare B")})
+    returning id`;
+  await sql`update fixtures set scheduled_at = ${new Date("2026-10-01T12:10:00.000Z")} where stage_id = ${stage!.id}`;
+  await startDivision(owner, division.id);
+  const out = await openRound({ stageId: stage!.id, roundNo: 1, actorUserId: ownerUserId });
+  expect(out, "premise: the real open invited the round").toMatchObject({ opened: true });
+  return { orgId: owner.orgId, owner, divisionId: division.id, stageId: stage!.id, generated, spared: spared!.id };
+}
 /** The premise every case starts from: the open left `n` rows, every one still queued after a 503, each with its body. */
 async function expectQueuedRows(orgId: string, atLeast: number): Promise<Row[]> {
   const rows = await rowsOf(orgId);
@@ -706,6 +753,39 @@ describe.skipIf(!HAS_DB)("a deleted fixture takes its queued invites with it (G-
     const after = await rowsOf(s.orgId);
     expect(after.map((x) => x.id)).toEqual(before.map((x) => x.id));
     expect(expectVoided(after, ROUND_VOIDED), "already ended; the delete re-ends none").toBe(before.length);
+  });
+
+  // T5 re-review n1: the Swiss case above can no longer reach history's delete-cancel with a queued invite (the Pair's Undo ends
+  // them first), so this is that cancel's witness: a league whose boards the generator minted, undone back past its generation.
+  it("undoing a league's generation deletes its boards and ends their queued invites fixture_deleted; a board it does not delete keeps its invites", async () => {
+    const g = await openedGeneratedLeague(4);
+    const before = await expectQueuedRows(g.orgId, 4);
+    const onGenerated = before.filter((r) => g.generated.includes(fixtureOf(r)));
+    const onSpared = before.filter((r) => fixtureOf(r) === g.spared);
+    expect(onGenerated.length, "premise: round 1's generated boards were invited").toBeGreaterThan(0);
+    expect(onSpared.length, "premise: the spared board was invited").toBe(2);
+    expect(onGenerated.length + onSpared.length, "premise: every invite is on one of the two").toBe(before.length);
+    const live = async () =>
+      (await sql<{ id: string }[]>`select id from fixtures where id = any(${g.generated}::uuid[])`).map((f) => f.id);
+
+    let steps = 0;
+    while ((await live()).length === g.generated.length && steps < 5) {
+      await undoDivision(g.owner, g.divisionId);
+      steps += 1;
+      if ((await live()).length === g.generated.length) {
+        expect((await rowsOf(g.orgId)).every((r) => r.status === "queued"), `step ${steps} deleted no board, so no invite ended`).toBe(true);
+      }
+    }
+    expect(await live(), "the Undo of the generation deleted every board it minted").toEqual([]);
+    const after = await rowsOf(g.orgId);
+    expect(after.map((x) => x.id)).toEqual(before.map((x) => x.id));
+    expect(
+      expectVoided(after.filter((r) => g.generated.includes(fixtureOf(r))), FIXTURE_DELETED),
+      "every invite on a deleted board ended fixture_deleted",
+    ).toBe(onGenerated.length);
+    const kept = after.filter((r) => fixtureOf(r) === g.spared);
+    expect(kept.map((r) => r.status), "positive pair: the board the Undo did not delete keeps its invites queued").toEqual(["queued", "queued"]);
+    expect((await sql`select 1 from fixtures where id = ${g.spared}`).length, "and the board itself").toBe(1);
   });
 
   it("deleting a competition ends the queued invites of its boards fixture_deleted, after its delete and in the same transaction, naming boards read before it (T6 review m3)", async () => {
