@@ -37,7 +37,14 @@ vi.mock("@/server/sponsors/airings", async (importOriginal) => {
   return { ...actual, recordAirings: vi.fn(actual.recordAirings), closeOpenAirings: vi.fn(actual.closeOpenAirings) };
 });
 
+// The repo's error capture, observed: a `card_not_sponsor` refusal is reported as an error (S8 review polish 4).
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn() };
+});
+
 import { sql, statementCount, type Tx } from "@/lib/db";
+import { captureError } from "@/lib/sentry";
 import { HttpError } from "@/lib/errors";
 import { RelayAiring, RelayHeartbeat } from "@/server/api-v1/schemas";
 import { SIGNAL_SPONSOR_END, SIGNAL_SPONSOR_START, sponsorLine, sponsorQueueLines } from "@/lib/overlay-compositor";
@@ -446,6 +453,13 @@ describe.skipIf(!HAS_DB)("S8: the heartbeat's airings become sponsor_airings row
     expect(a, "premise: the assignment survived with its snapshot").toEqual({ sponsor_id: null, sponsor_name: LONG_NAME });
     await c.beat({ state: "playing", airings: lines.map(itemOf) });
     expect(await airingsOf(c.S)).toEqual([expect.objectContaining({ sponsor_id: null, sponsor_name: LONG_NAME, source: "rotation", break_kind: OVER_END.kind })]);
+    // The scene side of the same deletion: a carousel card names its sponsor only by id, and no snapshot exists — the
+    // start is refused `sponsor_gone` (a deleted sponsor, not a broken card contract: no error is reported).
+    const reports = vi.mocked(captureError).mock.calls.length;
+    const scene = startItem({ momentId: "scene:starting:1", cardId: sponsorId, style: CAROUSEL_STYLE, source: "scene", breakKind: null, at: c.r.now() });
+    expect(await record({ sessionId: c.S, orgId: c.r.auth.orgId, fixtureId: c.r.fixtureId }, [scene], c.r.now())).toEqual({ written: 0, refused: 1, why: ["sponsor_gone"] });
+    expect(vi.mocked(captureError).mock.calls.length).toBe(reports);
+    expect(await airingsOf(c.S)).toHaveLength(1);
   });
 
   it("R5: a Play-next card is recorded `operator` from its assignment, though the page sends `rotation` for every break card", async () => {
@@ -461,19 +475,29 @@ describe.skipIf(!HAS_DB)("S8: the heartbeat's airings become sponsor_airings row
     expect(await airingsOf(c.S)).toEqual([expect.objectContaining({ sponsor_id: sponsorId, source: "operator" })]);
   });
 
-  it("ownership: another org's sponsor as a scene card, a corrupt assignment row naming another org, a non-uuid card id and a moment with no assignment are each refused by name; the session's own fixture of another org refuses every item", async () => {
+  it("ownership: another org's sponsor as a scene card (sponsor_gone), a non-uuid card id (card_not_sponsor, reported as an error), a corrupt assignment row naming another org and a moment with no assignment (each falls back to the card: another org's ⇒ sponsor_gone), and this org's assignment naming another org's sponsor (foreign_sponsor) are each refused by name; the session's own fixture of another org refuses every item", async () => {
     const p = await plainSession();
     const other = await plainSession();
     const foreignSponsor = await sponsorRow(other.orgId, "Not Yours Ltd");
     const t0 = new Date();
     const sceneOf = (cardId: string, n: number) => startItem({ momentId: `scene:starting:${n}`, cardId, style: CAROUSEL_STYLE, source: "scene", breakKind: null, at: t0 });
-    expect(await record(p.s, [sceneOf(foreignSponsor, 1)], t0), "another org's sponsor").toEqual({ written: 0, refused: 1, why: ["unknown_card"] });
-    expect(await record(p.s, [sceneOf("gallery-card-gold", 2)], t0), "not a sponsor id at all").toEqual({ written: 0, refused: 1, why: ["unknown_card"] });
+    const captured = () => vi.mocked(captureError).mock.calls.filter(([, ctx]) => ctx?.route === "relay.sponsor_airings.card_not_sponsor");
+    const before = captured().length;
+    expect(await record(p.s, [sceneOf(foreignSponsor, 1)], t0), "another org's sponsor").toEqual({ written: 0, refused: 1, why: ["sponsor_gone"] });
+    expect(captured().length, "a gone sponsor is no contract breach").toBe(before);
+    expect(await record(p.s, [sceneOf("gallery-card-gold", 2), sceneOf("gallery-card-silver", 8)], t0), "not a sponsor id at all").toEqual({ written: 0, refused: 2, why: ["card_not_sponsor", "card_not_sponsor"] });
+    expect(captured().map(([, ctx]) => ctx), "reported ONCE per beat, as an error, with the org and the count").toEqual([
+      ...captured().slice(0, before).map(([, ctx]) => ctx), { orgId: p.orgId, route: "relay.sponsor_airings.card_not_sponsor", extra: { sessionId: p.sessionId, items: 2 } },
+    ]);
     // A row the DB lets in (no composite FK): this fixture's moment, owned by another org.
     const moment = sponsorMomentId(3, OVER_END.kind);
     await persistAssignment(other.orgId, p.fixtureId, { momentId: moment, seq: 3, sponsorId: foreignSponsor, sponsorName: "Not Yours Ltd", position: 0, source: "rotation", breakKind: OVER_END.kind, style: "lower_third", holdMs: 8000, operatorChoiceAt: null });
-    expect(await record(p.s, [startItem({ momentId: moment, cardId: foreignSponsor, at: t0 })], t0), "another org's assignment").toEqual({ written: 0, refused: 1, why: ["no_assignment"] });
-    expect(await record(p.s, [startItem({ momentId: sponsorMomentId(4, OVER_END.kind), cardId: foreignSponsor, at: t0 })], t0), "no assignment at all").toEqual({ written: 0, refused: 1, why: ["no_assignment"] });
+    expect(await record(p.s, [startItem({ momentId: moment, cardId: foreignSponsor, at: t0 })], t0), "another org's assignment ⇒ the card ⇒ another org's").toEqual({ written: 0, refused: 1, why: ["sponsor_gone"] });
+    expect(await record(p.s, [startItem({ momentId: sponsorMomentId(4, OVER_END.kind), cardId: foreignSponsor, at: t0 })], t0), "no assignment, another org's card").toEqual({ written: 0, refused: 1, why: ["sponsor_gone"] });
+    // This org's assignment row, its COPIED sponsor another org's (the DB checks no composite reference).
+    const copied = sponsorMomentId(5, OVER_END.kind);
+    await persistAssignment(p.orgId, p.fixtureId, { momentId: copied, seq: 5, sponsorId: foreignSponsor, sponsorName: "Not Yours Ltd", position: 1, source: "rotation", breakKind: OVER_END.kind, style: "lower_third", holdMs: 8000, operatorChoiceAt: null });
+    expect(await record(p.s, [startItem({ momentId: copied, cardId: foreignSponsor, at: t0 })], t0), "this org's assignment, another org's sponsor").toEqual({ written: 0, refused: 1, why: ["foreign_sponsor"] });
     expect(await airingsOf(p.sessionId)).toEqual([]);
     // The positive pair on the same session: its own sponsor as a scene card is written.
     const own = await sponsorRow(p.orgId, "Yours Ltd");
@@ -484,6 +508,60 @@ describe.skipIf(!HAS_DB)("S8: the heartbeat's airings become sponsor_airings row
     expect((await airingsOf(p.sessionId)).map((r) => r.moment_id)).toEqual(["scene:starting:5"]);
     expect(sponsorIdOfCard(own)).toBe(own);
     expect(sponsorIdOfCard("gallery-card-gold")).toBeNull();
+  });
+
+  it("the void race (S8 review ruling): a take-back deletes the break's assignment while its card is on air — the start still lands, attributed to the CARD's sponsor (this org's), source rotation, the item's break kind and style; with the sponsor deleted too it is refused sponsor_gone; another org's card is refused", async () => {
+    const c = await composedRig("cricket");
+    const sponsorId = await c.sponsor(LONG_NAME);
+    const goneId = await c.sponsor("Deleted Before The Start");
+    const other = await plainSession();
+    const foreign = await sponsorRow(other.orgId, "Not Yours Ltd");
+    const cards = [cardOf(sponsorId, LONG_NAME), cardOf(goneId, "Deleted Before The Start"), cardOf(foreign, "Not Yours Ltd")];
+    // Three breaks, three cards, assigned and planned for real (three polls, past the cooldown), lines from the page.
+    const brks: BreakOpened[] = [];
+    const assigned: SponsorAssignment[] = [];
+    const moments: ReturnType<typeof sponsorMoments> = [];
+    for (const [i, seq] of [20, 21, 22].entries()) {
+      if (i > 0) c.r.tick(100 * SEC);
+      brks.push(breakAt(c.r, seq, i === 1 ? INNINGS_BREAK : OVER_END));
+      const got = await assignBreaks({ orgId: c.r.auth.orgId, fixtureId: c.r.fixtureId, cards: [cards[i]!], breaks: [...brks], now: c.r.now().getTime(), assigned: [...assigned] });
+      assigned.push(...got.assignments);
+      moments.push(...sponsorMoments(got.plan).filter((m) => m.seq === seq));
+    }
+    expect(moments.map((m) => m.seq), "premise: one moment per break").toEqual([20, 21, 22]);
+    const at = c.r.now();
+    const items = moments.flatMap((m) => sponsorQueueLines(null, { current: m, phase: "hold", cutShort: [] }, at.toISOString()).lines.map(itemOf));
+    expect(items.map((x) => x.kind === "start" && x.cardId), "premise: each card on air").toEqual([sponsorId, goneId, foreign]);
+    // The take-back: S5 deletes every voided break's assignment; the second card's sponsor is deleted as well.
+    expect((await sql`delete from sponsor_assignments where fixture_id = ${c.r.fixtureId} returning moment_id`).length).toBe(3);
+    await deleteSponsor(c.r.auth, goneId);
+    await c.beat({ state: "playing", airings: items });
+    expect(await airingsOf(c.S)).toEqual([expect.objectContaining({
+      moment_id: sponsorMomentId(20, OVER_END.kind), sponsor_id: sponsorId, sponsor_name: LONG_NAME, source: "rotation",
+      break_kind: OVER_END.kind, style: SPONSOR_STYLE_BY_SIZE.minor.style, started_at: at,
+    })]);
+    // The refusals, by name (the same items through the writer: the first is a re-send now).
+    const p = { sessionId: c.S, orgId: c.r.auth.orgId, fixtureId: c.r.fixtureId };
+    expect(await record(p, items, at)).toEqual({ written: 0, refused: 2, why: ["sponsor_gone", "sponsor_gone"] });
+  });
+
+  it("NUL bytes: a U+0000 in momentId, cardId or breakKind is refused by name PER ITEM — the beat's other items still land (one bad item never rolls back the batch the 200 then clears)", async () => {
+    const c = await composedRig("cricket");
+    const sponsorId = await c.sponsor("Acme");
+    const NUL = String.fromCharCode(0);
+    const at = c.r.now();
+    const scene = (n: number, cardId = sponsorId) => startItem({ momentId: `scene:starting:${n}`, cardId, style: CAROUSEL_STYLE, source: "scene", breakKind: null, at });
+    const bad = [
+      startItem({ momentId: `scene:starting:9${NUL}`, cardId: sponsorId, style: CAROUSEL_STYLE, source: "scene", breakKind: null, at }),
+      scene(10, `${sponsorId}${NUL}`),
+      startItem({ momentId: sponsorMomentId(30, OVER_END.kind), cardId: sponsorId, breakKind: `over${NUL}end`, at }),
+      endItem({ momentId: `scene:starting:1${NUL}`, at }),
+    ];
+    expect(bad.length, "premise: the twin admits each (zod does not refuse NUL)").toBe(4);
+    await c.beat({ state: "playing", airings: [scene(1), ...bad, scene(2)] });
+    expect((await airingsOf(c.S)).map((r) => r.moment_id), "the good items, both sides of the bad ones").toEqual(["scene:starting:1", "scene:starting:2"]);
+    const p = { sessionId: c.S, orgId: c.r.auth.orgId, fixtureId: c.r.fixtureId };
+    expect(await record(p, bad, at)).toEqual({ written: 0, refused: 4, why: ["nul_byte", "nul_byte", "nul_byte", "nul_byte"] });
   });
 
   it("the beat's own guards: a SUPERSEDED Machine's airings are not recorded (a sample only); a beat received after this attempt's final still records its airings (they predate the final)", async () => {

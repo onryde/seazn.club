@@ -194,7 +194,8 @@ Counted from **composed streams only** in the MVP (D10):
    `seazn:sponsor:end {"momentId","at","cutShort"}` (same channel as `seazn:ready`).
 2. **Compositor:** the console reader validates both (bounded JSON ≤ 512 bytes, known keys), buffers ≤ 64 (overflow
    drops oldest, counts `airingsDropped`), sends them on the next heartbeat as `airings: [...]` (additive; contract
-   bump in `relay-job.v1.json`, vendored to web). Cleared only on a 2xx reply; the final beat flushes.
+   bump in `relay-job.v1.json`, vendored to web). Cleared on a 2xx reply; a 400/422 drops what the beat carried, counted
+   in `airingsDropped`; a 5xx, a transport error or a 410 keeps it. The final beat flushes.
 3. **Frame grab (compositor):** 1.5 s after a `start` line, grab one programme frame, JPEG 640×360 q≈75, off the
    streaming thread, ≤ 1 per 20 s; `POST /api/internal/relay/sessions/[sid]/airings/[momentId]/frame` with the session
    token. A failure logs once and is dropped; it never blocks the pipeline. CPU cost measured on stg before merge; a
@@ -262,7 +263,7 @@ Footnote: "composed streams", "viewer numbers from YouTube". `noindex`, rate-lim
 
 ## 6. Constraints the builder must meet
 
-### 6.1 The top bar at 320 *(my call, per the coordinator; not an owner ruling)*
+### 6.1 The top bar at 320 *(owner ruling 2026-10-31, "a")*
 
 `nav.tsx` holds Dashboard / Directory / Settings (+ Player home for dual-role); a 4th icon overflows below ~340 px. The
 Sponsors link is `hidden min-[350px]:flex` (the Player-home precedent) and the org Dashboard carries a Sponsors entry

@@ -55,7 +55,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "725dbee11d651fd34bc3dfe0df69f550981b505ab47ed75bbbaa7249b3e351a6";
+const SHA256 = "dc0a2ff796fc5d105cc0363e04c3824905828e82cef0b0f0545f828274081651";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -906,15 +906,17 @@ describe("R4 S8: the beat's proof-of-play airings", () => {
     expect(old).toBe(3);
   });
 
-  it("the file's prose states the rules SC1 builds against: the 64 cap with the OLDEST dropped, clearing on a 2xx only, validation before buffering, the FIRST start kept, the clock skew in minutes (AIRING_CLOCK_SKEW_MS), kept out of the beat stores; `at` is UTC `Z`", () => {
+  it("the file's prose states the rules SC1 builds against: the 64 cap with the OLDEST dropped, cleared on a 2xx, dropped (counted) on a 400/422, kept on a 5xx / transport error / 410, validation before buffering, the FIRST start kept, the clock skew in minutes (AIRING_CLOCK_SKEW_MS), kept out of the beat stores; `at` is UTC `Z`", () => {
     const beat = defOf(contract(), "heartbeat");
     const prose = propOf(beat, AIRINGS_FIELD).description as string;
     let rules = 0;
-    for (const words of [`at most ${AIRINGS_MAX}`, "OLDEST", "2xx", "Validate each item", "FIRST", `${AIRING_CLOCK_SKEW_MS / 60_000} minutes`, "not kept with the beat"]) {
+    // S8 review polish: what each reply class does to the buffer — a 2xx clears, a 400/422 drops (counted: the beat will
+    // never be admitted as it is), a 5xx / transport error / 410 keeps.
+    for (const words of [`at most ${AIRINGS_MAX}`, "OLDEST", "2xx", "400 or 422 reply drops", "counted in airingsDropped (the beat will never", "a 5xx, a transport error or a 410 keeps it", "Validate each item", "FIRST", `${AIRING_CLOCK_SKEW_MS / 60_000} minutes`, "not kept with the beat"]) {
       expect(prose, words).toContain(words);
       rules++;
     }
-    expect(rules).toBe(7);
+    expect(rules).toBe(10);
     // The prose reached the items too (the generator walks into the array): `at` names its zone rule.
     const startBranch = ((propOf(beat, AIRINGS_FIELD).anyOf as Json[]).find((b) => b.type === "array")!.items as Json).oneOf as Json[];
     expect(startBranch).toHaveLength(2);

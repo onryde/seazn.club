@@ -2945,9 +2945,6 @@ async function previousRungOf(tx: Tx, before: Row): Promise<unknown> {
   }
 }
 
-/** #983 review r1: whether a beat's job token names an attempt OLDER than the session's current one (runner_attempts,
- *  the create calls made) — i.e. it is the beat of a Machine a retry replaced. `att` null is a token minted before the
- *  claim existed (a session in flight across the deploy): never superseded, so it keeps the behaviour it had. */
 /** R4 S8: `recordAirings` on the beat's transaction, isolated in a savepoint like `sampleBeat` is outside it — a
  *  database error rolls back the airings only, is logged and reported, and the beat is stored and answered anyway. */
 async function recordBeatAirings(tx: Tx, cur: Row, items: NonNullable<RelayHeartbeat["airings"]>, now: Date): Promise<void> {
@@ -2959,6 +2956,9 @@ async function recordBeatAirings(tx: Tx, cur: Row, items: NonNullable<RelayHeart
   }
 }
 
+/** #983 review r1: whether a beat's job token names an attempt OLDER than the session's current one (runner_attempts,
+ *  the create calls made) — i.e. it is the beat of a Machine a retry replaced. `att` null is a token minted before the
+ *  claim existed (a session in flight across the deploy): never superseded, so it keeps the behaviour it had. */
 function supersededAttempt(att: number | null, currentAttempt: number): boolean {
   return att !== null && att < currentAttempt;
 }
