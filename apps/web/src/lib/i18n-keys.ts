@@ -3218,6 +3218,8 @@ export type DictionaryKey =
   | "history.event.scheduleEdited"
   | "history.event.schedulePublished"
   | "history.event.scheduleRestored"
+  | "history.event.swissLateEntry"
+  | "history.event.swissRoundsChanged"
   | "history.freezeAll"
   | "history.notUndoable"
   | "history.recent.empty"

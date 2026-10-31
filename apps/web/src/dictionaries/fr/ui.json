@@ -6013,6 +6013,8 @@
   "history.event.participantsImported": "Participants importés",
   "history.event.schedulePublished": "Calendrier publié",
   "history.event.divisionStarted": "Division démarrée",
+  "history.event.swissLateEntry": "Joueur tardif ajouté",
+  "history.event.swissRoundsChanged": "Nombre de tours modifié",
   "pad.cricket.action.playerLine.field.innings": "Manche",
   "pad.cricket.action.playerLine.field.battingOut": "Éliminé",
   "pad.cricket.action.playerLine.field.battingRuns": "Runs marqués",

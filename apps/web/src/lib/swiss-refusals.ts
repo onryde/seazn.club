@@ -118,6 +118,12 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
   },
 };
 
+/** W3 T5: whether a wire code is one of this table's — the client's branch to say a Swiss refusal in the reader's
+ *  language (history-panel.tsx, stages-panel.tsx `undoRefusalMessage`). Own keys only: a prototype name is no code. */
+export function isSwissRefusalCode(code: unknown): code is SwissRefusalCode {
+  return typeof code === "string" && Object.hasOwn(SWISS_REFUSALS, code);
+}
+
 /** The `ui.json` key the desk renders for `code` (`useMsg()(swissRefusalKey(code))`). */
 export function swissRefusalKey(code: SwissRefusalCode): MessageKey {
   return SWISS_REFUSALS[code].key;

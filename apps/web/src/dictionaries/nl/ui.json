@@ -6013,6 +6013,8 @@
   "history.event.participantsImported": "Deelnemers geïmporteerd",
   "history.event.schedulePublished": "Schema gepubliceerd",
   "history.event.divisionStarted": "Divisie gestart",
+  "history.event.swissLateEntry": "Late speler toegevoegd",
+  "history.event.swissRoundsChanged": "Aantal rondes gewijzigd",
   "pad.cricket.action.playerLine.field.innings": "Innings",
   "pad.cricket.action.playerLine.field.battingOut": "Uitgeschakeld",
   "pad.cricket.action.playerLine.field.battingRuns": "Gescoorde runs",

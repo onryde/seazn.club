@@ -9,7 +9,7 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { HttpError } from "@/lib/errors";
-import { SWISS_REFUSALS, swissRefusalKey, type SwissRefusalCode } from "@/lib/swiss-refusals";
+import { SWISS_REFUSALS, isSwissRefusalCode, swissRefusalKey, type SwissRefusalCode } from "@/lib/swiss-refusals";
 import { swissRefusal } from "@/server/usecases/swiss-refusal";
 
 // The plan's list (W3 app-A plan, Task 4 "Interfaces → Codes defined here, for every later task"), typed here rather
@@ -62,6 +62,21 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
     // Anti-vacuity: 13 codes × 4 locales. Zero checked is a failure, not a pass.
     expect(checked, "anti-vacuity: (code, locale) pairs checked").toBe(PLAN_CODES.length * 4);
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it("isSwissRefusalCode (W3 T5): true for every plan code, false for any other wire code or a prototype name", () => {
+    // The client branches on the CODE to say a Swiss refusal in the reader's language (history-panel.tsx, the Undo
+    // toast in stages-panel.tsx); a guard that answered yes to a prototype key would hand `swissRefusalKey` an
+    // undefined row.
+    let yes = 0;
+    for (const code of PLAN_CODES) {
+      expect(isSwissRefusalCode(code), code).toBe(true);
+      yes++;
+    }
+    expect(yes, "anti-vacuity: every plan code judged").toBe(13);
+    const others = ["SEQ_CONFLICT", "SCHEDULE_LOCKED", "FORMAT_LOCKED", "swiss_undo_round_started", "", "toString", "__proto__", "constructor", undefined, null, 409];
+    for (const other of others) expect(isSwissRefusalCode(other), String(other)).toBe(false);
+    expect(others.length).toBe(11);
   });
 
   it("SWISS_ADHOC_REFUSED carries the RB3-15 guidance (spec §8 Q1 A, ruling 252)", () => {

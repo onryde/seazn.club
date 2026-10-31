@@ -9,14 +9,15 @@ import { type Session, newSession, check, signIn, tag, v1, v1data } from "../har
  * and reports what it could not keep. T2 (X-RB-1, SW-L8): a pre-Start Swiss reshape deletes an unscheduled board before a
  * pinned one. T4 (X-SW-21, RB3-15 A): an ad-hoc match on a Swiss stage is refused 422 SWISS_ADHOC_REFUSED and writes
  * nothing. T3 (X-SW-5, X-SW-29; SW-M7, SW-M13): a bye's format is frozen when Pair awards it, so a later format save
- * leaves it, and a bye shell takes no court or time (422 SWISS_BYE_NOT_PLACEABLE). Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
+ * leaves it, and a bye shell takes no court or time (422 SWISS_BYE_NOT_PLACEABLE). T5 (X-SW-28, #835): Undo of Pair next
+ * puts the round back onto its shells — no round-1 row is left seated. Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
  * is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissASuite(): Promise<void> {
   // T1: 2 (a rebuild keeps 3 slots; a shrinking rebuild counts the slots it freed) + T2: 1 (a pre-Start reshape keeps
   // the pinned boards) + T4: 1 (no ad-hoc match on a Swiss stage; T4 runs before T3 by controller ruling C1) + T3: 2 (a
-  // bye's format is frozen at award; a bye shell is never placed).
-  const EXPECTED_CHECKS = 6;
+  // bye's format is frozen at award; a bye shell is never placed) + T5: 1 (Undo of Pair next clears the round's seats).
+  const EXPECTED_CHECKS = 7;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -292,6 +293,49 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-29: a Swiss bye shell is refused a court and a time (422 SWISS_BYE_NOT_PLACEABLE) and holds none; the round's board takes the slot" +
           (ok ? "" : ` — ${setup}, PATCH bye ${refused.status} ${JSON.stringify(refused.json).slice(0, 160)}, PATCH board ${placed.status}, bye2 slotless ${slotless("sw-r2-bye")}, bye1 slotless ${slotless("sw-r1-bye")}`),
+        ok,
+      );
+    }
+
+    // Check 7 (T5, X-SW-28, #835): Undo of Pair next puts the round back onto its shells. A generic Swiss of five in the
+    // same competition (it holds one division): mint, Pair round 1 — every round-1 row seated, the positive pair — then
+    // Undo. No round-1 row is left seated, and every shell is still there.
+    {
+      const undoDiv = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/competitions/${byeComp?.id}/divisions`, "POST", {
+          name: "Undo",
+          sport_key: "generic",
+          variant_key: "score",
+          config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        }),
+      )?.id;
+      const undoPlayers =
+        v1data<{ id: string }[] | undefined>(
+          await v1(owner, `/api/v1/divisions/${undoDiv}/entrants`, "POST",
+            Array.from({ length: 5 }, (_, i) => ({ kind: "individual", display_name: `U${i + 1} ${tag}`, seed: i + 1 }))),
+        ) ?? [];
+      const undoStage = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/divisions/${undoDiv}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } }),
+      )?.id;
+      const undoMint = await v1(owner, `/api/v1/stages/${undoStage}/generate`, "POST");
+      const undoPair = await v1(owner, `/api/v1/stages/${undoStage}/generate`, "POST");
+      type Seat = Fx & { home_entrant_id: string | null; away_entrant_id: string | null };
+      const round1 = async () =>
+        (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${undoDiv}/fixtures`)) ?? []).filter(
+          (f) => f.stage_id === undoStage && f.round_no === 1,
+        );
+      const seated = (rs: Seat[]) => rs.filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null).length;
+      const before = await round1();
+      const undone = await v1(owner, `/api/v1/divisions/${undoDiv}/undo`, "POST", {});
+      const after = await round1();
+      const sameShells =
+        JSON.stringify(after.map((f) => f.id).sort()) === JSON.stringify(before.map((f) => f.id).sort());
+      const ok =
+        undoPlayers.length === 5 && undoMint.status === 200 && undoPair.status === 200 &&
+        before.length === 3 && seated(before) === 3 && undone.status === 200 && seated(after) === 0 && sameShells;
+      w3Check(
+        "w3a X-SW-28: Undo of Pair next leaves 0 seated round-1 rows (3 before) and keeps every shell" +
+          (ok ? "" : ` — players ${undoPlayers.length}, mint ${undoMint.status}, pair ${undoPair.status}, round 1 ${before.length} rows / ${seated(before)} seated, undo ${undone.status} ${JSON.stringify(undone.json).slice(0, 160)}, after ${after.length} rows / ${seated(after)} seated, same shells ${sameShells}`),
         ok,
       );
     }

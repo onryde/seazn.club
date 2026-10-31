@@ -7,7 +7,8 @@
 //   `fixtureHasResultSql` (status AND evidence: history's played set)
 //     - history.ts: the results-guard on every undo, redo and restore
 //       (`playedFixtureIds`), the row filter on its deletes, the schedule
-//       clear and the pool clear
+//       clear and the pool clear, and Undo of Pair next's refusal over the
+//       round it would unseat (W3 T5, SWISS_UNDO_ROUND_STARTED)
 //     - schedule-plus.ts: the rain-delay shift
 //     - stages.ts: `rebuildStageFixtures`
 //     - the board writes, through `isMovable`/`heldInPlace` over
@@ -28,7 +29,8 @@
 //     reader): the snapshot exemption inside `fixtureEvidenceSql` and `playedSql`
 //     (engine-db/format-standing.ts)
 //   `swissByeShellSql` (W3 T3, X-SW-29): `movableFixtureSql` and the quick
-//     Start's rolling times (schedule.ts), the sheet day list (scorer-sheets.ts)
+//     Start's rolling times (schedule.ts), the sheet day list (scorer-sheets.ts),
+//     history.ts's placement replays (`slotTaker`, W3 T5)
 //   NEITHER, a status list only
 //     - stages.ts: `deleteStage` refuses `in_play`/`decided`/`finalized` and
 //       deletes every other row with its evidence, an abandoned match or a

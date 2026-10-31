@@ -2338,8 +2338,10 @@ export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: s
 /**
  * THE clear-onto-shells write — the one place a seated swiss row is put back
  * to a shell, shared by Unpair and by the pre-Start entrant delete below
- * (2026-09-22). Extracted rather than restated so the two paths cannot drift
- * into leaving different residue behind.
+ * (2026-09-22), and by Undo of Pair next (W3 T5, X-SW-28: history.ts
+ * `stepWrite`, exported for it). Extracted rather than restated so the paths
+ * cannot drift into leaving different residue behind. Every caller refuses a
+ * round with a result first, under the division lock it already holds.
  *
  * What it deliberately does NOT touch is `scheduled_at` and `court_id`. A
  * shell scheduled ahead of Pair is a shipped feature (`e2e/swiss-shell.spec.ts`
@@ -2392,7 +2394,7 @@ async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string[]): Pr
   }
 }
 
-async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
+export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
   if (ids.length === 0) return;
   // Online play (T19, controller rulings Q1 + pre-review 2026-10-10). A
   // board's bridge row records who was INVITED to it, per seat; those seats
@@ -2408,8 +2410,9 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
   await cancelBoardInvites(tx, ids, ROUND_VOIDED_REASON);
   await tx`delete from fixture_external_play where fixture_id in ${tx(ids)}`;
   // W3 T3 (SW-M7): a seated bye froze its cfg at award, so its snapshot goes with its seat — the round's next Pair
-  // freezes afresh, under the format that stands then. Only a system bye can reach here holding one: both callers refuse
-  // a round with any other evidence first (`fixtureEvidenceSql`, which exempts a system bye's snapshot alone).
+  // freezes afresh, under the format that stands then. Only a system bye can reach here holding one: every caller refuses
+  // a round with any other evidence first (`fixtureEvidenceSql`, which exempts a system bye's snapshot alone; history's
+  // Undo reads it through `fixtureHasResultSql`).
   await tx`
     update fixtures set
       home_entrant_id = null,
@@ -3212,7 +3215,8 @@ export async function generateStageFixturesTx(
   // pass created so undo can remove exactly them (results-guarded).
   // `fixture_ids` IS that Undo contract — undo DELETEs every id in it — so a
   // Swiss seat's ids (UPDATEd shells that already existed) ride separately
-  // in `seated_fixture_ids`, which no undo path reads.
+  // in `seated_fixture_ids`, which Undo of Pair next reads to put exactly
+  // those rows back onto their shells (W3 T5, history.ts `stepWrite`).
   if (created > 0) {
     const [{ seq: last }] = await tx<{ seq: number }[]>`
       select coalesce(max(seq), 0)::int as seq from division_events

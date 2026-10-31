@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { undoRefusalMessage } from "@/components/v2/stages-panel";
 import { ApiV1Error } from "@/lib/client-v1";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
+import { SWISS_REFUSALS, type SwissRefusalCode } from "@/lib/swiss-refusals";
 import { msg } from "@/lib/messages";
 import enUi from "@/dictionaries/en/ui.json";
 
@@ -20,6 +21,25 @@ describe("undoRefusalMessage — StagesPanel's Undo-last refusal", () => {
     const text = undoRefusalMessage(new ApiV1Error(ENGINE, 422, PLAYED_REFUSAL_CODE), msg);
     expect(text).toBe(EN["history.error.played"]);
     expect(text).not.toBe(ENGINE);
+  });
+
+  it("says each Swiss step refusal with the dictionary's sentence (W3 T5, X-SW-28)", () => {
+    // Undo-last is a history Undo: over a Swiss round with a started match, or across an undo barrier, the server
+    // refuses with a Swiss code and an English sentence. The server's text here differs from the dictionary's, so a
+    // fall-through to `err.message` is told apart from the branch.
+    const codes: SwissRefusalCode[] = [
+      "SWISS_UNDO_ROUND_STARTED",
+      "SWISS_LATE_ENTRY_NOT_UNDOABLE",
+      "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
+    ];
+    let checked = 0;
+    for (const code of codes) {
+      const local = EN[SWISS_REFUSALS[code].key];
+      expect(typeof local, `${code}: en/ui.json has its sentence`).toBe("string");
+      expect(undoRefusalMessage(new ApiV1Error(`server: ${code}`, 409, code), msg), code).toBe(local);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("keeps an unrecognised refusal's own message", () => {

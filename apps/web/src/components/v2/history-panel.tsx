@@ -16,6 +16,7 @@ import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 // contract between a schedule-lock refusal and this panel; the SENTENCE is not.
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
+import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import type { MessageKey } from "@/lib/messages";
 
 interface HistoryRow {
@@ -69,6 +70,10 @@ const TYPE_LABEL_KEYS: Record<string, MessageKey> = {
   participants_imported: "history.event.participantsImported",
   schedule_published: "history.event.schedulePublished",
   division_started: "history.event.divisionStarted",
+  // W3 T5 (design §10.8): the two undo barriers — an organiser's "Add late player" and a change to a Swiss's round
+  // count. Listed (not undoable) so the organiser can see what an Undo refuses to cross.
+  swiss_late_entry: "history.event.swissLateEntry",
+  swiss_rounds_changed: "history.event.swissRoundsChanged",
 };
 
 export function HistoryPanel({
@@ -176,6 +181,11 @@ export function HistoryPanel({
         // finished. The server's sentence is English; say it locally, off the
         // code, like the two refusals above.
         setError(msg("history.error.played"));
+      } else if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
+        // W3 T5 (X-SW-28): an Undo, Redo or Restore over a Swiss round with a
+        // started match, or across an undo barrier (a late player the organiser
+        // added, a change to the round count). Said off the code, like the rest.
+        setError(msg(swissRefusalKey(err.code)));
       } else {
         // Deliberately NOT blanket-suppressed. Every refusal this client can
         // recognise now has its own sentence; what is left is the unanticipated

@@ -18,6 +18,7 @@ import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-ab
 import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
 import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
+import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import type { HoldState } from "@/server/relay/domain/session";
@@ -1963,6 +1964,8 @@ export function classifyActError(
  *  keeps its own message, which is the one an organiser can quote. */
 export function undoRefusalMessage(err: unknown, msg: Msg): string {
   if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) return msg("history.error.played");
+  // W3 T5 (X-SW-28): Undo of Pair next over a started round, or across an undo barrier.
+  if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) return msg(swissRefusalKey(err.code));
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
 }
 

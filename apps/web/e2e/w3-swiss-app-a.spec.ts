@@ -430,3 +430,103 @@ test.describe("X-SW-29 a bye has no court and no sheet", () => {
     ]);
   });
 });
+
+// X-SW-28 (W3 T5, SW-M2 / #835, RB3-22): a Pair next seats a Swiss round by
+// UPDATING shells that already exist, so its ledger row named nothing for Undo
+// to delete — Undo "worked" and every player stayed seated. Undo now puts the
+// round back onto its shells when no match of it has started. Pressed where an
+// organiser presses it (the History panel's Undo) and read back on the run
+// sheet and the API. Every "seats are empty" below has its positive pair: the
+// same rows seated, and named on the run sheet, before the Undo.
+test.describe("X-SW-28 Undo clears a paired round", () => {
+  test("Pair round 1 of an odd Swiss, press Undo: the boards are back on empty shells, the bye is gone, the shells stay", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    type Seated = Fx & { home_entrant_id: string | null; away_entrant_id: string | null };
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Undo pair ${TAG}`,
+      visibility: "private",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const names = Array.from({ length: 5 }, (_, i) => `Undo P${i + 1} ${TAG}`);
+    const added = await apiJson<{ id: string; display_name: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      names.map((n, i) => ({ kind: "individual", display_name: n, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const nameOf = new Map(added.data!.map((e) => [e.id, e.display_name]));
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 2 },
+    });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    // The first press mints the shells; the second is Pair next (round 1).
+    for (const what of ["mint", "pair"]) {
+      const gen = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+      expect(gen.status, `${what}: ${JSON.stringify(gen.error)}`).toBe(200);
+    }
+    const round1 = async () =>
+      ((await stageFixtures(request, divisionId, stageId)) as Seated[]).filter((f) => f.round_no === 1);
+    const isBye = (f: Fx) => /^sw-r\d+-bye$/.test(f.ext_key ?? "");
+
+    // Positive pair, API: every round-1 row is seated (two boards and the bye).
+    const paired = await round1();
+    expect(paired.length, "premise: five players seat two boards and a bye").toBe(3);
+    for (const f of paired) {
+      expect(f.home_entrant_id !== null && (isBye(f) || f.away_entrant_id !== null), `${f.ext_key} is seated`).toBe(true);
+    }
+    const boards = paired.filter((f) => !isBye(f));
+    expect(boards.length).toBe(2);
+
+    // Positive pair, page: the run sheet names each board's players and shows the bye.
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    for (const b of boards) {
+      const row = page.locator(`li[data-fixture-no="${b.fixture_no}"]`);
+      await expect(row).toContainText(nameOf.get(b.home_entrant_id!)!, { timeout: 20_000 });
+      await expect(row).toContainText(nameOf.get(b.away_entrant_id!)!);
+    }
+    await expect(page.getByTestId("run-sheet-bye")).toHaveCount(1);
+
+    // Undo, on the History panel.
+    await page.goto(await divisionPath(request, divisionId, "/schedule?tab=history"));
+    const undo = page.getByTestId("history-undo");
+    await expect(undo).toBeEnabled({ timeout: 20_000 });
+    await undo.click();
+    await expect(page.getByTestId("history-error")).toHaveCount(0);
+
+    // The seats are empty and the shells stay: same ids, nobody seated, nothing decided.
+    await expect
+      .poll(async () => (await round1()).filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null).length, {
+        timeout: 20_000,
+      })
+      .toBe(0);
+    const after = await round1();
+    expect(after.map((f) => f.id).sort(), "Undo keeps every shell").toEqual(paired.map((f) => f.id).sort());
+
+    // And on the run sheet: the board rows are still there, naming nobody; the bye row is gone.
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    for (const b of boards) {
+      const row = page.locator(`li[data-fixture-no="${b.fixture_no}"]`);
+      await expect(row).toBeAttached({ timeout: 20_000 });
+      await expect(row).not.toContainText(nameOf.get(b.home_entrant_id!)!);
+      await expect(row).not.toContainText(nameOf.get(b.away_entrant_id!)!);
+    }
+    await expect(page.getByTestId("run-sheet-bye")).toHaveCount(0);
+  });
+});

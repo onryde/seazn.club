@@ -25,15 +25,18 @@ import { sql, withTenant } from "@/lib/db";
 // below 1, where there is no window to roll (see `createCheckpoint`).
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
-import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
+import type { SwissRefusalCode } from "@/lib/swiss-refusals";
+import { fixtureHasResultSql, playedFixtureIds, swissByeShellSql } from "./fixture-results-sql";
 import { refuseOwnFormatLoss } from "./fixture-override-guards";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
 import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
+import { recomputeStandings } from "@/server/engine-db";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
-import { generateStageFixtures, wireCrossFeeds } from "./stages";
+import { clearSwissFixtureSeats, generateStageFixtures, wireCrossFeeds } from "./stages";
+import { swissRefusal } from "./swiss-refusal";
 import { DEPARTED_STATUSES } from "./entrants";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
@@ -73,6 +76,61 @@ async function loadLedger(tx: Tx, divisionId: string): Promise<LedgerEvent[]> {
  *  the target row itself (`fixtures`, unaliased), not a re-read of it, so a
  *  write parked on the row's lock re-checks the row it finally gets. */
 const unplayed = (tx: Tx) => tx`not ${fixtureHasResultSql(tx, "fixtures")}`;
+
+/** W3 T5 (X-SW-29; T3 review m3): a replayed PLACEMENT never lands on a Swiss bye shell. A bye is not played, so it
+ *  holds no court and no time (`swissByeShellSql`, the SQL twin of the one bye-shell predicate), and no writer since
+ *  W3 T3 records one — but a ledger row written before T3 can name a bye shell among its moves, and V483 cleared the
+ *  slot without touching the ledger. An Undo walking back past a Pair next reaches those rows, and a Redo replays them.
+ *  On the target row itself, like `unplayed`, on every statement below that writes a slot. */
+const slotTaker = (tx: Tx) => tx`not ${swissByeShellSql(tx, "fixtures")}`;
+
+/**
+ * W3 T5 (design §10.8, X-SW-28; spec §7 "Add late player has no Undo"): the ledger events no Undo or Redo steps across.
+ * The engine skips them — they are not REVERSIBLE (`isReversible`) — so this app-side check is the only barrier.
+ * A late entry is one only when an ORGANISER added the player (ruling 252 items 8 and 11: an automatic arrival — a paid
+ * registration, a waitlist promotion, an import — does not change Undo); a change to the round count always is.
+ */
+export const UNDO_BARRIER_TYPES = {
+  swiss_late_entry: "SWISS_LATE_ENTRY_NOT_UNDOABLE",
+  swiss_rounds_changed: "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
+} as const satisfies Record<string, SwissRefusalCode>;
+
+type UndoBarrierType = keyof typeof UNDO_BARRIER_TYPES;
+
+function isUndoBarrier(e: LedgerEvent): e is LedgerEvent & { type: UndoBarrierType } {
+  if (!Object.hasOwn(UNDO_BARRIER_TYPES, e.type)) return false;
+  return e.type !== "swiss_late_entry" || e.payload.source === "organiser";
+}
+
+/** The refusal code of the NEWEST barrier past `targetSeq` — the ledger row an Undo inverts or a Redo copies — or null
+ *  when the step crosses none. Order-free: the newest is the highest seq, however the ledger arrives. */
+export function undoBarrierRefusal(ledger: readonly LedgerEvent[], targetSeq: number): SwissRefusalCode | null {
+  let newest: (LedgerEvent & { type: UndoBarrierType }) | undefined;
+  for (const e of ledger) {
+    if (e.seq <= targetSeq || !isUndoBarrier(e)) continue;
+    if (newest === undefined || e.seq > newest.seq) newest = e;
+  }
+  return newest === undefined ? null : UNDO_BARRIER_TYPES[newest.type];
+}
+
+/** The ledger row a step inverts (Undo, `__undo_of`) or copies (Redo, `__redo_of`): the engine stamps every one
+ *  (`undo`/`redo`, @seazn/engine/history). A step with no stamp is a broken contract, and refused by name — a barrier
+ *  check skipped on an absence would let the step cross one. */
+export function invertedStepSeq(direction: "undo" | "redo", payload: Record<string, unknown>): number {
+  const seq = direction === "undo" ? payload.__undo_of : payload.__redo_of;
+  if (typeof seq !== "number") {
+    throw new HttpError(500, `history step names no ledger row (${direction === "undo" ? "__undo_of" : "__redo_of"})`);
+  }
+  return seq;
+}
+
+/** The rows a Pair next seated (`seated_fixture_ids`, stages.ts `generateStageFixturesTx`): the shells it UPDATED,
+ *  which `fixture_ids` — the Undo DELETE list — never names. Empty for every other generation. */
+function pairNextSeatedIds(e: LedgerEvent | undefined): string[] {
+  if (e?.type !== "fixtures_generated") return [];
+  const ids = e.payload.seated_fixture_ids;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+}
 
 interface DivisionMeta {
   seq: number;
@@ -511,10 +569,10 @@ async function execute(
         if (court.write) {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${liveCourt(tx, court.value)},
                                                              venue_id = ${venueBack(tx, court.value, m.to)}
-                   where id = ${m.fixture} and ${unplayed(tx)} returning id`);
+                   where id = ${m.fixture} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}
-                   where id = ${m.fixture} and ${unplayed(tx)} returning id`);
+                   where id = ${m.fixture} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
         }
       }
       break;
@@ -527,12 +585,12 @@ async function execute(
           update fixtures set scheduled_at = ${to.at}, court_id = ${liveCourt(tx, court.value)},
                               venue_id = ${venueBack(tx, court.value, to)},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
+          where id = ${p.fixture as string} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
       } else {
         wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
+          where id = ${p.fixture as string} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
       }
       break;
     }
@@ -551,10 +609,10 @@ async function execute(
         if (court.write) {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${liveCourt(tx, court.value)},
                                                              venue_id = ${venueWith(tx, court.value)}
-                   where id = ${s.id} and ${unplayed(tx)} returning id`);
+                   where id = ${s.id} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}
-                   where id = ${s.id} and ${unplayed(tx)} returning id`);
+                   where id = ${s.id} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
         }
       }
       break;
@@ -621,6 +679,8 @@ interface StepWrite {
   competitionId: string;
   fixtureIds: string[];
   scoredFixtureRemoved: boolean;
+  /** W3 T5: the stages an Undo of Pair next put back onto their shells, refolded after the commit. */
+  unpairedStageIds: string[];
 }
 
 async function stepWrite(
@@ -686,6 +746,33 @@ async function stepWrite(
     } catch (err) {
       toEngineError(err);
     }
+    // W3 T5 (design §10.8, X-SW-28). The undo barriers first, before any read or write: an organiser's late entry or a
+    // round-count change newer than the row this step inverts (Undo) or copies (Redo) refuses the step by name.
+    const targetSeq = invertedStepSeq(direction, result.event.payload);
+    const barrier = undoBarrierRefusal(ledger, targetSeq);
+    if (barrier !== null) throw swissRefusal(barrier);
+    // Undo of Pair next (SW-M2 / #835, RB3-22). A Pair seats a Swiss round by UPDATING shells that already exist, so
+    // its `fixtures_generated` names no `fixture_ids` and the engine's inverse deletes nothing: the seats are this
+    // step's to clear, read from the inverted row itself (`seated_fixture_ids`). The round goes back onto its shells
+    // exactly as Unpair puts it (`clearSwissFixtureSeats`: seats, outcome, the bye's frozen cfg; never a slot) — unless
+    // a row of it holds a result, when the whole Undo refuses by name (the bye is no result: `systemByeSql`). A Redo
+    // re-runs the generator instead (`regenerate_stage_id` below), so it re-pairs AND re-freezes the bye through
+    // `swissGen`'s own seat, under the division lock, with the cfg that stands then.
+    const unseated: string[] = [];
+    const unpairedStageIds: string[] = [];
+    const seatedIds = direction === "undo" ? pairNextSeatedIds(ledger.find((e) => e.seq === targetSeq)) : [];
+    if (seatedIds.length > 0) {
+      const [started] = await tx<{ id: string }[]>`
+        select f.id from fixtures f where f.id in ${tx(seatedIds)} and ${fixtureHasResultSql(tx, "f")} limit 1`;
+      if (started) throw swissRefusal("SWISS_UNDO_ROUND_STARTED", { fixtureId: started.id });
+      // Only rows that still exist: a later reshape may have deleted a shell the Pair seated.
+      const live = await tx<{ id: string; stage_id: string }[]>`
+        select id, stage_id from fixtures where id in ${tx(seatedIds)} order by id`;
+      const ids = live.map((f) => f.id);
+      await clearSwissFixtureSeats(tx, ids);
+      unseated.push(...ids);
+      unpairedStageIds.push(...new Set(live.map((f) => f.stage_id)));
+    }
     // A delete-side event records the rows it deletes AS THEY STAND NOW —
     // before the delete, so the appended event is self-contained. (A plain
     // Redo of a generation never reads them: it re-runs the generator. They
@@ -731,6 +818,7 @@ async function stepWrite(
     }
     const effects = { scoredFixtureRemoved: false };
     const fixtureIds = await execute(tx, divisionId, result.event, effects);
+    fixtureIds.push(...unseated);
     const seq = await appendEvent(tx, divisionId, result.event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = ${result.newWatermark}
              where id = ${divisionId}`;
@@ -756,6 +844,7 @@ async function stepWrite(
       competitionId: meta.competition_id,
       fixtureIds,
       scoredFixtureRemoved: effects.scoredFixtureRemoved,
+      unpairedStageIds,
     };
   });
   // generator re-run outside the history tx (it takes its own division lock).
@@ -763,6 +852,12 @@ async function stepWrite(
   // that case (`fixtures_generated` has no executor statement).
   if (write.out.regenerate_stage_id !== undefined) {
     await generateStageFixtures(auth, write.out.regenerate_stage_id);
+  }
+  // A bye award (and its removal) never goes through appendEvent, so the stored table would keep the cleared bye's
+  // points until the next scored match. Refold from the cleared rows, as Unpair does — `"drop"`: a stage left seating
+  // nobody has no table, so the stored one goes and the page reads "No standings yet".
+  for (const stageId of write.unpairedStageIds) {
+    await recomputeStandings(auth.orgId, stageId, undefined, { emptyFold: "drop" });
   }
   return write;
 }
