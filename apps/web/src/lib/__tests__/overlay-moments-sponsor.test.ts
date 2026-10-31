@@ -203,6 +203,7 @@ describe("sponsorMoments — the sequence through the real queue", () => {
       s = reduce(s, { type: "sync", live: after, now: 1_000, ...T });
       expect(momentIdOf(s.current!)).toBe(momentIdOf(minor!));
       expect(s.phase, "struck: folding off, not holding a break that never happened").toBe("out");
+      expect(s.cutShort, "and it ran short: the report must not claim a full showing").toEqual([momentIdOf(minor!)]);
       expect(s.queue.map(momentIdOf)).toEqual([momentIdOf(major!)]);
       expect(s.seen).not.toContain(momentIdOf(minor!));
     });

@@ -299,6 +299,33 @@ describe("Final, reduced motion, sync — sponsor moments are moments like any o
     expect(s.revision, "the repeated deadline still re-arms the timer").toBeGreaterThan(revision);
   });
 
+  it("an undo of its break while the card is on air folds it off AND records it in cutShort (controller ruling 2026-10-31)", () => {
+    // The sponsor report must not claim a full showing for a card that ran short.
+    let s = enqueue(INITIAL, [sp(8)], 0);
+    s = tick(s, F); // holding
+    s = reduce(s, { type: "sync", live: [], now: 2_000, ...T });
+    expect(s).toMatchObject({ phase: "out", deadline: 2_000 + F });
+    expect(s.cutShort).toEqual([momentIdOf(sp(8))]);
+    // Folding in counts too.
+    s = enqueue(INITIAL, [sp(8)], 0);
+    s = reduce(s, { type: "sync", live: [], now: 100, ...T });
+    expect(s.cutShort).toEqual([momentIdOf(sp(8))]);
+  });
+
+  it("an undo records nothing for a score slab, nor for a card already folding out on its own", () => {
+    let s = enqueue(INITIAL, [m(1, "six")], 0);
+    s = tick(s, F);
+    s = reduce(s, { type: "sync", live: [], now: 1_000, ...T });
+    expect(s.phase, "premise: the slab is struck off").toBe("out");
+    expect(s.cutShort, "cutShort is the sponsor report's flag; a score slab has no airing").toEqual([]);
+
+    s = enqueue(INITIAL, [sp(8)], 0);
+    s = tick(s, F);
+    s = tick(s, s.deadline!); // hold ran its course: folding out
+    s = reduce(s, { type: "sync", live: [], now: s.deadline! - 1, ...T });
+    expect(s.cutShort, "it held its full time").toEqual([]);
+  });
+
   it("sync drops a struck card from the queue and from the waits", () => {
     let s = enqueue(INITIAL, [m(1), sp(8), sp(20, INNINGS_BREAK)], 0);
     s = reduce(s, { type: "sync", live: [m(1), sp(20, INNINGS_BREAK)], now: 100, ...T });
@@ -481,7 +508,7 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
     const cards = [sp(5, OVER_END), sp(6, INNINGS_BREAK), sp(7, OVER_END)];
     const pool = [...score, ...cards];
     const isSponsor = (x: OverlayMoment) => x.priority === "sponsor";
-    const counts = { steps: 0, cuts: 0, skipCuts: 0, staleDrops: 0, sponsorAired: 0, scoreAired: 0 };
+    const counts = { steps: 0, cuts: 0, skipCuts: 0, undoCuts: 0, staleDrops: 0, sponsorAired: 0, scoreAired: 0 };
 
     type Step =
       | { op: "enqueue"; dt: number; moments: OverlayMoment[] }
@@ -564,14 +591,15 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
           }
           // I6 — the waits are exactly the queued cards'.
           expect(Object.keys(s.queuedAt).sort()).toEqual(ids(s.queue.filter(isSponsor)).sort());
-          // I7 — cutShort only ever gains the card that was on air (in/hold), and only through a score moment or a skip.
+          // I7 — cutShort only ever gains the card that was on air (in/hold): by a score moment, a skip, or an undo.
           const gained = s.cutShort.slice(prev.cutShort.length);
           if (gained.length > 0) {
             expect(gained).toEqual([momentIdOf(prev.current!)]);
             expect(isSponsor(prev.current!) && prev.phase !== "out").toBe(true);
-            expect(["enqueue", "skip"]).toContain(action.type);
+            expect(["enqueue", "skip", "sync"]).toContain(action.type);
             if (action.type === "enqueue") counts.cuts++;
-            else counts.skipCuts++;
+            else if (action.type === "skip") counts.skipCuts++;
+            else counts.undoCuts++;
           }
           if (action.type === "tick") {
             for (const x of prev.queue) {

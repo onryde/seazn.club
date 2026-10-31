@@ -72,8 +72,8 @@ export interface MomentQueueState {
    */
   queuedAt: Readonly<Record<string, number>>;
   /**
-   * R4 S6: the ids of sponsor moments folded off EARLY — by the pre-empt guard
-   * or by a `skip`. History, like `seen`: it is never cleared, because S7's end
+   * R4 S6: the ids of sponsor moments folded off EARLY — by the pre-empt guard,
+   * a `skip`, or an undo of the card's break (`sync`). History, like `seen`: it is never cleared, because S7's end
    * line is written when the card has FINISHED folding out, after it has left
    * `current`.
    */
@@ -238,6 +238,9 @@ export function momentQueueReducer(
         seen,
         phase: "out",
         deadline: action.now + action.foldMs,
+        // Controller ruling 2026-10-31: a sponsor card struck off air by an undo of its break ran short too — the
+        // sponsor report must not claim a full showing.
+        cutShort: isSponsor(state.current) ? [...state.cutShort, idOf(state.current)] : state.cutShort,
         revision,
       };
     }
