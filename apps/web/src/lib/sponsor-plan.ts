@@ -228,7 +228,6 @@ function checkInput(i: PlanInput): void {
     const id = sponsorMomentId(b.seq, b.kind);
     if (moments.has(id)) throw new SponsorPlanInputError(`breaks: ${id} twice`);
     moments.add(id);
-    timeOf(b.at, `break ${id}`);
   }
   // An assignment names a sponsor, not a card: with two cards for one sponsor a re-plan could not tell which it showed.
   const sponsors = new Set<string>();
