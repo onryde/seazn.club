@@ -130,12 +130,17 @@ describe("workspace wiring (trap 2: a new package is invisible to the root chain
     }
     expect(bare).toBeGreaterThan(0);
   });
-  it("packages/reference: the engine is a DEV dependency (types only), and every devDependency it shares with the engine has the engine's range", () => {
+  it("packages/reference: the engine is a DEV dependency (types only) on a caret range of the registry alias, and every devDependency it shares with the engine has the engine's range", () => {
     const ref = JSON.parse(read("packages/reference/package.json")) as Manifest;
     // Engine split 2b (I): the engine's devDependencies are read from its installed (published) manifest.
     const engine = JSON.parse(read("packages/reference/node_modules/@seazn/engine/package.json")) as Manifest;
     expect(ref.dependencies?.["@seazn/engine"]).toBeUndefined();
-    expect(ref.devDependencies?.["@seazn/engine"]).toBe("npm:@onryde/seazn-engine@^1.0.0"); // engine split 2b (A1): the registry alias
+    // Engine split 2b (A1): the registry alias, as a caret range on one full release (never `workspace:`/`link:`/`file:`, a tag or a
+    // 0.0.0-pr snapshot). Which release is the engine-release bump's business, so no version is typed here; consistency with the
+    // other five consumers rides the root manifest, the reference (scripts/__tests__/registry-install.test.ts sweeps all six).
+    const spec = ref.devDependencies?.["@seazn/engine"];
+    expect(spec, "packages/reference names the engine alias").toMatch(/^npm:@onryde\/seazn-engine@\^\d+\.\d+\.\d+$/);
+    expect(spec, "packages/reference carries the root manifest's specifier").toBe((JSON.parse(read("package.json")) as Manifest).dependencies?.["@seazn/engine"]);
     let shared = 0;
     for (const [name, range] of Object.entries(ref.devDependencies ?? {})) {
       const theirs = engine.devDependencies?.[name];
