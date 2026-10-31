@@ -1,7 +1,7 @@
 import "server-only";
 import type postgres from "postgres";
 import type { Tx } from "@/lib/db";
-import { systemByeSql } from "@/server/usecases/fixture-results-sql";
+import { systemByeSql } from "./system-bye-sql";
 
 // W2c batch-3 I1 — where a match stands for a FORMAT write: the one definition every format door reads. Two facts,
 // independent of each other (a walkover over a ledger every void took back is both):

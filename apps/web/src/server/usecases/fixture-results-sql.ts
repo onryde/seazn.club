@@ -24,8 +24,9 @@
 //       fixtures.ts)
 //   `fixtureEvidenceSql` alone, beside the caller's own status clause
 //     - stages.ts: the Swiss shell reconcile, unseat and Unpair
-//   `systemByeSql` (W3 T3): the snapshot exemption inside `fixtureEvidenceSql`
-//     and `playedSql` (engine-db/format-standing.ts)
+//   `systemByeSql` (W3 T3; defined in engine-db/system-bye-sql.ts, below every
+//     reader): the snapshot exemption inside `fixtureEvidenceSql` and `playedSql`
+//     (engine-db/format-standing.ts)
 //   `swissByeShellSql` (W3 T3, X-SW-29): `movableFixtureSql` and the quick
 //     Start's rolling times (schedule.ts), the sheet day list (scorer-sheets.ts)
 //   NEITHER, a status list only
@@ -33,6 +34,7 @@
 //       deletes every other row with its evidence, an abandoned match or a
 //       start taken back included
 import type postgres from "postgres";
+import { systemByeSql } from "@/server/engine-db/system-bye-sql";
 
 type Tx = postgres.TransactionSql;
 
@@ -77,26 +79,6 @@ export function fixtureEvidenceSql(tx: Tx, on = "f") {
     or exists (select 1 from match_reports mr where mr.fixture_id = ${f}.id)
     or exists (select 1 from official_marks om where om.fixture_id = ${f}.id)
     or exists (select 1 from suspensions s where s.fixture_id = ${f}.id)`;
-}
-
-/**
- * W3 T3 (SW-M7): a SYSTEM bye, as SQL over the fixtures row `on` — the typed bye every server writer stores
- * (`byeAward`, lib/fixture-bye.ts: an `award` with `reason: "bye"`), on a row with at most one seat filled, and that
- * seat the winner's. At most one, not exactly one: a bye whose holder was deleted before the swiss guard existed
- * keeps its award with BOTH seats empty (swiss-delete-entrant.test.ts's orphan), and Unpair is how it is cleared.
- * Ruling 116's walkover over a dead seat has `reason` `withdrew`, so it is not one; nor is any award with both seats
- * filled. Each clause is pinned by its own shape in swiss-bye-snapshot.test.ts. Never null: a null here would turn its readers' `not (...)` null and drop a row from the evidence
- * set (three-valued logic), so a row with no outcome reads false.
- */
-export function systemByeSql(tx: Tx | postgres.Sql, on = "f") {
-  const f = tx(on);
-  return tx`coalesce(
-    ${f}.outcome ->> 'kind' = 'award'
-    and ${f}.outcome ->> 'reason' = 'bye'
-    and (${f}.home_entrant_id is null or ${f}.away_entrant_id is null)
-    and (coalesce(${f}.home_entrant_id, ${f}.away_entrant_id) is null
-         or ${f}.outcome ->> 'winner' = coalesce(${f}.home_entrant_id, ${f}.away_entrant_id)::text),
-    false)`;
 }
 
 /**

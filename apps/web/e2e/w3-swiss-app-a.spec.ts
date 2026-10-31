@@ -366,7 +366,10 @@ test.describe("X-SW-29 a bye has no court and no sheet", () => {
     for (const b of boards) await expect(page.locator(`[data-fixture-id="${b.id}"]`).first()).toBeAttached();
     for (const b of byes) await expect(page.locator(`[data-fixture-id="${b.id}"]`)).toHaveCount(0);
 
-    // The run sheet: the board shells wait to be scheduled; a bye shell is no row at all.
+    // The run sheet: the board shells wait to be scheduled; a bye shell is no row at all. A row carries
+    // `data-fixture-no` only when the fixture has a number (run-sheet-row.tsx), so the count-0 negative below would pass
+    // by absence for a bye with none: premise first that every bye HAS one.
+    for (const b of byes) expect(b.fixture_no, `premise: bye ${b.ext_key} has a fixture number`).toEqual(expect.any(Number));
     await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
     await expect(page.locator(`[data-fixture-no="${boards[0]!.fixture_no}"]`).first()).toBeAttached({ timeout: 20_000 });
     for (const b of boards) await expect(page.locator(`[data-fixture-no="${b.fixture_no}"]`).first()).toBeAttached();
@@ -415,7 +418,10 @@ test.describe("X-SW-29 a bye has no court and no sheet", () => {
     await expect(page.getByTestId("board-tray-mobile")).toHaveCount(0);
     for (const b of byes) await expect(page.locator(`[data-fixture-id="${b.id}"]`)).toHaveCount(0);
 
-    // The print control offers the boards' day and no other: a bye adds no sheet.
+    // The print control offers the boards' day and no other: a bye holds no time, so it adds no print day. This step
+    // proves only that. That a bye prints no SHEET even when it holds a time (a pre-V483 row, which only SQL can seed)
+    // is proven by the server scorer-sheets test's X-SW-29 case: neither `listSheetDays` nor the sheet loader
+    // (`isPrintable`) offers it.
     await page.goto(await competitionPath(request, comp.data!.id, "/schedule"));
     const day = page.getByTestId("print-sheets-day");
     await expect(day).toBeAttached({ timeout: 20_000 });
