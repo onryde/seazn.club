@@ -1638,6 +1638,8 @@ export const MatchDayFixture = z.object({
   id: Uuid,
   division_id: Uuid,
   division_name: z.string(),
+  division_slug: z.string(),
+  fixture_no: z.number().int().positive(),
   sport_key: z.string(),
   stage_label: z.string(),
   home: z.string().nullable(),

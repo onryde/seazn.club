@@ -3202,6 +3202,14 @@
                                       "division_name": {
                                         "type": "string"
                                       },
+                                      "division_slug": {
+                                        "type": "string"
+                                      },
+                                      "fixture_no": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
                                       "sport_key": {
                                         "type": "string"
                                       },
@@ -3281,6 +3289,8 @@
                                       "id",
                                       "division_id",
                                       "division_name",
+                                      "division_slug",
+                                      "fixture_no",
                                       "sport_key",
                                       "stage_label",
                                       "home",
@@ -3336,6 +3346,14 @@
                                     },
                                     "division_name": {
                                       "type": "string"
+                                    },
+                                    "division_slug": {
+                                      "type": "string"
+                                    },
+                                    "fixture_no": {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
                                     },
                                     "sport_key": {
                                       "type": "string"
@@ -3426,6 +3444,8 @@
                                     "id",
                                     "division_id",
                                     "division_name",
+                                    "division_slug",
+                                    "fixture_no",
                                     "sport_key",
                                     "stage_label",
                                     "home",
@@ -3555,6 +3575,8 @@
                           "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "division_name": "example",
+                          "division_slug": "example",
+                          "fixture_no": 1,
                           "sport_key": "example",
                           "stage_label": "example",
                           "home": "example",
@@ -3571,6 +3593,8 @@
                             "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                             "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                             "division_name": "example",
+                            "division_slug": "example",
+                            "fixture_no": 1,
                             "sport_key": "example",
                             "stage_label": "example",
                             "home": "example",
@@ -3814,6 +3838,14 @@
                               "division_name": {
                                 "type": "string"
                               },
+                              "division_slug": {
+                                "type": "string"
+                              },
+                              "fixture_no": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
                               "sport_key": {
                                 "type": "string"
                               },
@@ -3893,6 +3925,8 @@
                               "id",
                               "division_id",
                               "division_name",
+                              "division_slug",
+                              "fixture_no",
                               "sport_key",
                               "stage_label",
                               "home",
@@ -3993,6 +4027,8 @@
                         "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "division_name": "example",
+                        "division_slug": "example",
+                        "fixture_no": 1,
                         "sport_key": "example",
                         "stage_label": "example",
                         "home": "example",

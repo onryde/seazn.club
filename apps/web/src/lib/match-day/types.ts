@@ -19,6 +19,10 @@ export interface MatchDayFixture {
   id: string;
   division_id: string;
   division_name: string;
+  /** The division's slug and the match's per-division number: its console page's address (`routes.fixture`), where the pad
+   *  and the per-match stream panel live. */
+  division_slug: string;
+  fixture_no: number;
   sport_key: string;
   /** The stage's name. */
   stage_label: string;

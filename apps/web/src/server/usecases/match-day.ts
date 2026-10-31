@@ -94,6 +94,7 @@ interface FixtureRow {
   id: string;
   division_id: string;
   division_name: string;
+  division_slug: string;
   sport_key: string;
   stage_name: string;
   stage_status: string;
@@ -202,7 +203,8 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
     (select fc.called_at from fixture_calls fc join fixtures g on g.id = fc.fixture_id
       where fc.fixture_id = ${fixture} and ${liveCallSql(tx)})`;
   const rows = await tx<FixtureRow[]>`
-    select f.id, f.division_id, d.name as division_name, d.sport_key, s.name as stage_name, s.status as stage_status,
+    select f.id, f.division_id, d.name as division_name, d.slug as division_slug, d.sport_key, s.name as stage_name,
+           s.status as stage_status,
            f.status, f.court_id, f.scheduled_at, f.home_entrant_id, f.away_entrant_id,
            h.display_name as home, a.display_name as away, f.round_no, f.fixture_no,
            ms.summary->>'headline' as headline,
@@ -359,6 +361,8 @@ function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">)
     id: r.id,
     division_id: r.division_id,
     division_name: r.division_name,
+    division_slug: r.division_slug,
+    fixture_no: r.fixture_no,
     sport_key: r.sport_key,
     stage_label: r.stage_name,
     home: r.home,

@@ -254,10 +254,15 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
 
     const c1 = courtOf(view, day.courts.c1);
     expect(c1.state).toBe("playing");
+    // Its console address (task A3: Open pad, the stream panel), read off the rows themselves — never off the read model.
+    const [address] = await sql<{ slug: string; fixture_no: number }[]>`
+      select d.slug, f.fixture_no from fixtures f join divisions d on d.id = f.division_id where f.id = ${f12.id}`;
     expect(c1.current).toEqual({
       id: f12.id,
       division_id: day.comp.divisionId,
       division_name: "Doubles",
+      division_slug: address!.slug,
+      fixture_no: address!.fixture_no,
       sport_key: "generic",
       stage_label: "League",
       home: day.comp.pairs.find((p) => p.id === f12.home)!.name,
