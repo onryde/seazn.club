@@ -10,8 +10,12 @@ import "server-only";
 //    time through `estimateQueue` (lib/match-day/estimate.ts), the same function the call preview uses; planned times are never
 //    written (owner ruling B). Another competition's planned match on a shared court counts toward the estimates and is never
 //    listed: it is not controllable from here.
-//  - "Today" is the organisation's day: the governing clock for calendar-day math (schedule.ts's `ScheduleSettingsOut`), and
-//    the day the call preview reads its queue on (`todayIn`).
+//  - "Today" is decided PER MATCH, on its own division's day: the venue zone, else the organisation's, else UTC (`divisionDays`,
+//    `resolveVenueTz` — the zone the desk reads the same division's match_day phase in; controller ruling I2). The call preview
+//    reads its queue through the same `divisionDays`. The view's `date` label alone is the organisation's day.
+//  - An archived division is gone from the competition, as on the desk (`listDivisions` lists live divisions only): it adds
+//    no court, no queue row, no candidate and no count. What holds a court stays org-wide, archived divisions' matches
+//    included: a match of an archived division still in play still holds its court, and is still this competition's.
 //  - Candidates for a free court (§7) are ranked by `rankCandidates`; a player busy elsewhere is judged by A1's `whoIsBusy`,
 //    the same judge a call refuses PLAYER_BUSY by.
 import type postgres from "postgres";
@@ -34,7 +38,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { defaultMatchMinutes, getCompetitionDesk } from "./competition-desk";
 import { resolveCandidateCourts } from "./court-candidates";
 import { listDivisions } from "./divisions";
-import { IN_PLAY, liveCallSql, targetCourt, todayIn, whoIsBusy } from "./match-day-call";
+import { dayTable, divisionDays, IN_PLAY, liveCallSql, targetCourt, todayIn, whoIsBusy } from "./match-day-call";
 import { courtNamesById, loadSettings, MOVABLE_STATUS } from "./schedule";
 import { openStreamStates } from "./stream-sessions";
 
@@ -50,18 +54,22 @@ const iso = (d: Date | null): string | null => (d === null ? null : new Date(d).
 const wholeMinutes = (ms: number): number => Math.max(0, Math.floor(ms / MS_PER_MIN));
 
 /**
- * How many of this competition's matches are on today's date in `displayTz`: planned within that day, or playing now whatever
- * their planned day (a match being played is a match today). A cancelled match is not. Shared with the competition desk
- * (controller ruling R2): one count, two surfaces.
+ * How many of this competition's matches are today, at `now`. Each match is on its OWN division's day: the division's venue
+ * zone, else the organisation's, else UTC (`divisionDays` — the zone the desk's match_day phase reads that division in, so the
+ * two agree; controller ruling I2: no zone parameter, because there is no one zone to pass). Counted: a match planned within
+ * its division's day, and a match in play whatever its planned day (a match being played is a match today; ruling m5). Not
+ * counted: a cancelled match, or any match of an archived division (I1). Shared with the competition desk (ruling R2): one
+ * count, two surfaces.
  */
-export async function countFixturesToday(tx: Tx, competitionId: string, displayTz: string, now: Date): Promise<number> {
-  const { from, to } = todayIn(displayTz, now);
+export async function countFixturesToday(tx: Tx, competitionId: string, now: Date): Promise<number> {
+  const [org] = await tx<{ timezone: string | null }[]>`
+    select o.timezone from competitions c join organizations o on o.id = c.org_id where c.id = ${competitionId}`;
+  const days = await divisionDays(tx, org?.timezone ?? null, now, tx`d.competition_id = ${competitionId} and d.archived_at is null`);
   const [row] = await tx<{ n: number }[]>`
     select count(*)::int as n
-      from fixtures f join divisions d on d.id = f.division_id
-     where d.competition_id = ${competitionId}
-       and f.status <> ${CANCELLED}
-       and ((f.scheduled_at >= ${from} and f.scheduled_at < ${to}) or f.status = ${IN_PLAY})`;
+      from fixtures f join ${dayTable(tx, days)} on w.division_id = f.division_id
+     where f.status <> ${CANCELLED}
+       and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to) or f.status = ${IN_PLAY})`;
   return row?.n ?? 0;
 }
 
@@ -78,6 +86,7 @@ interface DivisionRow {
   name: string;
   sport_key: string;
   required_court_tags: string[];
+  tz: string | null;
 }
 
 /** One of this competition's matches, as the board reads it. */
@@ -160,12 +169,19 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
      where c.id = ${competitionId}`;
   if (!comp) throw new HttpError(404, "competition not found");
   const tz = resolveVenueTz(null, comp.org_tz);
-  const { day, from, to } = todayIn(tz, now);
+  const { day } = todayIn(tz, now); // the label: the organisation's day
 
-  // Divisions in the competition's own order (listDivisions'), each with its candidate courts and match length.
+  // The competition's live divisions, as `listDivisions` lists them (not archived; created_at, id), each with its candidate
+  // courts, match length and day. An archived division is not in the competition any more (I1).
   const divisions = await tx<DivisionRow[]>`
-    select id, name, sport_key, required_court_tags from divisions
-     where competition_id = ${competitionId} order by created_at, id`;
+    select d.id, d.name, d.sport_key, d.required_court_tags, ss.tz
+      from divisions d left join schedule_settings ss on ss.division_id = d.id
+     where d.competition_id = ${competitionId} and d.archived_at is null
+     order by d.created_at, d.id`;
+  const liveDivisions = new Set(divisions.map((d) => d.id));
+  const compDays = divisions.map((d) => ({ division_id: d.id, ...todayIn(resolveVenueTz(d.tz, comp.org_tz), now) }));
+  // Every division of the organisation's day, archived ones too: what holds a court, and what is planned on it, is org-wide.
+  const orgDays = await divisionDays(tx, comp.org_tz, now, tx`true`);
   const minutesByDivision = new Map<string, number>();
   const candidateDivision = new Map<string, string>(); // court id -> the first division's sport
   for (const d of divisions) {
@@ -198,17 +214,23 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
       left join entrants h on h.id = f.home_entrant_id
       left join entrants a on a.id = f.away_entrant_id
       left join match_states ms on ms.fixture_id = f.id
+      left join ${dayTable(tx, compDays)} on w.division_id = f.division_id
      where d.competition_id = ${competitionId}
-       and ((f.scheduled_at >= ${from} and f.scheduled_at < ${to})
+       and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to)
             or f.status = ${IN_PLAY}
             or ${liveCallOf(tx`f.id`)} is not null
             ${opts.noCourt
-              ? tx`or (f.status = ${MOVABLE_STATUS} and f.court_id is null and (f.scheduled_at is null or f.scheduled_at < ${to}))`
+              ? tx`or (f.status = ${MOVABLE_STATUS} and f.court_id is null and w.division_id is not null
+                       and (f.scheduled_at is null or f.scheduled_at < w.day_to))`
               : tx``})`;
   const rowsById = new Map(rows.map((r) => [r.id, r]));
 
-  // The court set: every division's candidate courts, and every court one of this competition's matches today is on.
-  const onBoard = new Set([...candidateDivision.keys(), ...rows.flatMap((r) => (r.court_id !== null ? [r.court_id] : []))]);
+  // The court set: every live division's candidate courts, and every court one of their matches today is on. A match of an
+  // archived division in play (read above: it may hold one of these courts) adds no court of its own.
+  const onBoard = new Set([
+    ...candidateDivision.keys(),
+    ...rows.flatMap((r) => (r.court_id !== null && liveDivisions.has(r.division_id) ? [r.court_id] : [])),
+  ]);
   const courtNames = await courtNamesById(tx);
   const orgCourts = await tx<{ id: string; venue_name: string }[]>`
     select c.id, v.name as venue_name from courts c join venues v on v.id = c.venue_id
@@ -232,18 +254,19 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
   const planned = courtIds.length
     ? await tx<PlannedRow[]>`
         select f.id, f.court_id, f.division_id, f.scheduled_at
-          from fixtures f
+          from fixtures f join ${dayTable(tx, orgDays)} on w.division_id = f.division_id
          where f.status = ${MOVABLE_STATUS} and f.court_id in ${tx(courtIds)}
-           and f.scheduled_at >= ${from} and f.scheduled_at < ${to}
+           and f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to
            and ${liveCallOf(tx`f.id`)} is null
          order by f.scheduled_at, f.id`
     : [];
   const finished = courtIds.length
     ? await tx<{ court_id: string; at: Date }[]>`
-        select court_id, max(finished_at) as at from fixtures
-         where court_id in ${tx(courtIds)} and finished_at is not null and status <> ${CANCELLED}
-           and finished_at >= ${from} and finished_at <= ${now}
-         group by court_id`
+        select f.court_id, max(f.finished_at) as at
+          from fixtures f join ${dayTable(tx, orgDays)} on w.division_id = f.division_id
+         where f.court_id in ${tx(courtIds)} and f.finished_at is not null and f.status <> ${CANCELLED}
+           and f.finished_at >= w.day_from and f.finished_at <= ${now}
+         group by f.court_id`
     : [];
   const freeSince = new Map(finished.map((f) => [f.court_id, f.at]));
 
@@ -378,7 +401,7 @@ export async function getMatchDay(
 ): Promise<MatchDayView> {
   const { board, fixturesToday } = await withTenant(auth.orgId, async (tx) => {
     const board = await readBoard(tx, competitionId, now, { noCourt: false });
-    return { board, fixturesToday: await countFixturesToday(tx, competitionId, board.tz, now) };
+    return { board, fixturesToday: await countFixturesToday(tx, competitionId, now) };
   });
   const locale = opts.locale ?? DEFAULT_LOCALE;
   // Each reads through its own connection: none may run inside the tenant transaction above (pool nesting).

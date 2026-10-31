@@ -12,7 +12,11 @@
 //    max(planned, end of the match before) — the match before counting every competition's planned matches on a shared court
 //    (§7 "Which courts", §7.1);
 //  - needs_you is the competition desk's own Needs-you list; results_owed its `result_missing` count;
-//  - "today" is the organisation's day (the governing clock);
+//  - "today" is decided per match, on the day `now` falls in that match's own zone: its division's venue zone, else the
+//    organisation's, else UTC (`resolveVenueTz`, the zone the desk's match_day phase reads the same division in — controller
+//    ruling I2). The view's `date` label stays the organisation's day;
+//  - an archived division is gone from the competition (as on the desk, which lists live divisions only): it adds no court, no
+//    queue row, no candidate and no count — but a match of it in play still holds its court, for every competition (I1);
 //  - candidates (§7): this court's own next match, other courts' next matches (and a called, unstarted match, which "can also be
 //    called to a different free court"), ready no-court matches in active stages; never a TBD side; a player busy elsewhere —
 //    a doubles partner counts, and for a side with no roster the side itself — blocks, with the person and the court named.
@@ -387,7 +391,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
 });
 
 describe.skipIf(!HAS_DB)("countFixturesToday", () => {
-  it("counts this competition's matches on the given zone's day: not the day before or after, not a middle day with none, not a cancelled one; a match in play counts today", async () => {
+  it("counts this competition's matches on their division's day: not the day before or after, not a middle day with none, not a cancelled one; a match in play counts today", async () => {
     const day = await seedDay();
     const { p1, p2, p3, p4 } = pairs(day);
     const MIN = 60_000;
@@ -400,8 +404,8 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     await place(day, cancelled, 60, day.courts.c2);
     await setStatus(cancelled, "cancelled"); // Sat 7 Nov, cancelled
 
-    const count = (tz: string, isoAt: string) =>
-      withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, tz, new Date(isoAt)));
+    // The division declares no zone of its own, so its day is the organisation's (Amsterdam).
+    const count = (isoAt: string) => withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, new Date(isoAt)));
     const days: [string, number][] = [
       ["2026-11-06T12:00:00.000Z", 0], // the day before
       ["2026-11-07T12:00:00.000Z", 1], // the day of: 11:00, not the cancelled 12:00, not 00:30 tomorrow
@@ -412,17 +416,110 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     ];
     let checked = 0;
     for (const [isoAt, n] of days) {
-      expect(await count(ORG_TZ, isoAt), isoAt).toBe(n);
+      expect(await count(isoAt), isoAt).toBe(n);
       checked++;
     }
     expect(checked).toBe(6);
-    // In UTC the 23:30Z match is on the 7th: the zone is the caller's, not a constant.
-    expect(await count("UTC", "2026-11-07T12:00:00.000Z")).toBe(2);
     // A match in play is a match today, whatever its planned day (here: none).
     const playing = between(day.comp, p1, p4).id;
     await setStatus(playing, "in_play");
-    expect(await count(ORG_TZ, "2026-11-09T12:00:00.000Z")).toBe(1);
+    expect(await count("2026-11-09T12:00:00.000Z")).toBe(1);
     expect((await getMatchDay(day.auth, day.comp.id, new Date("2026-11-07T12:00:00.000Z"))).fixtures_today).toBe(2);
+    // The division's own zone, once it declares one: in UTC the 23:30Z match is on the 7th too — 10:00Z, 23:30Z and the
+    // match in play.
+    await sql`update schedule_settings set tz = 'UTC' where division_id = ${day.comp.divisionId}`;
+    expect(await count("2026-11-07T12:00:00.000Z")).toBe(3);
+  });
+
+  it("each match is today on its OWN division's day: a division far from the organisation's zone counts, queues and offers its matches on its venue's date, as the desk's match_day phase reads it", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    await sql`update schedule_settings set tz = 'Pacific/Auckland' where division_id = ${day.comp.divisionId}`;
+    // A running division: one still in setup reads "setting up" on the desk whatever its dates.
+    await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+    const minutesTo = (isoAt: string) => (Date.parse(isoAt) - at(0).getTime()) / 60_000;
+    // now = 12:00Z on Sat 7 Nov 2026. Amsterdam is on CET (UTC+1, since 25 Oct): Sat 7 Nov 13:00. Auckland is on NZDT (UTC+13,
+    // since 27 Sep): Sun 8 Nov 01:00. The two zones are on different dates.
+    const now = new Date("2026-11-07T12:00:00.000Z");
+    const A = between(day.comp, p1, p2).id; // 08:00Z Sat 7: Amsterdam Sat 09:00 (its "today"), Auckland Sat 21:00 — yesterday
+    const B = between(day.comp, p3, p4).id; // 08:00Z Sun 8: Amsterdam Sun 09:00 (tomorrow), Auckland Sun 21:00 — today
+    const C = between(day.comp, p1, p3).id; // 10:30Z Sun 8: Amsterdam Sun 11:30 (tomorrow), Auckland Sun 23:30 — today
+    const D = between(day.comp, p2, p4).id; // no court, 05:00Z Sun 8: Amsterdam Sun 06:00 (a later day), Auckland Sun 18:00 — today
+    const E = between(day.comp, p1, p4).id; // no court, 11:00Z Sun 8: Auckland Mon 9 Nov 00:00 — a later day
+    const count = () => withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, now));
+    const deskPhase = async () => (await getCompetitionDesk(day.auth, day.comp.id, now)).divisions.get(day.comp.divisionId);
+
+    await place(day, A, minutesTo("2026-11-07T08:00:00.000Z"), day.courts.c1);
+    // Only A: on the organisation's date, not on the division's. Neither the count nor the desk calls this a match day.
+    const before = await deskPhase();
+    expect(before?.display_tz).toBe("Pacific/Auckland"); // premise: the desk reads this division in Auckland
+    expect(await count()).toBe(0);
+    expect(before?.phase).not.toBe("match_day");
+
+    await place(day, B, minutesTo("2026-11-08T08:00:00.000Z"), day.courts.c1);
+    await place(day, C, minutesTo("2026-11-08T10:30:00.000Z"), day.courts.c1);
+    await place(day, D, minutesTo("2026-11-08T05:00:00.000Z"), null);
+    await place(day, E, minutesTo("2026-11-08T11:00:00.000Z"), null);
+    expect(await count()).toBe(3); // B, C and D (planned today with no court yet); in Amsterdam's day it would be A alone
+    expect((await deskPhase())?.phase).toBe("match_day");
+
+    const view = await getMatchDay(day.auth, day.comp.id, now);
+    expect(view).toMatchObject({ date: "2026-11-07", tz: ORG_TZ, fixtures_today: 3 }); // the label stays the organisation's day
+    // Court 1 is free: B at its plan (minute 1320), C at max(1470, 1320 + 30) = 1470. A was yesterday in Auckland.
+    expect(queueOf(courtOf(view, day.courts.c1))).toEqual([
+      [B, 1320, 1320],
+      [C, 1470, 1470],
+    ]);
+    const offered = (await matchDayCandidates(day.auth, day.comp.id, day.courts.c1, now)).map((c) => c.fixture.id);
+    expect(offered).toContain(D);
+    expect(offered).not.toContain(E);
+  });
+
+  it("an archived division adds no court, queue row, candidate or count; its match in play still holds its court — on its own competition's board and on another competition's", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const c4 = await addCourt(day, "hallB", "Court 4", 1);
+    // A live division of the same competition, on Court 1 only, with no matches: the board's one candidate court.
+    const live = await createDivision(day.auth, day.comp.id, {
+      name: "Live",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await putScheduleSettings(day.auth, live.id, {
+      config: { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [day.courts.c1], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
+    });
+    // The seeded division (candidate courts 1-3), about to be archived: a match planned today on Court 4, two in play — on
+    // Court 1 and on Court 2 — and three ready matches with no court (never placed).
+    const f13 = between(day.comp, p1, p3).id;
+    await place(day, f13, 30, c4);
+    const f34 = between(day.comp, p3, p4).id;
+    await place(day, f34, 0, day.courts.c1);
+    await start(day, f34, 0);
+    const f12 = between(day.comp, p1, p2).id;
+    await place(day, f12, 0, day.courts.c2);
+    await start(day, f12, 0);
+    const other = await otherCompetition(day, "Other Cup", { courts: [day.courts.c1, day.courts.c2] });
+    const [x, y] = other.pairs;
+    const xy = between(other, x!, y!).id;
+    await place(day, xy, 20, day.courts.c1);
+    await sql`update divisions set archived_at = now() where id = ${day.comp.divisionId}`;
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(10));
+    // Court 1 alone: not Courts 2-3 (the archived division's candidates), not Court 4 (its match today), not Court 2 (its
+    // match in play). Its match in play on Court 1 is still what holds Court 1.
+    expect(view.courts.map((c) => c.court_id)).toEqual([day.courts.c1]);
+    expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "playing", current: { id: f34 }, queue: [] });
+    expect(view.fixtures_today).toBe(0);
+    expect(await withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, at(10)))).toBe(0);
+    expect(await matchDayCandidates(day.auth, day.comp.id, day.courts.c1, at(10))).toEqual([]);
+
+    // Another competition's board: both matches in play hold their courts. Court 1 is held until max(10, 0 + 30) = 30, so
+    // its planned xy waits: max(20, 30) = 30.
+    const theirs = await getMatchDay(day.auth, other.id, at(10));
+    expect(courtOf(theirs, day.courts.c1)).toMatchObject({ state: "in_use_elsewhere", in_use_by: day.comp.name });
+    expect(courtOf(theirs, day.courts.c2)).toMatchObject({ state: "in_use_elsewhere", in_use_by: day.comp.name });
+    expect(queueOf(courtOf(theirs, day.courts.c1))).toEqual([[xy, 20, 30]]);
   });
 });
 

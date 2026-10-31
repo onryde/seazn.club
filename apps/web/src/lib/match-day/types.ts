@@ -85,9 +85,10 @@ export interface MatchDayCandidate {
 /** GET /api/v1/competitions/{id}/match-day. */
 export interface MatchDayView {
   competition_id: string;
-  /** Today, YYYY-MM-DD, in `tz`. */
+  /** The header's date label: today, YYYY-MM-DD, in `tz`. Which matches are today is decided per match, on its own division's
+   *  day (the venue zone, else the organisation's), so a far-away division's matches can be on another date than this. */
   date: string;
-  /** The zone "today" is read in, and times are printed in: the organisation's (the governing clock). */
+  /** The organisation's zone: the one `date` is in, and the one times are printed in. */
   tz: string;
   now: string;
   courts: MatchDayCourt[];
@@ -95,6 +96,6 @@ export interface MatchDayView {
   needs_you: NeedsYouItem[];
   /** How many matches owe a result: the desk's `result_missing` attentions, summed. */
   results_owed: number;
-  /** This competition's matches today (`countFixturesToday`). */
+  /** This competition's matches today, each on its own division's day, plus those in play (`countFixturesToday`). */
   fixtures_today: number;
 }

@@ -29,6 +29,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { appendDivisionEvent } from "@/server/engine-db";
 import { estimateQueue } from "@/lib/match-day/estimate";
+import { resolveVenueTz } from "@/lib/tz";
 import {
   CALL_REFUSAL,
   TBD_ENTRANT,
@@ -148,8 +149,7 @@ async function recordScheduleEdit(
   await tx`update divisions set seq = ${seq} where id = ${f.division_id}`;
 }
 
-/** Match Day's "today": the day `now` falls on in `tz`, as the instants [from, to). One authority for the call preview's queue
- *  and the read model's (match-day.ts), so the two never disagree about which matches are today's. */
+/** The day `now` falls on in `tz`, as the instants [from, to). */
 export function todayIn(tz: string, now: Date): { day: string; from: Date; to: Date } {
   const day = dayKeyInTz(now.getTime(), tz);
   return {
@@ -157,6 +157,36 @@ export function todayIn(tz: string, now: Date): { day: string; from: Date; to: D
     from: new Date(zonedTimeToUtc(day, "00:00", tz)),
     to: new Date(zonedTimeToUtc(ymdAddDays(day, 1), "00:00", tz)),
   };
+}
+
+/** One division's "today", as the instants [from, to). */
+export interface DivisionDay {
+  division_id: string;
+  from: Date;
+  to: Date;
+}
+
+/**
+ * Match Day's "today" is decided per match, in the match's own zone: its division's venue zone, else the organisation's, else
+ * UTC (`resolveVenueTz` — the zone the competition desk reads the same division's match_day phase in, so the two never
+ * disagree about which matches are today's; controller ruling I2, Match Day task A2). One authority for the call preview's
+ * queue and the read model's (match-day.ts). `where` picks the divisions (alias `d`); `orgTz` is the organisation's zone.
+ */
+export async function divisionDays(tx: Tx, orgTz: string | null, now: Date, where: postgres.Fragment): Promise<DivisionDay[]> {
+  const rows = await tx<{ id: string; tz: string | null }[]>`
+    select d.id, ss.tz from divisions d left join schedule_settings ss on ss.division_id = d.id where ${where}`;
+  return rows.map((r) => {
+    const { from, to } = todayIn(resolveVenueTz(r.tz, orgTz), now);
+    return { division_id: r.id, from, to };
+  });
+}
+
+/** The days as a table to join a match's division on: `w(division_id, day_from, day_to)`. A match is today when its
+ *  `scheduled_at` is in [w.day_from, w.day_to). */
+export function dayTable(tx: Tx, days: readonly DivisionDay[]): postgres.Fragment {
+  return tx`unnest(${days.map((d) => d.division_id)}::uuid[],
+                   ${days.map((d) => d.from.toISOString())}::timestamptz[],
+                   ${days.map((d) => d.to.toISOString())}::timestamptz[]) as w(division_id, day_from, day_to)`;
 }
 
 /** The target court, which must be this org's (RLS) and not archived: a court a match can be called onto. */
@@ -396,8 +426,8 @@ export async function undoCall(
  * The knock-on of calling `fixtureId` onto `courtId` now, before the organiser confirms (§7.1). Writes nothing. Refuses with
  * the same hard stops as the call itself, so a preview never offers a call that would be refused.
  *
- *  - shifts: the target court's unstarted matches today (the org's day, any competition: another competition's planned match
- *    on a shared court is part of the queue), in planned order, whose estimate moves past their planned time. Estimate =
+ *  - shifts: the target court's unstarted matches today (each on its own division's day, `divisionDays`; any competition:
+ *    another competition's planned match on a shared court is part of the queue), in planned order, whose estimate moves past their planned time. Estimate =
  *    max(planned, estimated end of the match before it), the called match first; each match runs its own division's
  *    `matchMinutes`, the length the scheduler places it with.
  *  - pushes_later: how many shifted.
@@ -429,7 +459,10 @@ export async function previewCall(
     };
     const tz = settings.orgTz;
     const start = now.getTime();
-    const { day, from: dayFrom, to: dayTo } = todayIn(tz, now);
+    const { day } = todayIn(tz, now); // the court's hours are read on the organisation's day
+    // Every division's day (any competition's match on the court is part of the queue), archived ones too: a court's occupancy
+    // is org-wide.
+    const days = await divisionDays(tx, tz, now, tx`true`);
     const calledEnd = start + settings.config.matchMinutes * MS_PER_MIN;
 
     const queue = await tx<
@@ -437,10 +470,11 @@ export async function previewCall(
     >`
       select f.id, f.division_id, f.scheduled_at, h.display_name as home_name, a.display_name as away_name
         from fixtures f
+        join ${dayTable(tx, days)} on w.division_id = f.division_id
         left join entrants h on h.id = f.home_entrant_id
         left join entrants a on a.id = f.away_entrant_id
        where f.court_id = ${court.id} and f.status = ${MOVABLE_STATUS} and f.id <> ${f.id}
-         and f.scheduled_at >= ${dayFrom} and f.scheduled_at < ${dayTo}
+         and f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to
        order by f.scheduled_at, f.id`;
     // The called match runs first, from now; the queue then runs through Match Day's one estimate (lib/match-day/estimate.ts).
     const planned: { id: string; planned_at: Date; match_minutes: number }[] = [];
