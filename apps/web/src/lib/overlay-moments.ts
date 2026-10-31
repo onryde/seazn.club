@@ -61,6 +61,15 @@ export interface OverlayMoment extends W1OverlayMoment {
   sponsor?: { cardId: string; style: SponsorStyle; breakKind: string };
 }
 
+/** Every sponsor moment's kind starts with this, so its queue id is `${seq}:sponsor.<breakKind>` — S4's
+ *  `sponsorMomentId`. No score rule emits a kind under it. */
+export const SPONSOR_MOMENT_KIND_PREFIX = "sponsor.";
+
+/** Is this queue id (`${seq}:${kind}`) a sponsor moment's? Read by the queue's `sync`, which holds only ids. */
+export function isSponsorMomentId(id: string): boolean {
+  return id.slice(id.indexOf(":") + 1).startsWith(SPONSOR_MOMENT_KIND_PREFIX);
+}
+
 /**
  * R4 S6 (spec 2026-10-27 §3.4): the served sponsor plan's airings → moments for the SAME queue (scenario rule 1: "a
  * sponsor card is just another moment kind"; no second pipeline).
@@ -86,7 +95,7 @@ export function sponsorMoments(plan: SponsorPlan): OverlayMoment[] {
     if (a.momentId !== sponsorMomentId(a.seq, a.breakKind)) continue;
     out.push({
       seq: a.seq,
-      kind: `sponsor.${a.breakKind}`,
+      kind: `${SPONSOR_MOMENT_KIND_PREFIX}${a.breakKind}`,
       graphic: "sponsor",
       priority: "sponsor",
       // The W1 shape requires a headline and a tone; the sponsor card (S7) renders its own face, so these are the
