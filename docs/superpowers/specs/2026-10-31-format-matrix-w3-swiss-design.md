@@ -296,8 +296,11 @@ tests, and the id appears in a test title. Use the `X-SW-` prefix for cross-spor
 A row lands with the code that makes it true, never ahead of it:
 
 - **Engine PR:** rows whose code is in the engine.
-- **Rules close-out PR** (engine repo, `pnpm changeset --empty`, after the app PRs merge): rows whose code is in the app.
-  They cite the app's real code and test paths. This is W3's last task. W3 is not done until every line below has a row.
+- **App-side rows ("Close-out" below), amended 2026-10-31 after the plan review (M9):** these ship IN the engine PR as
+  well, after app PR A has merged, so 2.0.0 carries every W3 row and app PR B's bump runs the app rules checker
+  (`scripts/__tests__/rules-reference.test.ts`) against them. This works because the engine's own checker verifies only
+  engine paths (`test/rules-reference.ts:191-205`). App PR B's cited test paths are a contract that PR B creates. If they
+  drift, a 2.0.1 rules patch goes out before PR B merges. W3 is not done until every line below has a row.
 
 | Rule | Source | Lands in |
 |---|---|---|

@@ -4,7 +4,7 @@
 
 **Goal:** Move seazn.club onto `@onryde/seazn-engine` 2.0.0 (the W3 engine release). Adapt every breaking type and epoch consequence. Then wire everything the release offers into the product: SW-H1's refusal on the desk with its recovery, the look-ahead warning, the topscorer flag, score groups from table points (SW-M11), and art. 16's two inputs filled from real data. Also show the Swiss tie-break columns on the slideshow and the public table (ST-G21), drive a full Swiss into its KO cut in the browser (SW-L10), and retire owner ruling 70 with an L3 re-baseline, all in the same PR.
 
-**Architecture:** One PR on `feat/w3-swiss-app-b`, cut from `origin/main` after app PR A has merged. It first pins the exact engine-PR snapshot (`0.0.0-pr<N>.<sha>`) and is re-pinned to `^2.0.0` once the release is published (Task 0 has the paired flow; the owner decides it).
+**Architecture:** One PR on `feat/w3-swiss-app-b`, cut from `origin/main` after app PR A has merged. It first installs the exact engine-PR snapshot (`0.0.0-pr<N>.<sha>`) through ONE `pnpm-workspace.yaml` `overrides:` entry keyed on the alias, with the manifests and their pin tests untouched. Task 13 removes the override and moves the 6 manifests and all 4 pin tests to `^2.0.0` literally once the release is published (Task 0 has the paired flow; the owner decides it).
 - **Server:** `swissGen` (`usecases/stages.ts`) narrows `pairRound`'s new union and throws the named refusal. It reads pairing scores from the stage's own table (`stageTablePoints`, a points-only read over `loadStageInputs`) and sets `lookAhead` / `finalRoundMaxScore`.
 - **Standings:** `loadStageInputs` (`engine-db/competition.ts`) fills `TableFixture.unplayed` through the engine's `unplayedSidesOf`, and `TableStage.swissAbsentRounds` from the stage's seats.
 - **Harness:** `tools/matrix` learns that a named refusal is not "paired nobody" and takes the organiser's recovery. Ruling 70's override goes, and L3 is re-baselined on this branch's truth run.
@@ -133,32 +133,34 @@ type TiebreakerKey = /* … */ | "opp_diff";
   - App PR A is merged to `origin/main`.
   - The engine PR is open, and its snapshot is published: `npm view @onryde/seazn-engine versions --registry https://npm.pkg.github.com | tr ',' '\n' | grep "0.0.0-pr<N>"`. Record `<N>` and the exact `<sha>` version.
   - The engine PR's epoch report (or `pnpm fold-epoch:check` output in its body) names **boardgame 4 → 5 only**. Anything else: STOP and report.
+  - **Release order (M7).** Engine 1.1.0 (#6) is cut BEFORE 2.0.0. Gate: 1.1.0 is published, and the app bump onto it has merged to `origin/main`. Read the 6 manifests' current spec from `origin/main` and record it in `$S/preflight.md` (expected `^1.1.0`, not `^1.0.0`). If 1.1.0 is not out, or the app is not yet on it, **STOP and put it to the owner**: wait, or proceed with app-B over the older pin. Do not decide this yourself.
 - [ ] **Step 2: The merge-order decision — PENDING THE OWNER. Put it to them in chat; do not decide it.**
   - **The problem.** The engine PR's `downstream` job (engine `ci.yml:312-459`) checks out **seazn.club main** (`:332-333`) and injects the PR snapshot through `pnpm-workspace.yaml` overrides (`:388-402`). It then runs `turbo run typecheck`. App main does not know the new union, `byeScore` or `opp_diff`, so `downstream` reds on every engine push, and no app branch can green it. It is NOT a required check (branch protection). The engine plan Task 11 Step 3 already expects the red.
   - **Recommended: flow A, paired PRs (engine `AGENTS.md:27-29`, which wins over the skill per `SKILL.md:8`).**
-    1. This PR pins the 6 manifests to the exact snapshot `npm:@onryde/seazn-engine@0.0.0-pr<N>.<sha>`. Every task is built and gated against it, with CI and the e2e dispatch green on this branch. Each engine-PR push that re-cuts the snapshot means a re-pin plus a re-run of the scoped gates.
-    2. The owner merges the engine PR over the documented `downstream` red, citing this PR's green run.
+    1. This PR installs the exact snapshot through ONE `pnpm-workspace.yaml` `overrides:` entry (the existing block, `:52`): `"@seazn/engine": "npm:@onryde/seazn-engine@0.0.0-pr<N>.<sha>"`. The 6 manifests and their 4 pin tests stay on main's spec. Every task is built and gated against the snapshot, with CI and the e2e dispatch green on this branch. Each engine-PR push that re-cuts the snapshot means editing that one line plus a re-run of the scoped gates.
+    2. `downstream` is NOT a required check. The owner merges the engine PR over its red once this PR is green on the snapshot, with this PR linked in the engine PR body.
     3. The owner merges `release/2.0.0` (engine-release skill §1). Prove the publish: registry version, `v2.0.0` tag, and a GitHub Release whose epoch report names boardgame.
-    4. Task 13 re-pins to `^2.0.0`, re-runs the gates, and the owner merges this PR.
-    - Owner value: the app is proven against exactly the engine code that ships before anything is released. App main stays on `^1.0.0` (a caret never resolves 2.x) and is never broken in between.
+    4. Task 13 removes the override, moves the manifests and pins to `^2.0.0`, re-runs the gates, and the owner merges this PR.
+    - Owner value: the app is proven against exactly the engine code that ships before anything is released. App main stays on its 1.x caret (a caret never resolves 2.x) and is never broken in between.
   - **Alternative: flow B (the skill's literal rule `SKILL.md:64`, "never pin a snapshot").** Merge the engine PR and release 2.0.0 first, then build this PR on `^2.0.0`. Cost: a MAJOR goes out unvalidated by its only consumer. A defect found here then needs a 2.0.1 round-trip.
   - Record the owner's answer in `$S/preflight.md`, and in the PR body as the owner's words. Do not label a recommendation as a ruling (AGENTS.md class 17).
 - [ ] **Step 3: Live data (stg standing read; prod only if the owner gives the route in chat; read-only).**
   - Pass the URL via env only (`REMOTE_DATABASE_URL`, `.env.local:9`). Set `default_transaction_read_only=on` and `search_path=seazn_club`. Never put it in argv, a log or chat.
-  - Count 1 (owned here per app-A Task 0 Step 3): Swiss bye rows whose effective points rule pays a `forfeit` row with `winnerPoints ≠ win`, or a `forfeit_win` bonus. Reuse app-A Task 0's SQL and quote its stg result if it is ≤ 7 days old. Above 0: **STOP and raise to the owner** with the division list. The bump moves those standings (anti-goal §2); the owner's rule is a LOUD note plus a decision, never a shim.
+  - Bye points: app-A Task 0 Step 3 owns this check (count 1: Swiss bye rows whose effective points rule pays a `forfeit` row with `winnerPoints ≠ win`, or a `forfeit_win` bonus). Do NOT re-run it. Cite app-A's recorded result. If that result is above 0 and the owner has not ruled on it, **STOP and raise to the owner** with the division list: the bump moves those standings (anti-goal §2), and the owner's rule is a LOUD note plus a decision, never a shim.
   - Count 2 (feeds Task 2): stored boardgame configs carrying `byeScore` in each of V481's five places (`divisions.config`, `stages.config->'rules'`, `fixtures.rules_override`, `fixtures.config_snapshot`, `match_states.state->'cfg'`), each scoped by the division's sport.
   - Count 3 (feeds Task 8): live Swiss stages with a seated round in which a table entrant holds no seat. These are the rows whose Buchholz moves when absences become VURs; quote the count in the PR body.
-  - Count 4: live Swiss stages holding an `adhoc-%` fixture (Review Focus 3); expected 0 after app-A's Task 0.
+  - Count 4: live Swiss stages holding an `adhoc-%` fixture (Review Focus 3). Quote the count; Task 8's ad-hoc guard has to hold for every one of them.
 
 ## Task 1: Bump to the snapshot; adapt every breaking type; re-derive the tests the release overrules
 
 **Rules:** none new. This is the substrate. Behaviour changes that arrive with the engine (X-SW-5 bye points, X-SW-9 chains, X-SW-7/8 Buchholz values) are re-derived where app tests froze the old values.
 
 **Files:**
-- Modify: the 6 manifests (`package.json:73`, `apps/web/package.json:25`, `packages/scheduler/package.json:20`, `packages/reference/package.json:14`, `tools/bench/package.json:8`, `tools/matrix/package.json:7`) to `npm:@onryde/seazn-engine@0.0.0-pr<N>.<sha>`, plus `pnpm-lock.yaml`.
-- Modify: `scripts/__tests__/registry-install.test.ts:22` and `scripts/__tests__/engine-package-identity.test.ts:13`. Both pin the literal `^1.0.0` (premise 1). Make each read the ONE spec constant from a new `scripts/lib/engine-spec.ts` (`export const ENGINE_SPEC = "npm:@onryde/seazn-engine@…"`). Task 13's re-pin then edits one line, and the two tests assert every manifest equals it.
+- Modify: `pnpm-workspace.yaml`, the existing `overrides:` block (`:52`). Add ONE entry keyed on the alias: `"@seazn/engine": "npm:@onryde/seazn-engine@0.0.0-pr<N>.<sha>"`. Then update `pnpm-lock.yaml`. This is the only way a snapshot is installed here.
+- **Do NOT touch** in this task: the 6 manifests (`package.json:73`, `apps/web/package.json:25`, `packages/scheduler/package.json:20`, `packages/reference/package.json:14`, `tools/bench/package.json:8`, `tools/matrix/package.json:7`) and the 4 tests that pin their spec verbatim (`scripts/__tests__/registry-install.test.ts:22`, `scripts/__tests__/engine-package-identity.test.ts:13`, `tools/matrix/__tests__/workspace-wiring.test.ts:138`, `apps/web/src/__tests__/toolchain.test.ts:357`). Those pins stay verbatim literals: a shared constant would turn them into a tautology. Task 13 moves all ten.
+- Modify: `apps/web/src/lib/swiss-refusals.ts` (app-A's table). Add the `SWISS_NO_LEGAL_PAIRING` row here (status 422, key `swiss.refusal.SWISS_NO_LEGAL_PAIRING`), with en copy plus the 3 locales and `i18n:gen-keys`. The reason-specific sentences and actions are Task 4's. The row lands in the same task as the throw that uses it.
 - Modify: `apps/web/src/server/usecases/stages.ts` at the `pairRound` call (`:1442`) and its consumers (`:1514-1548`). The narrowing only; Task 4 owns the refusal's copy and recovery.
-- Modify: `apps/web/src/lib/swiss-pairing.ts:54` (`roundOnePairs`: a refusal yields `[]`, and the hint says nothing), `apps/web/e2e/walkthrough/swiss-round-one-pairing.spec.ts:577` (its oracle narrows), `tools/matrix/__tests__/model-fake-driver.ts:654-668` (the twin narrows; Task 7 changes its scores).
+- Modify: `apps/web/src/lib/swiss-pairing.ts:54` (`roundOnePairs`: a refusal yields `[]`, and the hint says nothing), `apps/web/e2e/walkthrough/swiss-round-one-pairing.spec.ts:577` (its oracle narrows), `tools/matrix/__tests__/model-fake-driver.ts:654-668` (the twin narrows; Task 5 changes its scores).
 - Modify: `apps/web/src/server/usecases/rule-locks.ts:39` (comment: `byeScore` is gone, X-SW-6) and `apps/web/src/server/usecases/__tests__/division-locks.test.ts:631,1028-1048`. Re-derive both from the engine's declarations: the declared points keys become `["awardScore", "scoring"]`. The I-2 case is retitled `X-SW-6 a stored byeScore is not a declared key: a config carrying it saves, and the key is not written back`.
 - Re-derive: every app test the release overrules. Find them by behaviour, not filename (AGENTS.md class 16):
   - `grep -arln "byeScore\|forfeit.*bye\|bye.*forfeit\|virtual\|buchholz\|h2h_points" apps/web/src scripts tools/matrix --include='*.test.ts*'`;
@@ -168,24 +170,24 @@ type TiebreakerKey = /* … */ | "opp_diff";
 - Leave alone: `apps/web/src/server/engine-db/__tests__/fixtures/w2d-pin-before.json`. It is a recorded pre-W2d store; parse strips the key. If a test reading it reds, that is a finding: record it, do not edit the recording.
 
 **Interfaces:**
-- Produces: `ENGINE_SPEC` (`scripts/lib/engine-spec.ts`). In `swissGen`, `const round = pairRound(…); if (!round.ok) throw swissRefusal("SWISS_NO_LEGAL_PAIRING", { round: target, reason: round.reason, field: round.field });` **before any write**. Task 4 extends the details and adds the desk copy.
+- Produces: the `SWISS_REFUSALS.SWISS_NO_LEGAL_PAIRING` row. In `swissGen`, `const round = pairRound(…); if (!round.ok) throw swissRefusal("SWISS_NO_LEGAL_PAIRING", { round: target, reason: round.reason, field: round.field });` **before any write**. Task 4 extends the details and adds the desk copy.
 
 - [ ] **Step 1: Write the failing tests.**
-  - `scripts/__tests__/registry-install.test.ts`: `every one of the 6 manifests pins ENGINE_SPEC (counted: 6)`.
+  - `apps/web/src/lib/__tests__/swiss-refusals.test.ts` (app-A's): `SWISS_NO_LEGAL_PAIRING has a row with status 422 and a key present in all 4 locales`.
   - `apps/web/src/server/usecases/__tests__/swiss-no-legal-pairing.test.ts` (new; badminton and boardgame through one body):
     - `X-SW-3 Pair next on a history with no legal round answers SWISS_NO_LEGAL_PAIRING and seats nobody`. Construction (rulebook §3.1; engine plan Task 4b's S6 shape): 6 entrants, `config.rounds = 5`. Write rounds 1–3 onto the shells by SQL as R1 {p0-p1, p2-p3, p4-p5}, R2 {p0-p5, p1-p2, p3-p4}, R3 {p0-p3, p1-p4, p2-p5}, each decided home win. The unplayed remainder is two triangles, so round 4 has no perfect matching. Assert the refusal, then that every round-4 row's `home_entrant_id`/`away_entrant_id` is null, and that no new `fixtures_generated` row exists. `// differential: today created 0, "up to date"`.
     - `X-SW-3 empty case first: a 1-entrant stage refuses field_too_small, not a crash`.
-- [ ] **Step 2: Run, verify FAIL** on `^1.0.0` (before the pin): `VERIFY-WEB t1-red src/server/usecases/__tests__/swiss-no-legal-pairing.test.ts`. Expect the round-4 test red on `created: 0`.
-- [ ] **Step 3: Pin and install.** Write `ENGINE_SPEC`, point the 6 manifests at it, then `cd $WT && pnpm install; echo EXIT=$?`. `git diff --stat` must show only the manifests, the lockfile, the new constant and the two tests.
+- [ ] **Step 2: Run, verify FAIL** on main's engine (before the override): `VERIFY-WEB t1-red src/server/usecases/__tests__/swiss-no-legal-pairing.test.ts src/lib/__tests__/swiss-refusals.test.ts`. Expect the round-4 test red on `created: 0`.
+- [ ] **Step 3: Override and install.** Add the override line, then `cd $WT && pnpm install; echo EXIT=$?`. Confirm the snapshot resolved: `node -p 'require("./apps/web/node_modules/@seazn/engine/package.json").version'` prints `0.0.0-pr<N>.<sha>`, and so does the same read under `packages/reference/`. `git diff --stat` must show only `pnpm-workspace.yaml` and `pnpm-lock.yaml`. The 4 pin tests must stay green unchanged: they read the manifests, which did not move.
 - [ ] **Step 4: Adapt.** Run `pnpm turbo run typecheck` and fix each error at its site, narrowing on `ok` (never cast). Every caller of `pairRound` must handle `ok: false` by writing nothing.
 - [ ] **Step 5: Re-derive** the overruled tests listed above.
 - [ ] **Step 6: Run, verify PASS:**
-  - `VERIFY-WEB t1 src/server/usecases/__tests__/swiss-no-legal-pairing.test.ts src/server/usecases/__tests__/division-locks.test.ts src/lib/__tests__/swiss-pairing.test.ts src/server/usecases/__tests__/swiss-playoff-pairing.test.ts src/server/usecases/__tests__/swiss-shell-fixtures.test.ts` plus every file Step 5 touched (named);
-  - `VERIFY-ROOT t1-root scripts/__tests__/registry-install.test.ts scripts/__tests__/engine-package-identity.test.ts scripts/__tests__/engine-bare-imports.test.ts tools/matrix/__tests__/model-fake-driver.test.ts` (name the real test file of the fake driver; `ls tools/matrix/__tests__ | grep -i fake`);
+  - `VERIFY-WEB t1 src/server/usecases/__tests__/swiss-no-legal-pairing.test.ts src/lib/__tests__/swiss-refusals.test.ts src/server/usecases/__tests__/division-locks.test.ts src/lib/__tests__/swiss-pairing.test.ts src/server/usecases/__tests__/swiss-playoff-pairing.test.ts src/server/usecases/__tests__/swiss-shell-fixtures.test.ts` plus every file Step 5 touched (named);
+  - `VERIFY-ROOT t1-root scripts/__tests__/registry-install.test.ts scripts/__tests__/engine-package-identity.test.ts scripts/__tests__/engine-bare-imports.test.ts tools/matrix/__tests__/workspace-wiring.test.ts tools/matrix/__tests__/model-fake-driver.test.ts`, and `VERIFY-WEB t1-tc src/__tests__/toolchain.test.ts`. App CI's registry guard (`ci.yml:131-148`: no `link:`/`file:`, count 6) must accept the override; if it rejects an `npm:` override, STOP and report rather than editing the guard. (name the real test file of the fake driver; `ls tools/matrix/__tests__ | grep -i fake`);
   - both tsc commands and lint.
 - [ ] **Step 7: Mutate:** remove the `if (!round.ok)` throw (use a non-null assertion to compile) → the X-SW-3 test reds. Restore.
 - [ ] **Step 8: Smoke** check 1: `POST /api/v1/stages/{id}/generate` on the SQL-seeded S6 stage → 409/422 with code `SWISS_NO_LEGAL_PAIRING` (status from app-A's `SWISS_REFUSALS` table, never a typed literal). The seed is a smoke helper writing through `withTenant` exactly as the unit test does.
-- [ ] **Step 9: Commit** `chore(engine): pin the W3 engine snapshot; adapt pairRound's refusal union, byeScore removal (X-SW-3, X-SW-6)`. The body lists the re-derived tests.
+- [ ] **Step 9: Commit** `chore(engine): install the W3 engine snapshot via override; adapt pairRound's refusal union, byeScore removal (X-SW-3, X-SW-6)`. The body lists the re-derived tests.
 
 ## Task 2: The epoch bump's migration steps (boardgame FOLD_EPOCH 4 → 5; byeScore stored-config cleanup)
 
@@ -249,9 +251,9 @@ type TiebreakerKey = /* … */ | "opp_diff";
 
 **Files:**
 - Modify:
-  - `apps/web/src/lib/swiss-refusals.ts` (app-A's table) gains `SWISS_NO_LEGAL_PAIRING`: status 422, key `swiss.refusal.SWISS_NO_LEGAL_PAIRING`.
+  - The `SWISS_REFUSALS` row for `SWISS_NO_LEGAL_PAIRING` already exists (Task 1). This task adds only the reason-specific sentences and the actions below.
   - `apps/web/src/server/usecases/stages.ts`, `swissGen`: the throw from Task 1 gains the recovery details `{ round, reason, field, finishAfter: round − 1, canFinish: finishAfter ≥ 1 }`. Order matters: the refusal check sits before any write in the pairing transaction, so a pre-pair reshape is rolled back (Review Focus 1). If the reshape is committed in an earlier transaction after app-A, move the pairing call ahead of the reshape's writes or into the same transaction; say which in the commit body.
-  - `apps/web/src/server/api-v1/http.ts:229-282`: the refusal's `extra` must reach the wire (the allowlist copies details case by case).
+  - `apps/web/src/server/api-v1/http.ts:229-282`: read it; expect no edit. Its case-by-case allowlist applies to `EngineError` only. `swissRefusal` raises an `HttpError`, whose `extra` is merged into the response body as given. So the guard against leaking belongs at the source: `swissGen` builds `extra` from exactly the five fields below, copied by name, and never spreads the engine's `SwissRefusal` object or anything else into it. (If app-A's `swissRefusal` turns out not to be an `HttpError`, record it as a finding and route `extra` through the allowlist instead.)
   - `apps/web/src/components/v2/stages-panel.tsx`: in `classifyActError` (`:1873`), `SWISS_NO_LEGAL_PAIRING` maps to an amber warning with two actions. **"Finish the Swiss after round {n}"** calls app-A's `POST /api/v1/stages/{id}/swiss/finish` behind the same confirm copy app-A Task 13 uses. **"Change the number of rounds"** opens app-A's rounds control. The desk never shows `schedule.notice.nothingNew` for a refusal.
 - Create: `apps/web/src/lib/swiss-no-pairing.ts` (pure): `noPairingNotice(details): { key: MessageKey; params; actions: ("finish" | "rounds")[] }`.
 - Copy, 4 locales (rulebook §3.3, verbatim intent):
@@ -275,6 +277,7 @@ type TiebreakerKey = /* … */ | "opp_diff";
     - `X-SW-3 every refusal reason has its sentence and its recovery; round 1 offers no finish`.
   - DB:
     - `X-SW-3 the refusal carries round, reason, field and finishAfter on the wire`.
+    - `X-SW-3 the refusal body carries nothing internal`: through the real route, the response body's keys are exactly `code`, `message` (plus whatever envelope keys app-A's other refusals carry, read from one of them in the same test), and `extra`. `extra`'s keys are exactly `{round, reason, field, finishAfter, canFinish}`, with no entrant ids, no history, no stack and no `ok`. The empty case: a `field_too_small` refusal has the same key set.
     - `X-SW-3 a refusal after a reshape rolls the reshape back` (Review Focus 1). Withdraw p5 from the S6 construction pre-pair so the round-4 shells reshape, press Pair, and assert every round-4 row is byte-identical to before the press.
     - `X-SW-3 a second press refuses again and writes nothing` (second call).
     - `X-SW-3 after a void on round 3 the round re-opens and Pair next refuses STAGE_NOT_READY (undecided), not SWISS_NO_LEGAL_PAIRING` (after a void).
@@ -288,6 +291,7 @@ type TiebreakerKey = /* … */ | "opp_diff";
 - [ ] **Step 6: Mutate** one at a time:
   - map the code back to `nothingNew` → the component test reds;
   - drop `finishAfter` from `extra` → the wire test reds;
+  - spread the engine's `SwissRefusal` into `extra` → the nothing-internal test reds;
   - move the refusal check after the reshape write → the rollback test reds.
 - [ ] **Step 7: Screenshots** at 1280, 320 and 768 (the notice with both actions; the finish confirm) go to the Artifact with verdicts and the 320-vs-1280 control-set diff.
 - [ ] **Step 8: E2E + smoke.**
@@ -295,45 +299,41 @@ type TiebreakerKey = /* … */ | "opp_diff";
   - Smoke check 4: the wire `extra` carries `finishAfter = 3`. Update `EXPECTED_CHECKS`.
 - [ ] **Step 9: Commit** `feat(w3): an unpairable Swiss round refuses by name with Finish / Change rounds (SW-H1, X-SW-3)`.
 
-## Task 5: Wire the look-ahead (X-SW-10) and the topscorer flag (X-SW-11)
+## Task 5: Score groups from table points (SW-M11; RB3-9)
 
-**Rules:** X-SW-10 (app warning, cited at close-out); X-SW-11 (app input).
+**Rules:** X-SW-19 "Pairing score groups use the stage's table points".
+
+**Decision (premise 10):** the pairing score IS the table's points, read from the same inputs and the same engine fold the table uses, so the published table, the groups and the tie-breaks read one number (rulebook §5 last paragraph). A per-fixture formula (`win.regulation`, `swissDrawPoints`) would be a second authority. It would drift from the table on IIHF OT wins (3/2/1/0), `bySetScore` maps and bonus rules. `swissDrawPoints` is used here only to derive expected values, and in the matrix twin that has no table.
 
 **Files:**
-- Modify: `apps/web/src/server/usecases/stages.ts`, `swissGen`'s `pairRound` constraints.
-  - `lookAhead: rounds > swissRoundsGuidance(n).safeMax && target < rounds`, with n = `swissFieldForRound(entrants, target).length` (app-A). This is rulebook §3.3 "above the safe maximum", and never on the last round.
-  - `finalRoundMaxScore: target === rounds && chessOn ? (rounds − 1) × maxRoundPoints(rules.points) : undefined`, in the pairing score's units (Task 7's table points). `maxRoundPoints(rule)` = the clean-sweep win: `rule.bySetScore ? max over its pairs' [0] : rule.win.regulation`. Bonuses are excluded (A.6 counts game points, and this is the rule's largest game result).
-  - `GenerateOutcome.swiss_next_round?: "unpairable" | "unknown"`, present only when `round.nextRound` is not `"pairable"`.
-- Create: `apps/web/src/lib/swiss-max-round-points.ts` (pure): `maxRoundPoints(rule: PointsRule): number`.
-- Modify: `apps/web/src/components/v2/stages-panel.tsx`: after a successful Pair, an amber line when `swiss_next_round` is present. 4 locales:
-  - `swiss.warning.nextRoundUnpairable` = "Round {next} may not be possible: every pairing left after this round repeats a match. You can finish after round {round}."
-  - `…unknown` = "Round {next} could not be checked in time."
-- Test:
-  - `apps/web/src/lib/__tests__/swiss-max-round-points.test.ts`;
-  - `apps/web/src/server/usecases/__tests__/swiss-look-ahead.test.ts`.
+- Modify: `apps/web/src/server/engine-db/competition.ts`: add `stageTablePoints(tx: Tx, stageId: string): Promise<{ points: ReadonlyMap<string, number>; rule: PointsRule }>`. It runs `loadStageInputs`, then `completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures)`, and maps rows to `points`. `rule` is the SAME `rules.points` object `loadStageInputs` hands to `payout` (`competition.ts:470-480`): the stage's one table rule, its pin once started (`loadTableRules`, `table-rules.ts:270`). Return that object; do not re-read it. This is where `swissGen` gets `rules.points` (premise 7), so the scores and Task 7's maximum share one rule. It **never persists a lots draw** (unlike `rankedStageStandings:757`, which stores one): points do not depend on order.
+- Modify: `apps/web/src/server/usecases/stages.ts`, `swissGen` `:1355-1427`:
+  - `const { points, rule } = await stageTablePoints(tx, stageId)`; `score` = `points` (an entrant with no table row = 0, the empty case). Keep `rule` in scope for Task 7;
+  - the four hard-coded `+1` / `+0.5` / `+1` / `+1` (`:1373, :1395, :1396-1398, :1424`) are deleted;
+  - the loops keep their non-score jobs: `played`, `colours`, `byes`, `inRound`.
+  - **Legacy implicit byes** (app-A kept their +1 for `swiss_first_round` null): they now score what the table scores, 0. They keep bye-ineligibility. This supersedes app-A's legacy +1 for the pairing score only; it is listed under Decisions for the owner.
+- Modify: `tools/matrix/__tests__/model-fake-driver.ts:646-649`: the twin scores win = the declared rule's win (clean sweep under `bySetScore`), draw = `swissDrawPoints(rule)`, bye = win, the rule read from `tablePointsRule(cfg, "swiss")`.
+- Test: `apps/web/src/server/usecases/__tests__/swiss-score-groups.test.ts`.
 
 **Interfaces:**
-- Consumes: `SwissConstraints.lookAhead` / `finalRoundMaxScore`, `SwissRound.nextRound` (engine Tasks 4b/4c); `swissRoundsGuidance` (app-A).
-- Produces: `maxRoundPoints`; `GenerateOutcome.swiss_next_round`.
+- Produces: `stageTablePoints` (above); inside `swissGen`, the local `rule: PointsRule` that Task 7 reads.
 
-- [ ] **Step 1: Write the failing tests.**
-  - Pure: `maxRoundPoints` over every sport's DECLARED Swiss rule (`module.tablePointsRule(cfg, "swiss")` for each `declaredCfgs` cfg, via `forEachSport`), counted. Expected = rulebook §4 "win points" (the clean-sweep pair under a set-score map). Empty case first: a rule with no `bySetScore` is `win.regulation`.
-  - DB, through a `vi.spyOn` on the engine module's `pairRound` export plus the seated result (both, so a spy alone cannot pass):
-    - `X-SW-10 6 entrants, 5 rounds: round 3 is paired with lookAhead and round 4 stays pairable`. Seed R1–R2 as the S6 6-cycle and press Pair. Assert the spy saw `lookAhead: true`, and that the seated round 3 leaves a perfect matching for round 4, checked by the test's own brute-force oracle (rulebook §3.1). `// differential: without lookAhead the fold seats the three diameters`.
-    - `X-SW-10 empty case: 6 entrants, 3 rounds (= safe max) → no lookAhead, no warning`.
-    - `X-SW-10 the last round never asks for a look-ahead`.
-    - `X-SW-10 a round whose every legal pairing kills the next returns swiss_next_round "unpairable" and still seats the round`. The construction is found by brute force over n = 6..8 seeded histories with a non-last target round. Commit it as a named fixture with its seed, the way the engine plan found S6.
-    - `X-SW-11 the final round of a chess Swiss sends finalRoundMaxScore = (rounds − 1) × the declared clean-sweep win; earlier rounds and badminton send none` (counted over boardgame and badminton).
-    - `X-SW-11 two topscorers with the same absolute colour preference are paired in the final round instead of refused`. A boardgame history seeded so the topscorers' last two games were both White. `// differential: without the flag → SWISS_NO_LEGAL_PAIRING colour`.
-- [ ] **Step 2: Run FAIL**, implement, add 4 locales, `i18n:gen-keys`, then run PASS: `VERIFY-WEB t5 src/lib/__tests__/swiss-max-round-points.test.ts src/server/usecases/__tests__/swiss-look-ahead.test.ts src/server/usecases/__tests__/swiss-no-legal-pairing.test.ts`. Run tsc.
-- [ ] **Step 3: Mutate** one at a time:
-  - `lookAhead` always false → the S6 test reds;
-  - `lookAhead` on the last round too → the last-round test reds;
-  - `finalRoundMaxScore` on every round → the "earlier rounds send none" test reds;
-  - drop the warning field → the unpairable test reds.
-- [ ] **Step 4: Screenshots** of the amber line at 3 widths go to the Artifact.
-- [ ] **Step 5: Smoke** check 5: the `swiss_next_round` field on the brute-force fixture's Pair response. The e2e is in Task 10 (the 6 × 5 describe reads no warning on a pairable path).
-- [ ] **Step 6: Commit** `feat(w3): look-ahead above the safe maximum; final-round topscorer flag (RB3-4, RB3-10)`.
+- [ ] **Step 1: Write the failing tests** (through `swissGen` with a `vi.spyOn` on `pairRound`'s standings argument, plus the seated result):
+  - `X-SW-19 empty case first: round 1 sends every entrant score 0`.
+  - `X-SW-19 boardgame: a win is 2 and a draw 1 in the score groups (the table's half-points), not 1 / 0.5`. Expected from the declared rule. `// differential: today 1 and 0.5` (the ratio is equal, so also assert the absolute values).
+  - `X-SW-19 ice hockey: an OT win (2) and a regulation win (3) land in different score groups`. Expected from IIHF's declared 3/2/1/0. `// differential: today both +1, one group`. This is the case where the right answer differs in ORDER.
+  - `X-SW-19 a custom rule win 3 / draw 1 on badminton: groups are 3/1/0`.
+  - `X-SW-19 a bye scores the stage's win points, the same number the table shows (X-SW-5)`. Assert the spy score equals the public table's `points` for the bye holder, read through `rankedStageStandings` (the consumer).
+  - `X-SW-19 after a withdrawal: the withdrawn entrant's opponents keep the points the table gives them`.
+  - `X-SW-19 a second Pair (after Unpair) sends the same scores`.
+  - `X-SW-19 stageTablePoints writes no lots draw` (count the lots rows before and after = equal), and its positive pair: `rankedStageStandings still stores one`.
+  - Live-division sequence: `a stage pinned before W3 (pre-W3 rule pin) groups by its PINNED rule's points`.
+- [ ] **Step 2: Run FAIL:** `VERIFY-WEB t5 src/server/usecases/__tests__/swiss-score-groups.test.ts`.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run PASS:** the Step 2 file plus `swiss-late-field.test.ts`, `swiss-playoff-pairing.test.ts`, `swiss-shell-fixtures.test.ts`, `swiss-walkover-saturday.test.ts`, `swiss-unplayed-rematch.test.ts` (app-A's), `swiss-no-legal-pairing.test.ts`, and the fake driver's test via VERIFY-ROOT. Run tsc.
+- [ ] **Step 5: Mutate:** restore `+1` for a win → the ice hockey test reds. Score from `rankedStageStandings` instead → the lots-row test reds.
+- [ ] **Step 6: Smoke** check 5: an ice hockey Swiss, after round 1 with one OT win, pairs round 2 with the OT winner outside the regulation winners' group (read the seats). E2E is in Task 10 (the KO cut reads the table the groups now share).
+- [ ] **Step 7: Commit** `fix(w3): Swiss score groups are the table's own points (SW-M11, X-SW-19)`.
 
 ## Task 6: The harness reads a named refusal as a refusal, and takes the recovery (pre-requisite of the ruling-70 retirement)
 
@@ -362,43 +362,55 @@ type TiebreakerKey = /* … */ | "opp_diff";
 - [ ] **Step 4:** No UI, no product smoke. The proof is Task 12's CI truth run on the three cells.
 - [ ] **Step 5: Commit** `fix(matrix): a named Swiss refusal is a refusal, and the harness finishes the Swiss as an organiser would`.
 
-**Batch 2 = Tasks 4–6** (sequential: 4 and 5 share `swissGen` and `stages-panel.tsx`; 6 consumes 4's wire shape). Run the review, push, dispatch the e2e, and hand back.
+**Batch 2 = Tasks 4–6** (sequential: 4 and 5 share `swissGen`; 6 consumes 4's wire shape and 5's fake-driver scores). Run the review, push, dispatch the e2e, and hand back.
 
-## Task 7: Score groups from table points (SW-M11; RB3-9)
+## Task 7: Wire the look-ahead (X-SW-10) and the topscorer flag (X-SW-11)
 
-**Rules:** X-SW-19 "Pairing score groups use the stage's table points".
-
-**Decision (premise 10):** the pairing score IS the table's points, read from the same inputs and the same engine fold the table uses, so the published table, the groups and the tie-breaks read one number (rulebook §5 last paragraph). A per-fixture formula (`win.regulation`, `swissDrawPoints`) would be a second authority. It would drift from the table on IIHF OT wins (3/2/1/0), `bySetScore` maps and bonus rules. `swissDrawPoints` is used here only to derive expected values, and in the matrix twin that has no table.
+**Rules:** X-SW-10 (app warning, cited at close-out); X-SW-11 (app input).
 
 **Files:**
-- Modify: `apps/web/src/server/engine-db/competition.ts`: add `stageTablePoints(tx: Tx, stageId: string): Promise<ReadonlyMap<string, number>>`. It runs `loadStageInputs`, then `completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures)`, and maps rows to `points`. It **never persists a lots draw** (unlike `rankedStageStandings:757`, which stores one): points do not depend on order.
-- Modify: `apps/web/src/server/usecases/stages.ts`, `swissGen` `:1355-1427`:
-  - `score` = `stageTablePoints` (an entrant with no table row = 0, the empty case);
-  - the four hard-coded `+1` / `+0.5` / `+1` / `+1` (`:1373, :1395, :1396-1398, :1424`) are deleted;
-  - the loops keep their non-score jobs: `played`, `colours`, `byes`, `inRound`.
-  - **Legacy implicit byes** (app-A kept their +1 for `swiss_first_round` null): they now score what the table scores, 0. They keep bye-ineligibility. This supersedes app-A's legacy +1 for the pairing score only; it is listed under Decisions for the owner.
-- Modify: `tools/matrix/__tests__/model-fake-driver.ts:646-649`: the twin scores win = the declared rule's win (clean sweep under `bySetScore`), draw = `swissDrawPoints(rule)`, bye = win, the rule read from `tablePointsRule(cfg, "swiss")`.
-- Test: `apps/web/src/server/usecases/__tests__/swiss-score-groups.test.ts`.
+- Modify: `apps/web/src/server/usecases/stages.ts`, `swissGen`'s `pairRound` constraints.
+  - `lookAhead: rounds > swissRoundsGuidance(n).safeMax && target < rounds`, with n = `swissFieldForRound(entrants, target).length` (app-A). This is rulebook §3.3 "above the safe maximum", and never on the last round.
+  - `finalRoundMaxScore: target === rounds && chessOn ? (rounds − 1) × maxRoundPoints(rule, module, cfg) : undefined`. `rule` is the `PointsRule` Task 5 put in scope from `stageTablePoints`, which is the same rule the scores were computed under, in the same units (table points).
+  - **One bonus policy for the score and the maximum.** The score is table points, and table points include every bonus the rule pays. So `maxRoundPoints` = the most table points ONE fixture can pay one side under `rule`, bonuses included. Compute it by calling the same `payout` that `loadStageInputs` calls (`competition.ts:470-480`) on a regulation win with the clean-sweep result for the sport's format (`setsToWinOf(module, cfg)`), and take the winner's points. Never a hand formula: a formula is a second authority that drifts on bonuses (premise 10). Re-pin `payout`'s signature at the snapshot.
+  - `GenerateOutcome.swiss_next_round?: "unpairable" | "unknown"`, present only when `round.nextRound` is not `"pairable"`.
+- Create: `apps/web/src/server/engine-db/swiss-max-round-points.ts` (server, it calls `payout`): `maxRoundPoints(rule: PointsRule, module: AnySportModule, cfg: unknown): number`.
+- Modify: `apps/web/src/components/v2/stages-panel.tsx`: after a successful Pair, an amber line when `swiss_next_round` is present. 4 locales:
+  - `swiss.warning.nextRoundUnpairable` = "Round {next} may not be possible: every pairing left after this round repeats a match. You can finish after round {round}."
+  - `…unknown` = "Round {next} could not be checked in time."
+- Test:
+  - `apps/web/src/server/engine-db/__tests__/swiss-max-round-points.test.ts`;
+  - `apps/web/src/server/usecases/__tests__/swiss-look-ahead.test.ts`;
+  - `apps/web/src/components/v2/__tests__/stages-panel-swiss-pairing.test.tsx` (extend: the warning render).
 
 **Interfaces:**
-- Produces: `stageTablePoints` (above).
+- Consumes: `SwissConstraints.lookAhead` / `finalRoundMaxScore`, `SwissRound.nextRound` (engine Tasks 4b/4c); `swissRoundsGuidance` (app-A); Task 5's table-point scores and its `rule` in `swissGen`. **Runs after Task 5:** before Task 5, scores are 1/0.5 while the maximum would be in table points, so nobody is ever a topscorer and X-SW-11 would be inert.
+- Produces: `maxRoundPoints`; `GenerateOutcome.swiss_next_round`.
 
-- [ ] **Step 1: Write the failing tests** (through `swissGen` with a `vi.spyOn` on `pairRound`'s standings argument, plus the seated result):
-  - `X-SW-19 empty case first: round 1 sends every entrant score 0`.
-  - `X-SW-19 boardgame: a win is 2 and a draw 1 in the score groups (the table's half-points), not 1 / 0.5`. Expected from the declared rule. `// differential: today 1 and 0.5` (the ratio is equal, so also assert the absolute values).
-  - `X-SW-19 ice hockey: an OT win (2) and a regulation win (3) land in different score groups`. Expected from IIHF's declared 3/2/1/0. `// differential: today both +1, one group`. This is the case where the right answer differs in ORDER.
-  - `X-SW-19 a custom rule win 3 / draw 1 on badminton: groups are 3/1/0`.
-  - `X-SW-19 a bye scores the stage's win points, the same number the table shows (X-SW-5)`. Assert the spy score equals the public table's `points` for the bye holder, read through `rankedStageStandings` (the consumer).
-  - `X-SW-19 after a withdrawal: the withdrawn entrant's opponents keep the points the table gives them`.
-  - `X-SW-19 a second Pair (after Unpair) sends the same scores`.
-  - `X-SW-19 stageTablePoints writes no lots draw` (count the lots rows before and after = equal), and its positive pair: `rankedStageStandings still stores one`.
-  - Live-division sequence: `a stage pinned before W3 (pre-W3 rule pin) groups by its PINNED rule's points`.
-- [ ] **Step 2: Run FAIL:** `VERIFY-WEB t7 src/server/usecases/__tests__/swiss-score-groups.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run PASS:** the Step 2 file plus `swiss-late-field.test.ts`, `swiss-playoff-pairing.test.ts`, `swiss-shell-fixtures.test.ts`, `swiss-walkover-saturday.test.ts`, `swiss-unplayed-rematch.test.ts` (app-A's), `swiss-no-legal-pairing.test.ts`, and the fake driver's test via VERIFY-ROOT. Run tsc.
-- [ ] **Step 5: Mutate:** restore `+1` for a win → the ice hockey test reds. Score from `rankedStageStandings` instead → the lots-row test reds.
-- [ ] **Step 6: Smoke** check 6: an ice hockey Swiss, after round 1 with one OT win, pairs round 2 with the OT winner outside the regulation winners' group (read the seats). E2E is in Task 10 (the KO cut reads the table the groups now share).
-- [ ] **Step 7: Commit** `fix(w3): Swiss score groups are the table's own points (SW-M11, X-SW-19)`.
+- [ ] **Step 1: Write the failing tests.**
+  - `maxRoundPoints` over every sport's DECLARED Swiss rule (`module.tablePointsRule(cfg, "swiss")` for each `declaredCfgs` cfg, via `forEachSport`), counted. Expected = rulebook §4 "win points" for that sport (the clean-sweep pair under a set-score map), typed per sport from the rulebook. Empty case first: a rule with no `bySetScore` and no bonus is `win.regulation`.
+  - `maxRoundPoints counts a win bonus the rule pays, as the table does`: a custom rule with a winner bonus gives win + bonus. `// differential: a bonus-free formula gives win only`.
+  - `the score and the maximum agree: a player who won every round has score = (rounds − 1) × maxRoundPoints after round rounds − 1` (badminton bySetScore and boardgame, counted). This pins the shared policy: it fails if either side drops or adds the bonus.
+  - DB, through a `vi.spyOn` on the engine module's `pairRound` export plus the seated result (both, so a spy alone cannot pass):
+    - `X-SW-10 6 entrants, 5 rounds: round 3 is paired with lookAhead and round 4 stays pairable`. Seed R1–R2 as the S6 6-cycle and press Pair. Assert the spy saw `lookAhead: true`, and that the seated round 3 leaves a perfect matching for round 4, checked by the test's own brute-force oracle (rulebook §3.1). `// differential: without lookAhead the fold seats the three diameters`.
+    - `X-SW-10 empty case: 6 entrants, 3 rounds (= safe max) → no lookAhead, no warning`.
+    - `X-SW-10 the last round never asks for a look-ahead`.
+    - `X-SW-10 a round whose every legal pairing kills the next returns swiss_next_round "unpairable" and still seats the round`. The construction is found by brute force over n = 6..8 seeded histories with a non-last target round. Commit it as a named fixture with its seed, the way the engine plan found S6.
+    - `X-SW-11 the final round of a chess Swiss sends finalRoundMaxScore = (rounds − 1) × the declared clean-sweep win; earlier rounds and badminton send none` (counted over boardgame and badminton).
+    - `X-SW-11 a player on a perfect score before the final round IS a topscorer: the spy's standings score equals finalRoundMaxScore` (boardgame). This is the inert-seam guard for the flag.
+    - `X-SW-11 two topscorers with the same absolute colour preference are paired in the final round instead of refused`. A boardgame history seeded so the topscorers' last two games were both White. `// differential: without the flag → SWISS_NO_LEGAL_PAIRING colour`.
+  - Component (M8; the e2e only proves the warning's absence): `X-SW-10 a Pair response with swiss_next_round "unpairable" renders the amber line naming round {next} and the finish-after round`; `… "unknown" renders the could-not-check line`; empty case first, `… no swiss_next_round renders no warning`. Feed the panel the response shape, and anchor on `="` for the testid.
+- [ ] **Step 2: Run FAIL**, implement, add 4 locales, `i18n:gen-keys`, then run PASS: `VERIFY-WEB t7 src/server/engine-db/__tests__/swiss-max-round-points.test.ts src/server/usecases/__tests__/swiss-look-ahead.test.ts src/server/usecases/__tests__/swiss-no-legal-pairing.test.ts src/server/usecases/__tests__/swiss-score-groups.test.ts src/components/v2/__tests__/stages-panel-swiss-pairing.test.tsx`. Run tsc.
+- [ ] **Step 3: Mutate** one at a time:
+  - `lookAhead` always false → the S6 test reds;
+  - `lookAhead` on the last round too → the last-round test reds;
+  - `finalRoundMaxScore` on every round → the "earlier rounds send none" test reds;
+  - drop the warning field → the unpairable test reds;
+  - delete the panel's render branch for `swiss_next_round` (the server still sends it) → the component render test reds;
+  - drop the bonus from `maxRoundPoints` → the win-bonus test and the score-equals-max test red.
+- [ ] **Step 4: Screenshots** of the amber line at 3 widths go to the Artifact.
+- [ ] **Step 5: Smoke** check 6: the `swiss_next_round` field on the brute-force fixture's Pair response. The e2e is in Task 10 (the 6 × 5 describe reads no warning on a pairable path).
+- [ ] **Step 6: Commit** `feat(w3): look-ahead above the safe maximum; final-round topscorer flag (RB3-4, RB3-10)`.
 
 ## Task 8: Fill art. 16's two inputs from real data — `unplayed` and `swissAbsentRounds` (inert-seam guard)
 
@@ -457,7 +469,7 @@ type TiebreakerKey = /* … */ | "opp_diff";
 - [ ] **Step 7: Smoke** check 7: a boardgame Swiss with a case-(c) latecomer after round 1. After round 3, the hub doc's Buchholz cell for L equals the rulebook value (the smoke derives it with the same hand formula in a comment). Update `EXPECTED_CHECKS`. The e2e is Task 10's (a), (b), (c) flow.
 - [ ] **Step 8: Commit** `feat(w3): fill art. 16's unplayed and absent rounds from real data (X-SW-7, X-SW-8)`.
 
-**Batch 3 = Tasks 7–8** (sequential: both touch `competition.ts`). Run the review, push, dispatch the e2e, and hand back.
+**Batch 3 = Tasks 7–8** (sequential: 7 reads Task 5's scores and rule; 8 touches `competition.ts` after Task 5). Run the review, push, dispatch the e2e, and hand back.
 
 ## Task 9: ST-G21 — the slideshow and the public table show the Swiss tie-break columns
 
@@ -525,7 +537,7 @@ type TiebreakerKey = /* … */ | "opp_diff";
 - `X-SW-12 chess: the same three late-entry cases on a boardgame Swiss`. A shorter field (5 + 3 latecomers, 3 rounds). It asserts colours alternate and the absences' Buchholz as above. This is also Task 2's e2e on the migrated schema.
 - `football Swiss: Opp GD column and Buchholz on the public table` (Task 3 and ST-G21).
 - `X-SW-3 / X-SW-26 …` (Task 4).
-- `X-SW-10 a 6 × 5 Swiss pairs round 3 with no next-round warning` (Task 5).
+- `X-SW-10 a 6 × 5 Swiss pairs round 3 with no next-round warning` (Task 7).
 
 - [ ] **Step 1: Write the oracle and its own unit test.** `apps/web/e2e/support/__tests__/swiss-oracle.test.ts` runs under vitest via VERIFY-WEB; confirm the e2e support dir is collected, else place it under `src/lib/__tests__/` importing the file. It checks the engine plan's hand-derived S1–S5 numbers (E 12/2, C 7/2, L 8, B 11, X 13.5). These come from the rulebook, so the oracle is checked against the rulebook, not the product.
 - [ ] **Step 2: Write the spec.** Budget: `test.setTimeout(Math.max(FLOOR, base + taps × perTap))` with the constants named (AGENTS.md class 20), never a flat literal.
@@ -600,12 +612,20 @@ type TiebreakerKey = /* … */ | "opp_diff";
 ## Task 13: Re-pin to the release, PR, CI, owner sign-off
 
 - [ ] **Step 1: Paired-flow gate (flow A, if the owner chose it).** The engine PR has merged, `release/2.0.0` has merged, and the publish is proven: registry `2.0.0`, tag `v2.0.0`, and the Release's epoch report names boardgame 4 → 5 only.
-- [ ] **Step 2: Re-pin.** `ENGINE_SPEC = "npm:@onryde/seazn-engine@^2.0.0"`, the 6 manifests, then `pnpm install`. If the release's engine tree differs from the snapshot's (another engine PR merged between them, `git -C ~/github/seazn.club.engine diff <snapshot sha> v2.0.0 -- src`), re-run every task's VERIFY-WEB list and Task 12 Steps 1–2. A difference that moves a cell re-baselines.
+- [ ] **Step 2: Re-pin (M1, M7).**
+  - First re-read the CURRENT spec on `origin/main` (rebase onto it): `grep -an '"@seazn/engine"' package.json apps/web/package.json packages/scheduler/package.json packages/reference/package.json tools/bench/package.json tools/matrix/package.json` and the 4 pin lines below. Do not assume `^1.0.0`: by now it is `^1.1.0` (Task 0's gate) or later. Record what you found in the commit body.
+  - Remove the `"@seazn/engine"` entry from `pnpm-workspace.yaml`'s `overrides:`. No snapshot spec may remain anywhere: `grep -arn "0.0.0-pr" --include='*.json' --include='*.yaml' --include='*.ts' . | grep -v node_modules` returns nothing.
+  - Set the 6 manifests to `"npm:@onryde/seazn-engine@^2.0.0"`: `package.json:73`, `apps/web/package.json:25`, `packages/scheduler/package.json:20`, `packages/reference/package.json:14`, `tools/bench/package.json:8`, `tools/matrix/package.json:7`.
+  - Set ALL 4 verbatim pins to that literal string, as literals (no shared constant): `scripts/__tests__/registry-install.test.ts:22`, `scripts/__tests__/engine-package-identity.test.ts:13`, `tools/matrix/__tests__/workspace-wiring.test.ts:138`, `apps/web/src/__tests__/toolchain.test.ts:357`. Grep for any fifth: `grep -arn "seazn-engine@^1" scripts apps/web/src tools packages --include='*.ts'`, and move every hit.
+  - `pnpm install; echo EXIT=$?`, then confirm `node -p 'require("./apps/web/node_modules/@seazn/engine/package.json").version'` prints `2.0.0`.
+  - `VERIFY-ROOT t13-pins scripts/__tests__/registry-install.test.ts scripts/__tests__/engine-package-identity.test.ts tools/matrix/__tests__/workspace-wiring.test.ts` and `VERIFY-WEB t13-tc src/__tests__/toolchain.test.ts`. Mutate once: set one manifest back to its old spec → registry-install reds.
+  - If the release's engine tree differs from the snapshot's (another engine PR merged between them, `git -C ~/github/seazn.club.engine diff <snapshot sha> v2.0.0 -- src`), re-run every task's VERIFY-WEB list and Task 12 Steps 1–2. A difference that moves a cell re-baselines.
 - [ ] **Step 3: Gates:**
   - `pnpm turbo run typecheck`, `tsc -p tsconfig.tools-tests.json`, lint (count not risen);
   - `i18n:check`;
   - `openapi:gen` with a clean diff;
   - `pnpm matrix:single-sport --check --against origin/main`;
+  - **The rules checker on the released rows (M9).** The close-out rows (X-SW-12..30, and the app-appended proof paths of X-SW-3/7/8/10/11) land in the ENGINE PR before the 2.0.0 cut, so 2.0.0's published rules cite this PR's test files. Run `VERIFY-ROOT t13-rules scripts/__tests__/rules-reference.test.ts`: it reads `node_modules/@seazn/engine` rows through the testkit and checks every non-engine proof path and its id token. It must be green on 2.0.0 here, not on someone's later bump. Any red row naming an app-B path is a defect in this PR (a missing file or a title without its id). A red row naming an app-A path goes to the orchestrator. Also run it at each batch end against the snapshot, if the snapshot already carries the rows: a red there is expected only for a task not yet done, and must be named.
   - the smoke guard tests (`scripts/__tests__/smoke-{paths,select,manifest}.test.ts`), then `SMOKE_ONLY=w3SwissB npm run test:smoke`: 9/9 = `EXPECTED_CHECKS`.
 - [ ] **Step 4: PR body:**
   - the Matrix rows line (Global Constraints, R27);
@@ -619,6 +639,12 @@ type TiebreakerKey = /* … */ | "opp_diff";
   - the Claude Code line.
 - [ ] **Step 5: Dispatch** `gh workflow run e2e.yml --ref feat/w3-swiss-app-b -f pr=<N>` and hand back. Judge these as whole files: `w3-swiss-app-b.spec.ts`, `w3-swiss-app-a.spec.ts`, `formats.spec.ts`, `swiss-shell.spec.ts`, `swiss-legend.spec.ts`, `slideshow-pts-ratio.spec.ts`, `standings-*.spec.ts`, `walkthrough/swiss-round-one-pairing.spec.ts` and `mobile.spec.ts`. A serial file's red count is a floor.
 - [ ] **Step 6:** A final Opus `reviewer` pass over the whole branch answers the four questions per change. Then the per-screen visual sign-off on the Artifact. Merge only on the owner's explicit go.
+- [ ] **Step 6b: Post-deploy stg check (M6), after the owner deploys this PR to stg (Task 2's delta runs pre-deploy).** Drive it through the product on stg, by hand or browser, and record what you SAW on the Artifact (class 5: a read is not a run):
+  - Create a boardgame (chess) Swiss with an odd field (5 players, 3 rounds). Pair round 1, so a bye is awarded.
+  - The standings show the bye holder on the declared win points (X-SW-5, rulebook §4), with no forfeit row and no bonus. Score round 1 and check that the table equals the rulebook's hand values.
+  - The stored config has no `byeScore`. Standing stg read, URL via env only: count `byeScore` in the five places (Task 0 count 2's SQL) = 0, and the new division's `divisions.config` and `stages.config` carry none.
+  - No 426: the web pad scores a boardgame board on stg without `ENGINE_OUTDATED`, and `POST …/score` with no `engine_epoch` returns 2xx. Separately, a request carrying `engine_epoch: foldEpochOf("boardgame") − 1` returns 426, proving the gate is live and not bypassed.
+  - Any miss: STOP before merge and report it.
 - [ ] **Step 7:** Append "W3 App B" status, findings and premises to `_INDEX.md` (status sections, not rulings). Hand the rule-id table to the engine close-out (engine plan Task 12 Step 2).
 
 ---
@@ -628,9 +654,9 @@ type TiebreakerKey = /* … */ | "opp_diff";
 | Batch | Tasks | Why together | Parallel? |
 |---|---|---|---|
 | 0 | T0 | Owner decision, snapshot and live data first | — |
-| 1 | T1, then T2 ‖ T3 | Compiles against 2.0; epoch steps; labels | T2 and T3 disjoint after T1 |
-| 2 | T4–T6 | SW-H1 server, desk and harness | Sequential (`swissGen`, `stages-panel.tsx`, wire shape) |
-| 3 | T7–T8 | Both read through `loadStageInputs` | Sequential (`competition.ts`) |
+| 1 | T1, then T2 ‖ T3 | Compiles against the snapshot (override only); epoch steps; labels | T2 and T3 disjoint after T1 |
+| 2 | T4–T6 | SW-H1 desk; score groups from table points; harness | Sequential (`swissGen`, wire shape, fake driver) |
+| 3 | T7–T8 | Look-ahead and topscorer (needs T5's scores and rule); art. 16 inputs | Sequential (`swissGen`, `competition.ts`) |
 | 4 | T9–T10 | Display, then the browser flow that reads it | Sequential |
 | 5 | T11, T12, T13 | Spec re-derivation, retirement on the final tree, re-pin | Sequential |
 
@@ -638,16 +664,17 @@ Each batch ends with an Opus `reviewer` pass, a push, an e2e dispatch and a hand
 
 ## Decisions to confirm with the owner (recommendations, not rulings)
 
-1. **Merge order (Task 0 Step 2).** Recommend flow A, paired PRs pinned to the snapshot. The engine PR merges over a documented `downstream` red that no app branch can green, because the job builds app main.
-2. **Pairing score = the table's points, exactly (Task 7).** Legacy implicit byes (no bye row, `swiss_first_round` null) then score 0 in the groups, as the table already scores them, instead of app-A's kept +1. Recommend yes, per RB3-9 "one number". Only the next Pair changes; past pairings stand (§7).
+1. **Merge order (Task 0 Step 2), PENDING OWNER.** Recommend flow A, paired PRs: this PR installs the snapshot through a `pnpm-workspace.yaml` override. `downstream` is not a required check, so the engine PR merges over its red once this PR is green on the snapshot, with this PR linked in the engine PR body. The red cannot be fixed from any app branch, because the job builds app main.
+1b. **Release order (Task 0 Step 1).** Engine 1.1.0 (#6) ships, and the app moves onto it, before 2.0.0. If not, the owner decides whether app-B waits.
+2. **Pairing score = the table's points, exactly (Task 5).** Legacy implicit byes (no bye row, `swiss_first_round` null) then score 0 in the groups, as the table already scores them, instead of app-A's kept +1. Recommend yes, per RB3-9 "one number". Only the next Pair changes; past pairings stand (§7).
 3. **Every seated round with no seat is an absence (Task 8)**, a legacy implicit bye included, which becomes a zero-point VUR in Buchholz. Recommend yes: it is what the table already pays, and FIDE 16.2.5 is its category.
 4. **Re-derived specs (Task 11)** under the skill's "never edit a spec to pass a bump". Recommend accepting the listed, ruling-cited edits: this is a behaviour release, not a plain bump.
 5. **Slideshow layout option A** (two tie-break columns), Task 9.
 
 ## Premises found false or stale (to `_INDEX.md` "False premises found")
 
-1. The skill's bump diff "only those lines plus `pnpm-lock.yaml`" (`SKILL.md:39`) does not hold. `scripts/__tests__/registry-install.test.ts:22` and `engine-package-identity.test.ts:13` pin the literal `^1.0.0`.
-2. The skill (`SKILL.md:64`, never pin a snapshot) and engine `AGENTS.md:27-29` (the paired app PR pins the exact snapshot) disagree. `SKILL.md:8` makes AGENTS.md win.
+1. The skill's bump diff "only those lines plus `pnpm-lock.yaml`" (`SKILL.md:39`) does not hold. Four tests pin the manifest spec verbatim: `scripts/__tests__/registry-install.test.ts:22`, `scripts/__tests__/engine-package-identity.test.ts:13`, `tools/matrix/__tests__/workspace-wiring.test.ts:138`, `apps/web/src/__tests__/toolchain.test.ts:357`. A release bump moves them literally.
+2. The skill (`SKILL.md:64`, never pin a snapshot) and engine `AGENTS.md:27-29` ("the app PR pins that exact version") read as if they disagree. The mechanism that reconciles them: a snapshot is installed ONLY through a `pnpm-workspace.yaml` `overrides:` entry keyed on the alias, so no manifest ever pins one. The AGENTS.md wording is what led the first draft of this plan to edit manifests.
 3. A green paired app PR cannot green the engine's `downstream` job: it builds seazn.club **main** with the snapshot injected (`ci.yml:332-333,388-402`).
 4. No document names "the epoch-migration steps" (`SKILL.md:40`, engine AGENTS.md). Derived here: V481's stored-config cleanup shape plus the 426 gate. Nothing in storage is keyed by epoch.
 5. The harness records a REFUSED Swiss generate as `seated: 0` (`scenarios/common.ts:797-805`), and I4 calls it "paired nobody (SW-H1)" (`invariants.ts:300`). The SW-H1 fix alone would not clear ruling 70's cells.
@@ -657,7 +684,7 @@ Each batch ends with an Opus `reviewer` pass, a push, an e2e dispatch and a hand
 9. The public table already shows Buchholz whenever the cascade holds it (`tableColumns`). ST-G21's public half is delivered by the engine's chain change; only the slideshow drops metric columns.
 10. The brief's "score groups via `swissDrawPoints`": a per-fixture formula would be a second authority beside the table. `swissDrawPoints` is used only in the matrix twin and in test derivations.
 11. After W3's guards (app-A's round caps, the engine's bye retry, complete search and look-ahead), no UI path reaches `SWISS_NO_LEGAL_PAIRING` deterministically. Its e2e seeds the history by SQL and keeps the real server and engine as the producer.
-12. The matrix fake driver hard-codes swissGen's 1 / 0.5 scores (`model-fake-driver.ts:646-649`); it moves with Task 7.
+12. The matrix fake driver hard-codes swissGen's 1 / 0.5 scores (`model-fake-driver.ts:646-649`); it moves with Task 5.
 13. The skill's "never edit a spec to make a bump pass" (`SKILL.md:46`) assumes a behaviour-free bump. This one changes behaviour by ruling (Task 11).
 
 ## Findings (not built here)
@@ -670,12 +697,17 @@ Each batch ends with an Opus `reviewer` pass, a push, an e2e dispatch and a hand
 |---|---|---|---|
 | X-SW-3 | No legal pairing → named refusal (app surfacing) | `server/usecases/__tests__/swiss-no-legal-pairing.test.ts`, `lib/__tests__/swiss-no-pairing.test.ts`, `components/v2/__tests__/stages-panel-swiss-pairing.test.tsx` :: `X-SW-3` | 1, 4 |
 | X-SW-26 | "Finish the Swiss now" (offered by the refusal) | `swiss-no-legal-pairing.test.ts` :: `X-SW-26` (plus app-A's `swiss-finish-now.test.ts`) | 4 |
-| X-SW-10 | Look-ahead above the safe maximum (app warning) | `server/usecases/__tests__/swiss-look-ahead.test.ts` :: `X-SW-10` | 5 |
-| X-SW-11 | Topscorer exception (app input) | `swiss-look-ahead.test.ts` :: `X-SW-11` | 5 |
-| X-SW-19 | Pairing score groups use the stage's table points | `server/usecases/__tests__/swiss-score-groups.test.ts` :: `X-SW-19` | 7 |
+| X-SW-10 | Look-ahead above the safe maximum (app warning) | `server/usecases/__tests__/swiss-look-ahead.test.ts`, `components/v2/__tests__/stages-panel-swiss-pairing.test.tsx` :: `X-SW-10` | 7 |
+| X-SW-11 | Topscorer exception (app input) | `swiss-look-ahead.test.ts` :: `X-SW-11` | 7 |
+| X-SW-19 | Pairing score groups use the stage's table points | `server/usecases/__tests__/swiss-score-groups.test.ts` :: `X-SW-19` | 5 |
 | X-SW-7 | art. 16 unplayed rounds (app producer: `unplayed`, withdrawal adjust) | `server/engine-db/__tests__/swiss-art16-producer.test.ts` :: `X-SW-7` | 8 |
 | X-SW-8 | Late entrant's missed rounds (app producer: `swissAbsentRounds`) | `swiss-art16-producer.test.ts`, `server/engine-db/__tests__/swiss-absent-rounds.test.ts` :: `X-SW-8` | 8 |
 | X-SW-6 | `byeScore` removed (stored-config cleanup) | `server/__tests__/w3-migration.test.ts`, `server/usecases/__tests__/division-locks.test.ts` :: `X-SW-6` | 1, 2 |
-| X-SW-12 | Late entry cases (a)/(b)/(c) (browser proof) | `e2e/w3-swiss-app-b.spec.ts` :: `X-SW-12` (e2e titles are listed for the record; the engine checker cites unit proofs) | 10 |
+| (X-SW-12) | Late entry cases (a)/(b)/(c) | NOT cited from this PR. Its proof paths are app-A's unit tests. `e2e/w3-swiss-app-b.spec.ts` carries the token only as extra browser evidence | 10 |
 
 X-SW-5 (bye = win points) and X-SW-9 / BD-TB-2 (chains) are engine rows whose app evidence is re-derived in Task 1 and driven in Task 10. They need no app proof path. Never put `-KO-` in an id.
+
+**M9: the ids whose released rows cite THIS PR's tests.** Every one of these must have its cited file in this PR, with a test title carrying the id as a whole token, before Task 13's `rules-reference.test.ts` run: **X-SW-3, X-SW-6, X-SW-7, X-SW-8, X-SW-10, X-SW-11, X-SW-19, X-SW-26**.
+- The cited paths are the ones in the table above. They are a contract with the engine close-out, which lands them in 2.0.0's rows before this PR merges.
+- An executor never renames or moves a cited file and never drops an id from a title. If one has to move, the orchestrator amends the engine row first.
+- Hand this list and the table to the engine close-out (engine plan Task 12) as soon as Batch 1 opens the draft PR, not at Task 13.

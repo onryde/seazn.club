@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `@onryde/seazn-engine`'s Swiss pairing, bye scoring and Swiss tie-breaks match the signed W3 rulebook (rulings 250–252): a named refusal instead of an empty pairing, legal and complete pairing, FIDE C.07 2026 art. 16 for every unplayed round, a bye that pays win points, no `byeScore`, and a Swiss default chain for all 11 sports. Every rule lands as a row in `rules/` in the same PR. The last task, the rules close-out, is a second engine PR gated on the app PRs.
+**Goal:** Make `@onryde/seazn-engine`'s Swiss pairing, bye scoring and Swiss tie-breaks match the signed W3 rulebook (rulings 250–252): a named refusal instead of an empty pairing, legal and complete pairing, FIDE C.07 2026 art. 16 for every unplayed round, a bye that pays win points, no `byeScore`, and a Swiss default chain for all 11 sports. Every rule lands as a row in `rules/` in the same PR. The §12 close-out rows (Task 12) ship in this same PR, and therefore in 2.0.0 (review M9). This PR waits for app-A to merge, and its release waits for engine 1.1.0 (see "Execution order and release gates").
 
 **Architecture:** Three seams. (1) `scheduling/swiss.ts`: `pairRound` returns a discriminated union `SwissRound | SwissRefusal`. Bye selection retries. A score-group pass with a whole-group floater window runs first, with a complete whole-field search as the existence fallback. Non-chess home/away alternates softly. (2) `competition/points.ts` `payout`: a bye stops being a "forfeit row" outcome. (3) `competition/tiebreakers.ts` + `stage.ts`: the Swiss ledger is built per round from the stage's fixtures plus two new app-supplied facts (`TableFixture.unplayed`, `TableStage.swissAbsentRounds`). Every unplayed card carries its FIDE 16.2 category and its 16.4 dummy cap, and opponents read an adjusted score. Defaults and the new `opp_diff` key ride on that ledger.
 
-**Tech Stack:** TypeScript (typescript-native / TS7), vitest 4, fast-check 3, zod 4, pnpm 10, changesets. Engine repo `onryde/seazn.club.engine`, base `main` c612f51.
+**Tech Stack:** TypeScript (typescript-native / TS7), vitest 4, fast-check 3, zod 4, pnpm 10, changesets. Engine repo `onryde/seazn.club.engine`, base `main` (pins written at c612f51, re-checked at 60ffcf2 and 51be1bd; see "Line pins").
 
 **Spec:** `docs/superpowers/specs/2026-10-31-format-matrix-w3-swiss-design.md` (seazn.club, w3-spec tree, commit 9d190f7ce0). Scope: §5, §6.1, the engine side of §4 (missed rounds), and §12's "Engine PR" lines; the close-out task covers §12's "Close-out" lines. Read with `rulebook-W3-swiss.md` (§2, §4, §5, §10) and `_INDEX.md` rulings 250–252 (same directory as the rulebook, `docs/superpowers/specs/2026-09-27-format-matrix-prompts/`). Evidence with file:line: `/Users/ashokhein/github/seazn.club/.superpowers/handoff/2026-10-31-w3/gaps.md`, `recs.md`.
 
@@ -26,10 +26,15 @@
 - **Mutate every new guard once.** Do it by hand, one guard at a time: delete it, or revert it to today's line. Confirm a named test reds, then restore. Record each as `mutation: <guard> → <test name> red` in the task's commit body. Two guards that cover for each other are mutated separately.
 - **Sequence tests, every task:** a **second call**, an **empty input**, **after a withdrawal or void**, and **another sport** (use `forEachSport` from `src/testkit/for-each-sport.ts`). A single-sport test carries a one-line `// single-sport: <reason>`, or `pnpm single-sport --check --against origin/main` reds.
 - **Rule rows** (`rules/README.md` grammar). Header `| id | rule | citation | status | enforced at | proved by |`. Every path is written `packages/engine/...` (`ENGINE_ROW_PREFIX`, `test/rules-reference.ts:55`), even in this repo. Status is `signed <ruling> 2026-10-31` or `deviation <ruling> 2026-10-31`. The id is a whole token in an `it(`/`describe(` title of every listed proof file. A row lands in the SAME commit as the code that makes it true, never ahead of it. Cross-sport Swiss ids are `X-SW-<n>`. **Never put `-KO-` in an id.** Re-check that an id is unused (`grep -a "<id> " rules/*.md`) before writing it. Verify with the engine checker: `npx vitest run ... test/rules-reference.test.ts`.
-- **Allocated ids (Engine PR):** X-SW-1 … X-SW-11 in `rules/cross-sport.md`. Sport chain rows: BD-TB-2, TT-TB-2, VB-TB-3, TN-TB-3, FB-TB-5, HK-TB-3, IH-TB-3, CK-TB-2, CA-TB-2, GN-TB-2, BG-TB-4 (verified unused at c612f51).
+- **Allocated ids (Engine PR):** X-SW-1 … X-SW-11 in `rules/cross-sport.md`. Sport chain rows: BD-TB-2, TT-TB-2, VB-TB-3, TN-TB-3, FB-TB-5, HK-TB-3, IH-TB-3, CK-TB-2, CA-TB-2, GN-TB-2, BG-TB-4 (verified unused at c612f51; `rules/` is unchanged through 51be1bd).
+- **Line pins (review m6).** Every `file:line` pin in this plan was taken at c612f51. Engine main moved to 60ffcf2, then 51be1bd (fetched 2026-10-31). Neither move touches `rules/` or any `src/` file the plan cites: `git diff --stat c612f51 51be1bd -- src rules` lists only `src/sports/cricket/cricket.domain.test.ts` (+149, a test this plan never cites). `test/rules-reference.ts:55` is unchanged. So every pin holds. The rest of the diff is CI, Stryker and `test/` files the plan does not edit. Re-check once at worktree creation with `git diff --stat c612f51 HEAD -- src rules test/rules-reference.ts`. A cited file in that list must be re-pinned before its task starts.
+- **Execution order and release gates.** Run T1 … T10, then T12 (the close-out rows, now in this PR), then T11 (open the PR). T11 Step 0 holds three gates:
+  - (a) app-A (spec §6.2) has merged to seazn.club main;
+  - (b) engine 1.1.0 (r2-sponsor, engine PR #6 `feat/natural-breaks`) is released before this PR merges, so the release PR cuts 1.1.0 and then 2.0.0, never one 2.0.0 that swallows #6;
+  - (c) the branch is rebased onto the main that carries the 1.1.0 version commit.
 - **Ruling numbers:** 250 (late entry), 251 (byes and missed rounds, `byeScore`), 252 (rulebook signed per rec: RB3-1, -4, -6, -8, -11). Do not invent a ruling. A rule with no ruling is a finding for the orchestrator, not a row.
 - **Live divisions:** stage pins (`X-TB-2`, `pinStageTableRules`) keep the nine live badminton Swiss divisions on their pinned chain and rule. Rounds already paired keep their pairings. Nothing in this PR re-pairs a past round.
-- **Changeset: `major`.** The `pairRound` return type and `SwissGame`/`buildSwissTable` change the API, and boardgame's FOLD_EPOCH rises (Task 6). One changeset file per PR: `.changeset/w3-swiss-engine.md`.
+- **Changeset: `major`.** The `pairRound` return type and `SwissGame`/`buildSwissTable` change the API, and boardgame's FOLD_EPOCH rises (Task 6). One changeset file per PR: `.changeset/w3-swiss-engine.md`. The close-out rows (T12) ride in it. They get no `--empty` changeset of their own.
 - **Commits:** one or more per task, conventional (`feat(swiss): …`, `test(swiss): …`). End every message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Never `git stash`. Commit or push only when the task step says so.
 
 ## Interfaces the app plan consumes (exact; the app plan is written against these)
@@ -277,14 +282,16 @@ describe("X-SW-2 score groups first, bounded floats, a whole-field search only w
 
 ---
 
-### Task 3: Every pairing property counts; a fully-paired invariant; existence and bye-minimality oracle (SW-L9; RB3-1, RB3-24; X-SW-1)
+### Task 3: Every pairing property counts; a fully-paired invariant; an independent existence and bye-minimality oracle (SW-L9; RB3-1; the n ≤ 12 brute-force half of RB3-24; X-SW-1)
 
 **Files:**
 - Modify: `src/scheduling/swiss.test.ts` (rewrite `simulate`, `:150-242` properties; keep the 9×5 golden at `:83-109`)
+- Create: `src/testkit/swiss-oracle.ts` (the brute-force oracle, in the testkit convention so coverage counts it; NOT added to `src/testkit/index.ts`; it imports nothing from `src/scheduling` or `src/competition`)
 - Modify: `rules/cross-sport.md` (append X-SW-1)
 
 **Interfaces:**
-- Consumes: Tasks 1–2. The test's own oracle is written in the test file from rulebook §2.3. It never calls engine internals.
+- Consumes: Tasks 1–2, through `pairRound` only. The oracle is written from rulebook §2.3 and FIDE C.04.3 [C1]–[C3] (`|W−B| ≤ 2`, never three of one colour in a row). **It must not import, call or copy `canTake`, `colourLegal`, `hardLegal`, `assignColours`, `preferredColour` or any other `swiss.ts` export (review M5).** An oracle that reuses the code it checks agrees with that code's bugs. Its matching is a plain recursive search (pick the lowest unmatched entrant, try each compatible partner). Do not port `swiss.ts`'s search.
+- **Bound split (RB3-24, review M5):** this task covers the n ≤ 12 brute-force half, written by the engine implementer. The n ≤ 128 blossom existence check belongs to the app-A plan's `packages/reference` Swiss checker task, written by a different author against the same rulebook. This plan does not build it. That task's rows and tests cite RB3-24; X-SW-1's citation here names only the n ≤ 12 half.
 
 - [ ] **Step 1: Write the tests.**
   - `simulate()` returns `{ rounds, refusals, colours, played, byes }` and stops at the first refusal.
@@ -311,21 +318,23 @@ it("X-SW-1 every paired round seats each active entrant exactly once: ⌊n/2⌋ 
 ```
   - `"X-SW-1 (P-A6) pairs whenever a legal pairing exists and refuses only when none does — odd and even, several score groups, chess on and off (brute force n ≤ 12, counted)"`:
     - Random n ∈ 2..12, random scores in {0,1,2}, a random `played` set, random `byes`. For chess, random colour sequences.
-    - Oracle: edges are pairs not in `played` and, for chess, colour-compatible (one of the two assignments passes `|W−B| ≤ 2` and no three in a row).
+    - Oracle (`src/testkit/swiss-oracle.ts`, independent of `swiss.ts`, see Interfaces): edges are pairs not in `played` and, for chess, colour-compatible. Compatible means one of the two assignments keeps both players at `|W−B| ≤ 2` with no three in a row. The oracle computes this from the raw colour sequence, with its own arithmetic.
     - For odd n, existence holds iff some eligible entrant's removal leaves a perfect matching.
     - Assert `r.ok === exists`. On `ok`, assert legality. On refusal, assert the reason is `no_bye_candidate` iff no eligible entrant, else `rematch` or `colour`.
     - Count `pairedCases > 0` and `refusedCases > 0`. Both outcomes must be exercised; tune the `played` density until each count is above 0.
   - `"X-SW-1 bye minimality: no eligible entrant with a strictly lower score leaves a pairable remainder (rulebook §2.3 item 4, n ≤ 12, counted)"` uses the same oracle and counts `byeCases > 0`.
   - Keep the chess colour-bounds property, counting checked sequences (`> 0`). Keep determinism (a second call is equal) and count its cases too.
   - Add `"X-SW-1 another sport's shape: rank_adjacent pairing keeps the same invariant (counted)"`, driving `{ pairing: "rank_adjacent" }` through the invariant for n 2–20.
+  - Add `"X-SW-1 the oracle is independent: src/testkit/swiss-oracle.ts imports nothing from scheduling or competition"`. Read the oracle's source. Assert it defines its exported oracle function (so the read is not of an empty file). Then assert no `import` line names `scheduling`, `competition` or `swiss`. Mutate once: add `import { pairRound } from "../scheduling/swiss.ts"` → this test reds.
 - [ ] **Step 2: Run.** `src/scheduling/swiss.test.ts`. If a property reds, fast-check prints a shrunk counterexample. Commit it as a named regression case with its seed in `swiss-w3.test.ts` BEFORE fixing anything (R29). A red here is a Task 2 defect: report it, do not weaken the property.
 - [ ] **Step 3: Mutate** against the properties:
   - (a) Return `{ ok: true, pairings: [] }` instead of the refusal → the existence property reds.
   - (b) Comment out the `byes` filter → the P-A4 assertion reds.
   - (c) Make `hardLegal` ignore `played` → P-A1 reds.
+  - (d) Independence (M5): loosen the engine's `colourLegal` to `|W−B| ≤ 3` → the existence property reds, because the oracle's own bound did not move. If it stays green, the oracle is not independent: stop and report.
 - [ ] **Step 4: Write row X-SW-1:**
   - rule: "In a Swiss stage two entrants meet at most once, an entrant takes the pairing-allocated bye at most once and never after winning by walkover, and every round seats each active entrant exactly once: ⌊n/2⌋ boards and a bye exactly when the field is odd."
-  - citation: "FIDE C.04.1 r.2–4; C.04.3 [C1], [C2]; rulebook RB3-1, P-A1/P-A3/P-A4"
+  - citation: "FIDE C.04.1 r.2–4; C.04.3 [C1], [C2]; rulebook RB3-1, P-A1/P-A3/P-A4; RB3-24 (n ≤ 12 brute-force half; n ≤ 128 is the reference's)"
   - status: `signed 252 2026-10-31`
   - enforced at: `packages/engine/src/scheduling/swiss.ts`
   - proved by: `packages/engine/src/scheduling/swiss.test.ts`<br>`packages/engine/src/scheduling/swiss-w3.test.ts` (add an `X-SW-1` title to the withdrawal case in Task 2's file)
@@ -534,11 +543,11 @@ it("X-SW-5 second call: paying the same bye twice gives the same delta", …);
   - (a) Restore `|| bye` → the forfeit-row test reds.
   - (b) Remove the bye bonus exit → the bonus test reds.
 - [ ] **Step 6: Write row X-SW-5:**
-  - rule: "A pairing-allocated bye pays the stage's win points, in every sport: under a points rule keyed by set score, the clean-sweep score's points; never the rule's forfeit row and never a bonus; and it records no set, game, point, goal or run for or against."
-  - citation: "FIDE C.04.1 r.3; ruling 251 (amends the bye half of X-PT-1's payout; X-WO-1's 'a bye keeps the clean-sweep pair')"
+  - rule: "A pairing-allocated bye pays the stage's win points, in every sport: under a points rule keyed by set score, the clean-sweep score's points; never the rule's forfeit row and never a bonus; and it records no set, game, point, goal or run for or against. Its value is frozen at award: the bye seat records the stage's rules when the bye is awarded, and a later rule edit does not move a bye already awarded (SW-M7)."
+  - citation: "FIDE C.04.1 r.3; ruling 251 (amends the bye half of X-PT-1's payout; X-WO-1's 'a bye keeps the clean-sweep pair'); rulebook RB3-7(a), RB3-23 (frozen at award)"
   - status: `signed 251 2026-10-31`
-  - enforced at: `packages/engine/src/competition/points.ts`
-  - proved by: `packages/engine/src/competition/points-w3-bye.test.ts`
+  - enforced at: `packages/engine/src/competition/points.ts` (T12 Step 2 appends app-A Task 3's bye-seat write in `apps/web/src/server/usecases/stages.ts`)
+  - proved by: `packages/engine/src/competition/points-w3-bye.test.ts` (T12 Step 2 appends app-A Task 3's test file. Its title `X-SW-5 a seated bye carries config_snapshot equal to the stage cfg at award` proves the freeze; the engine's `payout` is pure and cannot)
 - [ ] **Step 7: Commit** `fix(points): a bye pays win points, never the forfeit row or a bonus (SW-M6, X-SW-5)`.
 
 ---
@@ -846,11 +855,15 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
 
 ---
 
-### Task 11: Open the engine PR (changeset, gates, live-division check, body)
+### Task 11: Open the engine PR (release-order gates, changeset, branch gates, live-division result, body). Runs AFTER Task 12
 
 **Files:**
 - Create: `.changeset/w3-swiss-engine.md` (`"@onryde/seazn-engine": major`; body: one line per change, the boardgame FOLD_EPOCH 4→5, and "pairRound returns SwissPairResult; buildSwissTable → buildSwissLedger").
 
+- [ ] **Step 0: Release-order gates.** All three must hold before the push. If one does not, stop and hand back; do not work around it.
+  - (a) **App-A has merged** (review M9). `gh pr list --repo onryde/seazn.club --state merged --search "w3 swiss app-a"` (or the PR number the orchestrator gives) shows it merged. T12 has re-pinned its app-A paths from that merged tree. This PR does not open before then.
+  - (b) **Engine 1.1.0 is cut first** (review M7; r2-sponsor, engine PR #6 `feat/natural-breaks`, OPEN on 2026-10-31). Check with `git -C "$WT" fetch --tags && git -C "$WT" tag -l v1.1.0`: it must print `v1.1.0`, and `git show origin/main:package.json` must read `"version": "1.1.0"`. Until then this PR may be reviewed but must not merge. Merging it first would fold #6's minor and the patch changesets on main into one 2.0.0, and r2-sponsor's app bump to `^1.1.0` would then have nothing to resolve. Tell the orchestrator. App-B T0 owns the matching app-side gate and re-reads the app's `^1.x` pins at its T13.
+  - (c) **Rebase onto that main** (`git rebase origin/main`, never `git stash`). Re-run Step 1 after the rebase. The changeset then computes 1.1.0 → 2.0.0.
 - [ ] **Step 1: Branch gates, run once, scoped:**
   - `pnpm boundary`
   - `pnpm single-sport --check --against origin/main`
@@ -861,13 +874,12 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
   - `pnpm exec eslint --max-warnings 0 $(git diff --name-only origin/main -- '*.ts')`
   - Every test file touched in Tasks 1–10 (4b and 4c included), in ONE JSON-reported run, plus `test/rules-reference.test.ts`.
 
-  Paste the raw counts into the PR body. A stryker sizing drift is the known red (`AGENTS.md` "Known red"). Record it, and name the follow-up re-measure PR (the #1054 / engine #5 pattern). Do not run Stryker.
-- [ ] **Step 2: Live-division check** (design §7; the orchestrator runs it).
-  - Run ONE read-only query against stg (standing OK; `REMOTE_DATABASE_URL` from the app's `.env.local`, schema `seazn_club`) and ONE against prod (approved 2026-10-31).
-  - The question: for Swiss stages with a bye fixture, does the effective points rule (the stage pin in the table-rules pin column read by `apps/web/src/server/engine-db/table-rules.ts`, else the division rule) carry a `forfeit` row whose `winnerPoints` differs from `win.regulation`, or a `forfeit_win` bonus?
-  - Never put a URL or secret in argv or in output.
-  - If the count is 0: write "Live divisions: 0 byes paid a forfeit row or bonus (stg N stages, prod M) — no data change" in the body.
-  - If it is above 0: STOP and report. The owner's rule is a LOUD note plus a pre-deploy app migration (app plan), never a shim.
+  Paste the raw counts into the PR body. On main at 51be1bd, `AGENTS.md` "Known red" reads "None currently". Stryker sizing drift is now a WARNING on PR CI (owner ruling 2026-10-31; it fails only the weekly and `group=all` mutation runs). Record any drift warning the job prints, with the legs it names, and name the follow-up re-measure PR (the #1054 / engine #5 pattern). Do not run Stryker. Any red is a stop.
+- [ ] **Step 2: Live-division result. CITED, not re-run** (design §7; review m4). App-A Task 0 owns the bye-points live check: one read-only stg query and one prod query, run by the controller. This task does not query any database.
+  - The question app-A T0 answered: for Swiss stages with a bye fixture, does the effective points rule (the stage pin, else the division rule) carry a `forfeit` row whose `winnerPoints` differs from `win.regulation`, or a `forfeit_win` bonus?
+  - Copy app-A T0's recorded result into the body, with its date and stg/prod counts. Where the count is 0, the line reads "Live divisions: 0 byes paid a forfeit row or bonus (stg N stages, prod M; app-A T0, <date>) — no data change".
+  - If app-A T0 recorded above 0, the body names the app migration that handles it (the owner's rule: a LOUD note plus a pre-deploy app migration, never a shim). If no such migration exists, STOP and report.
+  - If app-A T0's result is missing, stop and ask the orchestrator for it. Do not run the query here.
 - [ ] **Step 3: Downstream expectation.** The `downstream` job (app@main on this PR's snapshot) is expected to RED on app tsc. The expected errors are:
   - `pairRound` callers (`stages.ts` ~1442; others the job lists) narrowing on `ok`;
   - `byeScore` readers;
@@ -879,24 +891,30 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
   - the rows added;
   - the epoch table;
   - the raw gate counts;
-  - Step 2's line;
+  - Step 0's three gate results (app-A PR number and merge sha; the `v1.1.0` tag; the rebase base sha);
+  - Step 2's cited line;
   - Step 3's list;
   - a link to the paired app PR once open;
-  - exactly this line: `Matrix rows: swiss, swiss_playoff, swiss_knockout × football, cricket, boardgame, carrom, generic, volleyball, badminton, tabletennis, tennis, icehockey, hockey (33 cells) — pairing refusal and legality, art. 16 tie-breaks, bye = win points, Swiss default chains; rule rows X-SW-1..11, BD-TB-2, TT-TB-2, VB-TB-3, TN-TB-3, FB-TB-5, HK-TB-3, IH-TB-3, CK-TB-2, CA-TB-2, GN-TB-2, BG-TB-4`
+  - exactly this line: `Matrix rows: swiss, swiss_playoff, swiss_knockout × football, cricket, boardgame, carrom, generic, volleyball, badminton, tabletennis, tennis, icehockey, hockey (33 cells) — pairing refusal and legality, art. 16 tie-breaks, bye = win points, Swiss default chains; rule rows X-SW-1..11, BD-TB-2, TT-TB-2, VB-TB-3, TN-TB-3, FB-TB-5, HK-TB-3, IH-TB-3, CK-TB-2, CA-TB-2, GN-TB-2, BG-TB-4; close-out rows X-SW-12..30, BG-SW-1, X-RB-1`
+  - the M9 note: "The close-out rows name app paths. The engine checker skips them (`inEngine` scope, `test/rules-reference.test.ts`). App-A's paths exist on app main now. App-B's paths arrive in the app-B bump PR, whose `scripts/__tests__/rules-reference.test.ts` run is their first check (it reads `node_modules/@seazn/engine/rules`)." 
   - the attribution: `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
 
   Hand back after the push. The orchestrator watches CI.
 
 ---
 
-### Task 12: Rules close-out engine PR — GATED: start only after the §6.2 and §6.3 app PRs have merged to seazn.club main
+### Task 12: Rules close-out rows, folded INTO this engine PR (review M9). Runs after Task 10 and before Task 11. GATED on app-A (§6.2) merged
+
+**Why here, not a later `--empty` PR (M9, verified 2026-10-31 at engine 51be1bd).** The app's checker (`scripts/__tests__/rules-reference.test.ts`) reads `node_modules/@seazn/engine/rules`. Rows released after the app PRs would first be checked on some later, unrelated bump. With the rows in 2.0.0, app-B's own bump PR runs the checker over them. **The engine's checker does not refuse app paths.** `test/rules-reference.test.ts` calls `proofProblems(r, read, inEngine)`, and `proofProblems` (`test/rules-reference.ts:191-205`) checks only the paths in that scope. The "every enforced-at path exists" test skips `!inEngine(p)` (`rules-reference.test.ts:311`). The only row-level refusal, "names no proving test", is about the row's text. So a row whose proofs are all `apps/web/...` paths passes in the engine repo, whether or not those files exist yet. Re-confirm at worktree creation by reading those two spots.
 
 **Files:**
 - Modify: `rules/cross-sport.md`, `rules/boardgame.md`
-- Create: `.changeset/w3-swiss-rules-closeout.md` via `pnpm changeset --empty`
+- No changeset of its own: the rows ride in `.changeset/w3-swiss-engine.md` (major).
 
 **Interfaces:**
-- Consumes the app's merged code and test paths. Re-pin every path from the merged app tree (`git -C ~/github/seazn.club show origin/main:<path>`); never take them from either plan. Every proof file must already carry the row id in an `it(`/`test(`/`describe(` title. If it does not, the row waits: open a one-line app PR that adds the id to the title first.
+- **App-A paths** (merged before this task runs): re-pin every path and title from the merged app tree (`git -C ~/github/seazn.club fetch && git -C ~/github/seazn.club show origin/main:<path>`, read only; never write there). Never take them from the plan. Every proof file must already carry the row id as a whole token in an `it(`/`test(`/`describe(` title. If one does not, the row waits: hand back, and the orchestrator lands a one-line app PR that adds the id to the title first.
+- **App-B paths** (not merged; they land in the app-B bump PR itself, app-B T13): take each path and exact title from the app-B plan's id table. Those paths and titles are now a CONTRACT. The app-B PR must create those files with those titles. Its `rules-reference` run is their first check. List every app-B (row id, path) pair in the PR body.
+- **Fallback, if app-B's paths or titles drift after 2.0.0 is cut:** a 2.0.1 PATCH changeset (`"@onryde/seazn-engine": patch`) re-points the rows. It is cut and released BEFORE app-B T13 re-pins, so app-B bumps to `^2.0.1`, and app-B T13's checker run is green against the corrected rows. Never let app-B merge with a red app checker, and never weaken a row to fit.
 
 - [ ] **Step 1: Write one row per §12 "Close-out" line.** Allocate ids by re-checking the next free X-SW-n; the suggested ids are below. Keep `-KO-` out of every id.
 
@@ -908,7 +926,7 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
 | X-SW-15 | Unplayed pairs (double walkover) may meet again; a walkover winner stays bye-ineligible | signed 252 (RB3-2, RB3-14) |
 | X-SW-16 | Round count guidance; warn above ⌊n/2⌋; refuse above n−1 (even) / n (odd) | signed 252 (RB3-3) |
 | X-SW-17 | Rounds per stage, editable until the first fixture starts; then only Finish / Add a round | signed 252 (RB3-5, #838) |
-| X-SW-18 | Requested ½/0 byes deferred (⛔ with guidance) | signed 252 (RB3-7(c)) |
+| X-SW-18 | Requested ½/0 byes are not offered: a request is refused with named guidance (the status column is `signed 252`, never ⛔, review M4) | signed 252 (RB3-7(c)) |
 | X-SW-19 | Pairing score groups use the stage's table points | signed 252 (RB3-9) |
 | BG-SW-1 (`rules/boardgame.md`) | Chess colours on by default for boardgame Swiss; round-1 colour by lot | signed 252 (RB3-10) |
 | X-SW-20 | Rank-adjacent from round 2 in swiss_playoff / swiss_knockout | `deviation 252` (RB3-12) |
@@ -924,11 +942,14 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
 | X-SW-30 | Manual board swap in rounds ≥ 2 blocked with guidance | signed 252 (RB3-25) |
 | X-RB-1 (unused as of 2026-10-31) | Rebuild keeps every fixture's time and court and deletes and regenerates in one transaction (any format) | signed 253 (design G3, #840) |
 
-- [ ] **Step 2: Amend the engine rows** X-SW-3 (the desk refusal and its recovery), X-SW-10 (the desk warning on `nextRound`) and X-SW-8 (`swissGen`'s implicit-bye fix to 0) by appending the app's enforced-at and proved-by paths.
-- [ ] **Step 3: Verify.**
-  - Engine side: `npx vitest run ... test/rules-reference.test.ts` (engine paths; it skips app paths).
-  - App side: the app's `scripts/__tests__/rules-reference.test.ts` checks the app paths. It runs only once the app is bumped to a release containing these rows, so note in the PR body that a follow-up app bump PR owes that run green.
-- [ ] **Step 4: Changeset and PR.** `pnpm changeset --empty`. Commit `docs(rules): W3 close-out rows (X-SW-12..30, BG-SW-1, X-RB-1)`. The PR body has `Matrix rows: none — rule rows only; code landed in seazn.club #<app PRs>` and the attribution line. Hand back.
+- [ ] **Step 2: Amend the engine rows** by appending the app's enforced-at and proved-by paths:
+  - X-SW-3: the desk refusal and its recovery (app-B T4).
+  - X-SW-10: the desk warning on `nextRound` (app-B T7).
+  - X-SW-8: `swissGen`'s implicit-bye fix to 0 (app-A T6).
+  - X-SW-5: the bye frozen at award (app-A Task 3, `X-SW-5 a seated bye carries config_snapshot …`; m3).
+  - X-SW-1: the `packages/reference` n ≤ 128 checker, in app-A's reference task (M5).
+- [ ] **Step 3: Verify (engine side only).** `test/rules-reference.test.ts` in one JSON-reported run. It must stay green with every app path in place. Also count the `apps/`/`packages/reference` proof paths the new rows name, and assert that number is above 0 by hand in the commit body: the engine run is blind to them, so a count of 0 means the scope split was never exercised. The app side's check is app-B's bump PR. App-B T13's verify list must include `scripts/__tests__/rules-reference.test.ts`; tell the orchestrator if the app-B plan lacks it.
+- [ ] **Step 4: Commit into this branch** (no separate PR, no `--empty`): `docs(rules): W3 close-out rows (X-SW-12..30, BG-SW-1, X-RB-1)`. Then go to Task 11.
 
 ---
 
@@ -944,7 +965,15 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
   - SW-M6 → T5.
   - SW-M8 → T6.
   - Rows → in each task.
-  - §4's missed rounds → T7. §7 live check → T11. §12 Engine PR lines → X-SW-1..11 + sport rows. §12 Close-out lines → T12.
+  - §4's missed rounds → T7. §7 live check → app-A T0, cited in T11 Step 2 (m4). §12 Engine PR lines → X-SW-1..11 + sport rows. §12 Close-out lines → T12, in this PR (M9), before T11.
   - RB3-4's one-round look-ahead → T4b (X-SW-10). RB3-10's topscorer exception → T4c (X-SW-11). Spec §6/§12 assigned neither; the orchestrator placed both in the engine PR on 2026-10-31.
+- **Plan review 2026-10-31 (`plan-review.md`), engine items:**
+  - M9: close-out rows in this PR, verified safe against the engine checker (T12 header).
+  - M5: T3's oracle is independent, with a mutation proving it; the n ≤ 128 bound goes to app-A's reference task.
+  - M7: the 1.1.0-first gate is T11 Step 0(b).
+  - m3: "frozen at award" is in X-SW-5.
+  - m4: T11 Step 2 cites app-A T0.
+  - m6: pins re-checked through 51be1bd.
+  - M4: X-SW-18's status is `signed`.
 - **Types.** `SwissPairResult`, `SwissRefusal` and `UnplayedRound` are consistent T1→T3 and T7→T8. `swissDrawPoints` is defined in T7 and used in T7–T8. `unplayedSidesOf` is defined in T8. `opp_diff` is defined in T9 and used in T10.
 - **Seams.** Two new inputs (`TableFixture.unplayed`, `TableStage.swissAbsentRounds`) have no producer until the app plan fills them. Until then art. 16 forfeits and absences are inert in production: the inert-seam class. The app plan must drive them through `loadStageInputs` → `completeTableStage`. This PR's tests drive the engine consumer only.
