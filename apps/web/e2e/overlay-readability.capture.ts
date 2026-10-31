@@ -14,7 +14,9 @@
 //
 // With `OVERLAY_GALLERY=1` (a build that has `/admin/overlay-gallery`, i.e. the branch), it also shoots the staff gallery
 // at 1280 — the `/admin` width — at each of its three frames, one crop per template × sport of the live cell, plus the
-// warming and ended cells of the two default pairs (cricket on the bar, badminton on the bug): spec step 14.
+// warming and ended cells of the two default pairs (cricket on the bar, badminton on the bug): spec step 14. R4 S7 adds
+// the sponsor cards: every sponsor-slot cell (a live cell, so the live set already holds it) and every scene-carousel
+// cell, shot with CSS animations finished so a showing that rotates mid-shot is photographed in place.
 //
 // THE GATE HAS ITS OWN VACUOUS MODE (AGENTS.md class 10): every scene asserts the DOM state it photographs in the same
 // step, and the last test asserts every file exists, is non-empty, and differs from every other one byte for byte.
@@ -180,19 +182,34 @@ test("the staff gallery at each frame: one crop per template × sport (live), an
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(1_500);
     const live = page.locator('[data-gallery-cell][data-snapshot="live"][data-moment=""]');
+    const carousel = page.locator('[data-gallery-cell][data-sponsor-carousel="1"]');
+    const keysOf = (els: Element[]) => els.map((el) => (el as HTMLElement).dataset.galleryCell!);
+    const carouselKeys = await carousel.evaluateAll(keysOf);
+    const sponsorKeys = await page.locator('[data-gallery-cell]:not([data-sponsor-slot=""])').evaluateAll(keysOf);
+    // A Set: a reconnecting carousel cell is a live cell too, and must be shot once (the digest gate refuses twins).
     const wanted = [
-      ...(await live.evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.galleryCell!))),
-      "bar|cricket|live|warming",
-      "bar|cricket|live|ended",
-      "bug|badminton|live|warming",
-      "bug|badminton|live|ended",
+      ...new Set([
+        ...(await live.evaluateAll(keysOf)),
+        "bar|cricket|live|warming",
+        "bar|cricket|live|ended",
+        "bug|badminton|live|warming",
+        "bug|badminton|live|ended",
+        ...carouselKeys,
+      ]),
     ];
     expect(wanted.length, "anti-vacuity").toBeGreaterThan(4);
+    expect(sponsorKeys.length, "anti-vacuity: sponsor slot cells").toBeGreaterThan(0);
+    expect(carouselKeys.length, "anti-vacuity: carousel cells").toBeGreaterThan(0);
+    expect(sponsorKeys.filter((k) => !wanted.includes(k)), "every sponsor slot cell is shot").toEqual([]);
+    await expect
+      .poll(() => carousel.locator('[data-testid="ovl-sponsor-card"]').count(), { timeout: 30_000 })
+      .toBe(carouselKeys.length);
+    console.log(`[gallery ${frame}] cells shot: ${wanted.length} (sponsor slots ${sponsorKeys.length}, carousels ${carouselKeys.length})`);
     for (const key of wanted) {
       const cell = page.locator(`[data-gallery-cell="${key}"]`);
       await expect(cell, key).toHaveCount(1);
       const path = join(DIR, `gallery-${frame}-${key.replaceAll("|", "_")}.png`);
-      await cell.screenshot({ path });
+      await cell.screenshot({ path, ...(carouselKeys.includes(key) ? { animations: "disabled" as const } : {}) });
       shots.push(path);
       galleryExpected++;
     }

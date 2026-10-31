@@ -28,6 +28,12 @@ export const OVERLAY_SCENES = [
 
 export type SceneId = (typeof OVERLAY_SCENES)[number]["id"];
 
+/** R4 S7 (spec 2026-10-27 §3.4): the scenes whose layer carries the sponsor carousel — the compositor's Starting soon
+ *  and Reconnecting (the operator console, C4, adds Break and Full time). Declared HERE, beside the scenes, and not in
+ *  `sponsor-card.tsx`: the gallery's cell source runs on the server, and a value exported from a `"use client"` module
+ *  reaches a server component as a client reference, never as the array. */
+export const SPONSOR_CAROUSEL_SCENES: readonly SceneId[] = ["starting", "reconnecting"];
+
 /** Do moment slabs air in this scene? Read off the declaration above — the one authority (decision 8) — and never
  *  off a scene id. `null` is "no scene on screen" (an OBS page, or the compositor's `live`/`frozen`), where moments
  *  have always aired. An id the list does not declare is refused by name: a scene nobody declared has no rule. */

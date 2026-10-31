@@ -8,10 +8,10 @@
 // — the sponsor's name and, when the card carries a short code, `seazn.club/s/<code>` (owner ruling R7) — so it owes the
 // dictionaries nothing.
 //
-// THE CAROUSEL rotates the TICKED cards on the compositor's Starting soon and Reconnecting scenes (the console adds Break
-// and Full time): title first, then gold, then the rest in resolve order, `SCENE_CAROUSEL_MS` each, in the banner slot.
-// It yields to any moment on air — one card at a time — and at `host=compositor` logs each showing as a proof-of-play
-// pair with `source: "scene"`. Like the moment queue, every rule is a pure function here (`carouselStep`,
+// THE CAROUSEL rotates the TICKED cards on the scenes `SPONSOR_CAROUSEL_SCENES` names (`overlay-scenes.ts`): title
+// first, then gold, then the rest in resolve order, `SCENE_CAROUSEL_MS` each, in the banner slot. It yields to any
+// moment on air — one card at a time — and at `host=compositor` logs each showing as a proof-of-play pair with
+// `source: "scene"`. Like the moment queue, every rule is a pure function here (`carouselStep`,
 // `carouselLines`) and the component is a reducer, ONE `setTimeout` to the next deadline, and the console.
 import { useEffect, useReducer, useRef } from "react";
 import { COMPOSITOR_HOST, sponsorLine, type SponsorEndBody, type SponsorStartBody } from "@/lib/overlay-compositor";
@@ -19,10 +19,6 @@ import { sponsorShortLinkText } from "@/lib/sponsor-clicks";
 import { SCENE_CAROUSEL_MS, type SponsorCard, type SponsorStyle } from "@/lib/sponsor-plan";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
 import type { Phase } from "./moment-queue";
-import type { SceneId } from "./overlay-scenes";
-
-/** Spec §3.4: the scenes whose layer carries the carousel. The operator console (C4) adds Break and Full time. */
-export const SPONSOR_CAROUSEL_SCENES: readonly SceneId[] = ["starting", "reconnecting"];
 
 /** The look every carousel showing uses: a scene is a full-screen layer, so the bigger card (spec §3.2's banner). */
 export const CAROUSEL_STYLE: SponsorStyle = "banner";

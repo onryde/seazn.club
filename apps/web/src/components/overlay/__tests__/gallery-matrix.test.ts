@@ -10,14 +10,19 @@ import { MOMENT_RULES, momentsFor } from "@/lib/overlay-moments";
 import { t } from "@/lib/i18n-runtime";
 import type { OverlayMsg } from "@/lib/overlay-model";
 import { OVERLAY_SPORT_KEYS } from "../overlay-tokens";
-import { OVERLAY_SCENES, type OverlaySceneDef } from "../overlay-scenes";
+import { OVERLAY_SCENES, SPONSOR_CAROUSEL_SCENES, type OverlaySceneDef } from "../overlay-scenes";
 import { OVERLAY_TEMPLATES, templatesForSport } from "../template-registry";
+import { SPONSOR_STYLE_BY_SIZE } from "@/lib/sponsor-plan";
+import { SPONSOR_SHORT_CODE_PATTERN } from "@/lib/sponsor-short-code";
 import {
+  GALLERY_CAROUSEL_SPORTS,
   GALLERY_MOMENT_SAMPLES,
   GALLERY_RESULT_VARIANT_SPORTS,
   GALLERY_SNAPSHOT_KINDS,
+  GALLERY_SPONSOR_CARDS,
   galleryCells,
   galleryMatrix,
+  gallerySponsorPlan,
   type ResultVariant,
 } from "../gallery-matrix";
 
@@ -84,15 +89,20 @@ describe("galleryMatrix — the size, from the declarations", () => {
     { status: "abandoned", sportKey },
   ]);
 
-  it("plain + moment + variant cells, keys unique", () => {
-    const cells = galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS);
+  it("plain + moment + variant + sponsor + carousel cells, keys unique", () => {
+    const cells = galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS, GALLERY_CAROUSEL_SPORTS);
     const firing = OVERLAY_SCENES.filter((s) => s.momentsFire).length;
+    const carouselScenes = OVERLAY_SCENES.filter((s) => SPONSOR_CAROUSEL_SCENES.includes(s.id)).length;
     let expected = 0;
     for (const sport of OVERLAY_SPORT_KEYS) {
       expected += templatesForSport(sport).length * OVERLAY_SCENES.length * GALLERY_SNAPSHOT_KINDS.length;
+      // R4 S7: template × sport × each slot the template declares (spec 2026-10-27 §3.5).
+      for (const def of templatesForSport(sport)) expected += Object.keys(def.sponsorSlots).length;
     }
     for (const s of GALLERY_MOMENT_SAMPLES) expected += templatesForSport(s.sportKey).length * firing;
     for (const v of VARIANTS) expected += templatesForSport(v.sportKey).length;
+    for (const sport of GALLERY_CAROUSEL_SPORTS) expected += templatesForSport(sport).length * carouselScenes;
+    expect(carouselScenes, "premise: the shipped scenes carry the carousel somewhere").toBeGreaterThan(0);
     console.log(`cells: ${cells.length}, expected from the declarations: ${expected}`);
     expect(expected, "anti-vacuity").toBeGreaterThan(0);
     expect(cells).toHaveLength(expected);
@@ -100,10 +110,23 @@ describe("galleryMatrix — the size, from the declarations", () => {
   });
 
   it("each cell kind carries exactly its own fields", () => {
-    const cells = galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS);
-    const kinds = { plain: 0, moment: 0, variant: 0 };
+    const cells = galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS, GALLERY_CAROUSEL_SPORTS);
+    const kinds = { plain: 0, moment: 0, variant: 0, sponsor: 0, carousel: 0 };
     for (const c of cells) {
-      if (c.momentSampleId !== null) {
+      const own = [c.momentSampleId !== null, c.resultStatus !== null, c.sponsorSlot !== null, c.carousel].filter(Boolean);
+      expect(own.length, `${c.key}: at most one kind`).toBeLessThanOrEqual(1);
+      if (c.sponsorSlot !== null) {
+        kinds.sponsor++;
+        expect(c.scene, c.key).toBe("live");
+        expect(c.snapshot, c.key).toBe("live");
+        expect(Object.keys(OVERLAY_TEMPLATES[c.templateId as "bar" | "bug"].sponsorSlots), c.key).toContain(c.sponsorSlot);
+      } else if (c.carousel) {
+        kinds.carousel++;
+        expect(SPONSOR_CAROUSEL_SCENES, c.key).toContain(c.scene);
+        expect(GALLERY_CAROUSEL_SPORTS as readonly string[], c.key).toContain(c.sportKey);
+        // Starting soon is before the match: the warming snapshot (its match card shows the start); otherwise live.
+        expect(c.snapshot, c.key).toBe(c.scene === "starting" ? "warming" : "live");
+      } else if (c.momentSampleId !== null) {
         kinds.moment++;
         expect(c.snapshot, c.key).toBe("live");
         expect(c.resultStatus, c.key).toBeNull();
@@ -118,20 +141,22 @@ describe("galleryMatrix — the size, from the declarations", () => {
       }
       expect(templatesForSport(c.sportKey).map((d) => d.id), c.key).toContain(c.templateId);
     }
-    console.log(`plain: ${kinds.plain}, moment: ${kinds.moment}, variant: ${kinds.variant}`);
+    console.log(`plain: ${kinds.plain}, moment: ${kinds.moment}, variant: ${kinds.variant}, sponsor: ${kinds.sponsor}, carousel: ${kinds.carousel}`);
     expect(kinds.plain).toBeGreaterThan(0);
     expect(kinds.moment).toBeGreaterThan(0);
+    expect(kinds.sponsor).toBeGreaterThan(0);
+    expect(kinds.carousel).toBeGreaterThan(0);
     expect(kinds.variant).toBe(VARIANTS.reduce((n, v) => n + templatesForSport(v.sportKey).length, 0));
   });
 
-  it("galleryCells is galleryMatrix over the shipped sports, scenes and samples", () => {
+  it("galleryCells is galleryMatrix over the shipped sports, scenes, samples and carousel sports", () => {
     expect(galleryCells(OVERLAY_TEMPLATES, VARIANTS)).toEqual(
-      galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS),
+      galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, VARIANTS, GALLERY_CAROUSEL_SPORTS),
     );
   });
 
-  it("the empty case: no sports, no samples, no variants → no cells", () => {
-    expect(galleryMatrix(OVERLAY_TEMPLATES, [], OVERLAY_SCENES, [], [])).toEqual([]);
+  it("the empty case: no sports, no samples, no variants, no carousel sports → no cells", () => {
+    expect(galleryMatrix(OVERLAY_TEMPLATES, [], OVERLAY_SCENES, [], [], [])).toEqual([]);
   });
 });
 
@@ -141,7 +166,7 @@ describe("decision 8 (D14) — a scene's momentsFire is the one authority for mo
       { id: "live", labelKey: "stream.scene.live", momentsFire: true },
       { id: "held", labelKey: "stream.scene.live", momentsFire: false },
     ];
-    const cells = galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, scenes, GALLERY_MOMENT_SAMPLES, []);
+    const cells = galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, scenes, GALLERY_MOMENT_SAMPLES, [], []);
     const moments = cells.filter((c) => c.momentSampleId !== null);
     expect(moments.length, "anti-vacuity").toBeGreaterThan(0);
     for (const c of moments) expect(c.scene, c.key).toBe("live");
@@ -164,5 +189,70 @@ describe("decision 8 (D14) — a scene's momentsFire is the one authority for mo
     console.log(`scenes checked: ${scenes}, moment-firing: ${firing}`);
     expect(scenes, "anti-vacuity").toBeGreaterThan(0);
     expect(firing, "anti-vacuity").toBeGreaterThan(0);
+  });
+});
+
+describe("R4 S7 — the sponsor cells (spec 2026-10-27 §3.5: template × sport × slot) and the carousel cells", () => {
+  it("every template × sport × declared slot has exactly one sponsor cell", () => {
+    const cells = galleryCells(OVERLAY_TEMPLATES, []);
+    let checked = 0;
+    for (const sport of OVERLAY_SPORT_KEYS) {
+      for (const def of templatesForSport(sport)) {
+        for (const slot of Object.keys(def.sponsorSlots)) {
+          const hits = cells.filter((c) => c.templateId === def.id && c.sportKey === sport && c.sponsorSlot === slot);
+          expect(hits, `${def.id} × ${sport} × ${slot}`).toHaveLength(1);
+          checked++;
+        }
+      }
+    }
+    console.log(`sponsor cells checked: ${checked}`);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
+    expect(cells.filter((c) => c.sponsorSlot !== null)).toHaveLength(checked);
+  });
+
+  it("carousel cells: every template of each carousel sport, once per carousel scene — and only there", () => {
+    const cells = galleryCells(OVERLAY_TEMPLATES, []);
+    let checked = 0;
+    for (const sport of GALLERY_CAROUSEL_SPORTS) {
+      for (const def of templatesForSport(sport)) {
+        for (const scene of OVERLAY_SCENES) {
+          const hits = cells.filter((c) => c.carousel && c.templateId === def.id && c.sportKey === sport && c.scene === scene.id);
+          expect(hits, `${def.id} × ${sport} × ${scene.id}`).toHaveLength(SPONSOR_CAROUSEL_SCENES.includes(scene.id) ? 1 : 0);
+          checked++;
+        }
+      }
+    }
+    console.log(`carousel (template × sport × scene) combinations checked: ${checked}`);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
+  });
+
+  it("the empty case: no carousel sports, or no carousel scene in the list → no carousel cell", () => {
+    expect(galleryMatrix(OVERLAY_TEMPLATES, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, [], [], []).filter((c) => c.carousel)).toEqual([]);
+    const live = OVERLAY_SCENES.filter((s) => s.id === "live");
+    expect(galleryMatrix(OVERLAY_TEMPLATES, [], live, [], [], GALLERY_CAROUSEL_SPORTS)).toEqual([]);
+  });
+
+  it("gallerySponsorPlan: the REAL planner's plan — one airing in the slot's own look, naming the 43-character card", () => {
+    let checked = 0;
+    for (const { style, holdMs } of Object.values(SPONSOR_STYLE_BY_SIZE)) {
+      const plan = gallerySponsorPlan(style);
+      expect(plan?.airings, style).toHaveLength(1);
+      const airing = plan!.airings[0]!;
+      expect(airing.style).toBe(style);
+      expect(airing.holdMs).toBe(holdMs);
+      const card = plan!.cards.find((c) => c.id === airing.cardId);
+      expect(card?.name, "the brief's 43-character name").toHaveLength(43);
+      expect(card?.shortCode ?? "", "R7: a printable code").toMatch(SPONSOR_SHORT_CODE_PATTERN);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+  });
+
+  it("gallerySponsorPlan(null): the carousel's plan — every gallery card, all ticked, no airing", () => {
+    const plan = gallerySponsorPlan(null);
+    expect(plan?.airings).toEqual([]);
+    expect(plan?.cards.map((c) => c.id)).toEqual(GALLERY_SPONSOR_CARDS.map((c) => c.id));
+    expect(GALLERY_SPONSOR_CARDS.every((c) => c.onStream)).toBe(true);
+    expect(GALLERY_SPONSOR_CARDS.length, "anti-vacuity: the carousel has two cards to rotate").toBeGreaterThan(1);
   });
 });

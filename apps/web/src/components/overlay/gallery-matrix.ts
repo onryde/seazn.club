@@ -3,11 +3,13 @@
 // ONE cell source (review I3) and every sweep over the gallery is a sweep over these cells.
 //
 // A cell is one (template × sport × scene × snapshot kind), plus one per moment sample in each scene whose moments
-// fire, plus one per Result-card variant. Templates come from the registry passed IN, never from `OVERLAY_TEMPLATES`
+// fire, plus one per Result-card variant, plus (R4 S7) one per sponsor slot each template declares, per sport, and one
+// per carousel scene for each carousel sport. Templates come from the registry passed IN, never from `OVERLAY_TEMPLATES`
 // directly: `template-extensibility.test.ts` hands it a registry with a throwaway entry and expects that entry's cells.
 import type { RecentEvent } from "@/lib/overlay-recent-types";
+import { SPONSOR_STYLE_BY_SIZE, planSponsors, type SponsorCard, type SponsorPlan, type SponsorStyle } from "@/lib/sponsor-plan";
 import { OVERLAY_SPORT_KEYS } from "./overlay-tokens";
-import { OVERLAY_SCENES, type OverlaySceneDef, type SceneId } from "./overlay-scenes";
+import { OVERLAY_SCENES, SPONSOR_CAROUSEL_SCENES, type OverlaySceneDef, type SceneId } from "./overlay-scenes";
 import { templatesForSportFrom, type TemplateRegistry } from "./template-registry";
 
 export type GallerySnapshotKind = "warming" | "live" | "ended";
@@ -167,6 +169,10 @@ export interface ResultVariant {
  *  defaults. */
 export const GALLERY_RESULT_VARIANT_SPORTS = ["cricket", "badminton"] as const;
 
+/** R4 S7: the two sports carousel cells are drawn for — the two templates' defaults, as for result variants. The card
+ *  layout is sport-agnostic apart from the palette, which the sponsor slot cells already sweep across every sport. */
+export const GALLERY_CAROUSEL_SPORTS = GALLERY_RESULT_VARIANT_SPORTS;
+
 export interface GalleryCell {
   key: string;
   templateId: string;
@@ -175,6 +181,52 @@ export interface GalleryCell {
   snapshot: GallerySnapshotKind;
   momentSampleId: string | null;
   resultStatus: string | null;
+  /** R4 S7: a sponsor card pinned in this slot (scene "live", snapshot "live"); null otherwise. */
+  sponsorSlot: SponsorStyle | null;
+  /** R4 S7: the scene carousel's cell (a carousel scene, its cards and no airing). */
+  carousel: boolean;
+}
+
+/** R4 S7: the gallery's sponsor cards. The title carries the brief's realistic 43-character name, a logo and a short code
+ *  — every part of the card's face at its longest; the gold has neither logo nor code (the monogram, no link). */
+export const GALLERY_SPONSOR_CARDS: readonly SponsorCard[] = [
+  {
+    id: "gallery-card-title",
+    sponsorId: "gallery-sponsor-title",
+    name: "Northbridge Athletic Football & Social Club",
+    logoUrl: `data:image/svg+xml,${encodeURIComponent(
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><rect width='64' height='64' rx='12' fill='#16365c'/><path d='M14 46 32 14l18 32z' fill='#f2b705'/></svg>",
+    )}`,
+    tier: "title",
+    onStream: true,
+    shortCode: "NB7K",
+  },
+  { id: "gallery-card-gold", sponsorId: "gallery-sponsor-gold", name: "Harbourside Building Supplies", logoUrl: null, tier: "gold", onStream: true },
+];
+
+/** The REAL planner's plan for a gallery sponsor cell: one break at the sample seq (41) whose size is the slot's look
+ *  (`SPONSOR_STYLE_BY_SIZE`), so the airing is exactly what a broadcast would draw there. `null` style: the carousel's
+ *  plan — the cards, no airing. Refuses by name when the planner plans otherwise. */
+export function gallerySponsorPlan(style: SponsorStyle | null): SponsorPlan {
+  const size = (Object.keys(SPONSOR_STYLE_BY_SIZE) as (keyof typeof SPONSOR_STYLE_BY_SIZE)[]).find(
+    (k) => SPONSOR_STYLE_BY_SIZE[k].style === style,
+  );
+  const plan = planSponsors({
+    breaks: size === undefined ? [] : [{ seq: 41, at: AT, kind: size === "major" ? "innings_break" : "over_end", size }],
+    windowSeqs: size === undefined ? [] : [41],
+    settings: { enabled: true, frequency: "busy" },
+    cards: GALLERY_SPONSOR_CARDS,
+    assignedCards: [],
+    assigned: [],
+    operatorLog: [],
+    nextPosition: 0,
+    now: Date.parse(AT) + 1_000,
+    complete: true,
+  }).plan;
+  if (plan === null || plan.airings.length !== (size === undefined ? 0 : 1)) {
+    throw new Error(`overlay gallery: the planner planned ${plan?.airings.length ?? "no plan"} airing(s) for ${String(style)}`);
+  }
+  return plan;
 }
 
 /**
@@ -182,6 +234,10 @@ export interface GalleryCell {
  * Moment cells: every non-retired template suiting the sample's sport × sample × every scene whose `momentsFire` is
  * true (snapshot "live"; decision 8). A scene with `momentsFire: false` gets none.
  * Variant cells: every non-retired template suiting the variant's sport × variant (scene "live", snapshot "ended").
+ * Sponsor cells (R4 S7, spec 2026-10-27 §3.5): every non-retired template suiting the sport × sport × each slot the
+ * template DECLARES (scene "live", snapshot "live").
+ * Carousel cells (R4 S7): every non-retired template suiting a carousel sport × each scene in `scenes` that carries the
+ * carousel (`SPONSOR_CAROUSEL_SCENES`); Starting soon reads the warming snapshot, any other the live one.
  */
 export function galleryMatrix(
   registry: TemplateRegistry,
@@ -189,6 +245,7 @@ export function galleryMatrix(
   scenes: readonly OverlaySceneDef[],
   samples: readonly MomentSample[],
   variants: readonly ResultVariant[],
+  carouselSports: readonly string[],
 ): GalleryCell[] {
   const cells: GalleryCell[] = [];
   // `scene.id` is a SceneId for every shipped scene; a test may pass its own scene list to prove the momentsFire rule,
@@ -206,8 +263,23 @@ export function galleryMatrix(
             snapshot,
             momentSampleId: null,
             resultStatus: null,
+            sponsorSlot: null,
+            carousel: false,
           });
         }
+      }
+      for (const slot of Object.keys(def.sponsorSlots) as SponsorStyle[]) {
+        cells.push({
+          key: `${def.id}|${sportKey}|live|sponsor|${slot}`,
+          templateId: def.id,
+          sportKey,
+          scene: "live",
+          snapshot: "live",
+          momentSampleId: null,
+          resultStatus: null,
+          sponsorSlot: slot,
+          carousel: false,
+        });
       }
     }
   }
@@ -223,6 +295,8 @@ export function galleryMatrix(
           snapshot: "live",
           momentSampleId: sample.id,
           resultStatus: null,
+          sponsorSlot: null,
+          carousel: false,
         });
       }
     }
@@ -237,7 +311,27 @@ export function galleryMatrix(
         snapshot: "ended",
         momentSampleId: null,
         resultStatus: variant.status,
+        sponsorSlot: null,
+        carousel: false,
       });
+    }
+  }
+  for (const sportKey of carouselSports) {
+    for (const def of templatesForSportFrom(registry, sportKey)) {
+      for (const scene of scenes) {
+        if (!SPONSOR_CAROUSEL_SCENES.includes(sceneId(scene))) continue;
+        cells.push({
+          key: `${def.id}|${sportKey}|${scene.id}|carousel`,
+          templateId: def.id,
+          sportKey,
+          scene: sceneId(scene),
+          snapshot: scene.id === "starting" ? "warming" : "live",
+          momentSampleId: null,
+          resultStatus: null,
+          sponsorSlot: null,
+          carousel: true,
+        });
+      }
     }
   }
   return cells;
@@ -246,5 +340,5 @@ export function galleryMatrix(
 /** The gallery's ONE cell source (review I3): `galleryMatrix` over the shipped sports, scenes and samples. The page
  *  calls it with `OVERLAY_TEMPLATES`, and the extensibility test with a probe registry. */
 export function galleryCells(registry: TemplateRegistry, variants: readonly ResultVariant[]): GalleryCell[] {
-  return galleryMatrix(registry, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, variants);
+  return galleryMatrix(registry, OVERLAY_SPORT_KEYS, OVERLAY_SCENES, GALLERY_MOMENT_SAMPLES, variants, GALLERY_CAROUSEL_SPORTS);
 }

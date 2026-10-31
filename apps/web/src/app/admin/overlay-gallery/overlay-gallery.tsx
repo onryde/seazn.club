@@ -5,7 +5,8 @@
 // the text floor, the bar lift, the safe area and the slab placement against the rendered page.
 import Link from "@/components/ui/console-link";
 import { t } from "@/lib/i18n-runtime";
-import { momentsFor, type OverlayMoment } from "@/lib/overlay-moments";
+import { momentsFor, sponsorMoments, type OverlayMoment } from "@/lib/overlay-moments";
+import type { SponsorStyle } from "@/lib/sponsor-plan";
 import { overlaySideCodes, type OverlayMsg, type OverlaySideInput } from "@/lib/overlay-model";
 import { forfeitTag, NO_LEDGER } from "@/lib/forfeit-tag";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
@@ -16,6 +17,7 @@ import { OVERLAY_SPORT_KEYS } from "@/components/overlay/overlay-tokens";
 import { OVERLAY_TEMPLATES, type TemplateId } from "@/components/overlay/template-registry";
 import {
   GALLERY_MOMENT_SAMPLES,
+  gallerySponsorPlan,
   type GalleryCell,
   type GallerySnapshotKind,
 } from "@/components/overlay/gallery-matrix";
@@ -38,6 +40,12 @@ export interface OverlayGalleryProps {
   frameWidth: number;
 }
 
+/** R4 S7: the caption for each sponsor look. */
+const SPONSOR_SLOT_LABEL: Readonly<Record<SponsorStyle, string>> = {
+  lower_third: "admin.overlayGallery.sponsorSlot.lowerThird",
+  banner: "admin.overlayGallery.sponsorSlot.banner",
+};
+
 const FRAME_LABEL: Readonly<Record<GalleryFrame, string>> = {
   full: "admin.overlayGallery.frameFull",
   "844": "admin.overlayGallery.framePhoneLandscape",
@@ -56,6 +64,15 @@ function cellData(
       ? props.variantSnapshots[`${cell.resultStatus}:${cell.sportKey}`]
       : props.snapshots[cell.sportKey]?.[cell.snapshot];
   if (snapshot === undefined) throw new Error(`overlay gallery: no snapshot for cell ${cell.key}`);
+  // R4 S7: a sponsor cell pins the card the REAL planner airs in that slot; a carousel cell carries the cards only, and
+  // the stage's carousel shows them. Both on the cell's own snapshot, so the scene and the scorebug are the real ones.
+  if (cell.sponsorSlot !== null) {
+    const plan = gallerySponsorPlan(cell.sponsorSlot);
+    const moment = sponsorMoments(plan)[0];
+    if (moment === undefined) throw new Error(`overlay gallery: no sponsor moment for cell ${cell.key}`);
+    return { snapshot: { ...snapshot, sponsorPlan: plan }, moment };
+  }
+  if (cell.carousel) return { snapshot: { ...snapshot, sponsorPlan: gallerySponsorPlan(null) }, moment: undefined };
   if (cell.momentSampleId === null) return { snapshot, moment: undefined };
   const sample = GALLERY_MOMENT_SAMPLES.find((s) => s.id === cell.momentSampleId);
   if (sample === undefined) throw new Error(`overlay gallery: no moment sample ${cell.momentSampleId}`);
@@ -82,6 +99,10 @@ function decidedWinnerIndex(snapshot: OverlayLiveData, sides: OverlayGalleryProp
 }
 
 function cellState(cell: GalleryCell, ui: Record<string, string>, moment: OverlayMoment | undefined): string {
+  if (cell.sponsorSlot !== null) {
+    return t(ui, "admin.overlayGallery.sponsorCard", { slot: t(ui, SPONSOR_SLOT_LABEL[cell.sponsorSlot]) });
+  }
+  if (cell.carousel) return t(ui, "admin.overlayGallery.sponsorCarousel");
   if (cell.resultStatus !== null) return t(ui, `score.status.${cell.resultStatus}`);
   if (moment !== undefined) return `${t(ui, "admin.overlayGallery.moments")}: ${moment.headline}`;
   return t(ui, `admin.overlayGallery.snapshot.${cell.snapshot}`);
@@ -163,6 +184,9 @@ export function OverlayGallery(props: OverlayGalleryProps) {
                     data-result-winner={winner ?? ""}
                     data-slab-placement={def.slabPlacement}
                     data-safe-area={JSON.stringify(def.sceneCardSafeArea)}
+                    data-sponsor-slot={cell.sponsorSlot ?? ""}
+                    data-sponsor-carousel={cell.carousel ? "1" : ""}
+                    data-sponsor-slots={JSON.stringify(def.sponsorSlots)}
                     className="m-0 space-y-1.5"
                   >
                     <figcaption className="flex flex-wrap items-baseline gap-x-3 text-sm">
