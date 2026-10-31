@@ -68,6 +68,7 @@ import { stageFormatLines } from "@/server/public-site/stage-format-lines";
 import { patchDivision } from "@/server/usecases/divisions";
 import { writeFixtureRulesOverride } from "@/server/usecases/fixture-rules";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
+import { generateStageFixtures, unpairSwissRound } from "@/server/usecases/stages";
 import { insertLegacyEvents, seedBracket } from "./helpers/seed-bracket";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -176,12 +177,15 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
   // W2c Task 16 (batch-5 review Q1): the stage chip and the hub line resolve the cfg of a STAGE - a fixture-less call with
   // `config_snapshot: null, rules_override: null` - so the overlay is the whole of what reaches it. `override: false`.
   { file: "apps/web/src/server/public-site/stage-format-lines.ts", count: 1, case: "stage-format-lines.ts stageFormatLines", override: false },
+  // W3 T3 (SW-M7, X-SW-5): the Swiss bye freezes at award - the cfg append-event.ts would freeze at a first event, over
+  // the bye shell's own override.
+  { file: "apps/web/src/server/usecases/stages.ts", count: 1, case: "stages.ts swissGen bye seat" },
 ];
 /** The ledger's total, which the source scan and the driven set must both reach. */
 const SITE_TOTAL = SITES.reduce((n, s) => n + s.count, 0);
 
 describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)", () => {
-  it("the site ledger is exact: 17 production calls, and none unlisted", () => {
+  it("the site ledger is exact: 18 production calls, and none unlisted", () => {
     const files: string[] = [];
     (function walk(d: string) {
       for (const e of readdirSync(d)) {
@@ -200,8 +204,8 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       if (n > 0) found.set(rel, n);
     }
     expect(Object.fromEntries(found)).toEqual(Object.fromEntries(SITES.map((s) => [s.file, s.count])));
-    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(17);
-    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(17);
+    expect([...found.values()].reduce((a, b) => a + b, 0)).toBe(18);
+    expect(SITE_TOTAL, "the ledger's own rows add up to the scan").toBe(18);
   });
 
   it("the comment stripper keeps a call and drops prose (both directions)", () => {
@@ -483,6 +487,22 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect(r!.v, "the save moved the match's format: its version moved").toBe(1);
   });
 
+  it.skipIf(!HAS_DB)("stages.ts swissGen bye seat: the bye freezes the cfg its own row resolves, override included (a Swiss stage takes no bracket overlay)", async () => {
+    // W3 T3 (X-SW-5). Badminton (its `bestOf` is match-scoped, spec §4.1 Q5), an odd field: Pair seats a bye. The round
+    // is unpaired, every row of the stage given the override, and paired again - so the bye's seat is the call driven.
+    const s = await seedBracket({ sport: "badminton", variant: "bwf", stageKind: "swiss", entrants: 5, stageConfig: { rounds: 2 } });
+    await unpairSwissRound(s.auth, s.stageId);
+    await seedOverride({ stageId: s.stageId });
+    spy.mockClear();
+    await generateStageFixtures(s.auth, s.stageId); // Pair round 1 again
+    expectOverrideOut("swiss");
+    expectOverrideArg();
+    expect(seen().every((c) => c.kind === "swiss"), "a Swiss stage resolves as one: no bracket overlay").toBe(true);
+    const [bye] = await sql<{ config_snapshot: { bestOf?: number } | null }[]>`
+      select config_snapshot from fixtures where stage_id = ${s.stageId} and ext_key = 'sw-r1-bye'`;
+    expect(bye?.config_snapshot?.bestOf, "the bye froze its own row's format, override last").toBe(OVERRIDE.bestOf);
+  });
+
   it.skipIf(!HAS_DB)("stage-format-lines.ts stageFormatLines: a knockout chip gets the bracket overlay over the division's drawn tie board, and the call carries NO match override", async () => {
     // Carrom: the one sport whose bracket overlay is observable on a stage (`tieBoard`: 'extra' in a bracket, whatever the
     // division plays). The division plays 'draw'; the stage names no rules of its own, so the overlay is the ONLY source
@@ -523,11 +543,11 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
     expect(league[0]!.out?.tieBoard, "no overlay on a table stage").toBe("draw");
   });
 
-  // M3 (review): the ledger above pins the 17 sites in the SOURCE; this pins that the cases DROVE all 17 - 16 with the
+  // M3 (review): the ledger above pins the 18 sites in the SOURCE; this pins that the cases DROVE all 18 - 17 with the
   // override and the stage line without one (its row says `override: false`). Sites come from the spy's own caller frames (`callSite`), so a case cannot vouch for a site it never
   // reached. Declared last: vitest runs a file's cases in order, so every case above has run (or was filtered out
   // with -t, in which case this one is filtered out too).
-  it.skipIf(!HAS_DB)("every one of the 17 call sites was driven (16 with the override, the stage line without), per the spy's caller frames", () => {
+  it.skipIf(!HAS_DB)("every one of the 18 call sites was driven (17 with the override, the stage line without), per the spy's caller frames", () => {
     const tally = (driven: ReadonlySet<string>) => {
       const byFile = new Map<string, number>();
       for (const site of driven) {
@@ -550,7 +570,7 @@ describe("bracket overlay reaches every resolveFixtureCfg caller (spec §5.4.1)"
       SITES.filter((s) => s.override === false).map((s) => s.file).sort(),
     );
     expect(DRIVEN.size + DRIVEN_NO_OVERRIDE.size, "anti-vacuity: the sites checked").toBe(SITE_TOTAL);
-    expect(SITE_TOTAL).toBe(17);
+    expect(SITE_TOTAL).toBe(18);
   });
 });
 
