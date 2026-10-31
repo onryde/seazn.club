@@ -257,19 +257,13 @@ export function cardRegionFor(box: CanvasBox): CanvasBox | null {
 
 /**
  * R4 S7: the card region left once a sponsor slot shares the canvas with the match card (the scene carousel's banner on
- * Starting soon / Reconnecting). A slot already `CARD_CLEARANCE_PX` clear of `region` leaves it as it is. Otherwise the
- * largest, by area, of the four strips of `region` beside the slot (left, above, right, below; ties in that order),
- * each kept `CARD_CLEARANCE_PX` clear of it; `null` when none is at least `CARD_MIN_W × CARD_MIN_H` — the stage then
- * mounts no carousel, because the match card outranks it.
+ * Starting soon / Reconnecting): the largest, by area, of the four strips of `region` beside the slot (left, above,
+ * right, below; ties in that order), each kept `CARD_CLEARANCE_PX` clear of it; `null` when none is at least
+ * `CARD_MIN_W × CARD_MIN_H` — the stage then mounts no carousel, because the match card outranks it. A slot already
+ * `CARD_CLEARANCE_PX` clear of the region needs no case of its own: the strip on that side IS the whole region.
  */
 export function cardRegionBeside(region: CanvasBox, slot: CanvasBox): CanvasBox | null {
   const g = CARD_CLEARANCE_PX;
-  const clear =
-    slot.x + slot.width + g <= region.x ||
-    region.x + region.width + g <= slot.x ||
-    slot.y + slot.height + g <= region.y ||
-    region.y + region.height + g <= slot.y;
-  if (clear) return region;
   const x0 = region.x;
   const y0 = region.y;
   const x1 = region.x + region.width;
