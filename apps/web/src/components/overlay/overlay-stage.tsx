@@ -36,11 +36,11 @@ import { OverlayMatchCard, slateStateOf } from "./overlay-slate";
 import { forfeitCopyOf } from "@/lib/forfeit-tag";
 import { COMPOSITOR_HOST } from "@/lib/overlay-compositor";
 import { STREAM_POLL_MS } from "@/lib/stream-session-view";
-import { momentsFireIn, type SceneId } from "./overlay-scenes";
+import { SPONSOR_CAROUSEL_SCENES, momentsFireIn, type SceneId } from "./overlay-scenes";
 import { OverlaySceneBackdrop, phaseForScene, sceneFor } from "./overlay-scene";
 import { useProgrammePhase } from "./use-programme-phase";
 import { useCompositorSignals } from "./use-compositor-signals";
-import { SPONSOR_CAROUSEL_SCENES, SponsorCardView, SponsorCarousel } from "./sponsor-card";
+import { SponsorCardView, SponsorCarousel } from "./sponsor-card";
 
 export interface OverlayStageProps {
   fixtureId: string;

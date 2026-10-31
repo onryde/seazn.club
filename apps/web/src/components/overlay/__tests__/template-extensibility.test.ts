@@ -69,20 +69,28 @@ describe("a throwaway template reaches every reader with no other edit", () => {
   });
 
   it("the gallery's cell source: exactly the declared probe cells, all badminton", async () => {
-    const { galleryCells, GALLERY_MOMENT_SAMPLES, GALLERY_SNAPSHOT_KINDS } = await import("../gallery-matrix");
-    const { OVERLAY_SCENES } = await import("../overlay-scenes");
+    const { galleryCells, GALLERY_CAROUSEL_SPORTS, GALLERY_MOMENT_SAMPLES, GALLERY_SNAPSHOT_KINDS } = await import("../gallery-matrix");
+    const { OVERLAY_SCENES, SPONSOR_CAROUSEL_SCENES } = await import("../overlay-scenes");
     const cells = galleryCells(REG, VARIANTS).filter((c) => c.templateId === "probe");
     const firing = OVERLAY_SCENES.filter((s) => s.momentsFire).length;
     const badmintonSamples = GALLERY_MOMENT_SAMPLES.filter((s) => s.sportKey === "badminton").length;
-    const plain = cells.filter((c) => c.momentSampleId === null && c.resultStatus === null);
+    const plain = cells.filter((c) => c.momentSampleId === null && c.resultStatus === null && c.sponsorSlot === null && !c.carousel);
     const moment = cells.filter((c) => c.momentSampleId !== null);
     const variant = cells.filter((c) => c.resultStatus !== null);
+    // R4 S7: the probe's own declared slots, and the carousel when badminton is a carousel sport.
+    const sponsor = cells.filter((c) => c.sponsorSlot !== null);
+    const carousel = cells.filter((c) => c.carousel);
+    const carouselScenes = OVERLAY_SCENES.filter((s) => SPONSOR_CAROUSEL_SCENES.includes(s.id)).length;
     expect(plain).toHaveLength(OVERLAY_SCENES.length * GALLERY_SNAPSHOT_KINDS.length);
     expect(moment).toHaveLength(badmintonSamples * firing);
     expect(variant).toHaveLength(VARIANTS.length);
+    expect(sponsor.map((c) => c.sponsorSlot).sort()).toEqual(Object.keys(H.probeSlots).sort());
+    expect(carousel).toHaveLength((GALLERY_CAROUSEL_SPORTS as readonly string[]).includes("badminton") ? carouselScenes : 0);
     expect(badmintonSamples * firing, "anti-vacuity: badminton has firing moment samples").toBeGreaterThan(0);
     for (const c of cells) expect(c.sportKey, c.key).toBe("badminton");
-    console.log(`probe cells: ${cells.length} (plain ${plain.length}, moment ${moment.length}, variant ${variant.length})`);
+    console.log(
+      `probe cells: ${cells.length} (plain ${plain.length}, moment ${moment.length}, variant ${variant.length}, sponsor ${sponsor.length}, carousel ${carousel.length})`,
+    );
   });
 
   it("…and without the entry, no probe cell (the cell source reads its ARGUMENT, not the module's registry)", async () => {
