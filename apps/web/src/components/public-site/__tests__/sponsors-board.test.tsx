@@ -77,9 +77,28 @@ describe("sponsorHref", () => {
 
   // The rung that silently stops counting clicks. Blob-shim entries (an org's
   // un-backfilled `branding` jsonb) have no row and therefore no id.
-  it("links a blob-shim entry straight out, untagged on either page", () => {
-    expect(sponsorHref({ id: null, url: "https://halston.example" }, SITE)).toBe("https://halston.example");
-    expect(sponsorHref({ id: null, url: "https://halston.example" }, MATCH)).toBe("https://halston.example");
+  it("links a blob-shim entry straight out, untagged on either page (normalised by the URL parser)", () => {
+    expect(sponsorHref({ id: null, url: "https://halston.example" }, SITE)).toBe("https://halston.example/");
+    expect(sponsorHref({ id: null, url: "http://halston.example/deal?x=1" }, MATCH)).toBe("http://halston.example/deal?x=1");
+  });
+
+  // Fix round 1, m1: a blob entry is linked STRAIGHT out (no redirect to refuse it), so its href is the one place a
+  // stored `javascript:` or `data:` url would go live. React 19 blocks a `javascript:` href but passes `data:` through.
+  it("a blob-shim entry whose url is not http(s) gets no link at all (count reported)", () => {
+    const refused = ["javascript:alert(document.cookie)", "data:text/html,<script>alert(1)</script>", "ftp://files.example/x", "//evil.example", "halston.example"];
+    for (const url of refused) {
+      expect(sponsorHref({ id: null, url }, SITE), url).toBeNull();
+      expect(sponsorHref({ id: null, url }, MATCH), url).toBeNull();
+    }
+    expect(refused.length).toBe(5);
+    // A table row's link is the tracked redirect either way: the route refuses a bad stored url itself (404).
+    expect(sponsorHref({ id: "sp-gold", url: "https://halston.example" }, SITE)).toBe("/s/sp-gold?src=site");
+  });
+
+  it("a blob entry with a refused url still renders its NAME, unlinked, on the board", () => {
+    const html = render({ sponsors: [s({ name: "Old Faithful", tier: "partner", url: "data:text/html,<script>alert(1)</script>" })], tiered: false });
+    expect(html).toContain("Old Faithful");
+    expect(html).not.toContain("href=");
   });
 
   it("is null when the sponsor gave no url at all — with or without an id", () => {

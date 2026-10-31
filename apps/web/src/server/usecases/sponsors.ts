@@ -13,6 +13,7 @@ import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import { brandingSponsors } from "@/lib/org-branding";
+import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "@/lib/sponsor-clicks";
 import { getStripe } from "@/lib/stripe";
 import {
   sponsorInvoiceEmail,
@@ -76,7 +77,9 @@ const COLS = [
 
 export const CreateSponsorInput = z.object({
   name: z.string().min(1).max(80),
-  url: z.string().url().max(500).nullish(),
+  // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`, and this url is a
+  // redirect target (`/s/[key]`) and a board's href.
+  url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
   tier: z.enum(SPONSOR_TIERS).default("partner"),
   competition_id: z.string().uuid().nullish(),
@@ -340,14 +343,19 @@ export async function resolveSponsors(
   } else if (onStream) {
     resolved = [];
   } else {
-    // Blob shim: competition blob first then org blob, like the old render.
-    const [org] = await sql<{ branding: unknown }[]>`
-      select branding from organizations where id = ${orgId}`;
-    const comp = competitionId
+    // Blob shim: competition blob first then org blob, like the old render — ONLY for an org with no sponsor rows at
+    // all (R4 S10 fix round 1, m6). Rows that exist but none active here (withdrawn, pending, another competition's)
+    // mean the org has moved to the table: V283 backfilled the blobs but never cleared them, so reading them now would
+    // resurrect every withdrawn sponsor, untracked. Asked in the same read as the org's blob.
+    const [org] = await sql<{ branding: unknown; has_rows: boolean }[]>`
+      select o.branding, exists (select 1 from sponsors s where s.org_id = o.id) as has_rows
+        from organizations o where o.id = ${orgId}`;
+    const comp = competitionId && org?.has_rows === false
       ? await sql<{ branding: unknown }[]>`
           select branding from competitions where id = ${competitionId}`
       : [];
-    resolved = [...brandingSponsors(comp[0]?.branding), ...brandingSponsors(org?.branding)].map(
+    const blob = org?.has_rows === false ? org.branding : undefined;
+    resolved = [...brandingSponsors(comp[0]?.branding), ...brandingSponsors(blob)].map(
       (s) => ({
         id: null,
         name: s.name,

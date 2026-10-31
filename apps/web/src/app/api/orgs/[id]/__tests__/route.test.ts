@@ -116,6 +116,35 @@ describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] default_payment_method gate", () 
   });
 });
 
+// R4 S10 fix round 1, m1: the branding-blob sponsor slots are linked straight from the public boards (they have no row,
+// so no tracked redirect) — a stored `javascript:` or `data:` url would be a live href. zod 4's `.url()` accepts both.
+describe.skipIf(!HAS_DB)("PATCH /api/orgs/[id] sponsor slot urls: http(s) only", () => {
+  const branding = async (id: string) =>
+    (await sql<{ branding: { sponsors?: Array<{ url?: string | null }> } | null }[]>`
+      select branding from organizations where id = ${id}`)[0]!.branding;
+
+  it("refuses a javascript:, data: or ftp: url with a 400 and stores nothing (count reported)", async () => {
+    const org = await seedOrg();
+    const refused = ["javascript:alert(document.cookie)", "data:text/html,<script>alert(1)</script>", "ftp://files.example/x"];
+    for (const url of refused) {
+      const res = await PATCH(patchReq({ sponsors: [{ name: "Acme", url }] }), { params: Promise.resolve({ id: org.id }) });
+      expect(res.status, url).toBe(400);
+    }
+    expect(refused.length).toBe(3);
+    expect((await branding(org.id))?.sponsors ?? [], "nothing stored").toEqual([]);
+  });
+
+  it("positive pair: an https url, and a slot with no url, save", async () => {
+    const org = await seedOrg();
+    const res = await PATCH(
+      patchReq({ sponsors: [{ name: "Acme", url: "https://acme.example/" }, { name: "Bare" }] }),
+      { params: Promise.resolve({ id: org.id }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await branding(org.id))?.sponsors?.map((s) => s.url ?? null)).toEqual(["https://acme.example/", null]);
+  });
+});
+
 afterAll(async () => {
   if (!HAS_DB) return; // DB-less unit job: connecting just to disconnect throws
   await sql.end();
