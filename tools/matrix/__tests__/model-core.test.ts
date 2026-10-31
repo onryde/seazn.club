@@ -365,7 +365,7 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
     expect(m.counts.Rebuild).toEqual(counts(1, { refused: 1 }));
     expect(m.lateEntry).toBe(true);
   });
-  it("the #879 fence is for the product's round-robin kinds only (schedule.ts roundRobinStageIds): a late entry on a swiss stage leaves Generate offered (a knockout's is MB-005's fence, below)", async () => {
+  it("the #879 fence is for the product's round-robin kinds only (schedule.ts ROUND_ROBIN_STAGE_KINDS): a late entry on a swiss stage leaves Generate offered (a knockout's is MB-005's fence, below)", async () => {
     // single-sport: the fence reads stage kinds.
     const { m, d } = await fresh();
     await play(m, d, [["Generate", 0], ["AddEntrant", 0]]);

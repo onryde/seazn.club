@@ -43,7 +43,7 @@ export const FENCES: readonly Fence[] = Object.freeze([
     id: "late-entry-then-generate",
     issue: "#879",
     blocks: "Generate",
-    // Round-robin stages only (schedule.ts roundRobinStageIds). An entrant
+    // Round-robin stages only (schedule.ts ROUND_ROBIN_STAGE_KINDS). An entrant
     // added while the stage already has fixtures — before Start, since the
     // roster locks at Start — then Generate: the reconcile keys on POSITION
     // (rr-r{round}-c{court}), so it duplicates pairs and misses others (issue

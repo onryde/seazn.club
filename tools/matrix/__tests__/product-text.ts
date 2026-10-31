@@ -89,12 +89,17 @@ export function rosterLockText(): RosterLockText {
   return { statuses, openKinds, status, code, wireCode: code ?? wireCodeFor(status), message: m[4] };
 }
 
-/** schedule.ts roundRobinStageIds: the stage kinds the product generates as a
- *  round robin — the ones #879's positional reconcile can duplicate. */
+/** schedule.ts ROUND_ROBIN_STAGE_KINDS: the stage kinds the product generates
+ *  as a round robin — the ones #879's positional reconcile can duplicate. Not
+ *  `roundRobinStageIds`' own list since W3 T3b: that one is the wider
+ *  ROUND_SEQUENCE_STAGE_KINDS (it adds swiss, a round sequence for scheduling
+ *  but no round robin). */
 export function roundRobinKindsText(): string[] {
-  const m = /export async function roundRobinStageIds\([\s\S]*?kind in \(([^)]*)\)/.exec(read("apps/web/src/server/usecases/schedule.ts"));
-  if (m === null) throw new Error("product-text: schedule.ts roundRobinStageIds not found");
-  return [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
+  const m = /\nexport const ROUND_ROBIN_STAGE_KINDS: readonly string\[\] = \[([^\]]*)\];/.exec(read("apps/web/src/server/usecases/schedule.ts"));
+  if (m === null) throw new Error("product-text: schedule.ts ROUND_ROBIN_STAGE_KINDS not found in the expected shape");
+  const out = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+  if (out.length === 0) throw new Error("product-text: schedule.ts ROUND_ROBIN_STAGE_KINDS names no kind");
+  return out;
 }
 
 /** withdrawal.ts REASON: the reason every cascade event carries. */

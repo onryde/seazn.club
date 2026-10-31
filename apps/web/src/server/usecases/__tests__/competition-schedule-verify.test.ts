@@ -986,7 +986,8 @@ describe("joint engine assignments (#350)", () => {
         fixture(F2, D1, { round: 2, seq: 1, home: E3, away: E4 }),
       ],
       // stageIds stamped (unconditional, mirrors buildCompetitionPack), but
-      // NEITHER fixture is in roundNos — the bracket/swiss gate.
+      // NEITHER fixture is in roundNos — the bracket gate (swiss is a round
+      // sequence since W3 T3b; a bracket never is).
       { stageIds: { [F1]: "stage-bracket", [F2]: "stage-bracket" }, roundNos: {} },
     );
     const out = verifyJoint(

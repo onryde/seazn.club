@@ -341,11 +341,11 @@ export interface CompetitionPack {
    *  `fixtures.movable` order, like `poolIds`. */
   stageIds: Record<string, string>;
   /** C1 gap B — the joint twin of {@link SchedulePack.roundNos}. ONLY the
-   *  fixtures whose stage is round-robin-kind, unioned from the source
-   *  packs' own gated maps (each built against ITS OWN division's
-   *  `roundRobinStageIds`) — never re-derived here from `f.round` (the
-   *  ungated, model-facing display value), or a bracket/swiss stage's
-   *  display round would be forwarded as round-robin order again. Keys
+   *  fixtures whose stage is a round sequence (league, group, swiss — W3
+   *  T3b), unioned from the source packs' own gated maps (each built against
+   *  ITS OWN division's `roundRobinStageIds`) — never re-derived here from
+   *  `f.round` (the ungated, model-facing display value), or a bracket or
+   *  stepladder stage's display round would be forwarded as round order. Keys
    *  inserted in `fixtures.movable` order, like `poolIds`. */
   roundNos: Record<string, number>;
   /** Deterministic preprocessing choices worth telling the organiser about:

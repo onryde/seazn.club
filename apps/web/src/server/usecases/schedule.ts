@@ -648,29 +648,59 @@ export async function divisionLockState(
   return { frozen: row?.schedule_locked ?? false, scopes: row?.locked_scopes ?? [] };
 }
 
+/** The stage kinds `stages.ts` generates as a ROUND ROBIN (`generate()`'s
+ *  league/group branch): 1-based rounds, one sequence per stage or per pool.
+ *  Read as text by the format matrix's model (tools/matrix product-text.ts,
+ *  #879's positional reconcile), so keep it one array literal. */
+export const ROUND_ROBIN_STAGE_KINDS: readonly string[] = ["league", "group"];
+
+/** The stage kinds whose `round_no` is a real ROUND SEQUENCE, so scheduling
+ *  orders by it (`roundRobinStageIds`, below): the round robins, and swiss
+ *  (W3 T3b). */
+export const ROUND_SEQUENCE_STAGE_KINDS: readonly string[] = [...ROUND_ROBIN_STAGE_KINDS, "swiss"];
+
 /**
- * Which of a division's stages are round-robin-generated — `kind in
- * ('league', 'group')`, `stages.ts`'s own `generate()` switch (everything
- * else — knockout/page_playoff/double_elim/stepladder, plus swiss/americano/
- * ladder generated outside that switch entirely — is bracket- or
- * round-sequence-shaped some OTHER way).
+ * Which of a division's stages play a real ROUND SEQUENCE, so their
+ * `round_no` is an ordering input to scheduling: `ROUND_SEQUENCE_STAGE_KINDS`
+ * (league, group, swiss). The name predates `swiss` joining (W3 T3b,
+ * 2026-10-31) and was kept because every placement path imports it; read it
+ * as "round-sequence stage ids".
  *
- * C1 (2026-08-12 round-order design): round attaches to round-robin-
- * generated fixtures ONLY. `fixtures.round_no` is one shared column
- * populated for EVERY stage kind (a bracket's own round, a swiss round, a
- * stepladder leg — F1 (2026-08-17) names every one of them by position via
- * roundRole()/roundRoleLabel(), never derived from this column alone), so
- * which stages may forward it as a scheduling ORDERING input is
+ * `league`/`group` are `stages.ts`'s own round-robin `generate()` branch
+ * (a pooled group is one sequence per pool — the order key carries the pool).
+ * `swiss` is round-sequenced the same way: a Swiss stage mints every round as
+ * a TBD-v-TBD shell at Generate, and round r+1 cannot be paired until round r
+ * is complete, so a round-2 board ahead of round 1 is a schedule nobody can
+ * play — and with no entrants on the shells, nothing BUT round order keeps
+ * the auto pass from laying them down in fixture-ID order (it did, before
+ * T3b). The tails of `swiss_playoff`/`swiss_knockout` are separate
+ * `page_playoff`/`knockout` stages and stay OUT, as every bracket does: a
+ * bracket is ordered by its winner/loser feed edges (`feedDependencies`),
+ * not by round number. Everything else (double_elim, stepladder, americano,
+ * ladder) stays out too.
+ *
+ * C1 (2026-08-12 round-order design): `fixtures.round_no` is one shared
+ * column populated for EVERY stage kind (a bracket's own round, a swiss
+ * round, a stepladder leg — F1 (2026-08-17) names every one of them by
+ * position via roundRole()/roundRoleLabel(), never derived from this column
+ * alone), so which stages may forward it as a scheduling ORDERING input is
  * not derivable from a `FixtureLite` row alone; this is the one query that
  * resolves it, so `toAssignment` and the schedulable builder can both ask
  * it the SAME question rather than guessing from the row itself. Without
  * this gate, a division that mixes a league stage with a stepladder — the
  * design doc's own motivating symptom — would compare the two stages'
- * independent 1-based round sequences as if they were one.
+ * independent 1-based round sequences as if they were one. Two stages in
+ * this set are still never compared with each other: the order key is
+ * `(division, stage, pool)` (`roundRobinSequenceKey`, calendar.ts).
+ *
+ * WHAT IT ENFORCES is C1's rule and nothing stronger: a later round starts
+ * no earlier than an earlier round STARTS (ties legal). A Swiss round really
+ * needs the previous round to have ENDED; that end floor needs the engine's
+ * three placement sides (CP-SAT model, greedy, verifier) and is not here.
  */
 export async function roundRobinStageIds(tx: Tx, divisionId: string): Promise<Set<string>> {
   const rows = await tx<{ id: string }[]>`
-    select id from stages where division_id = ${divisionId} and kind in ('league', 'group')`;
+    select id from stages where division_id = ${divisionId} and kind in ${tx(ROUND_SEQUENCE_STAGE_KINDS)}`;
   return new Set(rows.map((r) => r.id));
 }
 
@@ -871,11 +901,21 @@ function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
  *  legs all reuse it for display), and forwarding it for a non-round-robin
  *  stage would compare two independent round sequences as if they were one
  *  — the design doc's own motivating symptom. Omitted (not `undefined`)
- *  when the parameter itself is omitted: existing callers that do not pass
- *  it keep their exact pre-C1 behaviour, and round-order enforcement is
- *  correctly inert wherever it is not threaded through (`competition-
- *  schedule-apply.ts`, `schedule-ai.ts`'s AI-plan path, `person-merge.ts` —
- *  deferred this session; see the task report).
+ *  when the parameter itself is omitted: a caller that does not pass it
+ *  keeps the pre-C1 behaviour, and round order is inert on that call. The
+ *  board paths pass it (autoSchedule, applySchedule, moveFixture,
+ *  validateScheduleIn, `competition-schedule-apply.ts`, `person-merge.ts`;
+ *  `schedule-ai.ts` gates its pack's `roundNos` on the same set). Two calls
+ *  do not, on purpose: `siblingAssignments` (other divisions' cards, in no
+ *  round sequence of this one) and `schedule-ai.ts`'s obstacle list (a court
+ *  booking with no ids, which orders nothing).
+ *
+ *  A Swiss bye row never carries `roundNo`, even on a round-sequence stage
+ *  (W3 T3b). A bye is not play — it takes no court and no time
+ *  (`isSwissByeShellExtKey`, SWISS_BYE_NOT_PLACEABLE) — so it is no round's
+ *  board. One that holds a slot anyway (a legacy row, a history Undo of a
+ *  pre-T3 step) must not read as "round 2 starts before round 1" on the
+ *  board, nor squeeze the solver as a pinned round-2 row.
  *
  *  `stageId` (C1 fix-loop, Finding 2) is stamped UNCONDITIONALLY, the same
  *  way `divisionId` is — `fixtures.stage_id` is `NOT NULL`, no gate needed.
@@ -912,7 +952,7 @@ export function toAssignment(
     ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
     divisionId: f.division_id,
     stageId: f.stage_id,
-    ...(roundRobinStageIds?.has(f.stage_id) ? { roundNo: f.round_no } : {}),
+    ...(roundRobinStageIds?.has(f.stage_id) && !isSwissByeShellExtKey(f.ext_key) ? { roundNo: f.round_no } : {}),
     movable: !f.schedule_locked,
   };
 }

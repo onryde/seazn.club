@@ -141,8 +141,10 @@ describe.runIf(HAS_DB)("W3 T3 X-SW-29 a Swiss bye shell never takes a court", ()
     expect(after.boards.filter(holdsSlot).length, "anti-vacuity: every board was placed").toBe(4);
 
     // An apply handed a bye shell anyway (a stale client, a hand-built body) skips it, the way it skips a row that holds
-    // a result: nothing is written to the bye, and the rest of the apply lands.
-    const board = after.boards[0]!;
+    // a result: nothing is written to the bye, and the rest of the apply lands. The board is the LAST round's: a Swiss
+    // stage is a round sequence (W3 T3b), so a round-1 board moved to 16:00 would start after round 2 and be refused.
+    const board = after.boards[after.boards.length - 1]!;
+    expect(board.round_no, "premise: the moved board is the last round's").toBe(2);
     const stale = await applySchedule(rig.auth, rig.stageId, {
       assignments: [
         { fixture_id: byes[0]!.id, scheduled_at: "2030-08-01T15:00:00.000Z", court_id: rig.courts[0]! },
