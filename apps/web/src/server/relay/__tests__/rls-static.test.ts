@@ -50,6 +50,25 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
   // m-2 (B3 review): the fold selects deltas by FILENAME (/stream|capture/), so a later `V4xx__relay_*.sql` that alters
   // a stream table would escape every scan here (AGENTS #16: sweep by behaviour, never by filename). This reads the
   // directory itself — not the fold's list — and checks every delta from V410 on by what its SQL touches.
+  //
+  // A foreign key that merely POINTS AT a stream table (`references fixture_stream_sessions(id)`) does not touch it: it
+  // creates no stream table, alters none, and grants nothing on one. R4's V483 (tenant sponsor tables with an airing →
+  // session key) is such a delta, and it must stay OUT of the fold, whose no-policy/no-grant claim would refuse its
+  // org-scoped policies. So FK targets are stripped before the content test — and only they: any other mention in the
+  // same file still counts (the synthetic pair below pins both directions).
+  const touchesStreamTable = (sqlText: string): boolean =>
+    /\b(fixture_stream_|org_stream_)\w*/.test(
+      stripSqlComments(sqlText).replace(/\breferences\s+(fixture_stream_|org_stream_)\w+/gi, ""),
+    );
+
+  it("a delta that only references a stream table as a foreign-key target does not touch it; one that also alters it does", () => {
+    expect(touchesStreamTable("create table t (s uuid references fixture_stream_sessions(id) on delete set null);")).toBe(false);
+    expect(touchesStreamTable(
+      "create table t (s uuid references fixture_stream_sessions(id));\nalter table fixture_stream_sessions add column x int;",
+    )).toBe(true);
+    expect(touchesStreamTable("grant select on org_stream_targets to app_user;")).toBe(true);
+  });
+
   it("the fold misses no delta that touches a stream table — chosen by name, checked by content", () => {
     const dir = resolve(import.meta.dirname, "../../../../../../db/migration/deltas");
     const version = (f: string): number => Number(/^V(\d+)__/.exec(f)![1]);
@@ -58,7 +77,7 @@ describe("the stream deltas — RLS is static text, not a runtime hope", () => {
     expect(v410, "V410 is where the stream tables begin").toBeDefined();
     const touching = deltas
       .filter((f) => version(f) >= version(v410!))
-      .filter((f) => /\b(fixture_stream_|org_stream_)\w*/.test(stripSqlComments(readFileSync(join(dir, f), "utf8"))));
+      .filter((f) => touchesStreamTable(readFileSync(join(dir, f), "utf8")));
     expect(touching.length, "no delta touches a stream table — the sweep proved nothing").toBeGreaterThan(1);
     for (const f of touching) expect(STREAM_DELTA_FILES, f).toContain(f);
   });
