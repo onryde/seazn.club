@@ -269,6 +269,15 @@ These go to `_INDEX.md` "False premises found".
    round's original pairings is out of scope (§4).
 7. The app work in §6.2 runs before the engine release; only §6.3 waits for it (§6).
 
+9. Cases (a) and (b) are tried before the "no round left" refusal. The refusal applies only when case (c) would be
+   needed and there is no next round.
+10. An *automatic* arrival with no round left is not refused, because that would fail a payment. It is recorded as an
+    entrant with no games and flagged on the desk.
+11. Only an organiser's "Add late player" makes Undo refuse. An automatic arrival does not change Undo.
+12. Freezing the bye's `config_snapshot` (SW-M7) must exempt system byes from the "played" readers
+    (`fixture-results-sql.ts:64` `fixtureEvidenceSql`, `format-standing.ts:23` `playedSql`). Otherwise an odd-field Pair
+    locks the stage rules and blocks Unpair, Rebuild and Undo (found by the app-A planner).
+
 ## 11. Left to the builder
 
 - Refusal codes, i18n keys and copy for every new message (all 4 locales).
