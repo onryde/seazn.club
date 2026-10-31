@@ -1,12 +1,12 @@
 // W2b Task 7 (spec §5.3 web half, §5.4; plan D20, PF-5, PF-8b, C-5; Review Focus 1 and 2). A double walkover seats
 // nobody; its fed seats are dead and the cascade walks the other side over; a forfeit loser never drops to a losers'
 // or third-place seat; byes carry `reason: "bye"`. Expected values come from Appendix A (X-DW-2, X-DE-1, X-BR-1) and
-// the engine's own pinned bye deltas (`bye-deltas.json`, spec C-5), never from the code under test.
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+// the engine's own pinned bye deltas (`bye-deltas.json`, spec C-5; read through `byeDeltas()` from @seazn/engine/testkit), never from
+// the code under test.
 import { afterAll, describe, expect, it } from "vitest";
 import { advancesNobody, OUTCOME_KINDS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
+import { byeDeltas } from "@seazn/engine/testkit";
 import { sql, withTenant } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { recomputeStandings } from "@/server/engine-db";
@@ -417,9 +417,7 @@ describe.skipIf(!HAS_DB)("Review Focus 1 and 2: a void moves the seats with it",
   });
 });
 
-const BYE_DELTAS = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../../../../../../packages/engine/src/sport/__fixtures__/bye-deltas.json", import.meta.url)), "utf8"),
-) as Record<string, Record<string, Record<"home" | "away", { entrantId: string; played: number; won: number; drawn: number; lost: number; points: number; metrics: Record<string, number> }[]>>>;
+const BYE_DELTAS = byeDeltas() as Record<string, Record<string, Record<"home" | "away", { entrantId: string; played: number; won: number; drawn: number; lost: number; points: number; metrics: Record<string, number> }[]>>>;
 
 describe.skipIf(!HAS_DB)("C-5: every bye writer stores reason bye, and a bye credits exactly today's bye delta", () => {
   it("C-5 bye: the Swiss bye, the generator bye and the seeded bye store {kind:award, winner, loser:null, reason:bye}", async () => {

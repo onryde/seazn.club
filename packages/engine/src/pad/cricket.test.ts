@@ -99,7 +99,7 @@ describe("P2.1 premise (Q1b): which batter the fold accepts as `out`", () => {
     expect(outs).toEqual([STRIKER, NON_STRIKER]);
   });
 
-  it("the fold's only `out` check is crease membership: it accepts the non-striker for EVERY mode, and refuses a batter not at the crease (lenient beyond the Laws; owed as rules row CK-WK-4, open: tightening the fold reds this on purpose)", () => {
+  it("the fold's only `out` check is crease membership: it accepts the non-striker for EVERY mode, and refuses a batter not at the crease (lenient beyond the Laws; owed as rules row CK-WK-4, deviation 249: tightening the fold reds this on purpose)", () => {
     // This is what makes `variableOutKinds` a declaration (c) and not a mirror of a fold guard: cricket.ts's applyDelivery checks
     // `wicket.out` against the two batters at the crease and nothing else, so bowled-the-non-striker folds. Pinned here so a
     // drift test can never claim the fold enforces "who can be out" per mode. The Laws allow it for none of bowled, caught, lbw,
@@ -152,6 +152,25 @@ describe("P2.1 premise (Q1b): which batter the fold accepts as `out`", () => {
     }
     expect(folded).toBe(4);
   });
+
+  it("CK-RH-2 a retired-out batter written on the wicket sheet's path (cricket.ball, wicket mode retired) counts a legal dot ball, while the Retire sheet's out (cricket.retire) records no delivery (ruling 246, a known deviation: Law 25.4.1 retires on a dead ball, so the rulebook's count is 0; owed work O-13 reds the first half of this pin on purpose)", () => {
+    // The control: one plain dot ball is one legal ball. Both retired-out paths are measured against it, for either batter.
+    const dotBall = openInnings(fold(T20, [["core.start"], delivery()]));
+    expect(dotBall.legalBalls, "control: a plain dot ball is one legal ball").toBe(1);
+    let measured = 0;
+    for (const out of [STRIKER, NON_STRIKER]) {
+      // The wicket sheet's Retired: the retirement rides a cricket.ball, so the delivery it rides on is counted (today's behaviour).
+      const onBall = openInnings(fold(T20, [["core.start"], delivery({ wicket: wicketOf("retired", out) })]));
+      expect(onBall.wickets, `retired on a ball, ${out}: a wicket`).toBe(1);
+      expect(onBall.legalBalls, `retired on a ball, ${out}: counts the dot ball it rides on`).toBe(dotBall.legalBalls);
+      // The Retire sheet's out: cricket.retire is no delivery, so it adds no ball to the one already bowled.
+      const retire = openInnings(fold(T20, [["core.start"], delivery(), ["cricket.retire", { person: out, reason: "out" }]]));
+      expect(retire.wickets, `cricket.retire out, ${out}: a wicket`).toBe(1);
+      expect(retire.legalBalls, `cricket.retire out, ${out}: adds no ball`).toBe(dotBall.legalBalls);
+      measured += 2;
+    }
+    expect(measured).toBe(4);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -189,7 +208,7 @@ const LAW_NO_BALL_PENALTY = 1;
 const sorted = (xs: readonly (string | number)[]) => [...xs].sort();
 
 describe("cricketPadRules: the static sets are the fold's own declarations", () => {
-  it("wicketKinds / extraKinds are the schema enums the fold parses with (the same objects)", () => {
+  it("CK-EX-1 wicketKinds / extraKinds are the schema enums the fold parses with (the same objects)", () => {
     expect(WicketKind).toBe(CricketWicket.shape.kind);
     expect(ExtraKind).toBe(CricketExtras.shape.kind);
     expect(cricketPadRules.wicketKinds).toBe(WicketKind.options);
@@ -334,7 +353,7 @@ describe("cricketPadRules against the real fold (T20)", () => {
     expect(folded).toBe(LAWS_NO_FIELDER_NAMED.length);
   });
 
-  it("CK-PR-1 penaltyRuns: Law 41's one award; a penalty extra of it lands on the batting side, charged to no bowler, run by nobody", () => {
+  it("CK-PR-1 CK-PR-2 penaltyRuns: Law 41's one award; a penalty extra of it lands on the batting side, charged to no bowler, run by nobody", () => {
     expect(cricketPadRules.penaltyRuns).toBe(LAW_41_ONE_AWARD);
     const innings = openInnings(fold(T20, [["core.start"], delivery({ extras: { kind: "penalty", runs: cricketPadRules.penaltyRuns } })]));
     expect(innings.battingSide).toBe("home");

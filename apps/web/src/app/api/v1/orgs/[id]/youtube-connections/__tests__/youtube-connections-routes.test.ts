@@ -28,6 +28,7 @@ vi.mock("next/headers", () => ({
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { YOUTUBE_CONSENT_VERSION } from "@/lib/youtube";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "@/server/api-v1/key-scopes";
 import { createApiKey } from "@/server/usecases/api-keys";
@@ -356,6 +357,36 @@ describe.skipIf(!HAS_DB)("PATCH a connection's settings", () => {
     expect(await connectionRow(c.connectionId)).toMatchObject({ default_privacy: "unlisted", made_for_kids: false });
   });
 
+  it("Review updated terms needs BOTH boxes (owner, PO 2026-10-30): the terms alone, the under-16 box alone, either one false, or the under-16 box beside a setting is 400 VALIDATION and the outdated consent stays as it was; both together record the current wording", async () => {
+    const o = await org();
+    signedInAs(o.userId);
+    // A connection consented to the wording BEFORE this one: the Streaming page asks for the review.
+    const c = await connect(o, { consentVersion: YOUTUBE_CONSENT_VERSION - 1 });
+    const consentRow = async () =>
+      (await sql<{ consent_version: number; default_privacy: string }[]>`select consent_version, default_privacy from org_youtube_connections where id = ${c.connectionId}`)[0]!;
+    expect(await consentRow(), "PREMISE: consented to the older wording").toEqual({ consent_version: YOUTUBE_CONSENT_VERSION - 1, default_privacy: "unlisted" });
+    // The body fields are T8's contract, typed: `consent` (box 1) and `consentMinors` (box 2), each only ever `true`.
+    const short: unknown[] = [
+      { consent: true }, { consentMinors: true }, { consent: true, consentMinors: false }, { consent: false, consentMinors: true },
+      { consentMinors: true, privacy: "public" }, { consent: true, privacy: "public" },
+    ];
+    let refused = 0;
+    for (const b of short) {
+      const res = await patch(o.orgId, c.connectionId, b);
+      expect(res.status, JSON.stringify(b)).toBe(400);
+      expect((await json(res)).error, JSON.stringify(b)).toMatchObject({ code: "VALIDATION" });
+      expect(await consentRow(), `${JSON.stringify(b)}: nothing changed`).toEqual({ consent_version: YOUTUBE_CONSENT_VERSION - 1, default_privacy: "unlisted" });
+      refused++;
+    }
+    expect(refused, "anti-vacuity: six short consents checked").toBe(6);
+
+    // The positive pair: both boxes, and the review is done — the current wording is on file and the page stops asking.
+    const res = await patch(o.orgId, c.connectionId, { consent: true, consentMinors: true });
+    expect(res.status).toBe(200);
+    expect((await json(res)).data).toMatchObject({ connectionId: c.connectionId, termsOutdated: false });
+    expect((await consentRow()).consent_version).toBe(YOUTUBE_CONSENT_VERSION);
+  });
+
   it("a disconnected connection is 404", async () => {
     const o = await org();
     signedInAs(o.userId);
@@ -422,7 +453,7 @@ describe.skipIf(!HAS_DB)("DELETE — Disconnect a channel (T18)", () => {
     expect(res.status).toBe(200);
     const body = await json(res);
     expect(body.ok).toBe(true);
-    expect(body.data).toEqual({ revokeOutcome: "revoked", keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
+    expect(body.data).toEqual({ revokeOutcome: "revoked", keysDeleted: 0, keysLeft: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } });
     expect(revokes() - before, "revoked at Google once").toBe(1);
     expect(await statusOf(c.connectionId)).toBe("revoked");
     expect(((await json(await list(o.orgId))).data as unknown as unknown[]).length, "no longer listed").toBe(0);
@@ -555,7 +586,7 @@ describe.skipIf(!HAS_DB)("DELETE — Disconnect a channel (T18)", () => {
     expect(op.summary.toLowerCase()).toContain("purge"); checked++;
     const ok = op.responses["200"]!.content!["application/json"]!.schema!;
     const dataProps = Object.keys(((ok.properties!.data as { properties: Record<string, unknown> }).properties));
-    expect(dataProps.sort()).toEqual(["keysDeleted", "purged", "revokeOutcome"]);
+    expect(dataProps.sort()).toEqual(["keysDeleted", "keysLeft", "purged", "revokeOutcome"]);
     expect(checked).toBe(7);
   });
 });

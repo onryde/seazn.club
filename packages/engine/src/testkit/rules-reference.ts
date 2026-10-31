@@ -4,9 +4,10 @@
 // `proved by` hold backticked paths separated by "<br>". The tables are `rules/*.md` at the package root, which ships in the
 // tarball (package.json "files"), so the one URL below is right from `src/testkit/` AND from `dist/testkit/`.
 //
-// This module reads the disk (node:fs), and is the ONE disk-reading module the testkit barrel exports: its input ships with the
-// package, where the other disk readers (golden.ts, dossiers.ts, conformance-pad.ts) read files that do not. The engine test
-// `the published testkit barrel's disk-reading closure is exactly the rules reference` holds that exception to this file alone.
+// This module reads the disk (node:fs), and is one of the TWO disk-reading modules the testkit barrel exports (the other is corpora.ts,
+// engine-split 2b R1): its input ships with the package, where the other disk readers (golden.ts, dossiers.ts, conformance-pad.ts) read
+// files that do not. The engine test `the published testkit barrel's disk-reading closure is exactly the rules reference and the corpora
+// reader` holds that exception to these two files alone.
 //
 // Pure of every repo path on purpose: what a row's paths mean (which test proves a rule, where it is enforced) is the checker's
 // business, and the checker reads the repo, which a package consumer does not have. See test/rules-reference.ts.

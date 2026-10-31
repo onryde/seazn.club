@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { generatePagePlayoff } from "@seazn/engine/scheduling";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildRuleOverride } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { RULES, decide } from "../lib/applicability.ts";
@@ -1209,6 +1210,36 @@ class WarnsToo extends FakeLeagueDriver {
 }
 const read = (rel: string) => readFileSync(resolve(REPO, rel), "utf8");
 
+/** The `kind` literals of the engine's exported `LineupIssue` union, read off the TYPE the way a consumer's compiler sees it through
+ *  `@seazn/engine/sport` (src/*.ts in the workspace, dist/*.d.ts once the engine is installed): a type has no runtime value, so the
+ *  compiler is the reader, and the file the type lives in is never named here. THROWS when the import does not resolve or the type is
+ *  not a union of string literals, so an `any` can never read as "no kinds". */
+function lineupIssueKinds(): string[] {
+  const rootFile = resolve(REPO, "tools/matrix/__tests__/lineup-issue-kinds.virtual.ts"); // beside this file, so `@seazn/engine` resolves as it does here
+  const text = 'import type { LineupIssue } from "@seazn/engine/sport";\nexport type Kind = LineupIssue["kind"];\n';
+  const options: ts.CompilerOptions = {
+    module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, target: ts.ScriptTarget.ES2022,
+    strict: true, noEmit: true, skipLibCheck: true, allowImportingTsExtensions: true, types: [],
+  };
+  const host = ts.createCompilerHost(options);
+  const { getSourceFile, fileExists, readFile } = host;
+  host.getSourceFile = (name, ...rest) => (name === rootFile ? ts.createSourceFile(name, text, ts.ScriptTarget.ES2022, true) : getSourceFile.call(host, name, ...rest));
+  host.fileExists = (name) => name === rootFile || fileExists.call(host, name);
+  host.readFile = (name) => (name === rootFile ? text : readFile.call(host, name));
+  const program = ts.createProgram([rootFile], options, host);
+  const source = program.getSourceFile(rootFile);
+  if (source === undefined) throw new Error("lineupIssueKinds: the probe file is not in the program");
+  const problems = program.getSemanticDiagnostics(source).map((d) => ts.flattenDiagnosticMessageText(d.messageText, " "));
+  if (problems.length > 0) throw new Error(`lineupIssueKinds: @seazn/engine/sport does not export LineupIssue as the probe expects: ${problems.join("; ")}`);
+  const alias = source.statements.find(ts.isTypeAliasDeclaration);
+  if (alias === undefined) throw new Error("lineupIssueKinds: the probe declares no type alias");
+  const type = program.getTypeChecker().getTypeAtLocation(alias.name);
+  return (type.isUnion() ? type.types : [type]).map((t) => {
+    if (!t.isStringLiteral()) throw new Error("lineupIssueKinds: LineupIssue[\"kind\"] is not a union of string literals");
+    return t.value;
+  });
+}
+
 /** http.ts's `if (err instanceof ZodError) { ... }` branch of v1Inner's catch, header to its closer at the same indent.
  *  THROWS on a missing header or closer, so a pin cannot pass on text it never found. */
 function zodErrorBranch(src: string): string {
@@ -1485,7 +1516,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
   });
 
   it("lineupWarningKind reads the product's formatLineupIssue templates and the engine's issue JSON, kind for kind", () => {
-    const engineKinds = [...(/\nexport type LineupIssue =([\s\S]*?);\n/.exec(read("packages/engine/src/sport/catalog.ts"))?.[1] ?? "").matchAll(/kind: "([a-z_]+)"/g)].map((m) => m[1]!);
+    const engineKinds = lineupIssueKinds();
     const fmt = /\nfunction formatLineupIssue\(issue: LineupIssue\): string \{([\s\S]*?)\n\}\n/.exec(read("apps/web/src/server/usecases/fixtures.ts"))?.[1] ?? "";
     // Every placeholder rendered as "7": a count, an id or a key alike.
     const rendered = [...fmt.matchAll(/case "([a-z_]+)":\s*return `([^`]*)`;/g)].map((m) => ({ kind: m[1]!, text: m[2]!.replace(/\$\{[^}]*\}/g, "7") }));
@@ -1500,7 +1531,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect(lineupWarningKind("nothing the product says")).toBeNull();
     expect(lineupWarningKind(JSON.stringify({ kind: 3 }))).toBeNull();
     expect(lineupWarningKind("[]")).toBeNull();
-  });
+  }, 60_000); // the compiler program behind lineupIssueKinds() is about a second warm, several cold
 
   it("Step 0: the product's lineup PUT, pinned from its source — the refusal codes, replace-not-append, a warning-only check, no event-time assertLineup", () => {
     const fixtures = read("apps/web/src/server/usecases/fixtures.ts");

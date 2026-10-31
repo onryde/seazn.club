@@ -6,7 +6,9 @@
 //
 // So the PRODUCER is the real component, rendered; the browser's job (serialising a form) is done by `formFields` below, from the markup
 // alone; the CONSUMER is the real route, the real FakeYouTube behind the port, and real Postgres for the pending row. Expected values are
-// literals typed from the spec (§6.1: Unlisted and "not for kids" by default; consent version 1), never read back from the code under test.
+// literals typed from the spec (§6.1: Unlisted and "not for kids" by default), never read back from the code under test. The consent
+// version is the one exception: it is `YOUTUBE_CONSENT_VERSION`, the version of the text the form renders, so the pin moves when the
+// wording does (youtube-connect-panel.test.tsx pins the wording and the version together).
 // Skipped without DATABASE_URL like every DB suite here.
 //
 // Sport: not applicable — connecting a YouTube channel is sport-agnostic.
@@ -51,7 +53,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { sql } from "@/lib/db";
-import { YOUTUBE_SCOPE } from "@/lib/youtube";
+import { YOUTUBE_CONSENT_VERSION, YOUTUBE_SCOPE } from "@/lib/youtube";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
 import { FakeYouTube } from "@/server/youtube/fake";
@@ -150,16 +152,19 @@ async function liveConnection(r: { orgId: string; userId: string }, consentVersi
 }
 const rowMarkup = (t: StreamTarget, orgId: string): string => renderToStaticMarkup((<ConfirmProvider><ul><YoutubeChannelRow t={t} canEdit orgId={orgId} badge={null} /></ul></ConfirmProvider>) as ReactElement);
 
+/** The consent is two boxes (owner, PO 2026-10-30): the terms and YouTube's under-16 rule — the form fields T7's route reads, typed. */
+const BOTH_BOXES = ["consent", "consentMinors"];
+
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => {
-  it("the form as shipped, ticked: the route sends the browser to Google (the fake hop) and records the consent with the DEFAULTS the spec names — Unlisted, not for kids, version 1, by this user", async () => {
+  it("the form as shipped, ticked: the route sends the browser to Google (the fake hop) and records the consent with the DEFAULTS the spec names — Unlisted, not for kids, the CURRENT consent version, by this user", async () => {
     const r = await rig();
     const html = renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />);
-    const res = await post(formFields(html, { tick: ["consent"] }));
+    const res = await post(formFields(html, { tick: BOTH_BOXES }));
     expect(res.status).toBe(303);
     expect(new URL(res.headers.get("location")!).pathname).toBe("/api/youtube/connect/fake-authorize");
     const rows = await pendingRows(r.orgId);
-    expect(rows).toEqual([{ user_id: r.userId, connection_id: null, default_privacy: "unlisted", made_for_kids: false, consent_version: 1 }]);
+    expect(rows).toEqual([{ user_id: r.userId, connection_id: null, default_privacy: "unlisted", made_for_kids: false, consent_version: YOUTUBE_CONSENT_VERSION }]);
   });
 
   it("the form UNTICKED is refused by the route (400, no pending row): the disabled button is the courtesy, this is the guard — and it is the form's own serialisation that lacks consent", async () => {
@@ -171,9 +176,29 @@ describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => 
     expect(await pendingRows(r.orgId)).toEqual([]);
   });
 
+  it("BOTH boxes, from the form's own markup: its checkboxes are exactly the two the route reads, and every tick short of both — one, the other, none — is refused 400 with no pending row; both go ahead", async () => {
+    const r = await rig();
+    const html = renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />);
+    // The boxes as the markup has them, so a third box (or a renamed one) is seen here rather than silently left unticked below.
+    const boxes = [...html.matchAll(/<input\b([^>]*)>/g)].map(([, a = ""]) => a).filter((a) => /\btype="checkbox"/.test(a)).map((a) => /\bname="([^"]*)"/.exec(a)?.[1]);
+    expect(boxes, "the form's checkboxes are the route's two consent fields").toEqual(BOTH_BOXES);
+    let refused = 0;
+    for (const tick of [["consent"], ["consentMinors"], []]) {
+      const fields = formFields(html, { tick });
+      expect(BOTH_BOXES.filter((b) => fields.has(b)), `PREMISE: the form posts only ${JSON.stringify(tick)}`).toEqual(tick);
+      const res = await post(fields);
+      expect(res.status, `ticked ${JSON.stringify(tick)}`).toBe(400);
+      expect(await pendingRows(r.orgId), `ticked ${JSON.stringify(tick)}: no pending row`).toEqual([]);
+      refused++;
+    }
+    expect(refused, "anti-vacuity: the three tick states that are not a consent").toBe(3);
+    expect((await post(formFields(html, { tick: BOTH_BOXES }))).status, "both: sent on").toBe(303);
+    expect((await pendingRows(r.orgId)).length).toBe(1);
+  });
+
   it("every visibility x made-for-kids the form can post is one the route accepts and stores — six combinations, each from the choice component's own markup", async () => {
     const r = await rig();
-    const base = formFields(renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />), { tick: ["consent"] });
+    const base = formFields(renderToStaticMarkup(<YoutubeConnectCard orgId={r.orgId} onCancel={() => {}} />), { tick: BOTH_BOXES });
     let checked = 0;
     for (const privacy of ["unlisted", "public", "private"] as const) {
       for (const kids of ["0", "1"] as const) {
@@ -201,7 +226,7 @@ describe.skipIf(!HAS_DB)("the Reconnect form -> POST /api/youtube/connect", () =
 
   it("a dead connection whose consent is CURRENT: the form as shipped (no consent field) reconnects it — the pending grant is bound to THAT connection (T7-R2)", async () => {
     const r = await rig();
-    const connectionId = await liveConnection(r, 1);
+    const connectionId = await liveConnection(r, YOUTUBE_CONSENT_VERSION);
     const fields = formFields(rowMarkup(dead(connectionId), r.orgId));
     expect(fields.has("consent"), "PREMISE: the reconnect form posts no consent").toBe(false);
     expect(fields.get("connectionId")).toBe(connectionId);
@@ -233,14 +258,14 @@ describe.skipIf(!HAS_DB)("the Reconnect form -> POST /api/youtube/connect", () =
 // handler); the panel is the real one. A notice built from a fixture on both ends would prove the fixture.
 
 const enDict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8")) as Record<string, string>;
-const noticeText = (name: string, outcome: "revoked" | "skipped_shared_account" | "not_confirmed"): string =>
-  renderToStaticMarkup(<DictProvider dict={enDict as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name={name} outcome={outcome} onDismiss={() => {}} /></DictProvider>)
+const noticeText = (name: string, outcome: "revoked" | "skipped_shared_account" | "not_confirmed", keysLeft: number | null): string =>
+  renderToStaticMarkup(<DictProvider dict={enDict as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name={name} outcome={outcome} keysLeft={keysLeft} onDismiss={() => {}} /></DictProvider>)
     .replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
 
 describe.skipIf(!HAS_DB)("the Disconnect row -> DELETE /api/v1/orgs/:id/youtube-connections/:id -> the notice", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("each of the three outcomes - revoked, left alone because another channel uses the Google account, and tried-and-not-confirmed - reaches the rendered notice as its own sentence, and a damaged saved token is the third, not the second (anti-vacuity: 3 outcomes + 1)", async () => {
+  it("each of the three outcomes - revoked, left alone because another channel uses the Google account, and tried-and-not-confirmed - reaches the rendered notice as its own sentence, and a damaged saved token is the third, not the second; a key YouTube will not delete, and a channel that cannot be read, reach it as 'keys left' (anti-vacuity: 3 outcomes + 1 + 2 keys-left)", async () => {
     setYoutubeDriverForTest(rigFake);
     vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
       const hit = /^\/api\/v1\/orgs\/([^/]+)\/youtube-connections\/([^/]+)$/.exec(url);
@@ -248,21 +273,32 @@ describe.skipIf(!HAS_DB)("the Disconnect row -> DELETE /api/v1/orgs/:id/youtube-
       return DISCONNECT(new Request(`http://localhost${url}`, { method: "DELETE", headers: init.headers }), { params: Promise.resolve({ id: hit[1]!, connectionId: hit[2]! }) });
     });
     const seen: string[] = [];
-    const scenarios: { name: string; want: "revoked" | "skipped_shared_account" | "not_confirmed"; setup: (c: { token: string; channel: { id: string }; connectionId: string }, sub: string) => Promise<void> }[] = [
-      { name: "plain", want: "revoked", setup: async () => {} },
+    type Want = "revoked" | "skipped_shared_account" | "not_confirmed";
+    const scenarios: { name: string; want: Want; keysLeft: number | null; setup: (c: { token: string; channel: { id: string }; connectionId: string }, sub: string) => Promise<void> }[] = [
+      { name: "plain", want: "revoked", keysLeft: 0, setup: async () => {} },
       {
-        name: "shared Google account", want: "skipped_shared_account",
+        name: "shared Google account", want: "skipped_shared_account", keysLeft: 0,
         setup: async (_c, sub) => {
           const other = await rigOrg();
           const b = await connect(other, { sub });
           rigFake.seedGrant({ refreshToken: b.token, channelId: b.channel.id, channelTitle: b.channel.title });
         },
       },
-      { name: "Google did not answer", want: "not_confirmed", setup: async (c) => { rigFake.failNext("revoke", "youtube_unavailable", "backendError", { channelId: c.channel.id }); } },
+      { name: "Google did not answer", want: "not_confirmed", keysLeft: 0, setup: async (c) => { rigFake.failNext("revoke", "youtube_unavailable", "backendError", { channelId: c.channel.id }); } },
       {
-        name: "damaged saved token", want: "not_confirmed",
+        // a damaged token can ask YouTube nothing: the channel is not read, so the keys are "not confirmed" as well
+        name: "damaged saved token", want: "not_confirmed", keysLeft: null,
         setup: async (c) => { await sql`update org_youtube_connections set refresh_token_enc = decode('deadbeef', 'hex') where id = ${c.connectionId}`; },
       },
+      {
+        // a Seazn key on the channel (the name every key had before 79a208d8b0) that YouTube will not let go of
+        name: "a key YouTube will not delete", want: "revoked", keysLeft: 1,
+        setup: async (c) => {
+          const { streamId } = await rigFake.insertStream(await rigFake.accessToken(c.token), { title: "Seazn stream key" });
+          rigFake.refuseStreamDelete(streamId, { times: "always" });
+        },
+      },
+      { name: "the channel cannot be read", want: "revoked", keysLeft: null, setup: async (c) => { rigFake.failNext("listStreams", "youtube_unavailable", "backendError", { channelId: c.channel.id }); } },
     ];
     for (const sc of scenarios) {
       const o = await rigOrg();
@@ -289,14 +325,20 @@ describe.skipIf(!HAS_DB)("the Disconnect row -> DELETE /api/v1/orgs/:id/youtube-
       const notice = panel.tree().find((el) => el.type === YoutubeDisconnectedNotice);
       expect(notice, `${sc.name}: the page shows a notice`).toBeDefined();
       expect(propsOf(notice!).outcome, sc.name).toBe(sc.want);
+      expect(propsOf(notice!).keysLeft, `${sc.name}: the keys left, as the route answered them`).toBe(sc.keysLeft);
       expect(propsOf(notice!).name, sc.name).toBe(c.channel.title);
-      expect(noticeText(c.channel.title, propsOf(notice!).outcome as never), sc.name).toContain(
-        sc.want === "revoked" ? `${c.channel.title} is disconnected. Seazn deleted what it stored from YouTube for this channel.`
+      const text = noticeText(c.channel.title, propsOf(notice!).outcome as never, propsOf(notice!).keysLeft as never);
+      expect(text, sc.name).toContain(
+        sc.keysLeft === 1 ? `${c.channel.title} is disconnected, but Seazn couldn't delete 1 stream key from YouTube.`
+        : sc.keysLeft === null ? `${c.channel.title} is disconnected, but Seazn couldn't check that it deleted every stream key it created on YouTube.`
+        : sc.want === "revoked" ? `${c.channel.title} is disconnected. Seazn deleted what it stored from YouTube for this channel.`
         : sc.want === "skipped_shared_account" ? "another channel on the same Google account is still connected"
         : "couldn't confirm that Google removed Seazn's access");
+      if (sc.want === "not_confirmed") expect(text, `${sc.name}: the revoke's own sentence stands beside the keys'`).toContain("couldn't confirm that Google removed Seazn's access");
+      if (sc.keysLeft !== 0) expect(text, `${sc.name}: never "deleted" while a key may be left`).not.toContain("Seazn deleted what it stored");
       seen.push(`${sc.name}=${String(propsOf(notice!).outcome)}`);
     }
-    expect(seen, "all four scenarios ran").toHaveLength(4);
+    expect(seen, "all six scenarios ran").toHaveLength(6);
     expect(new Set(seen.map((x) => x.split("=")[1])), "and the three outcomes were all produced by the real route").toEqual(new Set(["revoked", "skipped_shared_account", "not_confirmed"]));
   });
 });

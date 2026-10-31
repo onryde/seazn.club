@@ -12,7 +12,7 @@ import type { YouTubePort } from "../port";
 /** Every callable member of the port. */
 const METHODS = {
   authorizeUrl: 1, exchangeCode: 1, accessToken: 1, listMyChannels: 1, liveEnabled: 1, insertStream: 1, deleteStream: 1,
-  insertBroadcast: 1, bind: 1, broadcastLife: 1, complete: 1, deleteBroadcast: 1, existingVideos: 1, revoke: 1,
+  insertBroadcast: 1, bind: 1, broadcastLife: 1, complete: 1, deleteBroadcast: 1, existingVideos: 1, revoke: 1, listStreams: 1,
 } satisfies Record<Exclude<keyof YouTubePort, "mode">, 1>;
 const NAMES = Object.keys(METHODS);
 const UNGATED = ["revoke"];
@@ -41,9 +41,9 @@ async function attempt(run: () => unknown): Promise<unknown> {
 }
 
 describe("the daily pass's gated port (B6 round 2 C4)", () => {
-  it("anti-vacuity: the sweeps below judge every port method (14 of them), one of them ungated", () => {
-    expect(NAMES.length).toBe(14);
-    expect(NAMES.filter((m) => !UNGATED.includes(m)).length).toBe(13);
+  it("anti-vacuity: the sweeps below judge every port method (15 of them), one of them ungated", () => {
+    expect(NAMES.length).toBe(15);
+    expect(NAMES.filter((m) => !UNGATED.includes(m)).length).toBe(14);
   });
 
   it("a slice with NO room refuses every port method but revoke, calling none of them - listed in the wrapper or not", async () => {

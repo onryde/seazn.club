@@ -15,7 +15,9 @@ import "server-only";
 // No retry and no logging here: the callers own backoff and they log codes.
 import { GOOGLE_AUTH_URL, GOOGLE_TOKEN_URL, googleConfigured } from "@/lib/oauth";
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
-import { YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort } from "./port";
+import {
+  LIST_BUDGET_SPENT, YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type StreamListing, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
+} from "./port";
 
 const API = "https://www.googleapis.com/youtube/v3";
 /** OAuth 2.0 token revocation (…/oauth2/web-server, "Token revocation"). Google's example puts `token` in the query string; we
@@ -29,6 +31,12 @@ const GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
 const REQUEST_TIMEOUT_MS = YOUTUBE_CALL_BOUND_MS;
 /** videos.list takes at most 50 ids per call. */
 const MAX_VIDEO_IDS_PER_CALL = 50;
+/** liveStreams.list's page: `maxResults` 0-50 (the liveStreams.list page). */
+const STREAMS_PER_PAGE = 50;
+/** At most this many pages of liveStreams (500 streams) are read; a channel with more is refused rather than half-read (the disconnect
+ *  deletes from the answer and reports what it could not reach, so a list that stops early must not pass for the whole channel). Each page
+ *  is one request under the call bound, so the cap also bounds how long the disconnect waits on the list. */
+const MAX_STREAM_PAGES = 10;
 /** A broadcast title: 1–100 characters (liveBroadcasts.insert "invalidTitle"), and neither `<` nor `>` (the videos resource's
  *  `snippet.title`: a broadcast is one video). Counted in code points. The same rule, and the same refusal, as the fake. */
 const BROADCAST_TITLE_MAX_CHARS = 100;
@@ -297,6 +305,36 @@ export class GoogleYouTube implements YouTubePort {
 
   async deleteStream(at: string, streamId: string): Promise<void> {
     await deleteResource(at, "liveStreams", streamId);
+  }
+
+  /** liveStreams.list(part=snippet, mine=true), …/live/docs/liveStreams/list: the channel's own streams, 50 a page, following
+   *  `nextPageToken`. `part` is `snippet` ALONE and never `cdn`: the `cdn` part carries `ingestionInfo.streamName`, the stream key,
+   *  which this call must never fetch - and only id, title and channel id are read from whatever comes back. A page token that
+   *  repeats (a loop), a list longer than MAX_STREAM_PAGES and a caller's budget that runs out between pages (`room`, asked before
+   *  every page) are refused, never answered with a partial list. */
+  async listStreams(at: string, o: { room?: () => boolean } = {}): Promise<StreamListing[]> {
+    const out: StreamListing[] = [];
+    const seen = new Set<string>();
+    let pageToken: string | null = null;
+    for (let page = 0; page < MAX_STREAM_PAGES; page++) {
+      if (o.room && !o.room()) throw new YouTubeError("youtube_unavailable", LIST_BUDGET_SPENT);
+      const query: Record<string, string> = { part: "snippet", mine: "true", maxResults: String(STREAMS_PER_PAGE) };
+      if (pageToken !== null) query.pageToken = pageToken;
+      const body = parseBody(await api(at, "GET", "liveStreams", { query }));
+      for (const item of Array.isArray(body.items) ? body.items : []) {
+        const row = asRecord(item);
+        const id = nonEmpty(row?.id);
+        if (!id) continue;
+        const snippet = asRecord(row?.snippet);
+        out.push({ id, title: typeof snippet?.title === "string" ? snippet.title : "", channelId: nonEmpty(snippet?.channelId) });
+      }
+      const next = nonEmpty(body.nextPageToken);
+      if (next === null) return out;
+      if (seen.has(next)) return malformed();
+      seen.add(next);
+      pageToken = next;
+    }
+    throw new YouTubeError("youtube_unavailable", "tooManyPages");
   }
 
   /** liveBroadcasts.insert. `enableAutoStart` starts it when video arrives; `enableAutoStop` is FALSE (a pause in the video

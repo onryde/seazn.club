@@ -1946,6 +1946,52 @@ Elsewhere the text is the controller's record.
      is retired or abandoned. It replaces the old skin's reading (lit through tie-break points 7 to 11, off at 12, off at
      a set boundary, still lit after a mid-set retirement): an accepted visible change against the pad-wave spec's §3.5
      "no behaviour change", with the fold unchanged (no golden or epoch moves). Rule TN-EN-1 (`packages/engine/rules/tennis.md`).
+245. **Cricket super-over reviews and retirements follow ICC Appendix F paragraph 12, fixed after the pad wave**
+     (2026-10-30, owner "apply rec in open questions", engine-split pad wave close, rules row CK-SO-3). The owner accepts the
+     ICC reading: each team gets one unsuccessful player review per innings per super over (ICC Men's T20 World Cup 2026
+     Playing Conditions, Appendix F paragraph 12), and the match's playing conditions apply to the super over, retirement
+     (25.4) included (the Appendix F preamble). The engine refuses both today (`cricket.review` and `cricket.retire` are
+     WRONG_PHASE in a super over: `SUPER_OVER_EVENT_TYPES`), so CK-SO-3 is a known deviation, `deviation 245 2026-10-30`.
+     The fix is owed work O-12 (`docs/superpowers/specs/engine-split/2026-10-26-owed-work.md`): a fold change with a
+     cricket `FOLD_EPOCH` bump after the pad wave, which moves the two tests that pin the refusals. No fold change in the
+     pad wave.
+246. **Cricket: both ways of recording a retired-out batter stay for now** (2026-10-30, owner "apply rec in open
+     questions", engine-split pad wave close, rules row CK-RH-2, new). The two ways are the wicket sheet's Retired, which
+     writes a `cricket.ball` with `wicket.kind = "retired"` (a legal dot ball: `legalBalls` +1), and the Retire sheet's
+     out, `cricket.retire` with `reason: "out"`, which records no delivery. Law 25.4.1 says a batter retires when the ball
+     is dead, so the wicket-sheet path counting a legal ball is a known deviation, `deviation 246 2026-10-30`. Both stay.
+     Owed work O-13 (engine fold + pad): after the wave, decide whether the wicket sheet drops Retired or records no
+     delivery for it.
+247. **Chess tie-break score: a level score beside a named winner stays, a loser-ahead score is to be refused**
+     (2026-10-30, owner "apply rec in open questions", engine-split pad wave close, rules row BG-TS-1). A drawn mini-match
+     score (½–½, 1–1) with a named winner stays allowed, because a further tie-break decided the match. A score that
+     contradicts the named winner, the loser shown ahead (½–1½ beside the winner), should be refused, but the fold checks
+     only the written shape and accepts it today, so BG-TS-1 is a known deviation, `deviation 247 2026-10-30`. The fix is
+     owed work O-14: a fold change with a boardgame `FOLD_EPOCH` bump after the pad wave. The pad offers only no score,
+     1½–½ or 2–0, so only an API write reaches it; the BG-TS-1 tests pin the fold's laxness and move with O-14.
+248. **House limits: board number 200 (BG-PA-1), generic final score 500 (GN-SC-1), generic per-tap step 50 (GN-SC-2)**
+     (2026-10-30, owner "apply rec in open questions", engine-split pad wave close). Signed as house limits: they are
+     product limits, not rulebook rules (FIDE has no limit on board numbers, and no federation governs a generic sport),
+     and the pad enforces them while the fold does not (the fold takes any positive board number, any non-negative final
+     score and any non-zero press). The three rows are `signed 248 2026-10-30`, cite "house limit, ruling 248" and say the
+     fold does not enforce the limit. No code change; the tests that pin the three values stay change-detectors.
+249. **The pad wave's open rule rows are signed** (2026-10-30, owner "sign per rec", engine-split pad wave close). The
+     product owner's recommendation, taken whole: every row the pad wave left `⬜ open` is closed. No code change.
+     (A) 41 rulebook rows, `signed 249 2026-10-30`, citation kept: BD-CT-1, BD-IN-1, BD-RO-1, BD-SN-1, TT-EX-1, TT-FM-1,
+     TT-RO-1, TT-SN-1, VB-FM-1, VB-RC-1, VB-RO-2, VB-SN-1, TN-CF-2, TN-PT-1, TN-SC-1, TN-SE-3, TN-SS-3, TN-SV-1, CK-BD-1,
+     CK-EX-1, CK-EX-2, CK-PR-2, CK-TG-1, FB-CD-1, FB-CD-2, FB-ET-1, FB-PH-1, FB-PH-2, FB-PK-1, FB-PK-2, FB-SU-2, FB-TS-1,
+     HK-AS-1, HK-PH-1, IH-AS-1, IH-GL-1, IH-PH-1, IH-SU-2, CA-CN-1, CA-FM-1, X-PH-1. Where a citation ended "no ruling"
+     (or "no owner ruling yet") that tail now names this ruling, as 245 to 247 did.
+     (B) 10 house limits and product picklists, `signed 249 2026-10-30`, citing "house limit, ruling 249": the set-score
+     entry bounds BD-SC-2, TT-SC-2 and VB-SC-2 (`summaryScoreBound`), the tennis set-score ceilings TN-SS-4 and break
+     ceiling TN-RO-2, the hockey and ice-hockey card-minutes bounds HK-SU-2 and IH-SU-3, and the picklists HK-SU-3 and
+     IH-SU-4 (card and penalty reasons) and CA-AD-2 (carrom adjustment reasons). They are product limits and the pad's
+     own vocabulary, not rules of any sport; the pad enforces them and the fold or engine does not.
+     (C) 2 known deviations, `deviation 249 2026-10-30`: VB-LB-1 (the engine's libero exchange check is looser than FIVB
+     19.3.2; fix owed work O-9, a fold change with an epoch) and CK-WK-4 (the fold accepts the non-striker out in the six
+     striker-only modes; ruling 242 (c) parked it to O-8 and 249 records it as a deviation).
+     (D) CK-WK-5, `deviation 249 2026-10-30`: the pad should ask who is out for a timed out dismissal, as it does for run
+     out, obstructed and retired (CK-WK-3). Owed work O-16: a pad change alone, no fold change and no epoch.
 
 ## Recommendations (mine — not rulings)
 

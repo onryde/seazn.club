@@ -283,7 +283,7 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string;
       line: msgFor(locale, "streaming.youtube.broadcast.descriptionLine"),
       matchUrl: `${siteOrigin()}${routes.sharedFixture(f.org_slug, f.comp_slug, f.div_slug, ctx.fixtureId)}`,
       poweredBy: msgFor(locale, "streaming.youtube.broadcast.poweredBy"),
-      siteUrl: `${siteOrigin()}/`,
+      siteUrl: siteOrigin(),
     }),
   };
 }

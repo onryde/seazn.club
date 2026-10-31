@@ -77,7 +77,8 @@ competition public or unlisted, and notes the organisation id and its default lo
 
 1. Seazn → **Streaming** (top nav, `/streaming`) → **Connect YouTube**.
 2. The consent step: leave **Who can watch = Unlisted** (preselected; keep it: Private hides replays from the match
-   page, step 7), **Made for kids = No**, tick the required box, **Continue to Google**.
+   page, step 7), **Made for kids = No**, tick BOTH required boxes (the terms, and the under-16 rule: Continue stays
+   disabled with only one), **Continue to Google**.
 3. On Google: choose the account, pass the "unverified app" screen (Testing mode), and allow the YouTube access.
    If the account has several channels, pick yours under **Choose a channel** → **Connect channel**.
 
@@ -130,7 +131,7 @@ For **each** of the two videos in Studio:
   `TBD`. At most 100 characters; an over-long title gives up the competition first, then the division
   (`server/youtube/title.ts:13-14`, `prepare.ts:279-285`).
 - **Description** is two paragraphs: "Live score and results:" followed by the public match page URL, then a blank line and
-  "Powered by Seazn Club · <this environment's site origin>/" (stg links stg, prod links prod; the words are in the
+  "Powered by Seazn Club · <this environment's site origin>" with no trailing slash (stg links stg, prod links prod; the words are in the
   organisation's default locale; owner request 2026-10-29). Shown for every organisation, including ones with
   `dashboard.branding` (owner, 2026-10-29).
 - **Visibility.** This is the spec §10 unknown: whether YouTube forces an unverified project's videos to Private even
@@ -160,12 +161,17 @@ Only after the agent has finished S0–S4. Disconnect is refused while a match i
 2. **Expect** "`<channel>` is disconnected. Seazn deleted what it stored from YouTube for this channel." Two other
    sentences are possible and are findings to record: the one that says Seazn's access to the Google account **stays**
    (another connected channel uses the same Google account), and the one that says Seazn **couldn't confirm** Google
-   removed its access.
+   removed its access. Since the 2026-10-30 fix the lead sentence can also say "`<channel>` is disconnected, but Seazn
+   **couldn't delete N stream key(s)** from YouTube" or that Seazn **couldn't check** it deleted every key: either is a
+   finding — record it with its count, and check step 4 against it.
 3. Verify at Google: reload the third-party access page. **Record** what it lists for Seazn now (gone entirely, or only
    its YouTube access gone, or still listed), against the two snapshots from steps 1 and 2.
 4. Verify in YouTube Studio: the stream keys Seazn created (named **Seazn Club · stream key 1**, **… 2**, … by pool slot, in the
    organisation's default locale) are gone from the stream-key
-   list. **The two videos stay** ("Videos already on YouTube stay there.", says the Disconnect dialog).
+   list, and so is any older one named **Seazn stream key** (the name before 2026-10-29: a Disconnect now deletes every
+   stream named as Seazn names its keys, whether or not Seazn still records it). A club's own key stays. **A Seazn key
+   still listed while step 2 said "Seazn deleted what it stored" is a FAIL**; one still listed after the "couldn't
+   delete" sentence is the notice telling the truth: delete it by hand and record it. **The two videos stay** ("Videos already on YouTube stay there.", says the Disconnect dialog).
 5. Verify on the match page: the replay player and the stream link are gone.
 
 *Agent runs S5.*
@@ -268,7 +274,7 @@ select f.id, f.status, f.finished_at, f.stream_url,
 ```
 
 **S1 — the connection (after step 2).** Expect one row: `status = connected`, `default_privacy = unlisted`,
-`made_for_kids = false`, `consent_version = 1`, `last_error_code` null; and its destination row `kind = youtube`,
+`made_for_kids = false`, `consent_version = 3` (the current `YOUTUBE_CONSENT_VERSION`: the two consent boxes of D16; 2 was the under-16 clause inside the one box, 1 the launch wording), `last_error_code` null; and its destination row `kind = youtube`,
 `archived_at` null.
 
 ```sql
@@ -502,7 +508,7 @@ Read from the tree on `4e3b165274`.
 
 | Value | Source |
 |---|---|
-| Scope `https://www.googleapis.com/auth/youtube`; consent version 1 | `lib/youtube.ts:6`, `:10` |
+| Scope `https://www.googleapis.com/auth/youtube`; consent version 3 (the two boxes, D16; it was 1 on `4e3b165274`) | `lib/youtube.ts:6`, `:12` |
 | Callback path `/api/youtube/connect/callback`; `YOUTUBE_REDIRECT_URI` overrides | `lib/oauth.ts:59-61` |
 | stg / prod hosts `stg.seazn.club` / `seazn.club`; stg crons `17 * * * *`, `*/5 * * * *`; prod `17 * * * *`, `* * * * *` | `apps/cron-worker/wrangler.json` |
 | Grace after Stop: 5 min | `YOUTUBE_GRACE_MINUTES`, `lib/youtube.ts:214` |

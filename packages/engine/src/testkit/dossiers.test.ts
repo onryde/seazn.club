@@ -10,8 +10,9 @@
 // testkit/index.ts — @seazn/engine ships zero runtime dependencies and the
 // barrel is a published entrypoint. golden.ts set that precedent; this follows
 // it, and the last test here holds the line for these two readers. The barrel
-// has ONE disk reader, rules-reference.ts (its input, rules/, ships in the
-// tarball); test/rules-reference.test.ts pins that closure to that file alone.
+// has TWO disk readers, rules-reference.ts (its input, rules/, ships in the
+// tarball) and corpora.ts (its JSON is copied into dist/); test/rules-reference.test.ts
+// pins that closure to those two files alone.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,12 +140,16 @@ describe("every builtin sport module ships a domain dossier", () => {
     expect(dossierPath("football").endsWith("football/DOMAIN.md")).toBe(true);
   });
 
-  // Structural, not cosmetic: these two readers (their inputs do not ship) must never reach @seazn/engine/testkit. The rules reader
-  // is the barrel's one disk reader and is pinned in test/rules-reference.test.ts ("the published testkit barrel exports the rules parser, ...").
+  // Structural, not cosmetic: these two readers (their inputs do not ship) must never reach @seazn/engine/testkit. The barrel's disk
+  // readers are the rules reference and the corpora reader (their inputs ship), pinned in test/rules-reference.test.ts ("the published
+  // testkit barrel exports the rules parser, ..."). The golden RECORDER is what stays out: no `./golden*` module is exported, so the
+  // check is on the module specifiers, not on the word (the corpora reader's export is named `goldenCorpora`, engine-split 2b R1).
   it("keeps the dossier and golden readers out of the published testkit barrel", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const barrel = readFileSync(join(here, "index.ts"), "utf8");
     expect(barrel).not.toMatch(/dossiers/);
-    expect(barrel).not.toMatch(/golden/);
+    expect(barrel).not.toMatch(/from\s+["']\.\/golden/);
+    // the control: the specifier pattern does see a corpora export, so the line above is not blind to this barrel's own syntax
+    expect(barrel).toMatch(/from\s+["']\.\/corpora\.ts["']/);
   });
 });

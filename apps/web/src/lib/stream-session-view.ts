@@ -78,7 +78,7 @@ export function d3Warning(view: Pick<StreamSessionCurrent, "state" | "ingest" | 
 }
 export type PhoneTabState = "idle" | "provisioning" | "warming" | "live" | "ending" | "ended" | "failed";
 
-export function phoneTabState(view: StreamSessionView | null): PhoneTabState {
+export function phoneTabState(view: Pick<StreamSessionView, "state"> | null): PhoneTabState {
   if (!view) return "idle";
   switch (view.state) {
     case "requested":
@@ -99,6 +99,19 @@ export function composedSessionOpen(view: StreamSessionView | null): boolean {
   if (!view || view.mode !== "composed") return false;
   const at = phoneTabState(view);
   return at === "provisioning" || at === "warming" || at === "live" || at === "ending";
+}
+
+/** Owner 2026-10-30: the match page's "On YouTube" card — the latest session's video on YouTube and how to say it. The server decides
+ *  WHETHER there is a video (`youtubeVideoUrl`: a YouTube Connect broadcast with its id, not failed; null for a pasted key); this
+ *  says it is LIVE while the session is starting or live (a positive list, so a state added later reads as not live until named
+ *  here), and "On YouTube" once it is ending, over or failed. Null with no video — and for a view from a server older than the field,
+ *  which never becomes a link to `undefined`. */
+export type YoutubeLink = { url: string; live: boolean };
+export function youtubeLinkOf(view: Pick<StreamSessionView, "state" | "youtubeVideoUrl"> | null): YoutubeLink | null {
+  const url = view?.youtubeVideoUrl;
+  if (!view || typeof url !== "string") return null;
+  const at = phoneTabState(view);
+  return { url, live: at === "provisioning" || at === "warming" || at === "live" };
 }
 
 export const STATE_PILL_KEYS: Record<PhoneTabState, MessageKey> = {

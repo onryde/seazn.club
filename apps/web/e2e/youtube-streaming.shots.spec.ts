@@ -121,6 +121,15 @@ async function expectTappable(loc: Locator, label: string): Promise<void> {
   }
 }
 
+/** `first` precedes `second` in reading order as LAID OUT: on one row it sits to the left, stacked it sits above. */
+async function expectReadsBefore(first: Locator, second: Locator, label: string): Promise<void> {
+  const a = await first.boundingBox();
+  const b = await second.boundingBox();
+  expect(a !== null && b !== null, `${label}: both are laid out`).toBe(true);
+  const sameRow = Math.abs(a!.y - b!.y) < 2;
+  expect(sameRow ? a!.x < b!.x : a!.y < b!.y, `${label}: ${JSON.stringify({ first: a, second: b })}`).toBe(true);
+}
+
 /** The top gantry fits: every link in its <nav> shares one row (no wrap) and ends inside the viewport (nothing clipped or pushed), the
  *  Sign-out button (the control that used to be pushed out) ends inside it too, and each link's centre hit-tests to the link itself. */
 async function expectGantryFits(page: Page, where: string): Promise<void> {
@@ -244,8 +253,11 @@ async function connectThroughConsent(page: Page): Promise<void> {
   expect(slot, "SETUP: offerChannels ran before this connect").toBeDefined();
   const before = slot!.fired;
   const submit = page.getByTestId("youtube-connect-submit");
-  await expect(submit, "Continue is disabled until the box is ticked").toBeDisabled();
+  await expect(submit, "Continue is disabled until both boxes are ticked").toBeDisabled();
+  // Two boxes (PO 2026-10-30): the terms, then YouTube's under-16 rule. One alone leaves Continue disabled; both enable it.
   await page.getByTestId("youtube-consent").check();
+  await expect(submit, "the terms box alone is not a consent").toBeDisabled();
+  await page.getByTestId("youtube-consent-minors").check();
   await expect(submit).toBeEnabled();
   await Promise.all([page.waitForURL(/\/streaming\?youtube=/), submit.click()]);
   await declineCookies(page);
@@ -341,7 +353,11 @@ test("Streaming page: no destinations, then a pasted key - Add and Connect YouTu
     await expect(page.getByTestId("stream-dest-empty-add")).toBeVisible();
     await expect(page.getByTestId("youtube-connect-empty")).toBeVisible();
     await expectTappable(page.getByTestId("youtube-connect-empty"), `Connect YouTube (empty) at ${w}`);
-    await expectTappable(page.getByTestId("stream-dest-empty-add"), `Add destination (empty) at ${w}`);
+    await expectTappable(page.getByTestId("stream-dest-empty-add"), `Add streaming key (empty) at ${w}`);
+    // Owner 2026-10-30: Connect YouTube is the primary button and comes first; Add streaming key is the secondary one after it.
+    await expect(page.getByTestId("youtube-connect-empty"), `Connect YouTube (empty) is primary at ${w}`).toHaveClass(/\bbtn-primary\b/);
+    await expect(page.getByTestId("stream-dest-empty-add"), `Add streaming key (empty) is secondary at ${w}`).toHaveClass(/\bbtn-ghost\b/);
+    await expectReadsBefore(page.getByTestId("youtube-connect-empty"), page.getByTestId("stream-dest-empty-add"), `empty card at ${w}`);
     await expectNoPageScroll(page, `empty Streaming page at ${w}`);
     await shot(page, `page-empty-${w}`);
   }
@@ -358,6 +374,9 @@ test("Streaming page: no destinations, then a pasted key - Add and Connect YouTu
     await expect(page.getByTestId("stream-dest-add")).toBeVisible();
     await expect(page.getByTestId("youtube-connect")).toBeVisible();
     await expectTappable(page.getByTestId("youtube-connect"), `Connect YouTube at ${w}`);
+    await expect(page.getByTestId("youtube-connect"), `Connect YouTube is primary at ${w}`).toHaveClass(/\bbtn-primary\b/);
+    await expect(page.getByTestId("stream-dest-add"), `Add streaming key is secondary at ${w}`).toHaveClass(/\bbtn-ghost\b/);
+    await expectReadsBefore(page.getByTestId("youtube-connect"), page.getByTestId("stream-dest-add"), `header row at ${w}`);
     await expectNoPageScroll(page, `Streaming page with a pasted key at ${w}`);
     await shot(page, `page-pasted-${w}`);
   }
@@ -384,7 +403,20 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
     await expect(page.getByTestId("youtube-connect-submit")).toBeDisabled();
     await expect(page.getByTestId("youtube-consent-required")).toHaveText(en("streaming.youtube.consent.required"));
     await expect(form).toContainText(en("streaming.youtube.settingsNote"));
-    for (const id of ["youtube-privacy-unlisted", "youtube-privacy-public", "youtube-privacy-private", "youtube-kids-no", "youtube-kids-yes", "youtube-consent"]) {
+    // The consent is TWO boxes (PO 2026-10-30, owner-requested): box 1 the terms sentence, box 2 right below it YouTube's under-16 rule,
+    // each its own label, both above Continue at every width; the separate note #1089 added and #1092's clause inside box 1 are gone.
+    const termsLabel = labelOf(page.getByTestId("youtube-consent"));
+    const minorsLabel = labelOf(page.getByTestId("youtube-consent-minors"));
+    await expect(termsLabel, "box 1 reads the terms sentence").toHaveText(
+      en("streaming.youtube.consent.body", { tos: en("streaming.youtube.consent.tos"), guidelines: en("streaming.youtube.consent.guidelines") }),
+    );
+    await expect(minorsLabel, "box 2 reads the under-16 sentence").toHaveText(en("streaming.youtube.consent.minors"));
+    await expect(termsLabel, "#1092's clause is no longer inside box 1").not.toContainText("makes sure an adult is visibly present");
+    await expect(page.getByTestId("youtube-minors-note"), "no separate note any more").toHaveCount(0);
+    const [termsBox, minorsBox, continueBox] = [await termsLabel.boundingBox(), await minorsLabel.boundingBox(), await page.getByTestId("youtube-connect-submit").boundingBox()];
+    expect(termsBox && minorsBox && termsBox.y + termsBox.height <= minorsBox.y, `box 2 sits below box 1 at ${w}`).toBe(true);
+    expect(minorsBox && continueBox && minorsBox.y + minorsBox.height <= continueBox.y, `both boxes are read before Continue at ${w}`).toBe(true);
+    for (const id of ["youtube-privacy-unlisted", "youtube-privacy-public", "youtube-privacy-private", "youtube-kids-no", "youtube-kids-yes", "youtube-consent", "youtube-consent-minors"]) {
       await expectTappable(labelOf(page.getByTestId(id)), `${id} at ${w}`);
     }
     await expectTappable(page.getByTestId("youtube-connect-cancel"), `Cancel at ${w}`);
@@ -535,14 +567,18 @@ test("A connected channel's row in every state - connected, not enabled, blocked
   }
   expect(checked, "every state was walked").toBe(STATES.length);
 
-  // Review updated terms: the wording is shown, Accept stays disabled until ticked, and accepting clears the notice.
+  // Review updated terms: the wording is shown as the same two boxes, Accept stays disabled until BOTH are ticked, and accepting clears
+  // the notice.
   await page.setViewportSize({ width: 1280, height: 900 });
   await open(page, "/streaming");
   await page.getByTestId("youtube-review-terms").click();
   const terms = page.getByTestId("youtube-terms-form");
   await expect(terms).toBeVisible();
   await expect(page.getByTestId("youtube-terms-accept")).toBeDisabled();
+  await expect(labelOf(terms.getByTestId("youtube-consent-minors")), "the under-16 box is part of the review").toHaveText(en("streaming.youtube.consent.minors"));
   await shot(page, "review-terms-1280");
+  await terms.getByTestId("youtube-consent-minors").check();
+  await expect(page.getByTestId("youtube-terms-accept"), "the under-16 box alone is not a consent").toBeDisabled();
   await terms.getByTestId("youtube-consent").check();
   await page.getByTestId("youtube-terms-accept").click();
   await expect(page.getByTestId("youtube-review-terms"), "the notice is gone once accepted").toHaveCount(0);

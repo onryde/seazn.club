@@ -26,7 +26,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { LOCALES, type Dict } from "@/lib/i18n-constants";
 import { messages, type MessageKey } from "@/lib/messages";
-import { GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
+import { GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_CONSENT_VERSION, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
 import { ROUTES } from "@/server/api-v1/openapi";
 import { v1 } from "@/server/api-v1/http";
 import { PickYoutubeChannel, StreamTargetKind, YOUTUBE_REVOKE_OUTCOMES, YoutubeConnectionSaved, YoutubeConnectionSettings, type StreamTarget } from "@/server/api-v1/schemas";
@@ -191,51 +191,99 @@ const panelHtml = (p: Partial<Parameters<typeof StreamDestinationsPanel>[0]> & {
   );
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// The consent is TWO boxes (owner, PO 2026-10-30): the terms, and YouTube's under-16 rule. Their testids and the form fields the connect
+// route reads, typed from the ruling and T7's contract — never read back from the component.
+const TERMS_BOX = "youtube-consent";
+const MINORS_BOX = "youtube-consent-minors";
+type Box = typeof TERMS_BOX | typeof MINORS_BOX;
+
+/** A tick on one box, through its REAL checkbox: the island renders `ConsentBox` one level deep, so that element is rendered in turn with
+ *  the very props the island gave it, and the named <input>'s own onChange fires — which lands in the island's state the way a browser's
+ *  change event would. A box that is not there, or has no onChange, throws: a helper that found nothing cannot pass quietly. */
+function tickBox(tree: () => ReactElement[], box: Box, on: boolean): void {
+  const el = ofType(tree(), ConsentBox);
+  if (!el) throw new Error("no ConsentBox in the tree");
+  const inner = renderIsland(ConsentBox, propsOf(el) as Parameters<typeof ConsentBox>[0]);
+  const input = byTestId(inner.tree(), box);
+  const onChange = input && (propsOf(input).onChange as ((e: { target: { checked: boolean } }) => void) | undefined);
+  if (!onChange) throw new Error(`no ${box} checkbox with an onChange — the test is asserting nothing`);
+  onChange({ target: { checked: on } });
+}
+/** What each REAL box shows right now: ConsentBox rendered with the island's current props, each <input>'s `checked`. */
+function boxesShown(tree: () => ReactElement[]): Record<Box, unknown> {
+  const el = ofType(tree(), ConsentBox);
+  if (!el) throw new Error("no ConsentBox in the tree");
+  const inner = renderIsland(ConsentBox, propsOf(el) as Parameters<typeof ConsentBox>[0]).tree();
+  const of = (b: Box) => {
+    const input = byTestId(inner, b);
+    if (!input) throw new Error(`no ${b} checkbox`);
+    return attr(input, "checked");
+  };
+  return { [TERMS_BOX]: of(TERMS_BOX), [MINORS_BOX]: of(MINORS_BOX) } as Record<Box, unknown>;
+}
+/** Every tick state of the two boxes, and whether it is a consent: only BOTH is (typed from the ruling). Four, all of them. */
+const TICK_STATES: { terms: boolean; minors: boolean; name: string; consent: boolean }[] = [
+  { terms: false, minors: false, name: "neither box", consent: false },
+  { terms: true, minors: false, name: "only the terms box", consent: false },
+  { terms: false, minors: true, name: "only the under-16 box", consent: false },
+  { terms: true, minors: true, name: "both boxes", consent: true },
+];
+/** Put the two boxes into a state, each through its own checkbox. */
+function setBoxes(tree: () => ReactElement[], s: { terms: boolean; minors: boolean }): void {
+  tickBox(tree, TERMS_BOX, s.terms);
+  tickBox(tree, MINORS_BOX, s.minors);
+}
+
 describe("the consent step", () => {
   const mount = () => renderIsland(YoutubeConnectCard, { orgId: "org-1", onCancel: vi.fn() });
-  const tick = (island: ReturnType<typeof mount>, on: boolean) => {
-    const box = ofType(island.tree(), ConsentBox);
-    if (!box) throw new Error("the card rendered no ConsentBox");
-    (propsOf(box).onChange as (v: boolean) => void)(on);
-  };
 
-  it("Continue to Google is DISABLED until the box is ticked, enabled once it is, disabled again when it is unticked — and the hint goes and comes with it", () => {
+  it("Continue to Google is enabled ONLY with both boxes ticked: disabled with none, with only the terms, with only the under-16 box; the hint goes and comes with it — every state, and back again (the sequence)", () => {
     const card = mount();
     const state = () => ({
       disabled: attr(byTestId(card.tree(), "youtube-connect-submit")!, "disabled"),
       hint: byTestId(card.tree(), "youtube-consent-required"),
-      checked: attr(ofType(card.tree(), ConsentBox)!, "checked"),
+      shown: boxesShown(card.tree),
     });
-    expect(state().disabled, "unticked: disabled").toBe(true);
-    expect(state().checked).toBe(false);
+    expect(state().disabled, "untouched: disabled").toBe(true);
+    expect(state().shown, "untouched: both boxes empty").toEqual({ [TERMS_BOX]: false, [MINORS_BOX]: false });
     expect(textAt(card.tree(), "youtube-consent-required")).toBe(m("streaming.youtube.consent.required"));
     expect(textAt(card.tree(), "youtube-connect-submit")).toBe(m("streaming.youtube.consent.continue"));
 
-    tick(card, true);
-    expect(state().disabled, "ticked: enabled").toBe(false);
-    expect(state().checked).toBe(true);
-    expect(state().hint, "the hint is gone once ticked").toBeUndefined();
-
-    tick(card, false);
-    expect(state().disabled, "unticked again: disabled again").toBe(true);
-    expect(state().hint, "the hint is back").toBeDefined();
+    // Forward through every state, then back down: each box moves only itself, and only both enables Continue.
+    let checked = 0;
+    for (const s of [...TICK_STATES, ...[...TICK_STATES].reverse()]) {
+      setBoxes(card.tree, s);
+      expect(state().shown, `${s.name}: each box shows its own tick`).toEqual({ [TERMS_BOX]: s.terms, [MINORS_BOX]: s.minors });
+      expect(state().disabled, `${s.name}: Continue ${s.consent ? "enabled" : "disabled"}`).toBe(!s.consent);
+      if (s.consent) expect(state().hint, `${s.name}: the hint is gone`).toBeUndefined();
+      else expect(textAt(card.tree(), "youtube-consent-required"), `${s.name}: the hint says what is missing`).toBe(m("streaming.youtube.consent.required"));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four states, there and back").toBe(8);
   });
 
-  it("Enter inside a field cannot submit past an unticked box: the form refuses it (preventDefault), and lets a ticked one through", async () => {
+  it("Enter inside a field cannot submit past a missing tick: the form refuses it (preventDefault) with none, only the terms or only the under-16 box, and lets both through", async () => {
     const card = mount();
-    expect((await submit(byTestId(card.tree(), "youtube-connect-form"))).prevented, "unticked: stopped on the page").toBe(true);
-    tick(card, true);
-    expect((await submit(byTestId(card.tree(), "youtube-connect-form"))).prevented, "ticked: the browser posts it").toBe(false);
+    let checked = 0;
+    for (const s of TICK_STATES) {
+      setBoxes(card.tree, s);
+      expect((await submit(byTestId(card.tree(), "youtube-connect-form"))).prevented, `${s.name}: ${s.consent ? "the browser posts it" : "stopped on the page"}`).toBe(!s.consent);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
-  it("the markup: a real <form method=post> to the connect route, unticked and with Continue disabled in the HTML itself, carrying the org", () => {
+  it("the markup: a real <form method=post> to the connect route with TWO checkboxes, terms then under-16, each unticked and posting its own field; Continue disabled in the HTML itself; carrying the org", () => {
     const html = inLocale("en", <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
     expect(html).toMatch(/<form[^>]*\bmethod="post"/);
     expect(html).toMatch(/<form[^>]*\baction="\/api\/youtube\/connect"/);
     const hidden = inputsOf(html).filter((i) => i.type === "hidden");
     expect(hidden).toEqual([expect.objectContaining({ name: "orgId", value: "org-1" })]);
-    const consent = inputsOf(html).find((i) => i.name === "consent");
-    expect(consent, "the consent checkbox").toMatchObject({ type: "checkbox", value: "1", checked: false });
+    const boxes = inputsOf(html).filter((i) => i.type === "checkbox");
+    expect(boxes, "two checkboxes, terms first").toEqual([
+      { type: "checkbox", name: "consent", value: "1", testid: TERMS_BOX, checked: false, disabled: false },
+      { type: "checkbox", name: "consentMinors", value: "1", testid: MINORS_BOX, checked: false, disabled: false },
+    ]);
     expect(html, "the submit button is disabled in the server HTML too").toMatch(/<button[^>]*data-testid="youtube-connect-submit"[^>]*\bdisabled=""|<button[^>]*\bdisabled=""[^>]*data-testid="youtube-connect-submit"/);
   });
 
@@ -286,10 +334,100 @@ describe("the consent step", () => {
     expect(m("streaming.youtube.settingsNote")).toMatch(/already connected/i);
   });
 
+  // PO 2026-10-30, owner-requested: the consent is TWO boxes. Box 1 is the launch terms sentence (the wording before #1092, without the
+  // under-16 clause); box 2, right after it, is YouTube's under-16 rule and what breaking it costs, as its own tick. #1092 had folded the rule
+  // into box 1 as a clause; that clause, per locale as #1092 shipped it (typed), must be gone from box 1 now that it has its own box.
+  const CLAUSE_1092: Record<string, string> = {
+    en: "makes sure an adult is visibly present whenever players under 16 are on camera",
+    es: "se asegura de que un adulto esté visiblemente presente siempre que aparezcan en cámara jugadores menores de 16 años",
+    fr: "veille à ce qu’un adulte soit visiblement présent chaque fois que des joueurs de moins de 16 ans sont filmés",
+    nl: "ervoor zorgt dat er zichtbaar een volwassene aanwezig is wanneer spelers onder de 16 in beeld zijn",
+  };
+  /** The <label> around the checkbox with this testid, in markup: the words a tap ticks, and what a screen reader reads as its name. */
+  const labelAround = (html: string, testid: string): { open: number; close: number; label: string } => {
+    const at = html.indexOf(`data-testid="${testid}"`);
+    if (at < 0) throw new Error(`no ${testid} in the markup`);
+    const open = html.lastIndexOf("<label", at);
+    const close = html.indexOf("</label>", at);
+    return { open, close, label: html.slice(open, close) };
+  };
+
+  it("PO 2026-10-30: TWO boxes in EVERY locale — box 1 reads the terms sentence (slots filled), box 2 right after it reads the under-16 sentence, each in its own label, both before Continue; the hint asks for both", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      const dict = localeDict(l);
+      const html = inLocale(l, <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
+      const terms = labelAround(html, TERMS_BOX);
+      const minors = labelAround(html, MINORS_BOX);
+      const button = html.indexOf('data-testid="youtube-connect-submit"');
+      expect(button, `${l}: the go-to-Google button is in the markup`).toBeGreaterThan(-1);
+      expect(terms.open, `${l}: box 1 is inside a label`).toBeGreaterThan(-1);
+      const filled = dict["streaming.youtube.consent.body"]!.replace("{tos}", dict["streaming.youtube.consent.tos"]!).replace("{guidelines}", dict["streaming.youtube.consent.guidelines"]!);
+      expect(plain(terms.label), `${l}: box 1 reads the terms sentence, slots filled`).toBe(filled);
+      expect(plain(minors.label), `${l}: box 2 reads the under-16 sentence`).toBe(dict["streaming.youtube.consent.minors"]);
+      expect(terms.close, `${l}: box 1's label closes before box 2's opens (two labels, not one)`).toBeLessThan(minors.open);
+      // Right after it: nothing but markup between the two labels — no sentence a person would read in between.
+      expect(plain(html.slice(terms.close, minors.open)), `${l}: box 2 comes right after box 1`).toBe("");
+      expect(minors.close, `${l}: and both close before Continue to Google`).toBeLessThan(button);
+      expect(plain(html), `${l}: the hint asks for both`).toContain(dict["streaming.youtube.consent.required"]);
+      if (l !== "en") {
+        for (const k of ["streaming.youtube.consent.minors", "streaming.youtube.consent.required"] as const) {
+          expect(dict[k], `${l}: ${k} translated, not the English`).not.toBe(m(k));
+        }
+      }
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the under-16 rule is said ONCE, in its own box: #1092's clause is gone from box 1 in every locale, and #1089's separate note is gone too (no key, nothing rendered)", () => {
+    expect(Object.keys(CLAUSE_1092).sort(), "a clause for every locale, and no other").toEqual([...LOCALES].sort());
+    const OLD_KEY = "streaming.youtube.connect.minors";
+    // The #1089 sentence's opening, typed: a note that came back under another key is caught too.
+    const OLD_EN = "Streaming junior matches? YouTube doesn't allow live streams showing children under 16";
+    let checked = 0;
+    for (const l of LOCALES) {
+      const dict = localeDict(l);
+      expect(dict["streaming.youtube.consent.body"], `${l}: box 1 no longer carries #1092's clause`).not.toContain(CLAUSE_1092[l]!);
+      expect(dict[OLD_KEY], `${l}: #1089's key is deleted`).toBeUndefined();
+      const html = inLocale(l, <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />);
+      expect(html, `${l}: no note element`).not.toContain('data-testid="youtube-minors-note"');
+      expect(plain(html), `${l}: #1092's clause is nowhere on the card`).not.toContain(CLAUSE_1092[l]!);
+      // The positive pair: the rule is still on the card, exactly once, and it is box 2's label.
+      const sentence = dict["streaming.youtube.consent.minors"]!;
+      expect(typeof sentence === "string" && sentence.length > 0, `${l}: the dictionary carries box 2's sentence`).toBe(true);
+      expect(plain(html).split(sentence).length - 1, `${l}: box 2's sentence, once`).toBe(1);
+      expect(plain(labelAround(html, MINORS_BOX).label), `${l}: and it is the label of box 2`).toBe(sentence);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(plain(inLocale("en", <YoutubeConnectCard orgId="org-1" onCancel={() => {}} />))).not.toContain(OLD_EN);
+  });
+
+  it("the consent wording and its version move TOGETHER: these are the English texts YOUTUBE_CONSENT_VERSION 3 names (1 launch, 2 the under-16 clause inside the box, 3 the under-16 rule as its own box — PO 2026-10-30)", () => {
+    // If this fails you changed the words a person ticks. Update the pin AND bump YOUTUBE_CONSENT_VERSION (lib/youtube.ts) in the SAME
+    // change: that is what makes every new connection record the text it ticked, and every older one read "Review updated terms" (spec
+    // §6.1.5 — Go live is never blocked by it). Never the pin alone.
+    expect(YOUTUBE_CONSENT_VERSION).toBe(3);
+    // Box 1: the launch sentence, restored (owner 2026-10-30).
+    expect(m("streaming.youtube.consent.body")).toBe(
+      "I confirm this organisation will follow YouTube's {tos} and {guidelines}, has the rights to stream this content (venue, players, music), and agrees that Seazn will create, title, start and end a YouTube live broadcast on this channel for each match we stream here.",
+    );
+    // Box 2: the owner's sentence, verbatim (2026-10-30, with the consequence and "block or disable").
+    expect(m("streaming.youtube.consent.minors")).toBe(
+      "I confirm an adult will be visibly present whenever players under 16 are on camera. If not, YouTube can block or disable live streaming on this channel, temporarily or permanently.",
+    );
+    expect(m("streaming.youtube.consent.disclaimer")).toBe(
+      "YouTube alone decides whether this channel can stream; Seazn is not responsible if YouTube restricts or disables live streaming, removes a stream, issues a strike, or does not save a replay.",
+    );
+    expect(m("streaming.youtube.consent.bound")).toBe("By connecting you agree to be bound by the {tos}. See our {privacy}.");
+    expect(m("streaming.youtube.consent.required")).toBe("Tick both boxes to continue.");
+  });
+
   it("the consent text: the spec's words, the ToS / Community Guidelines / Privacy Policy links (external ones noopener), and no unfilled {slot} in ANY locale", () => {
     let checked = 0;
     for (const l of LOCALES) {
-      const html = inLocale(l, <ConsentBox checked={false} onChange={() => {}} withName />);
+      const html = inLocale(l, <ConsentBox value={{ terms: false, minors: false }} onChange={() => {}} withName />);
       const text = plain(html);
       expect(text, `${l}: no unfilled slot`).not.toMatch(/\{\w+\}/);
       const links = [...html.matchAll(/<a\b([^>]*)>/g)].map(([, a = ""]) => ({ href: /\bhref="([^"]*)"/.exec(a)?.[1], rel: /\brel="([^"]*)"/.exec(a)?.[1], target: /\btarget="([^"]*)"/.exec(a)?.[1] }));
@@ -307,18 +445,18 @@ describe("the consent step", () => {
     }
     expect(checked).toBe(LOCALES.length);
     // English: the sentence the owner approved in the spec, link labels in place.
-    const en = plain(inLocale("en", <ConsentBox checked={false} onChange={() => {}} withName />));
+    const en = plain(inLocale("en", <ConsentBox value={{ terms: false, minors: false }} onChange={() => {}} withName />));
     expect(en).toContain("I confirm this organisation will follow YouTube's Terms of Service and Community Guidelines");
     expect(en).toContain("create, title, start and end a YouTube live broadcast on this channel for each match we stream here");
     expect(en).toContain("By connecting you agree to be bound by the YouTube Terms of Service. See our Privacy Policy.");
   });
 
-  it("the review-terms variant of the box posts no field (it is a PATCH, not a form POST); the connect one posts consent=1", () => {
-    const named = inputsOf(renderToStaticMarkup(<ConsentBox checked={false} onChange={() => {}} withName />))[0]!;
-    const bare = inputsOf(renderToStaticMarkup(<ConsentBox checked={false} onChange={() => {}} withName={false} />))[0]!;
-    expect(named).toMatchObject({ type: "checkbox", name: "consent", value: "1" });
-    expect(bare.name).toBeUndefined();
-    expect(bare.value).toBeUndefined();
+  it("the review-terms variant of the boxes posts no field (it is a PATCH, not a form POST); the connect one posts consent=1 and consentMinors=1", () => {
+    const none = { terms: false, minors: false };
+    const named = inputsOf(renderToStaticMarkup(<ConsentBox value={none} onChange={() => {}} withName />));
+    const bare = inputsOf(renderToStaticMarkup(<ConsentBox value={none} onChange={() => {}} withName={false} />));
+    expect(named.map((i) => [i.type, i.testid, i.name, i.value])).toEqual([["checkbox", TERMS_BOX, "consent", "1"], ["checkbox", MINORS_BOX, "consentMinors", "1"]]);
+    expect(bare.map((i) => [i.type, i.testid, i.name, i.value])).toEqual([["checkbox", TERMS_BOX, undefined, undefined], ["checkbox", MINORS_BOX, undefined, undefined]]);
   });
 
   it("Cancel hands control back", async () => {
@@ -867,7 +1005,7 @@ describe("a connected channel's row", () => {
     expect(form![0]).toMatch(/\baction="\/api\/youtube\/connect"/);
     const fields = Object.fromEntries(inputsOf(form![1]!).map((i) => [i.name, i.value]));
     expect(fields).toEqual({ orgId: "o", connectionId: "11111111-2222-4333-8444-555555555555", privacy: "public", madeForKids: "1" });
-    expect(inputsOf(form![1]!).some((i) => i.name === "consent")).toBe(false);
+    expect(inputsOf(form![1]!).filter((i) => i.name === "consent" || i.name === "consentMinors"), "neither box's field").toEqual([]);
   });
 
   describe("Settings", () => {
@@ -954,34 +1092,42 @@ describe("a connected channel's row", () => {
 
   describe("Review updated terms", () => {
     const mount = (y: Partial<View> = {}) => renderIsland(YoutubeChannelRow, { t: channel({ connectionId: "c-7", termsOutdated: true, ...y }), canEdit: true, orgId: "org-1", badge: null });
-    const tickTerms = (row: ReturnType<typeof mount>, on: boolean) => (attr(ofType(row.tree(), ConsentBox)!, "onChange") as (v: boolean) => void)(on);
-
-    it("shows the consent text with an untouched box; Accept is disabled until ticked; ticking and accepting PATCHes {consent: true} (the route's own schema), refreshes, closes", async () => {
+    it("shows BOTH boxes untouched; Accept is disabled with none, only the terms or only the under-16 box, and Enter sends nothing then; both ticked and accepted PATCHes {consent: true, consentMinors: true} (the route's own schema), refreshes, closes", async () => {
       const row = mount();
       await click(byTestId(row.tree(), "youtube-review-terms"));
       expect(ofType(row.tree(), ConsentBox), "the wording is on screen to be read").toBeDefined();
       expect(attr(ofType(row.tree(), ConsentBox)!, "withName"), "a PATCH, not a form field").toBe(false);
-      expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled")).toBe(true);
-      await submit(byTestId(row.tree(), "youtube-terms-form"));
-      expect(apiCalls, "unticked: Enter sends nothing").toEqual([]);
+      expect(boxesShown(row.tree), "both boxes start empty").toEqual({ [TERMS_BOX]: false, [MINORS_BOX]: false });
 
-      tickTerms(row, true);
-      expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled")).toBe(false);
+      let refused = 0;
+      for (const s of TICK_STATES.filter((x) => !x.consent)) {
+        setBoxes(row.tree, s);
+        expect(boxesShown(row.tree), s.name).toEqual({ [TERMS_BOX]: s.terms, [MINORS_BOX]: s.minors });
+        expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled"), `${s.name}: Accept disabled`).toBe(true);
+        await submit(byTestId(row.tree(), "youtube-terms-form"));
+        expect(apiCalls, `${s.name}: Enter sends nothing`).toEqual([]);
+        refused++;
+      }
+      expect(refused, "anti-vacuity: the three states that are not a consent").toBe(3);
+
+      setBoxes(row.tree, { terms: true, minors: true });
+      expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled"), "both: Accept enabled").toBe(false);
       await submit(byTestId(row.tree(), "youtube-terms-form"));
-      expect(apiCalls).toEqual([{ url: "/api/v1/orgs/org-1/youtube-connections/c-7", method: "PATCH", json: { consent: true } }]);
+      expect(apiCalls).toEqual([{ url: "/api/v1/orgs/org-1/youtube-connections/c-7", method: "PATCH", json: { consent: true, consentMinors: true } }]);
       expect(isRealRoute("PATCH", apiCalls[0]!.url)).toBe(true);
       expect(() => YoutubeConnectionSettings.parse(apiCalls[0]!.json)).not.toThrow();
       expect(nav.refresh).toHaveBeenCalledTimes(1);
       expect(byTestId(row.tree(), "youtube-terms-form")).toBeUndefined();
     });
 
-    it("the tick does not survive a close: reopening starts unticked (consent is given each time it is read)", async () => {
+    it("the ticks do not survive a close: reopening starts with both boxes empty (consent is given each time it is read)", async () => {
       const row = mount();
       await click(byTestId(row.tree(), "youtube-review-terms"));
-      tickTerms(row, true);
+      setBoxes(row.tree, { terms: true, minors: true });
       await click(byTestId(row.tree(), "youtube-terms-cancel"));
       await click(byTestId(row.tree(), "youtube-review-terms"));
-      expect(attr(ofType(row.tree(), ConsentBox)!, "checked")).toBe(false);
+      expect(boxesShown(row.tree)).toEqual({ [TERMS_BOX]: false, [MINORS_BOX]: false });
+      expect(attr(byTestId(row.tree(), "youtube-terms-accept")!, "disabled")).toBe(true);
       expect(apiCalls).toEqual([]);
     });
 
@@ -1065,8 +1211,9 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(apiCalls).toEqual([{ url: DELETE_URL, method: "DELETE", json: undefined }]);
     expect(isRealRoute("DELETE", DELETE_URL), "the route table serves this path and method").toBe(true);
     expect(onDisconnected).toHaveBeenCalledTimes(1);
-    // the stand-in transport answers `{}`: no outcome on the wire is told as the cautious one, never as a confirmed revoke
-    expect(onDisconnected).toHaveBeenCalledWith({ name: "Riverside FC", outcome: "not_confirmed" });
+    // the stand-in transport answers `{}`: no outcome on the wire is told as the cautious one, never as a confirmed revoke - and no
+    // keysLeft is "not confirmed" too (null), never a 0 that would read as "every key went"
+    expect(onDisconnected).toHaveBeenCalledWith({ name: "Riverside FC", outcome: "not_confirmed", keysLeft: null });
     expect(nav.refresh).toHaveBeenCalledTimes(1);
     expect(byTestId(row.tree(), "youtube-error"), "no error line").toBeUndefined();
   });
@@ -1197,12 +1344,13 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
   it("the panel keeps the news of a disconnect after the row has left the list, and Dismiss clears it", async () => {
     const panel = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [channel()], locale: "en" });
     expect(ofType(panel.tree(), YoutubeDisconnectedNotice), "no notice before").toBeUndefined();
-    (attr(ofType(panel.tree(), YoutubeChannelRow)!, "onDisconnected") as (news: { name: string; outcome: string }) => void)({ name: "Riverside FC", outcome: "revoked" });
+    (attr(ofType(panel.tree(), YoutubeChannelRow)!, "onDisconnected") as (news: { name: string; outcome: string; keysLeft: number | null }) => void)({ name: "Riverside FC", outcome: "revoked", keysLeft: 0 });
     const notice = ofType(panel.tree(), YoutubeDisconnectedNotice);
     expect(notice, "the notice").toBeDefined();
     expect(attr(notice!, "name")).toBe("Riverside FC");
     expect(attr(notice!, "outcome")).toBe("revoked");
-    const html = renderToStaticMarkup(<DictProvider dict={messages as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name="Riverside FC" outcome="revoked" onDismiss={() => {}} /></DictProvider>);
+    expect(attr(notice!, "keysLeft")).toBe(0);
+    const html = renderToStaticMarkup(<DictProvider dict={messages as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name="Riverside FC" outcome="revoked" keysLeft={0} onDismiss={() => {}} /></DictProvider>);
     expect(plain(html)).toContain("Riverside FC is disconnected. Seazn deleted what it stored from YouTube for this channel.");
     expect(html).toMatch(/data-testid="youtube-disconnected"[^>]*\brole="status"|\brole="status"[^>]*data-testid="youtube-disconnected"/);
     (attr(notice!, "onDismiss") as () => void)();
@@ -1211,7 +1359,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
 
   it("m6: the news of a disconnect TAKES FOCUS as it appears (the button that asked left with the row, and focus would fall to the top of the page): the notice is a focusable block that hands itself the focus on attach, with the house ring; each new piece of news is a new element, so it focuses again - on the full page and on the restricted one", () => {
     // The notice itself
-    const notice = renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "revoked", onDismiss: () => {} });
+    const notice = renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "revoked", keysLeft: 0, onDismiss: () => {} });
     const box = byTestId(notice.tree(), "youtube-disconnected")!;
     expect(box, "the notice box").toBeDefined();
     expect(attr(box, "tabIndex"), "focusable, but not in the tab order").toBe(-1);
@@ -1225,12 +1373,12 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(() => attach!(null), "and the detach does nothing").not.toThrow();
     expect(el.focus).toHaveBeenCalledTimes(1);
     // an alert (a revoke Seazn could not confirm) is focusable the same way
-    const alert = byTestId(renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "not_confirmed", onDismiss: () => {} }).tree(), "youtube-disconnected")!;
+    const alert = byTestId(renderIsland(YoutubeDisconnectedNotice, { name: "Riverside FC", outcome: "not_confirmed", keysLeft: 0, onDismiss: () => {} }).tree(), "youtube-disconnected")!;
     expect(attr(alert, "role")).toBe("alert");
     expect(attr(alert, "tabIndex")).toBe(-1);
 
     // The mount sites: a different piece of news is a different element (a key), so a second disconnect focuses again.
-    type Done = (n: { name: string; outcome: string }) => void;
+    type Done = (n: { name: string; outcome: string; keysLeft?: number | null }) => void;
     const pair = (): StreamTarget[] => [
       channel({ connectionId: "c-1", channelTitle: "Riverside FC" }, { id: "t-1" }),
       channel({ connectionId: "c-2", channelTitle: "Riverside Juniors" }, { id: "t-2" }),
@@ -1251,6 +1399,25 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
       sites++;
     }
     expect(sites, "anti-vacuity: both mount sites judged").toBe(2);
+  });
+
+  it("keys left reach the notice from BOTH mount sites - the full page and the restricted one - as the row handed them: a count, and null (anti-vacuity: 2 sites x 2 values)", () => {
+    type Done = (n: { name: string; outcome: string; keysLeft: number | null }) => void;
+    let checked = 0;
+    for (const [where, make] of [
+      ["the full page", () => renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [channel()], locale: "en" })],
+      ["the restricted page", () => renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: [channel()] })],
+    ] as const) {
+      for (const keysLeft of [3, null]) {
+        const panel = make();
+        (attr(ofType(panel.tree(), YoutubeChannelRow)!, "onDisconnected") as Done)({ name: "Riverside FC", outcome: "revoked", keysLeft });
+        const notice = ofType(panel.tree(), YoutubeDisconnectedNotice);
+        expect(notice, `${where}/${keysLeft}: the notice`).toBeDefined();
+        expect(attr(notice!, "keysLeft"), `${where}/${keysLeft}: handed on`).toBe(keysLeft);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
   });
 
   it("F5: after a disconnect the connect round trip's landing banner ('YouTube channel connected.') does not sit above 'X is disconnected' - every non-picker landing goes, and its ?youtube= query with it; the picker, other landings' absence and a no-landing page are unaffected (anti-vacuity: every banner code)", () => {
@@ -1293,13 +1460,26 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(Object.keys(OUTCOME_COPY).sort(), "a declared outcome without copy would be told as another").toEqual([...YOUTUBE_REVOKE_OUTCOMES].sort());
     let checked = 0;
     for (const outcome of YOUTUBE_REVOKE_OUTCOMES) {
-      answerWith(async () => ({ revokeOutcome: outcome, keysDeleted: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } }));
+      answerWith(async () => ({ revokeOutcome: outcome, keysDeleted: 0, keysLeft: 0, purged: { broadcasts: 0, streamUrlsCleared: 0 } }));
       const onDisconnected = vi.fn();
       await click(disconnectBtn(mount({ channelTitle: "Riverside FC" }, { onDisconnected })));
-      expect(onDisconnected, outcome).toHaveBeenCalledWith({ name: "Riverside FC", outcome });
+      expect(onDisconnected, outcome).toHaveBeenCalledWith({ name: "Riverside FC", outcome, keysLeft: 0 });
       checked++;
     }
     expect(checked).toBe(YOUTUBE_REVOKE_OUTCOMES.length);
+  });
+
+  it("keys left: the row hands the page the `keysLeft` the wire carried - a count, null (the channel could not be read) - and an answer without one is told as null, the cautious one (anti-vacuity: 4 answers)", async () => {
+    const answers: [wire: unknown, want: number | null][] = [[2, 2], [1, 1], [null, null], [undefined, null]];
+    let checked = 0;
+    for (const [wire, want] of answers) {
+      answerWith(async () => ({ revokeOutcome: "revoked", keysDeleted: 0, ...(wire === undefined ? {} : { keysLeft: wire }), purged: { broadcasts: 0, streamUrlsCleared: 0 } }));
+      const onDisconnected = vi.fn();
+      await click(disconnectBtn(mount({ channelTitle: "Riverside FC" }, { onDisconnected })));
+      expect(onDisconnected, String(wire)).toHaveBeenCalledWith({ name: "Riverside FC", outcome: "revoked", keysLeft: want });
+      checked++;
+    }
+    expect(checked).toBe(answers.length);
   });
 
   it("F1: the notice tells the three outcomes apart in all four locales, from the dictionaries - revoked and 'kept on purpose' are calm statuses; 'not confirmed' is an alert that carries the plain Google link, and ONLY that one does (anti-vacuity: 3 outcomes x 4 locales)", () => {
@@ -1309,12 +1489,13 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
       const sentences = new Set<string>();
       for (const outcome of YOUTUBE_REVOKE_OUTCOMES) {
         const want = OUTCOME_COPY[outcome];
-        const html = inLocale(l, <YoutubeDisconnectedNotice name="Riverside FC" outcome={outcome} onDismiss={() => {}} />);
+        const html = inLocale(l, <YoutubeDisconnectedNotice name="Riverside FC" outcome={outcome} keysLeft={0} onDismiss={() => {}} />);
         const expected = dict[want.key]!.replaceAll("{name}", "Riverside FC").replaceAll("{link}", dict["streaming.youtube.disconnect.googleLink"]!);
         expect(plain(html), `${l}/${outcome}: the dictionary's sentence`).toContain(expected);
         expect(html, `${l}/${outcome}: no placeholder left in the page`).not.toMatch(/\{(name|link)\}/);
         expect(html, `${l}/${outcome}: role`).toMatch(new RegExp(`role="${want.role}"`));
         expect(html, `${l}/${outcome}: outcome marker`).toContain(`data-outcome="${outcome}"`);
+        expect(html, `${l}/${outcome}: nothing left`).toContain('data-keys-left="0"');
         expect(html, `${l}/${outcome}: no logo in the notice`).not.toMatch(/<svg|<img/);
         if (want.link) {
           // The href is the ONE constant (lib/youtube.ts); the literal it must equal - the page the Developer Policies name - is pinned in
@@ -1331,6 +1512,82 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
       expect(sentences.size, `${l}: three different sentences`).toBe(YOUTUBE_REVOKE_OUTCOMES.length);
     }
     expect(checked).toBe(LOCALES.length * YOUTUBE_REVOKE_OUTCOMES.length);
+  });
+
+  // Keys left on the channel (stg 2026-10-30, PO ruling): "deleted" must never be said while a Seazn key is still in the club's Studio. The
+  // sentence LEADS with what is left and where to delete it - a count (Intl.PluralRules picks `.one` / `.other`, the repo's plural keys) or,
+  // when the channel could not be read, "couldn't check" - and the grant's own outcome follows as a sentence of its own. Expected text is the
+  // dictionaries' in every locale, the plural form chosen by the platform's CLDR rules - never read back from the component.
+  const pluralOf = (dict: Record<string, string>, l: string, key: string, count: number) =>
+    dict[`${key}.${new Intl.PluralRules(l).select(count)}`] ?? dict[`${key}.other`]!;
+  const KEYS_STATES = [
+    { keysLeft: 1, outcome: "revoked", tail: null },
+    { keysLeft: 2, outcome: "revoked", tail: null },
+    { keysLeft: null, outcome: "revoked", tail: null },
+    { keysLeft: 1, outcome: "skipped_shared_account", tail: "streaming.youtube.disconnect.keysTail.shared" },
+    { keysLeft: null, outcome: "not_confirmed", tail: "streaming.youtube.disconnect.keysTail.unconfirmed" },
+  ] as const;
+
+  it("keys left, in all four locales: the sentence says how many keys are still on the channel (or that Seazn couldn't check) and where to delete them - never the 'deleted' sentence - and the shared and not-confirmed outcomes still say theirs after it; an alert with its own marker (anti-vacuity: 5 states x 4 locales)", () => {
+    let checked = 0;
+    const perLocale = new Map<string, number>();
+    for (const l of LOCALES) {
+      const dict = localeDict(l);
+      const sentences = new Set<string>();
+      for (const st of KEYS_STATES) {
+        const html = inLocale(l, <YoutubeDisconnectedNotice name="Riverside FC" outcome={st.outcome} keysLeft={st.keysLeft} onDismiss={() => {}} />);
+        const where = `${l}/${st.outcome}/${st.keysLeft}`;
+        const lead = (st.keysLeft === null ? dict["streaming.youtube.disconnect.keysUnchecked"]! : pluralOf(dict, l, "streaming.youtube.disconnect.keysLeft", st.keysLeft))
+          .replaceAll("{name}", "Riverside FC").replaceAll("{count}", String(st.keysLeft));
+        const tail = st.tail === null ? "" : ` ${dict[st.tail]!.replaceAll("{link}", dict["streaming.youtube.disconnect.googleLink"]!)}`;
+        expect(plain(html), `${where}: the dictionary's sentence(s)`).toContain(`${lead}${tail}`);
+        if (st.keysLeft !== null) expect(plain(html), `${where}: the count is in it`).toContain(String(st.keysLeft));
+        for (const told of ["streaming.youtube.disconnect.done", "streaming.youtube.disconnect.doneShared", "streaming.youtube.disconnect.doneUnconfirmed"]) {
+          expect(plain(html), `${where}: never "${told}"`).not.toContain(dict[told]!.replaceAll("{name}", "Riverside FC").split("{link}")[0]!.trim());
+        }
+        expect(html, `${where}: no placeholder left`).not.toMatch(/\{(name|count|link)\}/);
+        expect(html, `${where}: an alert - there is something for the organiser to do`).toMatch(/role="alert"/);
+        expect(html, `${where}: the outcome marker stands`).toContain(`data-outcome="${st.outcome}"`);
+        expect(html, `${where}: the keys marker`).toContain(`data-keys-left="${st.keysLeft === null ? "unknown" : st.keysLeft}"`);
+        const linked = html.includes(`href="${GOOGLE_THIRD_PARTY_ACCESS_URL}"`);
+        expect(linked, `${where}: the Google link only where the revoke was not confirmed`).toBe(st.outcome === "not_confirmed");
+        sentences.add(plain(html));
+        checked++;
+      }
+      expect(sentences.size, `${l}: five different notices`).toBe(KEYS_STATES.length);
+      perLocale.set(l, sentences.size);
+    }
+    expect(perLocale.size, "the new sentence rendered in every locale").toBe(4);
+    expect(checked).toBe(LOCALES.length * KEYS_STATES.length);
+  });
+
+  it("keys left: the new sentences exist in every locale, are not the English in es/fr/nl, keep their slots, and the plural pair differs (one key vs several) - and nothing is left (0) is the plain 'deleted' sentence, the positive pair", () => {
+    const slots: Record<string, string[]> = {
+      "streaming.youtube.disconnect.keysLeft.one": ["{name}", "{count}"],
+      "streaming.youtube.disconnect.keysLeft.other": ["{name}", "{count}"],
+      "streaming.youtube.disconnect.keysUnchecked": ["{name}"],
+      "streaming.youtube.disconnect.keysTail.shared": [],
+      "streaming.youtube.disconnect.keysTail.unconfirmed": ["{link}"],
+    };
+    let checked = 0;
+    for (const l of LOCALES) {
+      const d = localeDict(l);
+      for (const [k, want] of Object.entries(slots)) {
+        const v = d[k];
+        expect(v, `${l} ${k}`).toBeTypeOf("string");
+        if (l !== "en") expect(v, `${l} ${k} is not the English`).not.toBe(localeDict("en")[k]);
+        expect((v!.match(/\{\w+\}/g) ?? []).sort(), `${l} ${k}: its slots`).toEqual([...want].sort());
+        checked++;
+      }
+      expect(d["streaming.youtube.disconnect.keysLeft.one"], `${l}: one key reads differently from several`).not.toBe(d["streaming.youtube.disconnect.keysLeft.other"]);
+      const none = plain(inLocale(l, <YoutubeDisconnectedNotice name="Riverside FC" outcome="revoked" keysLeft={0} onDismiss={() => {}} />));
+      expect(none, `${l}: nothing left is the plain sentence`).toContain(d["streaming.youtube.disconnect.done"]!.replaceAll("{name}", "Riverside FC"));
+    }
+    expect(checked).toBe(LOCALES.length * Object.keys(slots).length);
+    // the English, typed from the PO ruling
+    expect(m("streaming.youtube.disconnect.keysLeft.other", { name: "X", count: 2 })).toBe(
+      "X is disconnected, but Seazn couldn't delete 2 stream keys from YouTube. Delete them in YouTube Studio → Go live → Stream → Manage stream keys.",
+    );
   });
 
   it("F1: only the unconfirmed sentence says Google may still hold access, and only the shared one says why it stays (the English wording, typed from the ruling)", () => {
@@ -1604,9 +1861,10 @@ describe("the archived 'disconnected' label is localized", () => {
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe("the panel with YouTube Connect", () => {
-  it("an editor with NO destinations: the empty card offers both ways in — Add destination and Connect YouTube (the mark beside it)", () => {
+  it("an editor with NO destinations: the empty card offers both ways in — Connect YouTube first, then Add streaming key (no YouTube mark on either)", () => {
     const html = panelHtml({ targets: [] });
-    expect(html).toMatch(/data-testid="stream-dest-empty"[\s\S]*data-testid="stream-dest-empty-add"[\s\S]*data-testid="youtube-connect-empty"/);
+    expect(html).toMatch(/data-testid="stream-dest-empty"[\s\S]*data-testid="youtube-connect-empty"[\s\S]*data-testid="stream-dest-empty-add"/);
+    expect(plain(html)).toContain(m("streamDest.add"));
     expect(plain(html)).toContain(m("streamDest.empty"));
     expect(plain(html)).toContain(m("streaming.youtube.connect"));
     expect(html.match(/data-platform-mark="youtube"/g), "the Connect button wears no mark").toBeNull();
@@ -1620,12 +1878,47 @@ describe("the panel with YouTube Connect", () => {
     for (const id of ["stream-dest-empty-add", "youtube-connect-empty", "youtube-connect", "stream-dest-add"]) expect(html, id).not.toContain(`data-testid="${id}"`);
   });
 
-  it("with destinations the Connect YouTube button sits beside Add destination, and Add is the louder of the two (the YouTube mark is never the most prominent thing)", () => {
-    const html = panelHtml({ targets: [pasted()] });
-    expect(html).toMatch(/data-testid="stream-dest-add"[^>]*class="[^"]*\bbtn-primary\b/);
-    expect(html).toMatch(/data-testid="youtube-connect"[^>]*class="[^"]*\bbtn-ghost\b/);
-    expect(html).not.toMatch(/data-testid="youtube-connect"[^>]*class="[^"]*\bbtn-primary\b/);
-    expect(html).not.toContain('data-testid="youtube-connect-empty"');
+  // Owner 2026-10-30: Connect YouTube is the primary way in and comes FIRST; adding a pasted key is the secondary one. Both places that offer
+  // the pair (the header row over a list, the empty card) — so a fix to one cannot leave the other behind.
+  it("Connect YouTube is the primary button and comes first; Add streaming key is the secondary one after it — in the header row AND the empty card", () => {
+    const classesOf = (html: string, testid: string): string[] => {
+      const tag = new RegExp(`<button\\b[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0];
+      expect(tag, `${testid} renders`).toBeDefined();
+      return (/\bclass="([^"]*)"/.exec(tag!)?.[1] ?? "").split(/\s+/).filter(Boolean);
+    };
+    const places = [
+      { where: "header row", targets: [pasted()], connect: "youtube-connect", add: "stream-dest-add", absent: "youtube-connect-empty" },
+      { where: "empty card", targets: [], connect: "youtube-connect-empty", add: "stream-dest-empty-add", absent: "youtube-connect" },
+    ];
+    let checked = 0;
+    for (const p of places) {
+      const html = panelHtml({ targets: p.targets });
+      const connect = classesOf(html, p.connect);
+      const add = classesOf(html, p.add);
+      expect(connect, `${p.where}: Connect YouTube is primary`).toContain("btn-primary");
+      expect(connect, `${p.where}: Connect YouTube is not the ghost`).not.toContain("btn-ghost");
+      expect(add, `${p.where}: Add streaming key is the ghost`).toContain("btn-ghost");
+      expect(add, `${p.where}: Add streaming key is not primary`).not.toContain("btn-primary");
+      expect(html.indexOf(`data-testid="${p.connect}"`), `${p.where}: Connect YouTube comes before Add streaming key`).toBeLessThan(html.indexOf(`data-testid="${p.add}"`));
+      expect(html, `${p.where}: only this place's pair renders`).not.toContain(`data-testid="${p.absent}"`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the Add button's label names a streaming key in every locale, in the same noun the YouTube stream-key title already uses (es/fr/nl)", () => {
+    // English is the owner's own wording (2026-10-30), "streaming key"; the shipped English title says "stream key", so en is pinned to the
+    // ruling and the other three to their title's noun (the title is "Seazn Club · <noun> {n}").
+    expect(m("streamDest.add")).toMatch(/\bstreaming key\b/i);
+    let checked = 0;
+    for (const l of ["es", "fr", "nl"] as const) {
+      const d = localeDict(l);
+      const noun = /·\s*(.+?)\s*\{n\}/.exec(d["streaming.youtube.streamKeyTitle"]!)?.[1];
+      expect(noun, `${l}: the stream-key title carries a noun`).toBeTruthy();
+      expect(d["streamDest.add"]!.toLowerCase(), l).toContain(noun!.toLowerCase());
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 
   it("connected channels and pasted keys list in two groups, channels first, each under a heading ONLY when both kinds are present", () => {
@@ -1658,7 +1951,7 @@ describe("the panel with YouTube Connect", () => {
     expect(checked).toBe(StreamTargetKind.options.length);
   });
 
-  it("Add destination and Connect YouTube are one form at a time: opening either closes the other (driven)", async () => {
+  it("Add streaming key and Connect YouTube are one form at a time: opening either closes the other (driven)", async () => {
     const panel = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [pasted()], locale: "en" });
     const has = () => ({ add: !!ofType(panel.tree(), AddForm), connect: !!ofType(panel.tree(), YoutubeConnectCard) });
     expect(has()).toEqual({ add: false, connect: false });
@@ -1748,11 +2041,19 @@ describe("the copy", () => {
     const used = new Set([...(SOURCE + PANEL_SOURCE).matchAll(/"((?:streaming\.youtube|streaming\.keys)\.[A-Za-z_.]+)"/g)].map((x) => x[1]!));
     expect(used.size, "the scan found keys").toBeGreaterThan(40);
     let checked = 0;
+    let plurals = 0;
     for (const k of used) {
-      expect((messages as Record<string, string>)[k], k).toBeTypeOf("string");
+      const dict = messages as Record<string, string>;
+      // A key read through the plural helper (`useMsgPlural`) is a BASE: it resolves to `<base>.<CLDR category>`, falling back to
+      // `<base>.other`, which must therefore exist (lib/i18n-runtime.ts `plural`).
+      if (dict[k] === undefined && typeof dict[`${k}.other`] === "string") {
+        expect(dict[`${k}.one`], `${k}: a plural base has its singular`).toBeTypeOf("string");
+        plurals++;
+      } else expect(dict[k], k).toBeTypeOf("string");
       checked++;
     }
     expect(checked).toBe(used.size);
+    expect(plurals, "the one plural base the notice reads (keys left)").toBe(1);
   });
 
   it("the user-visible strings in the new component are all dictionary keys: no English sentence is hardcoded in its JSX", () => {
@@ -1800,7 +2101,7 @@ describe("T12 polish: the Streaming page", () => {
     const picking = panelHtml({ targets: [], landing: { code: "pick", pendingId: PENDING } });
     expect(picking, "the picker is the way in").toContain('data-testid="youtube-picker"');
     expect(picking, "no second Connect YouTube beside it").not.toContain('data-testid="youtube-connect-empty"');
-    expect(picking, "Add destination is untouched").toContain('data-testid="stream-dest-empty-add"');
+    expect(picking, "Add streaming key is untouched").toContain('data-testid="stream-dest-empty-add"');
     // The positive pairs: no landing, and a landing that is not a pick, both still offer it.
     expect(panelHtml({ targets: [] })).toContain('data-testid="youtube-connect-empty"');
     expect(panelHtml({ targets: [], landing: { code: "connected", pendingId: null } })).toContain('data-testid="youtube-connect-empty"');

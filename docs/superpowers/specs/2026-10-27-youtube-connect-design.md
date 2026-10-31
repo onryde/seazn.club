@@ -32,6 +32,7 @@ These are the owner's own answers in this session's chat. Items marked *(my call
 | D13 | **Part labels only when a match has 2+ parts**; a single part shows the player alone. | "hope that we don't display part 1 like that always, only when more than one part" |
 | D14 | UI layouts: Directory = Option A connect flow + Option B channel rows; fixture panel = Option B; public page = D12. | "Option A but 4 from Option B" → clarified "1"; "Fixture stream panel Option B" |
 | D15 | Each broadcast stores YouTube's **actual start and end time** (filled when Seazn ends it), for R4 sponsors-on-stream's "watch this moment" replay link. | "if we can, then yes?" (2026-10-27) |
+| D16 | **The organiser ticks YouTube's under-16 live rule as its own box** (children under 16 only with an adult visibly present; a channel that breaks it can lose live streaming): a SECOND required checkbox right after the D7 one — "I confirm an adult will be visibly present whenever players under 16 are on camera. If not, YouTube can block or disable live streaming on this channel, temporarily or permanently." (`streaming.youtube.consent.minors`, all four locales) — while the D7 sentence is the launch wording again. Continue to Google is enabled only with BOTH ticked (hint: "Tick both boxes to continue."), and the connect route (`consent` + `consentMinors` form fields) and the re-consent PATCH (`{consent: true, consentMinors: true}`) each refuse one box without the other. Text versions (`YOUTUBE_CONSENT_VERSION`, `lib/youtube.ts`): **1** the launch wording; **2** the under-16 rule as a clause inside the D7 box (#1092); **3** the two boxes. New connections record 3; existing ones keep their stored version (no row migration) and read "Review updated terms" per §6.1.5, never blocking Go live. Plus a paragraph linking YouTube's child safety policy in the help (`billing/credits.md`, the only help page covering streaming). | PO ruling 2026-10-30 (product decision delegated by the owner), after stg's test stream was flagged under YouTube's child-safety policy: first a separate note (`streaming.youtube.connect.minors`, #1089, removed), then a clause of the consent sentence (#1092), then — owner-requested the same day — its own checkbox, wording the owner's. |
 
 Accepted without objection in playback (owner "Ok"), originally proposed by this author:
 - made-for-kids asked at connect, default **No** *(my call)*;
@@ -260,14 +261,22 @@ one open broadcast per key**. Index supporting "open broadcasts whose end may be
 
 1. An editor (owner|admin, as today) taps **Connect YouTube** (words only: a button is not a link to YouTube, so it carries no logo).
 2. A **consent step** inside Seazn, before Google: visibility (Unlisted preselected; Public; Private), made for
-   kids (No preselected), and the required checkbox (D7). Draft wording — final legal text is the owner's:
+   kids (No preselected), and TWO required checkboxes (D7, D16). Draft wording — final legal text is the owner's:
    > ☐ I confirm this organisation will follow YouTube's **Terms of Service** and **Community Guidelines**, has the
    > rights to stream this content (venue, players, music), and agrees that Seazn will **create, title, start and
-   > end a YouTube live broadcast on this channel for each match we stream** here. YouTube alone decides whether
+   > end a YouTube live broadcast on this channel for each match we stream** here.
+   >
+   > ☐ I confirm an adult will be visibly present whenever players under 16 are on camera. If not, YouTube can block
+   > or disable live streaming on this channel, temporarily or permanently. (D16)
+   >
+   > YouTube alone decides whether
    > this channel can stream; Seazn is not responsible if YouTube restricts or disables live streaming, removes a
    > stream, issues a strike, or does not save a replay. By connecting you agree to be bound by the YouTube Terms of
    > Service. See our **Privacy Policy**.
-   Links: YouTube ToS, Community Guidelines, Seazn privacy policy. The button stays disabled until ticked.
+   Links: YouTube ToS, Community Guidelines, Seazn privacy policy. The button stays disabled until BOTH are ticked
+   ("Tick both boxes to continue."), and the connect route refuses either box alone (400). Text version
+   (`YOUTUBE_CONSENT_VERSION`, stored as `consent_version`): **1** the launch wording; **2** the under-16 clause inside
+   the box (#1092); **3** the two boxes (D16).
 3. Google OAuth on a **separate route pair from sign-in** (never entangle with login): `access_type=offline`,
    `prompt=consent`, state cookie bound to org + user, PKCE. Scope: **`https://www.googleapis.com/auth/youtube`
    only** (owner configured it on the consent screen 2026-10-27; `youtube.force-ssl` dropped — both are accepted by
@@ -278,8 +287,10 @@ one open broadcast per key**. Index supporting "open broadcasts whose end may be
    ("This Google account has no YouTube channel").
 5. Saved: connection row + destination row; consent recorded with text version. When the consent text changes,
    **the old consent stands** and Go live is never blocked by it; Directory → Streaming shows the connection as
-   "Review updated terms" until an editor re-ticks. *(my call — a scorer at the match cannot tick it, and a legal
-   edit must not stop matches streaming on match day.)*
+   "Review updated terms" until an editor re-ticks — BOTH boxes of step 2, the same wording and the same rule:
+   Accept stays disabled until both are ticked, and the PATCH refuses `consent` without `consentMinors` (or the
+   reverse) with 400. *(my call — a scorer at the match cannot tick it, and a legal edit must not stop matches
+   streaming on match day.)*
 6. If the channel is not enabled for live yet, the first health check (§6.6) shows it, with "YouTube can take up to
    24 hours".
 
@@ -365,7 +376,7 @@ reuses a claimed row, it creates a new one).
 Title: `<Home> v <Away> · <Division> · <Competition>`, trimmed to YouTube's title limit (builder verifies the limit;
 truncate the competition first). Description: the match line + the Seazn public match URL ("Live score and results:"),
 then a blank line and a "Powered by Seazn Club" line linking the site (`siteOrigin()` + `/`; owner request 2026-10-29),
-i.e. `<line> <matchUrl>\n\n<poweredBy> · <origin>/`; shown for every org, including ones with `dashboard.branding` (owner, 2026-10-29). Both in the org's default locale (`organizations.default_locale`).
+i.e. `<line> <matchUrl>\n\n<poweredBy> · <origin>` (no trailing slash, owner 2026-10-30); shown for every org, including ones with `dashboard.branding` (owner, 2026-10-29). Both in the org's default locale (`organizations.default_locale`).
 
 ### 6.6 The tick (D8, D9)
 
@@ -404,6 +415,27 @@ tick after reconnect. The destination row shows "Reconnect needed" with the reas
   refresh token kills the other's grant; if it does, delete our token without the Google revoke and record why), null `refresh_token_enc`, connection → `revoked`, archive
   the destination row, and **purge stored YouTube data now**: broadcast ids/titles, and every `fixtures.stream_url`
   pointing at that channel's videos (DP III.E.4: 7 days; doing it inline satisfies it).
+- **Every Seazn key goes, or the organiser is told it did not** *(fix 2026-10-30, PO ruling the same day: a stg Disconnect
+  said "Seazn deleted what it stored" while Studio still listed a "Seazn stream key")*. After the purge commits, and before
+  the revoke (the revoke stays LAST, since a revoked token can delete nothing):
+  1. each pooled key's stream is deleted; one YouTube refuses (e.g. `liveStreamDeletionNotAllowed` while its broadcast is
+     still winding down) is tried **once more**, after its broadcast reads `complete` (`broadcastLife`, a few reads apart),
+     inside the same 30 s budget;
+  2. the channel's own streams are listed (`liveStreams.list`, `part=snippet`, `mine=true`, 50 a page: ids and titles only,
+     never `cdn`, so no stream key is ever fetched; the budget is asked before EVERY page, and a listing it cuts short is
+     unread, never a partial list) and every stream **whose whole title is a name Seazn gives its keys**,
+     on that channel, is deleted, so a key that no row of ours records (an orphan) goes as well. The names are the union of
+     `streaming.youtube.streamKeyTitle` in every locale (`{n}` = digits) and `POOLED_KEY_TITLES_SHIPPED`
+     (`server/youtube/pooled-key-title.ts`): every name ever shipped per locale, append-only, from "Seazn stream key"
+     (before 79a208d8b0) to the fr "clé de diffusión {n}" (before #1088). A reworded dictionary value fails the test
+     until it is added there, so keys made under the old wording stay matchable; every name carries "Seazn". A club's own
+     key never matches;
+  3. the result carries `keysLeft`: the Seazn keys still on the channel (`0` = none), or `null` when the listing could not
+     be read (no usable token, a dead grant, the budget spent, or YouTube refused the list): **not confirmed, never 0**.
+  The notice: `keysLeft > 0` says "`<channel>` is disconnected, but Seazn couldn't delete N stream key(s) from YouTube.
+  Delete them in YouTube Studio → Go live → Stream → Manage stream keys."; `null` says Seazn couldn't check. Either
+  REPLACES the "deleted" sentence; the revoke's own outcome follows it as a second sentence (another channel shares the
+  Google account, or Google's revoke was not confirmed, with the Google link), and says nothing more when it was revoked.
 - Revoked on Google's side (discovered as `invalid_grant`): connection stays `reconnect_needed`; after **7 days**
   without reconnect, the same purge runs from the daily sweep. *(PO ruling 2026-10-29, T19 fix round 1: DP III.D.2 gives 30 days
   from the revocation, and the sweep finds a revocation up to a day later, so a 30-day wait after the flip could land past it. The
@@ -414,7 +446,9 @@ tick after reconnect. The destination row shows "Reconnect needed" with the reas
 House bar: mobile-first; 1280 / 768 / 320 with no horizontal scroll; house theme (mocks are layout only); every
 string in en/es/fr/nl + `npm run i18n:gen-keys`; `frontend-design` skill in every UI task.
 
-- **Directory → Streaming:** Connect YouTube action beside "Add destination"; the consent step; the channel picker;
+- **Directory → Streaming:** Connect YouTube action beside "Add streaming key" — Connect YouTube is the primary button and
+  comes first, Add streaming key (a pasted key, formerly "Add destination") the secondary one after it (owner 2026-10-30);
+  the consent step; the channel picker;
   a destination row: YouTube icon (a link to the channel on YouTube) · channel · visibility · status badge (Connected / Reconnect needed / Not enabled
   for live); actions Reconnect, Settings (visibility, made-for-kids), Disconnect.
 - **Fixture stream panel:** the destination picker shows API-backed YouTube rows like any other; refusal reasons

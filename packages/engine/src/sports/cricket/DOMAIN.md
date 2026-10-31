@@ -98,7 +98,7 @@ coarse scoring must stay legal.
 | Run out | all | persons: `out`, `fielder`, `fielderAssist` | `…wicket.fielder`, `…wicket.fielderAssist` → `.fine.fielding[p].runOuts` | **extended** | `fielderAssist` is new: the scorebook's "run out (thrower/breaker)". `fielder` = the fielder who completed it (broke the wicket), `fielderAssist` = the supporting fielder; both are credited a run out. Requires `fielder` and must differ from it. |
 | Obstructing the field | all | persons: `out`, `fielder` (optional) | `…wicket.kind = "obstructed"` | modelled | either batter can be out (Law 37.1.1), and the pad asks which (CK-WK-3). A named fielder is credited a run out on the fold's fielding card (`fine.fielding`), a departure from MCC Law 37, which credits no fielder (ruling 242, CK-WK-2); naming one is optional, and with none named nobody is. The player stats (`run_outs`, so the leaders and player pages) and the scorecard do not yet count it (owed-work O-11). "Handled the ball" was folded into this by the 2017 Code |
 | Timed out | all | person: `out` | `…wicket.kind = "timedout"` | modelled | |
-| Retired out (as a delivery-time entry) | all | person: `out` | `…wicket.kind = "retired"` | modelled | legacy path, kept for back-compat; `cricket.retire` below is the richer one. Either batter can retire (Law 25.4.1), and the pad asks which (ruling 242, CK-WK-3) |
+| Retired out (as a delivery-time entry) | all | person: `out` | `…wicket.kind = "retired"` | modelled | legacy path, kept for back-compat; `cricket.retire` below is the richer one. Either batter can retire (Law 25.4.1), and the pad asks which (ruling 242, CK-WK-3). The ball it rides on counts as a legal dot ball (`legalBalls` +1), where `cricket.retire` records no delivery: a known deviation from Law 25.4.1, which retires a batter when the ball is dead (ruling 246, CK-RH-2, owed O-13) |
 | **Hit the ball twice** | all | person: `out` | `…wicket.kind = "hitballtwice"` | **extended** | Law 34 — the tenth mode of dismissal, previously absent from the enum. Credited to no bowler, so `bowlerCredited` must be `false`. |
 | Wicket-keeper distinguished from a fielder | all | person: `fielder` | `positions.roles[].key = "wicketkeeper"` | deferred | the keeper is a lineup role (required, unique), so "†" on a scorecard is derivable from the lineup rather than repeated on every ball. Recording it per delivery would be denormalised and could contradict the lineup. |
 | Who threw vs who broke the wicket | all | persons: `fielder`, `fielderAssist` | `…wicket.fielderAssist` | **extended** | judged scoreable: it is the standard scorebook entry for a run out. The pair is ordered (completer, assister) rather than (thrower, breaker) because the completer is the one the card always names. |
@@ -156,7 +156,7 @@ coarse scoring must stay legal.
 | DLS revision inputs (overs, wickets, resources) | one-innings variants with `Cfg.dls.enabled` | entrant | `cricket.revise.oversPerSide`, `State.r1`/`r2`, `dls.ts` `resourcesFromBalls()` | modelled | Standard Edition table; resources lost are computed at the current wickets. The table is a fixed six-ball / ten-wicket grid, so `resourcesFromBalls` converts balls and wickets onto ITS scales — never `cfg.ballsPerOver` or a raw wicket count (#451) |
 | DLS / manual revised target | as above | entrant | `cricket.revise.target`, `State.revisedTarget`, `State.targetSource` | modelled | a manual umpire target always wins over the computed one |
 | DLS par decision on abandonment | as above | entrant | `core.abandon` → `dlsPar()`, method `"dls"` | modelled | below `Cfg.minOversForResult` it is a no result |
-| Super over | one-innings variants with `Cfg.superOver` | persons: all ball fields | `cricket.superover.ball`, `State.superOver` | modelled | 2-wicket all out, batting order flips each pair, `Cfg.superOverStillTied` = repeat / boundary_count / shared |
+| Super over | one-innings variants with `Cfg.superOver` | persons: all ball fields | `cricket.superover.ball`, `State.superOver` | modelled | 2-wicket all out, batting order flips each pair, `Cfg.superOverStillTied` = repeat / boundary_count / shared. A super over takes no `cricket.review` and no `cricket.retire` (WRONG_PHASE), a known deviation from ICC Appendix F paragraph 12 and its preamble (ruling 245, CK-SO-3, owed O-12) |
 | Net run rate ledger | all | entrant | `standingsDelta().metrics` (`runs_for`, `balls_faced_eff`, …) | modelled | integer ledger only; a bowled-out side is charged its full quota; forfeits contribute nothing; a DLS or revised-overs result credits Team 1 per ICC 16.10.7 (par off the overs Team 2 faced at abandonment, else final target − 1 off Team 2's allocated overs; CK-RR-1). A tie at par counts; revised overs without DLS count as applied earlier; an abandonment par where R2 > R1 (a revision during Team 1's innings) is `dlsPar`'s pro-rate approximation, not the full Standard Edition table |
 | Per-result points | all | entrant | `Cfg.points.{win,tie,noResult,loss,draw}` | modelled | `draw` is two-innings only |
 | Post-match scorecard lines | all | person | `cricket.player.line` (Tier 2) | modelled | sum-checked against the innings totals; exact against a fine innings, bounded against a coarse one |
@@ -173,10 +173,23 @@ Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 ## Downstream owed
 
 - **Only the striker can be out bowled, caught, hit the ball twice, hit wicket, lbw or stumped; the fold takes the
-  non-striker too** (ruling 242 (c), rules row CK-WK-4, open). `applyDelivery` checks only that `wicket.out` is at the
+  non-striker too** (rulings 242 (c) and 249, rules row CK-WK-4, `deviation`). `applyDelivery` checks only that `wicket.out` is at the
   crease, for every mode, which no Law allows for these six (Laws 32 to 36 and 39 each dismiss the striker). The pad
   never offers it (it asks who is out only for run out, obstructing and retired), so only a write through the API can
   record one. The fix is a fold change with a cricket `FOLD_EPOCH` bump, after the pad wave (owed-work O-8).
+- **A super over takes no player review and no retirement; the ICC conditions allow both** (ruling 245, rules row CK-SO-3,
+  `deviation`). Appendix F paragraph 12 gives each team one unsuccessful player review per innings per super over, and
+  the Appendix F preamble applies the match's playing conditions (retirement, 25.4) to it. The fold refuses
+  `cricket.review` and `cricket.retire` there (WRONG_PHASE). The fix is a fold change with a cricket `FOLD_EPOCH` bump,
+  after the pad wave (owed-work O-12).
+- **Retired out on the wicket sheet counts a dot ball** (ruling 246, rules row CK-RH-2, `deviation`). The wicket sheet's
+  Retired writes a `cricket.ball` (a legal dot ball, `legalBalls` +1), where the Retire sheet's out writes `cricket.retire`
+  (no delivery); Law 25.4.1 retires a batter when the ball is dead. Both ways stay; whether the wicket sheet drops Retired
+  or records no delivery for it is decided after the pad wave (owed-work O-13).
+- **Timed out: the pad records the striker and does not ask who is out** (ruling 249, rules row CK-WK-5, `deviation`).
+  Law 40 dismisses the incoming batter, who may come in at either end, so the wicket sheet should ask who is out for
+  timed out, as it does for run out, obstructed and retired (CK-WK-3). The fold already takes either batter, so the fix
+  is a pad change alone, with no `FOLD_EPOCH` bump (owed-work O-16).
 - **Position labels owed in all four locale dictionaries** (W4a T6b): `scoring.position.innings`, `scoring.position.over`.
   `SportModule.position` returns a stable segment `key` plus an ENGLISH `label`
   fallback — the engine writes no locale copy, by the same rule `MetricSpec.label`

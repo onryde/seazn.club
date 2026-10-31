@@ -42771,6 +42771,16 @@
                                 "additionalProperties": false
                               }
                             },
+                            "youtubeVideoUrl": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "target": {
                               "type": "object",
                               "properties": {
@@ -42962,6 +42972,7 @@
                             "endedAt",
                             "replayUrl",
                             "replayParts",
+                            "youtubeVideoUrl",
                             "target",
                             "fixtureDecided",
                             "fixtureHeld",
@@ -43022,6 +43033,7 @@
                         "private": true
                       }
                     ],
+                    "youtubeVideoUrl": "example",
                     "target": {
                       "id": "example",
                       "kind": "youtube",
@@ -43555,6 +43567,16 @@
                             "additionalProperties": false
                           }
                         },
+                        "youtubeVideoUrl": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -43746,6 +43768,7 @@
                         "endedAt",
                         "replayUrl",
                         "replayParts",
+                        "youtubeVideoUrl",
                         "target",
                         "fixtureDecided",
                         "fixtureHeld",
@@ -43801,6 +43824,7 @@
                         "private": true
                       }
                     ],
+                    "youtubeVideoUrl": "example",
                     "target": {
                       "id": "example",
                       "kind": "youtube",
@@ -73675,7 +73699,7 @@
     },
     "/api/v1/orgs/{id}/youtube-connections/{connectionId}": {
       "patch": {
-        "summary": "Change a YouTube connection's default visibility ({privacy}), made-for-kids ({madeForKids}) and/or give the consent on the current wording ({consent: true}, 'Review updated terms'; it records the caller and the time, and a second press does not replace who consented). At least one field; 404 for a connection that is missing, disconnected or another organisation's",
+        "summary": "Change a YouTube connection's default visibility ({privacy}), made-for-kids ({madeForKids}) and/or give the consent on the current wording ({consent: true, consentMinors: true}, 'Review updated terms': both boxes, the terms and YouTube's under-16 rule, and one without the other is 400; it records the caller and the time, and a second press does not replace who consented). At least one field; 404 for a connection that is missing, disconnected or another organisation's",
         "tags": [
           "fixtures"
         ],
@@ -73721,6 +73745,10 @@
                   "consent": {
                     "type": "boolean",
                     "const": true
+                  },
+                  "consentMinors": {
+                    "type": "boolean",
+                    "const": true
                   }
                 },
                 "additionalProperties": false
@@ -73728,7 +73756,8 @@
               "example": {
                 "privacy": "unlisted",
                 "madeForKids": true,
-                "consent": true
+                "consent": true,
+                "consentMinors": true
               }
             }
           }
@@ -74021,7 +74050,7 @@
         ]
       },
       "delete": {
-        "summary": "Disconnect a YouTube channel: the grant is revoked at Google (unless another connected channel runs on the same Google account, which is left alone on purpose: `revokeOutcome` is `skipped_shared_account`), the stream keys Seazn made on the channel are deleted at YouTube, any broadcast that is no longer in use is completed or deleted there, and what Seazn stored from YouTube is purged at once (the broadcast records, the match stream links that pointed at their videos, the saved keys, the channel's id and name); the channel's destination is archived. Videos already on the channel stay there. Available whatever the plan. `keysDeleted` counts the stream keys deleted at YouTube. `revokeOutcome` is `revoked` (Google answered the revoke), `skipped_shared_account` (see above) or `not_confirmed` (the revoke was tried and Google or YouTube did not answer, or Seazn's saved token would not open: the person can remove Seazn under their Google account's third-party access). The purge happens in every case. 409 YOUTUBE_IN_USE while a match is using the channel (a broadcast that is live, reserved or bound and whose end is not yet due, which includes the grace after a Stop): nothing changes. 409 YOUTUBE_END_UNKNOWN when Seazn cannot tell whether one is (a broadcast whose recorded times are inconsistent): nothing changes and it is reported to us; retry later. 404 for a connection that is missing, already disconnected or another organisation's",
+        "summary": "Disconnect a YouTube channel: the grant is revoked at Google (unless another connected channel runs on the same Google account, which is left alone on purpose: `revokeOutcome` is `skipped_shared_account`), the stream keys Seazn made on the channel are deleted at YouTube (one YouTube refuses is tried again once its broadcast has ended, and any other stream on the channel named as Seazn names its keys is deleted too; a club's own keys are never touched), any broadcast that is no longer in use is completed or deleted there, and what Seazn stored from YouTube is purged at once (the broadcast records, the match stream links that pointed at their videos, the saved keys, the channel's id and name); the channel's destination is archived. Videos already on the channel stay there. Available whatever the plan. `keysDeleted` counts the stream keys deleted at YouTube. `keysLeft` counts the Seazn keys still on the channel afterwards (YouTube would not delete them: the person deletes them in YouTube Studio), `0` when none is, and is `null` when Seazn could not read the channel's streams to check. `revokeOutcome` is `revoked` (Google answered the revoke), `skipped_shared_account` (see above) or `not_confirmed` (the revoke was tried and Google or YouTube did not answer, or Seazn's saved token would not open: the person can remove Seazn under their Google account's third-party access). The purge happens in every case. 409 YOUTUBE_IN_USE while a match is using the channel (a broadcast that is live, reserved or bound and whose end is not yet due, which includes the grace after a Stop): nothing changes. 409 YOUTUBE_END_UNKNOWN when Seazn cannot tell whether one is (a broadcast whose recorded times are inconsistent): nothing changes and it is reported to us; retry later. 404 for a connection that is missing, already disconnected or another organisation's",
         "tags": [
           "fixtures"
         ],
@@ -74078,6 +74107,18 @@
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
                         },
+                        "keysLeft": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "purged": {
                           "type": "object",
                           "properties": {
@@ -74102,6 +74143,7 @@
                       "required": [
                         "revokeOutcome",
                         "keysDeleted",
+                        "keysLeft",
                         "purged"
                       ],
                       "additionalProperties": false
@@ -74117,6 +74159,7 @@
                   "data": {
                     "revokeOutcome": "revoked",
                     "keysDeleted": -9007199254740991,
+                    "keysLeft": -9007199254740991,
                     "purged": {
                       "broadcasts": -9007199254740991,
                       "streamUrlsCleared": -9007199254740991

@@ -19,5 +19,9 @@ export * from "./play-event.ts";
 // W2e X-SE-2 (preflight D-2) — "a sanction alone moves no score", the one sweep body the cross-sport and per-sport rows run. Pure.
 export * from "./sanction-score.ts";
 // Engine-split 1d-5 (R12) — the rules reference parser (`rules/*.md` rows). It reads the disk, which this barrel otherwise
-// never does, because `rules/` ships in the package; the barrel's disk-reading closure is pinned to this one module by a test.
+// never does, because `rules/` ships in the package; the barrel's disk-reading closure is pinned to the two readers by a test.
 export * from "./rules-reference.ts";
+// Engine-split 2b R1 — the recorded corpora and the bye-deltas fixture, for the app suites that read them. The second disk reader,
+// for the same reason: `build:dist` copies the JSON into dist/, so it ships. Only the two readers are named here; the recorder, the
+// writer and the corpus policy (golden*.ts) stay out of the barrel.
+export { byeDeltas, goldenCorpora, type GoldenCorpusFile } from "./corpora.ts";

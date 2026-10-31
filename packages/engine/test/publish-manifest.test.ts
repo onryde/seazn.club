@@ -7,7 +7,7 @@
 // dry run would stop with "failed tests in the initial test run". The lint-ignore assertion for dist/ lives in pack-proof.test.ts, which
 // imports nothing from src/; test/stryker-sandbox-safe.test.ts holds that rule.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,8 +75,8 @@ describe("publish manifest", () => {
   it("clears dist before it emits, so a module deleted from src cannot survive a rebuild into the tarball", () => {
     // tsc only ever writes: without a clear, the .js of a deleted module stays in dist and `files` ships it.
     const steps = (pkg.scripts["build:dist"] as string).split(" && ");
-    expect(steps, "clear, then emit — nothing else").toHaveLength(2);
-    const [clear, emit] = steps as [string, string];
+    expect(steps, "clear, emit, then copy the data the shipped code reads — nothing else").toHaveLength(3);
+    const [clear, emit] = steps as [string, string, string];
     expect(emit).toBe("node ../../node_modules/typescript-native/bin/tsc -p tsconfig.build.json");
     // run the clear step AS DECLARED, in a scratch package dir with a stale dist and a src that must survive it
     const dir = mkdtempSync(join(tmpdir(), "engine-clear-"));
@@ -93,6 +93,59 @@ describe("publish manifest", () => {
       expect(existsSync(join(dir, "package.json")), "package.json untouched").toBe(true);
       // the empty case: a first build has no dist yet, and a second clear must not fail
       execFileSync("sh", ["-c", clear], { cwd: dir });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The testkit's corpora reader (src/testkit/corpora.ts) finds its JSON by ONE url, `../sports` and `../sport/__fixtures__`, which is right
+  // from src/testkit/ and from dist/testkit/ only if build:dist puts the JSON at the same relative place under dist/. tsc does not copy JSON.
+  it("copies the recorded corpora and the bye deltas to the same relative paths under dist, as the third and last build step", () => {
+    const steps = (pkg.scripts["build:dist"] as string).split(" && ");
+    const copy = steps[2]!;
+    expect(copy).toBe("node scripts/copy-dist-data.mjs");
+    expect(pkg.files, "dist is what ships it").toContain("dist");
+    const dir = mkdtempSync(join(tmpdir(), "engine-copy-"));
+    try {
+      // a scratch package: the script AS SHIPPED, and a src holding two corpora (one in a shared directory), the fixture, and files that are NOT data
+      mkdirSync(join(dir, "scripts"), { recursive: true });
+      copyFileSync(join(ENGINE, "scripts/copy-dist-data.mjs"), join(dir, "scripts/copy-dist-data.mjs"));
+      const made: Record<string, string> = {
+        "src/sports/football/football.golden.json": '{"key":"football"}',
+        "src/sports/setbased/badminton.golden.json": '{"key":"badminton"}',
+        "src/sport/__fixtures__/bye-deltas.json": '{"football":{}}',
+        "src/sports/football/DOMAIN.md": "# not shipped",
+        "src/sports/football/index.ts": "export {};",
+        "src/sport/__fixtures__/other.json": "{}",
+      };
+      for (const [rel, text] of Object.entries(made)) {
+        mkdirSync(dirname(join(dir, rel)), { recursive: true });
+        writeFileSync(join(dir, rel), text);
+      }
+      execFileSync("sh", ["-c", copy], { cwd: dir });
+      const shipped = [
+        "dist/sports/football/football.golden.json",
+        "dist/sports/setbased/badminton.golden.json",
+        "dist/sport/__fixtures__/bye-deltas.json",
+      ];
+      for (const f of shipped) expect(readFileSync(join(dir, f), "utf8"), f).toBe(made[f.replace(/^dist/, "src")]);
+      // exactly the data, nothing else from src
+      expect((readdirSync(join(dir, "dist"), { recursive: true }) as string[]).filter((f) => f.endsWith(".json")).sort()).toEqual(
+        shipped.map((f) => f.replace(/^dist\//, "")).sort(),
+      );
+      expect(existsSync(join(dir, "dist/sports/football/DOMAIN.md")), "a dossier is not data the shipped code reads").toBe(false);
+      expect(existsSync(join(dir, "dist/sport/__fixtures__/other.json")), "only bye-deltas.json").toBe(false);
+      // a second run over an existing dist is the same result (the build clears first, but the step must not depend on it)
+      execFileSync("sh", ["-c", copy], { cwd: dir });
+      expect(readFileSync(join(dir, shipped[0]!), "utf8")).toBe(made["src/sports/football/football.golden.json"]);
+      // the empty case: a src with no corpus is a failed build, not a tarball whose corpora reader finds nothing
+      rmSync(join(dir, "src/sports/football/football.golden.json"));
+      rmSync(join(dir, "src/sports/setbased/badminton.golden.json"));
+      expect(() => execFileSync("sh", ["-c", copy], { cwd: dir, stdio: "pipe" })).toThrow();
+      // ... and so is a src with no bye deltas
+      writeFileSync(join(dir, "src/sports/football/football.golden.json"), made["src/sports/football/football.golden.json"]!);
+      rmSync(join(dir, "src/sport/__fixtures__/bye-deltas.json"));
+      expect(() => execFileSync("sh", ["-c", copy], { cwd: dir, stdio: "pipe" })).toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

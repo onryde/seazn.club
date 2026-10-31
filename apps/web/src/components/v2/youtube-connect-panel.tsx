@@ -3,7 +3,7 @@
 //
 //   * the consent step (`YoutubeConnectCard`) — a plain <form method="post"> to `/api/youtube/connect` (T7), because the next hop is
 //     Google's consent screen and a navigation cannot be a fetch. Visibility (Unlisted preselected), made for kids (No preselected)
-//     and the required checkbox (D7): the button stays disabled until it is ticked;
+//     and the two required checkboxes (D7, D16): the button stays disabled until both are ticked;
 //   * the landing banner (`YoutubeLandingNotice`) — the callback's outcome, `?youtube=<code>`, as this page's own sentence;
 //   * the picker (`YoutubeChannelPicker`) — a Google account that manages several channels (`?youtube=pick&pending=<id>`);
 //   * a connected channel's row (`YoutubeChannelRow`) — its state in words, plus the actions that exist for it.
@@ -15,7 +15,7 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
@@ -103,28 +103,45 @@ const PRIVACY_HINT_KEY = {
   private: "streaming.youtube.privacy.privateHint",
 } as const satisfies Record<YoutubePrivacy, MessageKey>;
 
-/** The consent text (spec §6.1.2) with its links, and the box. Used by the connect step and by "Review updated terms", so the
- *  wording a person ticks is one text in one place. `name="consent" value="1"` is what the connect route reads. */
-export function ConsentBox({ checked, onChange, withName }: { checked: boolean; onChange: (v: boolean) => void; withName: boolean }) {
+/** The two consent boxes' ticks (owner, PO 2026-10-30): the terms, and YouTube's under-16 rule. Only both is a consent. */
+type ConsentTicks = { terms: boolean; minors: boolean };
+const NO_TICKS: ConsentTicks = { terms: false, minors: false };
+const bothTicked = (t: ConsentTicks): boolean => t.terms && t.minors;
+
+const CONSENT_LABEL = "flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700";
+const CONSENT_INPUT = "mt-0.5 h-5 w-5 shrink-0 accent-purple-600";
+
+/** The consent text (spec §6.1.2) with its links, as TWO boxes (owner, PO 2026-10-30): box 1 the terms sentence, box 2 right after it
+ *  YouTube's under-16 rule, each its own tick. Used by the connect step and by "Review updated terms", so the wording a person ticks is
+ *  one text in one place. `name="consent" value="1"` and `name="consentMinors" value="1"` are what the connect route reads; it refuses
+ *  either one alone. */
+export function ConsentBox({ value, onChange, withName }: { value: ConsentTicks; onChange: (v: ConsentTicks) => void; withName: boolean }) {
   const msg = useMsg();
-  const id = useId();
+  const termsId = useId();
+  const minorsId = useId();
   const tos = (label: string) => <a href={YOUTUBE_TOS_URL} {...EXTERNAL} className={LINK}>{label}</a>;
   const guidelines = <a href={YOUTUBE_GUIDELINES_URL} {...EXTERNAL} className={LINK}>{msg("streaming.youtube.consent.guidelines")}</a>;
   const privacy = <Link href="/legal/privacy" {...EXTERNAL} className={LINK}>{msg("streaming.youtube.consent.privacy")}</Link>;
+  // One box, the same markup for both: called as a function (not a component) so both inputs are this component's own elements.
+  const box = (id: string, testid: string, field: string, checked: boolean, flip: (on: boolean) => ConsentTicks, text: ReactNode) => (
+    <label htmlFor={id} className={CONSENT_LABEL}>
+      <input
+        id={id}
+        type="checkbox"
+        data-testid={testid}
+        {...(withName ? { name: field, value: "1" } : {})}
+        checked={checked}
+        onChange={(e) => onChange(flip(e.target.checked))}
+        className={CONSENT_INPUT}
+      />
+      <span className="min-w-0">{text}</span>
+    </label>
+  );
   return (
     <div className="space-y-2">
-      <label htmlFor={id} className="flex min-h-11 cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-700">
-        <input
-          id={id}
-          type="checkbox"
-          data-testid="youtube-consent"
-          {...(withName ? { name: "consent", value: "1" } : {})}
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          className="mt-0.5 h-5 w-5 shrink-0 accent-purple-600"
-        />
-        <span className="min-w-0">{withSlots(msg("streaming.youtube.consent.body"), { tos: tos(msg("streaming.youtube.consent.tos")), guidelines })}</span>
-      </label>
+      {box(termsId, "youtube-consent", "consent", value.terms, (on) => ({ ...value, terms: on }),
+        withSlots(msg("streaming.youtube.consent.body"), { tos: tos(msg("streaming.youtube.consent.tos")), guidelines }))}
+      {box(minorsId, "youtube-consent-minors", "consentMinors", value.minors, (on) => ({ ...value, minors: on }), msg("streaming.youtube.consent.minors"))}
       <p className="text-xs text-slate-600">{msg("streaming.youtube.consent.disclaimer")}</p>
       <p className="text-xs text-slate-600">{withSlots(msg("streaming.youtube.consent.bound"), { tos: tos(msg("streaming.youtube.consent.tosFull")), privacy })}</p>
     </div>
@@ -188,7 +205,8 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
   const msg = useMsg();
   const [privacy, setPrivacy] = useState<YoutubePrivacy>("unlisted");
   const [kids, setKids] = useState<"0" | "1">("0");
-  const [consent, setConsent] = useState(false);
+  const [ticks, setTicks] = useState<ConsentTicks>(NO_TICKS);
+  const consent = bothTicked(ticks);
   const hintId = useId();
   return (
     <form
@@ -198,7 +216,7 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
       aria-label={msg("streaming.youtube.consent.title")}
       className="card space-y-5 p-5 max-md:p-4"
       // The disabled button refuses a click; Enter inside a field is refused here, so a consent the route would answer with a
-      // bare 400 never leaves the page.
+      // bare 400 (either box unticked) never leaves the page.
       onSubmit={(e) => {
         if (!consent) e.preventDefault();
       }}
@@ -211,7 +229,9 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
       <PrivacyChoice value={privacy} onChange={setPrivacy} />
       <KidsChoice value={kids} onChange={setKids} />
       <p data-testid="youtube-settings-note" className="max-w-xl text-xs text-slate-600">{msg("streaming.youtube.settingsNote")}</p>
-      <ConsentBox checked={consent} onChange={setConsent} withName />
+      {/* YouTube's child-safety rule for live streams (an adult visibly present whenever players under 16 are on camera) is the second
+          box, its own tick beside the terms: Continue needs both (PO 2026-10-30, owner-requested; spec D16). */}
+      <ConsentBox value={ticks} onChange={setTicks} withName />
       <div className="flex flex-wrap items-center gap-2 max-md:flex-col max-md:items-stretch">
         <button
           type="submit"
@@ -269,32 +289,46 @@ export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
   );
 }
 
-/** What a disconnect did, as the page keeps it once the channel has left the list: its name and what became of the grant at Google. */
-export type DisconnectNews = { name: string; outcome: YoutubeDisconnected["revokeOutcome"] };
+/** What a disconnect did, as the page keeps it once the channel has left the list: its name, what became of the grant at Google, and the
+ *  stream keys Seazn made that are still on the channel (0: none; null: Seazn could not read the channel to confirm). */
+export type DisconnectNews = { name: string; outcome: YoutubeDisconnected["revokeOutcome"]; keysLeft: YoutubeDisconnected["keysLeft"] };
 
 /** What a disconnect said, once the channel has left the list: this is the PAGE's notice, because the row that asked is gone with the
  *  refresh. The button that asked left with the row, which would drop focus to the top of the page, so the notice takes focus as it
  *  attaches (refusal-focus.tsx: a callback ref, so a re-render does not steal it back); the page keys it by its news, so the next
  *  disconnect is a new element and focuses again. Dismissing it is local state (it is not a URL outcome like the landing banner). The sentence follows the revoke's outcome:
  *  the grant was revoked; it was left alone on purpose (another channel on the same Google account still runs on it); or Seazn could not
- *  confirm it - then the person is told where to remove Seazn themselves, a plain link to their Google account's third-party access. */
-export function YoutubeDisconnectedNotice({ name, outcome, onDismiss }: DisconnectNews & { onDismiss: () => void }) {
+ *  confirm it - then the person is told where to remove Seazn themselves, a plain link to their Google account's third-party access. When
+ *  stream keys Seazn made are still on the channel, or Seazn could not read the channel to check, the notice says that first instead. */
+export function YoutubeDisconnectedNotice({ name, outcome, keysLeft, onDismiss }: DisconnectNews & { onDismiss: () => void }) {
   const msg = useMsg();
-  const unconfirmed = outcome === "not_confirmed";
-  const sentence =
-    outcome === "revoked" ? msg("streaming.youtube.disconnect.done", { name })
+  const msgPlural = useMsgPlural();
+  const link = <a href={GOOGLE_THIRD_PARTY_ACCESS_URL} data-testid="youtube-disconnected-google-link" {...EXTERNAL} className={LINK}>{msg("streaming.youtube.disconnect.googleLink")}</a>;
+  // Seazn keys still on the channel (a count), or a channel Seazn could not read (null): the "deleted" sentences would be false, so the
+  // notice LEADS with what is left and where to delete it, and the grant's outcome follows as a sentence of its own - nothing to add for a
+  // revoke, why it stays for a shared account, the Google link for one nobody confirmed.
+  const keysOpen = keysLeft === null || keysLeft > 0;
+  const sentence = keysOpen ? (
+    <>
+      {keysLeft === null
+        ? msg("streaming.youtube.disconnect.keysUnchecked", { name })
+        : msgPlural("streaming.youtube.disconnect.keysLeft", keysLeft, { name })}
+      {outcome === "skipped_shared_account" && <> {msg("streaming.youtube.disconnect.keysTail.shared")}</>}
+      {outcome === "not_confirmed" && <> {withSlots(msg("streaming.youtube.disconnect.keysTail.unconfirmed"), { link })}</>}
+    </>
+  ) : outcome === "revoked" ? msg("streaming.youtube.disconnect.done", { name })
     : outcome === "skipped_shared_account" ? msg("streaming.youtube.disconnect.doneShared", { name })
-    : withSlots(msg("streaming.youtube.disconnect.doneUnconfirmed", { name }), {
-      link: <a href={GOOGLE_THIRD_PARTY_ACCESS_URL} data-testid="youtube-disconnected-google-link" {...EXTERNAL} className={LINK}>{msg("streaming.youtube.disconnect.googleLink")}</a>,
-    });
+    : withSlots(msg("streaming.youtube.disconnect.doneUnconfirmed", { name }), { link });
+  const alert = keysOpen || outcome === "not_confirmed";
   return (
     <div
       ref={focusRefusalBlock}
       tabIndex={-1}
       data-testid="youtube-disconnected"
       data-outcome={outcome}
-      role={unconfirmed ? "alert" : "status"}
-      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${REFUSAL_FOCUS_RING} ${unconfirmed ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}
+      data-keys-left={keysLeft === null ? "unknown" : keysLeft}
+      role={alert ? "alert" : "status"}
+      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${REFUSAL_FOCUS_RING} ${alert ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}
     >
       <p className="min-w-0 flex-1 break-words">{sentence}</p>
       <button type="button" data-testid="youtube-disconnected-dismiss" onClick={onDismiss} className="btn btn-ghost min-h-11 shrink-0 px-3 max-md:w-full">
@@ -454,7 +488,8 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
   const [mode, setMode] = useState<"settings" | "terms" | null>(null);
   const [privacy, setPrivacy] = useState<YoutubePrivacy>(y?.privacy ?? "unlisted");
   const [kids, setKids] = useState<"0" | "1">(y?.madeForKids ? "1" : "0");
-  const [consent, setConsent] = useState(false);
+  const [ticks, setTicks] = useState<ConsentTicks>(NO_TICKS);
+  const consent = bothTicked(ticks);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const saving = useRef(false);
@@ -467,7 +502,7 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
   const meta = `${msg(PRIVACY_KEY[y.privacy])} · ${msg(y.madeForKids ? "streaming.youtube.row.kidsYes" : "streaming.youtube.row.kidsNo")}`;
   const changed = privacy !== y.privacy || (kids === "1") !== y.madeForKids;
 
-  const patch = async (body: { privacy: YoutubePrivacy; madeForKids: boolean } | { consent: true }) => {
+  const patch = async (body: { privacy: YoutubePrivacy; madeForKids: boolean } | { consent: true; consentMinors: true }) => {
     if (saving.current) return;
     saving.current = true;
     setBusy(true);
@@ -475,7 +510,7 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
     try {
       await apiV1(`/api/v1/orgs/${orgId}/youtube-connections/${y.connectionId}`, { method: "PATCH", json: body });
       setMode(null);
-      setConsent(false);
+      setTicks(NO_TICKS);
       router.refresh();
     } catch (err) {
       // A connection that is gone (a second tab disconnected it) is the list's news, not an error to sit under a dead row.
@@ -503,8 +538,8 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
       setError(null);
       const done = await apiV1<YoutubeDisconnected>(`/api/v1/orgs/${orgId}/youtube-connections/${y.connectionId}`, { method: "DELETE" });
       // An answer that does not say what became of the grant is told as the cautious one: the person is pointed at Google, never
-      // assured of a revoke nobody confirmed.
-      onDisconnected?.({ name: y.channelTitle, outcome: done?.revokeOutcome ?? "not_confirmed" });
+      // assured of a revoke nobody confirmed. The same for the keys: no count is "not confirmed" (null), never a 0.
+      onDisconnected?.({ name: y.channelTitle, outcome: done?.revokeOutcome ?? "not_confirmed", keysLeft: typeof done?.keysLeft === "number" ? done.keysLeft : null });
       if (refreshAfter) router.refresh();
     } catch (err) {
       // Already disconnected elsewhere (404): the list is the news - re-read, or dropped by the page that keeps its own list. A match
@@ -524,7 +559,7 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
   };
   const open = (which: "settings" | "terms") => {
     setError(null);
-    setConsent(false);
+    setTicks(NO_TICKS);
     setPrivacy(y.privacy);
     setKids(y.madeForKids ? "1" : "0");
     setMode((m) => (m === which ? null : which));
@@ -632,10 +667,10 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
           onSubmit={(e) => {
             e.preventDefault();
             if (!consent) return;
-            void patch({ consent: true });
+            void patch({ consent: true, consentMinors: true });
           }}
         >
-          <ConsentBox checked={consent} onChange={setConsent} withName={false} />
+          <ConsentBox value={ticks} onChange={setTicks} withName={false} />
           <div className="flex gap-2 max-md:flex-col">
             <button type="submit" data-testid="youtube-terms-accept" disabled={!consent || busy} className="btn btn-primary min-h-11">
               {msg("streaming.youtube.action.acceptTerms")}

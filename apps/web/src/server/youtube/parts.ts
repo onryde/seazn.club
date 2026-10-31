@@ -16,6 +16,9 @@ import "server-only";
 //                                        not show anyone. It also lists the broadcasts that are PRIVATE on YouTube, flagged
 //                                        `private: true` (the public view hides them - owner ruling 2026-10-28, option A).
 //
+//   sessionVideoUrl(orgId, sessionId)   the ORGANISER's link to the video ONE session streams into (owner, 2026-10-30: the match page's
+//                                        "On YouTube" card) - open or finished, any state but `failed`, as soon as YouTube gave it its id.
+//
 // A part is `{ partNo, url }` (the public read adds `madeForKids`, V482). The url is the video's watch URL: a broadcast id is also its video id. Only `complete` rows count - a
 // failed, open or ending broadcast is not a replay yet (V479's check: a complete row always has a finish time and a video id).
 import { sql } from "@/lib/db";
@@ -51,4 +54,18 @@ export async function fixtureReplayParts(orgId: string, fixtureId: string): Prom
      where b.org_id = ${orgId} and b.fixture_id = ${fixtureId} and b.state = 'complete'
      order by part_no`;
   return rows.map((r) => ({ partNo: r.part_no, url: youtubeWatchUrl(r.video_id), private: r.private }));
+}
+
+/** The watch URL of the video THIS session streams into (owner, 2026-10-30: the organiser's match page links the match's video on
+ *  YouTube), or null. The session's own broadcast (`youtube_broadcast_id`), once YouTube has given it its id, in ANY state but `failed`
+ *  - live, ending, complete, or still waiting for the stream (a broadcast that failed never was a video). Null for a pasted key (it names
+ *  no broadcast), and after a disconnect (the purge deletes the broadcast rows and V479's FK nulls the session's pointer). Org-scoped
+ *  on both rows: a broadcast of another organisation is never this session's link, whatever the session row names. */
+export async function sessionVideoUrl(orgId: string, sessionId: string): Promise<string | null> {
+  const [row] = await sql<{ video_id: string }[]>`
+    select b.yt_broadcast_id as video_id
+      from fixture_stream_sessions s
+      join youtube_broadcasts b on b.id = s.youtube_broadcast_id and b.org_id = s.org_id
+     where s.id = ${sessionId} and s.org_id = ${orgId} and b.yt_broadcast_id is not null and b.state <> 'failed'`;
+  return row ? youtubeWatchUrl(row.video_id) : null;
 }

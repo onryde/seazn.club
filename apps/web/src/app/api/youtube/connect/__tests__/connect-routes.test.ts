@@ -10,8 +10,8 @@
 // over" case), and every other callback case ends in real connection and destination rows. (T7 shipped before T8 with a stand-in that
 // followed the plan's text; it is gone, so no test here proves a stand-in.) What is stood in: the signed-in user (`requireUser`).
 //
-// Expected values are literals typed from the brief and the spec (cookie names, the landing codes, 600 s, consent version 1, the
-// scope), never read back from the code under test. Skipped without DATABASE_URL like every DB suite here.
+// Expected values are literals typed from the brief and the spec (cookie names, the landing codes, 600 s, the scope), never read back
+// from the code under test. The consent version is `YOUTUBE_CONSENT_VERSION`, which youtube-connect-panel.test.tsx pins beside the wording. Skipped without DATABASE_URL like every DB suite here.
 //
 // Sport: not applicable — connecting a YouTube channel is sport-agnostic.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -192,7 +192,8 @@ async function liveConnection(r: Rig, o: { channel?: string; sub?: string | null
 // ---- driving the three routes -------------------------------------------------------------------------------------------------------
 
 const form = (r: Rig, over: Record<string, string | undefined> = {}) => {
-  const f: Record<string, string> = { orgId: r.orgId, privacy: "unlisted", madeForKids: "0", consent: "1" };
+  // Both consent boxes ticked (owner, PO 2026-10-30): the terms (`consent`) and YouTube's under-16 rule (`consentMinors`).
+  const f: Record<string, string> = { orgId: r.orgId, privacy: "unlisted", madeForKids: "0", consent: "1", consentMinors: "1" };
   for (const [k, v] of Object.entries(over)) {
     if (v === undefined) delete f[k];
     else f[k] = v;
@@ -288,6 +289,37 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     expect(row.consent_at.getTime()).toBeGreaterThanOrEqual(before - 2000);
     const ttl = (row.expires_at.getTime() - row.consent_at.getTime()) / 1000;
     expect(ttl, "10 minutes").toBe(600);
+  });
+
+  it("BOTH boxes are required (owner, PO 2026-10-30): the terms only, the under-16 box only, neither, or a box with a value that is not 1 is 400 with no pending row and no cookie; both go ahead and record the CURRENT consent version", async () => {
+    const r = await rig();
+    // Every way a consent can be short of both boxes. The form fields are T7's contract, typed: `consent` (box 1), `consentMinors` (box 2).
+    const short: [string, Record<string, string | undefined>][] = [
+      ["the terms box only", { consentMinors: undefined }],
+      ["the under-16 box only", { consent: undefined }],
+      ["neither box", { consent: undefined, consentMinors: undefined }],
+      ["the under-16 box empty", { consentMinors: "" }],
+      ["the under-16 box 0", { consentMinors: "0" }],
+      ["the under-16 box true", { consentMinors: "true" }],
+      ["the under-16 box yes, the terms box absent", { consent: undefined, consentMinors: "yes" }],
+    ];
+    let refused = 0;
+    for (const [name, over] of short) {
+      jar.values.clear();
+      const res = await START(startReq(form(r, over)));
+      expect(res.status, name).toBe(400);
+      expect(await pendingRows(r.orgId), `${name}: no pending row`).toEqual([]);
+      expect(jar.values.size, `${name}: no cookie`).toBe(0);
+      refused++;
+    }
+    expect(refused, "anti-vacuity: seven refusals checked").toBe(7);
+
+    // The positive pair: the same request with both boxes ticked goes ahead, on the consent version of the text the form shows now.
+    const res = await START(startReq(form(r)));
+    expect(res.status).toBe(303);
+    expect(new URL(res.headers.get("location")!).pathname).toBe("/api/youtube/connect/fake-authorize");
+    const rows = await pendingRows(r.orgId);
+    expect(rows.map((x) => [x.user_id, x.consent_version])).toEqual([[r.userId, YOUTUBE_CONSENT_VERSION]]);
   });
 
   it("both cookies are httpOnly, SameSite=Lax, path /, 600 s (the flow's whole life)", async () => {
@@ -429,6 +461,8 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     const foreign = await liveConnection(await rig());
     session.user = { id: r.userId };
 
+    // No tick at all: neither box (the Reconnect form posts neither field).
+    const NO_TICK = { consent: undefined, consentMinors: undefined };
     const start = async (fields: Record<string, string | undefined>) => {
       jar.values.clear();
       const before = (await pendingRows(r.orgId)).length;
@@ -438,7 +472,7 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     };
 
     // a) current text, no tick: goes ahead, and the pending row carries the connection's own consent record.
-    const carried = await start({ connectionId: current.connectionId, consent: undefined });
+    const carried = await start({ connectionId: current.connectionId, ...NO_TICK });
     expect(carried.res.status).toBe(303);
     expect(carried.added).toBe(1);
     expect(carried.row.connection_id).toBe(current.connectionId);
@@ -451,7 +485,7 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     expect(ticked.row.consent_at.getTime()).toBeGreaterThan(consentedAt.getTime() + 24 * 3600 * 1000);
 
     // c) older wording, no tick: refused, nothing written. d) older wording, ticked: goes ahead on the CURRENT version.
-    const stale = await start({ connectionId: older.connectionId, consent: undefined });
+    const stale = await start({ connectionId: older.connectionId, ...NO_TICK });
     expect(stale.res.status).toBe(400);
     expect(stale.added).toBe(0);
     expect(jar.values.size, "no cookie").toBe(0);
@@ -460,13 +494,23 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     expect(reTicked.row.consent_version, "the text they ticked now, not the one they saw before").toBe(YOUTUBE_CONSENT_VERSION);
 
     // e) a first connect with no tick: refused. f) a value that is not "1" is malformed even where the tick is not needed.
-    const first = await start({ consent: undefined });
+    const first = await start({ ...NO_TICK });
     expect([first.res.status, first.added]).toEqual([400, 0]);
     const wrong = await start({ connectionId: current.connectionId, consent: "0" });
     expect([wrong.res.status, wrong.added]).toEqual([400, 0]);
+    // f2) half a tick is no consent, even where none is needed: one box without the other is refused, not carried and not re-stamped.
+    let halves = 0;
+    for (const [name, half] of [["the terms box only", { consentMinors: undefined }], ["the under-16 box only", { consent: undefined }]] as const) {
+      const res = await start({ connectionId: current.connectionId, ...half });
+      expect([res.res.status, res.added], `${name}, on a current consent`).toEqual([400, 0]);
+      const stale1 = await start({ connectionId: older.connectionId, ...half });
+      expect([stale1.res.status, stale1.added], `${name}, on older wording`).toEqual([400, 0]);
+      halves++;
+    }
+    expect(halves).toBe(2);
 
     // g) another org's connection is no carried consent: 404, as ever.
-    const theirs = await start({ connectionId: foreign.connectionId, consent: undefined });
+    const theirs = await start({ connectionId: foreign.connectionId, ...NO_TICK });
     expect([theirs.res.status, theirs.added]).toEqual([404, 0]);
   });
 
@@ -1257,7 +1301,7 @@ describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing le
     const { connectionId, targetId } = await savedOf(0);
     expect(await connRow(connectionId)).toMatchObject({
       org_id: r.orgId, channel_id: ch.id, channel_title: "Solo United", google_sub: "sub-solo", granted_scope: YOUTUBE_SCOPE, default_privacy: "private",
-      made_for_kids: true, consent_by: r.userId, consent_version: 1, status: "connected", created_by: r.userId, last_error_code: null,
+      made_for_kids: true, consent_by: r.userId, consent_version: YOUTUBE_CONSENT_VERSION, status: "connected", created_by: r.userId, last_error_code: null,
     });
     expect(await openToken(sql, r.orgId, connectionId), "the stored token is the one the grant minted").toBe(await minted(exchange));
     const targets = await targetRows(r.orgId);
