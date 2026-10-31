@@ -10,6 +10,8 @@
 // Rows are written on the privileged `sql` client (the overlay read path, the relay heartbeat and the /s/ redirect all
 // write there); the tenant reads go through `withTenant`, which drops to app_user.
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { sql, withTenant } from "@/lib/db";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
@@ -27,11 +29,14 @@ import { rigUser, streamRig } from "@/server/relay/__tests__/_session-rig";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 // ---- spec / brief literals ----------------------------------------------------------------------------------------
-/** The seven tables V483 creates (brief S3 + the coordinator's R7 addition). */
+/** The seven TENANT tables V483 creates (brief S3 + the coordinator's R7 addition). */
 const NEW_TABLES = [
   "sponsor_stream_settings", "sponsor_assignments", "sponsor_airings", "sponsor_airing_frames",
   "sponsor_clicks", "sponsor_report_links", "sponsor_short_codes",
 ] as const;
+/** And its one SEALED table (S9 review m8): the frame objects whose rows went — no org, no policy, no grant. */
+const SEALED_TABLES = ["sponsor_frame_tombstones"] as const;
+const V483_FILE = resolve(__dirname, "../../../../../../db/migration/deltas/V483__sponsor_rotation.sql");
 /** Tables the console writes under withTenant (S12 settings PUT, S13 create/revoke a link). */
 const TENANT_WRITTEN = new Set<string>(["sponsor_stream_settings", "sponsor_report_links"]);
 const FREQUENCIES = ["light", "normal", "busy"];
@@ -546,6 +551,31 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
   });
 
   // ---- tenancy ----------------------------------------------------------------------------------------------------
+  it("V483 creates exactly the tenant tables and the sealed one this file classifies — a table added later is classified or this reds (count reported)", () => {
+    const created = [...readFileSync(V483_FILE, "utf8").matchAll(/^create table (\w+)/gm)].map((m) => m[1]!);
+    expect(created.length, "tables read from the file").toBeGreaterThan(0);
+    expect([...created].sort()).toEqual([...NEW_TABLES, ...SEALED_TABLES].sort());
+  });
+
+  it("the tombstone table is SEALED (S9 review m8): RLS enabled and forced, no policy, no grant — app_user can neither read nor write it", async () => {
+    let checked = 0;
+    for (const table of SEALED_TABLES) {
+      const [flags] = await sql<{ enabled: boolean; forced: boolean; policies: number; grants: number }[]>`
+        select c.relrowsecurity as enabled, c.relforcerowsecurity as forced,
+               (select count(*)::int from pg_policies p where p.schemaname = current_schema() and p.tablename = c.relname) as policies,
+               (select count(*)::int from information_schema.role_table_grants g
+                 where g.table_schema = current_schema() and g.table_name = c.relname and g.grantee = 'app_user') as grants
+          from pg_class c join pg_namespace n on n.oid = c.relnamespace
+         where n.nspname = current_schema() and c.relname = ${table}`;
+      expect({ table, ...flags }).toEqual({ table, enabled: true, forced: true, policies: 0, grants: 0 });
+      const w = await world();
+      await expect(withTenant(w.orgId, (tx) => tx`select count(*) from ${tx(table)}`), `${table} read`).rejects.toMatchObject({ code: "42501" });
+      await expect(withTenant(w.orgId, (tx) => tx`insert into ${tx(table)} (path) values (${`${w.orgId}/x.jpg`})`), `${table} write`).rejects.toMatchObject({ code: "42501" });
+      checked++;
+    }
+    expect(checked).toBe(SEALED_TABLES.length);
+  });
+
   it("RLS: every new table is enabled AND forced, and org B reads none of org A's rows while org A reads its own (count reported, 0 tables checked ⇒ fail)", async () => {
     const a = await world();
     const b = await world();

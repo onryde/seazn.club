@@ -21,7 +21,11 @@
 //   the id grammar (400), the colon id, the `%` id ......................... "the grammar", "decoded exactly once"
 //   the storage key can never gain a segment ................................. "the storage key"
 //   a storage failure (502) then the retry ................................... "storage failure"
-//   orphans purged past session end + 24 h ................................... "orphans"
+//   a superseded attempt's Machine (410), the current one's frame kept ........ "a superseded attempt"
+//   a client abort mid-body (400) ............................................ "a client abort"
+//   the row write failing after the object was stored (tombstoned) ........... "tombstones"
+//   orphans purged past session end + 24 h, in capped batches ................ "orphans"
+//   a session deleted: its objects removed on the next pass .................. "tombstones"
 // TWO SPORTS where a sport changes the id: cricket (a break card: `<seq>:sponsor.over_end`) and generic (no natural
 // breaks, so its sponsors air on the scene carousel: `scene:<scene>:<bucket>`). Everything else is single-sport on
 // purpose: the endpoint reads no sport, only the id the page minted.
@@ -36,7 +40,9 @@ const store = vi.hoisted(() => {
   const objects = new Map<string, Uint8Array>();
   const calls: { op: "upload" | "remove" | "sign"; bucket: string; paths: string[]; upsert?: boolean; contentType?: string }[] = [];
   const fail = { upload: 0, remove: 0 };
-  return { objects, calls, fail };
+  /** Runs after an upload has stored its object — a thing that happens WHILE a frame is in flight. */
+  const hooks = { afterUpload: null as null | (() => Promise<void>) };
+  return { objects, calls, fail, hooks };
 });
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: () => ({
@@ -48,6 +54,7 @@ vi.mock("@/lib/supabase-admin", () => ({
           const key = `${bucket}\n${path}`;
           if (store.objects.has(key) && o.upsert !== true) return { data: null, error: { message: "The resource already exists" } };
           store.objects.set(key, new Uint8Array(bytes));
+          if (store.hooks.afterUpload) await store.hooks.afterUpload();
           return { data: { path }, error: null };
         },
         async remove(paths: string[]) {
@@ -69,12 +76,18 @@ vi.mock("@/lib/sentry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/sentry")>();
   return { ...actual, captureError: vi.fn() };
 });
+// The route's `handler` reports every 5xx through Sentry itself: kept, so "reported ONCE" (review m3) can be counted.
+vi.mock("@sentry/nextjs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@sentry/nextjs")>();
+  return { ...actual, captureException: vi.fn() };
+});
 
 import { getRouteMatcher } from "next/dist/shared/lib/router/utils/route-matcher";
 import { getRouteRegex } from "next/dist/shared/lib/router/utils/route-regex";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, statementCount } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
+import * as Sentry from "@sentry/nextjs";
 import { SPONSOR_FRAMES_BUCKET } from "@/lib/supabase-storage";
 import { RelayAiring, RelayHeartbeat } from "@/server/api-v1/schemas";
 import { SIGNAL_SPONSOR_END, SIGNAL_SPONSOR_START, sponsorQueueLines } from "@/lib/overlay-compositor";
@@ -91,7 +104,8 @@ import { POST as beatRoute } from "@/app/api/internal/relay/sessions/[sid]/heart
 import { captureRig } from "@/server/usecases/__tests__/_capture-rig";
 import { createSession, heartbeat } from "@/server/usecases/stream-sessions";
 import {
-  AIRING_FRAME_MAX_BYTES, ORPHAN_FRAME_GRACE_MS, airingFramePath, isFrameMomentId, purgeOrphanFrames, storeAiringFrame,
+  AIRING_FRAME_MAX_BYTES, FRAME_MOMENT_LOG_CHARS, ORPHAN_FRAME_GRACE_MS, ORPHAN_PURGE_BATCH, ORPHAN_PURGE_MAX_BATCHES, airingFramePath, isFrameMomentId,
+  purgeOrphanFrames, storeAiringFrame,
 } from "../airings";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -255,6 +269,9 @@ const reportJoin = (sessionId: string) => sql<{ moment_id: string; frame_path: s
    where a.session_id = ${sessionId}
    order by a.started_at, a.moment_id`;
 const storedAt = (path: string) => store.objects.get(`${SPONSOR_FRAMES_BUCKET}\n${path}`);
+/** The tombstones (V483) among `paths`. */
+const tombstonesOf = async (paths: string[]) =>
+  (await sql<{ path: string }[]>`select path from sponsor_frame_tombstones where path in ${sql(paths)} order by path`).map((r) => r.path);
 
 // ---------------------------------------------------------------------------------------------------------------
 // Pure: the grammar and the storage key.
@@ -410,6 +427,7 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
     expect(uploads.map((u) => [u.bucket, u.upsert, u.contentType])).toEqual([
       [SPONSOR_FRAMES_BUCKET, true, "image/jpeg"], [SPONSOR_FRAMES_BUCKET, true, "image/jpeg"],
     ]);
+    expect(await tombstonesOf([once[0]!.path]), "a replace under the SAME key tombstones nothing: the row still names it").toEqual([]);
     // Another moment of the same session.
     const other = sponsorMomentId(9, OVER_END.kind);
     expect((await postFrame(sc2FrameUrl(c.S, other), { token: c.jobToken, body: first })).status).toBe(204);
@@ -426,16 +444,23 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
     expect((await framesOf(c.S)).map((f) => f.moment_id).sort(), "the rows stand").toEqual([start.momentId, other].sort());
   });
 
-  it("replace overwrites the row's PATH: a row left under an older key moves to this frame's key, with this frame's bytes there", async () => {
+  it("replace overwrites the row's PATH: a row left under an older key moves to this frame's key, with this frame's bytes there — and the key it left is tombstoned (V483, review m8), so the next pass removes that object and never this one", async () => {
     const p = await plainSession();
     const id = sponsorMomentId(3, OVER_END.kind);
-    await sql`insert into sponsor_airing_frames (session_id, moment_id, org_id, path) values (${p.sessionId}, ${id}, ${p.orgId}, ${"legacy/older-key.jpg"})`;
+    const legacy = `${p.orgId}/legacy-older-key.jpg`;
+    await sql`insert into sponsor_airing_frames (session_id, moment_id, org_id, path) values (${p.sessionId}, ${id}, ${p.orgId}, ${legacy})`;
+    store.objects.set(`${SPONSOR_FRAMES_BUCKET}\n${legacy}`, jpegOf(100));
     const jpeg = jpegOf(5_000);
     expect((await postFrame(sc2FrameUrl(p.sessionId, id), { token: p.token, body: jpeg })).status).toBe(204);
     const rows = await framesOf(p.sessionId);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.path, "the path moved").not.toBe("legacy/older-key.jpg");
+    expect(rows[0]!.path, "the path moved").not.toBe(legacy);
     expect(storedAt(rows[0]!.path), "and names this frame").toEqual(jpeg);
+    expect(await tombstonesOf([legacy, rows[0]!.path]), "the left key, and only it").toEqual([legacy]);
+    expect(await purgeOrphanFrames(new Date(), { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 1, failed: 0 });
+    expect(storedAt(legacy), "the left key's object is removed").toBeUndefined();
+    expect(storedAt(rows[0]!.path), "the row's own object stays").toEqual(jpeg);
+    expect(await tombstonesOf([legacy]), "and its tombstone with it").toEqual([]);
   });
 
   it("the 401 gate: every refused credential is the heartbeat's own 401 (one body, byte for byte), stores nothing and asks storage nothing — an oversized body included; the job token beside them is 204", async () => {
@@ -571,6 +596,31 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
     expect(await framesOf(p.sessionId)).toEqual([]);
   });
 
+  it("a refused id is logged (review m4): one warning naming the session and the id — bounded, so a long segment cannot flood the line — and nothing for an id the grammar accepts", async () => {
+    const p = await plainSession();
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const long = "y".repeat(500);
+      let checked = 0;
+      for (const id of ["a/b", long]) {
+        warn.mockClear();
+        expect((await postFrame(sc2FrameUrl(p.sessionId, id), { token: p.token, body: jpegOf(1_000) })).status).toBe(400);
+        const refusals = warn.mock.calls.filter(([, msg]) => typeof msg === "string" && msg.includes("names no sponsor airing"));
+        expect(refusals, id.slice(0, 10)).toHaveLength(1);
+        const fields = refusals[0]![0] as unknown as { sid: string; momentId: string; length: number };
+        expect(fields).toEqual({ sid: p.sessionId, momentId: id.slice(0, FRAME_MOMENT_LOG_CHARS), length: id.length });
+        checked++;
+      }
+      expect(checked).toBe(2);
+      expect(FRAME_MOMENT_LOG_CHARS, "premise: the long id is past the bound").toBeLessThan(500);
+      warn.mockClear();
+      expect((await postFrame(sc2FrameUrl(p.sessionId, sponsorMomentId(1, OVER_END.kind)), { token: p.token, body: jpegOf(1_000) })).status).toBe(204);
+      expect(warn.mock.calls.filter(([, msg]) => typeof msg === "string" && msg.includes("names no sponsor airing"))).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("decoded EXACTLY once: a literal `%` id arrives double-encoded (`%255F`), Next decodes it once to the literal, which is no declared kind → 400, nothing stored — a second decode would have read ANOTHER moment's id and stored under it; `50%` is a 400, never a 500", async () => {
     const p = await plainSession();
     const literal = `12:sponsor.${OVER_END.kind.replace("_", "%5F")}`;
@@ -590,20 +640,31 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
     expect((await framesOf(p.sessionId)).map((f) => f.moment_id)).toEqual([colon]);
   });
 
-  it("storage failure: a failed put is a 502 (SC2 retries once), writes no row, reports it without the token or the bytes; the retry lands", async () => {
+  it("storage failure: a failed put is a 502 (SC2 retries once), writes no row, and is reported ONCE — by the route's handler, with the provider's error as its cause (review m3) — without the token or the bytes; the retry lands", async () => {
     const p = await plainSession();
     const id = sponsorMomentId(2, OVER_END.kind);
     const error = vi.spyOn(log, "error");
+    const warn = vi.spyOn(log, "warn");
     vi.mocked(captureError).mockClear();
+    vi.mocked(Sentry.captureException).mockClear();
     store.fail.upload = 1;
     try {
       const res = await postFrame(sc2FrameUrl(p.sessionId, id), { token: p.token, body: jpegOf(3_000) });
       expect(res.status).toBe(502);
       expect(await json(res)).toMatchObject({ ok: false, code: "FRAME_STORAGE_FAILED" });
       expect(await framesOf(p.sessionId)).toEqual([]);
-      expect(error).toHaveBeenCalled();
-      const said = JSON.stringify([error.mock.calls, vi.mocked(captureError).mock.calls], (_k, v: unknown) => (v instanceof Error ? v.message : v));
-      expect(said).toContain(p.sessionId);
+      // One report: Sentry once (the handler's), no second capture by the usecase, and one error line.
+      const reports = vi.mocked(Sentry.captureException).mock.calls;
+      expect(reports, "reported once").toHaveLength(1);
+      const reported = reports[0]![0] as Error & { code?: string; cause?: unknown };
+      expect(reported.code).toBe("FRAME_STORAGE_FAILED");
+      expect(reported.cause, "the provider's error rides as the cause").toBeInstanceOf(Error);
+      expect((reported.cause as Error).message).toContain("storage is down");
+      expect(vi.mocked(captureError), "the usecase reports nothing itself").not.toHaveBeenCalled();
+      expect(error, "one error line").toHaveBeenCalledTimes(1);
+      const said = JSON.stringify([error.mock.calls, warn.mock.calls, reports], (_k, v: unknown) =>
+        (v instanceof Error ? { message: v.message, cause: (v as { cause?: unknown }).cause } : v));
+      expect(said).toContain("storage is down");
       expect(said.includes(p.token), "the token is never logged").toBe(false);
       expect(said.includes(p.token.split(".")[2]!), "nor its signature").toBe(false);
       // jpegOf's SOI + APP0 in each form a byte array can take in a log line: a Uint8Array, a Buffer's `data`, text.
@@ -611,9 +672,53 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
     } finally {
       store.fail.upload = 0;
       error.mockRestore();
+      warn.mockRestore();
     }
     expect((await postFrame(sc2FrameUrl(p.sessionId, id), { token: p.token, body: jpegOf(3_000) })).status).toBe(204);
     expect(await framesOf(p.sessionId)).toHaveLength(1);
+  });
+
+  it("a superseded attempt (review m1): a frame on a token naming an attempt a retry replaced is 410 ATTEMPT_SUPERSEDED and stores nothing — the current attempt's frame is 204 and stays as it was; a token minted before the attempt claim is never superseded", async () => {
+    const p = await plainSession();
+    await sql`update fixture_stream_sessions set runner_attempts = 2 where id = ${p.sessionId}`;
+    const mint = (attempt?: number) =>
+      mintRelayToken({ sid: p.sessionId, scope: "relay-job", expiresAt: new Date(Date.now() + 3_600_000), ...(attempt === undefined ? {} : { attempt }) });
+    const id = sponsorMomentId(4, OVER_END.kind);
+    const current = jpegOf(4_000, 0x02);
+    expect((await postFrame(sc2FrameUrl(p.sessionId, id), { token: await mint(2), body: current })).status, "the current attempt (the edge: att = runner_attempts)").toBe(204);
+    const [row] = await framesOf(p.sessionId);
+    const calls = store.calls.length;
+    const stray = await postFrame(sc2FrameUrl(p.sessionId, id), { token: p.token, body: jpegOf(4_000, 0x01) });   // p.token: attempt 1
+    expect(stray.status).toBe(410);
+    expect(await json(stray)).toMatchObject({ ok: false, code: "ATTEMPT_SUPERSEDED" });
+    expect(store.calls.length, "a stray asks storage nothing").toBe(calls);
+    expect(storedAt(row!.path), "the current attempt's object is untouched").toEqual(current);
+    expect(await framesOf(p.sessionId), "and its row").toEqual([row]);
+    // Another moment from the stray: refused the same way, nothing written.
+    expect((await postFrame(sc2FrameUrl(p.sessionId, sponsorMomentId(5, OVER_END.kind)), { token: p.token, body: jpegOf(4_000) })).status).toBe(410);
+    expect(await framesOf(p.sessionId)).toHaveLength(1);
+    // A token with no attempt claim (minted before the claim existed) keeps the behaviour it had.
+    expect((await postFrame(sc2FrameUrl(p.sessionId, sponsorMomentId(6, OVER_END.kind)), { token: await mint(), body: jpegOf(4_000) })).status).toBe(204);
+  });
+
+  it("a client abort (review m10): a body whose stream fails mid-read is 400 FRAME_BODY_UNREADABLE — the client's failure, never a 500 or a report — and stores nothing", async () => {
+    const p = await plainSession();
+    vi.mocked(Sentry.captureException).mockClear();
+    let sent = 0;
+    const aborted = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (sent === 0) { sent++; c.enqueue(jpegOf(8_192)); return; }
+        c.error(Object.assign(new Error("aborted"), { code: "ECONNRESET" }));
+      },
+    }, { highWaterMark: 0 });
+    const calls = store.calls.length;
+    const res = await postFrame(sc2FrameUrl(p.sessionId, sponsorMomentId(7, OVER_END.kind)), { token: p.token, body: aborted });
+    expect(res.status).toBe(400);
+    expect(await json(res)).toMatchObject({ ok: false, code: "FRAME_BODY_UNREADABLE" });
+    expect(sent, "premise: the first chunk was read").toBe(1);
+    expect(vi.mocked(Sentry.captureException), "nothing reported").not.toHaveBeenCalled();
+    expect(store.calls.length).toBe(calls);
+    expect(await framesOf(p.sessionId)).toEqual([]);
   });
 
   it("a session that does not exist is 404 behind a VALID token for that id (a deleted session)", async () => {
@@ -627,8 +732,8 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
 // ---------------------------------------------------------------------------------------------------------------
 // DB: orphans.
 // ---------------------------------------------------------------------------------------------------------------
-describe.skipIf(!HAS_DB)("S9: orphan frames (no airing row) are purged past session end + ORPHAN_FRAME_GRACE_MS", () => {
-  /** A frame stored through the REAL writer while the session is live, then the session ended at `endedAt` (null: left live). */
+describe.skipIf(!HAS_DB)("S9: orphan frames (no airing row) are purged past session end + ORPHAN_FRAME_GRACE_MS, and every tombstoned object is removed", () => {
+  /** A frame stored through the REAL writer while the session is live. */
   async function framed(p: Awaited<ReturnType<typeof plainSession>>, seq: number) {
     const id = sponsorMomentId(seq, OVER_END.kind);
     await storeAiringFrame(p.sessionId, p.token, id, jpegOf(1_000));
@@ -636,24 +741,26 @@ describe.skipIf(!HAS_DB)("S9: orphan frames (no airing row) are purged past sess
     expect(storedAt(row!.path), "premise: the object exists").toBeDefined();
     return { id, path: row!.path };
   }
-  const endAt = (sessionId: string, endedAt: Date) => sql`update fixture_stream_sessions set state = 'completed', ended_at = ${endedAt} where id = ${sessionId}`;
+  const endAt = (sessionId: string, endedAt: Date, state = "completed") =>
+    sql`update fixture_stream_sessions set state = ${state}, ended_at = ${endedAt} where id = ${sessionId}`;
   const aired = (p: Awaited<ReturnType<typeof plainSession>>, momentId: string, at: Date) => sql`
     insert into sponsor_airings (org_id, sponsor_id, sponsor_name, fixture_id, session_id, moment_id, source, break_kind, style, started_at, ended_at)
     values (${p.orgId}, null, ${"Acme"}, ${p.fixtureId}, ${p.sessionId}, ${momentId}, 'rotation', ${OVER_END.kind}, 'lower_third', ${at}, ${at})`;
   const rowsFor = async (sessionIds: string[]) =>
     (await sql<{ session_id: string; moment_id: string }[]>`select session_id, moment_id from sponsor_airing_frames where session_id in ${sql(sessionIds)}`)
       .map((r) => `${r.session_id}/${r.moment_id}`).sort();
+  const pastGrace = (now: Date) => new Date(now.getTime() - ORPHAN_FRAME_GRACE_MS - 60_000);
 
-  it("the empty case first: a scope with no frames purges none, asks storage nothing, and spends ONE statement (the read — no delete follows it)", async () => {
+  it("the empty case first: a scope with no frames and no tombstones purges none, asks storage nothing, and spends TWO statements (the orphan delete, the tombstone read — nothing follows them)", async () => {
     const p = await plainSession();
     const calls = store.calls.length;
     const before = statementCount();
-    expect(await purgeOrphanFrames(new Date(), { orgIds: [p.orgId] })).toEqual({ purged: 0, failed: 0 });
-    expect(statementCount() - before, "one read").toBe(1);
+    expect(await purgeOrphanFrames(new Date(), { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 0, failed: 0 });
+    expect(statementCount() - before, "two reads").toBe(2);
     expect(store.calls.length).toBe(calls);
   });
 
-  it("past the grace an orphan goes (object, then row); at exactly the grace it stays; an aired frame, a live session's frame and another org's orphan stay; a second pass purges nothing more", async () => {
+  it("past the grace an orphan goes (row, then object); at exactly the grace it stays; an aired frame, a live session's frame and another org's orphan stay; a second pass purges nothing more", async () => {
     const now = new Date();
     const old = await plainSession();       // ended a millisecond past the grace: its orphan goes, its aired frame stays
     const edge = await plainSession();      // ended exactly the grace ago: stays
@@ -672,38 +779,153 @@ describe.skipIf(!HAS_DB)("S9: orphan frames (no airing row) are purged past sess
     const all = [old.sessionId, edge.sessionId, live.sessionId, foreign.sessionId];
     const before = await rowsFor(all);
     expect(before, "premise: five frames").toHaveLength(5);
-    expect(await purgeOrphanFrames(now, { orgIds: scope })).toEqual({ purged: 1, failed: 0 });
+    expect(await purgeOrphanFrames(now, { orgIds: scope })).toEqual({ orphans: 1, purged: 1, failed: 0 });
     expect(storedAt(orphan.path), "the orphan's object is gone").toBeUndefined();
     expect(await rowsFor(all)).toEqual(before.filter((k) => k !== `${old.sessionId}/${orphan.id}`));
     for (const f of [kept, atEdge, liveOne, foreignOne]) expect(storedAt(f.path), f.path).toBeDefined();
     const removes = store.calls.filter((x) => x.op === "remove" && x.paths.includes(orphan.path));
     expect(removes.map((r) => [r.bucket, r.paths])).toEqual([[SPONSOR_FRAMES_BUCKET, [orphan.path]]]);
+    expect(await tombstonesOf([orphan.path]), "its tombstone went with it").toEqual([]);
     // A second pass, same clock: nothing more is an orphan past its grace.
-    expect(await purgeOrphanFrames(now, { orgIds: scope })).toEqual({ purged: 0, failed: 0 });
+    expect(await purgeOrphanFrames(now, { orgIds: scope })).toEqual({ orphans: 0, purged: 0, failed: 0 });
     // A millisecond later the edge session's orphan is past it too.
-    expect(await purgeOrphanFrames(new Date(now.getTime() + 1), { orgIds: scope })).toEqual({ purged: 1, failed: 0 });
+    expect(await purgeOrphanFrames(new Date(now.getTime() + 1), { orgIds: scope })).toEqual({ orphans: 1, purged: 1, failed: 0 });
     expect(storedAt(atEdge.path)).toBeUndefined();
   });
 
-  it("a storage remove that fails keeps every row (tomorrow's pass retries it) and is counted; the next pass purges them", async () => {
+  it("review m6: the STATE is the authority — a session that is not terminal keeps its orphan however long ago its ended_at reads (25 h); the same session terminal loses it", async () => {
+    const now = new Date();
+    const p = await plainSession();
+    const f = await framed(p, 1);
+    const longAgo = new Date(now.getTime() - 25 * 3_600_000);
+    expect(longAgo.getTime(), "premise: 25 h is past the grace").toBeLessThan(now.getTime() - ORPHAN_FRAME_GRACE_MS);
+    let checked = 0;
+    for (const state of ["live", "ending", "warming"]) {
+      await endAt(p.sessionId, longAgo, state);
+      expect({ state, purge: await purgeOrphanFrames(now, { orgIds: [p.orgId] }) }).toEqual({ state, purge: { orphans: 0, purged: 0, failed: 0 } });
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(storedAt(f.path), "kept").toBeDefined();
+    await endAt(p.sessionId, longAgo, "failed");
+    expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ orphans: 1, purged: 1, failed: 0 });
+    expect(storedAt(f.path)).toBeUndefined();
+  });
+
+  it("review m5: each loop runs batches until one comes back short, and no more than maxBatches a pass — five orphans at batchSize 2: one batch takes 2, the next pass takes the other 3 (2 + a short 1); the tombstone drain is capped the same way; the defaults are the declared constants", async () => {
+    const now = new Date();
+    const p = await plainSession();
+    const frames = [];
+    for (let seq = 1; seq <= 5; seq++) frames.push(await framed(p, seq));
+    await endAt(p.sessionId, pastGrace(now));
+    expect(await purgeOrphanFrames(now, { orgIds: [p.orgId], batchSize: 2, maxBatches: 1 }), "capped: one batch per loop").toEqual({ orphans: 2, purged: 2, failed: 0 });
+    expect(await rowsFor([p.sessionId])).toHaveLength(3);
+    expect(frames.filter((f) => storedAt(f.path) === undefined)).toHaveLength(2);
+    const removesBefore = store.calls.filter((x) => x.op === "remove").length;
+    expect(await purgeOrphanFrames(now, { orgIds: [p.orgId], batchSize: 2, maxBatches: 10 }), "looped: 2 + 1").toEqual({ orphans: 3, purged: 3, failed: 0 });
+    const removes = store.calls.filter((x) => x.op === "remove").slice(removesBefore);
+    expect(removes.map((r) => r.paths.length), "one storage call per batch, each at most batchSize").toEqual([2, 1]);
+    expect(frames.every((f) => storedAt(f.path) === undefined)).toBe(true);
+    expect(await tombstonesOf(frames.map((f) => f.path))).toEqual([]);
+    // The drain's own cap: three tombstones and no orphan (a deleted session's frames) at batchSize 2, one batch a pass.
+    const q = await plainSession();
+    const graves = [];
+    for (let seq = 1; seq <= 3; seq++) graves.push(await framed(q, seq));
+    await sql`delete from fixture_stream_sessions where id = ${q.sessionId}`;
+    expect(await purgeOrphanFrames(now, { orgIds: [q.orgId], batchSize: 2, maxBatches: 1 }), "the drain capped too").toEqual({ orphans: 0, purged: 2, failed: 0 });
+    expect(await tombstonesOf(graves.map((f) => f.path)), "one waits for the next pass").toHaveLength(1);
+    expect(await purgeOrphanFrames(now, { orgIds: [q.orgId], batchSize: 2, maxBatches: 1 })).toEqual({ orphans: 0, purged: 1, failed: 0 });
+    expect(graves.every((f) => storedAt(f.path) === undefined)).toBe(true);
+    expect([ORPHAN_PURGE_BATCH, ORPHAN_PURGE_MAX_BATCHES], "the defaults").toEqual([500, 20]);
+    let refused = 0;
+    for (const bad of [{ batchSize: 0 }, { batchSize: 1.5 }, { maxBatches: 0 }, { maxBatches: Number.NaN }]) {
+      await expect(purgeOrphanFrames(now, { orgIds: [p.orgId], ...bad }), JSON.stringify(bad)).rejects.toThrow(RangeError);
+      refused++;
+    }
+    expect(refused).toBe(4);
+  });
+
+  it("a storage remove that fails keeps every tombstone (tomorrow's pass retries it) and is counted; the objects stay until the next pass removes them", async () => {
     const now = new Date();
     const p = await plainSession();
     const a = await framed(p, 1);
     const b = await framed(p, 2);
-    await endAt(p.sessionId, new Date(now.getTime() - ORPHAN_FRAME_GRACE_MS - 60_000));
+    await endAt(p.sessionId, pastGrace(now));
     store.fail.remove = 1;
     try {
-      expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ purged: 0, failed: 2 });
+      expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ orphans: 2, purged: 0, failed: 2 });
     } finally {
       store.fail.remove = 0;
     }
-    expect(await rowsFor([p.sessionId])).toHaveLength(2);
-    expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ purged: 2, failed: 0 });
-    expect(await rowsFor([p.sessionId])).toEqual([]);
+    expect(await rowsFor([p.sessionId]), "the orphan rows are gone").toEqual([]);
+    expect(await tombstonesOf([a.path, b.path]), "their tombstones stand").toEqual([a.path, b.path].sort());
+    expect([storedAt(a.path), storedAt(b.path)].every((x) => x !== undefined), "and so do the objects").toBe(true);
+    expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 2, failed: 0 });
     expect([storedAt(a.path), storedAt(b.path)]).toEqual([undefined, undefined]);
+    expect(await tombstonesOf([a.path, b.path])).toEqual([]);
   });
 
   it("an empty org scope is refused by name (an empty list must never read as 'every org')", async () => {
     await expect(purgeOrphanFrames(new Date(), { orgIds: [] })).rejects.toThrow(/orgIds is empty/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// DB: tombstones (V483, review m8) — the object outlives its row in no way at all.
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("S9: every object whose row goes is tombstoned and removed on the next pass", () => {
+  it("a session deleted (its frames cascade): each path is tombstoned in the same statement, live session or not, and the next pass removes the objects and the tombstones", async () => {
+    const p = await plainSession();
+    const paths: string[] = [];
+    for (const seq of [1, 2]) {
+      const id = sponsorMomentId(seq, OVER_END.kind);
+      expect((await postFrame(sc2FrameUrl(p.sessionId, id), { token: p.token, body: jpegOf(2_000) })).status).toBe(204);
+      paths.push(airingFramePath(p.orgId, p.sessionId, id));
+    }
+    expect(await tombstonesOf(paths), "premise: no tombstone while the rows stand").toEqual([]);
+    await sql`delete from fixture_stream_sessions where id = ${p.sessionId}`;
+    expect(await framesOf(p.sessionId), "the rows cascaded").toEqual([]);
+    expect(await tombstonesOf(paths), "and left their paths").toEqual([...paths].sort());
+    expect(paths.every((x) => storedAt(x) !== undefined), "the objects are still stored").toBe(true);
+    expect(await purgeOrphanFrames(new Date(), { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 2, failed: 0 });
+    expect(paths.map(storedAt)).toEqual([undefined, undefined]);
+    expect(await tombstonesOf(paths)).toEqual([]);
+  });
+
+  it("the row write failing AFTER the object was stored (the session deleted mid-upload): the client gets the 500 (reported once), no row is written, the path is tombstoned, and the next pass removes the object", async () => {
+    const p = await plainSession();
+    const id = sponsorMomentId(3, OVER_END.kind);
+    const path = airingFramePath(p.orgId, p.sessionId, id);
+    vi.mocked(Sentry.captureException).mockClear();
+    store.hooks.afterUpload = async () => { await sql`delete from fixture_stream_sessions where id = ${p.sessionId}`; };
+    let res: Response;
+    try {
+      res = await postFrame(sc2FrameUrl(p.sessionId, id), { token: p.token, body: jpegOf(2_000) });
+    } finally {
+      store.hooks.afterUpload = null;
+    }
+    expect(res.status).toBe(500);
+    expect(vi.mocked(Sentry.captureException), "reported once").toHaveBeenCalledTimes(1);
+    expect((vi.mocked(Sentry.captureException).mock.calls[0]![0] as { code?: string }).code, "the database's refusal (a foreign key)").toBe("23503");
+    expect(await framesOf(p.sessionId)).toEqual([]);
+    expect(storedAt(path), "premise: the object was stored").toBeDefined();
+    expect(await tombstonesOf([path]), "and its tombstone written").toEqual([path]);
+    expect(await purgeOrphanFrames(new Date(), { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 1, failed: 0 });
+    expect(storedAt(path)).toBeUndefined();
+  });
+
+  it("a tombstoned path a frame row still names keeps its object (a replace whose row write failed after its put): the tombstone goes, the object and the row stay", async () => {
+    const p = await plainSession();
+    const id = sponsorMomentId(4, OVER_END.kind);
+    const jpeg = jpegOf(2_000);
+    expect((await postFrame(sc2FrameUrl(p.sessionId, id), { token: p.token, body: jpeg })).status).toBe(204);
+    const path = airingFramePath(p.orgId, p.sessionId, id);
+    await sql`insert into sponsor_frame_tombstones (path) values (${path})`;
+    const removesBefore = store.calls.filter((x) => x.op === "remove").length;
+    expect(await purgeOrphanFrames(new Date(), { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 0, failed: 0 });
+    expect(store.calls.filter((x) => x.op === "remove").slice(removesBefore), "storage is not asked").toEqual([]);
+    expect(storedAt(path)).toEqual(jpeg);
+    expect(await framesOf(p.sessionId)).toHaveLength(1);
+    expect(await tombstonesOf([path]), "the tombstone is cleared").toEqual([]);
   });
 });

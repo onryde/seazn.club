@@ -31,7 +31,7 @@ import {
   RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, relayOutputProfile, tunable,
 } from "@/server/relay/config";
 import {
-  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, admitMode, decide, eventRowsOf, holdStateOf, isTerminal,
+  ACTIVE_STATES, TERMINAL_STATES, InvalidTransition, admit, admitMode, decide, eventRowsOf, holdStateOf, isTerminal, supersededAttempt,
   type Command, type Decision, type Effect, type HoldState, type PhoneStanding, type Session, type SessionState, type StartCause,
 } from "@/server/relay/domain/session";
 import { isPresent } from "@/server/relay/domain/pairing";
@@ -2945,13 +2945,6 @@ async function recordBeatAirings(tx: Tx, cur: Row, items: NonNullable<RelayHeart
     log.error({ sid: cur.id, items: items.length, code: (err as { code?: string }).code ?? null, err: String(err) }, "stream session: a heartbeat's sponsor airings were not recorded — the beat is answered anyway");
     captureError(err, { orgId: cur.org_id, route: "relay.sponsor_airings.record", extra: { sessionId: cur.id, items: items.length } });
   }
-}
-
-/** #983 review r1: whether a beat's job token names an attempt OLDER than the session's current one (runner_attempts,
- *  the create calls made) — i.e. it is the beat of a Machine a retry replaced. `att` null is a token minted before the
- *  claim existed (a session in flight across the deploy): never superseded, so it keeps the behaviour it had. */
-function supersededAttempt(att: number | null, currentAttempt: number): boolean {
-  return att !== null && att < currentAttempt;
 }
 
 /** Whether the row's STORED beat belongs to the current attempt. #980 review M2: a retry boots a new Machine — a new

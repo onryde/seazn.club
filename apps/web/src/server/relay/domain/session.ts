@@ -23,6 +23,14 @@ export const TERMINAL_STATES: readonly SessionState[] = ["completed", "failed"];
 export const isTerminal = (s: SessionState): boolean => TERMINAL_STATES.includes(s);
 export const isActive = (s: SessionState): boolean => ACTIVE_STATES.includes(s);
 
+/** #983 review r1: whether a job token names an attempt OLDER than the session's current one (runner_attempts, the create
+ *  calls made) — i.e. it is a Machine a retry replaced. `att` null is a token minted before the claim existed (a session in
+ *  flight across the deploy): never superseded, so it keeps the behaviour it had. The heartbeat drains such a Machine
+ *  (stream-sessions.ts); the sponsor frame upload refuses it 410 (sponsors/airings.ts, R4 S9). */
+export function supersededAttempt(att: number | null, currentAttempt: number): boolean {
+  return att !== null && att < currentAttempt;
+}
+
 /** Spec §5.3 — how a person reads an ACTIVE session that holds a destination: a phone has connected (`live`, and
  *  `ending` while it drains) or not yet (`waiting`). Terminal sessions hold nothing. */
 export type HoldState = "live" | "waiting";
