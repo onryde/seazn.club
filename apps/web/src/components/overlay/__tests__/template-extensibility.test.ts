@@ -10,6 +10,8 @@ import type * as RegistryModule from "../template-registry";
 
 const H = vi.hoisted(() => ({
   probeBox: { x: 1380, y: 54, width: 480, height: 600 },
+  // R4 S7: every entry declares its two sponsor slots (spec 2026-10-27 §3.5) — here clear of the probe's box, left side.
+  probeSlots: { lower_third: { x: 60, y: 810, width: 1000, height: 120 }, banner: { x: 96, y: 228, width: 560, height: 480 } },
 }));
 
 vi.mock("../template-registry", async (importOriginal) => {
@@ -22,6 +24,7 @@ vi.mock("../template-registry", async (importOriginal) => {
     component: OverlayBug,
     slabPlacement: "bug",
     sceneCardSafeArea: H.probeBox,
+    sponsorSlots: H.probeSlots,
   };
   return { ...orig, OVERLAY_TEMPLATES: { ...orig.OVERLAY_TEMPLATES, probe } };
 });
@@ -50,6 +53,7 @@ beforeAll(async () => {
     // Its own box (top-right), so the test can prove a new template moves the cards with no other edit.
     slabPlacement: "bug",
     sceneCardSafeArea: H.probeBox,
+    sponsorSlots: H.probeSlots,
   };
   REG = { ...A.OVERLAY_TEMPLATES, probe: PROBE };
   RETIRED = { ...REG, gone: { ...PROBE, id: "gone", retired: { replacedBy: "probe" } } };

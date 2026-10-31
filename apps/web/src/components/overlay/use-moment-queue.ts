@@ -14,8 +14,15 @@
 // 2026-09-12: each identity change also `sync`s against the live window so a
 // scorer undo folds away a slab that would otherwise keep announcing a voided
 // ball (see moment-queue `sync` + undo tests).
-import { useEffect, useReducer } from "react";
+//
+// R4 S7: the queue's proof-of-play lines (spec 2026-10-27 §3.6) — a sponsor
+// card entering `hold` logs a start line, leaving `out` an end line. The rule is
+// `sponsorQueueLines` (pure, `lib/overlay-compositor.ts`); this hook only feeds
+// it each committed state and prints what it returns, and only when the caller
+// says `sponsorLines` (the stage: `host=compositor`, never a preview).
+import { useEffect, useReducer, useRef } from "react";
 import type { OverlayMoment } from "@/lib/overlay-moments";
+import { sponsorQueueLines } from "@/lib/overlay-compositor";
 import { INITIAL, momentQueueReducer, nextDeadline, type Phase } from "./moment-queue";
 import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "./moment-timing";
 
@@ -23,9 +30,15 @@ export function useMomentQueue(
   incoming: readonly OverlayMoment[],
   /** `discard` (R2005, spec §4.8): the active scene's `momentsFire` is false, so every new moment is marked seen and
    *  never queued. The stage reads it off the scene's declaration (`momentsFireIn`), never off a scene id. */
-  opts: { reducedMotion: boolean; discard?: boolean },
+  opts: {
+    reducedMotion: boolean;
+    discard?: boolean;
+    /** R4 S7: log the sponsor proof-of-play lines. The stage passes its compositor-host flag; absent ⇒ none. */
+    sponsorLines?: boolean;
+  },
 ): { current: OverlayMoment | null; phase: Phase } {
   const discard = opts.discard === true;
+  const sponsorLines = opts.sponsorLines === true;
   // Reduced motion shortens the folds to nothing but keeps the PHASES, so the
   // slab still appears and leaves on the same schedule and `data-phase` still
   // reaches the DOM for the e2e to read. Skipping the phases would make the
@@ -82,6 +95,19 @@ export function useMomentQueue(
     );
     return () => clearTimeout(timer);
   }, [deadline, state.revision, foldMs, holdMs]);
+
+  // The sponsor id whose start line has been logged and whose end has not. Read and written only inside the effect
+  // (`react-hooks/refs`); a mutable box, so the effect owns one object for the island's life.
+  const onAir = useRef<{ id: string | null }>({ id: null });
+  useEffect(() => {
+    if (!sponsorLines) return;
+    const box = onAir.current;
+    const step = sponsorQueueLines(box.id, { current: state.current, phase: state.phase, cutShort: state.cutShort }, new Date().toISOString());
+    box.id = step.onAir;
+    for (const line of step.lines) console.info(line);
+    // Keyed on the whole state: a re-run on a state that changed nothing the tracker reads logs nothing (it is
+    // idempotent on a repeated view), so the extra runs cost a comparison, never a line.
+  }, [sponsorLines, state]);
 
   return { current: state.current, phase: state.phase };
 }

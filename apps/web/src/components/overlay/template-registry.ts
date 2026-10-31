@@ -22,6 +22,7 @@
 // the component lookup on the client side of the line.
 import type { ComponentType } from "react";
 import type { OverlayModel, OverlayMsg } from "@/lib/overlay-model";
+import type { SponsorStyle } from "@/lib/sponsor-plan";
 import { OverlayBar } from "./overlay-bar";
 import { OverlayBug } from "./overlay-bug";
 
@@ -74,6 +75,11 @@ export interface OverlayTemplateDef<Id extends string = TemplateId> {
    *  card out from it (`cardRegionFor`), and the gallery e2e proves the rendered template stays inside it.
    *  `overlay-slab-placement.test.tsx` holds each declaration to the custom properties it was derived from. */
   sceneCardSafeArea: CanvasBox;
+  /** R4 S7 (spec 2026-10-27 §3.5): where each sponsor look draws — the lower third (a minor break, 8 s) and the banner
+   *  (a major break, 15 s; also the scene carousel's). DECLARED, like the safe area: each box keeps `CARD_CLEARANCE_PX`
+   *  from `sceneCardSafeArea`, sits inside the canvas with its bottom ≥ 150 px off the floor (D9), and the banner leaves
+   *  the match card a region (`cardRegionBeside`). `sponsor-slots.test.ts` holds every entry to all four. */
+  sponsorSlots: Readonly<Record<SponsorStyle, CanvasBox>>;
   /** Kept so stored choices and OBS URLs resolve. Hidden from the picker. */
   retired?: { replacedBy: Id };
 }
@@ -93,6 +99,15 @@ export const OVERLAY_TEMPLATES: Readonly<Record<TemplateId, OverlayTemplateDef>>
     //   y = 1080 − 162 − 126 − 60 = 732, height = 126 + 60 = 186
     // The band is reserved whether or not it renders (a bar without one is 60 px shorter, still inside the box).
     sceneCardSafeArea: { x: 72, y: 732, width: 1776, height: 186 },
+    // Both above the bar, `CARD_CLEARANCE_PX` (24) clear of its box's top edge (732): bottoms at 708.
+    //   lower third: the bar's own left inset (72), 1000 wide — the slab's corner, which it never shares (one moment
+    //                at a time); 120 tall: an 88 px logo plate and a 48 + 30 px text pair.
+    //   banner:      a 560 × 480 panel flush with the card region's right edge (1920 − 96 = 1824), so the match card
+    //                keeps the 1144 × 636 strip to its left when the carousel shares a scene with it.
+    sponsorSlots: {
+      lower_third: { x: 72, y: 588, width: 1000, height: 120 },
+      banner: { x: 1264, y: 228, width: 560, height: 480 },
+    },
   },
   bug: {
     id: "bug",
@@ -105,6 +120,14 @@ export const OVERLAY_TEMPLATES: Readonly<Record<TemplateId, OverlayTemplateDef>>
     // strip + ONE hero row + footer, which is shorter:
     //   height = 60 (`--ovl-bug-header-h`) + 2 × 90 (`--ovl-bug-row-h`) + 56 (`--ovl-bug-footer-h`) = 296
     sceneCardSafeArea: { x: 60, y: 54, width: 560, height: 296 },
+    // Both on the bug's own left edge (60).
+    //   lower third: at the foot of the canvas, its bottom exactly 150 px off the floor (1080 − 150 = 930).
+    //   banner:      the bug's width, stacked under it (350 + 24 = 374) — and so outside the card region beside the
+    //                bug (x ≥ 644), which a scene's match card keeps whole.
+    sponsorSlots: {
+      lower_third: { x: 60, y: 810, width: 1000, height: 120 },
+      banner: { x: 60, y: 374, width: 560, height: 480 },
+    },
   },
 };
 
@@ -223,6 +246,40 @@ export function cardRegionFor(box: CanvasBox): CanvasBox | null {
     strip(left, top, right, Math.min(bottom, box.y - CARD_CLEARANCE_PX)), // above
     strip(left, top, Math.min(right, box.x - CARD_CLEARANCE_PX), bottom), // left
     strip(left, Math.max(top, box.y + box.height + CARD_CLEARANCE_PX), right, bottom), // below
+  ];
+  let best: CanvasBox | null = null;
+  for (const c of candidates) {
+    if (c.width < CARD_MIN_W || c.height < CARD_MIN_H) continue;
+    if (best === null || c.width * c.height > best.width * best.height) best = c;
+  }
+  return best;
+}
+
+/**
+ * R4 S7: the card region left once a sponsor slot shares the canvas with the match card (the scene carousel's banner on
+ * Starting soon / Reconnecting). A slot already `CARD_CLEARANCE_PX` clear of `region` leaves it as it is. Otherwise the
+ * largest, by area, of the four strips of `region` beside the slot (left, above, right, below; ties in that order),
+ * each kept `CARD_CLEARANCE_PX` clear of it; `null` when none is at least `CARD_MIN_W × CARD_MIN_H` — the stage then
+ * mounts no carousel, because the match card outranks it.
+ */
+export function cardRegionBeside(region: CanvasBox, slot: CanvasBox): CanvasBox | null {
+  const g = CARD_CLEARANCE_PX;
+  const clear =
+    slot.x + slot.width + g <= region.x ||
+    region.x + region.width + g <= slot.x ||
+    slot.y + slot.height + g <= region.y ||
+    region.y + region.height + g <= slot.y;
+  if (clear) return region;
+  const x0 = region.x;
+  const y0 = region.y;
+  const x1 = region.x + region.width;
+  const y1 = region.y + region.height;
+  const strip = (a: number, b: number, c: number, d: number): CanvasBox => ({ x: a, y: b, width: c - a, height: d - b });
+  const candidates: CanvasBox[] = [
+    strip(x0, y0, Math.min(x1, slot.x - g), y1), // left
+    strip(x0, y0, x1, Math.min(y1, slot.y - g)), // above
+    strip(Math.max(x0, slot.x + slot.width + g), y0, x1, y1), // right
+    strip(x0, Math.max(y0, slot.y + slot.height + g), x1, y1), // below
   ];
   let best: CanvasBox | null = null;
   for (const c of candidates) {

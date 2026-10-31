@@ -10,6 +10,8 @@
 // `listen-for-js-signals=false` and C11 reads `cefconsole` log lines. `gstSendMsg` is never used — it accepts only
 // `ready`/`eos`, and its js-signal mode hangs the compositor's `start()` and `set_state(NULL)` (F-001).
 import { parseRelayPhaseReply, type PhaseChannel, type ProgrammePhaseWire } from "@/lib/relay-phase";
+import type { OverlayMoment } from "@/lib/overlay-moments";
+import { sponsorMomentId, type SponsorStyle } from "@/lib/sponsor-plan";
 
 /** The `host` query value that turns the compositor signals on (R2004 decision 5 builds the URL with it). */
 export const COMPOSITOR_HOST = "compositor";
@@ -144,4 +146,108 @@ export function phaseReplyEvent(body: unknown): PhaseChannelEvent {
 export function settledChannel(state: PhaseChannelState, loopbackAnswered: boolean): PhaseChannel | null {
   if (state.channel === "web") return "web";
   return loopbackAnswered ? "loopback" : null;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// R4 sponsors on stream, S7 — proof of play (spec 2026-10-27 §3.6). Same channel as the ready line: at
+// `host=compositor` only, a sponsor moment ENTERING `hold` logs a start line and LEAVING `out` logs an end line; the
+// compositor (SC1) validates each, buffers them and sends them on its next heartbeat as `airings`, where S8 records
+// them. Until SC1's reader ships, the live compositor logs each line as an unknown page signal at WARN — noise, never a
+// failure (preflight row 19).
+// ---------------------------------------------------------------------------------------------------------------------
+
+export const SIGNAL_SPONSOR_START = "seazn:sponsor:start";
+export const SIGNAL_SPONSOR_END = "seazn:sponsor:end";
+/** Spec §3.6: the compositor's reader takes "bounded JSON ≤ 512 bytes". Counted in UTF-8 BYTES, the reader's unit. */
+export const SPONSOR_LINE_MAX_BYTES = 512;
+
+/** Spec §3.6, verbatim and in its order. The compositor adds `kind`; the page never sends it. */
+const START_KEYS = ["momentId", "cardId", "style", "source", "breakKind", "at"] as const;
+const END_KEYS = ["momentId", "at", "cutShort"] as const;
+
+/** Ruling R5: the page sends `scene` for a carousel showing and `rotation` for every break card — the server (S8)
+ *  takes the real source (rotation or operator) for a non-scene start from `sponsor_assignments`. */
+export type SponsorLineSource = "rotation" | "scene";
+
+export interface SponsorStartBody {
+  momentId: string;
+  cardId: string;
+  style: SponsorStyle;
+  source: SponsorLineSource;
+  /** Null for a carousel showing: a scene is not a break. */
+  breakKind: string | null;
+  at: string;
+}
+export interface SponsorEndBody {
+  momentId: string;
+  at: string;
+  cutShort: boolean;
+}
+
+/** A line the compositor's reader would refuse: a key set other than the spec's, or a body past the byte bound. */
+export class SponsorLineError extends Error {
+  override name = "SponsorLineError";
+}
+
+/** One proof-of-play line: the signal, one space, the body as JSON with exactly the spec's keys in the spec's order.
+ *  Throws `SponsorLineError` rather than emit a line the reader would drop. */
+export function sponsorLine(kind: "start" | "end", body: object): string {
+  const want: readonly string[] = kind === "start" ? START_KEYS : END_KEYS;
+  const got = Object.keys(body);
+  if (got.length !== want.length || !want.every((k) => Object.hasOwn(body, k))) {
+    throw new SponsorLineError(`${kind} line: keys ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+  }
+  const values = body as Record<string, unknown>;
+  const json = JSON.stringify(Object.fromEntries(want.map((k) => [k, values[k]])));
+  const size = new TextEncoder().encode(json).length;
+  if (size > SPONSOR_LINE_MAX_BYTES) throw new SponsorLineError(`${kind} line: ${size} bytes, over ${SPONSOR_LINE_MAX_BYTES}`);
+  return `${kind === "start" ? SIGNAL_SPONSOR_START : SIGNAL_SPONSOR_END} ${json}`;
+}
+
+/** What the tracker reads of the moment queue (`MomentQueueState`): who is on air, in which phase, and which sponsor
+ *  ids ran short. Structural, so this pure module does not import the component tree. */
+export interface SponsorQueueView {
+  current: OverlayMoment | null;
+  phase: "in" | "hold" | "out";
+  cutShort: readonly string[];
+}
+
+/**
+ * The queue's proof-of-play lines for one committed state (preflight row 17: a pure helper, so the rule is testable
+ * without a browser). `onAir` is the sponsor moment id whose START line has been logged and whose END has not.
+ *  - The tracked card is no longer current ⇒ ONE end line, `cutShort` read off the queue (a score cut, a skip, an undo).
+ *  - A sponsor moment is current in `hold` and not yet tracked ⇒ ONE start line.
+ * A card the queue cut while it was still folding IN never reached `hold`, so it logs no start and therefore no end
+ * (S6 addendum). Re-feeding the same state logs nothing (a second poll is not a second showing). `source` is always
+ * `rotation` here (R5).
+ */
+export function sponsorQueueLines(
+  onAir: string | null,
+  view: SponsorQueueView,
+  at: string,
+): { onAir: string | null; lines: string[] } {
+  const lines: string[] = [];
+  const m = view.current;
+  const sponsor = m !== null && m.graphic === "sponsor" && m.sponsor !== undefined ? m.sponsor : null;
+  // S6: the queue's id for a sponsor moment (`${seq}:${kind}`, kind `sponsor.<breakKind>`) IS S4's sponsorMomentId.
+  const currentId = m !== null && sponsor !== null ? sponsorMomentId(m.seq, sponsor.breakKind) : null;
+  let tracked = onAir;
+  if (tracked !== null && tracked !== currentId) {
+    const end: SponsorEndBody = { momentId: tracked, at, cutShort: view.cutShort.includes(tracked) };
+    lines.push(sponsorLine("end", end));
+    tracked = null;
+  }
+  if (tracked === null && currentId !== null && sponsor !== null && view.phase === "hold") {
+    const start: SponsorStartBody = {
+      momentId: currentId,
+      cardId: sponsor.cardId,
+      style: sponsor.style,
+      source: "rotation",
+      breakKind: sponsor.breakKind,
+      at,
+    };
+    lines.push(sponsorLine("start", start));
+    tracked = currentId;
+  }
+  return { onAir: tracked, lines };
 }
