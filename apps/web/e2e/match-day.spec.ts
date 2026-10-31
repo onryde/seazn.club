@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
   addEntrantsViaApi,
@@ -24,12 +24,21 @@ import {
  * So Court 2's candidates are Cal v Dee first (its own next match, both players free), Ana v Cal greyed (Ana is on Court 1)
  * and the unplaced rest, every one of which has Ana or Ben in it, greyed too. Times sit inside today's UTC day whatever the
  * clock says, so the run never straddles a midnight.
+ *
+ * Task A4 adds the `needsYou` seed: two more players (Eve, Fay) and a third court, so that
+ *   - Court 3: Eve v Fay IN PLAY with nothing recorded and no scorer named — the desk's red `no_scorer`, which marks the
+ *     court's row;
+ *   - Ben v Dee: planned three hours ago, on no court, no result — the desk's `result_missing`, which the header's
+ *     Needs-you list puts FIRST even though the red row outranks it on the desk.
+ * Eve and Fay play nobody else on the board, so Court 2's own candidates are what the A3 tests already pin.
  */
 
 interface Seed {
   competitionId: string;
   court1: string;
   court2: string;
+  /** The `needsYou` seed's third court (Eve v Fay in play, unscored); null otherwise. */
+  court3: string | null;
   /** Cal v Dee: Court 2's own next match, the top candidate. */
   calDee: string;
   /** Ana v Cal: queued on Court 1, blocked by Ana. */
@@ -37,7 +46,7 @@ interface Seed {
   names: { ana: string; ben: string; cal: string; dee: string };
 }
 
-async function seedMatchDay(request: APIRequestContext, label: string): Promise<Seed> {
+async function seedMatchDay(request: APIRequestContext, label: string, opts: { needsYou?: boolean } = {}): Promise<Seed> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `Match Day ${label} ${TAG}`,
@@ -56,18 +65,24 @@ async function seedMatchDay(request: APIRequestContext, label: string): Promise<
   // whole organisation's held matches, and persons are the organisation's.
   const nonce = Math.random().toString(36).slice(2, 7);
   const names = { ana: `Ana ${label} ${nonce}`, ben: `Ben ${label} ${nonce}`, cal: `Cal ${label} ${nonce}`, dee: `Dee ${label} ${nonce}` };
-  const ents = await addEntrantsViaApi(request, divisionId, [names.ana, names.ben, names.cal, names.dee]);
-  if (ents.status >= 300 || ents.ids.length !== 4) throw new Error(`entrants → ${ents.status}`);
-  const [ana, ben, cal, dee] = ents.ids as [string, string, string, string];
+  const extra = opts.needsYou ? [`Eve ${label} ${nonce}`, `Fay ${label} ${nonce}`] : [];
+  const ents = await addEntrantsViaApi(request, divisionId, [names.ana, names.ben, names.cal, names.dee, ...extra]);
+  if (ents.status >= 300 || ents.ids.length !== 4 + extra.length) throw new Error(`entrants → ${ents.status}`);
+  const [ana, ben, cal, dee, eve, fay] = ents.ids as [string, string, string, string, string?, string?];
   await createStageAndGenerate(request, divisionId);
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
   expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
 
-  const { courts } = await seedVenueWithCourts(request, [`MD1 ${label} ${nonce} ${TAG}`, `MD2 ${label} ${nonce} ${TAG}`]);
+  const { courts } = await seedVenueWithCourts(request, [
+    `MD1 ${label} ${nonce} ${TAG}`,
+    `MD2 ${label} ${nonce} ${TAG}`,
+    ...(opts.needsYou ? [`MD3 ${label} ${nonce} ${TAG}`] : []),
+  ]);
   const [court1, court2] = [courts[0]!, courts[1]!];
+  const court3 = opts.needsYou ? courts[2]! : null;
   const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
     tz: "UTC",
-    config: { matchMinutes: 30, courts: [court1.id, court2.id] },
+    config: { matchMinutes: 30, courts: [court1.id, court2.id, ...(court3 ? [court3.id] : [])] },
   });
   expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
 
@@ -99,10 +114,103 @@ async function seedMatchDay(request: APIRequestContext, label: string): Promise<
   const start = await apiJson(request, `/api/v1/fixtures/${anaBen}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
   expect(start.status, `core.start: ${JSON.stringify(start.error)}`).toBeLessThan(300);
 
-  return { competitionId, court1: court1.name, court2: court2.name, calDee, anaCal, names };
+  if (court3 !== null) {
+    const eveFay = fixtureOf(eve!, fay!);
+    const benDee = fixtureOf(ben, dee);
+    await withDb(async (sql) => {
+      // Court 3: in play with NOTHING recorded and no scorer — the state a phone that never opened the pad leaves. A status
+      // patch on purpose: a core.start would be a recorded event, and the desk's no_scorer asks for none.
+      await sql`update fixtures set court_id = ${court3.id}, scheduled_at = ${within(-15)}, status = 'in_play' where id = ${eveFay}`;
+      // Ben v Dee: its window closed hours ago, on no court, no result. Not clamped to today: the desk owes a result whatever
+      // day the window closed on.
+      await sql`update fixtures set court_id = null, scheduled_at = ${new Date(now - 3 * 3_600_000).toISOString()} where id = ${benDee}`;
+    });
+  }
+
+  return { competitionId, court1: court1.name, court2: court2.name, court3: court3?.name ?? null, calDee, anaCal, names };
 }
 
 const row = (page: Page, courtName: string) => page.getByTestId("md-court-row").filter({ hasText: courtName });
+
+/** A middle-dot line (`DotLine`, match-day-shell.tsx) never shows a dot at the start of a line: every dot still on screen
+ *  follows a part on its own line, and the dot of a part that starts a line is clipped by the box. Returns how many parts it
+ *  checked (anti-vacuity: the caller asserts it). */
+async function expectNoDanglingDot(box: Locator): Promise<number> {
+  const r = await box.evaluate((el) => {
+    const b = el.getBoundingClientRect();
+    const parts = [...el.querySelectorAll<HTMLElement>(":scope > [data-dot-part]")];
+    const dangling: string[] = [];
+    let clipped = 0;
+    parts.forEach((p, i) => {
+      const dot = p.querySelector<HTMLElement>("[data-dot]")!.getBoundingClientRect();
+      if (dot.right <= b.left + 0.5) {
+        clipped++;
+        return;
+      }
+      const prev = i === 0 ? null : parts[i - 1]!.getBoundingClientRect();
+      if (prev === null || Math.abs(prev.top - p.getBoundingClientRect().top) > 2) dangling.push(p.textContent ?? "");
+    });
+    return { parts: parts.length, clipped, dangling };
+  });
+  expect(r.dangling, "a dot opens a line").toEqual([]);
+  // The first part's dot is always clipped: the line starts with words, not a separator.
+  expect(r.clipped).toBeGreaterThanOrEqual(1);
+  return r.parts;
+}
+
+/** The header's Needs-you button opens the desk's own list with the owed result FIRST (the desk itself puts the red
+ *  no_scorer row first); the unscored Court 3 is marked on its row; its focus shows the scorer QR — Create mints it the
+ *  first time, and a second visit (`minted`) offers the same link back with Show QR rather than a second Create. */
+async function needsYouAndScorer(page: Page, seed: Seed, minted = false): Promise<void> {
+  const toggle = page.getByTestId("md-needs-you-toggle");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toContainText("need you");
+  await expect(toggle).toContainText("1 result owed");
+  await expect(toggle).toHaveAttribute("data-severity", "red");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
+  const checked =
+    (await expectNoDanglingDot(page.getByTestId("md-counts"))) +
+    (await expectNoDanglingDot(toggle.locator("span:has(> [data-dot-part])")));
+  expect(checked, "dot parts checked").toBeGreaterThanOrEqual(5);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const list = page.getByTestId("md-needs-you");
+  await expect(list).toBeVisible();
+  const rows = list.locator("[data-attention]");
+  await expect(rows.first()).toHaveAttribute("data-attention", "result_missing");
+  await expect(rows.first()).toContainText("Enter result");
+  await expect(rows.first()).toContainText(seed.names.ben);
+  await expect(list.locator('[data-attention="no_scorer"]')).toHaveCount(1);
+  await expectNoHorizontalScroll(page);
+  await toggle.click();
+  await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
+
+  // Court 3 is marked on its row. Court 2 is free: nothing in play, nothing to mark.
+  const r3 = row(page, seed.court3!);
+  await expect(r3).toHaveAttribute("data-scorer", "no_scorer");
+  await expect(r3).toContainText("No scorer");
+  await expect(row(page, seed.court2)).toHaveAttribute("data-state", "free");
+  await expect(row(page, seed.court2)).not.toHaveAttribute("data-scorer", /.+/);
+
+  await r3.click();
+  const focus = page.getByTestId("md-focus");
+  await expect(focus).toHaveAttribute("data-state", "playing");
+  const scorer = focus.getByTestId("md-scorer");
+  await expect(scorer).toBeVisible();
+  await expect(scorer).toContainText("Remote scoring");
+  await expect(scorer.locator('[data-md-scorer="no_scorer"]')).toBeVisible();
+  if (minted) {
+    await expect(scorer.getByTestId("device-link-show")).toBeVisible();
+    await expect(scorer.getByTestId("device-link-mint")).toHaveCount(0);
+    await scorer.getByTestId("device-link-show").click();
+  } else {
+    await scorer.getByTestId("device-link-mint").click();
+  }
+  await expect(scorer.getByTestId("dlink-qr")).toBeVisible({ timeout: 15_000 });
+  await expectNoHorizontalScroll(page);
+}
 
 /** Calls Court 2's top candidate through the sheet (its knock-on preview first) and waits for the court to read "Called". */
 async function callTop(page: Page, seed: Seed): Promise<void> {
@@ -145,6 +253,9 @@ async function callAndUndo(page: Page, seed: Seed): Promise<void> {
   // Which side is home is the generator's choice: both names, not an order.
   await expect(focus).toContainText(seed.names.cal);
   await expect(focus).toContainText(seed.names.dee);
+  // A4: a called court shows its scorer's QR panel (the console's Remote scoring, embedded), ready to create.
+  await expect(focus.getByTestId("md-scorer")).toBeVisible();
+  await expect(focus.getByTestId("md-scorer").getByTestId("device-link-mint")).toBeVisible();
   // The fixture really moved: a live call row, read where the server reads it.
   const called = await withDb(
     (sql) => sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${seed.calDee}`,
@@ -180,6 +291,12 @@ test.describe("Match Day — desktop", () => {
     // The playing court is focused first: the scoreboard, and "+ Connect a stream" — nothing is streaming here.
     await expect(page.getByTestId("md-scoreboard")).toBeVisible();
     await expect(page.getByTestId("md-scoreboard")).toContainText("+ Connect a stream");
+    // A4: and the scorer's QR panel under it. Ana v Ben has kicked off and nothing more: the desk does not count the
+    // kick-off as recording (competition-desk.ts, review 7), and nobody is named to score it — so its row says No scorer,
+    // in the desk's own words, while the free court says nothing.
+    await expect(page.getByTestId("md-focus").getByTestId("md-scorer")).toBeVisible();
+    await expect(row(page, seed.court1)).toHaveAttribute("data-scorer", "no_scorer");
+    await expect(row(page, seed.court2)).not.toHaveAttribute("data-scorer", /.+/);
     await expectNoHorizontalScroll(page);
 
     await row(page, seed.court2).click();
@@ -190,6 +307,21 @@ test.describe("Match Day — desktop", () => {
     await expect(page.getByTestId("md-list")).toBeVisible();
     await expect(page.getByTestId("md-focus")).toBeVisible();
     await expectNoHorizontalScroll(page);
+  });
+
+  test("A4: Needs you opens with the owed result first; the unscored court is marked; its scorer QR mints; at 1280 and 768", async ({
+    page,
+    request,
+  }) => {
+    const seed = await seedMatchDay(request, "NeedsDesk", { needsYou: true });
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    await expect(page.getByTestId("md-court-row")).toHaveCount(3);
+    await expect(page.getByTestId("md-counts")).toContainText("2 playing");
+    await needsYouAndScorer(page, seed);
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.reload({ waitUntil: "load" });
+    await needsYouAndScorer(page, seed, true);
   });
 });
 
@@ -223,5 +355,18 @@ test.describe("Match Day — phone (320)", () => {
     await back.click();
     await expect(list).toBeVisible();
     await expect(focus).toBeHidden();
+  });
+
+  test("A4: the Needs-you button opens its list at 320 with no dot opening a line; the unscored court's QR mints full-screen", async ({
+    page,
+    request,
+  }) => {
+    const seed = await seedMatchDay(request, "NeedsPhone", { needsYou: true });
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    await expect(page.getByTestId("md-list")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await needsYouAndScorer(page, seed);
+    await expect(page.getByTestId("md-list")).toBeHidden();
+    await expect(page.getByTestId("md-back")).toBeVisible();
   });
 });
