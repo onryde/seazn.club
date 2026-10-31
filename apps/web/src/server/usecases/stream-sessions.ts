@@ -54,6 +54,7 @@ import { youtubeDriver } from "@/server/youtube/driver";
 import type { YouTubePort } from "@/server/youtube/port";
 import { abandonPrepared, attachPrepared, prepareYoutubeBroadcast, youtubeRefusal } from "@/server/youtube/prepare";
 import { scrubBeatText } from "@/server/relay/sanitise";
+import { closeOpenAirings, recordAirings } from "@/server/sponsors/airings";
 import { CAMERA_LIVE_PHASE, PROGRAMME_PHASE_EVENT, latestLiveRung, recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
@@ -355,6 +356,16 @@ async function persistFacts(tx: Tx, before: Session, next: Session, cmd: Command
   // with: a repeat (a destroyed re-entry with no boot, a sweep before or after) lands on the same value. The STORAGE term
   // is still the sweep's to learn (`recording_seconds`, Task 12 step 5); this reads whatever it has learnt so far.
   const endedNow = !isTerminal(before.state) && isTerminal(next.state);
+  // R4 S8 (spec §3.6.4): an airing with no end by session end closes at the last beat received, `ended_estimated`. Once,
+  // at the transition that ends the session (every terminal path passes here); in a savepoint, so it never stops an end.
+  if (endedNow) {
+    try {
+      await tx.savepoint((sp) => closeOpenAirings(sp, next.id, before.heartbeatAt ?? now));
+    } catch (err) {
+      log.error({ sid: next.id, code: (err as { code?: string }).code ?? null, err: String(err) }, "stream session: open sponsor airings were not closed at session end — the session ends anyway");
+      captureError(err, { route: "relay.sponsor_airings.close", extra: { sessionId: next.id } });
+    }
+  }
   const destroyedAfterEnd = isTerminal(before.state) && before.runner.state !== "destroyed" && next.runner.state === "destroyed";
   if (endedNow || destroyedAfterEnd) {
     const [f] = await tx<{ recording_seconds: number; machine_seconds: number; guest_cpus: number | null; guest_memory_mb: number | null; guest_cpu_class: string | null }[]>`
@@ -2803,7 +2814,10 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
   const peek = await readRow(sessionId);
   if (!peek) throw new HttpError(404, "session not found");
   if (isTerminal(peek.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
-  const beat: RelayHeartbeat = body.exitDetail == null ? body : { ...body, exitDetail: scrubBeatText(body.exitDetail, await beatSecretsOf(sessionId, peek.mode, token)) };
+  // R4 S8 (ruling R14): the proof-of-play list is RECORDED (sponsor_airings, below) and kept out of both beat stores —
+  // `beat` is everything else, so neither last_heartbeat nor the sample's raw duplicates up to 64 items every 5 s.
+  const { airings, ...reported } = body;
+  const beat: RelayHeartbeat = reported.exitDetail == null ? reported : { ...reported, exitDetail: scrubBeatText(reported.exitDetail, await beatSecretsOf(sessionId, peek.mode, token)) };
   // #983 review r1: a beat whose token names an attempt OLDER than the row's (`superseded`) is a replaced Machine's —
   // received after the retry moved on, where the beat_window_at anchor cannot tell it from the replacement's first beat.
   // It is a SAMPLE only: no row write, no expiry tick, no callback, no sizing alarm, and the reply is `ending` (drain).
@@ -2827,6 +2841,10 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
     if (supersededAttempt(att, cur.runner_attempts)) return { row: cur, superseded: true, previousRung: null };
     // Read BEFORE this beat is stored or sampled, on the locked row (#983 r2).
     const previousRung = await previousRungOf(tx, cur);
+    // R4 S8 (spec §3.6.4): the beat's proof-of-play items, under the session row's lock. AFTER the superseded return (a
+    // replaced Machine's page is not this session's programme) and BEFORE the post-final one (a periodic beat overtaken
+    // by the final still carries items that aired before it). In a SAVEPOINT: a failing airing write never costs the beat.
+    if (airings && airings.length > 0) await recordBeatAirings(tx, cur, airings, deps.now());
     const thisAttempt = storedBeatIsThisAttempt(cur);
     if (thisAttempt && closesAttempt(cur.last_heartbeat) && beat.state !== "stopped") {
       log.info({ sid: sessionId, state: beat.state }, "stream session: a beat received after this attempt's final beat is a sample only — the stored final stands");
@@ -2921,6 +2939,17 @@ async function previousRungOf(tx: Tx, before: Row): Promise<unknown> {
 /** #983 review r1: whether a beat's job token names an attempt OLDER than the session's current one (runner_attempts,
  *  the create calls made) — i.e. it is the beat of a Machine a retry replaced. `att` null is a token minted before the
  *  claim existed (a session in flight across the deploy): never superseded, so it keeps the behaviour it had. */
+/** R4 S8: `recordAirings` on the beat's transaction, isolated in a savepoint like `sampleBeat` is outside it — a
+ *  database error rolls back the airings only, is logged and reported, and the beat is stored and answered anyway. */
+async function recordBeatAirings(tx: Tx, cur: Row, items: NonNullable<RelayHeartbeat["airings"]>, now: Date): Promise<void> {
+  try {
+    await tx.savepoint((sp) => recordAirings(sp, { sessionId: cur.id, orgId: cur.org_id, fixtureId: cur.fixture_id ?? null }, items, now));
+  } catch (err) {
+    log.error({ sid: cur.id, items: items.length, code: (err as { code?: string }).code ?? null, err: String(err) }, "stream session: a heartbeat's sponsor airings were not recorded — the beat is answered anyway");
+    captureError(err, { orgId: cur.org_id, route: "relay.sponsor_airings.record", extra: { sessionId: cur.id, items: items.length } });
+  }
+}
+
 function supersededAttempt(att: number | null, currentAttempt: number): boolean {
   return att !== null && att < currentAttempt;
 }

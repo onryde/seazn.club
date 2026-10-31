@@ -34,6 +34,10 @@ export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "exitReason", "exitDetail",
   // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from — an enum word.
   "phaseChannel",
+  // R4 S8 (sponsors spec 2026-10-27 §3.6.2): the compositor's proof-of-play overflow count — a number. Its `airings` list is
+  // NOT here, on purpose (ruling R14): the heartbeat records it as sponsor airings and strips it before either beat store,
+  // and this list is the floor under that strip (sanitise.test.ts names the exclusion).
+  "airingsDropped",
   "usedMinutes", "limitMinutes", "reservedMinutes", "headroomMinutes", "deleted", "deferred", "count",
   // effects / http
   "ok", "result", "httpStatus", "latencyMs", "retryAfterSeconds", "requestId", "errorCode", "operation", "provider", "method", "pathTemplate",

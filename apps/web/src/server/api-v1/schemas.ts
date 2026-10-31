@@ -2215,6 +2215,21 @@ export const YoutubeDisconnected = z.object({
 });
 export type YoutubeDisconnected = z.infer<typeof YoutubeDisconnected>;
 
+/** R4 sponsors on stream, S8 (spec 2026-10-27 §3.6; plan P6): one proof-of-play item on the beat — the overlay page's
+ *  `seazn:sponsor:start|end` console line (lib/overlay-compositor.ts `sponsorLine`, at most 512 bytes), tagged by the
+ *  compositor with `kind` from the line's name. STRICT per item: a key the page never writes is refused, and since the
+ *  beat is strict too that refuses the whole beat — so the compositor (SC1) validates each line before buffering it.
+ *  `source` is the page's word: `scene` for a carousel showing, `rotation` for every break card (ruling R5: the server
+ *  takes rotation vs operator from `sponsor_assignments`). `at` is UTC `Z`, as the page's `toISOString()` writes it. */
+export const RelayAiring = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("start"), momentId: z.string().max(80), cardId: z.string().max(80), style: z.enum(["lower_third", "banner"]),
+    source: z.enum(["rotation", "scene", "operator"]), breakKind: z.string().max(40).nullable(), at: z.string().datetime(),
+  }).strict(),
+  z.object({ kind: z.literal("end"), momentId: z.string().max(80), at: z.string().datetime(), cutShort: z.boolean() }).strict(),
+]);
+export type RelayAiring = z.infer<typeof RelayAiring>;
+
 /** The Machine's beat (§6.3) — the control channel; the reply carries desired_state. */
 export const RelayHeartbeat = z
   .object({
@@ -2259,6 +2274,12 @@ export const RelayHeartbeat = z
     // units; the contract publishes maxLength 100 (code points), the bound under which any text fits (review M1).
     exitReason: z.enum(["ended", "deadline", "signalled", "session_gone", "refused", "fatal", "restart"]).nullish(),
     exitDetail: z.string().max(200).nullish(),
+    // R4 S8 (sponsors on stream spec 2026-10-27 §3.6.2): the page's proof-of-play items since the last 2xx (the compositor
+    // buffers at most 64, dropping the oldest), and how many it has dropped. Additive and nullish like every R2 field: a
+    // compositor built before S8 sends neither. `airings` is RECORDED (server/sponsors/airings.ts) and stripped before
+    // either beat store (ruling R14); `airingsDropped` is stored as sent.
+    airings: z.array(RelayAiring).max(64).nullish(),
+    airingsDropped: z.number().int().min(0).nullish(),
   })
   .strict()
   // Review M6: the exit fields ride only on the FINAL beat. null is no report (the fields are nullish), so only a

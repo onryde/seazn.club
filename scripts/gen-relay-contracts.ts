@@ -29,6 +29,10 @@ interface Shape {
 const FILE = "relay-job.v1.json";
 const SPEC = "compositor spec 2026-10-14";
 const OVERLAY_SPEC = "overlay templates spec 2026-10-15";
+const SPONSORS_SPEC = "sponsors on stream spec 2026-10-27";
+/** web server/sponsors/airings.ts AIRING_CLOCK_SKEW_MS (spec §3.6.4), in minutes. This script cannot import that module
+ *  (it runs under node, without the app's path aliases), so relay-contract.test.ts pins the sentence to the constant. */
+const AIRING_CLOCK_SKEW_MINUTES = 10;
 const PINNED_BY = "Vendored into the compositor repo (C07); its sha256, parity with its zod twins and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/relay-contract.test.ts.";
 const ENVELOPE = "On the wire a 200 is the house envelope `{ \"ok\": true, \"data\": … }` and this shape is its `data`; every refusal is `{ \"ok\": false, … }` with its status.";
 const ABSENT = "Omitted when not measured, never sent as 0: a present 0 is a measured zero.";
@@ -70,7 +74,7 @@ const EXIT_DETAIL_UTF16_MAX = 200;
 
 const HEARTBEAT: Shape = {
   twin: RelayHeartbeat,
-  description: `POST /api/internal/relay/sessions/{sid}/heartbeat with \`Authorization: Bearer <job token>\`, every heartbeatIntervalMs (${SPEC} §5.3): the Machine's report, and the control channel. The body is bare (no envelope). Strict: an unknown key is a 400, never dropped. Every field but \`state\` is optional. ${ABSENT} null is admitted and stored as sent, but a compositor omits a field rather than sending null. The server keeps the whole latest body and every beat as a sample. The 200 is \`{ "ok": true, "data": <heartbeatReply> }\`; 400 a body this schema refuses; 401 a refused token; 404 an unknown session; 410 SESSION_ENDED.`,
+  description: `POST /api/internal/relay/sessions/{sid}/heartbeat with \`Authorization: Bearer <job token>\`, every heartbeatIntervalMs (${SPEC} §5.3): the Machine's report, and the control channel. The body is bare (no envelope). Strict: an unknown key is a 400, never dropped. Every field but \`state\` is optional. ${ABSENT} null is admitted and stored as sent, but a compositor omits a field rather than sending null. The server keeps the whole latest body and every beat as a sample, except \`airings\`, which it records as proof of play instead. The 200 is \`{ "ok": true, "data": <heartbeatReply> }\`; 400 a body this schema refuses; 401 a refused token; 404 an unknown session; 410 SESSION_ENDED.`,
   props: {
     state: "starting | playing | stalled | stopped. `playing` means the output is connected, whether it carries a slate or the camera (owner ruling 2026-10-14); the camera's own state is in programmePhase and input.",
     videoState: "R1's video state word, verbatim, at most 40 characters. The compositor does not send it.",
@@ -94,6 +98,16 @@ const HEARTBEAT: Shape = {
     scoreStale: "true while the overlay page cannot reach the score feed (it keeps the last score). Omitted until the page has reported either way.",
     phaseChannel: `Which channel the overlay page reads the programme phase from (${OVERLAY_SPEC} §4.3): \`loopback\`, the compositor's own endpoint (#/$defs/phaseEndpoint, the primary), or \`web\`, the fallback that reads programmePhase from the session's latest beat through the page's data poll (the page switches after 3 failed loopback attempts). Omitted until the page has reported.`,
     exitReason: "Sent only with `state: \"stopped\"`, on the final beat: why the Machine is exiting (compositor C06 `ExitReason`). ended, deadline, signalled and session_gone exit 0; refused exits 78; fatal exits 70; restart exits 75 (the compositor restarts itself in place: the host restarts the process on the same Machine, and the server records the beat and does not count it as a crash). A beat in any other state that carries exitReason or exitDetail is refused (400); this schema states it as its if/then. The server records the reason with the beat; the runner's observed exit stays the authority for how the session ends.",
+    airings: `R4 sponsors on stream (${SPONSORS_SPEC} §3.6): the overlay page's proof-of-play items, oldest first. The compositor reads each \`seazn:sponsor:start\` or \`seazn:sponsor:end\` console line (JSON of at most 512 bytes, with exactly the keys below except \`kind\`), sets \`kind\` from the line's name, and buffers at most 64 items: an overflow drops the OLDEST and counts it in airingsDropped. An item is cleared only when a beat that carried it is answered 2xx, and the final beat flushes the rest. Validate each item against this shape before buffering it: the beat is strict, so one item this schema refuses makes the whole beat a 400. The server records each item as proof of play, one airing per session and momentId. A repeated start keeps the FIRST row and a repeated end changes nothing, so sending an item again after a lost reply is safe. An item whose \`at\` is more than ${AIRING_CLOCK_SKEW_MINUTES} minutes from the server's clock is refused and counted, and the beat is still answered. The list is not kept with the beat: the stored latest beat and its samples carry every other field, never this one. Omitted when there is nothing to send.`,
+    "airings.kind": "`start` (a `seazn:sponsor:start` line: the card went on air) or `end` (a `seazn:sponsor:end` line: it left the screen).",
+    "airings.momentId": "The showing's id, as the page logged it: `<seq>:sponsor.<breakKind>` for a break's card, `scene:<sceneId>:<10-second bucket>` for a scene carousel showing. An end names its start's id.",
+    "airings.cardId": "The card on air. The server takes a break card's sponsor from its own assignment for the moment, and a scene card's sponsor from this id.",
+    "airings.style": "lower_third or banner.",
+    "airings.source": "`rotation` for a break's card (the server reads whether the rotation or the operator chose it from its own assignment), `scene` for a scene carousel showing. `operator` is admitted and read like `rotation`.",
+    "airings.breakKind": "The natural break the card filled, as the sport declares it (for example over_end). null for a scene carousel showing.",
+    "airings.at": "When the page logged the line, in UTC, as JavaScript's `Date.toISOString()` writes it (ending `Z`, never an offset). Pass it through unchanged.",
+    "airings.cutShort": "true when the card left before its hold ran out (a score moment cut it, or the operator skipped it).",
+    airingsDropped: "How many proof-of-play items the compositor's buffer has dropped since its process started (it holds 64 and drops the oldest): a total for the process and an upper bound, which starts again from 0 when the process restarts. Sent on every beat once above 0, with or without airings. A present 0 is a measured zero.",
     exitDetail: `Sent only with \`state: "stopped"\`, on the final beat: what went wrong, in words. The server's bound is ${EXIT_DETAIL_UTF16_MAX} UTF-16 code units. This schema's maxLength counts characters (code points), and a character is at most two UTF-16 code units, so it publishes ${EXIT_DETAIL_UTF16_MAX / 2} characters: a text within that is never refused. Redacted by the compositor before it is sent (no key, token or query). The server scrubs it again before storing it (anything JWT-shaped, the session's own job token, everything from the first \`?\`), and both stores keep the same text. Human text, never parsed.`,
   },
 };
@@ -137,12 +151,14 @@ function setDescription(node: Json, text: string): void {
   for (const [k, v] of rest) node[k] = v;
 }
 
-/** Every node at a dotted property path, through properties / anyOf / oneOf. */
+/** Every node at a dotted property path, through properties / anyOf / oneOf, and into an array's `items` (R4 S8: the
+ *  beat's `airings.at` names each item's `at`, in both of the union's branches). */
 function nodesAt(node: unknown, path: string[]): Json[] {
   if (node === null || typeof node !== "object") return [];
   const n = node as Json;
   if (path.length === 0) return [n];
-  const viaUnions = [...((n.anyOf as Json[] | undefined) ?? []), ...((n.oneOf as Json[] | undefined) ?? [])].flatMap((b) => nodesAt(b, path));
+  const viaUnions = [...((n.anyOf as Json[] | undefined) ?? []), ...((n.oneOf as Json[] | undefined) ?? []), ...(n.items === undefined ? [] : [n.items])]
+    .flatMap((b) => nodesAt(b, path));
   const next = (n.properties as Json | undefined)?.[path[0]];
   return [...viaUnions, ...(next === undefined ? [] : nodesAt(next, path.slice(1)))];
 }

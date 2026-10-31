@@ -17,6 +17,11 @@ const R2_BEAT_FIELDS = ["programmePhase", "input", "output", "graphics", "inputK
   "exitReason", "exitDetail",
   // R2007 PR B (overlay templates spec 2026-10-15 §4.3): which channel the overlay page reads its phase from.
   "phaseChannel"];
+/** R4 S8 (sponsors spec 2026-10-27 §3.6.2): the compositor's overflow count rides the beat and is kept like any count. */
+const R4_BEAT_FIELDS = ["airingsDropped"];
+/** R4 S8, ruling R14: the declared beat fields NEVER kept in a sample's raw (nor in last_heartbeat). `airings` is up to 64
+ *  proof-of-play items per beat; the server records them as sponsor airings instead (server/sponsors/airings.ts). */
+const NOT_IN_RAW = ["airings"];
 /** A hand-written vector of the relay-job.v1 contract (docs/contracts/fixtures/relay-job.v1). */
 const contractFixture = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/relay-job.v1", `${name}.json`), "utf8")) as Record<string, unknown>;
@@ -96,20 +101,41 @@ describe("sanitise — allowlist", () => {
   // R2002: ruling 13 keeps "the whole body in raw (sanitised)", and C14, C15 and C17 read the R2 fields there over time.
   // The expected key set is the BEAT CONTRACT's (RelayHeartbeat's declared fields and the contract's own heartbeat-full
   // vector), never the allowlist: a beat field added without its allowlist entry reds here, not in a post-match review.
-  it("R2002: every field the relay heartbeat declares survives into a sample's raw — the contract's full beat, unchanged", () => {
+  // R4 S8 (ruling R14) names the ONE exception, NOT_IN_RAW, and the test after this one proves it is kept out.
+  it("R2002: every field the relay heartbeat declares survives into a sample's raw — the contract's full beat, unchanged — but R14's named exclusion", () => {
     const declared = Object.keys(RelayHeartbeat.shape).sort();
-    expect(declared.length).toBeGreaterThan(R2_BEAT_FIELDS.length);
-    // heartbeat-full carries every field but the final beat's two, which heartbeat-final-fatal carries (review M6).
+    expect(NOT_IN_RAW.filter((k) => !declared.includes(k)), "every exclusion names a field the beat declares").toEqual([]);
+    const kept = declared.filter((k) => !NOT_IN_RAW.includes(k));
+    expect(kept.length).toBeGreaterThan(R2_BEAT_FIELDS.length);
+    // heartbeat-full carries every kept field but the final beat's two, which heartbeat-final-fatal carries (review M6).
     const full = { ...contractFixture("heartbeat-full"), ...contractFixture("heartbeat-final-fatal") };
-    expect(Object.keys(full).sort(), "premise: the two beats carry every declared field").toEqual(declared);
+    expect(Object.keys(full).sort(), "premise: the two beats carry every kept field").toEqual(kept);
     expect(sanitise(full)).toEqual(full);
     let checked = 0;
-    for (const k of declared) {
+    for (const k of kept) {
       expect(ALLOWED_KEYS.has(k), k).toBe(true);
       checked++;
     }
-    expect(checked).toBe(declared.length);
-    for (const k of R2_BEAT_FIELDS) expect(declared, k).toContain(k);
+    expect(checked).toBe(kept.length);
+    for (const k of [...R2_BEAT_FIELDS, ...R4_BEAT_FIELDS]) expect(kept, k).toContain(k);
+  });
+
+  // R4 S8 (ruling R14): 64 proof-of-play items a beat must never put in a sample row. The usecase strips the list before
+  // either beat store (stream-sessions.ts `heartbeat`; its DB test reads both stores back), and the allowlist is the floor
+  // under that strip: neither the list nor any key only an item carries survives, while the overflow count beside it does.
+  it("R4 S8 (R14): the airing list never survives into a sample's raw — the contract's airing beat loses that list and nothing else; airingsDropped is kept", () => {
+    const beat = contractFixture("heartbeat-airings");
+    const items = beat.airings as Record<string, unknown>[];
+    expect(items.length, "premise: the vector carries items").toBeGreaterThan(0);
+    const out = sanitise(beat);
+    expect(out, "the list is dropped").not.toHaveProperty("airings");
+    expect(out).toEqual(Object.fromEntries(Object.entries(beat).filter(([k]) => !NOT_IN_RAW.includes(k))));
+    expect(out).toHaveProperty("airingsDropped", beat.airingsDropped);
+    for (const k of NOT_IN_RAW) expect(ALLOWED_KEYS.has(k), k).toBe(false);
+    // No item key that only an airing carries is on the list, so the items could not survive under another container.
+    const itemOnly = [...new Set(items.flatMap((i) => Object.keys(i)))].filter((k) => !["at"].includes(k));
+    expect(itemOnly.sort()).toEqual(["breakKind", "cardId", "cutShort", "kind", "momentId", "source", "style"]);
+    expect(itemOnly.filter((k) => ALLOWED_KEYS.has(k))).toEqual([]);
   });
 
   it("R2002: `input` is now a kept key, so a composed session's input under it keeps its protocol and bare url — never its stream id or passphrase", () => {
