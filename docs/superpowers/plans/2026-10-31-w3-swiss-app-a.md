@@ -84,9 +84,9 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 ## Review Focus
 
 1. **A late player added while a current-round board has an online-chess game being created, or a device link open with no event yet.** Case (a) must not fire; the action must fall to (b) or (c) cleanly, never 500 from `lockBoardsRefusingOnlineGames`. Pinned in Task 9: `case (a) never runs over a board an online game stands behind`.
-2. **Undo pressed right after "Add late player" (wrong person), then Withdraw of the late player who took the bye (case b).** Undo must refuse by name and point to Withdraw. The Withdraw must walk the board over to the former bye holder, who then holds win points and is bye-ineligible (rulebook §4 walkover row). Pinned in Task 9: `X-SW-LE-1 sequence: (b) then Undo then Withdraw`.
-3. **A Rebuild whose regenerate throws (e.g. `STAGE_NOT_READY`).** The old board must still exist with its times and courts; no empty stage may be left behind. Pinned in Task 1: `X-SW-RB-1 a regenerate that throws rolls the delete back`.
-4. **A payment webhook confirming a registration on a Swiss division whose last round has started.** The confirmation must commit, the entrant must be recorded and named on the desk, and nothing must re-pair. Pinned in Task 9: `X-SW-LE-2 an automatic arrival with no round left never fails the confirmation`.
+2. **Undo pressed right after "Add late player" (wrong person), then Withdraw of the late player who took the bye (case b).** Undo must refuse by name and point to Withdraw. The Withdraw must walk the board over to the former bye holder, who then holds win points and is bye-ineligible (rulebook §4 walkover row). Pinned in Task 9: `X-SW-12 sequence: (b) then Undo then Withdraw`.
+3. **A Rebuild whose regenerate throws (e.g. `STAGE_NOT_READY`).** The old board must still exist with its times and courts; no empty stage may be left behind. Pinned in Task 1: `X-RB-1 a regenerate that throws rolls the delete back`.
+4. **A payment webhook confirming a registration on a Swiss division whose last round has started.** The confirmation must commit, the entrant must be recorded and named on the desk, and nothing must re-pair. Pinned in Task 9: `X-SW-13 an automatic arrival with no round left never fails the confirmation`.
 5. **An odd-field Pair of round 1 BEFORE Start, once byes freeze their config.** Rules must stay editable, Unpair and Rebuild must still work, and the rule locks must not trip on a bye. Pinned in Task 3: `a frozen bye is not PLAYED: stage rules stay editable, Unpair clears it`.
 
 ---
@@ -122,7 +122,7 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 
 ## Task 1: Rebuild keeps times and courts, in one transaction, format-agnostic (#840, FX-G13)
 
-**Rules (§12):** "Rebuild keeps times and courts, in one transaction" (design G3) → **X-SW-RB-1**.
+**Rules (§12):** "Rebuild keeps times and courts, in one transaction" (design G3) → **X-RB-1**.
 
 **Files:**
 - Create: `apps/web/src/lib/rebuild-slots.ts` (pure, client-safe).
@@ -147,15 +147,15 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 - Consumes: nothing new.
 
 - [ ] **Step 1: Write failing unit tests** in `rebuild-slots.test.ts`:
-  - `X-SW-RB-1 carrySlots keeps every slot whose (pool, round, seq) survives`;
+  - `X-RB-1 carrySlots keeps every slot whose (pool, round, seq) survives`;
   - `… frees a slot whose position no longer exists and reports it`. A 6-board round 1 becoming 5 frees exactly the round-1 seq-6 slot;
   - `… a bye row neither gives nor takes a slot`;
   - `… empty before → every new row unscheduled, freed = []` (empty case first, R13).
   - Cover a league (pool null), a group (two pools, the same `(round, seq)` in each must not cross pools) and a Swiss shell set.
 - [ ] **Step 2: Write failing DB tests** in `rebuild-one-transaction.test.ts`. The first two are the regression, red on main:
-  - `X-SW-RB-1 a Swiss pre-Start Rebuild keeps every board's scheduled_at and court_id`. Set it up by pinning times and courts on rounds 1–3 shells, withdrawing one entrant (roster drift), and pressing Rebuild.
-  - `X-SW-RB-1 a league Rebuild keeps slots by position`. This is the format-agnostic case W5 consumes.
-  - `X-SW-RB-1 a regenerate that throws rolls the delete back`. Make the regenerate throw (a group stage with too few entrants per group, `group_too_few_entrants`). Assert the old fixture ids still exist with their slots, and the stage fixture count is unchanged.
+  - `X-RB-1 a Swiss pre-Start Rebuild keeps every board's scheduled_at and court_id`. Set it up by pinning times and courts on rounds 1–3 shells, withdrawing one entrant (roster drift), and pressing Rebuild.
+  - `X-RB-1 a league Rebuild keeps slots by position`. This is the format-agnostic case W5 consumes.
+  - `X-RB-1 a regenerate that throws rolls the delete back`. Make the regenerate throw (a group stage with too few entrants per group, `group_too_few_entrants`). Assert the old fixture ids still exist with their slots, and the stage fixture count is unchanged.
   - `Rebuild still refuses STAGE_HAS_RESULTS and SCHEDULE_LOCKED before any delete`: a guard regression; both existing refusals keep their codes.
 - [ ] **Step 3: Run, verify FAIL:** `VERIFY-WEB t1 src/lib/__tests__/rebuild-slots.test.ts src/server/usecases/__tests__/rebuild-one-transaction.test.ts`. The two keep-slots tests fail on null slots, and the rollback test fails with the old fixtures gone.
 - [ ] **Step 4: Implement.**
@@ -175,13 +175,13 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   - Split the transaction again (move the delete back into its own `withTenant`). The rollback test must go red.
   - Make `carrySlots` return an empty `assign`. The keep-slots tests must go red.
 - [ ] **Step 8: Shared harnesses.**
-  - Create `w3-swiss-app-a.spec.ts`, modelled on `apps/web/e2e/stage-roster-drift.spec.ts`. Its first describe, `X-SW-RB-1 rebuild keeps the board`, pins a court and time, withdraws an entrant, presses Rebuild, and reads the slot back on the run sheet.
+  - Create `w3-swiss-app-a.spec.ts`, modelled on `apps/web/e2e/stage-roster-drift.spec.ts`. Its first describe, `X-RB-1 rebuild keeps the board`, pins a court and time, withdraws an entrant, presses Rebuild, and reads the slot back on the run sheet.
   - Create `w3SwissA.ts`, modelled on `suites/w2dTables.ts`, with its own owner email, `EXPECTED_CHECKS = 2` and a zero-checked failure. Check 1: rebuild keeps 3 slots. Check 2: `slots.freed` counted. Wire it into `main.ts`, `harness.ts` and `index.ts`, then run `scripts/__tests__/smoke-{paths,select,manifest}.test.ts` via VERIFY-WEB from `$WT`.
 - [ ] **Step 9: Commit** `feat(w3): Rebuild keeps times and courts in one transaction (#840, FX-G13)`.
 
 ## Task 2: Pre-Start reshape keeps pinned slots (SW-L8)
 
-**Rules (§12):** the same row → **X-SW-RB-1**. The spec §4 "Before Start" paragraph says the reshape inherits G3.
+**Rules (§12):** the same row → **X-RB-1**. The spec §4 "Before Start" paragraph says the reshape inherits G3.
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/stages.ts`:
@@ -193,21 +193,21 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 - Produces: `chooseDoomedBoards(rows: SwissExistingFixture[], keep: number): { survivors: SwissExistingFixture[]; doomed: SwissExistingFixture[] }`, exported for the test. A board is doomed first if it has no time and no court, then if it is not `schedule_locked`, then by highest seq. Survivors are re-packed to `seq_in_round` 1..keep in their prior order, and keep their `ext_key`. A minted board takes the smallest unused `b` index.
 
 - [ ] **Step 1: Write failing tests.**
-  - `X-SW-RB-1 a shrinking pre-Start round deletes the unscheduled board, not the pinned seq-4 board`. Set up 8 entrants with times and courts on boards 1, 2 and 4 of round 2 and board 3 unscheduled. Withdraw one entrant pre-Start, so round 2 needs 3 boards plus a bye. Assert boards 1, 2 and 4 survive with their slots.
+  - `X-RB-1 a shrinking pre-Start round deletes the unscheduled board, not the pinned seq-4 board`. Set up 8 entrants with times and courts on boards 1, 2 and 4 of round 2 and board 3 unscheduled. Withdraw one entrant pre-Start, so round 2 needs 3 boards plus a bye. Assert boards 1, 2 and 4 survive with their slots.
   - `ext_keys stay unique and seqs contiguous after a shrink then a grow`. Shrink, enrol two entrants, and Pair. Every `sw-rN-bK` must be unique and `seq_in_round` must be 1..k.
   - `all boards pinned → the highest-seq board goes and the delta counts it`. The ordering differential: the existing behaviour stays the fallback.
 - [ ] **Step 2: Run FAIL:** `VERIFY-WEB t2 src/server/usecases/__tests__/swiss-withdrawal-reconcile.test.ts`.
 - [ ] **Step 3: Implement** `chooseDoomedBoards` and use it in place of `slice(0, boards)`. Re-pack survivor seqs (with one `update` per moved row, before the mint), and change the mint naming.
 - [ ] **Step 4: Run PASS.** Run the Step 2 file plus `swiss-shell-fixtures.test.ts`, `swiss-delete-entrant.test.ts` and `swiss-walkover-saturday.test.ts`.
 - [ ] **Step 5: Mutate** the first sort key (drop the unscheduled-first rule). The first test must go red.
-- [ ] **Step 6: E2E + smoke.** Add a describe `X-SW-RB-1 pre-Start reshape keeps pinned boards`, and smoke check 3 (`EXPECTED_CHECKS` = 3).
+- [ ] **Step 6: E2E + smoke.** Add a describe `X-RB-1 pre-Start reshape keeps pinned boards`, and smoke check 3 (`EXPECTED_CHECKS` = 3).
 - [ ] **Step 7: Commit** `fix(w3): a pre-Start Swiss reshape keeps the boards that hold a slot (SW-L8)`.
 
 ## Task 3: A bye is frozen at award, never on a court, never printed (SW-M7, SW-M13)
 
 **Rules (§12):**
-- "A bye shell is never on a court and never printed" (RB3-23) → **X-SW-BY-1**.
-- "frozen at award" is RB3-7(a)'s app half, part of the engine PR's bye row → test token **X-SW-BY-2** (see the id table).
+- "A bye shell is never on a court and never printed" (RB3-23) → **X-SW-29**.
+- "frozen at award" is RB3-7(a)'s app half, part of the engine PR's bye row → test token **X-SW-5** (see the id table).
 
 **Files:**
 - Modify:
@@ -243,15 +243,15 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 - make Unpair, the reshape, Rebuild and Undo refuse every round that has a bye.
 
 - [ ] **Step 1: Write failing tests** (`swiss-bye-snapshot.test.ts`; sports badminton AND boardgame through the same body):
-  - `X-SW-BY-2 a seated bye carries config_snapshot equal to the stage cfg at award`. The expected value is `resolveFixtureCfg` of the stage and division as read before Pair, not the product's output. Then change the stage `config.points.win` (pre-Start) and assert the bye row's snapshot is unchanged.
+  - `X-SW-5 a seated bye carries config_snapshot equal to the stage cfg at award`. The expected value is `resolveFixtureCfg` of the stage and division as read before Pair, not the product's output. Then change the stage `config.points.win` (pre-Start) and assert the bye row's snapshot is unchanged.
   - `a frozen bye is not PLAYED: stage rules stay editable, Unpair clears it`. Pair an odd round 1 pre-Start. `PUT` the stage rules and get 200. Unpair, and assert the bye row's seats, outcome AND snapshot are null.
   - `a frozen bye does not block Rebuild or Undo`.
   - `a real walkover over a dead seat (ruling 116) is still evidence`. This is the guard's positive pair: an `awardSeededByes`-shaped row with `reason != 'bye'` stays in `fixtureEvidenceSql`.
 - [ ] **Step 2: Write failing schedule and print tests.**
-  - `X-SW-BY-1 the auto pass never places a Swiss bye shell` (`schedule-bye-shell.test.ts`): pre-Start shells, an odd field, `autoSchedule`. Zero rows with `ext_key ~ -bye` hold a court; count > 0 boards placed (anti-vacuity).
-  - `X-SW-BY-1 moveFixture onto a bye shell refuses SWISS_BYE_NOT_PLACEABLE`.
-  - `X-SW-BY-1 seating a bye clears a slot the shell held`.
-  - `X-SW-BY-1 an unseated Swiss bye shell with a time does not print` (`scorer-sheets.test.ts`). Its positive pair: an unlabelled Swiss BOARD shell with a time still prints (W8 owns sheet content).
+  - `X-SW-29 the auto pass never places a Swiss bye shell` (`schedule-bye-shell.test.ts`): pre-Start shells, an odd field, `autoSchedule`. Zero rows with `ext_key ~ -bye` hold a court; count > 0 boards placed (anti-vacuity).
+  - `X-SW-29 moveFixture onto a bye shell refuses SWISS_BYE_NOT_PLACEABLE`.
+  - `X-SW-29 seating a bye clears a slot the shell held`.
+  - `X-SW-29 an unseated Swiss bye shell with a time does not print` (`scorer-sheets.test.ts`). Its positive pair: an unlabelled Swiss BOARD shell with a time still prints (W8 owns sheet content).
 - [ ] **Step 3: Run FAIL:** `VERIFY-WEB t3 src/server/usecases/__tests__/swiss-bye-snapshot.test.ts src/server/usecases/__tests__/schedule-bye-shell.test.ts src/lib/__tests__/scorer-sheets.test.ts`.
 - [ ] **Step 4: Implement** the files above. In `swissGen`, load the division's `sport_key`, `module_version` and `config` once, under the lock.
 - [ ] **Step 5: Migration test** (`w3-migration.test.ts`): seed two bye shells with slots and one board with a slot. After the migration, the byes are slotless and the board is untouched. A second run changes 0 rows.
@@ -262,13 +262,13 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   - drop the bye filter in `movableFixtureSql` → the auto-pass test goes red;
   - drop the `ext_key` test in `isPrintable` → the print test goes red.
 - [ ] **Step 8: E2E + smoke.**
-  - E2E describe `X-SW-BY-1 a bye has no court and no sheet`: an odd field, auto-schedule, the board shows the bye without a court, and the sheet PDF list excludes it.
+  - E2E describe `X-SW-29 a bye has no court and no sheet`: an odd field, auto-schedule, the board shows the bye without a court, and the sheet PDF list excludes it.
   - Smoke checks 4 and 5 (a bye snapshot present; a bye row with no court). `EXPECTED_CHECKS` = 5.
 - [ ] **Step 9: Commit** `fix(w3): a Swiss bye freezes at award and never takes a court or a sheet (SW-M7, SW-M13)`. List the migration in the commit body as a DATA CHANGE.
 
 ## Task 4: Refuse "Add match" on a Swiss stage (RB3-15 A; #846, SW-M3/M4/M5)
 
-**Rules (§12):** "Ad-hoc 'Add match' refused on a Swiss stage" (RB3-15) → **X-SW-AH-1**.
+**Rules (§12):** "Ad-hoc 'Add match' refused on a Swiss stage" (RB3-15) → **X-SW-21**.
 
 **Files:**
 - Create: `apps/web/src/lib/swiss-refusals.ts`. It is client-safe and holds every W3 code, its English sentence and `swissRefusalKey(code): MessageKey`.
@@ -301,18 +301,18 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   - Copy for `SWISS_ADHOC_REFUSED` (RB3-15, verbatim intent): "Swiss rounds are paired by the system. Add friendlies in another stage."
 
 - [ ] **Step 1: Write failing tests.**
-  - `X-SW-AH-1 Add match on a Swiss stage refuses SWISS_ADHOC_REFUSED and writes nothing`: count the fixtures before and after.
+  - `X-SW-21 Add match on a Swiss stage refuses SWISS_ADHOC_REFUSED and writes nothing`: count the fixtures before and after.
   - `league and group still accept an ad-hoc fixture`: the positive pair; the existing cases stay green.
   - `every SwissRefusalCode has a key present in all 4 dictionaries`: iterate the table and fail on a count of 0.
   - In the rail test: `a Swiss stage renders no stage-add-match trigger; a league stage does`.
 - [ ] **Step 2: Run FAIL**, implement, add the copy in 4 locales, run `i18n:gen-keys` and `i18n:check`, then run PASS: `VERIFY-WEB t4 src/server/usecases/__tests__/add-fixture.test.ts src/lib/__tests__/swiss-refusals.test.ts src/components/v2/desk/__tests__/stage-rail.test.tsx`. Run `openapi:gen` (the 422 is documented).
 - [ ] **Step 3: Mutate:** restore `swiss` into `ADHOC_STAGE_KINDS` and drop the explicit check. The refusal test must go red.
-- [ ] **Step 4: E2E + smoke.** Describe `X-SW-AH-1 no Add match on a Swiss stage` (the rail has no trigger, and an API POST gets 422). Smoke check 6. `EXPECTED_CHECKS` = 6.
+- [ ] **Step 4: E2E + smoke.** Describe `X-SW-21 no Add match on a Swiss stage` (the rail has no trigger, and an API POST gets 422). Smoke check 6. `EXPECTED_CHECKS` = 6.
 - [ ] **Step 5: Commit** `feat(w3): refuse ad-hoc matches on a Swiss stage (RB3-15 A, #846)`.
 
 ## Task 5: Undo of Pair next clears the seats; undo barriers (SW-M2/#835, RB3-22, design §10.8)
 
-**Rules (§12):** "Undo of Pair next clears seats if no result, else a named refusal; Add late player has no Undo" → **X-SW-UN-1**.
+**Rules (§12):** "Undo of Pair next clears seats if no result, else a named refusal; Add late player has no Undo" → **X-SW-28**.
 
 **Premise found:** gaps.md labels SW-M2 BOTH. It is app-only. The engine's inverse carries `__undo_of: <seq>` (engine `history/history.ts:248-264`), so the app reads `seated_fixture_ids` from the undone event in its own ledger.
 
@@ -337,17 +337,17 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
     - `swiss_rounds_changed {stage_id, from: number, to: number, via: "edit"|"add_round"|"finish"}`.
 - Consumes: `clearSwissFixtureSeats`, `fixtureHasResultSql`, `recomputeStandings`.
 
-- [ ] **Step 1: Rewrite the old test.** Its name becomes `X-SW-UN-1 Undo of Pair next clears round 1's seats and keeps the shells`. It asserts:
+- [ ] **Step 1: Rewrite the old test.** Its name becomes `X-SW-28 Undo of Pair next clears round 1's seats and keeps the shells`. It asserts:
   - every round-1 row has `home_entrant_id` and `away_entrant_id` null, `status` `scheduled` and `outcome` null;
   - the bye row's snapshot is null;
   - the shell count is unchanged, and so are the ids and the slots.
   It also keeps the old shell-count assertion.
 - [ ] **Step 2: Write further failing tests** in `swiss-undo-pair-next.test.ts` (badminton + boardgame):
-  - `X-SW-UN-1 a started board refuses SWISS_UNDO_ROUND_STARTED and clears nothing`: one board has a `core.start` event.
-  - `X-SW-UN-1 Redo after Undo seats round 1 again`, with the same pairing (deterministic).
-  - `X-SW-UN-1 Undo walks back round 2 then round 1, seats cleared each time`: the sequence.
-  - `X-SW-UN-1 Undo after a withdrawal re-pairs nobody until Pair next`.
-  - `X-SW-UN-1 an organiser swiss_late_entry is a barrier; an automatic one is not`. Insert the two ledger rows by hand: `undoBarrierRefusal` is unit-tested on literal ledgers, and the route is tested with a DB row.
+  - `X-SW-28 a started board refuses SWISS_UNDO_ROUND_STARTED and clears nothing`: one board has a `core.start` event.
+  - `X-SW-28 Redo after Undo seats round 1 again`, with the same pairing (deterministic).
+  - `X-SW-28 Undo walks back round 2 then round 1, seats cleared each time`: the sequence.
+  - `X-SW-28 Undo after a withdrawal re-pairs nobody until Pair next`.
+  - `X-SW-28 an organiser swiss_late_entry is a barrier; an automatic one is not`. Insert the two ledger rows by hand: `undoBarrierRefusal` is unit-tested on literal ledgers, and the route is tested with a DB row.
   - `standings drop the cleared bye's points` (`recomputeStandings` with `emptyFold: "drop"`, as Unpair does).
 - [ ] **Step 3: Run FAIL:** `VERIFY-WEB t5 src/server/usecases/__tests__/swiss-playoff-pairing.test.ts src/server/usecases/__tests__/swiss-undo-pair-next.test.ts`.
 - [ ] **Step 4: Implement.** In `stepWrite`:
@@ -358,11 +358,11 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   Restore Checkpoint loops `step`, so it inherits both behaviours; add one case `restore across a late entry refuses SWISS_LATE_ENTRY_NOT_UNDOABLE`.
 - [ ] **Step 5: Run PASS:** the Step 3 files plus `src/server/usecases/__tests__/history*.test.ts` (name each) and `src/server/usecases/__tests__/swiss-shell-fixtures.test.ts`. Run tsc.
 - [ ] **Step 6: Mutate**, one at a time:
-  - skip the seat clear → the X-SW-UN-1 seats test goes red;
+  - skip the seat clear → the X-SW-28 seats test goes red;
   - drop the started guard → the refusal test goes red;
   - make `undoBarrierRefusal` return null → the barrier test goes red.
 - [ ] **Step 7: E2E + smoke.**
-  - E2E describe `X-SW-UN-1 Undo clears a paired round`: Pair, press Undo on the history panel, and the board shows empty seats.
+  - E2E describe `X-SW-28 Undo clears a paired round`: Pair, press Undo on the history panel, and the board shows empty seats.
   - Smoke check 7 (Undo leaves 0 seated round-1 rows). `EXPECTED_CHECKS` = 7.
 - [ ] **Step 8: Commit** `fix(w3): Undo of Pair next clears the seats; late entries and round changes are undo barriers (#835)`.
 
@@ -371,8 +371,8 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 ## Task 6: Field model — first Swiss round per entrant; missed rounds credit 0 (§4 scoring, ruling 251)
 
 **Rules (§12):**
-- "Late entrant: 0 per missed round, no score" is the engine PR's row. This task is its app half: the pairing score in `swissGen`. Test token **X-SW-MR-1**.
-- "Late entry cases" → **X-SW-LE-1** (the case (c) exclusion).
+- "Late entrant: 0 per missed round, no score" is the engine PR's row. This task is its app half: the pairing score in `swissGen`. Test token **X-SW-8**.
+- "Late entry cases" → **X-SW-12** (the case (c) exclusion).
 
 **Files:**
 - Create: `db/migration/deltas/V<next>__w3_swiss_first_round.sql`:
@@ -392,20 +392,20 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 - Consumes: none.
 
 - [ ] **Step 1: Write failing tests** (badminton + boardgame, the same body):
-  - `X-SW-MR-1 an entrant created after round 2 was seated scores 0, not +2, in round 3's score groups`. Expected (rulebook §4 late-entry row, A2 2.4): 0 per missed round. Assert through the pairing: with 7 players after 2 rounds and one 0-point latecomer, the latecomer is paired inside the 0-point group (or takes the bye), never the 2-point group. Spy on `pairRound`'s standings input via `vi.spyOn` on the module export, plus the seated result.
-  - `X-SW-MR-1 a missed round is not a bye: the latecomer is still bye-eligible` (P-A4).
-  - `X-SW-LE-1 an entrant whose first round is 4 is not seated in round 3`. A Pair of round 3 never seats them; this is the after-Undo path.
+  - `X-SW-8 an entrant created after round 2 was seated scores 0, not +2, in round 3's score groups`. Expected (rulebook §4 late-entry row, A2 2.4): 0 per missed round. Assert through the pairing: with 7 players after 2 rounds and one 0-point latecomer, the latecomer is paired inside the 0-point group (or takes the bye), never the 2-point group. Spy on `pairRound`'s standings input via `vi.spyOn` on the module export, plus the seated result.
+  - `X-SW-8 a missed round is not a bye: the latecomer is still bye-eligible` (P-A4).
+  - `X-SW-12 an entrant whose first round is 4 is not seated in round 3`. A Pair of round 3 never seats them; this is the after-Undo path.
   - `entrants with swiss_first_round null behave exactly as today`: the legacy pair, with the implicit bye from a round with no bye row still credited (owner value: live rounds keep their pairings).
 - [ ] **Step 2: Run FAIL:** `VERIFY-WEB t6 src/server/usecases/__tests__/swiss-late-field.test.ts`.
 - [ ] **Step 3: Implement**, then the migration test (`w3-migration.test.ts`): the column exists, the check rejects 0, and a second run is a no-op.
 - [ ] **Step 4: Run PASS:** the Step 2 file plus `w3-migration.test.ts`, `swiss-shell-fixtures.test.ts`, `swiss-withdrawal-reconcile.test.ts` and `swiss-walkover-saturday.test.ts`. Run tsc.
-- [ ] **Step 5: Mutate:** remove the `swiss_first_round` condition in the implicit-bye loop → `X-SW-MR-1 … scores 0` goes red. Separately, remove `swissFieldForRound` → `… not seated in round 3` goes red.
+- [ ] **Step 5: Mutate:** remove the `swiss_first_round` condition in the implicit-bye loop → `X-SW-8 … scores 0` goes red. Separately, remove `swissFieldForRound` → `… not seated in round 3` goes red.
 - [ ] **Step 6: Smoke** check 8 (an entrant with `swiss_first_round` set is not on a round below it). E2E is owed through Task 10's describe, which drives the same path from the UI. `EXPECTED_CHECKS` = 8.
 - [ ] **Step 7: Commit** `fix(w3): a Swiss latecomer's missed rounds score 0, not +1 each (ruling 251)`. The migration is listed.
 
 ## Task 7: Unplayed pairs may meet again (RB3-2, RB3-14; `stages.ts:1376`)
 
-**Rules (§12):** "Unplayed pairs (double walkover) may meet again; a walkover winner stays bye-ineligible" → **X-SW-UP-1**.
+**Rules (§12):** "Unplayed pairs (double walkover) may meet again; a walkover winner stays bye-ineligible" → **X-SW-15**.
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/stages.ts`, `swissGen`'s history loop at `:1360-1400`.
@@ -419,10 +419,10 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 
 - [ ] **Step 1: Read** `swiss-two-sided-walkover-pairing.test.ts` and list every assertion that pins "a walkover counts as met". Each is updated to the signed rule, and the commit body names each one (AGENTS.md class 4: a test that froze a now-overruled rule).
 - [ ] **Step 2: Write failing tests** (rulebook §2.1 P-A2 and the §4 rows):
-  - `X-SW-UP-1 a double walkover pair may meet again`: 4 players, 3 rounds. Force the only legal round-3 pairing to be the double-walkover pair, and assert it is seated.
-  - `X-SW-UP-1 a pre-play walkover (reason walkover) pair may meet again`.
-  - `X-SW-UP-1 a retirement after play is met: no rematch`: the positive pair.
-  - `X-SW-UP-1 a walkover winner is still never given the bye`.
+  - `X-SW-15 a double walkover pair may meet again`: 4 players, 3 rounds. Force the only legal round-3 pairing to be the double-walkover pair, and assert it is seated.
+  - `X-SW-15 a pre-play walkover (reason walkover) pair may meet again`.
+  - `X-SW-15 a retirement after play is met: no rematch`: the positive pair.
+  - `X-SW-15 a walkover winner is still never given the bye`.
   - The same four for boardgame, where `startIsPlay` is true: a forfeit after `core.start` IS played (ruling 118).
 - [ ] **Step 3: Run FAIL**, implement, run PASS: `VERIFY-WEB t7 src/server/usecases/__tests__/swiss-unplayed-rematch.test.ts src/server/usecases/__tests__/swiss-two-sided-walkover-pairing.test.ts src/server/usecases/__tests__/swiss-colour-history-double-walkover.test.ts src/server/usecases/__tests__/swiss-walkover-saturday.test.ts`.
 - [ ] **Step 4: Mutate:** treat every two-seated row as met again → the double-walkover test goes red. Separately, treat a retirement as unplayed → the retirement test goes red.
@@ -432,8 +432,8 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 ## Task 8: Seeded random round 1, chess colours default on, round-1 colour by lot (SW-L6, SW-H3)
 
 **Rules (§12):**
-- "Seeded random draw for an unseeded round 1" (RB3-16) → **X-SW-DR-1**.
-- "Chess colours on by default for boardgame Swiss; round-1 colour by lot" (RB3-10) → **X-SW-CC-1**.
+- "Seeded random draw for an unseeded round 1" (RB3-16) → **X-SW-22**.
+- "Chess colours on by default for boardgame Swiss; round-1 colour by lot" (RB3-10) → **BG-SW-1**.
 
 **Files:**
 - Create: `apps/web/src/lib/swiss-draw.ts` (pure, client-safe).
@@ -455,20 +455,20 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 - Consumes: `pairRound`'s round-1 pairings, which have the upper player at home (engine `swiss.ts:325`).
 
 - [ ] **Step 1: Write failing unit tests:**
-  - `X-SW-DR-1 an unseeded round 1 does not follow registration order`: register 8 in a known order, and assert the drawn order differs from it under the stage's seed;
+  - `X-SW-22 an unseeded round 1 does not follow registration order`: register 8 in a known order, and assert the drawn order differs from it under the stage's seed;
   - `… is identical for the same seed and the same field`: the replay;
   - `… seeded entrants keep their seed order ahead of the draw`;
-  - `X-SW-CC-1 the colour lot alternates by board`: enumerate boards 1–4 for both lots (8 rows, count asserted);
-  - `X-SW-CC-1 chess is on for boardgame unless config.chess is false; off for every other sport`. Iterate the sport registry (`forEachSport` from `@seazn/engine/testkit`), assert count > 0, and derive the expected value from the sport key.
+  - `BG-SW-1 the colour lot alternates by board`: enumerate boards 1–4 for both lots (8 rows, count asserted);
+  - `BG-SW-1 chess is on for boardgame unless config.chess is false; off for every other sport`. Iterate the sport registry (`forEachSport` from `@seazn/engine/testkit`), assert count > 0, and derive the expected value from the sport key.
 - [ ] **Step 2: Write failing DB tests:**
-  - `X-SW-CC-1 a boardgame Swiss with no config.chess alternates colours in round 2`: SW-H3's regression. After round 1, every player with White in round 1 gets Black in round 2 where the pairing allows; assert over all boards, with the count printed.
-  - `X-SW-DR-1 the audit payload records draw_seed and colour_lot`.
+  - `BG-SW-1 a boardgame Swiss with no config.chess alternates colours in round 2`: SW-H3's regression. After round 1, every player with White in round 1 gets Black in round 2 where the pairing allows; assert over all boards, with the count printed.
+  - `X-SW-22 the audit payload records draw_seed and colour_lot`.
   - `a badminton Swiss keeps upper-at-home in round 1`: no lot outside chess.
 - [ ] **Step 3: Run FAIL**, implement, run PASS: `VERIFY-WEB t8 src/lib/__tests__/swiss-draw.test.ts src/server/usecases/__tests__/swiss-round-one-draw.test.ts src/server/usecases/__tests__/swiss-playoff-pairing.test.ts src/lib/marketing/__tests__/club-names.test.ts` (if that file exists; else name its test). Run tsc.
 - [ ] **Step 4: Mutate:** return the input order from `swissRoundOneOrder` → the draw test goes red. Make `swissChessColoursOn` return `cfg.chess === true` → the boardgame colour test goes red.
 - [ ] **Step 5: UI.** Invoke `frontend-design`. `lib/swiss-pairing-menu.ts`'s round-1 hint says "Unseeded players are drawn at random" when any entrant is unseeded (4 locales). Extend `stages-panel-swiss-pairing.test.tsx`.
 - [ ] **Step 6: E2E + smoke.**
-  - E2E describe `X-SW-DR-1 / X-SW-CC-1`: a chess Swiss, Pair round 1, and the board shows White/Black alternating.
+  - E2E describe `X-SW-22 / BG-SW-1`: a chess Swiss, Pair round 1, and the board shows White/Black alternating.
   - Smoke check 10 (round-1 order ≠ registration order for a 16-player unseeded field). `EXPECTED_CHECKS` = 10.
 - [ ] **Step 7: Commit** `feat(w3): seeded random round 1; chess colours on by default for boardgame Swiss (SW-L6, SW-H3)`.
 
@@ -477,9 +477,9 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 ## Task 9: "Add late player" — cases (a)/(b)/(c), automatic arrivals, no round left (§4, ruling 250)
 
 **Rules (§12):**
-- "Late entry cases (a)/(b)/(c); (a) is a deviation from FIDE C.04.2 4.4" → **X-SW-LE-1**.
-- "Automatic arrivals after Start always take case (c)" → **X-SW-LE-2**.
-- "No round left: 'Add a round' while running, 'This Swiss is over' after" → **X-SW-LE-3**.
+- "Late entry cases (a)/(b)/(c); (a) is a deviation from FIDE C.04.2 4.4" → **X-SW-12**.
+- "Automatic arrivals after Start always take case (c)" → **X-SW-13**.
+- "No round left: 'Add a round' while running, 'This Swiss is over' after" → **X-SW-14**.
 
 **Files:**
 - Create:
@@ -544,27 +544,27 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   - automatic with no round left → refused (the server never throws);
   - `swissOver`;
   - the last round started with a bye → (b), since (a)/(b) are judged before "no round left" (Decisions to confirm, item 1).
-  Title the table `X-SW-LE-1 / X-SW-LE-2 / X-SW-LE-3 decision table`.
+  Title the table `X-SW-12 / X-SW-13 / X-SW-14 decision table`.
 - [ ] **Step 2: Write failing DB tests** (`server/usecases/__tests__/swiss-late-entry.test.ts`). Every case runs for badminton AND boardgame:
-  - `X-SW-LE-1 (a) re-pairs round 2 with the newcomer; every slot keeps its time and court`. Assert per row id that `scheduled_at` and `court_id` are unchanged and only seats changed. An odd→even field mints one board, placed in the next free slot or unscheduled.
-  - `X-SW-LE-1 (a) with an odd result field moves the bye`. The bye is never placed (Task 3).
-  - `X-SW-LE-1 (b) the newcomer plays the bye holder; nothing else moves`. Snapshot every other row before and after, and they must be equal. The holder's bye award is gone, and the holder is bye-eligible again at the next Pair (P-A4: force a field where the holder is the lowest).
-  - `X-SW-LE-1 (c) a started round without a bye: round untouched, newcomer seated in round N+1 at its Pair`.
-  - `X-SW-LE-1 case (a) never runs over a board an online game stands behind` (Review Focus 1). Insert a `fixture_external_play` row: the decision is (b) or (c), and there is no 500.
+  - `X-SW-12 (a) re-pairs round 2 with the newcomer; every slot keeps its time and court`. Assert per row id that `scheduled_at` and `court_id` are unchanged and only seats changed. An odd→even field mints one board, placed in the next free slot or unscheduled.
+  - `X-SW-12 (a) with an odd result field moves the bye`. The bye is never placed (Task 3).
+  - `X-SW-12 (b) the newcomer plays the bye holder; nothing else moves`. Snapshot every other row before and after, and they must be equal. The holder's bye award is gone, and the holder is bye-eligible again at the next Pair (P-A4: force a field where the holder is the lowest).
+  - `X-SW-12 (c) a started round without a bye: round untouched, newcomer seated in round N+1 at its Pair`.
+  - `X-SW-12 case (a) never runs over a board an online game stands behind` (Review Focus 1). Insert a `fixture_external_play` row: the decision is (b) or (c), and there is no 500.
   - **Sequences:**
     - `a second late player in the same round`: (a) then (a); then (b) then (c), since the bye is gone;
     - `a late player after a withdrawal`;
     - `a late player after an Undo of Pair next`;
-    - `X-SW-LE-1 sequence: (b) then Undo then Withdraw` (Review Focus 2): Undo refuses `SWISS_LATE_ENTRY_NOT_UNDOABLE`; the Withdraw walks the board over to the holder, who now holds win points via the walkover and is bye-ineligible.
-  - `X-SW-LE-3 the last round started: refusal SWISS_NO_ROUND_LEFT with canAddRound true; nothing written` (entrant count unchanged: the whole batch rolls back).
-  - `X-SW-LE-3 the Swiss is complete (or its knockout has a started fixture): SWISS_OVER`.
+    - `X-SW-12 sequence: (b) then Undo then Withdraw` (Review Focus 2): Undo refuses `SWISS_LATE_ENTRY_NOT_UNDOABLE`; the Withdraw walks the board over to the holder, who now holds win points via the walkover and is bye-ineligible.
+  - `X-SW-14 the last round started: refusal SWISS_NO_ROUND_LEFT with canAddRound true; nothing written` (entrant count unchanged: the whole batch rolls back).
+  - `X-SW-14 the Swiss is complete (or its knockout has a started fixture): SWISS_OVER`.
   - `a non-Swiss started division still refuses with the existing sentence`: the positive pair for the lock.
   - `a ladder/americano division still accepts`: the existing exemption.
 - [ ] **Step 3: Write failing arrival tests** (`swiss-late-arrival.test.ts`):
-  - `X-SW-LE-2 a payment confirmation during a live round never re-pairs: case (c), first round = current + 1`, through `materialise`;
+  - `X-SW-13 a payment confirmation during a live round never re-pairs: case (c), first round = current + 1`, through `materialise`;
   - the same for a waitlist promotion that seats (`promoteOldestWaitlisted` with auto-approval, free);
   - the same for an import `entrant.create`;
-  - `X-SW-LE-2 an automatic arrival with no round left never fails the confirmation` (Review Focus 4): the registration ends `confirmed`, and the entrant has `swiss_first_round = rounds + 1`;
+  - `X-SW-13 an automatic arrival with no round left never fails the confirmation` (Review Focus 4): the registration ends `confirmed`, and the entrant has `swiss_first_round = rounds + 1`;
   - `an automatic swiss_late_entry is not an undo barrier`.
 - [ ] **Step 4: Run FAIL:** `VERIFY-WEB t9 src/lib/__tests__/swiss-late-entry.test.ts src/server/usecases/__tests__/swiss-late-entry.test.ts src/server/usecases/__tests__/swiss-late-arrival.test.ts`.
 - [ ] **Step 5: Implement.** Keep the module import direction `entrants.ts → swiss-late-entry.ts → stages.ts`. If tsc reports a cycle through `stages.ts → entrants.ts`, import `DEPARTED_STATUSES` from a leaf instead of moving more code.
@@ -579,14 +579,14 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 - [ ] **Step 7: Mutate**, one at a time:
   - (a)'s "nothing started" guard → `true`: the online-game test and the (c) test go red;
   - drop `hasMet` in (b);
-  - make `automatic` take (a): the X-SW-LE-2 test goes red;
+  - make `automatic` take (a): the X-SW-13 test goes red;
   - swap the order of rules 1 and 4 → the decision-table row goes red.
 - [ ] **Step 8: Smoke** checks 11–14: one per case (a)/(b)/(c) through `POST /api/v1/divisions/{id}/entrants`, plus one automatic arrival (case c). `EXPECTED_CHECKS` = 14.
 - [ ] **Step 9: Commit** `feat(w3): Add late player — re-pair, take the bye or join next round (ruling 250)`. The body names the FIDE C.04.2 4.4 deviation for case (a).
 
 ## Task 10: Late entry on the desk (UI)
 
-**Rules (§12):** X-SW-LE-1, X-SW-LE-2, X-SW-LE-3 (UI half).
+**Rules (§12):** X-SW-12, X-SW-13, X-SW-14 (UI half).
 
 **Files:**
 - Modify:
@@ -614,14 +614,14 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 - [ ] **Step 1: Invoke `frontend-design`.** Show the owner two placements for the action (rail overflow vs a primary beside Pair next) before building (R24). Default recommendation: overflow, since the action is rare.
 - [ ] **Step 2: Write failing tests:** the notice table, one row per case plus the two counts, with the count asserted. Rail: `a started Swiss stage renders add-late-player; a setup stage and a league stage do not`.
 - [ ] **Step 3: Implement**, with 4 locales, `i18n:gen-keys` and `i18n:check`. Then run PASS: `VERIFY-WEB t10 src/lib/__tests__/swiss-late-entry-notice.test.ts src/components/v2/desk/__tests__/stage-rail.test.tsx src/components/v2/__tests__/stages-panel-swiss-pairing.test.tsx`.
-- [ ] **Step 4: E2E** describe `X-SW-LE-1 add a late player in each case`, covering:
+- [ ] **Step 4: E2E** describe `X-SW-12 add a late player in each case`, covering:
   - (a) before any board starts;
   - (b) after starting one board on an odd field;
   - (c) with no bye;
   - the refusal at the last round;
   - for badminton and for a chess (boardgame) division;
   - read the notices and the run sheet.
-  Add `X-SW-UP-1` and `X-SW-MR-1` steps to this describe (Tasks 6 and 7's UI paths).
+  Add `X-SW-15` and `X-SW-8` steps to this describe (Tasks 6 and 7's UI paths).
 - [ ] **Step 5: Screenshots** at 1280, 320 and 768 (rail, notice, refusal) go to an Artifact page with per-screen verdicts and the control-set diff at 320 vs 1280. There must be no horizontal scroll.
 - [ ] **Step 6: Commit** `feat(w3): Add late player on the desk`.
 
@@ -629,7 +629,7 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 
 ## Task 11: Round guidance and caps (SW-H2, RB3-3)
 
-**Rules (§12):** "Round count guidance, warn above the safe max, refuse above the hard max" → **X-SW-RC-1**.
+**Rules (§12):** "Round count guidance, warn above the safe max, refuse above the hard max" → **X-SW-16**.
 
 **Files:**
 - Modify:
@@ -662,23 +662,23 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   n counts the field paired now (Task 6's `swissFieldForRound`).
 
 - [ ] **Step 1: Write failing tests.**
-  - `X-SW-RC-1 guidance follows rulebook §3.1 for n = 2..130`: compute the expected values from the rulebook's formulas and `SWISS_ROUNDS_BANDS` (the owner's declaration), assert the count = 129, and add the §3.2 anchor rows quoted with citation (n=6 → 3/3/5; n=8 → 3/4/7; n=3 → 1/1/3).
+  - `X-SW-16 guidance follows rulebook §3.1 for n = 2..130`: compute the expected values from the rulebook's formulas and `SWISS_ROUNDS_BANDS` (the owner's declaration), assert the count = 129, and add the §3.2 anchor rows quoted with citation (n=6 → 3/3/5; n=8 → 3/4/7; n=3 → 1/1/3).
   - The ordering-differential: `n = 6 recommends 3, not the builder's old 5`.
-  - `X-SW-RC-1 Generate refuses rounds > hard max; writes nothing`, for a 4-entrant 5-round stage (rulebook SW-H1's example).
-  - `X-SW-RC-1 Pair next refuses after withdrawals shrink the field below rounds`, with the recovery details `{ canFinish: true }`.
-  - `X-SW-RC-1 6 × 5 warns, does not refuse`.
-  - `X-SW-RC-1 Start refuses a Swiss above its hard max`.
+  - `X-SW-16 Generate refuses rounds > hard max; writes nothing`, for a 4-entrant 5-round stage (rulebook SW-H1's example).
+  - `X-SW-16 Pair next refuses after withdrawals shrink the field below rounds`, with the recovery details `{ canFinish: true }`.
+  - `X-SW-16 6 × 5 warns, does not refuse`.
+  - `X-SW-16 Start refuses a Swiss above its hard max`.
 - [ ] **Step 2: Run FAIL**, implement, add the copy in 4 locales (the guidance line "For {n} players: {recommended} rounds recommended, at most {hardMax}" and the warn notice), run `i18n:gen-keys`, then run PASS: `VERIFY-WEB t11 src/lib/__tests__/swiss-rounds.test.ts src/server/usecases/__tests__/swiss-rounds-cap.test.ts src/server/usecases/__tests__/swiss-shell-fixtures.test.ts` plus the named builder/settings tests. Run `openapi:gen`.
 - [ ] **Step 3: Mutate:** `hardMax = n` for even n → the 4×5 refusal goes red. Drop the Generate check (keep Start) → the shrink test goes red.
 - [ ] **Step 4: UI.** Invoke `frontend-design`. Take screenshots of the builder and settings guidance at 3 widths and add them to the Artifact.
 - [ ] **Step 5: E2E + smoke.**
-  - E2E describe `X-SW-RC-1 rounds above the hard max are refused at Start`.
+  - E2E describe `X-SW-16 rounds above the hard max are refused at Start`.
   - Smoke check 15 (4 × 5 → 422 `SWISS_ROUNDS_ABOVE_MAX`). `EXPECTED_CHECKS` = 15.
 - [ ] **Step 6: Commit** `feat(w3): Swiss round guidance; warn above the safe max, refuse above the hard max (SW-H2, RB3-3)`.
 
 ## Task 12: Per-stage rounds editable until the first fixture starts; chess toggle; Add a round (SW-M10, #838, RB3-5)
 
-**Rules (§12):** "Rounds per stage, editable until the first fixture starts; then Finish / Add a round" → **X-SW-RC-2**. The chess toggle is RB3-10's "can be switched off" (→ X-SW-CC-1).
+**Rules (§12):** "Rounds per stage, editable until the first fixture starts; then Finish / Add a round" → **X-SW-17**. The chess toggle is RB3-10's "can be switched off" (→ BG-SW-1).
 
 **Files:**
 - Modify:
@@ -713,25 +713,25 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   - The same advisory lock and `divisionLockState` freeze refusal as Unpair.
 
 - [ ] **Step 1: Write failing tests:**
-  - `X-SW-RC-2 rounds edit after shells exist and before any start: 5 → 3 deletes rounds 4–5 shells; 3 → 4 mints round 4` (#838's regression: today `FORMAT_LOCKED` blocks it);
-  - `X-SW-RC-2 after the first core.start: SWISS_ROUNDS_LOCKED with canFinish and canAddRound`;
-  - `X-SW-RC-2 a bye alone does not lock rounds`;
-  - `X-SW-RC-2 Add a round mints round N+1 for the current field and is an undo barrier`;
-  - `X-SW-RC-2 Add a round above the hard max refuses`;
-  - `X-SW-RC-2 Add a round after the Swiss is complete refuses SWISS_OVER`;
-  - `X-SW-CC-1 chess can be switched off before start and is then off at Pair`.
+  - `X-SW-17 rounds edit after shells exist and before any start: 5 → 3 deletes rounds 4–5 shells; 3 → 4 mints round 4` (#838's regression: today `FORMAT_LOCKED` blocks it);
+  - `X-SW-17 after the first core.start: SWISS_ROUNDS_LOCKED with canFinish and canAddRound`;
+  - `X-SW-17 a bye alone does not lock rounds`;
+  - `X-SW-17 Add a round mints round N+1 for the current field and is an undo barrier`;
+  - `X-SW-17 Add a round above the hard max refuses`;
+  - `X-SW-17 Add a round after the Swiss is complete refuses SWISS_OVER`;
+  - `BG-SW-1 chess can be switched off before start and is then off at Pair`.
   Then the sequence: edit rounds, Pair, Undo (Task 5: Undo across `swiss_rounds_changed` refuses by name).
 - [ ] **Step 2: Run FAIL**, implement (route doc per `node_modules/next/dist/docs/`), run `openapi:gen`, then run PASS: `VERIFY-WEB t12 src/server/usecases/__tests__/swiss-rounds-admin.test.ts src/app/api/v1/stages/[id]/__tests__/route.test.ts src/server/usecases/__tests__/swiss-undo-pair-next.test.ts`.
 - [ ] **Step 3: Mutate:** "started" → any fixture exists (today's rule) → the first test goes red. Drop the hard-max check in `addSwissRound` → its refusal test goes red.
 - [ ] **Step 4: UI.** Invoke `frontend-design` and show 2 options for the rounds control (an inline stepper vs an edit dialog). Wire "Add a round" as the recovery button on Task 10's `SWISS_NO_ROUND_LEFT` refusal. 4 locales. Take screenshots at 3 widths and add them to the Artifact.
 - [ ] **Step 5: E2E + smoke.**
-  - E2E describe `X-SW-RC-2 edit rounds, then add a round after play`.
+  - E2E describe `X-SW-17 edit rounds, then add a round after play`.
   - Smoke checks 16–17. `EXPECTED_CHECKS` = 17.
 - [ ] **Step 6: Commit** `feat(w3): Swiss rounds editable until first start; Add a round (SW-M10, #838)`.
 
 ## Task 13: "Finish the Swiss now" (RB3-20, RB3-4's recovery)
 
-**Rules (§12):** "'Finish the Swiss now'" → **X-SW-FN-1**.
+**Rules (§12):** "'Finish the Swiss now'" → **X-SW-26**.
 
 **Files:**
 - Create: `apps/web/src/app/api/v1/stages/[id]/swiss/finish/route.ts`.
@@ -753,23 +753,23 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   - This is the recovery App B's SW-H1 refusal will offer ("Finish after N−1").
 
 - [ ] **Step 1: Write failing tests:**
-  - `X-SW-FN-1 finishing after round 3 of 5 completes the stage and seeds the knockout from round-3 standings`. Expected: the qualified list equals `rankedStageStandings` read before the call (the table after round 3), not after.
-  - `X-SW-FN-1 a paired-but-unstarted round 4 is unpaired and dropped`.
-  - `X-SW-FN-1 a started round 4 refuses and names its boards`.
-  - `X-SW-FN-1 nothing played refuses`.
-  - `X-SW-FN-1 Undo across a finish refuses SWISS_ROUNDS_CHANGE_NOT_UNDOABLE`.
+  - `X-SW-26 finishing after round 3 of 5 completes the stage and seeds the knockout from round-3 standings`. Expected: the qualified list equals `rankedStageStandings` read before the call (the table after round 3), not after.
+  - `X-SW-26 a paired-but-unstarted round 4 is unpaired and dropped`.
+  - `X-SW-26 a started round 4 refuses and names its boards`.
+  - `X-SW-26 nothing played refuses`.
+  - `X-SW-26 Undo across a finish refuses SWISS_ROUNDS_CHANGE_NOT_UNDOABLE`.
   - For boardgame too (swiss_knockout).
 - [ ] **Step 2: Run FAIL**, implement, run `openapi:gen`, then run PASS: `VERIFY-WEB t13 src/server/usecases/__tests__/swiss-finish-now.test.ts src/server/usecases/__tests__/swiss-knockout-shape.test.ts`.
 - [ ] **Step 3: Mutate:** skip the started check for round k+1 → the refusal test goes red.
 - [ ] **Step 4: UI.** Invoke `frontend-design`. The confirm copy: "Standings after round {k} become final. Rounds {k+1}–{N} are removed." (4 locales). Take screenshots at 3 widths and add them to the Artifact.
 - [ ] **Step 5: E2E + smoke.**
-  - E2E describe `X-SW-FN-1 finish a 5-round Swiss after round 3 into the knockout`.
+  - E2E describe `X-SW-26 finish a 5-round Swiss after round 3 into the knockout`.
   - Smoke check 18. `EXPECTED_CHECKS` = 18.
 - [ ] **Step 6: Commit** `feat(w3): Finish the Swiss now (RB3-20)`.
 
 ## Task 14: Manual board swap in rounds ≥ 2 — blocked with guidance (SW-L12, RB3-25)
 
-**Rules (§12):** "Manual board swap in rounds ≥ 2 blocked with guidance" → **X-SW-MS-1**.
+**Rules (§12):** "Manual board swap in rounds ≥ 2 blocked with guidance" → **X-SW-30**.
 
 **Premise found:** the API half is already true. `PatchFixture` is `.strict()` (`schemas.ts:1553-1578`), so a request naming `home_entrant_id` gets 400. Only the guidance is missing.
 
@@ -780,8 +780,8 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
   - `apps/web/src/app/api/v1/fixtures/[id]/__tests__/route.test.ts` (or the existing PatchFixture schema test; name it).
 
 - [ ] **Step 1: Write failing tests:**
-  - `X-SW-MS-1 PATCH a round-2 Swiss fixture with home_entrant_id is refused (400) and the seat is unchanged`. This pins today's behaviour; read the row back.
-  - `X-SW-MS-1 the round-2 menu shows the Unpair-then-Pair guidance; round 1 does not`.
+  - `X-SW-30 PATCH a round-2 Swiss fixture with home_entrant_id is refused (400) and the seat is unchanged`. This pins today's behaviour; read the row back.
+  - `X-SW-30 the round-2 menu shows the Unpair-then-Pair guidance; round 1 does not`.
 - [ ] **Step 2: Implement, PASS**, then mutate (hide the hint for every round → red).
 - [ ] **Step 3: E2E + smoke.**
   - E2E: a step in the Task 10 describe reading the hint.
@@ -792,7 +792,7 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 
 ## Task 15: Disqualification cascades like a withdrawal (RB3-17)
 
-**Rules (§12):** "Disqualification = withdrawal from that moment; annulment separate" → **X-SW-DQ-1**.
+**Rules (§12):** "Disqualification = withdrawal from that moment; annulment separate" → **X-SW-23**.
 
 **Files:**
 - Modify:
@@ -803,14 +803,14 @@ Requested ½ / 0 byes (RB3-7(c)) and RB3-19 have no product path in this PR.
 **Interfaces:** `WithdrawCascadeOut.status: "withdrawn" | "disqualified"`. The walkover reason the cascade already writes is unchanged; ruling 115 still decides credit.
 
 - [ ] **Step 1: Write failing tests** (Swiss badminton and boardgame, plus a league):
-  - `X-SW-DQ-1 PATCH status disqualified mid-Swiss walks the open board over to the opponent and leaves played results standing`;
-  - `X-SW-DQ-1 a disqualified entrant is not paired again`;
-  - `X-SW-DQ-1 before Start it stays a plain status flip`;
-  - `X-SW-DQ-1 a second PATCH to disqualified is idempotent`.
+  - `X-SW-23 PATCH status disqualified mid-Swiss walks the open board over to the opponent and leaves played results standing`;
+  - `X-SW-23 a disqualified entrant is not paired again`;
+  - `X-SW-23 before Start it stays a plain status flip`;
+  - `X-SW-23 a second PATCH to disqualified is idempotent`.
 - [ ] **Step 2: Run FAIL**, implement, then run PASS: `VERIFY-WEB t15 src/server/usecases/__tests__/disqualify-cascade.test.ts src/server/usecases/__tests__/swiss-withdrawal-walkover.test.ts src/lib/__tests__/status-set-sweep.test.ts`.
 - [ ] **Step 3: Mutate:** remove the route-through in `patchEntrant` → the first test goes red.
 - [ ] **Step 4: E2E + smoke.**
-  - E2E: an API-driven describe `X-SW-DQ-1` (there is no DQ button in the UI; the board shows the walkover).
+  - E2E: an API-driven describe `X-SW-23` (there is no DQ button in the UI; the board shows the walkover).
   - Smoke check 20. `EXPECTED_CHECKS` = 20.
 - [ ] **Step 5: Commit** `fix(w3): a disqualification cascades like a withdrawal (RB3-17)`.
 
@@ -857,9 +857,9 @@ Tasks 15 and 16 have disjoint file sets and may run in parallel.
 ## Task 17: Pin-only rule tests for signed behaviour that already holds (§12 close-out rows with app code)
 
 **Rules (§12):**
-- "Rank-adjacent from round 2 in swiss_playoff / swiss_knockout (deviation)" (RB3-12) → **X-SW-RA-1**.
-- "Cut-line ties: flag-and-pick / visible lots, no play-off game" (RB3-18) → **X-SW-CT-1**.
-- "A correction after the next round is paired: the published pairing stands, standings recompute" (RB3-21) → **X-SW-CR-1**.
+- "Rank-adjacent from round 2 in swiss_playoff / swiss_knockout (deviation)" (RB3-12) → **X-SW-20**.
+- "Cut-line ties: flag-and-pick / visible lots, no play-off game" (RB3-18) → **X-SW-24**.
+- "A correction after the next round is paired: the published pairing stands, standings recompute" (RB3-21) → **X-SW-27**.
 
 **Added scope:** this task was not in the brief. The controller may move it to the close-out PR instead.
 
@@ -870,9 +870,9 @@ Tasks 15 and 16 have disjoint file sets and may run in parallel.
   - `stages.ts:5701` (`SEEDING_TIE_UNRESOLVED`);
   - the correction path, a void and re-score on a round-1 board after round 2 is paired.
 - [ ] **Step 2: Write the tests:**
-  - `X-SW-RA-1 swiss_playoff pairs round 2 rank-adjacent`;
-  - `X-SW-CT-1 a tied cut line refuses SEEDING_TIE_UNRESOLVED and offers the lots draw, never a play-off fixture`;
-  - `X-SW-CR-1 correcting a round-1 result after round 2 is paired leaves round 2's seats and recomputes standings`.
+  - `X-SW-20 swiss_playoff pairs round 2 rank-adjacent`;
+  - `X-SW-24 a tied cut line refuses SEEDING_TIE_UNRESOLVED and offers the lots draw, never a play-off fixture`;
+  - `X-SW-27 correcting a round-1 result after round 2 is paired leaves round 2's seats and recomputes standings`.
   Each must pass on the branch. If one fails, that is a finding: stop and report it, do not fix it here.
 - [ ] **Step 3: Mutate one input per test**, for example force fold pairing → RA-1 goes red.
 - [ ] **Step 4: Commit** `test(w3): pin RB3-12, RB3-18, RB3-21 as signed`.
@@ -939,26 +939,26 @@ This PR covers the round-1 colour lot (app post-process) and the pairing-score z
 
 | Id | §12 rule | Source | Proving test(s) — file :: title prefix | Task |
 |---|---|---|---|---|
-| X-SW-RB-1 | Rebuild keeps times and courts, in one transaction | G3, #840, FX-G13, SW-L8 | `server/usecases/__tests__/rebuild-one-transaction.test.ts`, `lib/__tests__/rebuild-slots.test.ts`, `swiss-withdrawal-reconcile.test.ts` :: `X-SW-RB-1` | 1, 2 |
-| X-SW-BY-1 | A bye shell is never on a court and never printed | RB3-23 | `schedule-bye-shell.test.ts`, `lib/__tests__/scorer-sheets.test.ts` :: `X-SW-BY-1` | 3 |
-| X-SW-BY-2 | (app half of "Bye = win points … frozen at award", the engine-PR row) | 251, RB3-7(a) | `swiss-bye-snapshot.test.ts` :: `X-SW-BY-2` | 3 |
-| X-SW-AH-1 | Ad-hoc "Add match" refused on a Swiss stage | RB3-15 | `add-fixture.test.ts` :: `X-SW-AH-1` | 4 |
-| X-SW-UN-1 | Undo of Pair next clears seats if no result, else a named refusal; Add late player has no Undo | RB3-22, §10.8 | `swiss-playoff-pairing.test.ts`, `swiss-undo-pair-next.test.ts` :: `X-SW-UN-1` | 5 |
-| X-SW-MR-1 | (app half of "Late entrant: 0 per missed round", the engine-PR row) | 251 | `swiss-late-field.test.ts` :: `X-SW-MR-1` | 6 |
-| X-SW-UP-1 | Unplayed pairs may meet again; a walkover winner stays bye-ineligible | RB3-2, RB3-14 | `swiss-unplayed-rematch.test.ts` :: `X-SW-UP-1` | 7 |
-| X-SW-DR-1 | Seeded random draw for an unseeded round 1 | RB3-16 | `lib/__tests__/swiss-draw.test.ts`, `swiss-round-one-draw.test.ts` :: `X-SW-DR-1` | 8 |
-| X-SW-CC-1 | Chess colours on by default for boardgame Swiss; round-1 colour by lot (+ `rules/boardgame.md`) | RB3-10 | `lib/__tests__/swiss-draw.test.ts`, `swiss-round-one-draw.test.ts`, `swiss-rounds-admin.test.ts` :: `X-SW-CC-1` | 8, 12 |
-| X-SW-LE-1 | Late entry cases (a)/(b)/(c); (a) is a deviation from FIDE C.04.2 4.4 | 250 | `lib/__tests__/swiss-late-entry.test.ts`, `server/usecases/__tests__/swiss-late-entry.test.ts`, `swiss-late-field.test.ts` :: `X-SW-LE-1` | 6, 9, 10 |
-| X-SW-LE-2 | Automatic arrivals after Start always take case (c) | 250 | `swiss-late-arrival.test.ts` :: `X-SW-LE-2` | 9 |
-| X-SW-LE-3 | No round left: "Add a round" while running, "This Swiss is over" after | 250 | `server/usecases/__tests__/swiss-late-entry.test.ts` :: `X-SW-LE-3` | 9 |
-| X-SW-RC-1 | Round count guidance; warn above the safe max; refuse above the hard max | RB3-3 | `lib/__tests__/swiss-rounds.test.ts`, `swiss-rounds-cap.test.ts` :: `X-SW-RC-1` | 11 |
-| X-SW-RC-2 | Rounds per stage, editable until the first fixture starts; then Finish / Add a round | RB3-5 (#838) | `swiss-rounds-admin.test.ts` :: `X-SW-RC-2` | 12 |
-| X-SW-FN-1 | "Finish the Swiss now" | RB3-20 | `swiss-finish-now.test.ts` :: `X-SW-FN-1` | 13 |
-| X-SW-MS-1 | Manual board swap in rounds ≥ 2 blocked with guidance | RB3-25 | `stages-panel-swiss-pairing.test.tsx`, the PatchFixture route test :: `X-SW-MS-1` | 14 |
-| X-SW-DQ-1 | Disqualification = withdrawal from that moment; annulment separate | RB3-17 | `disqualify-cascade.test.ts` :: `X-SW-DQ-1` | 15 |
-| X-SW-RA-1 | Rank-adjacent from round 2 in swiss_playoff / swiss_knockout (deviation) | RB3-12 | `swiss-signed-rules-pin.test.ts` :: `X-SW-RA-1` | 17 |
-| X-SW-CT-1 | Cut-line ties: flag-and-pick / visible lots, no play-off game | RB3-18 | `swiss-signed-rules-pin.test.ts` :: `X-SW-CT-1` | 17 |
-| X-SW-CR-1 | A correction after the next round is paired: the published pairing stands, standings recompute | RB3-21 | `swiss-signed-rules-pin.test.ts` :: `X-SW-CR-1` | 17 |
+| X-RB-1 | Rebuild keeps times and courts, in one transaction | G3, #840, FX-G13, SW-L8 | `server/usecases/__tests__/rebuild-one-transaction.test.ts`, `lib/__tests__/rebuild-slots.test.ts`, `swiss-withdrawal-reconcile.test.ts` :: `X-RB-1` | 1, 2 |
+| X-SW-29 | A bye shell is never on a court and never printed | RB3-23 | `schedule-bye-shell.test.ts`, `lib/__tests__/scorer-sheets.test.ts` :: `X-SW-29` | 3 |
+| X-SW-5 | (app half of "Bye = win points … frozen at award", the engine-PR row) | 251, RB3-7(a) | `swiss-bye-snapshot.test.ts` :: `X-SW-5` | 3 |
+| X-SW-21 | Ad-hoc "Add match" refused on a Swiss stage | RB3-15 | `add-fixture.test.ts` :: `X-SW-21` | 4 |
+| X-SW-28 | Undo of Pair next clears seats if no result, else a named refusal; Add late player has no Undo | RB3-22, §10.8 | `swiss-playoff-pairing.test.ts`, `swiss-undo-pair-next.test.ts` :: `X-SW-28` | 5 |
+| X-SW-8 | (app half of "Late entrant: 0 per missed round", the engine-PR row) | 251 | `swiss-late-field.test.ts` :: `X-SW-8` | 6 |
+| X-SW-15 | Unplayed pairs may meet again; a walkover winner stays bye-ineligible | RB3-2, RB3-14 | `swiss-unplayed-rematch.test.ts` :: `X-SW-15` | 7 |
+| X-SW-22 | Seeded random draw for an unseeded round 1 | RB3-16 | `lib/__tests__/swiss-draw.test.ts`, `swiss-round-one-draw.test.ts` :: `X-SW-22` | 8 |
+| BG-SW-1 | Chess colours on by default for boardgame Swiss; round-1 colour by lot (+ `rules/boardgame.md`) | RB3-10 | `lib/__tests__/swiss-draw.test.ts`, `swiss-round-one-draw.test.ts`, `swiss-rounds-admin.test.ts` :: `BG-SW-1` | 8, 12 |
+| X-SW-12 | Late entry cases (a)/(b)/(c); (a) is a deviation from FIDE C.04.2 4.4 | 250 | `lib/__tests__/swiss-late-entry.test.ts`, `server/usecases/__tests__/swiss-late-entry.test.ts`, `swiss-late-field.test.ts` :: `X-SW-12` | 6, 9, 10 |
+| X-SW-13 | Automatic arrivals after Start always take case (c) | 250 | `swiss-late-arrival.test.ts` :: `X-SW-13` | 9 |
+| X-SW-14 | No round left: "Add a round" while running, "This Swiss is over" after | 250 | `server/usecases/__tests__/swiss-late-entry.test.ts` :: `X-SW-14` | 9 |
+| X-SW-16 | Round count guidance; warn above the safe max; refuse above the hard max | RB3-3 | `lib/__tests__/swiss-rounds.test.ts`, `swiss-rounds-cap.test.ts` :: `X-SW-16` | 11 |
+| X-SW-17 | Rounds per stage, editable until the first fixture starts; then Finish / Add a round | RB3-5 (#838) | `swiss-rounds-admin.test.ts` :: `X-SW-17` | 12 |
+| X-SW-26 | "Finish the Swiss now" | RB3-20 | `swiss-finish-now.test.ts` :: `X-SW-26` | 13 |
+| X-SW-30 | Manual board swap in rounds ≥ 2 blocked with guidance | RB3-25 | `stages-panel-swiss-pairing.test.tsx`, the PatchFixture route test :: `X-SW-30` | 14 |
+| X-SW-23 | Disqualification = withdrawal from that moment; annulment separate | RB3-17 | `disqualify-cascade.test.ts` :: `X-SW-23` | 15 |
+| X-SW-20 | Rank-adjacent from round 2 in swiss_playoff / swiss_knockout (deviation) | RB3-12 | `swiss-signed-rules-pin.test.ts` :: `X-SW-20` | 17 |
+| X-SW-24 | Cut-line ties: flag-and-pick / visible lots, no play-off game | RB3-18 | `swiss-signed-rules-pin.test.ts` :: `X-SW-24` | 17 |
+| X-SW-27 | A correction after the next round is paired: the published pairing stands, standings recompute | RB3-21 | `swiss-signed-rules-pin.test.ts` :: `X-SW-27` | 17 |
 
 §12 close-out rows this plan does NOT prove:
 - RB3-7(c), requested byes: there is no product path; the row is written as ⛔ citing the absent API.
@@ -966,4 +966,4 @@ This PR covers the round-1 colour lot (app post-process) and the pairing-score z
 - RB3-9 waits for the App-B bump PR.
 - RB3-4's app surfacing is App B.
 
-X-SW-BY-2 and X-SW-MR-1 are proposals. If the engine plan picks other ids for those two engine-PR rows, rename the two test titles to match in the same close-out.
+Ids are the engine plan's (Task 12 table and X-SW-1..11). The two engine-PR rows are X-SW-5 (bye pays win points, app half: frozen at award) and X-SW-8 (late entrant scores 0, app half).

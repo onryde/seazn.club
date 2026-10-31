@@ -922,7 +922,7 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
 | X-SW-28 | Undo of Pair next clears seats if no result, else a named refusal; Add late player has no Undo | signed 252 (RB3-22; design §10.8) |
 | X-SW-29 | A bye shell is never on a court and never printed | signed 252 (RB3-23) |
 | X-SW-30 | Manual board swap in rounds ≥ 2 blocked with guidance | signed 252 (RB3-25) |
-| X-RB-1 (re-check unused) | Rebuild keeps every fixture's time and court and deletes and regenerates in one transaction (any format) | design G3 (#840): cite the ruling the app PR records; if none exists, raise it, do not write the row |
+| X-RB-1 (unused as of 2026-10-31) | Rebuild keeps every fixture's time and court and deletes and regenerates in one transaction (any format) | signed 253 (design G3, #840) |
 
 - [ ] **Step 2: Amend the engine rows** X-SW-3 (the desk refusal and its recovery), X-SW-10 (the desk warning on `nextRound`) and X-SW-8 (`swissGen`'s implicit-bye fix to 0) by appending the app's enforced-at and proved-by paths.
 - [ ] **Step 3: Verify.**
