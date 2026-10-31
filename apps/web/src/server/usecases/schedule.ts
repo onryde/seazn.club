@@ -744,7 +744,7 @@ export function roundRobinSequenceKey(f: Pick<FixtureLite, "division_id" | "stag
  *  proposed side) — the set composition has to be identical on both sides or
  *  the write gate reads every pre-existing violation among the siblings as
  *  newly introduced and blocks a move that never touched them (see each call
- *  site's own comment). `keys` empty (a non-round-robin move) short-circuits
+ *  site's own comment). `keys` empty (a move in no round sequence) short-circuits
  *  to no widening at all, matching prior behaviour exactly. */
 export function roundRobinSequenceSiblings(
   all: readonly FixtureLite[],
@@ -897,9 +897,10 @@ function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
  *  `roundNo` is gated on `roundRobinStageIds`, an OPTIONAL 4th parameter —
  *  not read unconditionally off `f.round_no` the way `movable` reads off
  *  `f.schedule_locked`, because `fixtures.round_no` is one shared column
- *  populated for EVERY stage kind (bracket rounds, swiss rounds, stepladder
- *  legs all reuse it for display), and forwarding it for a non-round-robin
- *  stage would compare two independent round sequences as if they were one
+ *  populated for EVERY stage kind (bracket rounds and stepladder legs reuse
+ *  it for display), and forwarding it for a stage outside the round-sequence
+ *  set (league, group, swiss — `ROUND_SEQUENCE_STAGE_KINDS`) would compare
+ *  two independent round sequences as if they were one
  *  — the design doc's own motivating symptom. Omitted (not `undefined`)
  *  when the parameter itself is omitted: a caller that does not pass it
  *  keeps the pre-C1 behaviour, and round order is inert on that call. The
@@ -924,7 +925,7 @@ function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
  *  rows that already carry a `roundNo`, so a `stageId` on a round-less
  *  Assignment is simply never consulted. `calendar.ts`'s own comment on the
  *  grouping key explains WHY it is needed at all — `poolId` alone cannot
- *  tell two round-robin-kind stages in one division apart when neither has
+ *  tell two round-sequence stages in one division apart when neither has
  *  a pool (two `league` stages, say), which is exactly the shape
  *  `roundRobinStageIds` itself already has to return a SET for. */
 export function toAssignment(
@@ -1704,7 +1705,7 @@ export async function autoSchedule(
       // is, for the same reason (round is now a HARD constraint elsewhere,
       // not merely an ordering hint, so a bracket/stepladder stage's own
       // display-numbering round_no must not ride along as if it meant
-      // round-robin order).
+      // round order; the set is league, group and swiss — W3 T3b).
       ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
       ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
       divisionId: f.division_id,
@@ -2766,12 +2767,12 @@ export async function applySchedule(
         // C1 fix-loop (Finding 2): unconditional, same as `divisionId` just
         // above — `divisionFixtures` (below) is DIVISION-WIDE, so `all`, and
         // therefore `proposed`/`currentSlots`/`untouched`, can carry more
-        // than one round-robin-kind stage's fixtures in ONE call. This is
+        // than one round-sequence stage's fixtures in ONE call. This is
         // the actual WRITE gate (the comment above `roundRobin`'s own
         // assignment explains why it has to be judged HERE), so it is the
         // one place this omission would have mattered most: without it,
         // `calendar.ts`'s grouping key falls back to `(divisionId, poolId)`
-        // and two unpooled round-robin stages compare as one sequence again.
+        // and two unpooled round-sequence stages compare as one sequence again.
         stageId: f.stage_id,
         // C1 (2026-08-12 round-order design). Same shape as `toAssignment`
         // again — `f.round_no` is the fixture's own round, gated on stage

@@ -442,7 +442,7 @@ async function reverifyBoards(auth: AuthCtx, survivorId: string): Promise<Reveal
       // `validateAssignments`, not `existing` — and `toVerifyConfig` (below)
       // always carries `tz` (`settings.orgTz`, unconditional), so round order
       // is a genuinely observable rule here, not a structurally inert one:
-      // a merge that reveals two round-robin fixtures now sharing a person
+      // a merge that reveals two round-sequence fixtures now sharing a person
       // across rounds is exactly the kind of thing `reverifyBoards` exists to
       // surface (see its own doc comment — "reported, never enforced").
       // Wired the same way `autoSchedule`/`applySchedule` were (`schedule.ts`,

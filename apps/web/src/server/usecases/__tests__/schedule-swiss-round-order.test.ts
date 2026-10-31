@@ -16,9 +16,11 @@
 // round 1's highest), before anything references them. A placer that walks the rows by id — `slotFixtures` with no
 // round, every row sorting as round 0 — then puts round 3 on the first slots and round 1 on the last. Only round order
 // can put round 1 first. Asserted as a premise in every rig, so a change to the re-key cannot quietly make the shape
-// easy. Run without PLACEMENT_SERVICE_HOST this file drives the greedy fallback; with it, the CP-SAT service. The rule
-// is a hard constraint for the solver and a processing order plus a legalisation drop for greedy, so the floor holds
-// on both — `solver.engine` rides on every failure message.
+// easy. Every pass here runs the GREEDY fallback, with or without PLACEMENT_SERVICE_HOST: the CP-SAT service refuses a
+// request holding any fixture with neither entrants nor persons (INVALID_REQUEST), which every TBD shell is, so a Swiss
+// stage with unpaired rounds never reaches the solver. Greedy keeps the floor through its `(roundNo, id)` processing
+// order plus its legalisation drop; nothing in this file proves the CP-SAT side until the service takes such fixtures.
+// `solver.engine` rides on every failure message.
 //
 // single-sport: badminton — the rule reads stage kind, round_no, ext_key and the slot columns, never a sport field.
 import { afterAll, describe, expect, it } from "vitest";
@@ -361,6 +363,39 @@ describe.runIf(HAS_DB)("W3 T3b the board's own gates hold a Swiss stage to round
     expect(orderConflicts(landed), "round 1 moved earlier breaks no order").toEqual([]);
     const [moved] = await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${r1.id}`;
     expect(moved!.scheduled_at.toISOString()).toBe(early.scheduled_at);
+  }, 180_000);
+
+  it("an apply that puts a round-1 board after round 2 is refused for round order; the same apply of a round-2 board lands", async () => {
+    // The apply gate's own witness (X-SW-29's pre-T3b stale-apply shape): a round-1 board sent an hour past the last
+    // board, on court 2. Nothing else is there then, so round order is the only rule this can trip.
+    const [players, rounds] = [5, 2];
+    const rig = await swissRig(players, rounds, 2);
+    await applyAuto(rig, await autoSchedule(rig.auth, rig.stageId, { only_unlocked: false, mode: "build" }));
+    const { boards } = await split(rig.stageId, players, rounds);
+    const last = Math.max(...stored(boards).map((p) => p.startMs));
+    const late = { scheduled_at: new Date(last + 60 * MIN).toISOString(), court_id: rig.courts[1]! };
+    const r2Ids = new Set(boards.filter((b) => b.round_no === 2).map((b) => b.id));
+    expect(r2Ids.size, "premise: round 2 has boards on the board").toBe(boardsPerRound(players));
+
+    const r1 = boards.find((b) => b.round_no === 1)!;
+    const err = await applySchedule(rig.auth, rig.stageId, {
+      assignments: [{ fixture_id: r1.id, ...late }],
+      source: "manual",
+    }).catch((e: unknown) => e);
+    expect(EngineError.is(err, "SCHEDULE_CONFLICT"), "the apply is refused").toBe(true);
+    const order = orderConflicts(((err as EngineError).data as { conflicts: ScheduleConflict[] }).conflicts);
+    expect(order.length, "anti-vacuity: the refusal names round order").toBeGreaterThan(0);
+    expect(order.every((c) => c.blocking && c.rule === "H6"), "round order blocks, as rule H6").toBe(true);
+    expect(order.every((c) => r2Ids.has(c.fixture_id)), "blamed on round 2, the later round, now starting first").toBe(true);
+    const [kept] = await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${r1.id}`;
+    expect(kept!.scheduled_at.toISOString(), "nothing was written").toBe(r1.scheduled_at!.toISOString());
+
+    // Positive pair: round 2 is the last round, so the identical apply of one of its boards breaks no order and lands.
+    const r2 = boards.find((b) => b.round_no === 2)!;
+    await applySchedule(rig.auth, rig.stageId, { assignments: [{ fixture_id: r2.id, ...late }], source: "manual" });
+    const [moved] = await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${r2.id}`;
+    expect(moved!.scheduled_at.toISOString()).toBe(late.scheduled_at);
+    expect(orderConflicts((await validateSchedule(rig.auth, rig.divisionId)).conflicts), "the board report is clean").toEqual([]);
   }, 180_000);
 
   it("the board report flags a Swiss board ahead of an earlier round, and never a bye that holds a slot", async () => {

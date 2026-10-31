@@ -500,7 +500,7 @@ export async function applyCompetitionSchedule(
 
     // C1 follow-up (2026-08-12, task 2 item 1). ONE call PER DIVISION, not one
     // call over the whole run: `roundRobinStageIds` answers "which stages of
-    // THIS division are round-robin-generated", and a joint apply spans
+    // THIS division are round sequences" (league, group, swiss), and a joint apply spans
     // multiple, independent divisions — passing a single division id here
     // would silently answer the question for one division and apply that
     // answer to every other one in the run, which is exactly the
@@ -552,7 +552,7 @@ export async function applyCompetitionSchedule(
           // divisionId — `fixtures.stage_id` is NOT NULL. roundNo gated on
           // `roundRobinByDivision`, same reasoning as `toAssignment`'s own
           // gate: `fixtures.round_no` is one shared column populated for
-          // every stage kind, and forwarding it for a non-round-robin stage
+          // every stage kind, and forwarding it for a bracket or stepladder stage
           // would compare two independent round sequences as if they were
           // one — same defect this whole field exists to prevent, one level
           // up.
@@ -620,7 +620,7 @@ export async function applyCompetitionSchedule(
         // one field with one source is the whole point of the fix this file
         // is part of. Same reasoning extends to `roundRobinByDivision.get(d.id)`
         // (task 2 item 1): the fixture's own `stage_id` decides whether its
-        // round is round-robin-generated, never `d.id` alone.
+        // round is a round sequence's (league, group, swiss), never `d.id` alone.
         .map((f) => toAssignment(f, d.settings.config.matchMinutes, people, roundRobinByDivision.get(d.id))),
     );
 
@@ -650,7 +650,7 @@ export async function applyCompetitionSchedule(
       const mine = proposed.filter((a) => a.divisionId === d.id);
       if (mine.length === 0) continue;
       const others = proposed.filter((a) => a.divisionId !== d.id);
-      // This apply's own round-robin siblings for division `d` — same
+      // This apply's own round-sequence siblings for division `d` — same
       // (division, stage, pool) sequence as one of `d`'s LISTED fixtures,
       // already placed, not itself listed. `mine` only holds fixtures THIS
       // apply explicitly named for `d`; an unlisted same-sequence sibling

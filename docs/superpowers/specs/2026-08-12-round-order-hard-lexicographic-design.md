@@ -60,6 +60,17 @@ movable side**:
   more than one round sequence in one division, build.ts must strip rounds
   for that division rather than emit a false ordering (assert + test).
 
+  > **Amendment, 2026-10-31 (W3 T3b).** `swiss` stages join the round
+  > namespace: `roundRobinStageIds` (schedule.ts) now selects
+  > `ROUND_SEQUENCE_STAGE_KINDS` = league, group, swiss. A Swiss stage is its
+  > own sequence and the key stays `(division, stage, pool)`, so a Swiss
+  > round is still never compared with another stage's. The
+  > swiss_playoff/swiss_knockout tails (`page_playoff`/`knockout`) stay
+  > edge-ordered and round-less, and a Swiss bye row never carries a round.
+  > The floor is unchanged: still the START floor above (ties legal). A
+  > Swiss END barrier (round r+1 starts after round r ends) is owed by the
+  > W3 engine task T10b.
+
 ### Precedent tension, accepted knowingly
 
 C4 ruled that immovable input must not be able to make a board INFEASIBLE
