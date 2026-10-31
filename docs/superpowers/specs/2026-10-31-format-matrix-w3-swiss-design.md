@@ -276,3 +276,54 @@ These go to `_INDEX.md` "False premises found".
 - The engine API shape for the refusal and for art. 16 unplayed categories.
 - Whether removing `byeScore` raises FOLD_EPOCH or FOLD_MINOR (the epoch report decides; migration first if so).
 - Task breakdown, batching and PR count within the order in §3, in the plan (`superpowers:writing-plans`).
+
+## 12. Every rule gets a rule row (OWNER, 2026-10-31: "make sure that all rules are written in the rule book")
+
+Every signed W3 rule becomes a row in the engine repo's `rules/cross-sport.md` (and a sport file where a sport-specific
+consequence exists). The README grammar applies: id, rule, citation, `signed N date` / `deviation N date`, code and
+tests, and the id appears in a test title. Use the `X-SW-` prefix for cross-sport Swiss rows. Never put `-KO-` in an id:
+`packages/reference` bracket-finish reds on any KO row that is not signed and cited.
+
+A row lands with the code that makes it true, never ahead of it:
+
+- **Engine PR:** rows whose code is in the engine.
+- **Rules close-out PR** (engine repo, `pnpm changeset --empty`, after the app PRs merge): rows whose code is in the app.
+  They cite the app's real code and test paths. This is W3's last task. W3 is not done until every line below has a row.
+
+| Rule | Source | Lands in |
+|---|---|---|
+| Bye = win points (clean sweep under a score-keyed rule), no score, every sport | 251, RB3-7(a) | Engine PR |
+| Late entrant: 0 per missed round, no score; missed rounds are zero-point unplayed rounds for tie-breaks | 251, RB3-6 | Engine PR |
+| Late entry cases (a)/(b)/(c); (a) is a *deviation* from FIDE C.04.2 4.4 | 250 | Close-out |
+| Automatic arrivals after Start always take case (c) | 250 | Close-out |
+| No round left: "Add a round" while running, "This Swiss is over" after | 250 | Close-out |
+| `byeScore` removed; a bye is not a setting | 251, design §5 | Engine PR |
+| Pairing legality: no rematch, bye at most once, every active entrant seated once; simplified backtracking, not full Dutch | RB3-1 | Engine PR |
+| No legal pairing → named refusal, never an empty success | RB3-4 | Engine PR (app surfacing cited at close-out) |
+| Unplayed pairs (double walkover) may meet again; a walkover winner stays bye-ineligible | RB3-2, RB3-14 | Close-out |
+| Round count guidance, warn above the safe max, refuse above the hard max | RB3-3 | Close-out |
+| Rounds per stage, editable until the first fixture starts; then Finish / Add a round | RB3-5 (#838) | Close-out |
+| FIDE C.07 2026 art. 16 for unplayed rounds | RB3-6 | Engine PR |
+| Requested ½ / 0 byes deferred (⛔ with guidance) | RB3-7(c) | Close-out |
+| Swiss default tie-break chain per sport family | RB3-8 | Engine PR (+ sport files) |
+| Pairing score groups use table points | RB3-9 | Close-out (after app bump PR) |
+| Chess colours on by default for boardgame Swiss; round-1 colour by lot | RB3-10 | Close-out (+ `rules/boardgame.md`) |
+| Non-chess soft home/away alternation | RB3-11 | Engine PR |
+| Rank-adjacent from round 2 in swiss_playoff / swiss_knockout (*deviation*) | RB3-12 | Close-out |
+| Ad-hoc "Add match" refused on a Swiss stage | RB3-15 | Close-out |
+| Seeded random draw for an unseeded round 1 | RB3-16 | Close-out |
+| Disqualification = withdrawal from that moment; annulment separate | RB3-17 | Close-out |
+| Cut-line ties: flag-and-pick / visible lots, no play-off game | RB3-18 | Close-out |
+| A correction after the bracket started: bracket stands, desk warns | RB3-19 | Close-out |
+| "Finish the Swiss now" | RB3-20 | Close-out |
+| A correction after the next round is paired: the published pairing stands, standings recompute | RB3-21 | Close-out |
+| Undo of Pair next clears seats if no result, else a named refusal; Add late player has no Undo | RB3-22, design §10.8 | Close-out |
+| A bye shell is never on a court and never printed | RB3-23 | Close-out |
+| Manual board swap in rounds ≥ 2 blocked with guidance | RB3-25 | Close-out |
+| Rebuild keeps times and courts, in one transaction | design G3 (#840) | Close-out |
+
+RB3-24 (the reference's n bounds) is a test-harness bound, not a product rule. It is recorded here and in the reference
+family's own test, with no rule row.
+
+The ledger side is already written: rulings 250–252 are in `_INDEX.md`, and the signed rulebook `rulebook-W3-swiss.md`
+is amended to match rulings 250/251 (its §4 late-entry row, its §7 bye-value row, R2, RB3-7, RB3-13).
