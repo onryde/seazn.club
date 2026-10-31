@@ -7153,5 +7153,8 @@
   "matchDay.refusal.NOT_CALLED": "Deze wedstrijd is hier niet meer opgeroepen. De laatste stand wordt getoond.",
   "matchDay.refusal.SEQ_CONFLICT": "De planning veranderde op hetzelfde moment. De laatste stand wordt getoond; probeer het opnieuw.",
   "matchDay.refusal.other": "Dat lukte niet. Probeer het opnieuw.",
-  "matchDay.focus.noScore": "Nog geen score genoteerd"
+  "matchDay.focus.noScore": "Nog geen score genoteerd",
+  "matchDay.focus.left": "{court} staat niet meer in deze lijst.",
+  "matchDay.focus.pick": "Kies er een uit de lijst.",
+  "matchDay.notice.dismiss": "Sluiten"
 }

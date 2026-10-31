@@ -1,8 +1,9 @@
 "use client";
 // Match Day's call sheet (spec 2026-10-31 §7, §7.1, task A3). Opening it asks POST /fixtures/{id}/call/preview for the
 // knock-on — which of the court's matches start later than planned, and the warnings (§7.2) — so nothing changes behind the
-// organiser's back; confirming POSTs the call itself. A refusal (a player now busy, the court taken, the match started) shows
-// in the organiser's words and refreshes the page behind the sheet, which is stale by definition.
+// organiser's back; confirming POSTs the call itself. A refusal (a player now busy, the court taken, the match started) closes
+// the sheet and hands its words to the court focus, which keeps them on screen through the refresh the refusal triggers — the
+// page behind the sheet is stale by definition, and a refresh can unmount the sheet itself (review M5).
 import { useEffect, useState } from "react";
 import { Modal } from "@/components/modal";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
@@ -16,8 +17,7 @@ import type { MatchDayCtx } from "./court-focus";
 export type CallSheetState =
   | { kind: "loading" }
   | { kind: "ready"; preview: CallPreview }
-  | { kind: "calling"; preview: CallPreview }
-  | { kind: "refused"; message: string };
+  | { kind: "calling"; preview: CallPreview };
 
 /** A failed request's words: a refusal by its code, anything else (offline, a 500) as "that didn't work". */
 export function failureMessage(ctx: MatchDayCtx, err: unknown): string {
@@ -30,15 +30,15 @@ export function CallSheet({
   candidate,
   onClose,
   onCalled,
-  onStale,
+  onRefused,
 }: {
   ctx: MatchDayCtx;
   court: MatchDayCourt;
   candidate: MatchDayCandidate;
   onClose: () => void;
   onCalled: () => void;
-  /** A refusal: the page behind the sheet no longer matches the server. */
-  onStale: () => void;
+  /** A refusal, in the organiser's words: the page behind the sheet no longer matches the server. */
+  onRefused: (message: string) => void;
 }) {
   const [state, setState] = useState<CallSheetState>({ kind: "loading" });
   const fixtureId = candidate.fixture.id;
@@ -46,12 +46,16 @@ export function CallSheet({
 
   useEffect(() => {
     const ctl = new AbortController();
-    apiV1<CallPreview>(`/api/v1/fixtures/${fixtureId}/call/preview`, { method: "POST", json: { court_id: courtId }, signal: ctl.signal })
-      .then((preview) => setState({ kind: "ready", preview }))
+    apiV1<CallPreview | undefined>(`/api/v1/fixtures/${fixtureId}/call/preview`, { method: "POST", json: { court_id: courtId }, signal: ctl.signal })
+      // A cut-off 200 resolves to undefined (review M1's class): "that didn't work", never a sheet that crashes on it.
+      .then((preview) =>
+        preview && Array.isArray(preview.shifts) && Array.isArray(preview.warnings)
+          ? setState({ kind: "ready", preview })
+          : onRefused(failureMessage(ctx, null)),
+      )
       .catch((err: unknown) => {
         if (ctl.signal.aborted) return;
-        setState({ kind: "refused", message: failureMessage(ctx, err) });
-        onStale();
+        onRefused(failureMessage(ctx, err));
       });
     return () => ctl.abort();
     // The sheet previews ONE call: it is mounted per candidate and closed after.
@@ -65,8 +69,7 @@ export function CallSheet({
       await apiV1(`/api/v1/fixtures/${fixtureId}/call`, { method: "POST", json: { court_id: courtId } });
       onCalled();
     } catch (err) {
-      setState({ kind: "refused", message: failureMessage(ctx, err) });
-      onStale();
+      onRefused(failureMessage(ctx, err));
     }
   };
 
@@ -125,11 +128,6 @@ export function CallSheetBody({
         <span className="text-sm font-normal text-slate-500">· {candidate.fixture.division_name}</span>
       </p>
       {state.kind === "loading" && <p aria-live="polite">{t(dict, "matchDay.sheet.loading")}</p>}
-      {state.kind === "refused" && (
-        <p role="alert" data-testid="md-call-refused" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">
-          {state.message}
-        </p>
-      )}
       {(state.kind === "ready" || state.kind === "calling") && (
         <>
           {state.preview.shifts.length === 0 ? (

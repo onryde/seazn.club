@@ -5,6 +5,8 @@
 //  - free: "Court 5 is free" and the candidates (candidate-list.tsx);
 //  - in use by another competition: greyed, named, nothing to press.
 // On a phone it is a full screen of its own with "‹ All courts" back; from md it is the right-hand column.
+// A refused call or undo is held ABOVE the state panels (`notice`, kept by the shell per court): the refusal triggers a
+// refresh, and the refresh can change the court's state and unmount the panel that was refused (review M5).
 import { useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -43,6 +45,9 @@ export function CourtFocus({
   backLabel,
   onBack,
   onChanged,
+  onRefused,
+  notice = null,
+  onDismissNotice = () => {},
   refreshKey,
   divisions,
   hiddenOnPhone = false,
@@ -52,8 +57,13 @@ export function CourtFocus({
   /** "All courts", in the courts' own noun. */
   backLabel: string;
   onBack: () => void;
-  /** Something changed (a call, an undo, a refusal that proves the page stale): refresh the view now. */
+  /** A call or an undo landed: refresh the view now. */
   onChanged: () => void;
+  /** A call or an undo was refused, in the organiser's words: the shell keeps it for this court and refreshes. */
+  onRefused: (message: string) => void;
+  /** This court's last refusal, kept through refreshes until dismissed or another court is opened. */
+  notice?: string | null;
+  onDismissNotice?: () => void;
   /** Changes on every poll, so the free court's candidates follow the day. */
   refreshKey: string;
   divisions: ReadonlySet<string> | null;
@@ -94,6 +104,23 @@ export function CourtFocus({
         )}
       </header>
 
+      {notice !== null && (
+        <div
+          role="alert"
+          data-testid="md-notice"
+          className="flex min-w-0 items-start justify-between gap-3 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-900 ring-1 ring-inset ring-red-100"
+        >
+          <p className="min-w-0 py-1 [overflow-wrap:anywhere]">{notice}</p>
+          <button
+            type="button"
+            onClick={onDismissNotice}
+            className="-my-1 inline-flex min-h-11 shrink-0 items-center rounded-lg px-3 text-xs font-semibold text-red-800 hover:bg-red-100"
+          >
+            {t(dict, "matchDay.notice.dismiss")}
+          </button>
+        </div>
+      )}
+
       {court.state === "playing" && f !== null && (
         <>
           <MatchLine ctx={ctx} fixture={f} />
@@ -106,9 +133,17 @@ export function CourtFocus({
           />
         </>
       )}
-      {court.state === "called" && f !== null && <CalledPanel ctx={ctx} fixture={f} onChanged={onChanged} />}
+      {court.state === "called" && f !== null && <CalledPanel ctx={ctx} fixture={f} onChanged={onChanged} onRefused={onRefused} />}
       {court.state === "free" && (
-        <FreeCourt key={court.court_id} ctx={ctx} court={court} refreshKey={refreshKey} divisions={divisions} onChanged={onChanged} />
+        <FreeCourt
+          key={court.court_id}
+          ctx={ctx}
+          court={court}
+          refreshKey={refreshKey}
+          divisions={divisions}
+          onChanged={onChanged}
+          onRefused={onRefused}
+        />
       )}
       {court.state === "in_use_elsewhere" && (
         <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-100 p-5 text-slate-600">
@@ -141,21 +176,30 @@ function MatchLine({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixtur
 }
 
 /** A called match not started yet, and the way back: Undo call restores its old court and time (A1). Undo is refused
- *  NOT_CALLED once the scorer has started or the board has moved the match; the page then refreshes to what is true. */
-function CalledPanel({ ctx, fixture, onChanged }: { ctx: MatchDayCtx; fixture: MatchDayFixture; onChanged: () => void }) {
+ *  NOT_CALLED once the scorer has started or the board has moved the match; the refusal's words go to the court focus
+ *  (`onRefused`), which keeps them through the refresh that shows what is true now. */
+function CalledPanel({
+  ctx,
+  fixture,
+  onChanged,
+  onRefused,
+}: {
+  ctx: MatchDayCtx;
+  fixture: MatchDayFixture;
+  onChanged: () => void;
+  onRefused: (message: string) => void;
+}) {
   const { dict } = ctx;
   const [busy, setBusy] = useState(false);
-  const [refusal, setRefusal] = useState<string | null>(null);
   const undo = async () => {
     setBusy(true);
-    setRefusal(null);
     try {
       await apiV1(`/api/v1/fixtures/${fixture.id}/call`, { method: "DELETE" });
+      onChanged();
     } catch (err) {
-      setRefusal(failureMessage(ctx, err));
+      onRefused(failureMessage(ctx, err));
     } finally {
       setBusy(false);
-      onChanged();
     }
   };
   return (
@@ -171,11 +215,6 @@ function CalledPanel({ ctx, fixture, onChanged }: { ctx: MatchDayCtx; fixture: M
       {fixture.called_at !== null && (
         <p className="mt-3 text-sm text-court-muted">
           {t(dict, "matchDay.called.at", { time: fmtPublicTime(ctx.locale, ctx.tz, fixture.called_at) })}
-        </p>
-      )}
-      {refusal !== null && (
-        <p role="alert" className="mt-3 rounded-lg bg-white/10 px-3 py-2 text-sm text-court-ink">
-          {refusal}
         </p>
       )}
       <button

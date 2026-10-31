@@ -1,10 +1,13 @@
 "use client";
 // Match Day's playing court (spec 2026-10-31 §6.2, task A3). The dark panel at the top of a playing court IS the sport's
-// scoreboard: the public match page's own `LiveScoreBody`, fed the match's engine headline, so a football pitch shows goals,
-// a cricket pitch runs and wickets, a chess board its result line — never a badminton widget (§5). Its corner carries the
-// match's stream: the Live badge and a link to watch while one is live, "+ Connect a stream" while none is up (owner pick C1:
-// no empty black video box, ever). Both links open the match's console page with its stream panel open — the existing
-// per-match stream flow (§8 Phase 1).
+// scoreboard: the public match page's own `LiveScoreBody`, fed the engine's whole folded summary and both sides' names, so a
+// set sport shows games in large type with the set table and who serves, a football pitch its goals and periods, cricket its
+// innings — never a badminton widget (§5). Its corner carries the match's stream: the Live badge and a link to watch while one
+// is live, "+ Connect a stream" while none is up (owner pick C1: no empty black video box, ever). Both links open the match's
+// console page with its stream panel open — the existing per-match stream flow (§8 Phase 1).
+//
+// "Live" on this page means a STREAM is live (the list's red badge, the corner link). The panel's own status line says the
+// match is in play, in the public dictionary's own words for that status (review V1).
 import Link from "@/components/ui/console-link";
 import { LiveScoreBody } from "@/components/public-site/live-score";
 import type { Dict } from "@/lib/i18n-constants";
@@ -31,6 +34,11 @@ export function CourtScoreboard({
   /** The `public` dictionary's scoreboard words (`matchCentre.*`, `forfeit.*`), in the reader's language. */
   scoreDict: Dict;
 }) {
+  // LiveScoreBody prints `matchCentre.status.live` over an in-play match; here that word belongs to streams.
+  const panelDict: Dict = { ...scoreDict, "matchCentre.status.live": t(scoreDict, "matchCentre.status.in_play") };
+  const entrantNames: Record<string, string> = {};
+  if (fixture.home_entrant_id !== null && fixture.home !== null) entrantNames[fixture.home_entrant_id] = fixture.home;
+  if (fixture.away_entrant_id !== null && fixture.away !== null) entrantNames[fixture.away_entrant_id] = fixture.away;
   const stream =
     fixture.stream === "live" ? (
       <Link
@@ -69,23 +77,23 @@ export function CourtScoreboard({
       className="relative flex flex-col max-md:[&_.text-5xl]:text-4xl"
     >
       <div className="mb-2 flex justify-end md:absolute md:right-5 md:top-5 md:z-10 md:mb-0 md:max-w-[60%]">{stream}</div>
-      {fixture.headline === null ? (
+      {fixture.summary === null || !fixture.summary.headline ? (
         // Started, but its engine has published no scoreline yet. `LiveScoreBody` would print "Not started" under its own
-        // LIVE line for a null summary — a contradiction on a court that is playing — so this says what is true instead.
+        // status line for a summary with no headline — a contradiction on a court that is playing — so this says what is true.
         <div className="rounded-2xl bg-court p-5 text-court-ink shadow-lg sm:p-6">
           <p className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300">
             <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
-            {t(scoreDict, "matchCentre.status.live")}
+            {t(scoreDict, "matchCentre.status.in_play")}
           </p>
           <p className="font-display text-2xl font-semibold">{t(dict, "matchDay.focus.noScore")}</p>
         </div>
       ) : (
         <LiveScoreBody
-          data={{ status: "in_play", summary: { headline: fixture.headline }, outcome: null }}
-          entrantNames={{}}
+          data={{ status: "in_play", summary: fixture.summary, outcome: null }}
+          entrantNames={entrantNames}
           sportKey={fixture.sport_key}
           decidedTemplates={NO_OUTCOME}
-          dict={scoreDict}
+          dict={panelDict}
         />
       )}
     </section>

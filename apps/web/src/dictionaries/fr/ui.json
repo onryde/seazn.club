@@ -7153,5 +7153,8 @@
   "matchDay.refusal.NOT_CALLED": "Ce match n'est plus appelé ici. Voici l'état le plus récent.",
   "matchDay.refusal.SEQ_CONFLICT": "Le calendrier a changé au même moment. Voici l'état le plus récent ; réessayez.",
   "matchDay.refusal.other": "Cela n'a pas fonctionné. Réessayez.",
-  "matchDay.focus.noScore": "Aucun score enregistré pour l'instant"
+  "matchDay.focus.noScore": "Aucun score enregistré pour l'instant",
+  "matchDay.focus.left": "{court} n'est plus dans cette liste.",
+  "matchDay.focus.pick": "Choisissez-en un dans la liste.",
+  "matchDay.notice.dismiss": "Fermer"
 }

@@ -59,11 +59,16 @@ export function CourtList({
                   )}
                 </span>
                 <span className="block truncate text-xs text-slate-600">{rowLine(dict, c)}</span>
+                {/* The score on its own line: a real headline ("0 — 1 · 4–21 (19–19)", a cricket innings pair) is long, and
+                    beside the name it squeezed the court's own name to "Cour…" (fix round 1, from the prod-server shots). */}
+                {c.state === "playing" && c.current?.headline ? (
+                  <span className="mt-0.5 block font-mono text-xs font-semibold tabular-nums text-purple-900 [overflow-wrap:anywhere]">
+                    {c.current.headline}
+                  </span>
+                ) : null}
               </span>
               <span className="shrink-0 text-right">
-                {c.state === "playing" && c.current?.headline ? (
-                  <span className="font-mono text-sm font-semibold tabular-nums text-purple-900">{c.current.headline}</span>
-                ) : c.state === "called" ? (
+                {c.state === "called" ? (
                   <span className="text-xs font-semibold text-amber-700">{t(dict, "matchDay.state.called")}</span>
                 ) : c.state === "free" ? (
                   <span className="text-xs font-semibold text-purple-700">{t(dict, "matchDay.state.free")}</span>

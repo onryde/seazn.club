@@ -2,13 +2,22 @@
 // Match Day's free court (spec 2026-10-31 §6.2, §7, task A3): "Court 5 is free", since when, how many matches could start
 // here now, and the candidates themselves — fetched from GET …/match-day/candidates?court_id= whenever the court is focused
 // and on every poll of the page. A candidate whose player is on court elsewhere is greyed with the reason and has no call
-// button (§7.2's hard stop); every other one has "Call to Court N", which opens the call sheet's knock-on preview.
+// button (§7.2's hard stop); every other one has "Call to Court N", which opens the call sheet's knock-on preview. Only the
+// top-ranked callable one carries the primary button; the rest are secondary (review V2: one primary action per list).
 import { useCallback, useEffect, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicTime } from "@/lib/format";
 import { plural, t } from "@/lib/i18n-runtime";
 import type { MatchDayCandidate, MatchDayCandidateSource, MatchDayCourt } from "@/lib/match-day/types";
-import { blockedReason, candidateWhere, filterCandidates, matchLabel } from "@/lib/match-day/view";
+import {
+  blockedReason,
+  callableCount,
+  candidateWhere,
+  filterCandidates,
+  isCandidateList,
+  matchLabel,
+  primaryCandidateId,
+} from "@/lib/match-day/view";
 import type { MatchDayCtx } from "./court-focus";
 import { CallSheet } from "./call-sheet";
 
@@ -27,13 +36,16 @@ export function FreeCourt({
   refreshKey,
   divisions,
   onChanged,
+  onRefused,
 }: {
   ctx: MatchDayCtx;
   court: MatchDayCourt;
   refreshKey: string;
   divisions: ReadonlySet<string> | null;
-  /** A call landed, or a refusal said the page is stale: refresh the whole view. */
+  /** A call landed: refresh the whole view. */
   onChanged: () => void;
+  /** A refusal, in the organiser's words: the court focus keeps it on screen through the refresh it triggers (review M5). */
+  onRefused: (message: string) => void;
 }) {
   const [load, setLoad] = useState<CandidateLoad>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
@@ -41,15 +53,17 @@ export function FreeCourt({
 
   useEffect(() => {
     const ctl = new AbortController();
-    apiV1<MatchDayCandidate[]>(
+    const failed = () => setLoad((prev) => (prev.status === "ready" ? prev : { status: "failed" }));
+    apiV1<unknown>(
       `/api/v1/competitions/${ctx.competitionId}/match-day/candidates?court_id=${encodeURIComponent(court.court_id)}`,
       { signal: ctl.signal },
     )
-      .then((candidates) => setLoad({ status: "ready", candidates }))
+      // A cut-off 200 resolves to undefined (review M1): treated like a failure, never set as the list.
+      .then((candidates) => (isCandidateList(candidates) ? setLoad({ status: "ready", candidates }) : failed()))
       .catch(() => {
         if (ctl.signal.aborted) return;
         // A poll that raced a write can fail once (task A2 m1); keep what is on screen and let the next poll retry.
-        setLoad((prev) => (prev.status === "ready" ? prev : { status: "failed" }));
+        failed();
       });
     return () => ctl.abort();
   }, [ctx.competitionId, court.court_id, refreshKey, attempt]);
@@ -73,7 +87,10 @@ export function FreeCourt({
             setCalling(null);
             onChanged();
           }}
-          onStale={onChanged}
+          onRefused={(message) => {
+            setCalling(null);
+            onRefused(message);
+          }}
         />
       )}
     </>
@@ -105,9 +122,9 @@ export function FreeCourtBody({
             ? t(dict, "matchDay.free.loading")
             : load.status === "failed"
               ? t(dict, "matchDay.free.failed")
-              : load.candidates.length === 0
+              : callableCount(load.candidates) === 0
                 ? t(dict, "matchDay.free.countNone")
-                : plural(dict, "matchDay.free.count", load.candidates.length, ctx.locale)}
+                : plural(dict, "matchDay.free.count", callableCount(load.candidates), ctx.locale)}
         </p>
         {load.status === "failed" && (
           <button type="button" onClick={onRetry} className="btn mt-3 min-h-11 border border-white/30 text-court-ink hover:bg-white/10">
@@ -135,6 +152,7 @@ export function CandidateRows({
   onCall: (candidate: MatchDayCandidate) => void;
 }) {
   const { dict } = ctx;
+  const primary = primaryCandidateId(candidates);
   return (
     <section aria-label={t(dict, "matchDay.candidate.label", { court: court.court_name })} className="card overflow-hidden">
       {GROUPS.map((group) => {
@@ -168,8 +186,11 @@ export function CandidateRows({
                   ) : (
                     <button
                       type="button"
+                      data-md-primary={c.fixture.id === primary ? "true" : undefined}
                       onClick={() => onCall(c)}
-                      className="btn btn-primary min-h-11 w-full text-sm md:w-auto lg:min-h-0 lg:py-1.5"
+                      className={`btn min-h-11 text-sm ${
+                        c.fixture.id === primary ? "btn-primary w-full md:w-auto" : "btn-ghost justify-self-start md:justify-self-auto"
+                      }`}
                     >
                       {t(dict, "matchDay.candidate.call", { court: court.court_name })}
                     </button>

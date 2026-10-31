@@ -7153,5 +7153,8 @@
   "matchDay.refusal.NOT_CALLED": "Este partido ya no está convocado aquí. Se muestra lo más reciente.",
   "matchDay.refusal.SEQ_CONFLICT": "El calendario cambió en ese mismo momento. Se muestra lo más reciente; inténtelo de nuevo.",
   "matchDay.refusal.other": "No ha funcionado. Inténtelo de nuevo.",
-  "matchDay.focus.noScore": "Aún no hay marcador"
+  "matchDay.focus.noScore": "Aún no hay marcador",
+  "matchDay.focus.left": "{court} ya no está en esta lista.",
+  "matchDay.focus.pick": "Elige uno de la lista.",
+  "matchDay.notice.dismiss": "Cerrar"
 }

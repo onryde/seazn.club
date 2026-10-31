@@ -7153,5 +7153,8 @@
   "matchDay.refusal.NOT_CALLED": "This match is no longer called here. Showing the latest.",
   "matchDay.refusal.SEQ_CONFLICT": "The schedule changed at the same moment. Showing the latest; try again.",
   "matchDay.refusal.other": "That didn't work. Try again.",
-  "matchDay.focus.noScore": "No score recorded yet"
+  "matchDay.focus.noScore": "No score recorded yet",
+  "matchDay.focus.left": "{court} is no longer on this list.",
+  "matchDay.focus.pick": "Pick one from the list.",
+  "matchDay.notice.dismiss": "Dismiss"
 }

@@ -56,6 +56,45 @@ export function filterCourts(courts: readonly MatchDayCourt[], divisions: Readon
   return out;
 }
 
+/** What is focused (§6.1, review M6): the court the organiser opened while it is still on the list; none opened yet → the first
+ *  court (the desktop's default); the opened court gone from the list (the filter dropped it, or the day moved on) → `lost`,
+ *  named — the page goes back to the list rather than silently showing a different court. */
+export type Focus =
+  | { kind: "court"; court: MatchDayCourt }
+  | { kind: "lost"; name: string }
+  | { kind: "none" };
+
+export function resolveFocus(courts: readonly MatchDayCourt[], opened: { id: string; name: string } | null): Focus {
+  if (opened === null) return courts[0] === undefined ? { kind: "none" } : { kind: "court", court: courts[0] };
+  const court = courts.find((c) => c.court_id === opened.id);
+  return court === undefined ? { kind: "lost", name: opened.name } : { kind: "court", court };
+}
+
+/** How many candidates could start here NOW (§7, review I2): a blocked one cannot, so it is not counted. */
+export function callableCount(candidates: readonly MatchDayCandidate[]): number {
+  return candidates.filter((c) => c.blocked === null).length;
+}
+
+/** The one candidate whose call is the primary action (review V2): the top-ranked one that is not blocked. The list arrives in
+ *  rank order (estimate.ts `rankCandidates`: unblocked first, then this court, other courts, no court), so it is the first
+ *  unblocked; null when every one is blocked. */
+export function primaryCandidateId(candidates: readonly MatchDayCandidate[]): string | null {
+  return candidates.find((c) => c.blocked === null)?.fixture.id ?? null;
+}
+
+/** A poll's answer is a view only if it has the view's shape: `apiV1` resolves a cut-off 200 to `undefined` (review M1), and
+ *  setting that would crash the island — the caller keeps the last view instead. */
+export function isMatchDayView(v: unknown): v is MatchDayView {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Partial<MatchDayView>;
+  return Array.isArray(o.courts) && typeof o.date === "string" && typeof o.tz === "string" && typeof o.now === "string";
+}
+
+/** The same guard for a candidates answer. */
+export function isCandidateList(v: unknown): v is MatchDayCandidate[] {
+  return Array.isArray(v);
+}
+
 /** The same filter on a free court's candidates. */
 export function filterCandidates(
   candidates: readonly MatchDayCandidate[],

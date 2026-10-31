@@ -18,7 +18,8 @@ import {
  *
  * The seed is two courts of one competition (a generic/score league of four players, the division's schedule settings naming
  * exactly those two courts and planning in UTC):
- *   - Court 1: Ana v Ben IN PLAY (a real core.start), and Ana v Cal queued behind it;
+ *   - Court 1: Ana v Ben IN PLAY (planned 40 minutes ago, a real core.start), and Ana v Cal queued behind it, planned 10
+ *     minutes ago — a late-running court, as a real day looks;
  *   - Court 2: free, with Cal v Dee planned on it later today.
  * So Court 2's candidates are Cal v Dee first (its own next match, both players free), Ana v Cal greyed (Ana is on Court 1)
  * and the unplaced rest, every one of which has Ana or Ben in it, greyed too. Times sit inside today's UTC day whatever the
@@ -90,8 +91,8 @@ async function seedMatchDay(request: APIRequestContext, label: string): Promise<
   const calDee = fixtureOf(cal, dee);
   // Placing is seed, not the behaviour under test: straight to the rows, as the board would have left them.
   await withDb(async (sql) => {
-    await sql`update fixtures set court_id = ${court1.id}, scheduled_at = ${within(-10)} where id = ${anaBen}`;
-    await sql`update fixtures set court_id = ${court1.id}, scheduled_at = ${within(2)} where id = ${anaCal}`;
+    await sql`update fixtures set court_id = ${court1.id}, scheduled_at = ${within(-40)} where id = ${anaBen}`;
+    await sql`update fixtures set court_id = ${court1.id}, scheduled_at = ${within(-10)} where id = ${anaCal}`;
     await sql`update fixtures set court_id = ${court2.id}, scheduled_at = ${within(5)} where id = ${calDee}`;
   });
   // In play for real: a core.start through the engine, never a status patch.
@@ -103,7 +104,26 @@ async function seedMatchDay(request: APIRequestContext, label: string): Promise<
 
 const row = (page: Page, courtName: string) => page.getByTestId("md-court-row").filter({ hasText: courtName });
 
-/** Court 2 is focused and free: call its top candidate through the sheet, see "Called", undo it, see the candidate back. */
+/** Calls Court 2's top candidate through the sheet (its knock-on preview first) and waits for the court to read "Called". */
+async function callTop(page: Page, seed: Seed): Promise<void> {
+  const focus = page.getByTestId("md-focus");
+  const top = focus.locator(`[data-testid="md-candidate"][data-fixture-id="${seed.calDee}"]`);
+  // The one primary action on the list (review V2).
+  await expect(focus.locator('[data-md-primary="true"]')).toHaveCount(1);
+  await top.getByRole("button", { name: `Call to ${seed.court2}` }).click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet).toContainText(`Call to ${seed.court2}?`);
+  // The knock-on preview loads before anything can be confirmed.
+  const confirm = sheet.getByTestId("md-call-confirm");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect(sheet).toHaveCount(0);
+  await expect(focus).toHaveAttribute("data-state", "called");
+  await expect(focus).toContainText("Called: waiting for players");
+}
+
+/** Court 2 is focused and free: call its top candidate, see "Called", undo it, see the candidate back — then call it AGAIN
+ *  from the same screen (spec §10: a call after an undo is an ordinary call), and undo that too. */
 async function callAndUndo(page: Page, seed: Seed): Promise<void> {
   const focus = page.getByTestId("md-focus");
   await expect(focus).toHaveAttribute("data-state", "free");
@@ -118,17 +138,10 @@ async function callAndUndo(page: Page, seed: Seed): Promise<void> {
   await expect(blocked).toContainText(`${seed.names.ana} is on ${seed.court1}`);
   await expect(blocked.getByRole("button")).toHaveCount(0);
 
-  await candidates.first().getByRole("button", { name: `Call to ${seed.court2}` }).click();
-  const sheet = page.getByRole("dialog");
-  await expect(sheet).toContainText(`Call to ${seed.court2}?`);
-  // The knock-on preview loads before anything can be confirmed.
-  const confirm = sheet.getByTestId("md-call-confirm");
-  await expect(confirm).toBeEnabled();
-  await confirm.click();
-  await expect(sheet).toHaveCount(0);
+  // Only one match can start here now: the blocked ones are listed, not counted (review I2).
+  await expect(page.getByTestId("md-free-panel")).toContainText("1 match could start here now");
 
-  await expect(focus).toHaveAttribute("data-state", "called");
-  await expect(focus).toContainText("Called: waiting for players");
+  await callTop(page, seed);
   // Which side is home is the generator's choice: both names, not an order.
   await expect(focus).toContainText(seed.names.cal);
   await expect(focus).toContainText(seed.names.dee);
@@ -138,6 +151,12 @@ async function callAndUndo(page: Page, seed: Seed): Promise<void> {
   );
   expect(called[0]!.n).toBe(1);
 
+  await focus.getByTestId("md-undo-call").click();
+  await expect(focus).toHaveAttribute("data-state", "free");
+  await expect(focus.locator(`[data-testid="md-candidate"][data-fixture-id="${seed.calDee}"]`)).toBeVisible();
+
+  // Again, through the UI: the undone match is callable like any other.
+  await callTop(page, seed);
   await focus.getByTestId("md-undo-call").click();
   await expect(focus).toHaveAttribute("data-state", "free");
   await expect(focus.locator(`[data-testid="md-candidate"][data-fixture-id="${seed.calDee}"]`)).toBeVisible();

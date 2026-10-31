@@ -4,11 +4,14 @@
 //
 // Assertions on attributes anchor on `="` (AGENTS.md: React serialises an omitted prop as "$undefined", so a bare `data-*`
 // probe passes in both states). Expected copy is read from the dictionaries, the court noun from lib/venue.ts's own
-// declarations and the sport list from the engine's registry — never from the components under test.
+// declarations, the sport list from the engine's registry and every scoreboard's summary from the engine's own fold of its
+// recorded golden streams — never from the components under test.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { EngineError, foldMatchWithStoppage, outcomeOf, summaryOf, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
 import { registerBuiltins } from "@seazn/engine/sports";
-import type { AnySportModule, SportRegistry } from "@seazn/engine/sport";
+import { registry, resolvePositions, type AnySportModule, type SportRegistry } from "@seazn/engine/sport";
+import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -19,14 +22,19 @@ import { plural, t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import { VENUE_NOUNS, venueNoun } from "@/lib/venue";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview } from "@/lib/match-day/call";
-import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
+import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDaySummary, MatchDayView } from "@/lib/match-day/types";
 import {
+  callableCount,
   courtCounts,
   filterCandidates,
   filterCourts,
+  isCandidateList,
   isLive,
+  isMatchDayView,
+  primaryCandidateId,
   REFUSAL_CODES,
   refusalMessage,
+  resolveFocus,
   sharedNoun,
 } from "@/lib/match-day/view";
 import { CourtList } from "@/components/v2/match-day/court-list";
@@ -37,6 +45,81 @@ import { MatchDayShell } from "@/components/v2/match-day/match-day-shell";
 
 const dict = en as Dict;
 const DICTS = { en, es, fr, nl } as Record<string, Dict>;
+const pub = publicEn as Dict;
+
+// ---- A match in play, as the ENGINE folds it (review I1: never a made-up headline) --------------------------------------
+
+try {
+  registerBuiltins(registry);
+} catch (err) {
+  // Another suite in this worker already booted the shared default registry.
+  if (!EngineError.is(err, "MODULE_DUPLICATE")) throw err;
+}
+
+/** The golden corpora (@seazn/engine/testkit): each sport's recorded streams, found by walking the engine's tree. */
+interface GoldenStream {
+  config: string;
+  lineups?: LineupPair;
+  events: { type: string; payload: unknown; voids?: string }[];
+}
+const CORPORA = goldenCorpora().map(({ corpus }) => corpus as { key: string; configs: Record<string, unknown>; streams: GoldenStream[] });
+
+/** Golden streams seat their entrants as "H" and "A". */
+const HOME = { id: "H", name: "Harbour Rovers" };
+const AWAY = { id: "A", name: "Avenue Athletic" };
+
+/**
+ * The engine's summary of a match IN PLAY for `key`: the latest prefix of one of its recorded golden streams that has scored
+ * something, folds, is not decided, and satisfies `pick`. Longest streams first, longest prefix first. Null when the sport has
+ * no corpus or no such moment — a sweep counts those apart, it never invents one.
+ */
+function inPlaySummary(key: string, pick: (s: MatchDaySummary) => boolean = () => true): MatchDaySummary | null {
+  const corpus = CORPORA.find((c) => c.key === key);
+  if (corpus === undefined) return null;
+  const mod = registry.latest(key) as AnySportModule;
+  for (const stream of [...corpus.streams].sort((a, b) => b.events.length - a.events.length)) {
+    const cfg = mod.configSchema.parse(corpus.configs[stream.config]);
+    const lineups = stream.lineups ?? defaultLineupPair(resolvePositions(mod, cfg));
+    const envelopes: EventEnvelope[] = stream.events.map((e, i) => ({
+      id: `e-${i}`,
+      fixtureId: "fx-match-day",
+      seq: i,
+      type: e.type,
+      payload: e.payload,
+      recordedAt: new Date(Date.UTC(2026, 9, 31, 11, 0, i)).toISOString(),
+      recordedBy: null,
+      ...(e.voids === undefined ? {} : { voids: e.voids }),
+    }));
+    for (let k = envelopes.length; k >= 1; k--) {
+      const prefix = envelopes.slice(0, k);
+      if (!prefix.some((e) => !e.type.startsWith("core."))) break;
+      let folded: ReturnType<typeof foldMatchWithStoppage>;
+      try {
+        folded = foldMatchWithStoppage(mod, cfg, lineups, prefix);
+      } catch {
+        continue; // a prefix the fold refuses (a void whose target is cut off): not a moment of play
+      }
+      if (outcomeOf(mod, folded) !== null) continue;
+      const summary = summaryOf(mod, folded) as MatchDaySummary;
+      if (summary.headline && pick(summary)) return summary;
+    }
+  }
+  return null;
+}
+
+const detailOf = (s: MatchDaySummary): Record<string, unknown> =>
+  typeof s.detail === "object" && s.detail !== null ? (s.detail as Record<string, unknown>) : {};
+const hasSets = (s: MatchDaySummary): boolean => Array.isArray(detailOf(s).sets) && (detailOf(s).sets as unknown[]).length > 0;
+/** The spec's rule (§6.2): games or sets in large type, the live points beside them — never the "0 – 0 (3-2)" one-liner. */
+const largeType = (s: MatchDaySummary): string => (hasSets(s) ? s.headline!.replace(/\s*\([^)]*\)\s*$/, "") : s.headline!);
+/** React's text escaping, for matching a text node in static markup. */
+const esc = (v: string): string =>
+  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+
+/** Badminton mid-game: a set closed, the next one with points on the board ("… (19–19)"). */
+const BADMINTON = inPlaySummary("badminton", (s) => hasSets(s) && /\([^)]*\)\s*$/.test(s.headline!));
+/** Tennis with the server known: the serve marker's source. */
+const TENNIS = inPlaySummary("tennis", (s) => detailOf(s).serving === "home" || detailOf(s).serving === "away");
 
 const ctx: MatchDayCtx = {
   competitionId: "comp-1",
@@ -58,7 +141,10 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
   stage_label: "Swiss round 3",
   home: "Zara Khan",
   away: "Ella Brooks",
+  home_entrant_id: "e-zara",
+  away_entrant_id: "e-ella",
   headline: "0 – 0 (13-11)",
+  summary: null,
   started_at: "2026-10-31T11:20:00.000Z",
   called_at: null,
   stream: null,
@@ -105,10 +191,43 @@ const view = (courts: MatchDayCourt[]): MatchDayView => ({
   fixtures_today: 6,
 });
 
-const focus = (c: MatchDayCourt) =>
+const focus = (c: MatchDayCourt, notice: string | null = null) =>
   renderToStaticMarkup(
-    <CourtFocus ctx={ctx} court={c} backLabel="All courts" onBack={() => {}} onChanged={() => {}} refreshKey="k" divisions={null} />,
+    <CourtFocus
+      ctx={ctx}
+      court={c}
+      backLabel="All courts"
+      onBack={() => {}}
+      onChanged={() => {}}
+      onRefused={() => {}}
+      notice={notice}
+      refreshKey="k"
+      divisions={null}
+    />,
   );
+
+/** The scoreboard's own markup: from its section to the first section closing after it (LiveScoreBody nests none). */
+function scoreboardOf(html: string): string {
+  const at = html.indexOf('data-testid="md-scoreboard"');
+  if (at < 0) return "";
+  return html.slice(at, html.indexOf("</section>", at));
+}
+
+/** A playing court whose match is the golden summary's, seated as the corpus seats it. */
+const goldenCourt = (key: string, summary: MatchDaySummary, o: Partial<MatchDayFixture> = {}) =>
+  court({
+    sport_noun: venueNoun(key),
+    current: fx({
+      sport_key: key,
+      home: HOME.name,
+      away: AWAY.name,
+      home_entrant_id: HOME.id,
+      away_entrant_id: AWAY.id,
+      headline: summary.headline ?? null,
+      summary,
+      ...o,
+    }),
+  });
 
 /** The markup of the element carrying `attr="value"`, up to the next sibling of the same testid — rows here are flat lists. */
 function rowsOf(html: string, testId: string): string[] {
@@ -117,13 +236,13 @@ function rowsOf(html: string, testId: string): string[] {
 }
 
 describe("focused court: playing", () => {
-  it("C1 — no stream: the scoreboard panel, a '+ Connect a stream' link to the match's stream panel, and no video slot", () => {
-    const html = focus(court({ current: fx({ stream: null }) }));
-    expect(html).toContain('data-testid="md-scoreboard"');
-    // The engine's own headline, through LiveScoreBody — not a Match Day widget.
-    expect(html).toContain("0 – 0 (13-11)");
+  it("C1 — no stream: the sport's scoreboard, a '+ Connect a stream' link to the match's stream panel, and no video slot", () => {
+    expect(BADMINTON, "a badminton golden stream mid-game").not.toBeNull();
+    const html = focus(goldenCourt("badminton", BADMINTON!, { stream: null }));
+    const sb = scoreboardOf(html);
+    expect(sb).not.toBe("");
     const connect = t(dict, "matchDay.stream.connect");
-    expect(html).toContain(connect);
+    expect(sb).toContain(connect);
     const streamHref = `${routes.fixture("acme", "safe-badminton", "girls-u14", 7)}?stream=open`;
     expect(html).toContain(`href="${streamHref}"`);
     // No empty black video box (§5 anti-goal): no player element and no preview slot.
@@ -132,12 +251,54 @@ describe("focused court: playing", () => {
     expect(html).not.toContain('data-md-stream="');
   });
 
+  it("I1 — a set sport: games in large type with the live points stripped, the set table, both sides named", () => {
+    const summary = BADMINTON!;
+    const sb = scoreboardOf(focus(goldenCourt("badminton", summary)));
+    const big = largeType(summary);
+    // The one-liner the spec replaces is gone; the large type is the sets/games part alone.
+    expect(big).not.toBe(summary.headline);
+    expect(sb).toContain(`>${esc(big)}</p>`);
+    expect(sb).not.toContain(esc(summary.headline!));
+    // The set table: its heading and a column per set the engine reports (whichever unit the sport counts in).
+    const sets = detailOf(summary).sets as unknown[];
+    const unit = (["game", "set"] as const).find((u) => sb.includes(esc(t(pub, "matchCentre.scoreByUnit", { unit: t(pub, `matchCentre.unit.${u}`) }))));
+    expect(unit, "the set table's heading").toBeDefined();
+    for (let n = 1; n <= sets.length; n++) expect(sb).toContain(t(pub, `matchCentre.col.${unit}`, { n }));
+    expect(sb).not.toContain(t(pub, `matchCentre.col.${unit}`, { n: sets.length + 1 }));
+    expect(sb).toContain(HOME.name);
+    expect(sb).toContain(AWAY.name);
+    expect(sb).not.toContain(">—<");
+  });
+
+  it("I1 — the serve marker beside the serving side, when the engine's summary says who serves (tennis)", () => {
+    expect(TENNIS, "a tennis golden stream with the server known").not.toBeNull();
+    const serving = detailOf(TENNIS!).serving === "home" ? HOME.name : AWAY.name;
+    const other = serving === HOME.name ? AWAY.name : HOME.name;
+    const sb = scoreboardOf(focus(goldenCourt("tennis", TENNIS!)));
+    expect(sb).toContain(`● ${serving}`);
+    expect(sb).not.toContain(`● ${other}`);
+  });
+
+  it("V1 — the panel says the match is in play; 'Live' is the stream's word only", () => {
+    const quiet = scoreboardOf(focus(goldenCourt("badminton", BADMINTON!, { stream: null })));
+    expect(quiet).toContain(t(pub, "matchCentre.status.in_play"));
+    expect(quiet).not.toContain(`>${t(pub, "matchCentre.status.live")}<`);
+    expect(quiet).not.toMatch(new RegExp(`\\b${t(dict, "matchDay.stream.live")}\\b`));
+    // No score yet: the same word, never "Live".
+    const blank = scoreboardOf(focus(court({ current: fx({ headline: null, summary: null }) })));
+    expect(blank).toContain(t(pub, "matchCentre.status.in_play"));
+    expect(blank).toContain(t(dict, "matchDay.focus.noScore"));
+    expect(blank).not.toMatch(new RegExp(`\\b${t(dict, "matchDay.stream.live")}\\b`));
+  });
+
   it("stream live: the Live badge and the watch link instead of '+ Connect a stream' (the positive half of the pair above)", () => {
-    const html = focus(court({ current: fx({ stream: "live" }) }));
-    expect(html).toContain('data-testid="md-scoreboard"');
-    expect(html).toContain('data-md-stream="live"');
-    expect(html).toContain(t(dict, "matchDay.stream.watch"));
-    expect(html).not.toContain(t(dict, "matchDay.stream.connect"));
+    const sb = scoreboardOf(focus(goldenCourt("badminton", BADMINTON!, { stream: "live" })));
+    expect(sb).toContain('data-md-stream="live"');
+    expect(sb).toContain(t(dict, "matchDay.stream.watch"));
+    expect(sb).not.toContain(t(dict, "matchDay.stream.connect"));
+    // "Live" appears once — on the stream link — and the panel still says in play.
+    expect(sb.split(`>${t(dict, "matchDay.stream.live")}<`).length - 1).toBe(1);
+    expect(sb).toContain(t(pub, "matchCentre.status.in_play"));
   });
 
   it("names the match, its division and stage, and opens its pad at the console address", () => {
@@ -191,6 +352,33 @@ describe("focused court: called, free, in use elsewhere", () => {
     );
     expect(html).toContain(t(dict, "matchDay.free.countNone"));
     expect(html).not.toContain('data-testid="md-candidate"');
+  });
+
+  it("I2 — the count is of matches that could start NOW: a blocked candidate is listed but not counted", () => {
+    const c = court({ court_name: "Court 5", state: "free", current: null });
+    const busy = { kind: "player_busy" as const, person_name: "Zara Khan", court_name: "Court 3" };
+    const candidates = [cand({}, { id: "ok-1" }), cand({ blocked: busy }, { id: "busy-1" }), cand({}, { id: "ok-2" }), cand({ blocked: busy }, { id: "busy-2" })];
+    expect(callableCount(candidates)).toBe(2);
+    const html = renderToStaticMarkup(
+      <FreeCourtBody ctx={ctx} court={c} load={{ status: "ready", candidates }} onCall={() => {}} onRetry={() => {}} />,
+    );
+    expect(html).toContain(plural(dict, "matchDay.free.count", 2, "en"));
+    expect(html).not.toContain(plural(dict, "matchDay.free.count", 4, "en"));
+    expect(rowsOf(html, "md-candidate")).toHaveLength(4);
+  });
+
+  it("I2 — every candidate blocked: 'No match can start here right now', and the blocked rows still say why", () => {
+    const c = court({ court_name: "Court 5", state: "free", current: null });
+    const busy = { kind: "player_busy" as const, person_name: "Zara Khan", court_name: "Court 3" };
+    const candidates = [cand({ blocked: busy }, { id: "busy-1" }), cand({ blocked: busy }, { id: "busy-2" })];
+    expect(callableCount(candidates)).toBe(0);
+    const html = renderToStaticMarkup(
+      <FreeCourtBody ctx={ctx} court={c} load={{ status: "ready", candidates }} onCall={() => {}} onRetry={() => {}} />,
+    );
+    expect(html).toContain(t(dict, "matchDay.free.countNone"));
+    expect(html).not.toMatch(new RegExp(plural(dict, "matchDay.free.count", 2, "en")));
+    expect(rowsOf(html, "md-candidate")).toHaveLength(2);
+    expect(html).toContain(t(dict, "matchDay.candidate.blocked", { person: "Zara Khan", court: "Court 3" }));
   });
 
   it("free, while the candidates load (the first paint): a loading line, no count", () => {
@@ -256,6 +444,47 @@ describe("candidates", () => {
   });
 });
 
+describe("V2 — one primary action per list", () => {
+  const busy = { kind: "player_busy" as const, person_name: "Zara Khan", court_name: "Court 3" };
+  const primaries = (html: string) => (html.match(/<button[^>]*class="[^"]*\bbtn-primary\b[^"]*"[^>]*>/g) ?? []).length;
+
+  it("only the top-ranked callable candidate is primary, even when a blocked one is drawn above it; the rest are secondary, 44px", () => {
+    // Rank order (estimate.ts): unblocked first — but the rows are drawn grouped, so the blocked "due here" row is drawn FIRST.
+    const candidates = [
+      cand({}, { id: "top" }),
+      cand({ waiting_minutes: 30 }, { id: "second" }),
+      cand({ source: "no_court", from_court_name: null }, { id: "third" }),
+      cand({ source: "this_court", from_court_name: null, blocked: busy }, { id: "busy-here" }),
+    ];
+    expect(primaryCandidateId(candidates)).toBe("top");
+    const html = renderToStaticMarkup(<CandidateRows ctx={ctx} court={court({ court_name: "Court 5" })} candidates={candidates} onCall={() => {}} />);
+    const rows = rowsOf(html, "md-candidate");
+    expect(rows[0]).toContain('data-fixture-id="busy-here"');
+    expect(primaries(html)).toBe(1);
+    const byId = (id: string) => rows.find((r) => r.startsWith(` data-fixture-id="${id}"`))!;
+    expect(byId("top")).toMatch(/\bbtn-primary\b/);
+    expect(byId("top")).toContain('data-md-primary="true"');
+    for (const id of ["second", "third"]) {
+      expect(byId(id), id).not.toMatch(/\bbtn-primary\b/);
+      expect(byId(id), id).toMatch(/<button[^>]*class="[^"]*\bbtn-ghost\b[^"]*\bmin-h-11\b|<button[^>]*class="[^"]*\bmin-h-11\b[^"]*\bbtn-ghost\b/);
+    }
+    // Every call button keeps a 44px target at every width (no lg: shrink).
+    const buttons = html.match(/<button[^>]*>/g) ?? [];
+    expect(buttons).toHaveLength(3);
+    for (const b of buttons) {
+      expect(b).toMatch(/\bmin-h-11\b/);
+      expect(b).not.toMatch(/min-h-0/);
+    }
+  });
+
+  it("every candidate blocked: no primary at all", () => {
+    const candidates = [cand({ blocked: busy }, { id: "a" }), cand({ blocked: busy }, { id: "b" })];
+    expect(primaryCandidateId(candidates)).toBeNull();
+    const html = renderToStaticMarkup(<CandidateRows ctx={ctx} court={court()} candidates={candidates} onCall={() => {}} />);
+    expect(primaries(html)).toBe(0);
+  });
+});
+
 describe("the call sheet", () => {
   const sheet = (state: Parameters<typeof CallSheetBody>[0]["state"]) =>
     renderToStaticMarkup(<CallSheetBody ctx={ctx} court={court({ court_name: "Court 5" })} candidate={cand()} state={state} />);
@@ -282,10 +511,24 @@ describe("the call sheet", () => {
     expect(html).not.toContain('data-testid="md-shift"');
   });
 
-  it("a refused preview shows the organiser's words, not the code", () => {
-    const html = sheet({ kind: "refused", message: refusalMessage(dict, CALL_REFUSAL.COURT_BUSY, { court_name: "Court 5", competition_name: "Winter Open" }) });
-    expect(html).toContain("Winter Open");
-    expect(html).not.toContain(CALL_REFUSAL.COURT_BUSY);
+  it("M5 — a refusal is held by the court focus, whatever state the refresh left the court in, until dismissed", () => {
+    const message = refusalMessage(dict, CALL_REFUSAL.COURT_BUSY, { court_name: "Court 5", competition_name: "Winter Open" });
+    let checked = 0;
+    for (const c of [
+      court({ court_name: "Court 5", state: "free", current: null }),
+      court({ court_name: "Court 5", state: "in_use_elsewhere", current: null, in_use_by: "Winter Open" }),
+      court({ court_name: "Court 5", state: "called", current: fx({ started_at: null, called_at: "2026-10-31T11:31:00.000Z" }) }),
+      court({ court_name: "Court 5" }),
+    ]) {
+      const html = focus(c, message);
+      const notice = html.match(/<div role="alert" data-testid="md-notice"[\s\S]*?<\/div>/)?.[0] ?? "";
+      expect(notice, c.state).toContain(esc(message));
+      expect(notice, c.state).not.toContain(CALL_REFUSAL.COURT_BUSY);
+      expect(notice, c.state).toContain(t(dict, "matchDay.notice.dismiss"));
+      expect(focus(c), c.state).not.toContain('data-testid="md-notice"');
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });
 
@@ -342,21 +585,38 @@ registerBuiltins({
 } as SportRegistry);
 
 describe("every sport: the court noun and the scoreboard follow the sport (G5)", () => {
-  it("each registered sport's court shows its noun from matchDay.noun.* and the engine's own headline", () => {
-    let checked = 0;
+  it("each registered sport's court shows its noun, and its scoreboard from the ENGINE's folded summary, both sides named", () => {
+    const swept: string[] = [];
+    const noCorpus: string[] = [];
     const nouns = new Set<string>();
     for (const key of SPORTS) {
+      const summary = inPlaySummary(key);
+      if (summary === null) {
+        // Only a sport with no recorded golden stream may sit out — never one whose streams yield no moment of play.
+        expect(CORPORA.some((c) => c.key === key), `${key} has a corpus but no in-play moment`).toBe(false);
+        noCorpus.push(key);
+        continue;
+      }
       const noun = venueNoun(key);
       nouns.add(noun);
-      const html = focus(court({ sport_noun: noun, current: fx({ sport_key: key, headline: `${key} 2 – 1` }) }));
+      const html = focus(goldenCourt(key, summary));
       expect(html, key).toContain(`>${t(dict, `matchDay.noun.${noun}`)}<`);
-      expect(html, key).toContain(`${key} 2 – 1`);
-      expect(html, key).toContain('data-testid="md-scoreboard"');
-      checked++;
+      const sb = scoreboardOf(html);
+      expect(sb, key).not.toBe("");
+      expect(sb, key).toContain(`>${esc(largeType(summary))}</p>`);
+      expect(sb, key).toContain(esc(HOME.name));
+      expect(sb, key).toContain(esc(AWAY.name));
+      expect(sb, key).not.toContain(">—<");
+      // Each side's own line, where the engine gives one and no set table takes its place.
+      if (!hasSets(summary)) for (const side of summary.perSide ?? []) expect(sb, key).toContain(`>${esc(side.line)}<`);
+      expect(sb, key).toContain(t(pub, "matchCentre.status.in_play"));
+      swept.push(key);
     }
-    expect(checked).toBeGreaterThan(5);
-    expect(checked).toBe(SPORTS.length);
-    // The sweep can witness a hard-coded "Court": at least one registered sport plays on something else.
+    // Anti-vacuity: every registered sport is accounted for, and the sweep really ran.
+    expect(swept.length + noCorpus.length).toBe(SPORTS.length);
+    expect(swept.length).toBeGreaterThan(5);
+    expect(swept.length, `swept ${swept.join(",")}; no corpus: ${noCorpus.join(",")}`).toBe(CORPORA.filter((c) => SPORTS.includes(c.key)).length);
+    // The sweep can witness a hard-coded "Court": at least one swept sport plays on something else.
     expect([...nouns].filter((n) => n !== "court").length).toBeGreaterThan(0);
   });
 
@@ -448,6 +708,30 @@ describe("the header, the filter and the poll's cadence", () => {
     const cands = [cand({}, { id: "a", division_id: "d-u14" }), cand({}, { id: "b", division_id: "d-u17" })];
     expect(filterCandidates(cands, only).map((c) => c.fixture.id)).toEqual(["a"]);
     expect(filterCandidates(cands, null)).toHaveLength(2);
+  });
+
+  it("M6 — the opened court while it is on the list; none opened → the first; opened but gone → lost, by name", () => {
+    const courts = [court({ court_id: "c-1", court_name: "Court 1" }), court({ court_id: "c-2", court_name: "Court 2" })];
+    expect(resolveFocus(courts, null)).toEqual({ kind: "court", court: courts[0] });
+    expect(resolveFocus(courts, { id: "c-2", name: "Court 2" })).toEqual({ kind: "court", court: courts[1] });
+    // The filter (or the day) took Court 3 away: say so, never fall back to Court 1.
+    expect(resolveFocus(courts, { id: "c-3", name: "Court 3" })).toEqual({ kind: "lost", name: "Court 3" });
+    expect(resolveFocus([], { id: "c-3", name: "Court 3" })).toEqual({ kind: "lost", name: "Court 3" });
+    expect(resolveFocus([], null)).toEqual({ kind: "none" });
+    // And in a filtered list: the opened court's division unchosen, it is lost.
+    const kept = filterCourts([court({ court_id: "c-9", current: fx({ division_id: "d-u17" }) })], new Set(["d-u14"]));
+    expect(resolveFocus(kept, { id: "c-9", name: "Court 9" })).toEqual({ kind: "lost", name: "Court 9" });
+  });
+
+  it("M1 — a poll's or a candidates fetch's answer is used only when it has the shape (a cut-off 200 is undefined)", () => {
+    expect(isMatchDayView(view([court()]))).toBe(true);
+    expect(isMatchDayView(view([]))).toBe(true);
+    for (const bad of [undefined, null, {}, [], { courts: "x", date: "d", tz: "UTC", now: "n" }, { ...view([]), courts: undefined }]) {
+      expect(isMatchDayView(bad), JSON.stringify(bad)).toBe(false);
+    }
+    expect(isCandidateList([])).toBe(true);
+    expect(isCandidateList([cand()])).toBe(true);
+    for (const bad of [undefined, null, {}, "x"]) expect(isCandidateList(bad), String(bad)).toBe(false);
   });
 
   it("polls fast while a match is playing or called, slow otherwise", () => {

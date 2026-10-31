@@ -6,7 +6,11 @@
 //
 // SSR-first, then polled through the competition desk's own schedule (desk/band-poll.ts): fast while a match is playing or
 // called, slow while the day is quiet, paused while the tab is hidden. A poll that fails (a rare race on the server, task A2
-// m1) keeps the last view and tries again on the next tick.
+// m1) or answers something that is not a view (a cut-off 200, review M1) keeps the last view and tries again on the next tick.
+//
+// The court the organiser opened stays opened only while it is on the list: when the filter or the day takes it away, the page
+// says so and goes back to the list — never silently onto a different court (review M6). A refused call or undo is kept per
+// court through the refresh it triggers, until dismissed or another court is opened (review M5).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -15,7 +19,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import type { MatchDayView } from "@/lib/match-day/types";
-import { courtCounts, filterCourts, isLive, sharedNoun } from "@/lib/match-day/view";
+import { courtCounts, filterCourts, isLive, isMatchDayView, resolveFocus, sharedNoun } from "@/lib/match-day/view";
 import { browserBandPollDeps, startBandPolling } from "@/components/v2/desk/band-poll";
 import { CourtFocus, type MatchDayCtx } from "./court-focus";
 import { CourtList } from "./court-list";
@@ -47,14 +51,17 @@ export function MatchDayShell({
   scoreDict,
 }: MatchDayShellProps) {
   const [view, setView] = useState<MatchDayView>(initial);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** The court the organiser opened (its name kept to say so if it leaves the list); null until one is. */
+  const [opened, setOpened] = useState<{ id: string; name: string } | null>(null);
   /** On a phone: the list (false) or one court full-screen (true). Desktop shows both and ignores it. */
   const [phoneOpen, setPhoneOpen] = useState(false);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
+  const [notice, setNotice] = useState<{ courtId: string; message: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setView(await apiV1<MatchDayView>(`/api/v1/competitions/${competitionId}/match-day`));
+      const next = await apiV1<unknown>(`/api/v1/competitions/${competitionId}/match-day`);
+      if (isMatchDayView(next)) setView(next);
     } catch {
       // Keep the last view; the next tick tries again.
     }
@@ -65,15 +72,18 @@ export function MatchDayShell({
 
   const filter = chosen.size === 0 ? null : chosen;
   const courts = useMemo(() => filterCourts(view.courts, filter), [view.courts, filter]);
-  // The focused court: the one tapped while it is still on the page, else the first.
-  const focused = courts.find((c) => c.court_id === selectedId) ?? courts[0] ?? null;
+  const focus = resolveFocus(courts, opened);
+  const focused = focus.kind === "court" ? focus.court : null;
+  /** A phone shows one court full-screen only while the court it opened is still there. */
+  const phoneCourt = phoneOpen && focused !== null;
   const counts = courtCounts(courts);
   const noun = sharedNoun(courts.length > 0 ? courts : view.courts);
   const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict };
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
 
   const open = (courtId: string) => {
-    setSelectedId(courtId);
+    setOpened({ id: courtId, name: courts.find((c) => c.court_id === courtId)?.court_name ?? "" });
+    setNotice((n) => (n !== null && n.courtId === courtId ? n : null));
     setPhoneOpen(true);
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches) window.scrollTo({ top: 0 });
   };
@@ -87,7 +97,7 @@ export function MatchDayShell({
 
   return (
     <div data-testid="match-day" className="min-w-0">
-      <header data-testid="md-header" className={`mb-5 min-w-0${phoneOpen ? " max-md:hidden" : ""}`}>
+      <header data-testid="md-header" className={`mb-5 min-w-0${phoneCourt ? " max-md:hidden" : ""}`}>
         <h1 className="page-title min-w-0 [overflow-wrap:anywhere]">{t(dict, "matchDay.title", { date })}</h1>
         <p className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-600">
           <Link
@@ -143,7 +153,13 @@ export function MatchDayShell({
         </div>
       ) : (
         <div className="min-w-0 md:grid md:grid-cols-[minmax(0,17rem)_minmax(0,1fr)] md:items-start md:gap-6 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
-          <div data-testid="md-list" className={`min-w-0${phoneOpen ? " max-md:hidden" : ""}`}>
+          {focus.kind === "lost" && (
+            <div data-testid="md-lost" role="status" className="card mb-4 min-w-0 p-5 md:col-start-2 md:row-start-1 md:mb-0">
+              <p className="font-semibold text-slate-900 [overflow-wrap:anywhere]">{t(dict, "matchDay.focus.left", { court: focus.name })}</p>
+              <p className="mt-1 text-sm text-slate-600">{t(dict, "matchDay.focus.pick")}</p>
+            </div>
+          )}
+          <div data-testid="md-list" className={`min-w-0 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
             <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} onSelect={open} />
           </div>
           {focused !== null && (
@@ -152,10 +168,19 @@ export function MatchDayShell({
               court={focused}
               backLabel={t(dict, `matchDay.back.${noun}`)}
               onBack={() => setPhoneOpen(false)}
-              onChanged={() => void refresh()}
+              onChanged={() => {
+                setNotice(null);
+                void refresh();
+              }}
+              onRefused={(message) => {
+                setNotice({ courtId: focused.court_id, message });
+                void refresh();
+              }}
+              notice={notice !== null && notice.courtId === focused.court_id ? notice.message : null}
+              onDismissNotice={() => setNotice(null)}
               refreshKey={view.now}
               divisions={filter}
-              hiddenOnPhone={!phoneOpen}
+              hiddenOnPhone={!phoneCourt}
             />
           )}
         </div>

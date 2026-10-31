@@ -640,6 +640,9 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // by name, no matter how many other specs touch it.
     { path: `/o/${orgSlug}/c/${compSlug}/registration?tab=settings` },
     { path: `/o/${orgSlug}/c/${compSlug}/registration?tab=registrants` },
+    // Match Day (task A3) — the organiser's court list + focus. Page-level width at all seven projects; the court states
+    // themselves (playing, called, free + candidates, the call sheet) are driven at 320/768/1280 by e2e/match-day.spec.ts.
+    { path: `/o/${orgSlug}/c/${compSlug}/match-day` },
     // The /schedule console was absent from this inventory entirely, so the
     // three tabs that carry the portfolio's new panels (P1 capacity card on
     // Settings, P2 health panel on Health, both on the Board's chrome) shipped
