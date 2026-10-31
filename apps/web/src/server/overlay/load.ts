@@ -5,6 +5,9 @@
 // the fold, inside `unstable_cache` keyed on `last_seq`, so N polls at one
 // ledger position cost one fold.
 //
+// R4 S5 adds a fourth, OUTSIDE the cache: the sponsor plan (`server/sponsors/assign.ts`), planned on every poll over
+// the cached fold's natural breaks.
+//
 // Throw nothing new: a 404 from the row read is the 404 the route answers, and
 // a fold that cannot run is NOT an error the viewer should see (see
 // `cachedFold`'s catch).
@@ -18,6 +21,8 @@ import { HttpError } from "@/lib/errors";
 import { publicFixture } from "@/server/usecases/public";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentDerived, RecentEvent, RecentPerson } from "@/lib/overlay-recent-types";
+import type { BreakOpened, SponsorPlan } from "@/lib/sponsor-plan";
+import { loadSponsorPlan, sponsorScopeOf } from "@/server/sponsors/assign";
 import {
   buildOverlayRecent,
   cricketBundlePersonIdsIn,
@@ -70,6 +75,12 @@ interface CachedOverlay {
   /** Cricket scorecard projections WITHOUT names (person ids stand in). Toss /
    *  lastClosedOver / scoringStarted ship with the crease for openers + end-of-over. */
   cricket: OverlayCricketBundleIds;
+  /** R4 S5: the whole fixture's natural breaks (`DerivedReplay.breaks`) — the sponsor planner's input, planned per poll
+   *  OUTSIDE this cache (the fold is per `last_seq`; the settings, ticks and assignments are not). */
+  breaks: BreakOpened[];
+  /** `DerivedReplay.breaksComplete`. False wherever no complete replay ran — no events, no inputs, a fold that fell
+   *  back — so a break missing from `breaks` is never taken for an undone one (R3). */
+  breaksComplete: boolean;
 }
 
 const EMPTY_CRICKET: OverlayCricketBundleIds = {
@@ -79,6 +90,9 @@ const EMPTY_CRICKET: OverlayCricketBundleIds = {
   scoringStarted: false,
   highlights: null,
 };
+
+/** Nothing folded: no events yet, no fold inputs, or a fold that fell back. */
+const UNFOLDED: CachedOverlay = { folded: null, derived: {}, cricket: EMPTY_CRICKET, breaks: [], breaksComplete: false };
 
 /** Folds once per (fixture, last_seq), and derives in the SAME pass. The fold
  *  reads the whole ledger and every module the fixture pins; at ~1 event / 36 s
@@ -99,10 +113,11 @@ const EMPTY_CRICKET: OverlayCricketBundleIds = {
  *  stubs `next/cache` passthrough, exactly as this repo's other
  *  `unstable_cache` tests do.
  *
- *  The key is `overlay-fold-v4`: the VALUE's shape changed (highlights on the
- *  cricket bundle), and a live entry written under v3 would deserialise wrong. */
+ *  The key is `overlay-fold-v5`: the VALUE's shape changed (R4 S5: the natural
+ *  breaks and their completeness), and a live entry written under v4 would
+ *  deserialise without them. */
 /** R2005 change 1: the RELAY read (a composed session's compositor, `relay-access.ts`) folds under its own key,
- *  `overlay-fold-relay-v4`, so the bypass read never shares a cache entry with the public read — even where the VALUE
+ *  `overlay-fold-relay-v5`, so the bypass read never shares a cache entry with the public read — even where the VALUE
  *  would be the same, one namespace per door means no reasoning about which entries a public read may be handed. Two
  *  literal keys at two call sites, so the cache-site ledger (`public-not-found-uncached.test.ts`) classifies each. */
 type FoldNamespace = "public" | "relay";
@@ -111,9 +126,9 @@ function cachedFold(fixtureId: string, lastSeq: number, ns: FoldNamespace): () =
   const fold = async () =>
     sql.begin(async (tx) => {
       const inputs = await loadFoldInputs(tx, fixtureId);
-      if (inputs === null) return { folded: null, derived: {}, cricket: EMPTY_CRICKET };
+      if (inputs === null) return UNFOLDED;
       const folded = foldFrom(fixtureId, inputs);
-      const { bySeq } = replayDerived({
+      const { bySeq, breaks, breaksComplete } = replayDerived({
         sportKey: inputs.sportKey,
         module: inputs.module,
         cfg: inputs.cfg,
@@ -124,11 +139,13 @@ function cachedFold(fixtureId: string, lastSeq: number, ns: FoldNamespace): () =
         folded,
         derived: Object.fromEntries([...bySeq].map(([seq, d]) => [String(seq), d])),
         cricket: overlayCricketBundleIds(inputs, folded.active),
+        breaks,
+        breaksComplete,
       };
     }) as Promise<CachedOverlay>;
   return ns === "relay"
-    ? unstable_cache(fold, ["overlay-fold-relay-v4", fixtureId, String(lastSeq)], { revalidate: 300 })
-    : unstable_cache(fold, ["overlay-fold-v4", fixtureId, String(lastSeq)], { revalidate: 300 });
+    ? unstable_cache(fold, ["overlay-fold-relay-v5", fixtureId, String(lastSeq)], { revalidate: 300 })
+    : unstable_cache(fold, ["overlay-fold-v5", fixtureId, String(lastSeq)], { revalidate: 300 });
 }
 
 /**
@@ -154,7 +171,7 @@ async function foldOrNull(fixtureId: string, lastSeq: number, ns: FoldNamespace)
     return await cachedFold(fixtureId, lastSeq, ns)();
   } catch (err) {
     log.error({ err, fixtureId, lastSeq }, "overlay: fold failed, serving the row without it");
-    return { folded: null, derived: {}, cricket: EMPTY_CRICKET };
+    return UNFOLDED;
   }
 }
 
@@ -251,6 +268,34 @@ async function relayFixtureRow(fixtureId: string): Promise<PublicRow> {
   return row;
 }
 
+/**
+ * R4 S5 — the fixture's sponsor plan (spec 2026-10-27 §3.2), planned on EVERY poll from the cached fold's breaks and
+ * the live settings (`loadSponsorPlan`, which writes the assignments it hands out). The same call for the public and the
+ * relay door, so OBS and the composed page air the same card at the same break.
+ *
+ * Planned with no events too: the scene carousel (Starting soon, before the first ball) shows the ticked cards.
+ *
+ * BEST EFFORT, like everything here: a sponsor failure costs the overlay its cards, never its scorebug.
+ */
+async function sponsorPlanOrNull(fixtureId: string, bundle: CachedOverlay): Promise<SponsorPlan> {
+  try {
+    const scope = await sponsorScopeOf(sql, fixtureId);
+    if (scope === null) return null;
+    return await loadSponsorPlan({
+      fixtureId,
+      orgId: scope.orgId,
+      competitionId: scope.competitionId,
+      breaks: bundle.breaks,
+      // The page's own window (`recent`), from the one authority for it.
+      windowSeqs: bundle.folded === null ? [] : recentWindow(bundle.folded.active).map((e) => e.seq),
+      complete: bundle.breaksComplete,
+    });
+  } catch (err) {
+    log.error({ err, fixtureId }, "overlay: sponsor plan failed, serving no sponsor cards");
+    return null;
+  }
+}
+
 export interface OverlayLoadOptions {
   /** The caller passed `relayPageAccess`: read the row off the base tables and fold under the relay namespace. */
   relay?: boolean;
@@ -260,14 +305,12 @@ export async function loadOverlayLiveData(fixtureId: string, opts: OverlayLoadOp
   const ns: FoldNamespace = opts.relay === true ? "relay" : "public";
   const row = ns === "relay" ? await relayFixtureRow(fixtureId) : ((await publicFixture(fixtureId)) as PublicRow);
   const venueTz = await venueTzForDivision(row.division_id);
-  const bundle: CachedOverlay =
-    row.last_seq === null
-      ? { folded: null, derived: {}, cricket: EMPTY_CRICKET }
-      : await foldOrNull(fixtureId, row.last_seq, ns);
+  const bundle: CachedOverlay = row.last_seq === null ? UNFOLDED : await foldOrNull(fixtureId, row.last_seq, ns);
   const personOf = await overlayPersonOf(row, bundle);
   const recent = recentOrEmpty(row, bundle, personOf);
   const cricket = cricketBundleNamed(bundle, personOf);
-  return projectOverlayLiveData({
+  const sponsorPlan = await sponsorPlanOrNull(fixtureId, bundle);
+  const live = projectOverlayLiveData({
     row,
     folded: bundle.folded,
     venueTz,
@@ -278,4 +321,6 @@ export async function loadOverlayLiveData(fixtureId: string, opts: OverlayLoadOp
     scoringStarted: cricket.scoringStarted,
     highlights: cricket.highlights,
   });
+  // Always set, null included: one shape for "no cards", as `recent` is always set.
+  return { ...live, sponsorPlan };
 }
