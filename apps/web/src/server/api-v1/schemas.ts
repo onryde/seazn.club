@@ -1655,6 +1655,9 @@ export const MatchDayFixture = z.object({
       detail: z.unknown().optional(),
     })
     .nullable(),
+  // Who serves the next rally of a playing set-sport match, as the engine's serve reader says it over the ledger; null for
+  // any other match, a sport with no serve, or when the engine does not know.
+  serving: z.enum(["home", "away"]).nullable(),
   started_at: z.iso.datetime({ offset: true }).nullable(),
   called_at: z.iso.datetime({ offset: true }).nullable(),
   stream: z.enum(["live", "waiting"]).nullable(),

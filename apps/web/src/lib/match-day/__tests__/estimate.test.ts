@@ -132,6 +132,7 @@ const fixture = (id: string) => ({
   away_entrant_id: null,
   headline: null,
   summary: null,
+  serving: null,
   started_at: null,
   called_at: null,
   stream: null,

@@ -26,6 +26,10 @@
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
 import { afterAll, describe, expect, it } from "vitest";
+import { foldMatchWithStoppage, initSquads, summaryOf, type EventEnvelope } from "@seazn/engine/core";
+import { resolvePositions } from "@seazn/engine/sport";
+import { badminton, setBasedServeContext, type SetBasedState } from "@seazn/engine/sports/setbased";
+import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -39,6 +43,8 @@ import { appendEvent } from "@/server/engine-db/append-event";
 import { createCompetition } from "../competitions";
 import { getCompetitionDesk } from "../competition-desk";
 import { createDivision, listDivisions } from "../divisions";
+import { createEntrants } from "../entrants";
+import { createStages, generateStageFixtures } from "../stages";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { countFixturesToday, getMatchDay, matchDayCandidates } from "../match-day";
 import { putScheduleSettings } from "../schedule";
@@ -102,6 +108,89 @@ async function otherCompetition(day: Day, label: string, opts: { courts: string[
     people.push(await person(day.orgId, n));
   }
   return seedCompetition(day.auth, label, [0, 2, 4, 6].map((i) => [people[i]!, people[i + 1]!]), opts);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Who serves (task A3 fix round 2, S1). The expected side is the ENGINE's: the pad's own call (`setBasedServeContext`,
+// skins/badminton.tsx) over a pure fold of the same recorded stream, never a rule typed here.
+// ---------------------------------------------------------------------------------------------------------------------------
+
+interface GoldenEvent {
+  type: string;
+  payload: unknown;
+  /** Test-local: the index of the event this one voids. */
+  voids?: number;
+}
+
+/** The badminton corpus's rally-by-rally stream: game 1 entered as its summary, game 2 point by point. */
+const BWF = (() => {
+  const corpus = goldenCorpora()
+    .map(({ corpus }) => corpus as { key: string; configs: Record<string, unknown>; streams: { config: string; events: GoldenEvent[] }[] })
+    .find((c) => c.key === "badminton")!;
+  const stream = corpus.streams.find(
+    (st) =>
+      st.events.some((e) => e.type === "badminton.game.summary") &&
+      st.events.filter((e) => e.type === "badminton.rally").length >= 20 &&
+      st.events.every((e) => e.type.startsWith("core.start") || e.type.startsWith("badminton.")),
+  )!;
+  return { cfg: badminton.configSchema.parse(corpus.configs[stream.config]), events: stream.events };
+})();
+
+const envelopesOf = (events: readonly GoldenEvent[]): EventEnvelope[] =>
+  events.map((e, i) => ({
+    id: `e-${i}`,
+    fixtureId: "f-golden",
+    seq: i,
+    type: e.type,
+    payload: e.payload,
+    recordedAt: new Date(Date.UTC(2026, 10, 7, 10, 0, i)).toISOString(),
+    recordedBy: null,
+    ...(e.voids === undefined ? {} : { voids: `e-${e.voids}` }),
+  }));
+
+/** The engine's fold of `events` as the corpus seats them ("H" home, "A" away): who it says serves next, and its summary. */
+function engineSays(events: readonly GoldenEvent[]): { serving: "home" | "away" | null; headline: string | undefined } {
+  const lineups = defaultLineupPair(resolvePositions(badminton, BWF.cfg));
+  const envelopes = envelopesOf(events);
+  const folded = foldMatchWithStoppage(badminton, BWF.cfg, lineups, envelopes);
+  const state = folded.state as SetBasedState;
+  const ctx = setBasedServeContext(badminton, { ...state, squads: state.squads ?? initSquads(lineups) }, envelopes);
+  return { serving: ctx.side, headline: summaryOf(badminton, folded).headline };
+}
+
+/** The void of event `i`, as the test's own events say it. */
+const voidOf = (i: number): GoldenEvent => ({ type: "core.void", payload: {}, voids: i });
+
+/** A badminton singles division of `day`'s competition on `courtId`: three players, its round robin's fixtures. */
+async function badmintonFixtures(day: Day, courtId: string): Promise<{ id: string; home: string; away: string }[]> {
+  const d = await createDivision(day.auth, day.comp.id, { name: "Singles", sport_key: "badminton", variant_key: "bwf", config: {} });
+  await createEntrants(
+    day.auth,
+    d.id,
+    ["Ivy Iles", "Jon Judd", "Kim Kerr"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+  );
+  await putScheduleSettings(day.auth, d.id, {
+    config: { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [courtId], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
+  });
+  const [stage] = await createStages(day.auth, d.id, { seq: 1, kind: "league", name: "League", config: {} });
+  await generateStageFixtures(day.auth, stage!.id);
+  return sql<{ id: string; home: string; away: string }[]>`
+    select id, home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${stage!.id} order by round_no, seq_in_round`;
+}
+
+/** Records `events` on the fixture through the real write path, the corpus's "H"/"A" seated on its own sides. */
+async function record(day: Day, f: { id: string; home: string; away: string }, events: readonly GoldenEvent[]): Promise<void> {
+  const seat = (v: unknown): unknown =>
+    v === "H" ? f.home
+      : v === "A" ? f.away
+        : Array.isArray(v) ? v.map(seat)
+          : typeof v === "object" && v !== null ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, seat(x)])) : v;
+  for (const [i, e] of events.entries()) {
+    const voids = e.voids === undefined
+      ? undefined
+      : (await sql<{ id: string }[]>`select id from score_events where fixture_id = ${f.id} order by seq offset ${e.voids} limit 1`)[0]!.id;
+    await appendEvent(day.orgId, f.id, i, { type: e.type, payload: seat(e.payload), ...(voids === undefined ? {} : { voids }) });
+  }
 }
 
 function courtOf(view: MatchDayView, courtId: string): MatchDayCourt {
@@ -272,6 +361,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       away_entrant_id: f12.away,
       headline: null,
       summary: null,
+      serving: null,
       started_at: iso(5),
       called_at: null,
       stream: "live",
@@ -319,6 +409,54 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     expect(current.summary).toEqual(summary);
     expect(current.headline).toBe(summary.headline);
     expect([current.home_entrant_id, current.away_entrant_id]).toEqual([f12.home, f12.away]);
+  });
+
+  it("S1 — a playing set-sport match says who serves next, as the engine's own serve reader says it over the ledger: after a void too; a non-set sport, a queued match: null", async () => {
+    // Two moments of game 2, found in the recorded stream (never picked by hand): one where the engine names AWAY, and one
+    // where the last rally put HOME to serve and its void hands the serve back to AWAY — the void must move the answer.
+    const rallyEnds = BWF.events.flatMap((e, i) => (e.type === "badminton.rally" && i > BWF.events.findIndex((x) => x.type === "badminton.game.summary") ? [i + 1] : []));
+    const plainK = [...rallyEnds].reverse().find((k) => engineSays(BWF.events.slice(0, k)).serving === "away");
+    const voidK = [...rallyEnds].reverse().find(
+      (k) => engineSays(BWF.events.slice(0, k)).serving === "home" && engineSays([...BWF.events.slice(0, k), voidOf(k - 1)]).serving === "away",
+    );
+    expect(plainK, "a moment of game 2 the engine gives to away").toBeDefined();
+    expect(voidK, "a home rally whose void hands the serve back").toBeDefined();
+    const plain = BWF.events.slice(0, plainK);
+    const voided = [...BWF.events.slice(0, voidK), voidOf(voidK! - 1)];
+
+    const day = await seedDay();
+    const [fPlain, fVoided] = await badmintonFixtures(day, day.courts.c1);
+    await place(day, fPlain!.id, 0, day.courts.c1);
+    await place(day, fVoided!.id, 0, day.courts.c2);
+    await record(day, fPlain!, plain);
+    await record(day, fVoided!, voided);
+    // A generic match in play on court 3 (no serve in its sport), and one queued behind it.
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    const f34 = between(day.comp, p3, p4);
+    await place(day, f12.id, 0, day.courts.c3);
+    await place(day, f34.id, 30, day.courts.c3);
+    await appendEvent(day.orgId, f12.id, 0, { type: "core.start", payload: {} });
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(5));
+
+    let checked = 0;
+    for (const [court, f, events] of [[day.courts.c1, fPlain!, plain], [day.courts.c2, fVoided!, voided]] as const) {
+      const current = courtOf(view, court).current!;
+      expect(current.id).toBe(f.id);
+      const engine = engineSays(events);
+      // The DB fold is the same fold: same stream, same headline (so the same cfg) — the comparison below is like for like.
+      expect(current.summary?.headline, court).toBe(engine.headline);
+      expect(current.serving, court).toBe(engine.serving);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(courtOf(view, day.courts.c1).current!.serving).toBe("away");
+    expect(courtOf(view, day.courts.c2).current!.serving).toBe("away");
+    const generic = courtOf(view, day.courts.c3);
+    expect(generic.current!.id).toBe(f12.id);
+    expect(generic.current!.serving).toBeNull();
+    expect(generic.queue.map((q) => [q.id, q.serving])).toEqual([[f34.id, null]]);
   });
 
   it("what holds a court ends no earlier than now: an overrunning match holds it until now; a called match for a match length from now", async () => {

@@ -45,6 +45,10 @@ export interface MatchDayFixture {
    *  points, who serves, periods, innings). The playing court's scoreboard is the public match page's own `LiveScoreBody` fed
    *  this, so every sport shows its own scorebug. Null when the match has no state yet. */
   summary: MatchDaySummary | null;
+  /** Who serves the next rally (task A3 S1): a playing set-sport match only, from the engine's serve reader over the match's
+   *  ledger (`setBasedServeContext`, the pad's own call; server/engine-db/serving.ts). Null for any other match, a sport with no
+   *  serve, or when the engine does not know — never a guess. */
+  serving: "home" | "away" | null;
   /** The real kick-off: the match's `core.start` score event. Null before it starts (fixtures have no start column). */
   started_at: string | null;
   /** When it was called onto its court; null unless its call still holds. */

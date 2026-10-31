@@ -42,8 +42,10 @@ import { listDivisions } from "./divisions";
 import { dayTable, divisionDays, IN_PLAY, liveCallSql, targetCourt, todayIn, whoIsBusy } from "./match-day-call";
 import { courtNamesById, loadSettings, MOVABLE_STATUS } from "./schedule";
 import { openStreamStates } from "./stream-sessions";
+import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
 
 type Tx = postgres.TransactionSql;
+type Serving = MatchDayFixture["serving"];
 
 const MS_PER_MIN = 60_000;
 /** A cancelled match was never played: it is no match of the day, and it never freed a court. */
@@ -359,7 +361,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
   return { comp, tz, day, courts, noCourt, courtNames };
 }
 
-function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">): MatchDayFixture {
+function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">, serving: Serving = null): MatchDayFixture {
   return {
     id: r.id,
     division_id: r.division_id,
@@ -374,13 +376,14 @@ function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">)
     away_entrant_id: r.away_entrant_id,
     headline: r.headline,
     summary: r.summary ?? null,
+    serving,
     started_at: r.status === IN_PLAY ? iso(r.started_at) : null,
     called_at: iso(r.called_at),
     stream: streams[r.id] ?? null,
   };
 }
 
-function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">): MatchDayCourt {
+function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, serving: ReadonlyMap<string, Serving>): MatchDayCourt {
   const queue: MatchDayQueued[] = c.queue.map((q) => ({
     ...fixtureView(q.row, streams),
     planned_at: q.planned_at.toISOString(),
@@ -392,7 +395,7 @@ function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">): 
     venue_name: c.venue_name,
     sport_noun: venueNoun(c.current?.sport_key ?? c.queue[0]?.row.sport_key ?? c.candidate_sport),
     state: c.state,
-    current: c.current === null ? null : fixtureView(c.current, streams),
+    current: c.current === null ? null : fixtureView(c.current, streams, serving.get(c.current.id) ?? null),
     in_use_by: c.in_use_by,
     free_since: iso(c.free_since),
     queue,
@@ -409,9 +412,16 @@ export async function getMatchDay(
   now: Date = new Date(),
   opts: { locale?: Locale } = {},
 ): Promise<MatchDayView> {
-  const { board, fixturesToday } = await withTenant(auth.orgId, async (tx) => {
+  const { board, fixturesToday, serving } = await withTenant(auth.orgId, async (tx) => {
     const board = await readBoard(tx, competitionId, now, { noCourt: false });
-    return { board, fixturesToday: await countFixturesToday(tx, competitionId, now) };
+    // Who serves, on this competition's playing courts only, for a sport whose engine reads a serve (S1).
+    const serving = new Map<string, Serving>();
+    for (const c of board.courts) {
+      if (c.state === "playing" && c.current !== null && sportReadsServe(c.current.sport_key)) {
+        serving.set(c.current.id, await servingSideOf(tx, c.current.id));
+      }
+    }
+    return { board, fixturesToday: await countFixturesToday(tx, competitionId, now), serving };
   });
   const locale = opts.locale ?? DEFAULT_LOCALE;
   // Each reads through its own connection: none may run inside the tenant transaction above (pool nesting).
@@ -439,7 +449,7 @@ export async function getMatchDay(
     date: board.day,
     tz: board.tz,
     now: now.toISOString(),
-    courts: board.courts.map((c) => courtView(c, streams)),
+    courts: board.courts.map((c) => courtView(c, streams, serving)),
     needs_you: needs,
     results_owed: resultsOwed,
     fixtures_today: fixturesToday,

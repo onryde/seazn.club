@@ -3306,6 +3306,20 @@
                                           }
                                         ]
                                       },
+                                      "serving": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "enum": [
+                                              "home",
+                                              "away"
+                                            ]
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
                                       "started_at": {
                                         "anyOf": [
                                           {
@@ -3359,6 +3373,7 @@
                                       "away_entrant_id",
                                       "headline",
                                       "summary",
+                                      "serving",
                                       "started_at",
                                       "called_at",
                                       "stream"
@@ -3514,6 +3529,20 @@
                                         }
                                       ]
                                     },
+                                    "serving": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "home",
+                                            "away"
+                                          ]
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
                                     "started_at": {
                                       "anyOf": [
                                         {
@@ -3577,6 +3606,7 @@
                                     "away_entrant_id",
                                     "headline",
                                     "summary",
+                                    "serving",
                                     "started_at",
                                     "called_at",
                                     "stream",
@@ -3715,6 +3745,7 @@
                             "perSide": null,
                             "detail": null
                           },
+                          "serving": "home",
                           "started_at": "2026-08-01T09:00:00Z",
                           "called_at": "2026-08-01T09:00:00Z",
                           "stream": "live"
@@ -3740,6 +3771,7 @@
                               "perSide": null,
                               "detail": null
                             },
+                            "serving": "home",
                             "started_at": "2026-08-01T09:00:00Z",
                             "called_at": "2026-08-01T09:00:00Z",
                             "stream": "live",
@@ -4082,6 +4114,20 @@
                                   }
                                 ]
                               },
+                              "serving": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "home",
+                                      "away"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "started_at": {
                                 "anyOf": [
                                   {
@@ -4135,6 +4181,7 @@
                               "away_entrant_id",
                               "headline",
                               "summary",
+                              "serving",
                               "started_at",
                               "called_at",
                               "stream"
@@ -4249,6 +4296,7 @@
                           ],
                           "detail": null
                         },
+                        "serving": "home",
                         "started_at": "2026-08-01T09:00:00Z",
                         "called_at": "2026-08-01T09:00:00Z",
                         "stream": "live"
