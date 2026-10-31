@@ -108,6 +108,12 @@ export interface CompetitionDesk {
    *  same per-division `next` (`resolveDivisionNext` below) every row in
    *  `divisions` already carries. */
   up_next: DeskNextFixture | null;
+  /** Match Day B1 (spec 2026-10-31 §9): how many of this competition's matches are today — Match Day's own count, A2's
+   *  `countFixturesToday` (match-day.ts), read in this desk's transaction at this desk's `now` (controller ruling R2: one count,
+   *  two surfaces). Each match is today on its own division's day (venue zone, else the organisation's, else UTC); a match in
+   *  play counts whatever day it was planned for; a cancelled match and an archived division's never do. The competition
+   *  page's match-day gate: above zero, it shows Open Match Day and the Needs-you list lives in Match Day (`needsYouHome`). */
+  fixtures_today: number;
   divisions: Map<string, DeskDivision>;
   /** Same instant every division's phase was resolved against (SSR-stable).
    *  `competitionPhase` filters on it too, so the masthead's "earliest next
@@ -307,7 +313,10 @@ export async function getCompetitionDesk(
     hasFeature(auth.orgId, "discipline.enforced", competitionId),
   ]);
   const ids = divisions.map((d) => d.id);
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink } = await withTenant(auth.orgId, async (tx) => {
+  // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
+  // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
+  const { countFixturesToday } = await import("./match-day");
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -451,7 +460,8 @@ export async function getCompetitionDesk(
              and dl.revoked_at is null
              and (dl.expires_at is null or dl.expires_at > ${now})`
       : [];
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink };
+    const fixturesToday = await countFixturesToday(tx, competitionId, now);
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday };
   });
   const fixturesWithScorer = new Set([...fixturesWithOfficial, ...fixturesWithLink].map((a) => a.fixture_id));
   // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
@@ -668,7 +678,14 @@ export async function getCompetitionDesk(
     },
     "competition_desk_built",
   );
-  return { in_play: inPlayTotal, in_play_fixtures: inPlayFixtures, up_next: upNext, divisions: out, now: nowIso };
+  return {
+    in_play: inPlayTotal,
+    in_play_fixtures: inPlayFixtures,
+    up_next: upNext,
+    fixtures_today: fixturesToday,
+    divisions: out,
+    now: nowIso,
+  };
 }
 
 /** The competition-level pill's phase: either a ranked/counted state, or a

@@ -2590,12 +2590,15 @@ export const CompetitionDesk = z.object({
   // always (competition-desk.test.ts's Task 6 case pins this).
   in_play_fixtures: z.array(DeskInPlayFixture),
   up_next: DeskNextFixture.nullable(),
+  // Match Day B1: how many of the competition's matches are today, each on its own division's day, plus any in play — Match
+  // Day's own count (`countFixturesToday`). Above zero, the competition is on its match day.
+  fixtures_today: z.number().int().nonnegative(),
   // The usecase's own type is `Map<string, DeskDivision>` — a bare Map
   // serialises to `{}` over JSON (no own enumerable properties), so the
   // route converts it with `Object.fromEntries` before this schema ever
   // sees it. Left loosely typed rather than a full `DeskDivision` mirror:
   // no consumer of this wire contract reads inside `divisions` yet (the W3
-  // band reads only in_play/in_play_fixtures/up_next), and DeskDivision's
+  // band, retired by Match Day B1, read only in_play/in_play_fixtures/up_next), and DeskDivision's
   // own shape (division-phase.ts's `Attention` discriminated union, etc.)
   // has no established Zod schema to reuse — inventing one is out of this
   // task's scope.

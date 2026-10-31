@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 // Competition overview: divisions as match-day cards (v3/03 §2); settings
 // live on their own page.
 import Link from "@/components/ui/console-link";
-import { CalendarRange, Globe, MonitorPlay, Printer, Settings } from "lucide-react";
+import { CalendarRange, Globe, MonitorPlay, Printer, Radio, Settings } from "lucide-react";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
@@ -27,8 +27,15 @@ import { statusLine, nextDateLabel } from "@/lib/division-status-line";
 import { ledgerRank, leadingAttention } from "@/lib/division-phase";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { DeskToolsMore } from "@/components/v2/desk/desk-tools-more";
-import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
-import { InPlayBand } from "@/components/v2/desk/in-play-band";
+import {
+  NeedsYou,
+  NeedsYouInMatchDay,
+  needsYouAt,
+  needsYouHome,
+  needsYouItems,
+  resultsOwedOf,
+} from "@/components/v2/desk/needs-you";
+import { needsYouCount, needsYouTone } from "@/lib/match-day/view";
 import { DivisionLedger, type LedgerRow } from "@/components/v2/desk/division-ledger";
 import { log } from "@/server/logger";
 
@@ -75,6 +82,14 @@ export default async function CompetitionPage({
   const now = desk?.now ?? new Date().toISOString();
   const divisionNames = divisions.map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
   const needs = desk && canEdit ? needsYouItems(dict, desk, divisionNames, orgSlug, compSlug, locale) : [];
+  // Match Day B1 (spec 2026-10-31 §9). A match day is the desk's `fixtures_today` (A2's `countFixturesToday`, Match Day's own
+  // count) above zero; `needsYouHome` is the one rule, so Open Match Day and the place the Needs-you list lives can never
+  // disagree. A desk that failed to load (`null`) is no match day: the page degrades to what it showed before.
+  const onMatchDay = desk !== null && needsYouHome(desk.fixtures_today) === "match_day";
+  const needsHere = desk ? needsYouAt("competition", desk.fixtures_today, needs) : [];
+  // The line into Match Day carries the number Match Day's own header button opens with (`needsYouCount`), for the same rows.
+  const needsInMatchDay = onMatchDay && needs.length > 0 && desk ? needsYouCount({ needs_you: needs, results_owed: resultsOwedOf(desk) }) : 0;
+  const needsInMatchDayTone = needsYouTone(needs);
   const ledgerRows: LedgerRow[] = divisions.map((d) => {
     const dd = desk?.divisions.get(d.id) ?? null;
     const s = stats.get(d.id);
@@ -241,6 +256,21 @@ export default async function CompetitionPage({
             data-testid="desk-tool-row"
             className="flex flex-wrap items-center gap-2 max-md:w-full max-md:flex-col max-md:items-stretch"
           >
+            {/* Match Day B1 (spec §9): on a match day the venue board is the organiser's place to be, so it is THE action — the
+                one filled control at every width, and first on a phone (the schedule board steps back to a plain row below).
+                Organisers only: Match Day itself is (its page 404s for anyone who cannot edit). */}
+            {canEdit && onMatchDay && (
+              <Link
+                href={routes.competitionMatchDay(orgSlug, compSlug)}
+                data-testid="desk-tool-match-day"
+                // The phone fill is spelled out, not left to `btn-primary`: the hover reset and the tap floor are the same
+                // ones the schedule board needed (see its comment below), and the e2e phone composition reads this fill.
+                className="btn btn-primary gap-1.5 max-md:order-first max-md:min-h-11 max-md:w-full max-md:justify-start max-md:border-purple-600 max-md:bg-purple-600 max-md:px-4 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
+              >
+                <Radio aria-hidden className="h-4 w-4" strokeWidth={1.75} />
+                <span>{t(dict, "desk.tools.openMatchDay")}</span>
+              </Link>
+            )}
             {/* Entry point 1 of 4 (task 19): the pass, offered in the
                 competition's own header instead of only at a paywall. Renders
                 itself away for a paid org — Pro already exceeds it, and shows
@@ -294,7 +324,9 @@ export default async function CompetitionPage({
               <span className="hidden md:inline">{t(dict, "action.slideshow")} ↗</span>
             </Link>
             {/* The organiser's most likely action at a venue, so on a phone it
-                is THE action: first, full width, filled, and labelled. */}
+                is THE action: first, full width, filled, and labelled — except
+                on a match day (B1), when Open Match Day above is, and this
+                keeps its place as a plain full-width row: one primary. */}
             <Link
               href={routes.competitionSchedule(orgSlug, compSlug)}
               aria-label={t(dict, "aria.scheduleBoard")}
@@ -311,7 +343,11 @@ export default async function CompetitionPage({
               // full-width controls with one of them centred read as three
               // unrelated things. The fill is what marks the primary now, not
               // a different alignment.
-              className="btn btn-ghost gap-1.5 max-md:order-1 max-md:min-h-11 max-md:w-full max-md:justify-start max-md:border-purple-600 max-md:bg-purple-600 max-md:px-4 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
+              className={`btn btn-ghost gap-1.5 max-md:order-1 max-md:min-h-11 max-md:w-full max-md:justify-start max-md:px-4 ${
+                canEdit && onMatchDay
+                  ? ""
+                  : "max-md:border-purple-600 max-md:bg-purple-600 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
+              }`}
             >
               <CalendarRange className="h-4 w-4" strokeWidth={1.75} />
               <span className="md:inline">{t(dict, "action.scheduleBoard")}</span>
@@ -404,19 +440,17 @@ export default async function CompetitionPage({
           </div>
         </div>
 
-          {/* W3 Task 7: the live in-play band. `desk === null` (a summary
-              failure — see the `.catch` above) renders nothing here too; the
-              band's own `inPlay.length === 0` guard covers the far more
-              common "nothing live right now" case. */}
-          {desk && (
-            <InPlayBand
-              competitionId={id}
-              initial={{ inPlay: desk.in_play_fixtures, upNext: desk.up_next }}
-              dict={dict}
+          {/* Match Day B1 (spec §9): the live strip that sat here (W3's InPlayBand) is gone — live state is Match Day's — and
+              the Needs-you list lives in one place at a time: here before the day, in Match Day on a match day, where this
+              page keeps one line pointing at it. */}
+          <NeedsYou dict={dict} items={needsHere} />
+          {needsInMatchDay > 0 && needsInMatchDayTone !== null && (
+            <NeedsYouInMatchDay
+              href={routes.competitionMatchDay(orgSlug, compSlug)}
+              label={plural(dict, "desk.needsYou.inMatchDay", needsInMatchDay, locale)}
+              severity={needsInMatchDayTone}
             />
           )}
-
-          <NeedsYou dict={dict} items={needs} />
 
           {/* v17 gap #362 — nothing retires a competition past its end date, so
               the product asks instead of sweeping. Editors only: the two

@@ -47,7 +47,7 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
 const desk = (d: TestDivision, inPlay = 0, now = "2026-09-05T09:00:00Z"): CompetitionDesk => {
   const { division_id, ...rest } = d;
   return {
-    in_play: inPlay, in_play_fixtures: inPlayFixtures(inPlay, division_id), up_next: null,
+    in_play: inPlay, in_play_fixtures: inPlayFixtures(inPlay, division_id), up_next: null, fixtures_today: 0,
     divisions: new Map([[division_id, rest]]), now,
   };
 };
@@ -58,6 +58,7 @@ const deskOf = (divisions: TestDivision[], inPlay = 0, now = "2026-09-05T09:00:0
   in_play: inPlay,
   in_play_fixtures: inPlayFixtures(inPlay, divisions[0]?.division_id ?? "d1"),
   up_next: null,
+  fixtures_today: 0,
   divisions: new Map(divisions.map(({ division_id, ...rest }) => [division_id, rest])), now,
 });
 const names = [{ id: "d1", name: "Premier Division", slug: "premier-division" }];
@@ -682,7 +683,10 @@ describe("DivisionLedger", () => {
     );
     expect(html).toContain("Riverside FC");
   });
-  it("F5: an in-play fixture always renders as Now, even with no scheduled_at", () => {
+  // Match Day B1 (spec 2026-10-31 §9, "remove the divisions list's Now: column"): this used to pin "Now: Riverside FC v
+  // Harbour CC". The live match is Match Day's now — the ledger names no in-play fixture at any width, and with no other row
+  // carrying a next fixture it reserves no Next track either.
+  it("B1: an in-play fixture is never named on the ledger — no Now cell, no Next track, the pill reads In play", () => {
     const live = div({
       phase: "match_day",
       next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: null, in_play: true },
@@ -691,7 +695,35 @@ describe("DivisionLedger", () => {
       <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: live, statusLine: "s" }]} />,
     );
-    expect(html).toContain("Now: Riverside FC v Harbour CC");
+    // Positive pair: the row rendered, with its phase pill in the new word.
+    expect(html).toContain("Premier");
+    expect(html).toContain('data-pill="match_day"');
+    expect(html).toContain(`>${en["desk.phase.match_day"]}<`);
+    expect(en["desk.phase.match_day"]).toBe("In play");
+    expect(html).not.toContain("Now:");
+    expect(html).not.toContain("Riverside FC");
+    expect(html).not.toContain("minmax(0,1.4fr)");
+  });
+  it("B1: an in-play division beside one with a future fixture: the track stays (ledger-wide), the live row's cell is empty", () => {
+    const live = div({
+      phase: "match_day",
+      next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: null, in_play: true },
+    });
+    const future = div({
+      phase: "scheduled",
+      next: { home: "Lakeside FC", away: "Valley CC", scheduled_at: "2026-09-02T12:30:00Z", in_play: false },
+    });
+    const html = renderToStaticMarkup(
+      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-02T12:00:00Z"
+        rows={[
+          { id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: live, statusLine: "s" },
+          { id: "d2", name: "Second", slug: "second", sportKey: "football", logoUrl: null, desk: future, statusLine: "s" },
+        ]} />,
+    );
+    expect(html).toContain("minmax(0,1.4fr)");
+    expect(html).toContain("Lakeside FC");
+    expect(html).not.toContain("Riverside FC");
+    expect(html).not.toContain("Now:");
   });
 });
 

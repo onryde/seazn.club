@@ -34,7 +34,7 @@ import type {
 } from "@/lib/match-day/types";
 import { resolveVenueTz } from "@/lib/tz";
 import { venueNoun } from "@/lib/venue";
-import { needsYouItems } from "@/components/v2/desk/needs-you";
+import { needsYouAt, needsYouHome, needsYouItems, resultsOwedOf } from "@/components/v2/desk/needs-you";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { defaultMatchMinutes, getCompetitionDesk } from "./competition-desk";
 import { resolveCandidateCourts } from "./court-candidates";
@@ -462,16 +462,17 @@ export async function getMatchDay(
     board.comp.slug,
     locale,
   );
-  let resultsOwed = 0;
   // The desk's scorer attentions, by match (A4): the same `Attention` rows `needsYouItems` turns into Needs-you rows, so a court's
   // mark and the list's row are one fact. A match never raises both kinds (division-phase.ts).
   const scorerAttention = new Map<string, MatchDayFixture["scorer_attention"]>();
   for (const d of desk.divisions.values()) {
     for (const a of d.attention) {
-      if (a.kind === "result_missing") resultsOwed += a.count;
       if (a.kind === "no_scorer" || a.kind === "not_recording") for (const id of a.fixtureIds) scorerAttention.set(id, a.kind);
     }
   }
+  // B1 (spec §9, "Needs you lives in one place at a time"): the list is Match Day's on a match day only — before the day it is the
+  // competition page's (`needsYouHome`, the one rule both surfaces ask), and Match Day carries none of it, its owed count included.
+  const atHome = needsYouAt("match_day", fixturesToday, needs);
   // The preview's video (A4, §6.2): asked for the playing matches whose stream is live, and only those.
   const liveIds = board.courts.flatMap((c) => (c.state === "playing" && c.current !== null && streams[c.current.id] === "live" ? [c.current.id] : []));
   const videos = await liveSessionVideos(auth.orgId, liveIds);
@@ -490,8 +491,8 @@ export async function getMatchDay(
     tz: board.tz,
     now: now.toISOString(),
     courts: board.courts.map((c) => courtView(c, streams, extras)),
-    needs_you: needs,
-    results_owed: resultsOwed,
+    needs_you: atHome,
+    results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,
   };
 }

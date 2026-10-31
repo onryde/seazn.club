@@ -138,7 +138,6 @@ const EXEMPT: readonly Exemption[] = [
     via: [{ file: "src/server/usecases/me-officiating.ts", decl: "getMyOfficiating" }],
   },
   // Status-gated: the tie is `forfeited` (settled), and these list only unplayed or live fixtures.
-  { file: "src/components/v2/stages-panel.tsx", fn: "StagesPanel", sites: 2, reason: "the Now Playing strip lists in_play fixtures only (`nowPlaying`)" },
   { file: "src/server/usecases/org-posts.ts", fn: "assembleDigestUpcoming", sites: 2, reason: "the digest's upcoming list: `status = 'scheduled'` only" },
   { file: "src/server/public-site/public-player-matches.ts", fn: "opponentSeatNamer", sites: 2, reason: "a player's UPCOMING matches: `status = 'scheduled'` only" },
   { file: "src/server/public-site/public-player-matches.ts", fn: "readPlayerUpcoming", sites: 2, reason: "the upcoming read's own bye exclusion: `status = 'scheduled'` only" },

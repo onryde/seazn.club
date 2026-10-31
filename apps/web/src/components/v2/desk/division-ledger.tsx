@@ -44,9 +44,12 @@ function nextLine(dict: Dict, d: DeskDivision, locale: string, nowMs: number): s
   // row) is the whole point of a desk that only speaks when something is
   // actually owed.
   if (!d.next) return "";
+  // Match Day B1 (spec 2026-10-31 §9, "remove the divisions list's Now: column"): a match being played is Match Day's to show,
+  // and this page no longer repeats it — the row's pill already says the division is in play. Not "Next" either: it has
+  // started. Empty, at every width (the phone card prints this same value).
+  if (d.next.in_play) return "";
   const home = d.next.home ?? "—";
   const away = d.next.away ?? "—";
-  if (d.next.in_play) return t(dict, "desk.ledger.now", { home, away });
   // F5 fix (final review, Important): `d.next` is card-stats.ts's shared
   // "next fixture" query (out of this wave's scope to change — see
   // card-stats.ts:145-151) — it carries no `>= now()` floor and can name a
@@ -232,10 +235,9 @@ export function DivisionLedger({
                       lines as it needs"). */}
                   <p className="mt-2 text-xs text-slate-600">{r.statusLine}</p>
                   {/* F5 (round J): the phone card used to DROP this line, so
-                      the width most likely to be in a hand at the venue was
-                      the only one that never said a match was live right now
-                      — "Now: Alpha v Bravo" appeared on the desktop row and
-                      nowhere else. Same `nextLine` value the desktop row
+                      the two widths disagreed about the same row (then:
+                      "Now: Alpha v Bravo", a live line B1 has since moved to
+                      Match Day). Same `nextLine` value the desktop row
                       prints (computed once per row above, never re-derived):
                       a second derivation of one displayed fact is how this
                       wave produced its worst defects. Empty stays empty —

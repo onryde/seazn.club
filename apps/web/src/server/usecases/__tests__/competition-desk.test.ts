@@ -22,6 +22,11 @@ import { appendEvent } from "@/server/engine-db";
 import { getCompetitionDesk, competitionPhase } from "../competition-desk";
 import { NOT_RECORDING_GRACE_MINUTES } from "@/lib/division-phase";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import en from "@/dictionaries/en/ui.json";
+import { needsYouAt, needsYouItems } from "@/components/v2/desk/needs-you";
+import { getMatchDay } from "../match-day";
+import { listDivisions } from "../divisions";
+import { ORG_TZ, between, seedDay, setStatus, type Pair } from "./_match-day-seed";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const GENERIC_CONFIG = {
@@ -1366,6 +1371,120 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       const { competitionId } = await seedDivision(auth, 4);
       const desk = await getCompetitionDesk(auth, competitionId);
       expect(desk.up_next).toBeNull();
+    });
+  });
+
+  // -------------------------------------------------------------------------------------------------------------------------
+  // Match Day B1 (spec 2026-10-31 §9): `fixtures_today` is the competition page's match-day gate — it shows Open Match Day and
+  // decides where the Needs-you list lives. It is A2's `countFixturesToday` (controller ruling R2: one count, two surfaces), so
+  // each match is today on its OWN division's day: the venue zone, else the organisation's. The expected values below come from
+  // the zone's own calendar (Intl), never from the SQL under test.
+  // -------------------------------------------------------------------------------------------------------------------------
+  // One sport (generic, `seedDay`'s): `countFixturesToday` reads a fixture's status, time and division zone only — no sport
+  // column is in its query, so another sport cannot change the count.
+  describe("B1: fixtures_today, the competition page's match-day gate", () => {
+    /** `instant`'s calendar date in `tz`, read from Intl — the zone's declaration, not the code under test. */
+    const dateIn = (instant: Date, tz: string): string =>
+      new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(instant);
+
+    it("counts a multi-day event's matches on each match's own day — the day before, the day of, a middle day with none — and the competition page and Match Day agree every day", async () => {
+      // The organisation is on Europe/Amsterdam and the division declares no zone, so its matches are on Amsterdam's day.
+      const day = await seedDay();
+      const [p1, p2, p3, p4] = day.comp.pairs as [Pair, Pair, Pair, Pair];
+      const planned = [
+        { id: between(day.comp, p1, p2).id, at: "2026-11-07T10:00:00.000Z" }, // Sat 7 Nov, 11:00 in Amsterdam
+        { id: between(day.comp, p3, p4).id, at: "2026-11-07T22:30:00.000Z" }, // Sat 7 Nov, 23:30 in Amsterdam
+        { id: between(day.comp, p1, p3).id, at: "2026-11-09T23:30:00.000Z" }, // Monday in UTC; Tue 10 Nov, 00:30 in Amsterdam
+      ];
+      for (const p of planned) await sql`update fixtures set scheduled_at = ${p.at} where id = ${p.id}`;
+      const onDay = (now: Date, tz: string): number =>
+        planned.filter((p) => dateIn(new Date(p.at), tz) === dateIn(now, tz)).length;
+      const days: [string, string][] = [
+        ["the day before", "2026-11-06T12:00:00.000Z"],
+        ["the first day", "2026-11-07T12:00:00.000Z"],
+        ["a middle day with no matches", "2026-11-08T12:00:00.000Z"],
+        ["the late match's day in UTC, not in Amsterdam", "2026-11-09T12:00:00.000Z"],
+        ["the last day", "2026-11-10T12:00:00.000Z"],
+      ];
+      // Guard the guard: the derived expectations have the shape this test is about — none the day before, two on the day,
+      // none in the middle — and on the Monday the two zones disagree, so a count taken in UTC cannot pass.
+      expect(days.map(([, d]) => onDay(new Date(d), ORG_TZ))).toEqual([0, 2, 0, 0, 1]);
+      expect(onDay(new Date(days[3]![1]), "UTC")).toBe(1);
+      let checked = 0;
+      for (const [label, d] of days) {
+        const now = new Date(d);
+        const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
+        expect(desk.fixtures_today, label).toBe(onDay(now, ORG_TZ));
+        // One count, two surfaces: Match Day's own count is the same number at the same instant.
+        expect((await getMatchDay(day.auth, day.comp.id, now)).fixtures_today, `${label}: Match Day agrees`).toBe(
+          desk.fixtures_today,
+        );
+        checked++;
+      }
+      expect(checked, "days checked").toBe(days.length);
+
+      // The division's own zone, once it declares one: in UTC the late match is Monday's, and Tuesday has none.
+      await sql`update schedule_settings set tz = 'UTC' where division_id = ${day.comp.divisionId}`;
+      const monday = new Date(days[3]![1]);
+      const tuesday = new Date(days[4]![1]);
+      expect((await getCompetitionDesk(day.auth, day.comp.id, monday)).fixtures_today).toBe(onDay(monday, "UTC"));
+      expect((await getCompetitionDesk(day.auth, day.comp.id, tuesday)).fixtures_today).toBe(onDay(tuesday, "UTC"));
+      expect((await getMatchDay(day.auth, day.comp.id, monday)).fixtures_today).toBe(1);
+
+      // A match in play is a match today whatever day it was planned for (ruling m5): the middle day becomes a match day.
+      const middle = new Date(days[2]![1]);
+      await setStatus(planned[0]!.id, "in_play");
+      expect((await getCompetitionDesk(day.auth, day.comp.id, middle)).fixtures_today).toBe(1);
+      // A cancelled match is no match: Monday stops being a match day.
+      await setStatus(planned[2]!.id, "cancelled");
+      expect((await getCompetitionDesk(day.auth, day.comp.id, monday)).fixtures_today).toBe(1); // only the one in play
+      await setStatus(planned[0]!.id, "decided");
+      expect((await getCompetitionDesk(day.auth, day.comp.id, monday)).fixtures_today).toBe(0);
+    });
+
+    it("the Needs-you list lives in one place: Match Day carries it only on a match day, the competition page before the day", async () => {
+      const day = await seedDay();
+      const [p1, p2] = day.comp.pairs as [Pair, Pair];
+      // Started, so the desk raises its live-activity rows (a division still in setup raises none).
+      await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+      // One match on Sat 7 Nov at 11:00 in Amsterdam, 30 minutes long; the other five have no time.
+      await sql`update fixtures set scheduled_at = ${"2026-11-07T10:00:00.000Z"} where id = ${between(day.comp, p1, p2).id}`;
+      const names = (await listDivisions(day.auth, day.comp.id)).map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
+      const itemsAt = async (now: Date) => {
+        const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
+        return { desk, items: needsYouItems(en, desk, names, "org", "comp", "en") };
+      };
+
+      // The day before: the desk has a row to place, and it is the competition page's.
+      const before = new Date("2026-11-06T12:00:00.000Z");
+      const b = await itemsAt(before);
+      expect(b.items.map((i) => i.kind), "premise: the desk has a row").toEqual(["unscheduled"]);
+      expect(b.desk.fixtures_today).toBe(0);
+      expect(needsYouAt("competition", b.desk.fixtures_today, b.items)).toEqual(b.items);
+      const viewBefore = await getMatchDay(day.auth, day.comp.id, before);
+      expect(viewBefore.needs_you, "Match Day has no list the day before").toEqual([]);
+      expect(viewBefore.results_owed).toBe(0);
+
+      // The day of, an hour after the match's window closed: its result is owed, and the whole list is Match Day's.
+      const on = new Date("2026-11-07T12:00:00.000Z");
+      const o = await itemsAt(on);
+      expect(o.items.map((i) => i.kind).sort(), "premise: the desk has two rows").toEqual(["result_missing", "unscheduled"]);
+      expect(o.desk.fixtures_today).toBe(1);
+      expect(needsYouAt("competition", o.desk.fixtures_today, o.items), "the competition page lists nothing").toEqual([]);
+      const viewOn = await getMatchDay(day.auth, day.comp.id, on);
+      expect(viewOn.needs_you.map((i) => i.kind).sort()).toEqual(["result_missing", "unscheduled"]);
+      expect(viewOn.results_owed).toBe(1);
+
+      // The next day has no match: Saturday's result is still owed, and it is back on the competition page — Match Day carries
+      // neither the row nor its count (the owed count is part of the list, not a fact of its own).
+      const after = new Date("2026-11-08T12:00:00.000Z");
+      const a = await itemsAt(after);
+      expect(a.desk.fixtures_today).toBe(0);
+      expect(a.items.map((i) => i.kind).sort(), "premise: the owed result is still owed").toEqual(["result_missing", "unscheduled"]);
+      expect(needsYouAt("competition", a.desk.fixtures_today, a.items)).toEqual(a.items);
+      const viewAfter = await getMatchDay(day.auth, day.comp.id, after);
+      expect(viewAfter.needs_you).toEqual([]);
+      expect(viewAfter.results_owed).toBe(0);
     });
   });
 });

@@ -1,4 +1,5 @@
 import Link from "@/components/ui/console-link";
+import { ChevronRight } from "lucide-react";
 // The pure runtime, not `@/lib/i18n` (server-only): Match Day's client shell renders this same list (task A4) — reused, never
 // copied. Only `t`/`plural` were ever read from there, and `@/lib/i18n` re-exports them from this module.
 import { t, plural } from "@/lib/i18n-runtime";
@@ -246,6 +247,41 @@ export function needsYouItems(
   return items.sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
 }
 
+// ---- Where the list lives (Match Day B1, spec 2026-10-31 §9: "Needs you lives in one place at a time") ----------------------
+
+/** The two surfaces that can carry the Needs-you list. */
+export type NeedsYouHome = "competition" | "match_day";
+
+/**
+ * Where the WHOLE Needs-you list lives, from the competition desk's `fixtures_today` (A2's `countFixturesToday`): in Match Day
+ * on a match day — the same condition that puts Open Match Day on the competition page — and on the competition page before
+ * the day. Never split, never in both: the competition page and Match Day each ask this one function.
+ *
+ * The empty case first: no match today is the competition page's. A count that is not one (negative, fractional, NaN) is a
+ * broken read, not a day — refused, rather than silently landing the list on either surface.
+ */
+export function needsYouHome(fixturesToday: number): NeedsYouHome {
+  if (!Number.isInteger(fixturesToday) || fixturesToday < 0) {
+    throw new RangeError(`needsYouHome: fixtures_today must be a whole count, got ${fixturesToday}`);
+  }
+  if (fixturesToday === 0) return "competition";
+  return "match_day";
+}
+
+/** The Needs-you rows `surface` shows: all of them when it is their home (`needsYouHome`), none otherwise. */
+export function needsYouAt(surface: NeedsYouHome, fixturesToday: number, items: readonly NeedsYouItem[]): NeedsYouItem[] {
+  return needsYouHome(fixturesToday) === surface ? [...items] : [];
+}
+
+/** How many matches owe a result: the desk's `result_missing` attentions, summed across divisions. One sum for Match Day's
+ *  `results_owed` (match-day.ts) and the competition page's line into Match Day, so the line's count is the one Match Day's
+ *  header opens with (`needsYouCount`). */
+export function resultsOwedOf(desk: Pick<CompetitionDesk, "divisions">): number {
+  let owed = 0;
+  for (const d of desk.divisions.values()) for (const a of d.attention) if (a.kind === "result_missing") owed += a.count;
+  return owed;
+}
+
 export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] }) {
   if (items.length === 0) return null;
   return (
@@ -291,5 +327,26 @@ export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] })
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * The competition page's one line on a match day (B1, spec §9: "N things need you, in Match Day"), in place of the list it
+ * would otherwise show: the whole list lives in Match Day then. One full-width row, the most urgent row's colour on its dot,
+ * at the tap floor at every width. The arrow is an icon, not a character in the copy, so no locale carries punctuation that
+ * only reads left to right.
+ */
+export function NeedsYouInMatchDay({ href, label, severity }: { href: string; label: string; severity: Severity }) {
+  return (
+    <Link
+      href={href}
+      data-testid="desk-needs-you-in-match-day"
+      data-severity={severity}
+      className="card mb-6 flex min-h-11 items-center gap-3 px-4 py-3 text-sm text-slate-900 transition-colors hover:bg-purple-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600"
+    >
+      <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${DOT[severity]}`} />
+      <span className="min-w-0 flex-1">{label}</span>
+      <ChevronRight aria-hidden className="h-4 w-4 shrink-0 text-slate-500" strokeWidth={1.75} />
+    </Link>
   );
 }

@@ -36,7 +36,6 @@ import {
   isUnscheduledFixture,
   type DivisionPhase,
 } from "@/lib/division-phase";
-import { resolveSlotLabel } from "@/lib/slot-label";
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey, type PointsRule } from "@seazn/engine/competition";
@@ -63,7 +62,7 @@ import { DocumentsMenu } from "@/components/v2/board/documents-menu";
 import { DateTimeField } from "./shared/datetime-field";
 import { boardSlotTimes } from "./shared/time-options";
 import { windowsToDailyHours } from "@/lib/schedule-board";
-import { courtDisplayName, type BoardConfig } from "@/components/v2/board/types";
+import type { BoardConfig } from "@/components/v2/board/types";
 // `resolveCourtNames`/`flattenCourts` are the SAME shared pieces the board's
 // own `courtNamesById` and the settings tab's `CourtMultiPicker` already use
 // — reused here rather than a third court-name implementation. `courtGroups`
@@ -814,8 +813,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     return <p className="text-sm text-slate-500">{msg("schedule.noStages")}</p>;
   }
 
-  const nowPlaying = fixtures.filter((f) => f.status === "in_play");
-
   return (
     <div className="space-y-6">
       {/* L1 (fix round H, Critical — instance ELEVEN): gated on PROGRESS, not
@@ -874,51 +871,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         {canExport && <DocumentsMenu divisionId={divisionId} competitionId={competitionId} />}
       </div>
 
-      {/* "Now playing" strip (item 4): in-play matches float above the rounds. */}
-      {nowPlaying.length > 0 && (
-        <section
-          className="rounded-xl border border-amber-200 bg-amber-50/70 p-3"
-          aria-label={msg("schedule.nowPlaying")}
-        >
-          <h3 className="mb-1.5 text-xs font-semibold tracking-wide text-amber-800 uppercase">
-            {msg("schedule.nowPlaying")}
-          </h3>
-          <ul className="flex flex-wrap gap-2">
-            {nowPlaying.map((f) => (
-              <li key={f.id}>
-                <Link
-                  href={routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-800 hover:border-amber-400"
-                >
-                  <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-                  {/* max-w + truncate (P6/D4b): a slot label ("Best 3 of the
-                      3rd-place teams") runs far longer than a team name — an
-                      in_play fixture always has both entrants filled in
-                      practice (scoring an unfilled fixture 422s), so this is
-                      a defensive floor, not the common case. */}
-                  <span className="inline-block max-w-[9rem] truncate align-bottom">
-                    {f.home_entrant_id
-                      ? (entrantNames[f.home_entrant_id] ?? "?")
-                      : resolveSlotLabel(f.home_slot_label ?? null, msg, "schedule.tbd")}
-                  </span>{" "}
-                  {msg("schedule.vs")}{" "}
-                  <span className="inline-block max-w-[9rem] truncate align-bottom">
-                    {f.away_entrant_id
-                      ? (entrantNames[f.away_entrant_id] ?? "?")
-                      : resolveSlotLabel(f.away_slot_label ?? null, msg, "schedule.tbd")}
-                  </span>
-                  {/* P9 pass 4d: resolved NAME first (venue-qualified when
-                      ambiguous), the frozen label as a fallback — never a raw
-                      court_id. */}
-                  {courtDisplayName(f, courtNamesById) ? (
-                    <span className="text-slate-500">· {courtDisplayName(f, courtNamesById)}</span>
-                  ) : null}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {/* Match Day B1 (spec 2026-10-31 §9, "remove the Now playing banner"): the in-play strip that floated above the rounds
+          is gone — what is being played is Match Day's to show. The run sheet below still lists every match, in play or not. */}
 
       {/* Competition Desk (2026-09-02, task 6): stages always in seq order —
           the old complete-sinks-last rule reshuffled a running division's own
