@@ -37,9 +37,11 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { applicationFeeCents, feePercentFor } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
 import { orgOwnerRecipient } from "./org-owner";
+import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 
-export const SPONSOR_TIERS = ["title", "gold", "silver", "partner"] as const;
-export type SponsorTier = (typeof SPONSOR_TIERS)[number];
+// The tier list lives in the client-safe lib (R4 F10: this module imports the email outbox, so the planner and the
+// overlay cannot import it). Re-exported, never re-declared — one authority.
+export { SPONSOR_TIERS, type SponsorTier };
 
 export interface SponsorRow {
   id: string;
