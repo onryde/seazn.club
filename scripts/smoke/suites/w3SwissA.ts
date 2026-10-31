@@ -226,11 +226,14 @@ export async function w3SwissASuite(): Promise<void> {
     );
   }
 
-  // Checks 5 and 6 (T3) — a badminton Swiss of five (odd: every round has a bye), round 1 paired.
+  // Checks 5 and 6 (T3) — a badminton Swiss of five (odd: every round has a bye), round 1 paired. Its own competition: the
+  // fresh owner's plan caps divisions per competition, and the one above already holds four.
   {
-    const divId = v1data<{ id: string } | undefined>(
-      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Bye", sport_key: "badminton", variant_key: "bwf" }),
-    )?.id;
+    const byeComp = v1data<{ id: string } | undefined>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss A bye ${tag}`, visibility: "private" }),
+    );
+    const divRes = await v1(owner, `/api/v1/competitions/${byeComp?.id}/divisions`, "POST", { name: "Bye", sport_key: "badminton", variant_key: "bwf" });
+    const divId = v1data<{ id: string } | undefined>(divRes)?.id;
     const players =
       v1data<{ id: string }[] | undefined>(
         await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
@@ -249,7 +252,7 @@ export async function w3SwissASuite(): Promise<void> {
     const bye1 = await byKey("sw-r1-bye");
     const board2 = await byKey("sw-r2-b1");
     const rulesOf = async (id: string | undefined) => v1data<{ cfg?: { bestOf?: number } } | undefined>(await v1(owner, `/api/v1/fixtures/${id}/rules`))?.cfg;
-    const setup = `players ${players.length}, mint ${minted.status}, pair ${paired.status}, bye ${bye1?.status ?? "missing"}, board ${board2 ? "found" : "missing"}`;
+    const setup = `division ${divRes.status}${divId ? "" : ` ${JSON.stringify(divRes.json).slice(0, 160)}`}, players ${players.length}, mint ${minted.status}, pair ${paired.status}, bye ${bye1?.status ?? "missing"}, board ${board2 ? "found" : "missing"}`;
 
     // Check 5 (X-SW-5, SW-M7): the seated bye's format is the one it was awarded under. A stage format save moves what an
     // unplayed match plays (round 2's board: the witness the save landed) and leaves the bye's.

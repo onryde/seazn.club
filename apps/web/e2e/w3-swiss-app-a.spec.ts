@@ -407,9 +407,12 @@ test.describe("X-SW-29 a bye has no court and no sheet", () => {
     }
     expect(checked, "anti-vacuity: every row was read back").toBe(6);
 
-    // The board after the pass: nothing left to place — the byes are not waiting in the tray.
+    // The board after the pass opens on the boards' day with all four placed (the grid at a desktop width, the agenda
+    // on a phone), and nothing is left to place: an empty tray renders nothing at all — the byes are not waiting in it.
     await page.goto(await divisionPath(request, divisionId, "/schedule"));
-    await expect(page.getByTestId("board-tray")).toHaveAttribute("data-count", "0", { timeout: 20_000 });
+    for (const b of boards) await expect(page.locator(`[data-fixture-id="${b.id}"]`).first()).toBeAttached({ timeout: 20_000 });
+    await expect(page.getByTestId("board-tray")).toHaveCount(0);
+    await expect(page.getByTestId("board-tray-mobile")).toHaveCount(0);
     for (const b of byes) await expect(page.locator(`[data-fixture-id="${b.id}"]`)).toHaveCount(0);
 
     // The print control offers the boards' day and no other: a bye adds no sheet.
