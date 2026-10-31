@@ -21,6 +21,7 @@ import {
   GALLERY_SNAPSHOT_KINDS,
   GALLERY_SPONSOR_CARDS,
   GALLERY_SPONSOR_FACE_SPORTS,
+  GALLERY_SPONSOR_WITNESS_ID,
   galleryCells,
   galleryMatrix,
   gallerySponsorPlan,
@@ -106,7 +107,7 @@ describe("galleryMatrix — the size, from the declarations", () => {
     for (const sport of OVERLAY_SPORT_KEYS) {
       expected += templatesForSport(sport).length * OVERLAY_SCENES.length * GALLERY_SNAPSHOT_KINDS.length;
       // R4 S7: template × sport × each slot the template declares (spec 2026-10-27 §3.5), plus the plain face's (m3).
-      const faces = (GALLERY_SPONSOR_FACE_SPORTS as readonly string[]).includes(sport) ? 2 : 1;
+      const faces = (GALLERY_SPONSOR_FACE_SPORTS as readonly string[]).includes(sport) ? GALLERY_SPONSOR_CARDS.length : 1;
       for (const def of templatesForSport(sport)) expected += Object.keys(def.sponsorSlots).length * faces;
     }
     for (const s of GALLERY_MOMENT_SAMPLES) expected += templatesForSport(s.sportKey).length * firing;
@@ -214,27 +215,36 @@ describe("decision 8 (D14) — a scene's momentsFire is the one authority for mo
 });
 
 describe("R4 S7 — the sponsor cells (spec 2026-10-27 §3.5: template × sport × slot) and the carousel cells", () => {
-  it("every template × sport × declared slot has one full-face (title) cell; the face sports one plain-face (gold) cell too", () => {
+  it("every template × sport × declared slot has one full-face (title) cell; the face sports one cell per OTHER gallery card too (plain face, witness)", () => {
     const cells = galleryCells(OVERLAY_TEMPLATES, []);
     const [full, plain] = GALLERY_SPONSOR_CARDS;
+    const witness = GALLERY_SPONSOR_CARDS.find((c) => c.id === GALLERY_SPONSOR_WITNESS_ID);
+    expect(witness, "premise: the witness is a gallery card").toBeDefined();
     let checked = 0;
-    let plainChecked = 0;
+    let extraChecked = 0;
+    const witnessTemplates = new Set<string>();
     for (const sport of OVERLAY_SPORT_KEYS) {
       const faceSport = (GALLERY_SPONSOR_FACE_SPORTS as readonly string[]).includes(sport);
       for (const def of templatesForSport(sport)) {
         for (const slot of Object.keys(def.sponsorSlots)) {
           const at = (id: string) => cells.filter((c) => c.templateId === def.id && c.sportKey === sport && c.sponsorSlot === slot && c.sponsorCard === id);
           expect(at(full!.id), `${def.id} × ${sport} × ${slot}: full face`).toHaveLength(1);
-          expect(at(plain!.id), `${def.id} × ${sport} × ${slot}: plain face`).toHaveLength(faceSport ? 1 : 0);
+          for (const other of GALLERY_SPONSOR_CARDS.slice(1)) {
+            expect(at(other.id), `${def.id} × ${sport} × ${slot}: ${other.id}`).toHaveLength(faceSport ? 1 : 0);
+            if (faceSport) extraChecked++;
+          }
+          if (faceSport) witnessTemplates.add(`${def.id}|${slot}`);
           checked++;
-          if (faceSport) plainChecked++;
         }
       }
     }
-    console.log(`sponsor cells checked: ${checked} slots, ${plainChecked} with the plain face`);
+    console.log(`sponsor cells checked: ${checked} slots, ${extraChecked} other-card cells`);
     expect(checked, "anti-vacuity").toBeGreaterThan(0);
-    expect(plainChecked, "anti-vacuity: a plain face").toBeGreaterThan(0);
-    expect(cells.filter((c) => c.sponsorSlot !== null)).toHaveLength(checked + plainChecked);
+    expect(extraChecked, "anti-vacuity: the other faces").toBeGreaterThan(0);
+    expect(cells.filter((c) => c.sponsorSlot !== null)).toHaveLength(checked + extraChecked);
+    // Round 2: the witness reaches EVERY template's EVERY slot (check 9 holds it cut on each).
+    const everySlot = Object.values(OVERLAY_TEMPLATES).flatMap((def) => Object.keys(def.sponsorSlots).map((slot) => `${def.id}|${slot}`));
+    expect([...witnessTemplates].sort()).toEqual(everySlot.sort());
     // Premise (m3): the second gallery card IS the plain face — no logo, no short code.
     expect(plain!.logoUrl).toBeNull();
     expect(plain!.shortCode).toBeUndefined();

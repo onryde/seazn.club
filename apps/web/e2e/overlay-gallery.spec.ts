@@ -511,7 +511,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
   // 9 — R4 S7. Measured off the SLOT (placed by the declaration, never transformed) and the card's own layout box, not
   // the card's painted box: a carousel card that rotates mid-probe is sliding in, and its transform would read as a
   // card out of its slot for 250 ms. The slot clips (`overflow: hidden`), so nothing of the card paints outside it.
-  test("check 9 (sponsor slots): every template × sport × slot and the scene carousel — the declared slot, clear of the scorebug and the match card, the floors held, the 43-character name cut inside its card", async ({ page }) => {
+  test("check 9 (sponsor slots): every template × sport × slot and the scene carousel — the declared slot, clear of the scorebug and the match card, the floors held, the 43-character name whole or cleanly cut, the longest name cut inside its card", async ({ page }) => {
     test.setTimeout(240_000);
     await signInStaff(page);
     await openGallery(page);
@@ -626,13 +626,23 @@ test.describe("the staff overlay gallery (R2007)", () => {
     const lowerCut = slotCells.filter((p) => p.slot === "lower_third" && p.nameCut).length;
     const lowerThirds = slotCells.filter((p) => p.slot === "lower_third").length;
     // The face each cell pins (`data-sponsor-face`): full = a logo and `seazn.club/s/<code>` (R7); plain = the
-    // monogram and nothing link-like (fix round 1, m3).
+    // monogram and nothing link-like (fix round 1, m3); witness = a full face whose name is the longest a sponsor can
+    // have (80 characters) — too wide for any slot by the font's own metrics (sponsor-card.test.tsx), so it is the
+    // ellipsis's and the clamp's witness (fix round 2). The 43-character name FITS every slot whole (758 px in an
+    // 816 px lower-third column; two lines in the banner), so on its own it witnesses neither.
     const fullFaces = slotCells.filter((p) => p.face === "full");
     const plainFaces = slotCells.filter((p) => p.face === "plain");
-    const linkless = fullFaces.filter((p) => !/^seazn\.club\/s\/[A-Z0-9]+$/.test(p.link ?? "") || !p.logo || p.mono).map((p) => `${p.key}: ${p.link}`);
+    const witnessFaces = slotCells.filter((p) => p.face === "witness");
+    const linked = [...fullFaces, ...witnessFaces];
+    const linkless = linked.filter((p) => !/^seazn\.club\/s\/[A-Z0-9]+$/.test(p.link ?? "") || !p.logo || p.mono).map((p) => `${p.key}: ${p.link}`);
     const plainWrong = plainFaces.filter((p) => p.link !== null || p.logo || !p.mono).map((p) => `${p.key}: link ${p.link}, logo ${p.logo}`);
-    expect(fullFaces.length + plainFaces.length, "every sponsor-slot cell names its face").toBe(slotCells.length);
+    expect(fullFaces.length + plainFaces.length + witnessFaces.length, "every sponsor-slot cell names its face").toBe(slotCells.length);
     expect(plainFaces.length, "anti-vacuity: the plain face is drawn").toBeGreaterThan(0);
+    // The witness is drawn on EVERY template's every slot, and it is cut on each one (cleanly: `badCut` below).
+    const witnessSlots = new Set(witnessFaces.map((p) => `${p.template}|${p.slot}`));
+    const everySlot = new Set(templates.flatMap((t) => ["lower_third", "banner"].map((slot) => `${t}|${slot}`)));
+    expect([...witnessSlots].sort(), "the witness reaches every template's every slot").toEqual([...everySlot].sort());
+    const witnessWhole = witnessFaces.filter((p) => !p.nameCut).map((p) => p.key);
     // The scene's match card and its brand mark, where the scene draws them (Starting soon always does).
     const besideMatch = carouselCells.filter((p) => p.slotBox !== null && p.matchBox !== null);
     const overMatch = carouselCells
@@ -645,12 +655,13 @@ test.describe("the staff overlay gallery (R2007)", () => {
     console.log(
       `[9] cards checked: ${probes.length - cardless.length}, text elements: ${textChecked}, below ${TEXT_FLOOR_PX}px: ${below.length}, ` +
         `lowest lift: ${Math.min(...probes.filter((p) => p.slotBox).map(lift)).toFixed(1)}px, lower-third names cut: ${lowerCut} of ${lowerThirds}, ` +
-        `faces: ${fullFaces.length} full, ${plainFaces.length} plain, ` +
+        `faces: ${fullFaces.length} full, ${plainFaces.length} plain, ${witnessFaces.length} witness (cut: ${witnessFaces.length - witnessWhole.length}), ` +
         `carousel cards measured against a match card: ${besideMatch.length} of ${carouselCells.length}, over it: ${overMatch.length}`,
     );
     expect(besideMatch.length, "anti-vacuity: a carousel shares the canvas with a match card (Starting soon)").toBeGreaterThan(0);
     expect(textChecked, "anti-vacuity: no sponsor text read").toBeGreaterThan(0);
-    expect(lowerCut, "anti-vacuity: the 43-character name is cut on at least one lower third").toBeGreaterThan(0);
+    expect(lowerCut, "anti-vacuity: a name is cut on at least one lower third (the witness)").toBeGreaterThan(0);
+    expect(witnessWhole, "anti-vacuity: the longest name allowed is cut on every lower third and banner").toEqual([]);
     expect.soft(cardless, "a sponsor cell without exactly one card").toEqual([]);
     expect.soft(wrongSlot, "a card drawn in another look's slot").toEqual([]);
     expect.soft(undeclared, "a slot off its declared box").toEqual([]);

@@ -18,6 +18,7 @@ import { OVERLAY_TEMPLATES, type TemplateId } from "@/components/overlay/templat
 import {
   GALLERY_MOMENT_SAMPLES,
   GALLERY_SPONSOR_CARDS,
+  GALLERY_SPONSOR_WITNESS_ID,
   gallerySponsorPlan,
   type GalleryCell,
   type GallerySnapshotKind,
@@ -100,20 +101,23 @@ function decidedWinnerIndex(snapshot: OverlayLiveData, sides: OverlayGalleryProp
 }
 
 /** Which face a sponsor cell's card shows — what gallery check 9 holds it to: `full` (a logo and a short link), `plain`
- *  (the monogram, no link), or "" off the sponsor cells. */
-function sponsorFaceOf(cell: GalleryCell): "full" | "plain" | "" {
+ *  (the monogram, no link), `witness` (a full face whose name cannot fit the slot: cut, cleanly), or "" off the sponsor
+ *  cells. */
+function sponsorFaceOf(cell: GalleryCell): "full" | "plain" | "witness" | "" {
   const c = GALLERY_SPONSOR_CARDS.find((x) => x.id === cell.sponsorCard);
   if (c === undefined) return "";
+  if (c.id === GALLERY_SPONSOR_WITNESS_ID) return "witness";
   return c.logoUrl !== null && c.shortCode !== undefined ? "full" : "plain";
 }
 
 function cellState(cell: GalleryCell, ui: Record<string, string>, moment: OverlayMoment | undefined): string {
   if (cell.sponsorSlot !== null) {
     const slot = t(ui, SPONSOR_SLOT_LABEL[cell.sponsorSlot]);
-    // The plain face (fix round 1, m3): the card with no logo and no short code.
-    return sponsorFaceOf(cell) === "plain"
-      ? t(ui, "admin.overlayGallery.sponsorCardPlain", { slot })
-      : t(ui, "admin.overlayGallery.sponsorCard", { slot });
+    // The plain face (fix round 1, m3): the card with no logo and no short code. The witness (round 2): the longest name.
+    const face = sponsorFaceOf(cell);
+    if (face === "plain") return t(ui, "admin.overlayGallery.sponsorCardPlain", { slot });
+    if (face === "witness") return t(ui, "admin.overlayGallery.sponsorCardLongest", { slot });
+    return t(ui, "admin.overlayGallery.sponsorCard", { slot });
   }
   if (cell.carousel) return t(ui, "admin.overlayGallery.sponsorCarousel");
   if (cell.resultStatus !== null) return t(ui, `score.status.${cell.resultStatus}`);
