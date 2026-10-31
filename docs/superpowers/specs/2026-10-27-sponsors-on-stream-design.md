@@ -213,10 +213,15 @@ Counted from **composed streams only** in the MVP (D10):
 
 ### 3.7 Click attribution
 
-`/s/[sponsorId]` accepts `?f=<fixtureId>&src=<match|stream|site>` (fixture must be in the sponsor's org, `src` an
-enum, else `unknown`). It still bumps `click_count` and also inserts a `sponsor_clicks` row (deferred, as today).
-Tagged links: the public match page's sponsor strip (`src=match`) and the `/s/` link shown on screen with the card
-(`src=stream`). **No sponsor links in the YouTube description** *(coordinator's call 2026-10-27, not an owner ruling)*: the YouTube Connect spec
+`/s/[key]` serves two shapes. A sponsor id accepts `?f=<fixtureId>&src=<match|site>` (the fixture must be in the
+sponsor's org — and, for a competition-scoped sponsor, in that competition — and `src` one of the two, else `unknown`).
+A short code (owner ruling R7) is its own tag: that sponsor, that fixture, `stream`; it is matched in any case.
+**Stream clicks come only through `/s/<code>`** *(owner ruling R7 "a", 2026-10-31)*: a sponsor-id link claiming
+`src=stream` is recorded as `unknown` (it still redirects and still counts). Each click still bumps `click_count` and
+also inserts a `sponsor_clicks` row (deferred, as today), in one statement. Only a person's GET counts: a HEAD or a
+link unfurler / crawler is redirected but not counted, and one IP's repeat tap on one link within 30 s counts once.
+Tagged links: the competition page's board (`src=site`), the public match page's sponsor board (`src=match`) and the
+short code shown on screen with the card (`stream`). **No sponsor links in the YouTube description** *(coordinator's call 2026-10-27, not an owner ruling)*: the YouTube Connect spec
 (§6.5) rules the description to one line plus the match link, so clicks come through the on-screen `/s/` link and
 the match page only.
 

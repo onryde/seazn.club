@@ -135,6 +135,13 @@ export const CAPTURE_START_LIMIT: RateLimitConfig = { max: 6, windowSeconds: 60 
 export const CAPTURE_RECORD_LIMIT: RateLimitConfig = { max: 10, windowSeconds: 3600 };
 
 /**
+ * The tracked sponsor redirect's MISSES (`/s/[key]` 404s), per client IP (R4 S10 fix round 1, I3). A stream short code
+ * is 4–8 characters, so the keyspace can be walked: past 30 misses a minute an IP's next miss answers 429. A hit (the
+ * 302) never spends or checks this bucket — a real viewer's tap is never refused. Fail-open, like the public reads.
+ */
+export const SPONSOR_LINK_MISS_LIMIT: RateLimitConfig = { max: 30, windowSeconds: 60 };
+
+/**
  * The match room's camera-fault stamp (T14 fix round 6, M-2): the lobby PING a
  * changed stamp sends the opponent, per fixture and seat. Past it the stamp is
  * still written and the ping skipped — the opponent's next read catches up.
