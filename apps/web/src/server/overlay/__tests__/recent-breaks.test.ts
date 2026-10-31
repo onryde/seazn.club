@@ -162,8 +162,40 @@ describe("replayDerived — the fixture's natural breaks", () => {
   });
 });
 
+/**
+ * The ORACLE, independent of the engine's declarations and of `breakSizeOf`: spec 2026-10-27 §3.1's kind list, as
+ * amended by S5 against engine 1.1.0 (football, hockey and ice hockey gained `shootout_break`, a major — PO ruling S1/S2).
+ * Typed from the SPEC, so a module that re-sizes or renames a kind disagrees with it instead of moving it.
+ */
+const SPEC_3_1: Record<string, Record<string, "minor" | "major">> = {
+  cricket: { over_end: "minor", innings_break: "major" },
+  football: { half_time: "major", period_end: "major", shootout_break: "major", after_goal: "minor" },
+  hockey: { quarter_end: "major", half_time: "major", shootout_break: "major", after_goal: "minor" },
+  icehockey: { period_end: "major", shootout_break: "major", after_goal: "minor" },
+  tennis: { changeover: "minor", set_end: "major" },
+  badminton: { interval: "minor", game_end: "major" },
+  tabletennis: { timeout: "minor", game_end: "major" },
+  volleyball: { timeout: "minor", set_end: "major" },
+};
+
 describe("replayDerived — natural-break sweep over every builtin module", () => {
-  it("every break is a DECLARED kind at its declared size, ascending, one moment id each; 8 modules declare breaks (spec §3.1)", () => {
+  it("the modules declare exactly spec §3.1's kinds at its sizes, and the three it names declare none", () => {
+    let pairs = 0;
+    for (const mod of builtinModules) {
+      const spec = SPEC_3_1[mod.key];
+      if (spec === undefined) {
+        expect(mod.naturalBreaks, `${mod.key}: the spec names no breaks for it`).toBeUndefined();
+        continue;
+      }
+      expect(Object.fromEntries((mod.naturalBreaks?.kinds ?? []).map((k) => [k.kind, k.size])), mod.key).toEqual(spec);
+      pairs += Object.keys(spec).length;
+    }
+    expect(pairs, `${pairs} sport/kind pairs`).toBe(21);
+    expect(builtinModules.filter((m) => SPEC_3_1[m.key] === undefined).map((m) => m.key).sort()).toEqual(["boardgame", "carrom", "generic"]);
+  });
+
+  it("every break is a spec kind at the SPEC's size, ascending, one moment id each, and every seed replays whole; 8 modules declare breaks", () => {
+    let seedsReplayed = 0;
     let modulesWithBreaks = 0;
     let modulesWithout = 0;
     let breaksChecked = 0;
@@ -171,17 +203,21 @@ describe("replayDerived — natural-break sweep over every builtin module", () =
     for (const mod of builtinModules) {
       const cfg = cfgOf(mod.key);
       const lineups = defaultLineupPair(mod.positions);
-      const declared = new Map((mod.naturalBreaks?.kinds ?? []).map((k) => [k.kind, k.size]));
+      const spec = SPEC_3_1[mod.key] ?? {};
       if (mod.naturalBreaks === undefined) modulesWithout++;
       else modulesWithBreaks++;
       for (let seed = 1; seed <= 6; seed++) {
         const events = buildStream(mod as never, cfg as never, lineups, seed, 400).map((e) => ({ ...e, recordedAt: atOf(e.seq) }));
         const r = replayDerived({ sportKey: mod.key, module: mod as never, cfg, lineups, active: events });
+        // A truncated replay (a refusal, an `opensAt` that threw) would leave the checks below passing on what it DID see.
+        expect(r.complete, `${mod.key} seed ${seed}: the replay ran to the end`).toBe(true);
+        expect(r.breaksComplete, `${mod.key} seed ${seed}: every opensAt answered`).toBe(true);
+        seedsReplayed++;
         const ids = new Set<string>();
         let last = Number.NEGATIVE_INFINITY;
         for (const b of r.breaks) {
           breaksChecked++;
-          expect(declared.get(b.kind), `${mod.key} seed ${seed}: ${b.kind} is declared at this size`).toBe(b.size);
+          expect(b.size, `${mod.key} seed ${seed}: ${b.kind} at the spec's size`).toBe(spec[b.kind]);
           expect(b.seq, `${mod.key}: ascending`).toBeGreaterThanOrEqual(last);
           last = b.seq;
           const id = sponsorMomentId(b.seq, b.kind);
@@ -194,6 +230,7 @@ describe("replayDerived — natural-break sweep over every builtin module", () =
         if (mod.naturalBreaks === undefined) expect(r.breaks, `${mod.key} declares no breaks`).toEqual([]);
       }
     }
+    expect(seedsReplayed, "every module × 6 seeds").toBe(builtinModules.length * 6);
     expect(modulesWithBreaks).toBe(8);
     expect(modulesWithout).toBe(builtinModules.length - 8);
     expect(breaksChecked, `${breaksChecked} breaks checked over ${modulesWithBreaks} modules, ${reached.size} kinds reached`).toBeGreaterThan(0);

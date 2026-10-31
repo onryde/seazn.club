@@ -7,8 +7,9 @@ import "server-only";
 // `sponsorCardOf`, for both of the planner's lists (the ticked cards here, the assigned cards in assign.ts).
 //
 // ORDER AND DEDUPE are `resolveSponsors`' (usecases/sponsors.ts) — called, never restated (preflight (e)5): competition
-// rows first, then tier rank, display order, created_at, id, deduped by name, active only. This only narrows its answer
-// to the rows ticked onto the stream (`on_stream`, V483).
+// rows first, then tier rank, display order, created_at, id, deduped by name, active only. Asked `onStream`, it keeps
+// only the rows ticked onto the stream (`on_stream`, V483) BEFORE it dedupes (fix round 1, I2: a ticked renewal must not
+// hide behind the unticked row it renews), and never answers from the branding blob.
 //
 // TIERS (ruling R13, D8): an org without `sponsors.tiers` gets every card as `partner`, exactly as its public board
 // renders (`resolveSponsors({ tiered: false })`) — a downgraded org's leftover `title` row must not keep a title's weight
@@ -70,16 +71,10 @@ export async function activeSponsorCards(
 export const sponsorsTableCardSource: SponsorCardSource = {
   async cardsFor(orgId, fixture) {
     const tiered = await sponsorTiersOn(orgId, fixture.competitionId);
-    const resolved = await resolveSponsors(orgId, fixture.competitionId ?? undefined, { tiered });
-    // A blob-shim entry (no `sponsors` row: id null) has nothing to tick, and so no card.
-    const ids = resolved.flatMap((s) => (s.id === null ? [] : [s.id]));
-    if (ids.length === 0) return [];
-    const ticked = new Map(
-      (await activeSponsorCards(sql, orgId, ids, tiered)).filter((c) => c.onStream).map((c) => [c.id, c]),
+    const ticked = await resolveSponsors(orgId, fixture.competitionId ?? undefined, { tiered, onStream: true });
+    // `onStream` answers table rows only, so every id is a row's; an id-less entry would be a blob's, with nothing to tick.
+    return ticked.flatMap((s) =>
+      s.id === null ? [] : [sponsorCardOf({ id: s.id, name: s.name, logo_path: s.logo, tier: s.tier, on_stream: true }, tiered)],
     );
-    return ids.flatMap((id) => {
-      const card = ticked.get(id);
-      return card === undefined ? [] : [card];
-    });
   },
 };

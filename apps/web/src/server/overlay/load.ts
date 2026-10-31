@@ -22,7 +22,7 @@ import { publicFixture } from "@/server/usecases/public";
 import type { OverlayLiveData } from "@/components/public-site/live-score-data";
 import type { RecentDerived, RecentEvent, RecentPerson } from "@/lib/overlay-recent-types";
 import type { BreakOpened, SponsorPlan } from "@/lib/sponsor-plan";
-import { loadSponsorPlan, sponsorScopeOf } from "@/server/sponsors/assign";
+import { loadFixtureSponsorPlan } from "@/server/sponsors/assign";
 import {
   buildOverlayRecent,
   cricketBundlePersonIdsIn,
@@ -276,20 +276,29 @@ async function relayFixtureRow(fixtureId: string): Promise<PublicRow> {
  * Planned with no events too: the scene carousel (Starting soon, before the first ball) shows the ticked cards.
  *
  * BEST EFFORT, like everything here: a sponsor failure costs the overlay its cards, never its scorebug.
+ *
+ * `foldedThrough` is the `last_seq` this bundle was folded at — the ROW's, which on the public door is a cached doc up to
+ * 30 s behind the relay door's (fix round 1, I1): nothing past it is ever taken for undone. `readOnly` is the console's
+ * preview (`?preview=1`, fix round 1, m6): planned, never written.
  */
-async function sponsorPlanOrNull(fixtureId: string, bundle: CachedOverlay): Promise<SponsorPlan> {
+async function sponsorPlanOrNull(
+  fixtureId: string,
+  bundle: CachedOverlay,
+  foldedThrough: number | null,
+  readOnly: boolean,
+): Promise<SponsorPlan> {
   try {
-    const scope = await sponsorScopeOf(sql, fixtureId);
-    if (scope === null) return null;
-    return await loadSponsorPlan({
-      fixtureId,
-      orgId: scope.orgId,
-      competitionId: scope.competitionId,
-      breaks: bundle.breaks,
-      // The page's own window (`recent`), from the one authority for it.
-      windowSeqs: bundle.folded === null ? [] : recentWindow(bundle.folded.active).map((e) => e.seq),
-      complete: bundle.breaksComplete,
-    });
+    return await loadFixtureSponsorPlan(
+      {
+        fixtureId,
+        breaks: bundle.breaks,
+        // The page's own window (`recent`), from the one authority for it.
+        windowSeqs: bundle.folded === null ? [] : recentWindow(bundle.folded.active).map((e) => e.seq),
+        complete: bundle.breaksComplete,
+        foldedThrough: bundle.folded === null ? null : foldedThrough,
+      },
+      { readOnly },
+    );
   } catch (err) {
     log.error({ err, fixtureId }, "overlay: sponsor plan failed, serving no sponsor cards");
     return null;
@@ -299,6 +308,8 @@ async function sponsorPlanOrNull(fixtureId: string, bundle: CachedOverlay): Prom
 export interface OverlayLoadOptions {
   /** The caller passed `relayPageAccess`: read the row off the base tables and fold under the relay namespace. */
   relay?: boolean;
+  /** The console's preview (`?preview=1`): the sponsor plan is read-only — no assignment or short code is written. */
+  readOnly?: boolean;
 }
 
 export async function loadOverlayLiveData(fixtureId: string, opts: OverlayLoadOptions = {}): Promise<OverlayLiveData> {
@@ -309,7 +320,7 @@ export async function loadOverlayLiveData(fixtureId: string, opts: OverlayLoadOp
   const personOf = await overlayPersonOf(row, bundle);
   const recent = recentOrEmpty(row, bundle, personOf);
   const cricket = cricketBundleNamed(bundle, personOf);
-  const sponsorPlan = await sponsorPlanOrNull(fixtureId, bundle);
+  const sponsorPlan = await sponsorPlanOrNull(fixtureId, bundle, row.last_seq, opts.readOnly === true);
   const live = projectOverlayLiveData({
     row,
     folded: bundle.folded,
