@@ -692,9 +692,10 @@ describe("planSponsors — the sequence", () => {
       source: "rotation",
       breakKind: OVER_END.kind,
       style: "lower_third",
-      holdMs: 8 * SEC,
+      holdMs: 6 * SEC, // a hold the size no longer gives (written under an older constant): the stored row wins
       operatorChoiceAt: null,
     });
+    expect(SPONSOR_STYLE_BY_SIZE.minor.holdMs).not.toBe(6 * SEC);
     // Minor 2 opened 30 s after minor 1's card, while graphics were hidden, and the dial is now Light (majors only).
     const breaks = [brk(1, T0, OVER_END), brk(2, T0 + 30 * SEC, OVER_END), brk(3, T0 + 100 * SEC, OVER_END)];
     const r = planSponsors(
@@ -709,8 +710,8 @@ describe("planSponsors — the sequence", () => {
       }),
     );
     expect(r.plan!.airings).toEqual([
-      { momentId: "1:sponsor.over_end", seq: 1, cardId: TITLE.id, style: "lower_third", holdMs: 8 * SEC, breakKind: "over_end" },
-      { momentId: "2:sponsor.over_end", seq: 2, cardId: GOLD.id, style: "lower_third", holdMs: 8 * SEC, breakKind: "over_end" },
+      { momentId: "1:sponsor.over_end", seq: 1, cardId: TITLE.id, style: "lower_third", holdMs: 6 * SEC, breakKind: "over_end" },
+      { momentId: "2:sponsor.over_end", seq: 2, cardId: GOLD.id, style: "lower_third", holdMs: 6 * SEC, breakKind: "over_end" },
     ]);
     expect(r.newAssignments).toEqual([]);
     // On Busy and shown, minor 3 (70 s after frozen minor 2) is thinned; 100 s after minor 1 it would not be.
@@ -782,6 +783,16 @@ describe("planSponsors — play next", () => {
     expect(run.assigned[0]!.sponsorName).toBe(SILVER.name);
     // Without the choice, break 1 is the rotation's: silver is not the cycle's first.
     expect(cycle[0]).not.toBe(SILVER.sponsorId);
+    // Both breaks new in ONE poll (the overlay was not polled in between): the operator break still takes no position.
+    const twoFresh = [brk(1, T0 + 50 * SEC, SET_END), brk(2, T0 + 55 * SEC, SET_END)];
+    const onePoll = planSponsors(
+      input({ breaks: twoFresh, windowSeqs: [1, 2], operatorLog: [entry(choiceAt, "next_sponsor_id", SILVER.sponsorId)], nextPosition: 4, now: T0 + 56 * SEC }),
+    );
+    expect(summary(onePoll.newAssignments)).toEqual([
+      [1, "operator", null, SILVER.sponsorId],
+      [2, "rotation", 4, cycle[4 % cycle.length]],
+    ]);
+    expect(cycle[4 % cycle.length]).not.toBe(cycle[5 % cycle.length]);
   });
 
   it("play next chosen again before the break replaces the first choice", () => {
