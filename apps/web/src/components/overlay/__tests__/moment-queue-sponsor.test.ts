@@ -18,7 +18,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { defaultLineupPair, makeEnvelope, SIM_CONFIGS } from "@seazn/engine/testkit";
 import { buildOverlayRecent, overlayCricketBundleIds, replayDerived } from "@/server/overlay/recent";
 import { CLOSED_OVER_BASELINE_NONE, END_OF_OVER_HOLD_MS, endOfOverMoment } from "@/lib/overlay-end-of-over";
-import { momentsFor, sponsorMoments, type OverlayMoment } from "@/lib/overlay-moments";
+import { isSponsorMomentId, momentsFor, sponsorMoments, type OverlayMoment } from "@/lib/overlay-moments";
 import {
   SPONSOR_STALE_MS,
   SPONSOR_STYLE_BY_SIZE,
@@ -326,6 +326,25 @@ describe("Final, reduced motion, sync — sponsor moments are moments like any o
     expect(s.cutShort, "it held its full time").toEqual([]);
   });
 
+  it("fix round 1: a card that aired is never forgotten — sync without it, then the same card again, changes nothing", () => {
+    const { state } = airTimeline(enqueue(INITIAL, [sp(8)], 0), 0);
+    let s = reduce(state, { type: "sync", live: [], now: 60_000, ...T });
+    expect(s.seen).toContain(momentIdOf(sp(8)));
+    const before = s;
+    s = enqueue(s, [sp(8)], 245_000);
+    expect(s).toBe(before);
+  });
+
+  it("fix round 1: a score moment is still forgotten by sync, so an end-of-over re-airs after undo + recomplete", () => {
+    const eoo: OverlayMoment = { seq: 1001, kind: "endOfOver", graphic: "endOfOver", headline: "End of over 1", tone: "led" };
+    const { state } = airTimeline(enqueue(INITIAL, [eoo, sp(8)], 0), 0);
+    let s = reduce(state, { type: "sync", live: [], now: 60_000, ...T });
+    expect(s.seen).toEqual([momentIdOf(sp(8))]);
+    s = enqueue(s, [eoo, sp(8)], 61_000);
+    expect(momentIdOf(s.current!), "the over card airs again; the sponsor card does not").toBe("1001:endOfOver");
+    expect(s.queue).toEqual([]);
+  });
+
   it("sync drops a struck card from the queue and from the waits", () => {
     let s = enqueue(INITIAL, [m(1), sp(8), sp(20, INNINGS_BREAK)], 0);
     s = reduce(s, { type: "sync", live: [m(1), sp(20, INNINGS_BREAK)], now: 100, ...T });
@@ -460,6 +479,8 @@ describe("cricket over end (single sport: the end-of-over card is cricket's alon
 
     // The stage's own order among score moments: moments first, then end-of-over (`overlay-stage.tsx`).
     const score = [...slabs, ...eoo!];
+    // The queue keeps sponsor ids through `sync` by their id's shape: no real score moment may share it.
+    for (const x of score) expect(isSponsorMomentId(momentIdOf(x)), momentIdOf(x)).toBe(false);
     let checked = 0;
     for (const [label, batch] of [
       ["the stage's order", [...score, ...card]],
@@ -508,7 +529,8 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
     const cards = [sp(5, OVER_END), sp(6, INNINGS_BREAK), sp(7, OVER_END)];
     const pool = [...score, ...cards];
     const isSponsor = (x: OverlayMoment) => x.priority === "sponsor";
-    const counts = { steps: 0, cuts: 0, skipCuts: 0, undoCuts: 0, staleDrops: 0, sponsorAired: 0, scoreAired: 0 };
+    const cardIds = new Set(ids(cards));
+    const counts = { steps: 0, cuts: 0, skipCuts: 0, undoCuts: 0, staleDrops: 0, sponsorAired: 0, scoreAired: 0, reoffered: 0 };
 
     type Step =
       | { op: "enqueue"; dt: number; moments: OverlayMoment[] }
@@ -540,7 +562,11 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
       fc.property(fc.constantFrom(F, 0), fc.array(step, { minLength: 10, maxLength: 60, size: "max" }), (foldMs, steps) => {
         let s = INITIAL;
         let now = 0;
+        // A card's wait is measured from its FIRST acceptance, never reset: a card is one showing of one break.
         const acceptedAt = new Map<string, number>();
+        const airedCards = new Set<string>();
+        /** Cards that aired and that a later poll's `live` no longer carried — the fix round 1 re-air path. */
+        const leftLiveAfterAir = new Set<string>();
         for (const st of steps) {
           if ("dt" in st) now += st.dt;
           if (st.op === "due" && s.deadline !== null) now = Math.max(now, s.deadline);
@@ -559,7 +585,14 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
           const prev = s;
           s = reduce(prev, action);
           counts.steps++;
-          if (action.type === "enqueue") for (const id of s.seen) if (!prev.seen.includes(id)) acceptedAt.set(id, now);
+          if (action.type === "enqueue") {
+            for (const id of s.seen) if (!prev.seen.includes(id) && !(cardIds.has(id) && acceptedAt.has(id))) acceptedAt.set(id, now);
+            if (action.moments.some((x) => leftLiveAfterAir.has(momentIdOf(x)))) counts.reoffered++;
+          }
+          if (action.type === "sync") {
+            const live = new Set(ids(action.live));
+            for (const id of airedCards) if (!live.has(id)) leftLiveAfterAir.add(id);
+          }
 
           // I1 — the queue is partitioned: no score moment waits behind a sponsor moment.
           const firstCard = s.queue.findIndex(isSponsor);
@@ -587,10 +620,15 @@ describe("model — a sponsor never delays, covers or eats a score moment", () =
             if (isSponsor(s.current!)) {
               counts.sponsorAired++;
               expect(now - acceptedAt.get(id)!, `${id} aired stale`).toBeLessThanOrEqual(SPONSOR_STALE_MS);
+              // I8 (fix round 1) — no card ever reaches air twice: proof of play counts each showing once.
+              expect(airedCards.has(id), `${id} aired twice`).toBe(false);
+              airedCards.add(id);
             } else counts.scoreAired++;
           }
           // I6 — the waits are exactly the queued cards'.
           expect(Object.keys(s.queuedAt).sort()).toEqual(ids(s.queue.filter(isSponsor)).sort());
+          // I9 — each card is cut short at most once (it airs at most once).
+          expect(new Set(s.cutShort).size, "a card cut twice").toBe(s.cutShort.length);
           // I7 — cutShort only ever gains the card that was on air (in/hold): by a score moment, a skip, or an undo.
           const gained = s.cutShort.slice(prev.cutShort.length);
           if (gained.length > 0) {

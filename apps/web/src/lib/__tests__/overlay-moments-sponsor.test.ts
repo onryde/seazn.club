@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { INITIAL, momentIdOf, momentQueueReducer as reduce, type MomentQueueState } from "@/components/overlay/moment-queue";
 import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "@/components/overlay/moment-timing";
-import { sponsorMoments, type OverlayMoment } from "../overlay-moments";
+import { isSponsorMomentId, sponsorMoments, type OverlayMoment } from "../overlay-moments";
 import {
   SPONSOR_STYLE_BY_SIZE,
   planSponsors,
@@ -205,7 +205,7 @@ describe("sponsorMoments — the sequence through the real queue", () => {
       expect(s.phase, "struck: folding off, not holding a break that never happened").toBe("out");
       expect(s.cutShort, "and it ran short: the report must not claim a full showing").toEqual([momentIdOf(minor!)]);
       expect(s.queue.map(momentIdOf)).toEqual([momentIdOf(major!)]);
-      expect(s.seen).not.toContain(momentIdOf(minor!));
+      expect(s.seen, "a sponsor id is never forgotten (fix round 1)").toContain(momentIdOf(minor!));
     });
 
     it("the card still QUEUED never reaches air", () => {
@@ -220,9 +220,69 @@ describe("sponsorMoments — the sequence through the real queue", () => {
         if (s.current !== null) aired.add(momentIdOf(s.current));
       }
       expect([...aired], "only the minor's card ran out").toEqual([momentIdOf(minor!)]);
-      expect(s.seen).not.toContain(momentIdOf(major!));
+      expect(s.seen, "a sponsor id is never forgotten (fix round 1)").toContain(momentIdOf(major!));
       expect(s.current).toBeNull();
     });
+  });
+
+  // Fix round 1 (reviewer I1): a card that already aired must never air again because its airing left `live` and came
+  // back. Two real paths, each driven the way the hook drives every poll: `sync` against the poll's moments, then
+  // `enqueue` them.
+  describe("a card that aired never airs again (fix round 1)", () => {
+    const poll = (s: MomentQueueState, moments: readonly OverlayMoment[], now: number) => {
+      const synced = reduce(s, { type: "sync", live: moments, now, ...T });
+      return moments.length === 0 ? synced : enqueue(synced, moments, now);
+    };
+    /** Poll 1 hands the over_end break at seq 8 its card; the card runs its whole showing. */
+    function airedOnce() {
+      const brk: BreakOpened = { seq: 8, at: iso(T0), ...SPORTS.cricket!.minor };
+      const poll1 = planSponsors(input([brk], { windowSeqs: [1, 2, 3, 4, 5, 6, 7, 8], now: T0 + 2_000 }));
+      const card = sponsorMoments(poll1.plan);
+      expect(card, "premise: one card").toHaveLength(1);
+      let s = poll(INITIAL, card, 0);
+      for (let now = F; s.current !== null; now = s.deadline!) s = reduce(s, { type: "tick", now, ...T });
+      return { brk, card: card[0]!, assigned: poll1.newAssignments, state: s };
+    }
+
+    it("the window scrolls past the break, the scorer undoes a ball, the window shifts back: the card stays off air", () => {
+      const { brk, card, assigned, state } = airedOnce();
+      let s = state;
+      expect(s.seen).toContain(momentIdOf(card));
+      // Eight more balls: the window is seqs 9..16, so the frozen break is outside it and the plan airs nothing.
+      const scrolled = planSponsors(input([brk], { assigned, windowSeqs: [9, 10, 11, 12, 13, 14, 15, 16], now: T0 + 240_000 }));
+      expect(scrolled.plan?.airings, "premise: the plan dropped the airing").toEqual([]);
+      s = poll(s, sponsorMoments(scrolled.plan), 240_000);
+      // The scorer undoes ball 16: the window is 8..15 again, and the frozen break's airing is back in the plan.
+      const back = planSponsors(input([brk], { assigned, windowSeqs: [8, 9, 10, 11, 12, 13, 14, 15], now: T0 + 245_000 }));
+      expect(sponsorMoments(back.plan).map(momentIdOf), "premise: the airing returned").toEqual([momentIdOf(card)]);
+      const before = s;
+      s = poll(s, sponsorMoments(back.plan), 245_000);
+      expect(s, "nothing new: the same state").toBe(before);
+      expect(s.current).toBeNull();
+    });
+
+    it("a poll carrying a null plan, then the plan again: the card stays off air", () => {
+      const { brk, card, assigned, state } = airedOnce();
+      let s = poll(state, sponsorMoments(null), 30_000);
+      const again = planSponsors(input([brk], { assigned, windowSeqs: [1, 2, 3, 4, 5, 6, 7, 8], now: T0 + 35_000 }));
+      expect(sponsorMoments(again.plan).map(momentIdOf), "premise: the airing returned").toEqual([momentIdOf(card)]);
+      const before = s;
+      s = poll(s, sponsorMoments(again.plan), 35_000);
+      expect(s).toBe(before);
+      expect(s.current).toBeNull();
+    });
+  });
+
+  it("isSponsorMomentId: true for every sponsor moment's id, false for score kinds sharing its seq", () => {
+    let checked = 0;
+    for (const sport of Object.keys(SPORTS)) {
+      for (const m of sponsorMoments(planSponsors(input(breaksOf(sport))).plan)) {
+        expect(isSponsorMomentId(momentIdOf(m)), momentIdOf(m)).toBe(true);
+        expect(isSponsorMomentId(`${m.seq}:six`)).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
   });
 
   it("an empty plan after a full plan: sync folds the card on air away (the plan no longer carries it)", () => {

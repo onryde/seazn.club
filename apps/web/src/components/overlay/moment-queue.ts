@@ -26,7 +26,7 @@
 //      seen. The wait is timed on THIS page's clock from when the card was
 //      queued — never against the event's server timestamp, which `?delay=`
 //      (up to 5 min) and an OBS machine's own clock would both skew.
-import type { MomentPriority, OverlayMoment } from "@/lib/overlay-moments";
+import { isSponsorMomentId, type MomentPriority, type OverlayMoment } from "@/lib/overlay-moments";
 import { SPONSOR_STALE_MS } from "@/lib/sponsor-plan";
 
 /** `in` — folding on. `hold` — fully shown. `out` — folding off. The three are
@@ -215,10 +215,17 @@ export function momentQueueReducer(
     // natural hold stays in `seen` after undo, and undo+recomplete cannot
     // re-air (same over number, new completion). Pair beats (`.bis`) leave
     // together because both ids drop from live at once.
+    //
+    // R4 S6 fix round 1: a SPONSOR id is never forgotten. The reason above does
+    // not apply to it — its id keys on the break's own ledger seq, so a new
+    // break is a new id — and its airing leaves `live` for reasons that are not
+    // an undo: the plan lists only the recent window (8 events), and a poll can
+    // carry a null plan. Forgetting it put a card that had already aired back on
+    // air minutes after its break, and proof of play would count it twice.
     const live = new Set(action.live.map(idOf));
     const queue = state.queue.filter((m) => live.has(idOf(m)));
     const currentGone = state.current !== null && !live.has(idOf(state.current));
-    const seen = state.seen.filter((id) => live.has(id));
+    const seen = state.seen.filter((id) => live.has(id) || isSponsorMomentId(id));
     const queueShrunk = queue.length !== state.queue.length;
     const seenShrunk = seen.length !== state.seen.length;
     if (!currentGone && !queueShrunk && !seenShrunk) return state;
