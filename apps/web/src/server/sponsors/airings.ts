@@ -34,7 +34,8 @@ import "server-only";
 // S9 (spec §3.6.3, plan P4): the FRAME — one JPEG the compositor grabs 1.5 s after a `start` and posts on its own, keyed
 // like the airing in sponsor_airing_frames (session_id, moment_id) with no foreign key to it, because the frame usually
 // arrives before the beat that carries its start. `storeAiringFrame` below; the report (S14) left-joins it, driven from
-// the airings, and `purgeOrphanFrames` (the daily relay sweep) removes the frames no airing ever claimed.
+// the airings, and `purgeOrphanFrames` (the daily relay sweep) removes the frames no airing ever claimed, then every
+// object whose row has gone (sponsor_frame_tombstones, V483: an orphan purged, a session or org deleted, a key moved).
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -42,7 +43,7 @@ import { SCENE_CAROUSEL_MS, SPONSOR_STYLE_BY_SIZE } from "@/lib/sponsor-plan";
 import { putStorageObject, removeStorageObjects } from "@/lib/supabase-storage";
 import { SPONSOR_CAROUSEL_SCENES } from "@/components/overlay/overlay-scenes";
 import { RelayAiring } from "@/server/api-v1/schemas";
-import { isTerminal, type SessionState } from "@/server/relay/domain/session";
+import { TERMINAL_STATES, isTerminal, supersededAttempt, type SessionState } from "@/server/relay/domain/session";
 import { verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
@@ -249,8 +250,12 @@ const JPEG_SOI = [0xff, 0xd8, 0xff] as const;
 /** Plan ruling (S9, orphans): a frame no airing row claims is purged once its session ended more than this long ago. */
 export const ORPHAN_FRAME_GRACE_MS = 24 * 3_600_000;
 
-/** How many orphans one pass removes (one storage call); the rest wait for the next daily pass. */
-const ORPHAN_PURGE_BATCH = 500;
+/** One batch of the purge: this many rows per delete, this many objects per storage call. */
+export const ORPHAN_PURGE_BATCH = 500;
+
+/** The batches one pass runs at most, per loop (orphan rows; tombstones): 10 000 frames a day each. The rest wait for the
+ *  next daily pass, so one pass never runs unbounded. */
+export const ORPHAN_PURGE_MAX_BATCHES = 20;
 
 /** The heartbeat's own bound on a moment id, read off its contract twin (RelayAiring, S8): a frame names a moment the
  *  beat can carry. */
@@ -292,6 +297,12 @@ export function airingFramePath(orgId: string, sessionId: string, momentId: stri
   return `${orgId}/${sessionId}/${encoded}.jpg`;
 }
 
+/** The moment id a refusal logs, at most: the wire's bound and some (S9 review m4). */
+export const FRAME_MOMENT_LOG_CHARS = 120;
+
+const tombstoneFrame = (path: string) => sql`
+  insert into sponsor_frame_tombstones (path) values (${path}) on conflict (path) do update set deleted_at = excluded.deleted_at`;
+
 const isJpeg = (bytes: Uint8Array): boolean => JPEG_SOI.every((b, i) => bytes[i] === b);
 
 /**
@@ -299,20 +310,32 @@ const isJpeg = (bytes: Uint8Array): boolean => JPEG_SOI.every((b, i) => bytes[i]
  * route stops reading there). Each refusal comes before anything is stored, in this order:
  *   401  not this session's relay JOB token — `verifyRelayToken`, the heartbeat's own check and its one refusal;
  *   404  no such session; 410 SESSION_ENDED once it is terminal (`isTerminal`, as the heartbeat; SC2 then stops grabbing);
+ *        410 ATTEMPT_SUPERSEDED when the token names an attempt a retry replaced (`supersededAttempt`, the question the
+ *        heartbeat asks before it drains such a Machine): a stray Machine's page is not this session's programme;
  *   400  the id names no airing (`isFrameMomentId`);
  *   413  past the bound (inclusive); 415 no JPEG SOI.
  * Then the object is written (replacing an earlier frame of the moment) and the row upserted: one row per (session,
  * moment), its path this frame's. The id is stored VERBATIM — the route hands it over decoded once — so it joins
- * sponsor_airings.moment_id. A storage failure is a 502 and writes no row (SC2 retries a 5xx once). The token and the
- * bytes are never logged. No lock: a frame racing the session's end is still a real frame of a real showing.
+ * sponsor_airings.moment_id. A storage failure is a 502 and writes no row (SC2 retries a 5xx once); it is reported ONCE,
+ * by the route's `handler` (every 5xx HttpError is captured there), with the provider's error as its `cause`. A row write
+ * that fails after the object was stored tombstones the path (V483), so the sweep removes the object no row names. The
+ * token and the bytes are never logged. No lock: a frame racing the session's end is still a real frame of a real showing.
  */
 export async function storeAiringFrame(sessionId: string, token: string, momentId: string, bytes: Uint8Array | null): Promise<void> {
-  await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
-  const [s] = await sql<{ id: string; org_id: string; state: SessionState }[]>`
-    select id, org_id, state from fixture_stream_sessions where id = ${sessionId}`;
+  const { att } = await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
+  const [s] = await sql<{ id: string; org_id: string; state: SessionState; runner_attempts: number }[]>`
+    select id, org_id, state, runner_attempts from fixture_stream_sessions where id = ${sessionId}`;
   if (!s) throw new HttpError(404, "session not found");
   if (isTerminal(s.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
-  if (!isFrameMomentId(momentId)) throw new HttpError(400, "the moment id names no sponsor airing", "FRAME_MOMENT_INVALID");
+  if (supersededAttempt(att, s.runner_attempts)) {
+    log.info({ sid: s.id, att, attempt: s.runner_attempts }, "sponsor frame: from a superseded attempt's Machine — refused, the current attempt's frames stand");
+    throw new HttpError(410, "this runner attempt was superseded", "ATTEMPT_SUPERSEDED");
+  }
+  if (!isFrameMomentId(momentId)) {
+    // The id is the Machine's own text: bounded here, so a long path segment cannot flood the log line.
+    log.warn({ sid: s.id, momentId: momentId.slice(0, FRAME_MOMENT_LOG_CHARS), length: momentId.length }, "sponsor frame: the moment id names no sponsor airing — refused");
+    throw new HttpError(400, "the moment id names no sponsor airing", "FRAME_MOMENT_INVALID");
+  }
   if (bytes === null || bytes.byteLength > AIRING_FRAME_MAX_BYTES) {
     throw new HttpError(413, `a frame is at most ${AIRING_FRAME_MAX_BYTES} bytes`, "FRAME_TOO_LARGE");
   }
@@ -321,51 +344,92 @@ export async function storeAiringFrame(sessionId: string, token: string, momentI
   try {
     await putStorageObject(path, bytes, "image/jpeg");
   } catch (err) {
-    log.error({ sid: s.id, orgId: s.org_id, bytes: bytes.byteLength, err }, "sponsor frame: the storage write failed — no row written");
-    captureError(err, { orgId: s.org_id, route: "relay.sponsor_frame.store", extra: { sessionId: s.id } });
-    throw new HttpError(502, "the frame could not be stored", "FRAME_STORAGE_FAILED");
+    throw Object.assign(new HttpError(502, "the frame could not be stored", "FRAME_STORAGE_FAILED"), { cause: err });
   }
-  await sql`
-    insert into sponsor_airing_frames (session_id, moment_id, org_id, path)
-    values (${s.id}, ${momentId}, ${s.org_id}, ${path})
-    on conflict (session_id, moment_id) do update set path = excluded.path, created_at = now()`;
+  try {
+    await sql`
+      insert into sponsor_airing_frames (session_id, moment_id, org_id, path)
+      values (${s.id}, ${momentId}, ${s.org_id}, ${path})
+      on conflict (session_id, moment_id) do update set path = excluded.path, created_at = now()`;
+  } catch (err) {
+    // The object is stored and no row names it (the session deleted mid-upload, the database gone): its tombstone lets the
+    // sweep remove it. A row that does name the path (a replace) keeps its object — the drain checks. The error itself is
+    // the route's to report; only a tombstone that cannot be written either is logged here.
+    await tombstoneFrame(path).catch((e: unknown) => {
+      log.error({ sid: s.id, orgId: s.org_id, err: String(e) }, "sponsor frame: the row write failed and so did the object's tombstone — the object stays until removed by hand");
+    });
+    throw err;
+  }
 }
+
+
+/** What one purge did: orphan ROWS deleted, OBJECTS removed from storage, and objects whose remove failed (their
+ *  tombstones kept for the next pass). */
+export interface FramePurge { orphans: number; purged: number; failed: number }
 
 /**
  * Plan ruling (S9, orphans): a frame posted for an airing web never records — the compositor's 64-item buffer overflowed,
  * a beat was refused, the final beat was lost — is claimed by no sponsor_airings row, and S14's report (driven from the
  * airings) never shows it. Once its session has been over for longer than ORPHAN_FRAME_GRACE_MS no airing can still land
- * (the heartbeat answers 410), so it goes: the objects first, in one storage call, then the rows. A remove that fails
- * keeps every row of the batch, counted, for the next pass. Run by the daily relay sweep (relay-sweep.ts step 7d).
- * "Over" is `ended_at`, set only by the session's terminal transitions (domain/session.ts) — a live session has none.
- * `orgIds` is the sweep's TEST-ONLY scope; an empty one is refused, never read as "every org".
+ * (the heartbeat answers 410), so its row goes; V483's trigger tombstones its path in the same statement. Then the
+ * tombstones are drained — every object whose row went, by this purge or by a cascade (a session or org deleted) or a
+ * moved key — storage first: the objects in one call per batch, then the tombstones. A remove that fails keeps the batch's
+ * tombstones, counted, for the next pass, and stops the drain. A tombstoned path a frame row names again keeps its object.
+ * Each loop runs batches of `batchSize` until one comes back short, at most `maxBatches` (ORPHAN_PURGE_MAX_BATCHES).
+ * "Over" is a terminal state with `ended_at` past the grace (both: the state is the authority, `ended_at` the clock).
+ * `orgIds` is the sweep's TEST-ONLY scope — tombstones carry no org, so they are scoped by their key's first segment
+ * (`airingFramePath`); an empty one is refused, never read as "every org". Run by the daily relay sweep (step 7d).
  */
-export async function purgeOrphanFrames(now: Date, opts: { orgIds?: readonly string[] } = {}): Promise<{ purged: number; failed: number }> {
+export async function purgeOrphanFrames(
+  now: Date,
+  opts: { orgIds?: readonly string[]; batchSize?: number; maxBatches?: number } = {},
+): Promise<FramePurge> {
   const orgIds = opts.orgIds === undefined ? undefined : [...opts.orgIds];
   if (orgIds !== undefined && orgIds.length === 0) {
     throw new Error("purgeOrphanFrames: orgIds is empty — omit it to purge every organisation, or name at least one");
   }
-  const cutoff = new Date(now.getTime() - ORPHAN_FRAME_GRACE_MS);
-  const orphans = await sql<{ session_id: string; moment_id: string; path: string }[]>`
-    select f.session_id, f.moment_id, f.path
-      from sponsor_airing_frames f
-      join fixture_stream_sessions s on s.id = f.session_id
-     where s.ended_at < ${cutoff}
-       and not exists (select 1 from sponsor_airings a where a.session_id = f.session_id and a.moment_id = f.moment_id)
-       ${orgIds ? sql`and f.org_id in ${sql(orgIds)}` : sql``}
-     order by s.ended_at, f.session_id, f.moment_id
-     limit ${ORPHAN_PURGE_BATCH}`;
-  if (orphans.length === 0) return { purged: 0, failed: 0 };
-  try {
-    await removeStorageObjects(orphans.map((o) => o.path));
-  } catch (err) {
-    log.warn({ frames: orphans.length, err }, "sponsor frames: removing orphan frames from storage failed — their rows are kept for the next pass");
-    return { purged: 0, failed: orphans.length };
+  const batchSize = opts.batchSize ?? ORPHAN_PURGE_BATCH;
+  const maxBatches = opts.maxBatches ?? ORPHAN_PURGE_MAX_BATCHES;
+  for (const [name, n] of [["batchSize", batchSize], ["maxBatches", maxBatches]] as const) {
+    if (!Number.isInteger(n) || n < 1) throw new RangeError(`purgeOrphanFrames: ${name} must be a whole number of at least 1, got ${n}`);
   }
-  const deleted = await sql`
-    delete from sponsor_airing_frames f
-     using unnest(${orphans.map((o) => o.session_id)}::uuid[], ${orphans.map((o) => o.moment_id)}::text[]) as k(session_id, moment_id)
-     where f.session_id = k.session_id and f.moment_id = k.moment_id
-    returning f.session_id`;
-  return { purged: deleted.length, failed: 0 };
+  const cutoff = new Date(now.getTime() - ORPHAN_FRAME_GRACE_MS);
+  let orphans = 0;
+  for (let batch = 0; batch < maxBatches; batch++) {
+    const gone = await sql<{ session_id: string }[]>`
+      delete from sponsor_airing_frames d
+       using (select f.session_id, f.moment_id
+                from sponsor_airing_frames f
+                join fixture_stream_sessions s on s.id = f.session_id
+               where s.state in ${sql([...TERMINAL_STATES])} and s.ended_at < ${cutoff}
+                 and not exists (select 1 from sponsor_airings a where a.session_id = f.session_id and a.moment_id = f.moment_id)
+                 ${orgIds ? sql`and f.org_id in ${sql(orgIds)}` : sql``}
+               order by s.ended_at, f.session_id, f.moment_id
+               limit ${batchSize}) k
+       where d.session_id = k.session_id and d.moment_id = k.moment_id
+      returning d.session_id`;
+    orphans += gone.length;
+    if (gone.length < batchSize) break;
+  }
+  let purged = 0;
+  for (let batch = 0; batch < maxBatches; batch++) {
+    const graves = await sql<{ path: string; named: boolean }[]>`
+      select t.path, exists (select 1 from sponsor_airing_frames f where f.path = t.path) as named
+        from sponsor_frame_tombstones t
+       where true ${orgIds ? sql`and split_part(t.path, '/', 1) in ${sql(orgIds)}` : sql``}
+       order by t.deleted_at, t.path
+       limit ${batchSize}`;
+    if (graves.length === 0) break;
+    const dead = graves.filter((g) => !g.named).map((g) => g.path);
+    try {
+      await removeStorageObjects(dead);
+    } catch (err) {
+      log.warn({ frames: dead.length, err }, "sponsor frames: removing frame objects from storage failed — their tombstones are kept for the next pass");
+      return { orphans, purged, failed: dead.length };
+    }
+    await sql`delete from sponsor_frame_tombstones where path in ${sql(graves.map((g) => g.path))}`;
+    purged += dead.length;
+    if (graves.length < batchSize) break;
+  }
+  return { orphans, purged, failed: 0 };
 }

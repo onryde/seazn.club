@@ -130,6 +130,34 @@ create policy sponsor_airing_frames_tenant on sponsor_airing_frames for all to a
   using (org_id = current_org_id()) with check (org_id = current_org_id());
 grant select on sponsor_airing_frames to app_user;
 
+-- S9 polish (review m8): the storage object a frame row named outlives the row unless something removes it, and a row
+-- goes in more ways than the orphan purge — its session's or org's delete cascades, a replace moves it to another key.
+-- Every such departure leaves the path here, in the same transaction, and the daily relay sweep (step 7d) removes the
+-- object, then the tombstone. The drain skips the object of a path a row still names, so no object a row names is
+-- removed. The frame upload writes one too when its row write fails after the object was stored.
+-- No org_id and no foreign key: a tombstone outlives its org. SEALED, like V410's tables: RLS enabled and forced, no
+-- policy, no grant — only the privileged relay client reads or writes it, and the trigger runs as its definer.
+create table sponsor_frame_tombstones (
+  path       text primary key,
+  deleted_at timestamptz not null default now()
+);
+
+alter table sponsor_frame_tombstones enable row level security;
+alter table sponsor_frame_tombstones force  row level security;
+
+create function sponsor_airing_frames_tombstone() returns trigger
+  language plpgsql security definer
+  set search_path = ${flyway:defaultSchema}, pg_temp as $$
+begin
+  insert into sponsor_frame_tombstones (path) values (old.path)
+    on conflict (path) do update set deleted_at = excluded.deleted_at;
+  return null;
+end $$;
+create trigger sponsor_airing_frames_tombstone_on_delete after delete on sponsor_airing_frames
+  for each row execute function sponsor_airing_frames_tombstone();
+create trigger sponsor_airing_frames_tombstone_on_move after update of path on sponsor_airing_frames
+  for each row when (old.path is distinct from new.path) execute function sponsor_airing_frames_tombstone();
+
 -- One row per tracked /s/ click (S10), beside the existing click_count bump.
 create table sponsor_clicks (
   id         uuid primary key default gen_random_uuid(),

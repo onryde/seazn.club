@@ -1,3 +1,4 @@
+import { HttpError } from "@/lib/errors";
 import { handler } from "@/lib/http";
 import { bearerOf } from "@/server/relay/bearer";
 import { readCapped } from "@/server/relay/record-body";
@@ -6,11 +7,17 @@ import { AIRING_FRAME_MAX_BYTES, storeAiringFrame } from "@/server/sponsors/airi
 type Ctx = { params: Promise<{ sid: string; momentId: string }> };
 
 /** The JPEG, or null once it runs past AIRING_FRAME_MAX_BYTES (inclusive). A Content-Length past the bound is refused
- *  before a byte is read; a body with no length is read no further than one chunk past the bound (`readCapped`). */
+ *  before a byte is read; a body with no length is read no further than one chunk past the bound (`readCapped`). A body
+ *  that cannot be read to its end — the client aborted mid-upload — is the CLIENT's failure: 400, never a 500 (this path
+ *  runs no proxy, so the route reads the stream itself: S9 review m10). */
 async function frameBody(req: Request): Promise<Uint8Array | null> {
   const declared = Number(req.headers.get("content-length") ?? "");
   if (Number.isFinite(declared) && declared > AIRING_FRAME_MAX_BYTES) return null;
-  return readCapped(req.body, AIRING_FRAME_MAX_BYTES);
+  try {
+    return await readCapped(req.body, AIRING_FRAME_MAX_BYTES);
+  } catch {
+    throw new HttpError(400, "the frame body could not be read to its end", "FRAME_BODY_UNREADABLE");
+  }
 }
 
 /** POST …/airings/[momentId]/frame — R4 S9 (spec 2026-10-27 §3.6.3): the compositor's proof-of-play still, one JPEG per
