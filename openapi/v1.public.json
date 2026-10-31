@@ -83880,7 +83880,7 @@
     },
     "/api/v1/stages/{id}/fixtures": {
       "post": {
-        "summary": "Ad-hoc single fixture (replay / friendly / tie-breaker) on a league, group or swiss stage; the match folds into the standings. Bracket kinds 422.",
+        "summary": "Ad-hoc single fixture (replay / friendly / tie-breaker) on a league or group stage; the match folds into the standings. Bracket kinds 422. A Swiss stage 422 SWISS_ADHOC_REFUSED: the system pairs Swiss rounds, so friendlies go in another stage (W3 RB3-15)",
         "tags": [
           "stages"
         ],

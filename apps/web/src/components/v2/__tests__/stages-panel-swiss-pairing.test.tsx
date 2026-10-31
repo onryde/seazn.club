@@ -133,6 +133,31 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
   });
 });
 
+// W3 RB3-15 A (X-SW-21, ruling 252): the panel's half of "no Add match on a Swiss stage". The rail refuses on the kind
+// whatever it is handed (stage-rail.test.tsx); this pins that the PANEL no longer calls Swiss an ad-hoc kind either,
+// so the two guards are each killable on their own.
+describe("StagesPanel — no Add match on a Swiss stage (X-SW-21)", () => {
+  const railOf = (stage: ReturnType<typeof swissStage>) => {
+    // The island runs the panel's mount effects, which read the network: answer them empty.
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation(() => Promise.resolve({}));
+    const island = renderIsland(StagesPanel, { ...props, stages: [stage], fixtures: fixtures([1]) });
+    const rails = island.tree().filter((el) => el.type === StageRail);
+    expect(rails).toHaveLength(1);
+    return propsOf(rails[0]!);
+  };
+
+  it("hands the rail adhoc=false for Swiss and adhoc=true for a league, and the page shows the note, not the trigger", () => {
+    expect(railOf(swissStage()).adhoc, "swiss").toBe(false);
+    expect(railOf({ ...swissStage(), kind: "league", name: "League" }).adhoc, "league").toBe(true);
+
+    const html = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1])} />);
+    expect(html).toContain('data-testid="stage-generate"');
+    expect(html).not.toContain('data-testid="stage-add-match"');
+    expect(html).toContain('data-testid="stage-swiss-adhoc-note"');
+  });
+});
+
 // Review M2 (Task 4): the rail clears the organiser's round-1 pick only when a
 // press LANDS, and it learns that from what `onAct` resolves to. This pins the
 // panel's half of that contract through the real `act()`: the StageRail

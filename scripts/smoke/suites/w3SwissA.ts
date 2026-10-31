@@ -7,13 +7,14 @@ import { type Session, newSession, check, signIn, tag, v1, v1data } from "../har
  *
  * T1 (X-RB-1, #840, FX-G13): Rebuild keeps every time and court at its (pool, round, seq) position, in one transaction,
  * and reports what it could not keep. T2 (X-RB-1, SW-L8): a pre-Start Swiss reshape deletes an unscheduled board before a
- * pinned one. Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
+ * pinned one. T4 (X-SW-21, RB3-15 A): an ad-hoc match on a Swiss stage is refused 422 SWISS_ADHOC_REFUSED and writes
+ * nothing. Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
  * is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissASuite(): Promise<void> {
   // T1: 2 (a rebuild keeps 3 slots; a shrinking rebuild counts the slots it freed) + T2: 1 (a pre-Start reshape keeps
-  // the pinned boards).
-  const EXPECTED_CHECKS = 3;
+  // the pinned boards) + T4: 1 (no ad-hoc match on a Swiss stage; T4 runs before T3 by controller ruling C1).
+  const EXPECTED_CHECKS = 4;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -181,6 +182,44 @@ export async function w3SwissASuite(): Promise<void> {
     w3Check(
       "w3a X-RB-1 SW-L8: a pre-Start Swiss reshape deletes the unscheduled board 3, and the pinned boards 1, 2 and 4 keep their slots" +
         (ok ? "" : ` — players ${players.length}, placed ${placed}, delete ${left.status}, pair ${paired.status}, round 2 ${shape}, kept ${kept}`),
+      ok,
+    );
+  }
+
+  // Check 4 (T4, X-SW-21) — Swiss rounds are paired by the system: an ad-hoc match on a paired Swiss stage is refused by
+  // name (422 SWISS_ADHOC_REFUSED) and the stage's fixtures are exactly what they were.
+  {
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", {
+        name: "No ad-hoc",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      }),
+    )?.id;
+    const players =
+      v1data<{ id: string }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Q${i + 1} ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } }),
+    )?.id;
+    const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const count = async () =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId).length;
+    const before = await count();
+    const res = await v1(owner, `/api/v1/stages/${stageId}/fixtures`, "POST", {
+      home_entrant_id: players[0]?.id,
+      away_entrant_id: players[1]?.id,
+    });
+    const after = await count();
+    const ok =
+      players.length === 4 && paired.status === 200 && before > 0 &&
+      res.status === 422 && res.json.error?.code === "SWISS_ADHOC_REFUSED" && after === before;
+    w3Check(
+      "w3a X-SW-21: Add match on a Swiss stage is refused 422 SWISS_ADHOC_REFUSED and writes nothing" +
+        (ok ? "" : ` — players ${players.length}, pair ${paired.status}, before ${before}, after ${after}, POST ${res.status} ${JSON.stringify(res.json).slice(0, 160)}`),
       ok,
     );
   }

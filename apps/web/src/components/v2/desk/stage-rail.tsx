@@ -72,6 +72,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
+import { swissRefusalKey } from "@/lib/swiss-refusals";
 import {
   swissPairingForKey,
   swissPairingHint,
@@ -625,7 +626,23 @@ export function StageRail({
               {msg("schedule.delete")}
             </button>
           )}
-          {stage.status !== "complete" && adhoc && fixtureCount > 0 && (
+          {stage.status !== "complete" && fixtureCount > 0 && stage.kind === "swiss" && (
+            // W3 RB3-15 A (X-SW-21, ruling 252): no Add match on a Swiss stage,
+            // whatever `adhoc` says — the system pairs its rounds and the server
+            // refuses the match (SWISS_ADHOC_REFUSED). The refusal's own copy
+            // stands where the trigger would, on the same gates, so the
+            // organiser reads where friendlies go instead of finding nothing.
+            // A quiet hint line, not a control: slate-500 xs (the Add match
+            // form's own hint), wrapping freely in the phone sheet's column and
+            // capped at a readable measure in the desktop row.
+            <p
+              data-testid="stage-swiss-adhoc-note"
+              className="min-w-0 text-xs leading-snug text-slate-500 md:max-w-[60ch]"
+            >
+              {msg(swissRefusalKey("SWISS_ADHOC_REFUSED"))}
+            </p>
+          )}
+          {stage.status !== "complete" && adhoc && fixtureCount > 0 && stage.kind !== "swiss" && (
             // Task 3 — trigger only. `AddMatchForm` deliberately stays mounted in
             // stages-panel.tsx: it reads `boardSlotOptions`, which also feeds
             // `<RunSheet>`, so hoisting the form itself here would mean building

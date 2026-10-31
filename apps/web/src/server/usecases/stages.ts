@@ -20,6 +20,7 @@ import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
+import { swissRefusal } from "./swiss-refusal";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -1576,7 +1577,7 @@ const DIVISION_STARTED_STATUSES: ReadonlySet<string> = new Set(["active", "compl
 
 /**
  * Read INSIDE the caller's write transaction, never in a separate pre-flight:
- * `generateStageFixturesWrite` already holds
+ * `generateStageFixturesTx` (Generate's and Rebuild's shared body) already holds
  * `pg_advisory_xact_lock('division:' + division_id)` by the time `swissGen`
  * runs, so this is read under the lock and cannot go stale between the check
  * and the writes it gates (the file's stated convention; design-doc Task 2.4).
@@ -1819,7 +1820,7 @@ async function reconcileSwissRoundShells(
   }
 
   // `org_id` and `fixture_no` are assigned by BEFORE INSERT triggers, exactly
-  // as they are for the shell mint in generateStageFixturesWrite.
+  // as they are for the shell mint in generateStageFixturesTx.
   const shell = (extKey: string, seqInRound: number) => ({
     id: randomUUID(),
     stage_id: stageId,
@@ -6437,11 +6438,17 @@ export async function issueChallenge(
 // ---------------------------------------------------------------------------
 // Ad-hoc single fixture (PROMPT-66): a replay, a friendly, a manual
 // tie-breaker or a missing match, added to an already-running stage. League /
-// group / swiss standings fold every fixture, so the added match is a real
-// result; bracket kinds have no slot for a loose fixture and reject it.
+// group standings fold every fixture, so the added match is a real result;
+// bracket kinds have no slot for a loose fixture and reject it.
+//
+// W3 RB3-15 A (spec §8 Q1, ruling 252; #846 SW-M3/M4/M5): Swiss is refused by
+// name. Its rounds are paired by the system, and a loose board made phantom
+// byes and broke the round shells. Legacy `adhoc-N` rows already on a Swiss
+// stage stay live (carried-forward.ts C7, swiss-shell.ts read them).
+// `stages-panel.tsx` keeps the same set for the desk's Add match trigger.
 // ---------------------------------------------------------------------------
 
-const ADHOC_STAGE_KINDS = new Set(["league", "group", "swiss"]);
+const ADHOC_STAGE_KINDS = new Set(["league", "group"]);
 
 export async function addFixture(
   auth: AuthCtx,
@@ -6470,6 +6477,9 @@ export async function addFixture(
     if (stage.kind === "americano") {
       throw new HttpError(422, "americano matches are generated round by round — generate another round instead");
     }
+    // X-SW-21: before the generic bracket refusal, so the organiser reads why
+    // and where friendlies go instead of "no slot in the tree".
+    if (stage.kind === "swiss") throw swissRefusal("SWISS_ADHOC_REFUSED");
     if (!ADHOC_STAGE_KINDS.has(stage.kind)) {
       throw new HttpError(422, "can't add a loose fixture to a bracket — it has no slot in the tree");
     }

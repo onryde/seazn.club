@@ -119,6 +119,51 @@ describe("StageRail", () => {
     expect(nonAdhocHtml).not.toContain('data-testid="stage-add-match"');
   });
 
+  // W3 RB3-15 A (X-SW-21, ruling 252): Swiss rounds are paired by the system, so a Swiss stage offers no Add match; the
+  // rail says why in its place. `adhoc` is passed TRUE for the Swiss stage on purpose: the rail refuses on the KIND,
+  // whatever the panel hands it (the panel's own set is pinned in stages-panel-swiss-pairing.test.tsx).
+  it("a Swiss stage renders no stage-add-match trigger; a league stage does", () => {
+    const row = (kind: string, status = "active") => ({ id: "s1", name: kind, kind, seq: 1, status }) as never;
+    const render = (kind: string, extra: Partial<StageRailProps> = {}) =>
+      renderToStaticMarkup(
+        <StageRail stage={row(kind)} canEdit busy={null} fixtureCount={4} deletable
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          adhoc courtTagsSlot={null} {...NEUTRAL} {...extra} />,
+      );
+    const NOTE = 'data-testid="stage-swiss-adhoc-note"';
+    const copy = en["swiss.refusal.SWISS_ADHOC_REFUSED"];
+    expect(copy, "premise: the guidance copy exists").toBeTruthy();
+
+    // Positive pair first: the league row renders the trigger and no Swiss note.
+    const league = render("league");
+    expect(league).toContain('data-testid="stage-add-match"');
+    expect(league).not.toContain(NOTE);
+
+    let checked = 0;
+    for (const [label, html] of [
+      ["Swiss, desktop row", render("swiss")],
+      ["Swiss, phone sheet open", render("swiss", { open: true })],
+      ["Swiss, Add match form state says open", render("swiss", { addingTo: "s1" })],
+    ] as const) {
+      // The rail still renders its controls, so the absence below is not a rail that rendered nothing.
+      expect(html, `${label}: rail controls`).toContain('data-testid="stage-generate"');
+      expect(html, `${label}: no Add match`).not.toContain('data-testid="stage-add-match"');
+      expect(html, `${label}: the guidance line takes its place`).toContain(NOTE);
+      expect(html, `${label}: in the reader's words`).toContain(copy);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: Swiss states rendered").toBe(3);
+
+    // The note stands where the button would: a complete stage, or one with nothing generated, shows neither.
+    // Each with its positive pair: the rail is still rendering.
+    const complete = render("swiss", { stage: row("swiss", "complete") });
+    expect(complete).toContain('data-testid="stage-delete"');
+    expect(complete).not.toContain(NOTE);
+    const empty = render("swiss", { fixtureCount: 0 });
+    expect(empty).toContain('data-testid="stage-generate"');
+    expect(empty).not.toContain(NOTE);
+  });
+
   it("renders courtTagsSlot content where given", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable

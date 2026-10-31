@@ -239,3 +239,72 @@ test.describe("X-RB-1 pre-Start reshape keeps pinned boards", () => {
   });
 });
 
+
+// X-SW-21 (W3 T4, RB3-15 A, ruling 252; #846): Swiss rounds are paired by the
+// system, so a Swiss stage offers no "Add match" — an ad-hoc board made
+// phantom byes and broke the round shells. The rail shows the refusal's own
+// copy where the trigger stood, and the API refuses the match by name. The
+// rail's own Pair/Generate control is asserted first, so the absence is not a
+// rail that rendered nothing (the league's trigger is pinned at unit level,
+// stage-rail.test.tsx and stages-panel-swiss-pairing.test.tsx).
+test.describe("X-SW-21 no Add match on a Swiss stage", () => {
+  test("a paired Swiss stage has no Add match trigger and shows why; a POST is refused 422 SWISS_ADHOC_REFUSED and writes nothing", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `No ad-hoc Swiss ${TAG}`,
+      visibility: "private",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Adhoc P${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const [p1, p2] = added.data!;
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 2 },
+    });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+    expect(paired.status, JSON.stringify(paired.error)).toBe(200);
+    const before = await stageFixtures(request, divisionId, stageId);
+    expect(before.length, "premise: the Swiss rounds are minted").toBeGreaterThan(0);
+
+    // The API refuses by name and writes nothing.
+    const refused = await apiJson(request, `/api/v1/stages/${stageId}/fixtures`, "POST", {
+      home_entrant_id: p1!.id,
+      away_entrant_id: p2!.id,
+    });
+    expect(refused.status).toBe(422);
+    expect(refused.error?.code).toBe("SWISS_ADHOC_REFUSED");
+    expect((await stageFixtures(request, divisionId, stageId)).length, "nothing written").toBe(before.length);
+
+    // The desk: the rail renders its controls, no Add match, and the guidance in its place.
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await expect(page.getByTestId("stage-generate")).toBeAttached({ timeout: 20_000 });
+    const trigger = page.getByTestId("stage-rail-trigger");
+    if (await trigger.isVisible()) await trigger.click(); // phone widths fold the rail into a sheet
+    await expect(page.getByTestId("stage-swiss-adhoc-note")).toHaveText(
+      "Swiss rounds are paired by the system. Add friendlies in another stage.",
+    );
+    await expect(page.getByTestId("stage-add-match")).toHaveCount(0);
+  });
+});

@@ -37,12 +37,13 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
 import { publishSchedule, startDivision } from "../schedule";
-import { addFixture, createStages, generateStageFixtures, unpairSwissRound, type SwissExistingFixture } from "../stages";
+import { createStages, generateStageFixtures, unpairSwissRound, type SwissExistingFixture } from "../stages";
 import { chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { swissBoardsForField } from "@/lib/swiss-shell";
 import { createVenue, createCourt } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
+import { seedLegacySwissAdhoc } from "./_swiss-legacy-adhoc";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -729,9 +730,11 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
   });
 
   // The widened scope must not reach a round it cannot legally reshape.
-  // `addFixture` puts an ad-hoc swiss fixture at `maxRound + 1`, SEATED on both
-  // sides (it requires two entrant ids), so a 3-round stage can hold a fully
-  // seated round 4. It trips the reconcile's "already partly seated" guard —
+  // `addFixture` used to put an ad-hoc swiss fixture at `maxRound + 1`, SEATED
+  // on both sides (it requires two entrant ids), so a 3-round stage can hold a
+  // fully seated round 4. W3 RB3-15 A refuses that now, but the LEGACY rows
+  // stay live, so the row is seeded as `addFixture` wrote it
+  // (`seedLegacySwissAdhoc`). It trips the reconcile's "already partly seated" guard —
   // which, on a NON-target round, skips instead of throwing. Hand the later
   // rounds `"refuse"` in `swissGen` and this test reds with STAGE_NOT_READY,
   // which is a Generate that works today turned into a hard refusal.
@@ -744,10 +747,7 @@ describe.runIf(HAS_DB)("swiss — before Start, every unseated round tracks the 
     const pair = await sql<{ id: string }[]>`
       select id from entrants where division_id = ${divisionId}
         and status in ('registered','confirmed') order by seed limit 2`;
-    const { fixture_id } = await addFixture(auth, stageId, {
-      home_entrant_id: pair[0]!.id,
-      away_entrant_id: pair[1]!.id,
-    });
+    const { fixture_id } = await seedLegacySwissAdhoc(stageId, pair[0]!.id, pair[1]!.id);
     expect(inRound(await fixturesOf(stageId), 4).map((f) => f.id)).toEqual([fixture_id]);
 
     await addEntrants(auth, divisionId, 1); // six → seven
@@ -1013,7 +1013,7 @@ describe.runIf(HAS_DB)("X-RB-1 swiss — a pre-Start reshape keeps the boards th
   // (`withdrawEntrantCascade`, what POST /entrants/{id}/withdraw runs), not the
   // delete the cases around it use. The field shrinks the same way, and the
   // next press reshapes with the same choice.
-  it("X-RB-1 a pre-Start WITHDRAWAL (status flip) reshapes round 2 and keeps the pinned b4", async () => {
+  it("X-RB-1 a pre-Start WITHDRAWAL (status flip) reshapes round 2 and keeps the laid-out b4", async () => {
     const { auth } = await seedOrg();
     const { divisionId, stageId } = await seedSwissStage(auth, 3, 8);
     const courts = await twoCourts(auth);

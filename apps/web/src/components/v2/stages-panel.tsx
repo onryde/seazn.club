@@ -397,8 +397,11 @@ interface Props {
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
 // fixture there). Bracket kinds have no slot for a loose fixture; ladder /
-// americano have their own on-demand mechanisms.
-const ADHOC_STAGE_KINDS = new Set(["league", "group", "swiss"]);
+// americano have their own on-demand mechanisms. Swiss is out (W3 RB3-15 A,
+// X-SW-21): the system pairs its rounds, and the server refuses the match by
+// name; the rail shows that guidance in the trigger's place. Mirrors
+// `ADHOC_STAGE_KINDS` in server/usecases/stages.ts.
+const ADHOC_STAGE_KINDS = new Set(["league", "group"]);
 
 /**
  * The slice of GET /api/v1/divisions/{id}/schedule-settings this panel reads

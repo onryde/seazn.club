@@ -180,7 +180,7 @@ describe.skipIf(!HAS_DB)("X-RB-1 Rebuild keeps times and courts", () => {
   // by seq. b4 holds a slot and b3 does not, so b4's slot lands on the new b3
   // and nothing is freed — the positional carry used to free b4's slot here
   // while the bare b3 kept its (empty) place.
-  it("X-RB-1 a shrinking Swiss Rebuild keeps the pinned b4's slot when the bare b3 is the board that goes", async () => {
+  it("X-RB-1 a shrinking Swiss Rebuild keeps the laid-out b4's slot when the bare b3 is the board that goes", async () => {
     const { auth } = await seedOrg();
     const { divisionId, entrants } = await seedDivision(auth, BADMINTON, 8); // four boards a round
     const [stage] = await createStages(auth, divisionId, {

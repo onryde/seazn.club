@@ -414,7 +414,8 @@ export function refuseDivisionTableSave(
 /**
  * W2d Task 10 fix round 1 (I1; spec §5.4 "active or complete ⇒ pinned", D9): the STARTED stages a division save would
  * reach while they still have no pin, to be pinned with their CURRENT rules before the save lands. A stage starts without
- * being activated when an ad-hoc match (`addFixture`) on a pending league, group or Swiss stage takes its first event (or
+ * being activated when an ad-hoc match (`addFixture`) on a pending league or group stage (or a legacy one on a Swiss stage:
+ * W3 RB3-15 refuses new ones) takes its first event (or
  * a round of it opens): it stays `pending`, so neither generate nor completion has pinned it, and a division order or
  * points edit would otherwise move the table under a played match (class 6: silently re-ranked).
  *
