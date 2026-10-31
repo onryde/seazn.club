@@ -20,6 +20,7 @@ import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { ResolvedSponsor } from "@/server/usecases/sponsors";
+import { parseClickTag, type BoardClickTag } from "@/lib/sponsor-clicks";
 import { SponsorsBoard, SponsorsHeroTitle, sponsorHref } from "../sponsors-board";
 
 const DICTS: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
@@ -38,7 +39,12 @@ const GOLD = s({ name: "Halston Tyres", tier: "gold", id: "sp-gold", url: "https
 const SILVER = s({ name: "Cobb Dairy", tier: "silver" });
 const PARTNER = s({ name: "Vale Physio", tier: "partner", id: "sp-partner", url: "https://vale.example" });
 
-type Over = { sponsors?: ResolvedSponsor[]; tiered?: boolean; locale?: string };
+type Over = { sponsors?: ResolvedSponsor[]; tiered?: boolean; locale?: string; clickTag?: BoardClickTag; includeTitle?: boolean };
+
+/** The competition page's tag (S10): what every board and hero link claims there. */
+const SITE: BoardClickTag = { source: "site" };
+/** A match page's tag (D15): that match's fixture. Not a uuid on purpose — the board encodes, it does not validate. */
+const MATCH: BoardClickTag = { source: "match", fixtureId: "fx-42" };
 
 const render = (over: Over = {}) =>
   renderToStaticMarkup(
@@ -46,6 +52,8 @@ const render = (over: Over = {}) =>
       sponsors={over.sponsors ?? [TITLE, GOLD, SILVER, PARTNER]}
       tiered={over.tiered ?? true}
       dict={DICTS[over.locale ?? "en"]!}
+      clickTag={over.clickTag ?? SITE}
+      includeTitle={over.includeTitle}
     />,
   );
 
@@ -57,23 +65,63 @@ const renderHero = (over: Over = {}) =>
       sponsors={over.sponsors ?? [TITLE, GOLD, SILVER, PARTNER]}
       tiered={over.tiered ?? true}
       dict={DICTS[over.locale ?? "en"]!}
+      clickTag={over.clickTag ?? SITE}
     />,
   );
 
 describe("sponsorHref", () => {
-  it("sends a table row through the tracked redirect", () => {
-    expect(sponsorHref({ id: "sp-gold", url: "https://halston.example" })).toBe("/s/sp-gold");
+  it("sends a table row through the tracked redirect, tagged with the page it sits on (S10)", () => {
+    expect(sponsorHref({ id: "sp-gold", url: "https://halston.example" }, SITE)).toBe("/s/sp-gold?src=site");
+    expect(sponsorHref({ id: "sp-gold", url: "https://halston.example" }, MATCH)).toBe("/s/sp-gold?f=fx-42&src=match");
   });
 
   // The rung that silently stops counting clicks. Blob-shim entries (an org's
   // un-backfilled `branding` jsonb) have no row and therefore no id.
-  it("links a blob-shim entry straight out", () => {
-    expect(sponsorHref({ id: null, url: "https://halston.example" })).toBe("https://halston.example");
+  it("links a blob-shim entry straight out, untagged on either page", () => {
+    expect(sponsorHref({ id: null, url: "https://halston.example" }, SITE)).toBe("https://halston.example");
+    expect(sponsorHref({ id: null, url: "https://halston.example" }, MATCH)).toBe("https://halston.example");
   });
 
   it("is null when the sponsor gave no url at all — with or without an id", () => {
-    expect(sponsorHref({ id: "sp-gold", url: null })).toBeNull();
-    expect(sponsorHref({ id: null, url: null })).toBeNull();
+    expect(sponsorHref({ id: "sp-gold", url: null }, SITE)).toBeNull();
+    expect(sponsorHref({ id: null, url: null }, MATCH)).toBeNull();
+  });
+});
+
+// ── CLICK TAGS (S10, spec §3.7, owner ruling D15) ──────────────────────────
+// Every tracked link carries the page it sits on, so a sponsor's report can
+// say WHERE a click came from. Swept over every link the markup actually
+// renders — hero, panels, ticker, flat strip and the match board's title line —
+// rather than one sample, and each href is parsed back through the route's
+// own reader (`parseClickTag`), never compared to a string built the same way.
+describe("click tags — every tracked link says which page it sits on", () => {
+  const LINKED = [TITLE, GOLD, PARTNER]; // the rows with an id AND a url (SILVER has neither)
+  const hrefsIn = (html: string) => [...html.matchAll(/<a href="([^"]*)"/g)].map((m) => m[1]!.replace(/&amp;/g, "&"));
+
+  for (const [page, tag, html] of [
+    ["competition page (board + hero)", SITE, () => render() + renderHero()],
+    ["competition page, free org (flat strip)", SITE, () => render({ tiered: false })],
+    ["match page (board incl. title)", MATCH, () => render({ clickTag: MATCH, includeTitle: true })],
+    ["match page, free org (flat strip)", MATCH, () => render({ clickTag: MATCH, includeTitle: true, tiered: false })],
+  ] as const) {
+    it(`${page}: each linked sponsor once, each href tagged ${tag.source} (count reported)`, () => {
+      const hrefs = hrefsIn(html());
+      expect(hrefs.length, "links checked").toBe(LINKED.length);
+      for (const href of hrefs) {
+        const url = new URL(href, "https://seazn.club");
+        expect(url.pathname, href).toMatch(/^\/s\/sp-(title|gold|partner)$/);
+        expect(parseClickTag(url.searchParams), href).toEqual(
+          tag.source === "match" ? { fixtureId: null, source: "match" } : { fixtureId: null, source: "site" },
+        );
+        if (tag.source === "match") expect(url.searchParams.get("f"), href).toBe(tag.fixtureId);
+      }
+      expect(new Set(hrefs.map((h) => h.split("?")[0])).size, "no sponsor linked twice").toBe(LINKED.length);
+    });
+  }
+
+  it("anchors on the attribute: the match tag is in the href itself (`=\"`), &-escaped as React writes it", () => {
+    expect(render({ sponsors: [GOLD], clickTag: MATCH })).toContain(`href="/s/sp-gold?f=fx-42&amp;src=match"`);
+    expect(render({ sponsors: [GOLD] })).toContain(`href="/s/sp-gold?src=site"`);
   });
 });
 
@@ -130,7 +178,7 @@ describe("SponsorsHeroTitle — the hero lockup", () => {
 
   it("marks the hero link as sponsored and opens it away from the competition", () => {
     expect(renderHero({ sponsors: [TITLE] })).toMatch(
-      /<a href="\/s\/sp-title" target="_blank" rel="nofollow noopener sponsored"/,
+      /<a href="\/s\/sp-title\?src=site" target="_blank" rel="nofollow noopener sponsored"/,
     );
   });
 });
@@ -196,6 +244,69 @@ describe("SponsorsBoard — the tiered board", () => {
   });
 });
 
+// ── THE MATCH PAGE'S BOARD (owner rulings D15 + R8) ────────────────────────
+// The match page has no hero, so the title tier would otherwise be missing
+// from every match page, and its clicks with it. `includeTitle` puts the title
+// sponsor at the head of the slab, as the same "Presented by" sentence the
+// hero carries. The competition page never sets it: there, the hero has it.
+describe("SponsorsBoard — the match page's board (includeTitle)", () => {
+  it("leads the slab with the title sentence, then the panels — each once, in that order", () => {
+    const h = render({ clickTag: MATCH, includeTitle: true });
+    const title = h.indexOf(`data-testid="mh-sponsors-title"`);
+    const panels = h.indexOf(`data-testid="mh-sponsors-panels"`);
+    expect(title, "the title line is drawn").toBeGreaterThan(-1);
+    expect(title, "inside the slab").toBeGreaterThan(h.indexOf(`data-testid="mh-sponsors-board"`));
+    expect(panels, "the panels follow it").toBeGreaterThan(title);
+    expect(h).toContain("Presented by Northbank Bank");
+    expect(h.match(/Northbank Bank/g)?.length, "the title sponsor once").toBe(1);
+    // The title line holds the title sponsor only; the panels never repeat it.
+    const titleLine = h.slice(title, panels);
+    expect(titleLine).not.toContain("Halston Tyres");
+    expect(h.slice(panels)).not.toContain("Northbank Bank");
+    // Not the hero's lockup: there is no hero on a match page.
+    expect(h).not.toContain(`data-testid="mh-hero-sponsor"`);
+  });
+
+  it("a tiered org whose only sponsor is the title still gets the slab, holding just the title line", () => {
+    const h = render({ sponsors: [TITLE], clickTag: MATCH, includeTitle: true });
+    expect(h).toContain(`data-testid="mh-sponsors-board"`);
+    expect(h).toContain(`data-testid="mh-sponsors-title"`);
+    expect(h).not.toContain(`data-testid="mh-sponsors-panels"`);
+    // The competition page's board for the SAME list draws nothing (its hero has the sponsor) — the differential.
+    expect(render({ sponsors: [TITLE] })).toBe("");
+  });
+
+  it("separates the title line from the panels with a hairline only when both are drawn", () => {
+    const both = render({ sponsors: [TITLE, GOLD], clickTag: MATCH, includeTitle: true });
+    expect(both).toMatch(/data-testid="mh-sponsors-panels" class="[^"]*border-t border-white\/10/);
+    const panelsOnly = render({ sponsors: [GOLD], clickTag: MATCH, includeTitle: true });
+    expect(panelsOnly).not.toContain("border-t border-white/10");
+  });
+
+  it("a free org gets the flat strip with the title-tier row as a plain name — no title line, no sentence", () => {
+    const h = render({ tiered: false, clickTag: MATCH, includeTitle: true });
+    expect(h).toContain(`data-testid="mh-sponsors-flat"`);
+    expect(h).not.toContain(`data-testid="mh-sponsors-title"`);
+    expect(h).not.toContain("Presented by");
+    expect(h).toContain("Northbank Bank");
+  });
+
+  it("renders NOTHING for no sponsors, with or without the title tier switched in", () => {
+    expect(render({ sponsors: [], clickTag: MATCH, includeTitle: true })).toBe("");
+    expect(render({ sponsors: [], tiered: false, clickTag: MATCH, includeTitle: true })).toBe("");
+  });
+
+  it("carries min-w-0 down the title line's chain and wraps rather than truncating (a 43-character name)", () => {
+    const long = s({ name: "Northbank Regional Building Society & Trust", tier: "title", id: "sp-long", url: "https://nb.example" });
+    expect(long.name.length).toBe(43);
+    const h = render({ sponsors: [long], clickTag: MATCH, includeTitle: true });
+    const line = h.slice(h.indexOf(`data-testid="mh-sponsors-title"`));
+    expect(line).toContain("flex-wrap");
+    expect(h).not.toContain("truncate");
+    expect(line.match(/min-w-0/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
 describe("SponsorsBoard — the free strip", () => {
   // The product rule this component exists for: without Pro `sponsors.tiers`
   // a community sponsor must not read like a paid title placement, whatever
@@ -253,7 +364,7 @@ describe("SponsorsBoard — the free strip", () => {
 describe("SponsorsBoard — links and logos", () => {
   it("marks a sponsored link for crawlers and opens it away from the competition", () => {
     const h = render({ sponsors: [GOLD] });
-    expect(h).toMatch(/<a href="\/s\/sp-gold" target="_blank" rel="nofollow noopener sponsored"/);
+    expect(h).toMatch(/<a href="\/s\/sp-gold\?src=site" target="_blank" rel="nofollow noopener sponsored"/);
   });
 
   it("renders a sponsor with no url as plain text, not as an empty link", () => {
@@ -319,6 +430,9 @@ describe("SponsorsBoard — four locales", () => {
       // Both placements, because the sentence and the two labels no longer live
       // in one component and a per-component check would leave one untested.
       const h = render({ locale }) + renderHero({ locale });
+      // The match board's title line is the same dictionary sentence, not a second copy of it.
+      const matchBoard = render({ locale, clickTag: MATCH, includeTitle: true });
+      expect(matchBoard).toContain(dict["landing.presentedBy"]!.replace("{sponsor}", "Northbank Bank"));
 
       expect(h).toContain(dict["landing.sponsors"]!);
       expect(h).toContain(dict["landing.partners"]!);
