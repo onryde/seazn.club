@@ -6,6 +6,7 @@ import {
   competitionPath,
   createStageAndGenerate,
   expectNoHorizontalScroll,
+  scoreFixture,
   seedVenueWithCourts,
   withDb,
 } from "./helpers";
@@ -31,6 +32,9 @@ import {
  *   - Ben v Dee: planned three hours ago, on no court, no result — the desk's `result_missing`, which the header's
  *     Needs-you list puts FIRST even though the red row outranks it on the desk.
  * Eve and Fay play nobody else on the board, so Court 2's own candidates are what the A3 tests already pin.
+ *
+ * Task B1 adds the `quiet` seed: the same board with Ana v Ben NOT started — nothing playing, so the shell polls on its quiet
+ * cadence — for the two tests that moved here from the retired desk-in-play-band.spec.ts (the board's own polls).
  */
 
 interface Seed {
@@ -39,6 +43,8 @@ interface Seed {
   court2: string;
   /** The `needsYou` seed's third court (Eve v Fay in play, unscored); null otherwise. */
   court3: string | null;
+  /** Ana v Ben: on Court 1, in play (a real core.start) unless the seed is `quiet`. */
+  anaBen: string;
   /** Cal v Dee: Court 2's own next match, the top candidate. */
   calDee: string;
   /** Ana v Cal: queued on Court 1, blocked by Ana. */
@@ -46,7 +52,11 @@ interface Seed {
   names: { ana: string; ben: string; cal: string; dee: string };
 }
 
-async function seedMatchDay(request: APIRequestContext, label: string, opts: { needsYou?: boolean } = {}): Promise<Seed> {
+async function seedMatchDay(
+  request: APIRequestContext,
+  label: string,
+  opts: { needsYou?: boolean; quiet?: boolean } = {},
+): Promise<Seed> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `Match Day ${label} ${TAG}`,
@@ -110,9 +120,8 @@ async function seedMatchDay(request: APIRequestContext, label: string, opts: { n
     await sql`update fixtures set court_id = ${court1.id}, scheduled_at = ${within(-10)} where id = ${anaCal}`;
     await sql`update fixtures set court_id = ${court2.id}, scheduled_at = ${within(5)} where id = ${calDee}`;
   });
-  // In play for real: a core.start through the engine, never a status patch.
-  const start = await apiJson(request, `/api/v1/fixtures/${anaBen}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
-  expect(start.status, `core.start: ${JSON.stringify(start.error)}`).toBeLessThan(300);
+  // In play for real: a core.start through the engine, never a status patch. A quiet board leaves it to the test.
+  if (!opts.quiet) await startFixture(request, anaBen);
 
   if (court3 !== null) {
     const eveFay = fixtureOf(eve!, fay!);
@@ -130,7 +139,13 @@ async function seedMatchDay(request: APIRequestContext, label: string, opts: { n
     });
   }
 
-  return { competitionId, court1: court1.name, court2: court2.name, court3: court3?.name ?? null, calDee, anaCal, names };
+  return { competitionId, court1: court1.name, court2: court2.name, court3: court3?.name ?? null, anaBen, calDee, anaCal, names };
+}
+
+/** A real core.start through the engine — the way a scorer's pad starts a match, never a status patch. */
+async function startFixture(request: APIRequestContext, fixtureId: string): Promise<void> {
+  const start = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(start.status, `core.start: ${JSON.stringify(start.error)}`).toBeLessThan(300);
 }
 
 const row = (page: Page, courtName: string) => page.getByTestId("md-court-row").filter({ hasText: courtName });
@@ -395,5 +410,59 @@ test.describe("Match Day — phone (320)", () => {
     await needsYouAndScorer(page, seed);
     await expect(page.getByTestId("md-list")).toBeHidden();
     await expect(page.getByTestId("md-back")).toBeVisible();
+  });
+});
+
+/**
+ * Task B1 (spec §9): the competition page's live strip is gone, and the two things its spec (desk-in-play-band.spec.ts,
+ * retired) proved in a real browser move here, to the board that now shows what is being played. Both are about the shell's
+ * OWN polls (`startBandPolling`: 20 s while a court is playing or called, 90 s while quiet) — the node-environment suite never
+ * runs an effect, so this is the only place they are seen. The clock is installed before navigation, so the interval the
+ * shell registers at hydration is the fake one, and no tab is ever reloaded.
+ */
+test.describe("Match Day — the board keeps itself current (B1, moved from desk-in-play-band.spec.ts)", () => {
+  test("a match decided elsewhere leaves its court on the next live poll, not before", async ({ page, request }) => {
+    const seed = await seedMatchDay(request, "Poll");
+    await page.clock.install();
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    await expect(row(page, seed.court1)).toHaveAttribute("data-state", "playing");
+
+    // Decided out of band — a real generic.result, never a status patch — so the match genuinely leaves in_play.
+    await scoreFixture(request, seed.anaBen, 2, 1);
+    // Nothing has told this tab: the server-rendered board still shows it playing, so the poll is what moves it.
+    await expect(row(page, seed.court1), "the court changed before any poll ran: this is not proving the poll").toHaveAttribute(
+      "data-state",
+      "playing",
+    );
+    await page.clock.fastForward("00:21");
+    await expect(row(page, seed.court1), "a decided match still holds its court after the live poll ran").not.toHaveAttribute(
+      "data-state",
+      "playing",
+    );
+    await expect(page.getByTestId("md-counts")).toContainText("0 playing");
+  });
+
+  test("a quiet board left open picks up the day's first match starting, on the quiet poll, without a reload", async ({
+    page,
+    request,
+  }) => {
+    const seed = await seedMatchDay(request, "Wake", { quiet: true });
+    await page.clock.install();
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    // Quiet, and the board really rendered (the positive half: two courts, neither playing).
+    await expect(page.getByTestId("md-court-row")).toHaveCount(2);
+    await expect(row(page, seed.court1)).not.toHaveAttribute("data-state", "playing");
+
+    // The match starts elsewhere, as it does when a scorer opens the pad on a phone.
+    await startFixture(request, seed.anaBen);
+    // Past one LIVE tick (20 s) it must still read quiet — if it changed here, something other than the quiet poll moved it.
+    await page.clock.fastForward("00:25");
+    await expect(row(page, seed.court1), "the board changed before the quiet poll could have run").not.toHaveAttribute(
+      "data-state",
+      "playing",
+    );
+    // Past the quiet period (90 s) it wakes.
+    await page.clock.fastForward("01:10");
+    await expect(row(page, seed.court1), "a quiet board never noticed the first match start").toHaveAttribute("data-state", "playing");
   });
 });

@@ -70,5 +70,7 @@ test("round J: capture the desk at three widths", async ({ page, request }) => {
   // for a sign-off (the harness once collected one on zero pictures).
   console.log("CAPTURED", url);
   console.log("MASTHEAD", (await page.getByTestId("desk-masthead-pill").textContent())?.trim());
-  console.log("NEEDS", (await page.getByTestId("desk-needs-you").innerText()).replace(/\n+/g, " | "));
+  // Match Day B1: a match in play makes this a match day, so the Needs-you list lives in Match Day; the competition page
+  // carries one line pointing there, which is what was photographed.
+  console.log("NEEDS", (await page.getByTestId("desk-needs-you-in-match-day").innerText()).replace(/\n+/g, " | "));
 });

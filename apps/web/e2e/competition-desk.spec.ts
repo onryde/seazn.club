@@ -13,6 +13,7 @@ import {
   scoreFixture } from "./helpers";
 import { findBucketSplit, findPrintSplit, sweepZoneSplitFinders } from "./zone-split";
 import { NOT_RECORDING_GRACE_MINUTES } from "../src/lib/division-phase";
+import { needsYouInMatchDay, needsYouOnCompetitionPage } from "./needs-you-home";
 
 /** "Sun 6 Sep" — matches division-status-line.ts's `nextDateLabel`/`whenLabel`
  *  day portion, so an assertion never hardcodes a calendar date that ages. */
@@ -55,7 +56,8 @@ test.describe("competition desk", () => {
     const org = await activeOrg(page);
     const rig = await seed(request);
     await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
-    const needs = page.getByTestId("desk-needs-you");
+    // Not a match day (no match has a time, none is in play): the list is this page's, and there is no Open Match Day (B1).
+    const needs = await needsYouOnCompetitionPage(page);
     await expect(needs.locator('[data-attention="unscheduled"]')).toHaveCount(1);
     await expect(needs).toContainText(`Premier · ${rig.fixtureIds.length} fixtures unscheduled`);
     const row = page.getByTestId("desk-ledger-row").first();
@@ -94,8 +96,6 @@ test.describe("competition desk", () => {
     const rig = await seed(request);
     await setFixtureStatusSql(rig.fixtureIds[0]!, "in_play");
     await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
-    const first = page.getByTestId("desk-needs-you").locator("[data-attention]").first();
-    await expect(first).toHaveAttribute("data-attention", "no_scorer");
     // The division ledger row renders its PhasePill twice (mobile card +
     // desktop row, one hidden by CSS per width, per division-ledger.tsx) — a
     // bare `.first()` resolves the mobile-hidden copy at this project's
@@ -114,6 +114,12 @@ test.describe("competition desk", () => {
     await expect(masthead, "the live count must survive a red attention").toContainText("1 in play");
     const chip = page.getByTestId("desk-masthead-attention");
     await expect(chip, "and the red attention is named beside it").toHaveAttribute("data-attention-chip", "no_scorer");
+    // B1: a match in play makes it a match day, so the Needs-you list is Match Day's — No scorer leads it there, and this page
+    // carries one line pointing at it instead (and no "Now:" line naming the match: live state is Match Day's).
+    await expect(page.getByTestId("desk-ledger-row").first()).not.toContainText("Now:");
+    const list = await needsYouInMatchDay(page);
+    await expect(list.locator('[data-attention="no_scorer"]')).toHaveCount(1);
+    await expect(list.locator("[data-attention]").filter({ visible: true }).first()).toHaveAttribute("data-attention", "no_scorer");
   });
 
   // H2 fix (final review round 3, Important — corrected ruling): G3's gate
@@ -468,7 +474,9 @@ test.describe("competition desk", () => {
     expect(started.status, "core.start must be accepted — this test is meaningless otherwise").toBeLessThan(400);
 
     await page.goto(`/o/${org.slug}/c/${rig.comp.slug}`);
-    const needs = page.getByTestId("desk-needs-you");
+    const compUrl = page.url();
+    // B1: the match in play makes it a match day, so the list is Match Day's (the competition page points there).
+    let needs = await needsYouInMatchDay(page);
     // Nobody assigned yet: the red row.
     await expect(
       needs.locator('[data-attention="no_scorer"]'),
@@ -483,7 +491,8 @@ test.describe("competition desk", () => {
     // Minor 8b, and is what this test caught on its first run. Age the start
     // event instead; the fixture still got in play through the real endpoint.
     await backdateFixtureStartSql(fixtureId, NOT_RECORDING_GRACE_MINUTES + 40);
-    await page.reload();
+    await page.goto(compUrl);
+    needs = await needsYouInMatchDay(page);
     await expect(needs.locator('[data-attention="not_recording"]')).toHaveCount(1);
     await expect(needs.locator('[data-attention="no_scorer"]')).toHaveCount(0);
 
@@ -493,8 +502,14 @@ test.describe("competition desk", () => {
       expected_seq: 1, type: "generic.result", payload: { p1Score: 1, p2Score: 0 },
     });
     expect(scored.status).toBeLessThan(400);
-    await page.reload();
-    await expect(needs.locator('[data-attention="not_recording"]')).toHaveCount(0);
+    // Nothing is in play and no match has a time: no longer a match day. The list is back on the competition page, and it
+    // has no recording row — nor does any surface (Match Day lists nothing off its day).
+    await page.goto(compUrl);
+    await expect(page.getByTestId("desk-ledger-row").first()).toBeVisible();
+    await expect(page.getByTestId("desk-tool-match-day")).toHaveCount(0);
+    await expect(page.getByTestId("desk-needs-you-in-match-day")).toHaveCount(0);
+    await expect(page.locator('[data-attention="not_recording"]')).toHaveCount(0);
+    await expect(page.locator('[data-attention="no_scorer"]')).toHaveCount(0);
   });
 
   // F4 (round J): the rows put a red attention on their pill and the masthead
@@ -764,7 +779,7 @@ test.describe("competition desk", () => {
     // they PRINT — it says nothing about which day BUCKETS the fixture into
     // `match_day` in the first place. Reproduced live before this fix (see
     // fix-round-e-report.md): a fixture genuinely dated TODAY at the venue
-    // (Kolkata) read "Scheduled", never "Match day", because the phase was
+    // (Kolkata) read "Scheduled", never match_day ("In play" since Match Day B1), because the phase was
     // bucketed in the ORG zone (London), which was still on the day before.
     test("match day is decided by the venue's calendar day, not the org's", async ({ page, request }) => {
       const org = await activeOrg(page);
@@ -786,6 +801,10 @@ test.describe("competition desk", () => {
         // even though this same instant is a different calendar day for the
         // org, which is the only reason this can tell the two zones apart.
         await expect(row).toHaveAttribute("data-phase", "match_day");
+        // B1: the organiser's word for it is "In play" (Match Day is the product's name), and the competition page's own
+        // match-day gate (`fixtures_today`, Match Day's count) reads the SAME venue day — Open Match Day is offered.
+        await expect(row.locator('[data-pill="match_day"]:visible').first()).toHaveText("In play");
+        await expect(page.getByTestId("desk-tool-match-day")).toBeVisible();
       } finally {
         await restore?.();
       }

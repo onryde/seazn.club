@@ -100,7 +100,7 @@ function searchBucketSplit(from: Date, orgTz: string, venueTz: string): Date | n
  * Two conditions, not one. The obvious search — "first instant where the two
  * zones disagree on the day" — returns something a few hours out, which is
  * TODAY at the venue, and the ladder answers `match_day` before it ever
- * reaches its date step. The masthead then reads "Match day" and the test
+ * reaches its date step. The masthead then reads "In play" (match_day) and the test
  * fails against correct code. Existence is not behaviour when branch ORDER
  * decides the outcome: the instant must also be on a LATER venue day, so the
  * date step is the branch under test.

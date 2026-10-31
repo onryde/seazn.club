@@ -5,10 +5,11 @@ import {
   orgTimezoneSql,
 } from "../helpers";
 import { zoneDateKey } from "../zone-split";
+import { needsYouInMatchDay } from "../needs-you-home";
 
 test.describe.configure({ mode: "serial" });
 
-test("an organiser watches the desk go Setting up → Scheduled → Match day → No scorer → Finished, and every button lands where it says", async ({ page, request }, testInfo) => {
+test("an organiser watches the desk go Setting up → Scheduled → In play (a match day) → No scorer → Finished, and every button lands where it says", async ({ page, request }, testInfo) => {
   test.setTimeout(240_000);
   const shot = (name: string) => page.screenshot({ path: `${testInfo.outputPath()}/${name}.png`, fullPage: true });
   const org = await activeOrg(page);
@@ -125,7 +126,8 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await expect(needs.locator('[data-attention="result_missing"]')).toBeVisible();
   await shot("03c-past-kickoff-no-result");
 
-  // 4. Reach: kick-off today (API PATCH). Read: Match day.
+  // 4. Reach: kick-off today (API PATCH). Read: a match day — the pill says In play (Match Day B1: "Match Day" is the
+  //    product's name now, not a phase word), Open Match Day is offered, and Needs you has moved into Match Day.
   //
   // J1 class (fix round F): this used to be `new Date()` with
   // `setUTCHours(18, 0, 0, 0)` — "today at 18:00 UTC". `match_day` is bucketed
@@ -150,12 +152,16 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "match_day");
   await expect(page.locator('[data-phase="match_day"]').first()).toBeVisible();
+  await expect(row.locator('[data-pill="match_day"]:visible')).toHaveText("In play");
+  await expect(page.getByTestId("desk-tool-match-day")).toBeVisible();
+  // The unscheduled round still needs the organiser — in Match Day now; this page says so in one line.
+  await expect(needs).toHaveCount(0);
+  await expect(page.getByTestId("desk-needs-you-in-match-day")).toBeVisible();
   await shot("04-match-day");
 
   // 5. Reach: in play, nobody scoring (SQL). Read: No scorer leads, and the button lands on the fixture.
   await setFixtureStatusSql(ids[0]!, "in_play");
   await page.goto(compPath);
-  await expect(needs.locator("[data-attention]").first()).toHaveAttribute("data-attention", "no_scorer");
   // Division ledger row renders its PhasePill twice (mobile card + desktop
   // row, division-ledger.tsx) — one hidden by CSS per width. `:visible`
   // picks whichever copy actually renders at this project's viewport, same
@@ -179,12 +185,15 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await expect(masthead).toContainText("1 in play");
   await expect(page.getByTestId("desk-masthead-attention")).toHaveAttribute("data-attention-chip", "no_scorer");
   await shot("05-no-scorer");
+  // B1: the list is Match Day's on a match day — follow this page's one line there; No scorer leads it.
+  const mdNeeds = await needsYouInMatchDay(page);
+  await expect(mdNeeds.locator("[data-attention]").first()).toHaveAttribute("data-attention", "no_scorer");
   // M2 (fix round I): the action used to read "Assign scorer" — a control
   // that exists nowhere in the product (`createAssignment` has no production
   // caller; `scorer_assignments` is written only by accepting a scoped
   // invite, which no UI creates). It now asks for the thing that IS on the
   // console it lands on: the pad.
-  await needs.getByRole("link", { name: "Open scoring" }).click();
+  await mdNeeds.getByRole("link", { name: "Open scoring" }).click();
   await expect(page).toHaveURL(new RegExp(`/f/${fixtures[0]!.fixture_no}$`));
   // `toHaveURL` alone is the shape that could not see instances 9 to 12 —
   // it proves the address, never the screen. `competition-desk-actions.spec.ts`
@@ -199,7 +208,9 @@ test("an organiser watches the desk go Setting up → Scheduled → Match day �
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "finished");
   await expect(row).toContainText("complete");
+  // Nothing needs the organiser, on either surface: no list here, and no line pointing at one in Match Day.
   await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
+  await expect(page.getByTestId("desk-needs-you-in-match-day")).toHaveCount(0);
   await shot("06-finished");
 
   // 7. The page holds at every width, in this final state.

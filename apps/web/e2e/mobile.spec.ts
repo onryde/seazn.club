@@ -994,7 +994,9 @@ test("competition desk: the division row is a CARD below md and a grid at md, no
 });
 
 // F2 + F5 (round J). The desk's TOOL ROW below `sm`, and the Now line on the
-// phone card.
+// phone card — retired by Match Day B1 (spec 2026-10-31 §9): the ledger names no
+// live match at any width now, and a match day gives the row a new lead, Open
+// Match Day (the second half of this test).
 //
 // Before this the five tools were `hidden sm:inline` labels over 46x34 icon
 // tiles: unlabelled, under the 44px floor, on the width most likely to be in
@@ -1026,8 +1028,8 @@ test("competition desk: the tool row is a phone composition below md, not the de
   await addEntrantsViaApi(request, div.data!.id, ["Alpha", "Bravo", "Charlie", "Delta"]);
   const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
   expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBeLessThan(400);
-  // One fixture LIVE, so the ledger row has a "Now: …" line to carry (F5).
-  await setFixtureStatusSql(fixtureIds[0]!, "in_play");
+  // Quiet first (no match has a time, none is in play): not a match day, so the schedule board is the phone primary. The
+  // match-day composition is checked at the end, once a fixture is live.
 
   await page.goto(await competitionPath(request, comp.data!.id), { waitUntil: "load" });
   await dismissCookieBanner(page);
@@ -1061,13 +1063,9 @@ test("competition desk: the tool row is a phone composition below md, not the de
       .map((i) => i.text);
   };
 
-  // F5: the Now line, at EVERY width. The phone card used to drop it — the
-  // one width where "a match is on right now" matters most was the only one
-  // that never said so.
-  const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Tools Cup" }).first();
-  const nowLine = row.locator("p:visible", { hasText: /^Now:/ });
-  await expect(nowLine, "the ledger row must name the live fixture at this width").toHaveCount(1);
-  await expect(nowLine).toContainText(/Alpha|Bravo|Charlie|Delta/);
+  // Not a match day: no way into Match Day is offered.
+  await expect(page.getByTestId("desk-ledger-row").filter({ hasText: "Tools Cup" }).first()).toBeVisible();
+  await expect(page.getByTestId("desk-tool-match-day")).toHaveCount(0);
 
   if (isPhone) {
     // 1. The primary action is labelled, full width, and clears the floor.
@@ -1195,6 +1193,44 @@ test("competition desk: the tool row is a phone composition below md, not the de
   expect(bandSet, "at 700 the row keeps a labelled More control").toMatch(/More/);
   expect(bandSet, "at 700 the inline Settings tile must not be back — that is the desktop row").not.toMatch(/Settings/);
   expect(bandSet, "at 700 the inline Slideshow tile must not be back").not.toMatch(/Slideshow/);
+  await expectNoHorizontalScroll(page);
+
+  // Match Day B1 (spec §9). A match in play makes it a match day: Open Match Day joins the row and LEADS it — on a phone the
+  // one filled control, full width, at the floor, and still filled while pressed (the schedule board's own hover lesson,
+  // 1b above) — while the schedule board steps back to a plain row: one primary, never two. And the ledger names no live
+  // match at any width (F5's "Now:" line is gone; live state is Match Day's).
+  await setFixtureStatusSql(fixtureIds[0]!, "in_play");
+  const vp = projectViewport();
+  if (vp) await page.setViewportSize(vp);
+  await page.reload({ waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const openMatchDay = page.getByTestId("desk-tool-match-day");
+  await expect(openMatchDay, "a match day offers Open Match Day at every width").toBeVisible();
+  await expect(openMatchDay).toContainText("Open Match Day");
+  const liveRow = page.getByTestId("desk-ledger-row").filter({ hasText: "Tools Cup" }).first();
+  await expect(liveRow).toBeVisible();
+  await expect(liveRow, "the ledger no longer names the live match").not.toContainText("Now:");
+  if (isPhone) {
+    const daySet = await rowControlSet();
+    expect(daySet[0], `on a match day the phone row leads with Open Match Day; got ${daySet.join(" | ")}`).toMatch(/Open Match Day/);
+    expect(daySet.join(" | "), "the schedule board is still in the row").toMatch(/Schedule/);
+    const dayBox = await openMatchDay.boundingBox();
+    expect(dayBox, "Open Match Day must have a measurable box").not.toBeNull();
+    expect(dayBox!.height, "a phone action must clear the 44px touch floor").toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    expect(dayBox!.width, "the phone primary is full-width, not an inline tile").toBeGreaterThan(width * 0.7);
+    const bg = (l: typeof schedule) => l.evaluate((el) => getComputedStyle(el).backgroundColor);
+    // One primary: the schedule board now wears the ghost fill the More toggle does, and not the primary's white text.
+    await expect(schedule).not.toHaveCSS("color", "rgb(255, 255, 255)");
+    expect(await bg(schedule), "the schedule board is a plain row on a match day").toBe(await bg(more));
+    await expect(openMatchDay).toHaveCSS("color", "rgb(255, 255, 255)");
+    await openMatchDay.hover();
+    expect(await bg(openMatchDay), "a pressed Open Match Day must not fall back to the ghost fill").not.toBe(await bg(more));
+    await expect(openMatchDay).toHaveCSS("color", "rgb(255, 255, 255)");
+  } else {
+    const daySet = (await rowControlSet()).join(" | ");
+    expect(daySet, "Open Match Day joins the labelled row at 768 and up").toMatch(/Open Match Day/);
+    expect(daySet, "and the row is otherwise unchanged").toMatch(/Settings/);
+  }
   await expectNoHorizontalScroll(page);
 });
 

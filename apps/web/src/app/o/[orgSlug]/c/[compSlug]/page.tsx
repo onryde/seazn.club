@@ -256,21 +256,6 @@ export default async function CompetitionPage({
             data-testid="desk-tool-row"
             className="flex flex-wrap items-center gap-2 max-md:w-full max-md:flex-col max-md:items-stretch"
           >
-            {/* Match Day B1 (spec §9): on a match day the venue board is the organiser's place to be, so it is THE action — the
-                one filled control at every width, and first on a phone (the schedule board steps back to a plain row below).
-                Organisers only: Match Day itself is (its page 404s for anyone who cannot edit). */}
-            {canEdit && onMatchDay && (
-              <Link
-                href={routes.competitionMatchDay(orgSlug, compSlug)}
-                data-testid="desk-tool-match-day"
-                // The phone fill is spelled out, not left to `btn-primary`: the hover reset and the tap floor are the same
-                // ones the schedule board needed (see its comment below), and the e2e phone composition reads this fill.
-                className="btn btn-primary gap-1.5 max-md:order-first max-md:min-h-11 max-md:w-full max-md:justify-start max-md:border-purple-600 max-md:bg-purple-600 max-md:px-4 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
-              >
-                <Radio aria-hidden className="h-4 w-4" strokeWidth={1.75} />
-                <span>{t(dict, "desk.tools.openMatchDay")}</span>
-              </Link>
-            )}
             {/* Entry point 1 of 4 (task 19): the pass, offered in the
                 competition's own header instead of only at a paywall. Renders
                 itself away for a paid org — Pro already exceeds it, and shows
@@ -314,6 +299,23 @@ export default async function CompetitionPage({
               canBuy={canEdit}
             />
             </div>
+            {/* Match Day B1 (spec §9): on a match day the venue board is the organiser's place to be, so it is THE action — the
+                one filled control at every width, and first on a phone (the schedule board steps back to a plain row below).
+                Organisers only: Match Day itself is (its page 404s for anyone who cannot edit). After the pass entry in source,
+                not before it: that wrapper renders empty for a paid org yet still takes a flex gap, and here it stays the row's
+                leading edge, as it always was, instead of opening a double gap after the primary. */}
+            {canEdit && onMatchDay && (
+              <Link
+                href={routes.competitionMatchDay(orgSlug, compSlug)}
+                data-testid="desk-tool-match-day"
+                // The phone fill is spelled out, not left to `btn-primary`: the hover reset and the tap floor are the same
+                // ones the schedule board needed (see its comment below), and the e2e phone composition reads this fill.
+                className="btn btn-primary gap-1.5 max-md:order-first max-md:min-h-11 max-md:w-full max-md:justify-start max-md:border-purple-600 max-md:bg-purple-600 max-md:px-4 max-md:text-white max-md:hover:border-purple-700 max-md:hover:bg-purple-700 max-md:hover:text-white"
+              >
+                <Radio aria-hidden className="h-4 w-4" strokeWidth={1.75} />
+                <span>{t(dict, "desk.tools.openMatchDay")}</span>
+              </Link>
+            )}
             <Link
               href={routes.slideshowCompetition(competition.id)}
               target="_blank"
