@@ -6,7 +6,7 @@
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MatchDayCourt } from "@/lib/match-day/types";
-import { matchLabel } from "@/lib/match-day/view";
+import { compactScore, matchLabel, scoreLine } from "@/lib/match-day/view";
 
 /** The state dot: green while playing, amber while called, an open ring while free, grey while another competition has it. */
 const DOT: Record<MatchDayCourt["state"], string> = {
@@ -31,6 +31,7 @@ export function CourtList({
     <ul aria-label={t(dict, "matchDay.list.label")} className="card divide-y divide-purple-50 overflow-hidden">
       {courts.map((c) => {
         const selected = c.court_id === selectedId;
+        const score = c.state === "playing" && c.current !== null ? scoreLine(c.current) : null;
         return (
           <li key={c.court_id}>
             <button
@@ -59,11 +60,12 @@ export function CourtList({
                   )}
                 </span>
                 <span className="block truncate text-xs text-slate-600">{rowLine(dict, c)}</span>
-                {/* The score on its own line: a real headline ("0 — 1 · 4–21 (19–19)", a cricket innings pair) is long, and
-                    beside the name it squeezed the court's own name to "Cour…" (fix round 1, from the prod-server shots). */}
-                {c.state === "playing" && c.current?.headline ? (
-                  <span className="mt-0.5 block font-mono text-xs font-semibold tabular-nums text-purple-900 [overflow-wrap:anywhere]">
-                    {c.current.headline}
+                {/* The score on its own line (beside the name a real score squeezed the court's own name to "Cour…"), in the row's
+                    own sans with tabular figures: games won and the current game's points for a set sport, the sport's own
+                    headline otherwise (`scoreLine`, the panel's rule; review V4). */}
+                {score !== null ? (
+                  <span data-md-row-score className="mt-0.5 block text-xs font-semibold tabular-nums text-purple-900 [overflow-wrap:anywhere]">
+                    {compactScore(score)}
                   </span>
                 ) : null}
               </span>

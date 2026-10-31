@@ -110,14 +110,28 @@ function inPlaySummary(key: string, pick: (s: MatchDaySummary) => boolean = () =
 const detailOf = (s: MatchDaySummary): Record<string, unknown> =>
   typeof s.detail === "object" && s.detail !== null ? (s.detail as Record<string, unknown>) : {};
 const hasSets = (s: MatchDaySummary): boolean => Array.isArray(detailOf(s).sets) && (detailOf(s).sets as unknown[]).length > 0;
-/** The spec's rule (§6.2): games or sets in large type, the live points beside them — never the "0 – 0 (3-2)" one-liner. */
-const largeType = (s: MatchDaySummary): string => (hasSets(s) ? s.headline!.replace(/\s*\([^)]*\)\s*$/, "") : s.headline!);
+/** A set sport's summary as the engine reports it: two sides, each with its games/sets won as its line. */
+const isSetSport = (s: MatchDaySummary): boolean => hasSets(s) && (s.perSide?.length ?? 0) === 2;
+type SetRow = { home: number; away: number; closed: boolean };
+const setsOf = (s: MatchDaySummary): SetRow[] => detailOf(s).sets as SetRow[];
+/** The engine's own live points: the headline's trailing "(…)" ("19–19", tennis's "40–Ad"); null between games. */
+const livePointsOf = (s: MatchDaySummary): string | null => /\(([^)]*)\)\s*$/.exec(s.headline!)?.[1] ?? null;
+/** The spec's rule (§6.2, review V3): a set sport's large type is games or sets won, "0 – 1"; any other sport keeps its own
+ *  headline (LiveScoreBody's). */
+const gamesWon = (s: MatchDaySummary): string => `${s.perSide![0]!.line} – ${s.perSide![1]!.line}`;
 /** React's text escaping, for matching a text node in static markup. */
 const esc = (v: string): string =>
   v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
 
-/** Badminton mid-game: a set closed, the next one with points on the board ("… (19–19)"). */
-const BADMINTON = inPlaySummary("badminton", (s) => hasSets(s) && /\([^)]*\)\s*$/.test(s.headline!));
+/** Badminton mid-game 2: game 1 closed, game 2 open with points on the board ("… (19–19)"). */
+const BADMINTON = inPlaySummary(
+  "badminton",
+  (s) =>
+    isSetSport(s) &&
+    livePointsOf(s) !== null &&
+    setsOf(s).some((x) => x.closed) &&
+    setsOf(s).some((x) => !x.closed && x.home + x.away > 0),
+);
 /** Tennis with the server known: the serve marker's source. */
 const TENNIS = inPlaySummary("tennis", (s) => detailOf(s).serving === "home" || detailOf(s).serving === "away");
 
@@ -145,6 +159,7 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
   away_entrant_id: "e-ella",
   headline: "0 – 0 (13-11)",
   summary: null,
+  serving: null,
   started_at: "2026-10-31T11:20:00.000Z",
   called_at: null,
   stream: null,
@@ -206,6 +221,13 @@ const focus = (c: MatchDayCourt, notice: string | null = null) =>
     />,
   );
 
+/** The large type of a set sport's panel: the element carrying `data-testid="md-score-large"`, to its closing tag. */
+function largeOf(html: string): string {
+  const at = html.indexOf('data-testid="md-score-large"');
+  if (at < 0) return "";
+  return html.slice(at, html.indexOf("</p>", at));
+}
+
 /** The scoreboard's own markup: from its section to the first section closing after it (LiveScoreBody nests none). */
 function scoreboardOf(html: string): string {
   const at = html.indexOf('data-testid="md-scoreboard"');
@@ -251,16 +273,28 @@ describe("focused court: playing", () => {
     expect(html).not.toContain('data-md-stream="');
   });
 
-  it("I1 — a set sport: games in large type with the live points stripped, the set table, both sides named", () => {
+  it("V3 — a set sport: games won in large type, the CURRENT game's points beside them, never a finished game's score; the set table, both sides named", () => {
     const summary = BADMINTON!;
+    expect(summary, "a badminton golden stream mid-game 2").not.toBeNull();
     const sb = scoreboardOf(focus(goldenCourt("badminton", summary)));
-    const big = largeType(summary);
-    // The one-liner the spec replaces is gone; the large type is the sets/games part alone.
-    expect(big).not.toBe(summary.headline);
-    expect(sb).toContain(`>${esc(big)}</p>`);
+    const big = largeOf(sb);
+    expect(big, "the large type").not.toBe("");
+    // Expected values from the engine's own fold, read off its set table (never the headline the code reads).
+    const sets = setsOf(summary);
+    const open = sets.find((x) => !x.closed)!;
+    const live = `${open.home}–${open.away}`;
+    const closed = sets.filter((x) => x.closed).map((x) => `${x.home}–${x.away}`);
+    expect(closed.length).toBeGreaterThan(0);
+    expect(big).toContain(`>${gamesWon(summary)}<`);
+    expect(big).toContain(`>${live}<`);
+    for (const done of closed) {
+      expect(done, "a finished game whose score differs from the live one (else the next line proves nothing)").not.toBe(live);
+      expect(big).not.toContain(done);
+    }
+    // Nor the engine's one-line headline, whole or with its live points stripped.
     expect(sb).not.toContain(esc(summary.headline!));
+    expect(sb).not.toContain(esc(summary.headline!.replace(/\s*\([^)]*\)\s*$/, "")));
     // The set table: its heading and a column per set the engine reports (whichever unit the sport counts in).
-    const sets = detailOf(summary).sets as unknown[];
     const unit = (["game", "set"] as const).find((u) => sb.includes(esc(t(pub, "matchCentre.scoreByUnit", { unit: t(pub, `matchCentre.unit.${u}`) }))));
     expect(unit, "the set table's heading").toBeDefined();
     for (let n = 1; n <= sets.length; n++) expect(sb).toContain(t(pub, `matchCentre.col.${unit}`, { n }));
@@ -270,6 +304,29 @@ describe("focused court: playing", () => {
     expect(sb).not.toContain(">—<");
   });
 
+  it("S1 — a set kernel's serve marker comes from the wire's `serving` (the engine's serve reader): on that side, in the panel and the table, for either side", () => {
+    const summary = BADMINTON!;
+    // The badminton summary itself never says who serves: the marker below can only come from the wire.
+    expect(detailOf(summary).serving).toBeUndefined();
+    const word = t(pub, "matchCentre.serving");
+    let checked = 0;
+    for (const [side, name, other] of [["home", HOME.name, AWAY.name], ["away", AWAY.name, HOME.name]] as const) {
+      const sb = scoreboardOf(focus(goldenCourt("badminton", summary, { serving: side })));
+      const panel = sb.slice(sb.indexOf("data-md-serving"));
+      expect(sb, side).toContain("data-md-serving");
+      expect(panel.slice(0, panel.indexOf("</p>")), side).toContain(`${esc(name)} `);
+      expect(panel.slice(0, panel.indexOf("</p>")), side).toContain(`>${esc(word)}<`);
+      expect(sb, side).toContain(`● ${esc(name)}`);
+      expect(sb, side).not.toContain(`● ${esc(other)}`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // Unknown (the engine will not say): no marker anywhere — never a guess, never a placeholder.
+    const unknown = scoreboardOf(focus(goldenCourt("badminton", summary, { serving: null })));
+    expect(unknown).not.toContain("data-md-serving");
+    expect(unknown).not.toContain("●");
+  });
+
   it("I1 — the serve marker beside the serving side, when the engine's summary says who serves (tennis)", () => {
     expect(TENNIS, "a tennis golden stream with the server known").not.toBeNull();
     const serving = detailOf(TENNIS!).serving === "home" ? HOME.name : AWAY.name;
@@ -277,6 +334,7 @@ describe("focused court: playing", () => {
     const sb = scoreboardOf(focus(goldenCourt("tennis", TENNIS!)));
     expect(sb).toContain(`● ${serving}`);
     expect(sb).not.toContain(`● ${other}`);
+    expect(sb).toContain("data-md-serving");
   });
 
   it("V1 — the panel says the match is in play; 'Live' is the stream's word only", () => {
@@ -551,16 +609,48 @@ describe("the court list", () => {
 
   it("each row says what is on: the match and its score, Called, Free, or In use", () => {
     const courts = [
-      court({ court_id: "c-1" }),
+      goldenCourt("badminton", BADMINTON!, { home: "Zara Khan", away: "Ella Brooks" }),
       court({ court_id: "c-2", state: "called", current: fx({ started_at: null, headline: null }) }),
       court({ court_id: "c-3", state: "free", current: null }),
       court({ court_id: "c-4", state: "in_use_elsewhere", current: null, in_use_by: "Winter Open" }),
     ];
     const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} onSelect={() => {}} />), "md-court-row");
-    expect(rows[0]).toContain("0 – 0 (13-11)");
+    expect(rows[0]).toContain("Zara Khan v Ella Brooks");
+    expect(rows[0]).toContain("data-md-row-score");
     expect(rows[1]).toContain(t(dict, "matchDay.state.called"));
     expect(rows[2]).toContain(t(dict, "matchDay.state.free"));
     expect(rows[3]).toContain(t(dict, "matchDay.state.inUse", { competition: "Winter Open" }));
+  });
+
+  it("V4 — a set sport's row: games won and the current game's points, compact — no brackets, no finished game, no monospace", () => {
+    const summary = BADMINTON!;
+    const rows = rowsOf(
+      renderToStaticMarkup(<CourtList courts={[goldenCourt("badminton", summary)]} selectedId={null} dict={dict} onSelect={() => {}} />),
+      "md-court-row",
+    );
+    expect(rows).toHaveLength(1);
+    const at = rows[0]!.indexOf("data-md-row-score");
+    expect(at, "the row's score").toBeGreaterThan(-1);
+    const tag = rows[0]!.slice(rows[0]!.lastIndexOf("<", at), rows[0]!.indexOf(">", at));
+    const score = rows[0]!.slice(rows[0]!.indexOf(">", at) + 1, rows[0]!.indexOf("</span>", at));
+    const open = setsOf(summary).find((x) => !x.closed)!;
+    const won = summary.perSide!.map((x) => x.line);
+    expect(score).toBe(`${won[0]}–${won[1]} · ${open.home}–${open.away}`);
+    expect(score).not.toMatch(/[()]/);
+    for (const x of setsOf(summary).filter((y) => y.closed)) expect(score).not.toContain(`${x.home}–${x.away}`);
+    expect(tag).not.toContain("font-mono");
+    expect(tag).toContain("tabular-nums");
+  });
+
+  it("a non-set sport's row keeps its own headline, whole", () => {
+    const football = inPlaySummary("football");
+    expect(football, "a football golden stream in play").not.toBeNull();
+    expect(isSetSport(football!)).toBe(false);
+    const row = rowsOf(
+      renderToStaticMarkup(<CourtList courts={[goldenCourt("football", football!)]} selectedId={null} dict={dict} onSelect={() => {}} />),
+      "md-court-row",
+    )[0]!;
+    expect(row).toContain(`>${esc(football!.headline!)}</span>`);
   });
 
   it("marks the selected court, and only it", () => {
@@ -587,6 +677,7 @@ registerBuiltins({
 describe("every sport: the court noun and the scoreboard follow the sport (G5)", () => {
   it("each registered sport's court shows its noun, and its scoreboard from the ENGINE's folded summary, both sides named", () => {
     const swept: string[] = [];
+    const setSports: string[] = [];
     const noCorpus: string[] = [];
     const nouns = new Set<string>();
     for (const key of SPORTS) {
@@ -603,7 +694,21 @@ describe("every sport: the court noun and the scoreboard follow the sport (G5)",
       expect(html, key).toContain(`>${t(dict, `matchDay.noun.${noun}`)}<`);
       const sb = scoreboardOf(html);
       expect(sb, key).not.toBe("");
-      expect(sb, key).toContain(`>${esc(largeType(summary))}</p>`);
+      if (isSetSport(summary)) {
+        // V3: games or sets won large, the engine's live points beside them, no finished set's score.
+        const big = largeOf(sb);
+        expect(big, key).toContain(`>${esc(gamesWon(summary))}<`);
+        const live = livePointsOf(summary);
+        if (live !== null) expect(big, key).toContain(`>${esc(live)}<`);
+        for (const x of setsOf(summary).filter((y) => y.closed)) {
+          const done = `${x.home}–${x.away}`;
+          if (done !== live) expect(big, `${key} shows finished ${done}`).not.toContain(done);
+        }
+        setSports.push(key);
+      } else {
+        expect(sb, key).toContain(`>${esc(summary.headline!)}</p>`);
+        expect(largeOf(sb), key).toBe("");
+      }
       expect(sb, key).toContain(esc(HOME.name));
       expect(sb, key).toContain(esc(AWAY.name));
       expect(sb, key).not.toContain(">—<");
@@ -616,6 +721,9 @@ describe("every sport: the court noun and the scoreboard follow the sport (G5)",
     expect(swept.length + noCorpus.length).toBe(SPORTS.length);
     expect(swept.length).toBeGreaterThan(5);
     expect(swept.length, `swept ${swept.join(",")}; no corpus: ${noCorpus.join(",")}`).toBe(CORPORA.filter((c) => SPORTS.includes(c.key)).length);
+    // Both shapes were really drawn: set sports through Match Day's own large type, the rest through their own scorebug.
+    expect(setSports.length, `set sports: ${setSports.join(",")}`).toBeGreaterThan(1);
+    expect(swept.length - setSports.length, "non-set sports").toBeGreaterThan(1);
     // The sweep can witness a hard-coded "Court": at least one swept sport plays on something else.
     expect([...nouns].filter((n) => n !== "court").length).toBeGreaterThan(0);
   });

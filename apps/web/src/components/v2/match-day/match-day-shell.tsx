@@ -9,7 +9,8 @@
 // m1) or answers something that is not a view (a cut-off 200, review M1) keeps the last view and tries again on the next tick.
 //
 // The court the organiser opened stays opened only while it is on the list: when the filter or the day takes it away, the page
-// says so and goes back to the list — never silently onto a different court (review M6). A refused call or undo is kept per
+// says so and goes back to the list — never silently onto a different court (review M6), and a phone sent back to the list is
+// not jumped into the court again if it returns (M6b). A refused call or undo is kept per
 // court through the refresh it triggers, until dismissed or another court is opened (review M5).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "@/components/ui/console-link";
@@ -74,6 +75,9 @@ export function MatchDayShell({
   const courts = useMemo(() => filterCourts(view.courts, filter), [view.courts, filter]);
   const focus = resolveFocus(courts, opened);
   const focused = focus.kind === "court" ? focus.court : null;
+  // A phone whose court left the list is back on the list (review M6b): it stays there when the court returns, rather than
+  // jumping back into a court the organiser was told had gone. React's render-phase adjustment, not an effect.
+  if (phoneOpen && focus.kind === "lost") setPhoneOpen(false);
   /** A phone shows one court full-screen only while the court it opened is still there. */
   const phoneCourt = phoneOpen && focused !== null;
   const counts = courtCounts(courts);
