@@ -32,7 +32,8 @@
       },
       "tiebreakers": [
         "points",
-        "diff"
+        "diff",
+        "lots"
       ],
       "stages": [
         {
@@ -218,7 +219,8 @@
       "tiebreakers": [
         "points",
         "diff",
-        "for"
+        "for",
+        "lots"
       ],
       "stages": [
         {

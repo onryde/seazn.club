@@ -270,7 +270,8 @@ const TINY_DIVISION: PackInput["divisions"][number] = {
     points: { w: 3, d: 1, l: 0 },
     progressScore: false,
   },
-  tiebreakers: ["points", "diff"],
+  // The engine's tie-break rule (cascade-rules.ts, 10-25) requires every non-Swiss order to END with a drawing of lots.
+  tiebreakers: ["points", "diff", "lots"],
   stages: [
     {
       ref: "s-league",
@@ -1032,7 +1033,7 @@ const REGISTRATION_ADAPTATIONS: NonNullable<PackInput["meta"]["adaptations"]> = 
 //
 // e-echo and e-golf finish tied on points (4 each); e-foxtrot is well clear
 // last (0). Between echo and golf: echo's `diff` (+3) beats golf's (+1), but
-// golf's `for` (10) beats echo's (4) — cascade `["points","diff","for"]`
+// golf's `for` (10) beats echo's (4) — cascade `["points","diff","for","lots"]`
 // (this division's own declared order) ranks echo ahead of golf, while the
 // SAME two rows under `["points","for","diff"]` would rank golf ahead of
 // echo. That reversal is the whole point: a mutant that reverses the
@@ -1126,10 +1127,11 @@ const TIEBREAK_DIVISION: PackInput["divisions"][number] = {
     progressScore: false,
   },
   // The DIVISION's own declared cascade, read by `oracle.ts`'s
-  // `compareTieOrderCascade` rather than hardcoded — extends `generic`'s own
+  // `compareTieOrderCascade` rather than hardcoded — `generic`'s own
   // default order (`["points","diff","for","h2h_points","lots"]`,
-  // generic.ts:647) by exactly the two keys this pack's tie needs.
-  tiebreakers: ["points", "diff", "for"],
+  // generic.ts:647) less `h2h_points`, which this pack's tie never reaches.
+  // It ENDS with `lots`: the engine refuses an order that does not (cascade-rules.ts, 10-25).
+  tiebreakers: ["points", "diff", "for", "lots"],
   stages: [
     {
       ref: TIEBREAK_STAGE_REF,
