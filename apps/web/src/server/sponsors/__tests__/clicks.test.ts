@@ -16,14 +16,21 @@
 //   withdrawal: a sponsor deactivated, then reactivated (both directions) ...... "active"
 //   the stored url changed, or never http(s) ................................... "target"
 //   another org's fixture on a sponsor's link; a forged code row ............... "org"
+//   another COMPETITION's fixture on a competition-scoped sponsor's link ........ "competition" (fix round 1, m3)
+//   the write failing ......................................................... "failure" (fix round 1, m4)
 // Single-sport on purpose: neither half reads a sport — a fixture is only an id and an org here.
-import { afterAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createHash, randomUUID } from "node:crypto";
+
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
+
 import { sql, statementCount } from "@/lib/db";
 import { classifySponsorLink, parseClickTag } from "@/lib/sponsor-clicks";
 import { SPONSOR_SHORT_CODE_MAX_LENGTH, SPONSOR_SHORT_CODE_MIN_LENGTH } from "@/lib/sponsor-short-code";
+import { log } from "@/server/logger";
 import { drawShortCode, mintShortCode } from "../short-codes";
-import { recordClick, redirectTarget, resolveSponsorLink } from "../clicks";
+import { CLICK_BOT_UA, clientIpDigest, countsAsClick, recordClick, recordClickOnce, resolveSponsorLink } from "../clicks";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -31,6 +38,7 @@ const GENERIC_DIVISION_CONFIG = { resultMode: "score", allowDraws: true, points:
 
 interface Rig {
   orgId: string;
+  compId: string;
   fixtureIds: [string, string];
 }
 const orgs: string[] = [];
@@ -53,13 +61,34 @@ async function rig(): Promise<Rig> {
   const fx = await sql<{ id: string }[]>`
     insert into fixtures (org_id, division_id, stage_id, fixture_no, round_no, seq_in_round)
     values (${orgId}, ${divisionId}, ${stageId}, 1, 1, 1), (${orgId}, ${divisionId}, ${stageId}, 2, 1, 2) returning id`;
-  return { orgId, fixtureIds: [fx[0]!.id, fx[1]!.id] };
+  return { orgId, compId, fixtureIds: [fx[0]!.id, fx[1]!.id] };
 }
 
-async function sponsor(orgId: string, o: { url?: string | null; status?: string } = {}): Promise<string> {
+/** A second competition of the SAME org, with one fixture: the m3 case (same org, another competition). */
+async function otherCompetitionFixture(orgId: string): Promise<{ compId: string; fixtureId: string }> {
+  const s = uniq();
+  const [{ id: compId }] = await sql<{ id: string }[]>`
+    insert into competitions (org_id, name, slug, visibility, status) values (${orgId}, ${`S10 Other ${s}`}, ${`s10-other-${s}`}, 'public', 'live') returning id`;
+  const [{ id: divisionId }] = await sql<{ id: string }[]>`
+    insert into divisions (org_id, competition_id, name, slug, sport_key, variant_key, status, config, module_version)
+    values (${orgId}, ${compId}, 'Open', ${`open-${s}`}, 'generic', 'score', 'active', ${sql.json(GENERIC_DIVISION_CONFIG)}, '1.0.0')
+    returning id`;
+  const [{ id: stageId }] = await sql<{ id: string }[]>`
+    insert into stages (org_id, division_id, kind, name, seq) values (${orgId}, ${divisionId}, 'league', 'League', 1) returning id`;
+  const [{ id: fixtureId }] = await sql<{ id: string }[]>`
+    insert into fixtures (org_id, division_id, stage_id, fixture_no, round_no, seq_in_round)
+    values (${orgId}, ${divisionId}, ${stageId}, 1, 1, 1) returning id`;
+  return { compId, fixtureId };
+}
+
+async function sponsor(
+  orgId: string,
+  o: { url?: string | null; status?: string; competitionId?: string | null } = {},
+): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
-    insert into sponsors (org_id, name, url, status)
-    values (${orgId}, ${`Sponsor ${uniq()}`}, ${o.url === undefined ? "https://sponsor.example/offer" : o.url}, ${o.status ?? "active"})
+    insert into sponsors (org_id, competition_id, name, url, status)
+    values (${orgId}, ${o.competitionId ?? null}, ${`Sponsor ${uniq()}`},
+            ${o.url === undefined ? "https://sponsor.example/offer" : o.url}, ${o.status ?? "active"})
     returning id`;
   return row!.id;
 }
@@ -78,23 +107,8 @@ async function counted<T>(fn: () => Promise<T>): Promise<{ statements: number; v
 
 const q = (o: Record<string, string> = {}) => new URLSearchParams(o);
 
-describe("redirectTarget — the stored url, http(s) only (addendum: no open redirect)", () => {
-  it("http and https pass, normalised by the URL parser", () => {
-    expect(redirectTarget("https://sponsor.example/offer?x=1")).toBe("https://sponsor.example/offer?x=1");
-    expect(redirectTarget("http://sponsor.example")).toBe("http://sponsor.example/");
-    expect(redirectTarget("HTTPS://Sponsor.Example/Offer")).toBe("https://sponsor.example/Offer");
-  });
-
-  it("every other scheme, a relative or protocol-relative url, and no url at all are refused (count reported)", () => {
-    const refused = [
-      "javascript:alert(1)", "JavaScript:alert(document.cookie)", "data:text/html,<script>alert(1)</script>",
-      "vbscript:msgbox(1)", "ftp://sponsor.example/file", "mailto:hello@sponsor.example", "file:///etc/passwd",
-      "//evil.example/x", "/s/elsewhere", "sponsor.example", "", "   ", null,
-    ];
-    for (const url of refused) expect(redirectTarget(url), JSON.stringify(url)).toBeNull();
-    expect(refused.length, "refusals checked").toBeGreaterThan(0);
-  });
-});
+// `redirectTarget` moved to lib/sponsor-clicks.ts in fix round 1 (m1: the boards and the write schemas read it too);
+// its refusal list is pinned in lib/__tests__/sponsor-clicks.test.ts, and the route's own 404s for those urls below.
 
 describe.skipIf(!HAS_DB)("resolveSponsorLink — one route, two shapes (S10, R7)", () => {
   it("dispatch: a sponsor uuid reads that sponsor (ONE statement) and keeps the link's own tag", async () => {
@@ -102,8 +116,18 @@ describe.skipIf(!HAS_DB)("resolveSponsorLink — one route, two shapes (S10, R7)
     const id = await sponsor(r.orgId);
     const query = q({ f: r.fixtureIds[0], src: "match" });
     const { statements, value } = await counted(() => resolveSponsorLink(id, query));
-    expect(value).toEqual({ sponsorId: id, url: "https://sponsor.example/offer", tag: parseClickTag(query) });
+    expect(value).toEqual({ sponsorId: id, key: id, url: "https://sponsor.example/offer", tag: { fixtureId: r.fixtureIds[0], source: "match" } });
     expect(statements, "one read, no code lookup").toBe(1);
+  });
+
+  it("I1 (R7 \"a\"): a sponsor uuid claiming `stream` resolves as `unknown` — it still redirects, and still counts", async () => {
+    const r = await rig();
+    const id = await sponsor(r.orgId);
+    const link = await resolveSponsorLink(id, q({ f: r.fixtureIds[0], src: "stream" }));
+    expect(link?.url, "it still redirects").toBe("https://sponsor.example/offer");
+    expect(link?.tag).toEqual({ fixtureId: r.fixtureIds[0], source: "unknown" });
+    await recordClick(link!.sponsorId, link!.tag);
+    expect((await clicksOf(id)).map((c) => [c.fixture_id, c.source])).toEqual([[r.fixtureIds[0], "unknown"]]);
   });
 
   it("dispatch: a short code reads its (sponsor, fixture) in ONE statement, as `stream`; its query is ignored", async () => {
@@ -113,8 +137,25 @@ describe.skipIf(!HAS_DB)("resolveSponsorLink — one route, two shapes (S10, R7)
     expect(code, "premise: S5 minted a code for a sponsor with a url").not.toBeNull();
     // A query that tries to re-tag the click: another fixture, another source. The code is the whole tag.
     const { statements, value } = await counted(() => resolveSponsorLink(code!, q({ f: r.fixtureIds[1], src: "site" })));
-    expect(value).toEqual({ sponsorId: id, url: "https://sponsor.example/offer", tag: { fixtureId: r.fixtureIds[0], source: "stream" } });
+    expect(value).toEqual({ sponsorId: id, key: code, url: "https://sponsor.example/offer", tag: { fixtureId: r.fixtureIds[0], source: "stream" } });
     expect(statements, "one read, no sponsor-id lookup").toBe(1);
+  });
+
+  it("I2: the code typed in lowercase resolves to it — one statement, the stored (uppercase) code as its key", async () => {
+    const r = await rig();
+    const id = await sponsor(r.orgId);
+    // Drawn until it has a letter, so lowercasing it changes it (a digits-only code has nothing to fold).
+    let code: string | null = null;
+    const draw = (len: number) => {
+      let c = drawShortCode(len);
+      while (c.toLowerCase() === c) c = drawShortCode(len);
+      return c;
+    };
+    code = await mintShortCode({ orgId: r.orgId, sponsorId: id, fixtureId: r.fixtureIds[0] }, draw);
+    expect(code!.toLowerCase(), "premise: the code has a letter").not.toBe(code);
+    const { statements, value } = await counted(() => resolveSponsorLink(code!.toLowerCase(), q()));
+    expect(value).toEqual({ sponsorId: id, key: code, url: "https://sponsor.example/offer", tag: { fixtureId: r.fixtureIds[0], source: "stream" } });
+    expect(statements).toBe(1);
   });
 
   it("dispatch: S5's own draws classify as codes at every declared length (count reported)", () => {
@@ -133,14 +174,15 @@ describe.skipIf(!HAS_DB)("resolveSponsorLink — one route, two shapes (S10, R7)
     const r = await rig();
     const id = await sponsor(r.orgId);
     const code = (await mintShortCode({ orgId: r.orgId, sponsorId: id, fixtureId: r.fixtureIds[0] }))!;
-    // Each is one edit away from a live key: the code lowercased, the uuid with a character more, the code with one.
-    const keys = [code.toLowerCase(), `${id}x`, `${code}${"2".repeat(SPONSOR_SHORT_CODE_MAX_LENGTH)}`, "not-a-uuid", ""];
+    // Each is one edit away from a live key: a misread letter (`o` folds to O, outside the alphabet), a non-ASCII
+    // ligature that UPPERCASES into the code's letters, the uuid with a character more, the code with one.
+    const keys = [`o${code.slice(1)}`, `\uFB00${code.slice(1)}`, `${id}x`, `${code}${"2".repeat(SPONSOR_SHORT_CODE_MAX_LENGTH)}`, "not-a-uuid", ""];
     for (const key of keys) {
       const { statements, value } = await counted(() => resolveSponsorLink(key, q()));
       expect(value, JSON.stringify(key)).toBeNull();
       expect(statements, `${JSON.stringify(key)}: no lookup`).toBe(0);
     }
-    expect(keys.length).toBe(5);
+    expect(keys.length).toBe(6);
   });
 
   it("empty: a code-shaped key nobody minted, and a uuid that is no sponsor, are null", async () => {
@@ -270,6 +312,118 @@ describe.skipIf(!HAS_DB)("recordClick — click_count + 1 and one row, in ONE st
     await recordClick(id, { fixtureId: r.fixtureIds[0], source: "match" });
     expect(await clicksOf(id)).toHaveLength(1);
     expect(await countOf(id)).toBe(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("competition: a competition-scoped sponsor's `f` must be that competition's (fix round 1, m3)", () => {
+  it("its own competition's fixture is kept; the same org's OTHER competition's is fixture null, `unknown`; still counted", async () => {
+    const r = await rig();
+    const other = await otherCompetitionFixture(r.orgId);
+    const scoped = await sponsor(r.orgId, { competitionId: r.compId });
+    await recordClick(scoped, { fixtureId: r.fixtureIds[0], source: "match" });
+    await recordClick(scoped, { fixtureId: other.fixtureId, source: "match" });
+    expect((await clicksOf(scoped)).map((c) => [c.fixture_id, c.source])).toEqual([
+      [r.fixtureIds[0], "match"],
+      [null, "unknown"],
+    ]);
+    expect(await countOf(scoped)).toBe(2);
+  });
+
+  it("an ORG-WIDE sponsor (no competition) keeps a fixture of any of its org's competitions", async () => {
+    const r = await rig();
+    const other = await otherCompetitionFixture(r.orgId);
+    const orgWide = await sponsor(r.orgId);
+    await recordClick(orgWide, { fixtureId: r.fixtureIds[0], source: "match" });
+    await recordClick(orgWide, { fixtureId: other.fixtureId, source: "site" });
+    expect((await clicksOf(orgWide)).map((c) => [c.fixture_id, c.source])).toEqual([
+      [r.fixtureIds[0], "match"],
+      [other.fixtureId, "site"],
+    ]);
+  });
+
+  it("still one statement", async () => {
+    const r = await rig();
+    const scoped = await sponsor(r.orgId, { competitionId: r.compId });
+    const { statements } = await counted(() => recordClick(scoped, { fixtureId: r.fixtureIds[1], source: "match" }));
+    expect(statements).toBe(1);
+  });
+});
+
+describe("which requests count as a click (fix round 1, I3)", () => {
+  const req = (method: string, ua?: string) =>
+    new Request("https://seazn.club/s/ABCD", { method, headers: ua === undefined ? {} : { "user-agent": ua } });
+  const BROWSER = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+
+  it("a person's GET counts — a browser's UA, or none at all", () => {
+    expect(countsAsClick(req("GET", BROWSER))).toBe(true);
+    expect(countsAsClick(req("GET"))).toBe(true);
+  });
+
+  it("HEAD (Next answers it from GET) and any other method never count", () => {
+    for (const method of ["HEAD", "POST", "OPTIONS"]) expect(countsAsClick(req(method, BROWSER)), method).toBe(false);
+  });
+
+  it("a link unfurler, a crawler or a preview bot never counts — one per family the pattern names (count reported)", () => {
+    const bots = [
+      "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      "Mozilla/5.0 (compatible; YandexBot/3.0)",
+      "ia_archiver crawler",
+      "Mozilla/5.0 (compatible; SemrushSpider)",
+      "Mozilla/5.0 (Macintosh) LinkPreview/1.0",
+      "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+      "WhatsApp/2.23.20.0 A",
+      "Slack-ImgProxy (+https://api.slack.com/robots)",
+      "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)",
+      "TelegramBot (like TwitterBot)",
+      "Mozilla/5.0 (compatible; Embedly/0.2; +http://support.embed.ly/)",
+      "Mozilla/5.0 (Windows NT 6.1; WOW64) SkypeUriPreview Preview/0.5",
+    ];
+    for (const ua of bots) expect(countsAsClick(req("GET", ua)), ua).toBe(false);
+    // Every alternative the pattern names is exercised by at least one UA above — a new alternative needs a row.
+    const alternatives = CLICK_BOT_UA.source.split("|");
+    for (const alt of alternatives) expect(bots.some((ua) => new RegExp(alt, "i").test(ua)), alt).toBe(true);
+    expect(alternatives.length, "alternatives checked").toBe(11);
+    expect(CLICK_BOT_UA.flags).toContain("i");
+  });
+
+  it("the IP is never kept: its digest is sha256 hex, and the raw address is in no part of it", () => {
+    for (const ip of ["203.0.113.7", "2001:db8::1", "unknown"]) {
+      const digest = clientIpDigest(ip);
+      expect(digest).toBe(createHash("sha256").update(ip).digest("hex"));
+      expect(digest).toMatch(/^[0-9a-f]{64}$/);
+      expect(digest.includes(ip)).toBe(false);
+    }
+  });
+});
+
+describe.skipIf(!HAS_DB)("failure: a click write that fails is logged at error level and sent to Sentry (fix round 1, m4)", () => {
+  afterEach(() => {
+    sentry.captureError.mockClear();
+    vi.restoreAllMocks();
+  });
+
+  it("the write throws (a fixture id the uuid column refuses): error log + captureError, and the caller never sees it", async () => {
+    const r = await rig();
+    const id = await sponsor(r.orgId);
+    const errors = vi.spyOn(log, "error");
+    // `parseClickTag` never lets a non-uuid `f` through, so only a hand-built tag reaches the database with one.
+    await expect(
+      recordClickOnce({ sponsorId: id, key: id, url: "https://sponsor.example/offer", tag: { fixtureId: "not-a-uuid", source: "match" } }, "203.0.113.7"),
+    ).resolves.toBeUndefined();
+    expect(sentry.captureError).toHaveBeenCalledTimes(1);
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(errors.mock.calls[0]), "the log line never carries the IP").not.toContain("203.0.113.7");
+    expect(await clicksOf(id)).toEqual([]);
+  });
+
+  it("positive pair: a write that succeeds reports nothing, and lands its row", async () => {
+    const r = await rig();
+    const id = await sponsor(r.orgId);
+    const errors = vi.spyOn(log, "error");
+    await recordClickOnce({ sponsorId: id, key: id, url: "https://sponsor.example/offer", tag: { fixtureId: r.fixtureIds[0], source: "match" } }, "203.0.113.7");
+    expect(sentry.captureError).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    expect(await clicksOf(id)).toEqual([{ org_id: r.orgId, fixture_id: r.fixtureIds[0], source: "match" }]);
   });
 });
 

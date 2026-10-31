@@ -12,8 +12,12 @@
 // card reads it (`shortCodesFor`), printed the way S7's card prints it (`sponsorShortLinkText`), then typed into this
 // route — and the `sponsor_clicks` row read back. Real Postgres throughout; skipped without DATABASE_URL.
 //
+// Fix round 1 (I3): the WRITE is filtered, never the redirect — a HEAD and a bot's GET redirect but queue nothing, one
+// IP's repeat tap inside the window counts once, and only a 404 can turn into a 429. Redis is stood in for by a counter
+// (`incrWindow`), off by default — the state every local and e2e run is in — and switched on per test.
+//
 // Single-sport on purpose: the route reads no sport, only ids, codes and orgs.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 // Held, not started: a task runs only when `flush()` says so.
@@ -23,10 +27,27 @@ vi.mock("@/lib/deferred", () => ({
     tail.tasks.push(fn);
   },
 }));
+// Redis's fixed window: `null` (not configured) until a test turns it on; then a real per-key count.
+const redis = vi.hoisted(() => ({ on: false, counts: new Map<string, number>(), keys: [] as string[] }));
+vi.mock("@/lib/cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cache")>()),
+  incrWindow: async (key: string, windowSeconds: number) => {
+    redis.keys.push(key);
+    if (!redis.on) return null;
+    const count = (redis.counts.get(key) ?? 0) + 1;
+    redis.counts.set(key, count);
+    return { count, ttlMs: windowSeconds * 1000 };
+  },
+}));
+// A failed click write is reported, not thrown (m4) — so every test also asserts nothing was reported.
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql, statementCount } from "@/lib/db";
+import { SPONSOR_LINK_MISS_LIMIT } from "@/lib/rate-limit";
 import { sponsorShortLinkText, SPONSOR_LINK_HOST } from "@/lib/sponsor-clicks";
 import { SPONSOR_SHORT_CODE_MAX_LENGTH } from "@/lib/sponsor-short-code";
+import { CLICK_DEDUPE_WINDOW_SECONDS } from "@/server/sponsors/clicks";
 import { drawShortCode, mintShortCode, shortCodesFor } from "@/server/sponsors/short-codes";
 import { GET } from "../[key]/route";
 
@@ -37,6 +58,12 @@ const GENERIC_DIVISION_CONFIG = { resultMode: "score", allowDraws: true, points:
 const orgs: string[] = [];
 beforeEach(() => {
   tail.tasks.length = 0;
+  redis.on = false;
+  redis.counts.clear();
+  redis.keys.length = 0;
+});
+afterEach(() => {
+  expect(sentry.captureError, "no click write failed").not.toHaveBeenCalled();
 });
 
 /** Runs every queued tail write to completion — and rethrows, unlike the real `deferred()`. */
@@ -72,9 +99,17 @@ async function seedSponsor(orgId: string, url: string | null = "https://clicky.e
   return id;
 }
 
-/** GET `/s/<key><search>`, the way a visitor's browser asks for it. */
-const click = (key: string, search = "") =>
-  GET(new Request(`https://seazn.club/s/${key}${search}`), { params: Promise.resolve({ key }) });
+const BROWSER = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36";
+
+/** GET `/s/<key><search>`, the way a visitor's browser asks for it (from `ip`, as Cloudflare names it). */
+const click = (key: string, search = "", o: { method?: string; ua?: string; ip?: string } = {}) =>
+  GET(
+    new Request(`https://seazn.club/s/${key}${search}`, {
+      method: o.method ?? "GET",
+      headers: { "user-agent": o.ua ?? BROWSER, "cf-connecting-ip": o.ip ?? "198.51.100.1" },
+    }),
+    { params: Promise.resolve({ key }) },
+  );
 
 const rowsOf = (sponsorId: string) => sql<{ org_id: string; fixture_id: string | null; source: string }[]>`
   select org_id, fixture_id, source from sponsor_clicks where sponsor_id = ${sponsorId} order by at, id`;
@@ -96,16 +131,17 @@ describe.skipIf(!HAS_DB)("GET /s/[key] — a sponsor uuid (the boards' links)", 
     expect(await countOf(id)).toBe(1);
   });
 
-  it("each tagged source with an own-org fixture records {fixture, source} (count reported)", async () => {
+  it("each source a link may claim records {fixture, source}; a link claiming `stream` records `unknown` (R7 \"a\")", async () => {
     const r = await rig();
     const id = await seedSponsor(r.orgId);
-    const sources = ["match", "site", "stream"] as const;
-    for (const src of sources) {
-      expect((await click(id, `?f=${r.fixtureIds[1]}&src=${src}`)).status).toBe(302);
+    // Expected from the ruling, not the parser: a board link is `match` or `site`; only a short code is `stream`.
+    const cases = [["match", "match"], ["site", "site"], ["stream", "unknown"]] as const;
+    for (const [src] of cases) {
+      expect((await click(id, `?f=${r.fixtureIds[1]}&src=${src}`)).status, src).toBe(302);
     }
-    expect(await flush()).toBe(sources.length);
-    expect((await rowsOf(id)).map((c) => [c.fixture_id, c.source])).toEqual(sources.map((s) => [r.fixtureIds[1], s]));
-    expect(await countOf(id)).toBe(sources.length);
+    expect(await flush()).toBe(cases.length);
+    expect((await rowsOf(id)).map((c) => [c.fixture_id, c.source])).toEqual(cases.map(([, rec]) => [r.fixtureIds[1], rec]));
+    expect(await countOf(id), "a `stream` claim still counts").toBe(cases.length);
   });
 
   it("another org's sponsor still redirects to THAT sponsor; an `f` from a different org records fixture null, `unknown`", async () => {
@@ -154,12 +190,22 @@ describe.skipIf(!HAS_DB)("GET /s/[key] — a sponsor uuid (the boards' links)", 
     expect(cases.length).toBe(6);
   });
 
-  it("a key of neither shape 404s without touching the database", async () => {
-    for (const key of ["not-a-uuid", "abcd", "ABCD!", `${randomUUID()}0`]) {
+  it("a key of neither shape 404s without touching the database — a ligature that uppercases into a code included", async () => {
+    // "ﬀﬀ".toUpperCase() is "FFFF", a valid code: only an ASCII fold is a fold (I2).
+    const keys = ["not-a-uuid", "ABCD!", `${randomUUID()}0`, "\uFB00\uFB00", "\uFB00AB", "\u017FABC"];
+    for (const key of keys) {
       const before = statementCount();
       expect((await click(key)).status, key).toBe(404);
       expect(statementCount() - before, `${key}: no lookup`).toBe(0);
     }
+    expect(keys.length).toBe(6);
+    expect(tail.tasks.length).toBe(0);
+  });
+
+  it("I2: a lowercase code-shaped key folds — `abcd` is looked up as ABCD (one lookup; nobody minted it, so 404)", async () => {
+    const before = statementCount();
+    expect((await click("abcd")).status).toBe(404);
+    expect(statementCount() - before, "one code lookup").toBe(1);
     expect(tail.tasks.length).toBe(0);
   });
 
@@ -173,9 +219,16 @@ describe.skipIf(!HAS_DB)("GET /s/[key] — a sponsor uuid (the boards' links)", 
 });
 
 describe.skipIf(!HAS_DB)("GET /s/[key] — an R7 short code (the stream)", () => {
+  /** A draw that always holds a letter, so a lowercased code differs from it. */
+  const lettered = (len: number) => {
+    let c = drawShortCode(len);
+    while (c.toLowerCase() === c) c = drawShortCode(len);
+    return c;
+  };
+
   /** The code exactly as the overlay card prints it: minted by S5, read back as the card reads it, printed by S7. */
   async function printedCode(orgId: string, sponsorId: string, fixtureId: string): Promise<string> {
-    await mintShortCode({ orgId, sponsorId, fixtureId });
+    await mintShortCode({ orgId, sponsorId, fixtureId }, lettered);
     const { codes } = await shortCodesFor(sql, { orgId, fixtureId, sponsorIds: [sponsorId] });
     const printed = sponsorShortLinkText(codes.get(sponsorId));
     expect(printed, "premise: the card prints a link").not.toBeNull();
@@ -199,6 +252,18 @@ describe.skipIf(!HAS_DB)("GET /s/[key] — an R7 short code (the stream)", () =>
       { org_id: r.orgId, fixture_id: r.fixtureIds[0], source: "stream" },
     ]);
     expect(await countOf(id)).toBe(2);
+  });
+
+  it("I2: the printed code typed in lowercase — as a phone keyboard types it — redirects and counts as that stream click", async () => {
+    const r = await rig();
+    const id = await seedSponsor(r.orgId, "https://stream-sponsor.example/deal");
+    const code = await printedCode(r.orgId, id, r.fixtureIds[0]);
+    expect(code.toLowerCase(), "premise: the code has a letter").not.toBe(code);
+    const res = await click(code.toLowerCase());
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://stream-sponsor.example/deal");
+    await flush();
+    expect(await rowsOf(id)).toEqual([{ org_id: r.orgId, fixture_id: r.fixtureIds[0], source: "stream" }]);
   });
 
   it("a query on a code is ignored: the code is the whole tag", async () => {
@@ -237,6 +302,104 @@ describe.skipIf(!HAS_DB)("GET /s/[key] — an R7 short code (the stream)", () =>
     expect((await click(code)).status).toBe(302);
     await flush();
     expect(await rowsOf(id)).toEqual([{ org_id: r.orgId, fixture_id: null, source: "stream" }]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("GET /s/[key] — the write is filtered, never the redirect (fix round 1, I3)", () => {
+  it("HEAD redirects and records nothing (Next answers HEAD from this GET)", async () => {
+    const r = await rig();
+    const id = await seedSponsor(r.orgId);
+    const res = await click(id, "?src=site", { method: "HEAD" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://clicky.example/offer");
+    expect(tail.tasks.length, "no write queued").toBe(0);
+    // Positive pair: the same link as a GET does queue one.
+    await click(id, "?src=site");
+    expect(await flush()).toBe(1);
+    expect(await rowsOf(id)).toHaveLength(1);
+  });
+
+  it("a link unfurler's or a crawler's GET redirects and records nothing — on both shapes (count reported)", async () => {
+    const r = await rig();
+    const id = await seedSponsor(r.orgId);
+    const code = (await mintShortCode({ orgId: r.orgId, sponsorId: id, fixtureId: r.fixtureIds[0] }))!;
+    const bots = ["WhatsApp/2.23.20.0 A", "facebookexternalhit/1.1", "Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)", "Mozilla/5.0 (compatible; Googlebot/2.1)"];
+    let checked = 0;
+    for (const ua of bots) {
+      for (const key of [id, code]) {
+        const res = await click(key, "", { ua });
+        expect(res.status, `${ua} ${key}`).toBe(302);
+        checked++;
+      }
+    }
+    expect(checked).toBe(bots.length * 2);
+    expect(tail.tasks.length, "no write queued for any bot").toBe(0);
+    expect(await rowsOf(id)).toEqual([]);
+  });
+
+  it("with Redis: one IP's two GETs inside the window are ONE click; another IP's is its own", async () => {
+    redis.on = true;
+    const r = await rig();
+    const id = await seedSponsor(r.orgId);
+    await click(id, `?f=${r.fixtureIds[0]}&src=match`, { ip: "203.0.113.7" });
+    await click(id, `?f=${r.fixtureIds[0]}&src=match`, { ip: "203.0.113.7" });
+    await click(id, `?f=${r.fixtureIds[0]}&src=match`, { ip: "203.0.113.99" });
+    expect(await flush(), "all three redirects queued their tail").toBe(3);
+    expect((await rowsOf(id)).map((c) => c.source)).toEqual(["match", "match"]);
+    expect(await countOf(id)).toBe(2);
+    // The repeat key is the link and a digest — never the address.
+    const clickKeys = redis.keys.filter((k) => k.startsWith("sclick:"));
+    expect(clickKeys).toHaveLength(3);
+    for (const k of clickKeys) {
+      expect(k).toMatch(new RegExp(`^sclick:${id}:[0-9a-f]{64}$`));
+      expect(k.includes("203.0.113")).toBe(false);
+    }
+    expect(CLICK_DEDUPE_WINDOW_SECONDS, "the window the ruling names").toBe(30);
+  });
+
+  it("with Redis: a code typed in two cases from one IP is still one link — one click", async () => {
+    redis.on = true;
+    const r = await rig();
+    const id = await seedSponsor(r.orgId);
+    const code = (await mintShortCode({ orgId: r.orgId, sponsorId: id, fixtureId: r.fixtureIds[0] }))!;
+    await click(code);
+    await click(code.toLowerCase());
+    await flush();
+    expect(await rowsOf(id)).toHaveLength(1);
+  });
+
+  it("without Redis (local, e2e): every tap counts — two GETs from one IP are two rows", async () => {
+    const r = await rig();
+    const id = await seedSponsor(r.orgId);
+    await click(id, "?src=site");
+    await click(id, "?src=site");
+    await flush();
+    expect(await rowsOf(id)).toHaveLength(2);
+    expect(redis.keys.filter((k) => k.startsWith("sclick:")), "the window was asked, and answered null").toHaveLength(2);
+  });
+
+  it("only a 404 can become a 429: past the miss budget an IP's next miss is 429, while its hit still 302s and counts", async () => {
+    redis.on = true;
+    const r = await rig();
+    const id = await seedSponsor(r.orgId);
+    const { max } = SPONSOR_LINK_MISS_LIMIT;
+    for (let i = 0; i < max; i++) {
+      expect((await click(randomUUID(), "", { ip: "192.0.2.50" })).status, `miss ${i + 1}`).toBe(404);
+    }
+    const over = await click(randomUUID(), "", { ip: "192.0.2.50" });
+    expect(over.status, `miss ${max + 1}`).toBe(429);
+    expect(Number(over.headers.get("retry-after"))).toBeGreaterThan(0);
+    // The same IP's real tap is never refused, and still counts.
+    const hit = await click(id, "?src=site", { ip: "192.0.2.50" });
+    expect(hit.status).toBe(302);
+    await flush();
+    expect(await rowsOf(id)).toHaveLength(1);
+    // Another IP's miss is its own budget.
+    expect((await click(randomUUID(), "", { ip: "192.0.2.51" })).status).toBe(404);
+    // The bucket is keyed on a digest of the IP, never the address.
+    const missKeys = redis.keys.filter((k) => k.startsWith("rl:s404:"));
+    expect(missKeys).toHaveLength(max + 2);
+    for (const k of missKeys) expect(k.includes("192.0.2.5")).toBe(false);
   });
 });
 

@@ -6,8 +6,9 @@
 //      since only mobile.spec.ts runs in the width projects): the board renders below the match centre, the page has no
 //      horizontal scroll with a 43-character title sponsor, the tap opens the sponsor's own site in a new tab through
 //      `/s/…`, and a `sponsor_clicks` row lands with this fixture and `match`.
-//   2. A stream short code typed as a viewer types it (`seazn.club/s/<CODE>`): 302 to the sponsor, and each visit is a
-//      `stream` row for the code's fixture — twice is two rows.
+//   2. A stream short code typed as a viewer types it (`seazn.club/s/<CODE>`, in either case — fix round 1, I2): 302 to
+//      the sponsor, and each visit is a `stream` row for the code's fixture. Each visit names its own client IP, so a
+//      Redis-backed repeat window (none in e2e today) could not fold them into one.
 // The sponsor's site is fulfilled by a route stub, so no test leaves the box. The expected values are the spec's
 // (`?f=<fixture>&src=match`, `stream`), never read off the page under test.
 import { expect, test, type Page } from "@playwright/test";
@@ -28,7 +29,8 @@ interface Rig {
 }
 
 /** A public, started division with one fixture, and two competition-scoped sponsors (title + gold) on the shared Pro
- *  org — scoped to THIS competition, so no other spec's sponsors can reach this page. */
+ *  org. Other specs' sponsors CAN reach this page — the board also shows the org's org-wide rows — so the test asserts
+ *  on its own two sponsors and on every link's tag, never on the exact set. */
 async function rig(page: Page): Promise<Rig> {
   const request = page.request;
   const org = await activeOrg(page);
@@ -100,11 +102,13 @@ for (const width of [320, 768, 1280] as const) {
       await expect(page.getByTestId("mh-sponsors-title")).toContainText(LONG_TITLE);
       await expectNoHorizontalScroll(page);
 
-      // Every tracked link on the board is this match's (spec §3.7): `?f=<this fixture>&src=match`.
+      // Every tracked link on the board is this match's (spec §3.7): `?f=<this fixture>&src=match` — whoever else the
+      // shared org sponsors org-wide — and both of this competition's sponsors are among them.
       const hrefs = await board.locator('a[href^="/s/"]').evaluateAll((as) => as.map((a) => a.getAttribute("href")!));
-      expect(hrefs.sort()).toEqual(
-        [r.titleId, r.goldId].map((id) => `/s/${id}?f=${r.fixtureId}&src=match`).sort(),
-      );
+      const tagged = new RegExp(`^/s/[0-9a-f-]{36}\\?f=${r.fixtureId}&src=match$`);
+      for (const href of hrefs) expect(href, "every board link is this match's").toMatch(tagged);
+      for (const id of [r.titleId, r.goldId]) expect(hrefs, id).toContain(`/s/${id}?f=${r.fixtureId}&src=match`);
+      expect(hrefs.length, "links checked").toBeGreaterThanOrEqual(2);
 
       // The tap a spectator makes: the gold panel opens the sponsor's site in a new tab, through the tracked redirect.
       const link = board.locator(`a[href^="/s/${r.goldId}?"]`);
@@ -130,18 +134,14 @@ test("a stream click counts: the short code a viewer types redirects and records
   await withDb((sql) => sql`
     insert into sponsor_short_codes (code, org_id, sponsor_id, fixture_id) values (${code}, ${r.orgId}, ${r.goldId}, ${r.fixtureId})`);
 
-  for (let visit = 1; visit <= 2; visit++) {
-    // A query on a code is ignored: the code is the whole tag.
-    const res = await page.request.get(`/s/${code}?src=site`, { maxRedirects: 0 });
-    expect(res.status(), `visit ${visit}`).toBe(302);
-    expect(res.headers()["location"]).toBe(`https://${SPONSOR_HOST}/gold`);
+  // Twice as printed (a query on a code is ignored: the code is the whole tag), then as a phone keyboard types it.
+  const visits = [`/s/${code}?src=site`, `/s/${code}`, `/s/${code.toLowerCase()}`];
+  for (const [i, path] of visits.entries()) {
+    const res = await page.request.get(path, { maxRedirects: 0, headers: { "cf-connecting-ip": `198.51.100.${10 + i}` } });
+    expect(res.status(), path).toBe(302);
+    expect(res.headers()["location"], path).toBe(`https://${SPONSOR_HOST}/gold`);
   }
   await expect
     .poll(() => clicksOf(r.goldId), { timeout: 15_000 })
-    .toEqual([
-      { fixture_id: r.fixtureId, source: "stream" },
-      { fixture_id: r.fixtureId, source: "stream" },
-    ]);
-  // The lowercase form is not a code (the case rule lib/sponsor-short-code.ts declares): a 404, no row.
-  expect((await page.request.get(`/s/${code.toLowerCase()}`, { maxRedirects: 0 })).status()).toBe(404);
+    .toEqual(visits.map(() => ({ fixture_id: r.fixtureId, source: "stream" })));
 });
