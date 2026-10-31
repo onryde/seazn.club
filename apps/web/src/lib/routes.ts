@@ -35,6 +35,8 @@ export const routes = {
   /** Event Pass purchase page — embedded one-time checkout (v3/07 §3). */
   competitionUpgrade: (org: Slug, comp: Slug) => `/o/${org}/c/${comp}/upgrade`,
   competitionSchedule: (org: Slug, comp: Slug) => `/o/${org}/c/${comp}/schedule`,
+  /** Match Day (spec 2026-10-31): running the competition's day court by court. Organisers with edit rights only. */
+  competitionMatchDay: (org: Slug, comp: Slug) => `/o/${org}/c/${comp}/match-day`,
   /** Competition-level Registration hub (design §5) — replaces the
    *  division-level `divisionRegistrations` route RS001 deleted. Settings is
    *  the landing tab; `?tab=registrants` switches panels
