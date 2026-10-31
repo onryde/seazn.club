@@ -24,8 +24,8 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^1.0.0
-        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^1.1.0
+        version: '@onryde/seazn-engine@1.1.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -109,8 +109,8 @@ importers:
         specifier: ^0.9.54
         version: 0.9.54(qrcode@1.5.4)(react@19.2.4)(tailwindcss@4.3.1)(typescript@6.0.3)(zod@4.4.3)
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^1.0.0
-        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^1.1.0
+        version: '@onryde/seazn-engine@1.1.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       '@seazn/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
@@ -293,8 +293,8 @@ importers:
         specifier: ^9
         version: 9.39.4
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^1.0.0
-        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^1.1.0
+        version: '@onryde/seazn-engine@1.1.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       '@types/node':
         specifier: ^26
         version: 26.1.2
@@ -323,8 +323,8 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^1.0.0
-        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^1.1.0
+        version: '@onryde/seazn-engine@1.1.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -363,8 +363,8 @@ importers:
         specifier: ^1.14.4
         version: 1.14.4
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^1.0.0
-        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^1.1.0
+        version: '@onryde/seazn-engine@1.1.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -381,8 +381,8 @@ importers:
   tools/matrix:
     dependencies:
       '@seazn/engine':
-        specifier: npm:@onryde/seazn-engine@^1.0.0
-        version: '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
+        specifier: npm:@onryde/seazn-engine@^1.1.0
+        version: '@onryde/seazn-engine@1.1.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)'
       '@seazn/reference':
         specifier: workspace:*
         version: link:../../packages/reference
@@ -1230,17 +1230,12 @@ packages:
     resolution: {integrity: sha512-nn5ozdjYQpUCZlWGuxcJY/KpxkWQs4DcbMCmKojjyrYDEAGy4Ce19NN4v5MduafTwJlbKc99UA8YhSVqq9yPZA==}
     engines: {node: '>=12.4.0'}
 
-  '@onryde/seazn-engine@1.0.0':
-    resolution: {integrity: sha512-xWSdAPyhBtNxyPwNIgMHZv4meRjfWDPyb8ko3y4uOTSY9S65+6mt0jtEP8kGpJ7p5hjVnubl//zlR1zQm9g8kg==, tarball: https://npm.pkg.github.com/download/@onryde/seazn-engine/1.0.0/4bed0ef32e0125b5f90810e76aef65d5b2261f6e}
+  '@onryde/seazn-engine@1.1.0':
+    resolution: {integrity: sha512-2MSOlPgR23qFSy0f5HyhG/Xj049Cn4OzqKelDZfo7Bjv0vhOBHZedb2LxWlV4gI5HxfFr54aRXNcqGCv6Ziy4w==, tarball: https://npm.pkg.github.com/download/@onryde/seazn-engine/1.1.0/d8e5aa47119de4ad64d67f723845c90d74c89d6e}
     peerDependencies:
       fast-check: ^3
       vitest: ^4.1.11
       zod: ^4.4.3
-    peerDependenciesMeta:
-      fast-check:
-        optional: true
-      vitest:
-        optional: true
 
   '@opentelemetry/api-logs@0.214.0':
     resolution: {integrity: sha512-40lSJeqYO8Uz2Yj7u94/SJWE/wONa7rmMKjI1ZcIjgf3MHNHv1OZUCrCETGuaRF62d5pQD1wKIW+L4lmSMTzZA==}
@@ -6763,12 +6758,11 @@ snapshots:
 
   '@nolyfill/is-core-module@1.0.39': {}
 
-  '@onryde/seazn-engine@1.0.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)':
+  '@onryde/seazn-engine@1.1.0(fast-check@3.23.2)(vitest@4.1.11)(zod@4.4.3)':
     dependencies:
-      zod: 4.4.3
-    optionalDependencies:
       fast-check: 3.23.2
       vitest: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.1.2)(@vitest/coverage-v8@4.1.11)(vite@8.1.1(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
+      zod: 4.4.3
 
   '@opentelemetry/api-logs@0.214.0':
     dependencies:
