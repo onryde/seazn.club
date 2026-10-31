@@ -182,6 +182,10 @@ const RULES: RouteRule[] = [
   // fixtures — events + state are the scoreboard surface
   { method: "GET", path: "/fixtures/:id", scope: "read", pin: "fixture" },
   { method: "PATCH", path: "/fixtures/:id", scope: "manage", pin: "fixture" },
+  // Match Day: calling a match onto a court is a schedule write, on the same terms as PATCH /fixtures/:id above
+  { method: "POST", path: "/fixtures/:id/call", scope: "manage", pin: "fixture" },
+  { method: "DELETE", path: "/fixtures/:id/call", scope: "manage", pin: "fixture" },
+  { method: "POST", path: "/fixtures/:id/call/preview", scope: "manage", pin: "fixture" },
   { method: "PUT", path: "/fixtures/:id/stream", scope: "manage", pin: "fixture" },
   { method: "PUT", path: "/fixtures/:id/rules", scope: "manage", pin: "fixture" },
   // the rules a match plays by now: read-only, the same fixture door as GET /fixtures/:id/state (organiser or the match's device link)

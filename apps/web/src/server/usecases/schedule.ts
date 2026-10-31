@@ -823,7 +823,14 @@ export async function peopleByEntrant(tx: Tx, entrantIds: string[]): Promise<Map
 // (INVALID_REQUEST "person_indices repeats a person") and the WHOLE board falls
 // back to greedy; and every per-person tally (`entityKeysFor`'s universal
 // scopes) would count that one fixture twice for them.
-function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
+//
+// Exported for Match Day (match-day-call.ts, and its read model): a call's hard
+// stop is person-level — a doubles partner on another court — and must resolve
+// a fixture's people exactly as the scheduler does, never a second way.
+export function peopleOf(
+  f: Pick<FixtureLite, "home_entrant_id" | "away_entrant_id">,
+  people: Map<string, string[]>,
+): string[] {
   return [
     ...new Set([
       ...(f.home_entrant_id ? (people.get(f.home_entrant_id) ?? []) : []),

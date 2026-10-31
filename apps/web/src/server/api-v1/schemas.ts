@@ -1586,6 +1586,52 @@ export type PatchFixture = z.infer<typeof PatchFixture>;
 export const PutFixtureStream = z.object({ streamUrl: streamUrlSchema }).strict();
 export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
 
+/** Match Day (spec 2026-10-31 §7): POST /fixtures/{id}/call and POST /fixtures/{id}/call/preview — the court to call the match
+ *  onto, now. `.strict()` for the reason `PatchFixture` documents. */
+export const CallFixtureInput = z.object({ court_id: CourtId }).strict();
+export type CallFixtureInput = z.infer<typeof CallFixtureInput>;
+
+/** POST /fixtures/{id}/call's answer: the match is on `court_id`, called (and timed) at `called_at`. */
+export const FixtureCalled = z.object({
+  fixture_id: Uuid,
+  court_id: CourtId,
+  called_at: z.iso.datetime({ offset: true }),
+});
+
+/** DELETE /fixtures/{id}/call's answer: the court and time the match is back on, as they were before the call (null when it had
+ *  none). */
+export const FixtureCallUndone = z.object({
+  fixture_id: Uuid,
+  court_id: CourtId.nullable(),
+  scheduled_at: z.iso.datetime({ offset: true }).nullable(),
+});
+
+/** POST /fixtures/{id}/call/preview's answer (spec §7.1): the target court's matches the call pushes past their planned time
+ *  (planned times are never written: `estimated_at` is an estimate), and the warnings the organiser confirms past (§7.2). The
+ *  shape is `CallPreview` in lib/match-day/call.ts; the route test parses the real answer with this schema. */
+export const FixtureCallPreview = z.object({
+  shifts: z.array(
+    z.object({
+      fixture_id: Uuid,
+      label: z.string(),
+      planned_at: z.iso.datetime({ offset: true }),
+      estimated_at: z.iso.datetime({ offset: true }),
+    }),
+  ),
+  warnings: z.array(
+    z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("pushes_later"), count: z.number().int().positive() }),
+      z.object({
+        kind: z.literal("rest_gap"),
+        person_name: z.string(),
+        minutes: z.number().int().nonnegative(),
+        min_rest: z.number().int().positive(),
+      }),
+      z.object({ kind: z.literal("past_day_end"), court_name: z.string(), until: z.iso.datetime({ offset: true }) }),
+    ]),
+  ),
+});
+
 /** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3; D16, §5.6.4) — the request names ONE PLAYER's meeting by the
  *  ENTRANT side (a board has a meeting per player, and nothing reads a meeting by colour, which a pairing card can swap).
  *  Strict: a missing side, another value or an extra key is a 400. */
