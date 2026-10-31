@@ -183,11 +183,11 @@ vi.mock("@/lib/seazn-qr", async (importOriginal) => ({
 
 // The preview's own first fetch. Left rejecting by default: the panel must
 // render its seed from the ROW, so a failing fetch is the interesting case.
-const fetchOverlayFixture = vi.fn(async () => {
-  throw new Error("offline");
+const fetchOverlayFixture = vi.fn(async (...args: unknown[]): Promise<never> => {
+  throw new Error(`offline (${args.length} args)`);
 });
 vi.mock("@/components/public-site/live-score-data", () => ({
-  fetchOverlayFixture: () => fetchOverlayFixture(),
+  fetchOverlayFixture: (...args: unknown[]) => fetchOverlayFixture(...args),
   fetchLiveFixture: async () => ({}),
   fetchPublicRealtimeToken: async () => ({ token: "", channel: "" }),
 }));
@@ -6449,5 +6449,16 @@ describe("Owner 2026-10-30: the On YouTube card", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// R4 S5 fix round 1 (m6): the preview reads the overlay answer READ-ONLY. The OBS poll on the same route hands out sponsor
+// assignments and mints short codes (P3); an organiser opening this panel must not — `?preview=1` is the route's
+// read-only door (server/overlay/__tests__/load-sponsor-plan.test.ts proves the route writes nothing on it).
+describe("the preview's fetch is the read-only door", () => {
+  it("asks for the fixture's overlay answer with preview set, once, on mount", () => {
+    openPanel();
+    expect(fetchOverlayFixture).toHaveBeenCalledTimes(1);
+    expect(fetchOverlayFixture).toHaveBeenCalledWith(FIXTURE.id, undefined, { preview: true });
   });
 });

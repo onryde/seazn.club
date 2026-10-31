@@ -305,18 +305,25 @@ export interface ResolvedSponsor {
  * Runs on the privileged connection: public pages have no tenant context.
  * Orgs without `sponsors.tiers` get the un-tiered free strip — every row
  * collapses to `partner` so tier grouping stays a Pro-visible feature.
+ *
+ * `onStream` (R4 S5, the stream's card source): only rows ticked onto the
+ * stream, filtered BEFORE the name dedupe — a ticked row must never be hidden
+ * behind an unticked one of the same name (a paid renewal inserts a new row
+ * under the old name). And no blob shim: a blob entry has no row to tick.
  */
 export async function resolveSponsors(
   orgId: string,
   competitionId?: string,
-  opts: { tiered?: boolean } = {},
+  opts: { tiered?: boolean; onStream?: boolean } = {},
 ): Promise<ResolvedSponsor[]> {
+  const onStream = opts.onStream === true;
   const rows = await sql<
     (Pick<SponsorRow, "id" | "name" | "url" | "tier"> & { logo_path: string | null })[]
   >`
     select id, name, url, logo_path, tier from sponsors
     where org_id = ${orgId} and status = 'active'
       and (competition_id is null or competition_id = ${competitionId ?? null})
+      ${onStream ? sql`and on_stream` : sql``}
     order by (competition_id is null),
              array_position(array['title','gold','silver','partner'], tier),
              display_order, created_at, id`;
@@ -330,6 +337,8 @@ export async function resolveSponsors(
       logo: r.logo_path,
       tier: r.tier,
     }));
+  } else if (onStream) {
+    resolved = [];
   } else {
     // Blob shim: competition blob first then org blob, like the old render.
     const [org] = await sql<{ branding: unknown }[]>`

@@ -37,12 +37,12 @@ import {
 import { SPONSOR_SHORT_CODE_PATTERN, SPONSOR_SHORT_CODE_MAX_LENGTH, SPONSOR_SHORT_CODE_MIN_LENGTH } from "@/lib/sponsor-short-code";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
 import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
-import { deleteSponsor } from "@/server/usecases/sponsors";
+import { deleteSponsor, resolveSponsors } from "@/server/usecases/sponsors";
 import { recentWindow, replayDerived } from "@/server/overlay/recent";
 import { AWAY, HOME, scriptLedger } from "@/server/public-site/__tests__/cricket-ledger";
 import {
-  SponsorAssignmentWriteError, assignmentsFor, loadSponsorPlan, lockSponsorRotation, sponsorRotationLockKey, sponsorScopeOf,
-  writeAssignments,
+  SponsorAssignmentWriteError, assignmentsFor, loadFixtureSponsorPlan, loadSponsorPlan, lockSponsorRotation, sponsorContextOf,
+  sponsorRotationLockKey, sponsorScopeOf, writeAssignments,
 } from "../assign";
 import { sponsorsTableCardSource, type SponsorCardSource } from "../card-source";
 import { operatorLogFor } from "../operator-log";
@@ -114,15 +114,25 @@ const rowsOf = (fixtureId: string) => sql<{
   select moment_id, seq, sponsor_id, sponsor_name, position, source, break_kind, style, hold_ms
     from sponsor_assignments where fixture_id = ${fixtureId} order by seq, moment_id`;
 
+/** The widest seq: by default a poll's fold saw every seq a test names (a fresh door). */
+const ALL_SEQS = 2 ** 31 - 1;
 function poll(
   r: Rig, fixtureId: string, breaks: BreakOpened[],
-  o: { now: number; complete?: boolean; windowSeqs?: number[]; source?: SponsorCardSource; draw?: (n: number) => string; orgId?: string },
+  o: {
+    now: number; complete?: boolean; windowSeqs?: number[]; source?: SponsorCardSource; draw?: (n: number) => string; orgId?: string;
+    foldedThrough?: number | null; readOnly?: boolean;
+  },
 ) {
   return loadSponsorPlan(
-    { fixtureId, orgId: o.orgId ?? r.orgId, competitionId: r.competitionId, breaks, windowSeqs: o.windowSeqs ?? breaks.map((b) => b.seq), complete: o.complete ?? true },
-    { now: o.now, source: o.source, draw: o.draw },
+    {
+      fixtureId, orgId: o.orgId ?? r.orgId, competitionId: r.competitionId, breaks, windowSeqs: o.windowSeqs ?? breaks.map((b) => b.seq),
+      complete: o.complete ?? true, foldedThrough: o.foldedThrough === undefined ? ALL_SEQS : o.foldedThrough,
+    },
+    { now: o.now, source: o.source, draw: o.draw, readOnly: o.readOnly },
   );
 }
+const codesOf = async (fixtureId: string) =>
+  (await sql<{ n: number }[]>`select count(*)::int as n from sponsor_short_codes where fixture_id = ${fixtureId}`)[0]!.n;
 /** The sponsor each airing shows, by moment. */
 const airedBy = (plan: Awaited<ReturnType<typeof loadSponsorPlan>>) =>
   Object.fromEntries((plan?.airings ?? []).map((a) => [a.momentId, plan!.cards.find((c) => c.id === a.cardId)?.sponsorId ?? "?"]));
@@ -428,14 +438,14 @@ describe.skipIf(!HAS_DB)("S5: guards", () => {
     await sponsor(other.orgId, "Other Co");
     const now = Date.now();
     await expect(
-      loadSponsorPlan({ fixtureId: r.fixtureIds[0]!, orgId: other.orgId, competitionId: r.competitionId, breaks: [overEnd(6, now - SEC)], windowSeqs: [6], complete: true }, { now }),
+      loadSponsorPlan({ fixtureId: r.fixtureIds[0]!, orgId: other.orgId, competitionId: r.competitionId, breaks: [overEnd(6, now - SEC)], windowSeqs: [6], complete: true, foldedThrough: ALL_SEQS }, { now }),
     ).rejects.toBeInstanceOf(SponsorAssignmentWriteError);
     expect(await rowsOf(r.fixtureIds[0]!)).toHaveLength(0);
     // The competition must match too: the right org with another competition's id.
     await settings(r.orgId, null, true, "busy");
     await sponsor(r.orgId, "Acme");
     await expect(
-      loadSponsorPlan({ fixtureId: r.fixtureIds[0]!, orgId: r.orgId, competitionId: other.competitionId, breaks: [overEnd(6, now - SEC)], windowSeqs: [6], complete: true }, { now }),
+      loadSponsorPlan({ fixtureId: r.fixtureIds[0]!, orgId: r.orgId, competitionId: other.competitionId, breaks: [overEnd(6, now - SEC)], windowSeqs: [6], complete: true, foldedThrough: ALL_SEQS }, { now }),
     ).rejects.toBeInstanceOf(SponsorAssignmentWriteError);
     expect(await rowsOf(r.fixtureIds[0]!)).toHaveLength(0);
     // The positive pair: the fixture's own scope writes.
@@ -562,6 +572,198 @@ describe.skipIf(!HAS_DB)("S5: the short code (R7)", () => {
     await expect(mintShortCode({ orgId: r.orgId, sponsorId: a, fixtureId: other.fixtureIds[0]! })).rejects.toBeInstanceOf(ShortCodeOwnershipError);
     const [n] = await sql<{ n: number }[]>`select count(*)::int as n from sponsor_short_codes where sponsor_id in ${sql([a, foreign])}`;
     expect(n!.n).toBe(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("S5 fix round 1", () => {
+  const air = (r: Rig, fixtureId: string, sponsorId: string, momentId: string) => sql`
+    insert into sponsor_airings (org_id, sponsor_id, sponsor_name, fixture_id, moment_id, source, break_kind, style, started_at)
+    values (${r.orgId}, ${sponsorId}, 'Aired', ${fixtureId}, ${momentId}, 'rotation', 'over_end', 'lower_third', now())`;
+
+  it("I1 a STALE door (folded through 6) never undoes the fresher door's seq-12 assignment, and opens no transaction for it; folded through 12, a complete poll deletes it", async () => {
+    const r = await rig();
+    await settings(r.orgId, null, true, "busy");
+    await sponsor(r.orgId, "Acme");
+    const now = Date.now();
+    await poll(r, r.fixtureIds[0]!, [overEnd(12, now - SEC)], { now, foldedThrough: 12 });
+    expect((await rowsOf(r.fixtureIds[0]!)).map((x) => x.seq)).toEqual([12]);
+
+    const lock = await holdTheLock(r.orgId);
+    try {
+      const stale = await within(poll(r, r.fixtureIds[0]!, [], { now, foldedThrough: 6 }), 5 * SEC);
+      expect(stale.done, "an absence past the fold's tip is not proof: no transaction").toBe(true);
+    } finally {
+      await lock.release();
+    }
+    expect((await rowsOf(r.fixtureIds[0]!)).map((x) => x.seq), "kept").toEqual([12]);
+    await poll(r, r.fixtureIds[0]!, [], { now, foldedThrough: null });
+    expect(await rowsOf(r.fixtureIds[0]!), "nothing folded: nothing proven gone").toHaveLength(1);
+    // The positive pair: a fold that reached seq 12 and lost the break proves it gone.
+    await poll(r, r.fixtureIds[0]!, [], { now, foldedThrough: 12 });
+    expect(await rowsOf(r.fixtureIds[0]!)).toHaveLength(0);
+  });
+
+  it("I1 inside the transaction too: a stale door that assigns its OWN new break keeps the fresher door's seq 12", async () => {
+    const r = await rig();
+    await settings(r.orgId, null, true, "busy");
+    await sponsor(r.orgId, "Acme");
+    const now = Date.now();
+    const major = (seq: number) => brk(seq, "innings_break", cricketSize("innings_break"), now - SEC);
+    await poll(r, r.fixtureIds[0]!, [major(12)], { now, foldedThrough: 12 });
+    await poll(r, r.fixtureIds[0]!, [major(8)], { now, foldedThrough: 8 });
+    expect((await rowsOf(r.fixtureIds[0]!)).map((x) => x.seq)).toEqual([8, 12]);
+  });
+
+  it("I2 two ACTIVE rows with one name (a paid renewal inserts a new row): only the later is ticked — its card is served, never hidden behind the first", async () => {
+    const r = await rig();
+    await settings(r.orgId, null, true, "busy");
+    await sponsor(r.orgId, "Acme", { onStream: false });
+    const renewed = await sponsor(r.orgId, "Acme");
+    expect((await sponsorsTableCardSource.cardsFor(r.orgId, { competitionId: r.competitionId })).map((c) => c.id)).toEqual([renewed]);
+    const plan = await poll(r, r.fixtureIds[0]!, [], { now: Date.now() });
+    expect(plan!.cards.map((c) => c.id)).toEqual([renewed]);
+  });
+
+  it("I2 an unticked COMPETITION row named like a ticked ORG row: the org row is served", async () => {
+    const r = await rig();
+    await sponsor(r.orgId, "Acme", { competitionId: r.competitionId, onStream: false });
+    const orgRow = await sponsor(r.orgId, "Acme");
+    expect((await sponsorsTableCardSource.cardsFor(r.orgId, { competitionId: r.competitionId })).map((c) => c.id)).toEqual([orgRow]);
+    // The board (no on-stream question) still shows the competition's own row, as it always has.
+    expect((await resolveSponsors(r.orgId, r.competitionId)).map((s) => s.id)).not.toContain(orgRow);
+  });
+
+  it("I2 the stream asks the TABLE only: an org whose sponsors live in the branding blob has none on stream; the board still reads the blob", async () => {
+    const r = await rig();
+    await sql`update organizations set branding = ${sql.json({ sponsors: [{ name: "Blob Co", url: "https://blob.example" }] })} where id = ${r.orgId}`;
+    expect(await resolveSponsors(r.orgId, r.competitionId, { onStream: true })).toEqual([]);
+    expect((await resolveSponsors(r.orgId, r.competitionId)).map((s) => [s.id, s.name])).toEqual([[null, "Blob Co"]]);
+  });
+
+  it("m2 rotation off: ONE statement and no plan — an undone row survives while it is off; settings handed in by the caller cost none", async () => {
+    const r = await rig();
+    await settings(r.orgId, null, true, "busy");
+    await sponsor(r.orgId, "Acme");
+    const now = Date.now();
+    await poll(r, r.fixtureIds[0]!, [overEnd(6, now - SEC)], { now });
+    await settings(r.orgId, null, false, "busy");
+    let before = statementCount();
+    expect(await poll(r, r.fixtureIds[0]!, [], { now })).toBeNull();
+    expect(statementCount() - before, "the settings read, nothing else").toBe(1);
+    expect(await rowsOf(r.fixtureIds[0]!), "the undone row waits for the rotation to come back").toHaveLength(1);
+    before = statementCount();
+    const off = await loadSponsorPlan(
+      { fixtureId: r.fixtureIds[0]!, orgId: r.orgId, competitionId: r.competitionId, breaks: [], windowSeqs: [], complete: true, foldedThrough: ALL_SEQS,
+        settings: { enabled: false, frequency: "busy" } },
+      { now },
+    );
+    expect(off).toBeNull();
+    expect(statementCount() - before).toBe(0);
+  });
+
+  it("m3a a direct mint for a sponsor with NO URL returns null and writes no row", async () => {
+    const r = await rig();
+    const n = await sponsor(r.orgId, "No Link", { url: null });
+    expect(await mintShortCode({ orgId: r.orgId, sponsorId: n, fixtureId: r.fixtureIds[0]! })).toBeNull();
+    expect(await codesOf(r.fixtureIds[0]!)).toBe(0);
+  });
+
+  it("m3b a code minted while the sponsor had a URL is not served once the URL is cleared (its row stays)", async () => {
+    const r = await rig();
+    await settings(r.orgId, null, true, "busy");
+    const a = await sponsor(r.orgId, "Acme");
+    const first = await poll(r, r.fixtureIds[0]!, [], { now: Date.now() });
+    expect(first!.cards[0]!.shortCode).toMatch(SPONSOR_SHORT_CODE_PATTERN);
+    await sql`update sponsors set url = null where id = ${a}`;
+    const second = await poll(r, r.fixtureIds[0]!, [], { now: Date.now() });
+    expect(second!.cards[0]).not.toHaveProperty("shortCode");
+    expect(await codesOf(r.fixtureIds[0]!)).toBe(1);
+  });
+
+  it("m5 the overlay's context — org, competition and the settings in force — is ONE statement; rotation off costs nothing more", async () => {
+    const r = await rig();
+    let before = statementCount();
+    expect(await sponsorContextOf(sql, r.fixtureIds[0]!)).toEqual({ orgId: r.orgId, competitionId: r.competitionId, settings: null });
+    expect(statementCount() - before).toBe(1);
+    await settings(r.orgId, null, true, "busy");
+    expect((await sponsorContextOf(sql, r.fixtureIds[0]!))?.settings).toEqual({ enabled: true, frequency: "busy" });
+    await settings(r.orgId, r.competitionId, false, "light");
+    expect((await sponsorContextOf(sql, r.fixtureIds[0]!))?.settings, "the competition's row wins").toEqual({ enabled: false, frequency: "light" });
+    expect(await sponsorContextOf(sql, randomUUID())).toBeNull();
+    const args = { fixtureId: r.fixtureIds[0]!, breaks: [], windowSeqs: [], complete: true, foldedThrough: ALL_SEQS };
+    before = statementCount();
+    expect(await loadFixtureSponsorPlan(args, { now: Date.now() })).toBeNull();
+    expect(statementCount() - before, "rotation off: the one context statement").toBe(1);
+    // On: the same plan the org-scoped loader serves.
+    await settings(r.orgId, r.competitionId, true, "busy");
+    const a = await sponsor(r.orgId, "Acme");
+    const plan = await loadFixtureSponsorPlan(args, { now: Date.now() });
+    expect(plan!.cards.map((c) => c.id)).toEqual([a]);
+    expect(await poll(r, r.fixtureIds[0]!, [], { now: Date.now() })).toEqual(plan);
+  });
+
+  it("m7 the stored rows carry `aired`; an AIRED undone row costs no transaction and stays, an unaired one waits for the lock and goes", async () => {
+    const r = await rig();
+    await settings(r.orgId, null, true, "busy");
+    const a = await sponsor(r.orgId, "Acme");
+    const now = Date.now();
+    await poll(r, r.fixtureIds[0]!, [overEnd(6, now - SEC)], { now });
+    await air(r, r.fixtureIds[0]!, a, sponsorMomentId(6, "over_end"));
+    expect((await assignmentsFor(sql, r.fixtureIds[0]!, r.orgId)).map((x) => [x.seq, x.aired])).toEqual([[6, true]]);
+
+    const lock = await holdTheLock(r.orgId);
+    try {
+      const again = await within(poll(r, r.fixtureIds[0]!, [], { now }), 5 * SEC);
+      expect(again.done, "an aired undone row is never deleted, so it opens nothing").toBe(true);
+    } finally {
+      await lock.release();
+    }
+    expect(await rowsOf(r.fixtureIds[0]!)).toHaveLength(1);
+
+    // The positive pair: an UNAIRED undone row (seq 12) does queue on the lock, and goes.
+    const later = now + 100 * SEC;
+    await poll(r, r.fixtureIds[0]!, [overEnd(6, now - SEC), overEnd(12, later - SEC)], { now: later });
+    expect((await assignmentsFor(sql, r.fixtureIds[0]!, r.orgId)).map((x) => [x.seq, x.aired])).toEqual([[6, true], [12, false]]);
+    const lock2 = await holdTheLock(r.orgId);
+    let pending: Promise<unknown> | null = null;
+    try {
+      pending = poll(r, r.fixtureIds[0]!, [], { now: later });
+      expect((await within(pending, 1500)).done).toBe(false);
+    } finally {
+      await lock2.release();
+    }
+    await pending;
+    expect((await rowsOf(r.fixtureIds[0]!)).map((x) => x.seq)).toEqual([6]);
+  });
+
+  it("m6 read-only (the console preview): plans the card a writing poll would hand out, and writes no assignment, no code and no delete", async () => {
+    const r = await rig();
+    await settings(r.orgId, null, true, "busy");
+    const a = await sponsor(r.orgId, "Acme");
+    const b = await sponsor(r.orgId, "Bolt");
+    const now = Date.now();
+    const breaks = [overEnd(6, now - SEC)];
+    const ro = await poll(r, r.fixtureIds[0]!, breaks, { now, readOnly: true });
+    expect(airedBy(ro)).toEqual({ [sponsorMomentId(6, "over_end")]: a });
+    expect(await rowsOf(r.fixtureIds[0]!)).toHaveLength(0);
+    expect(await codesOf(r.fixtureIds[0]!)).toBe(0);
+    expect(ro!.cards.every((c) => c.shortCode === undefined), "no code minted for a preview").toBe(true);
+    // The writing poll hands out the same card, and mints.
+    const rw = await poll(r, r.fixtureIds[0]!, breaks, { now });
+    expect(airedBy(rw)).toEqual(airedBy(ro));
+    expect(await rowsOf(r.fixtureIds[0]!)).toHaveLength(1);
+    expect(await codesOf(r.fixtureIds[0]!)).toBe(2);
+    // A preview after it serves the frozen card and the minted codes — and deletes nothing it finds undone.
+    const ro2 = await poll(r, r.fixtureIds[0]!, [], { now, readOnly: true });
+    expect(ro2!.cards.map((c) => c.shortCode).sort()).toEqual(rw!.cards.map((c) => c.shortCode).sort());
+    expect(await rowsOf(r.fixtureIds[0]!)).toHaveLength(1);
+    // The NEXT break previews from the org's real next position (1 → Bolt), not from 0 (which would name Acme again).
+    const later = now + 100 * SEC;
+    const next = [...breaks, overEnd(12, later - SEC)];
+    const ro3 = await poll(r, r.fixtureIds[0]!, next, { now: later, readOnly: true });
+    expect(airedBy(ro3)[sponsorMomentId(12, "over_end")]).toBe(b);
+    expect(await rowsOf(r.fixtureIds[0]!)).toHaveLength(1);
+    expect(airedBy(await poll(r, r.fixtureIds[0]!, next, { now: later })), "the writing poll agrees").toEqual(airedBy(ro3));
   });
 });
 

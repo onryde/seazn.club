@@ -3,6 +3,7 @@ import "server-only";
 // on every overlay poll and written by the On stream tab (S12's PUT route). One row per scope in
 // sponsor_stream_settings (V483): the org row (competition_id null) and any competition rows. A competition's own row
 // OVERRIDES the org row — whole, `enabled` included, so a competition can be switched off under an org that is on.
+import type postgres from "postgres";
 import type { Tx } from "@/lib/db";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -17,22 +18,38 @@ export interface StreamSettings {
   frequency: SponsorFrequency;
 }
 
+type Exec = Tx | typeof sql;
+
+/**
+ * THE one statement that picks the settings row in force: the competition's row, else the org's. `org` and
+ * `competition` are values, or column fragments (`exec\`f.org_id\``) when it runs as a lateral subquery — the overlay's
+ * per-poll context read (`sponsorContextOf`, assign.ts) folds it into its fixture read, and must not restate the rule.
+ * Returned un-awaited: a fragment to interpolate, or a query to await.
+ */
+export function streamSettingsQuery(
+  exec: Exec,
+  org: string | postgres.Fragment,
+  competition: string | null | postgres.Fragment,
+) {
+  return exec<{ enabled: boolean; frequency: SponsorFrequency }[]>`
+    select enabled, frequency from sponsor_stream_settings
+     where org_id = ${org}
+       and (competition_id is null or competition_id = ${competition})
+     order by competition_id nulls last
+     limit 1`;
+}
+
 /**
  * The settings in force for a fixture of `competitionId` (null: a fixture outside any competition, or the org-wide
  * question): the competition's row, else the org's row, else none (null — the rotation is off and the overlay answer
  * carries no plan). One indexed read on the scope key.
  */
 export async function resolveStreamSettings(
-  exec: Tx | typeof sql,
+  exec: Exec,
   orgId: string,
   competitionId: string | null,
 ): Promise<StreamSettings | null> {
-  const [row] = await exec<{ enabled: boolean; frequency: SponsorFrequency }[]>`
-    select enabled, frequency from sponsor_stream_settings
-     where org_id = ${orgId}
-       and (competition_id is null or competition_id = ${competitionId})
-     order by competition_id nulls last
-     limit 1`;
+  const [row] = await streamSettingsQuery(exec, orgId, competitionId);
   return row === undefined ? null : { enabled: row.enabled, frequency: row.frequency };
 }
 

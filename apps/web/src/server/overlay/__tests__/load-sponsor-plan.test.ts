@@ -24,6 +24,12 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
   revalidatePath: vi.fn(),
 }));
+// The loader's sponsor entry, passed through untouched — one test makes it reject ONCE, to prove a sponsor failure
+// costs the overlay its cards and never its scorebug (fix round 1, m1).
+vi.mock("@/server/sponsors/assign", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/sponsors/assign")>();
+  return { ...actual, loadFixtureSponsorPlan: vi.fn(actual.loadFixtureSponsorPlan) };
+});
 
 import { sql, type Tx } from "@/lib/db";
 import { builtinModules } from "@seazn/engine/sports";
@@ -43,6 +49,9 @@ import { appendEvent } from "@/server/engine-db/append-event";
 import { rigTarget, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { recordAirings } from "@/server/sponsors/airings";
 import { log } from "@/server/logger";
+import { loadFixtureSponsorPlan } from "@/server/sponsors/assign";
+import { overlayPollPath } from "@/components/public-site/live-score-data";
+import { GET as overlayRoute } from "@/app/api/v1/public/fixtures/[id]/overlay/route";
 import { loadOverlayLiveData } from "../load";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -180,8 +189,11 @@ describe.skipIf(!HAS_DB)("S5: the overlay answer's sponsorPlan, from a real ledg
 
     // The scorer takes back the full-time whistle — a REAL void. The shoot-out break is undone and never aired: its
     // assignment goes. The aired Q4 interval and the rest stay.
-    await append(s, "core.void", {}, ft.event.id);
+    const voided = await append(s, "core.void", {}, ft.event.id);
     const after = await loadOverlayLiveData(s.fixtureId);
+    // The public door proves a break gone only up to the `last_seq` it folded at (fix round 1, I1) — here the ledger's
+    // tip, the void's own seq; and an ordinary poll is never read-only.
+    expect(vi.mocked(loadFixtureSponsorPlan)).toHaveBeenLastCalledWith(expect.objectContaining({ foldedThrough: voided.seq }), { readOnly: false });
     const kept = Object.fromEntries(Object.entries(want).filter(([id]) => id !== sponsorMomentId(ft.seq, "shootout_break")));
     expect(Object.keys(kept), "premise: one break removed").toHaveLength(3);
     expect(airedBy(after.sponsorPlan)).toEqual(kept);
@@ -232,5 +244,50 @@ describe.skipIf(!HAS_DB)("S5: the overlay answer's sponsorPlan, from a real ledg
     } finally {
       error.mockRestore();
     }
+  });
+
+  it("m1 a sponsor failure costs the overlay its cards, never its scorebug: the loader resolves with sponsorPlan null and the same score", async () => {
+    const s = await seedFixture("volleyball", "indoor");
+    await rotationOn(s.orgId, "busy");
+    await sponsor(s.orgId, "Acme Physio");
+    await append(s, "core.start", {});
+    const good = await loadOverlayLiveData(s.fixtureId);
+    expect(good.sponsorPlan, "premise: the plan is served when nothing fails").not.toBeNull();
+    vi.mocked(loadFixtureSponsorPlan).mockRejectedValueOnce(new Error("sponsor store down"));
+    const error = vi.spyOn(log, "error").mockImplementation(() => undefined as never);
+    try {
+      const bad = await loadOverlayLiveData(s.fixtureId);
+      expect(bad.sponsorPlan).toBeNull();
+      const { sponsorPlan: _a, ...scoreGood } = good;
+      const { sponsorPlan: _b, ...scoreBad } = bad;
+      void _a; void _b;
+      expect(scoreBad).toEqual(scoreGood);
+      expect(error).toHaveBeenCalledWith(expect.objectContaining({ fixtureId: s.fixtureId }), expect.stringContaining("sponsor plan failed"));
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("m6 the console preview (`?preview=1`, the panel's own path) writes nothing; the OBS poll on the same route writes", async () => {
+    const s = await seedFixture("volleyball", "indoor");
+    await rotationOn(s.orgId, "busy");
+    const a = await sponsor(s.orgId, "Acme Physio");
+    await append(s, "core.start", {});
+    const timeout = await append(s, "volleyball.timeout", { by: s.home });
+    const get = (path: string) => overlayRoute(
+      new Request(`https://test.local${path}`, { headers: { "x-forwarded-for": `9.9.8.${Math.floor(Math.random() * 250)}` } }),
+      { params: Promise.resolve({ id: s.fixtureId }) },
+    );
+    const codes = async () => (await sql<{ n: number }[]>`select count(*)::int as n from sponsor_short_codes where fixture_id = ${s.fixtureId}`)[0]!.n;
+    const preview = await get(overlayPollPath(s.fixtureId, undefined, { preview: true }));
+    expect(preview.status).toBe(200);
+    const pv = (await preview.json()) as { data: { sponsorPlan: SponsorPlan } };
+    expect(airedBy(pv.data.sponsorPlan), "the preview shows the card the stream will").toEqual({ [sponsorMomentId(timeout.seq, "timeout")]: a });
+    expect(await rowsOf(s.fixtureId), "a preview hands out nothing").toHaveLength(0);
+    expect(await codes()).toBe(0);
+    const obs = await get(overlayPollPath(s.fixtureId));
+    expect(obs.status).toBe(200);
+    expect(await rowsOf(s.fixtureId)).toHaveLength(1);
+    expect(await codes()).toBe(1);
   });
 });

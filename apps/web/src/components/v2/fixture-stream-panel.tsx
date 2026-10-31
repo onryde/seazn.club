@@ -338,7 +338,8 @@ export function FixtureStreamPanel({
     let cancelled = false;
     void (async () => {
       try {
-        const next = await fetchOverlayFixture(fixture.id);
+        // Read-only (`?preview=1`): previewing must not hand out the stream's sponsor cards (R4 S5 fix round 1, m6).
+        const next = await fetchOverlayFixture(fixture.id, undefined, { preview: true });
         if (!cancelled) setLive(next);
       } catch {
         // transient or unreachable (a private competition) — keep the seed

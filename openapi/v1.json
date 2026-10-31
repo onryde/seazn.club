@@ -80188,7 +80188,7 @@
     },
     "/api/v1/public/fixtures/{id}/overlay": {
       "get": {
-        "summary": "Stream overlay payload: the public live summary, the folded-state clock (football family) and innings numbers (cricket), and the last eight surviving ledger events with consent-resolved person names",
+        "summary": "Stream overlay payload: the public live summary, the folded-state clock (football family) and innings numbers (cricket), the last eight surviving ledger events with consent-resolved person names, and the sponsor plan (`sponsorPlan`, null when the organisation has no sponsors on stream). Planning the sponsor plan hands each new natural break its sponsor and mints the cards' short codes; `?preview=1` answers the same payload read-only, writing neither",
         "tags": [
           "public"
         ],
@@ -80200,6 +80200,17 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "preview",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
             }
           }
         ],
