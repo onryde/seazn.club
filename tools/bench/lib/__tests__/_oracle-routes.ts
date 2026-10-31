@@ -164,7 +164,7 @@ export function tinyDivisionPlayerStats(
     return {
       metrics,
       rows: [
-        { person_id: personIdOf("Ana Alvarez"), full_name: "Ana Alvarez", stats: { scores: 2, points: 2 } },
+        { person_id: personIdOf("Ana Alvarez"), full_name: "Ana Alvarez", stats: { scores: 3, points: 3 } },
         { person_id: personIdOf("Bo Baptiste"), full_name: "Bo Baptiste", stats: { scores: 1, points: 2 } },
       ],
       requires_detailed_scoring: false,

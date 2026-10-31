@@ -385,11 +385,16 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
     away: "e-bravo",
     provenance: "real",
     // W2b ruling 113 (2026-10-11): nobody retires from a match never played, so Bravo retires hurt after the first
-    // point — one unattributed generic.score (no `person`, so TINY_LEADERBOARDS, rr-r2-c1's three attributed scores,
-    // does not move). The retirement special below needs play before it.
+    // point. The retirement special below needs play before it.
+    // Bench run 41208936894 (2026-10-31): that point names Ana. It was authored with no `person` so that
+    // TINY_LEADERBOARDS would not move, and that held only on the API route. d-tiny is played by TAP (registry.ts),
+    // and the generic pad stamps a one-player side's sole player into every half tap (generic.tsx `buildHalf`,
+    // `soleScorer`). e-alpha's only player is p-ana, so the live row carried her id and her leaderboard read 3
+    // against the pack's 2. A point e-alpha scores on the pad can only be Ana's. The stream now says so, and both
+    // routes record the same row. `suites/__tests__/tap-sole-scorer.test.ts` refuses an unattributed point here again.
     events: [
       { type: "core.start" },
-      { type: "generic.score", payload: { by: "@e-alpha", points: 1 } },
+      { type: "generic.score", payload: { by: "@e-alpha", points: 1, person: "@p-ana" } },
       { type: "core.forfeit", payload: { by: "@e-bravo", reason: "retired" } },
     ],
   },
@@ -400,10 +405,11 @@ const TINY_STREAMS: NonNullable<PackInput["streams"]> = [
   // (scheduling/bracket.ts:171-172), so this is deterministic given the
   // league table above, not a guess. A plain `generic.result` (no
   // `generic.score` events) on purpose — this stream must not perturb
-  // TINY_LEADERBOARDS below, which is entirely derived from rr-r2-c1's own
-  // three `generic.score` events (B05 review: adding scoring events here
-  // would silently change an oracle two blocks away in a diff nobody would
-  // think to re-check).
+  // TINY_LEADERBOARDS below, which is entirely derived from the league's four
+  // attributed `generic.score` events, rr-r2-c1's three and rr-r3-c1's one
+  // (B05 review: adding scoring events here would silently change an oracle
+  // two blocks away in a diff nobody would think to re-check). The playoff's
+  // typed result is entered on the score-entry sheet, which posts no score.
   {
     divisionRef: "d-tiny",
     fixtureExtKey: "se-r0-i0",
@@ -489,12 +495,20 @@ const TINY_CHAMPIONS: NonNullable<PackInput["expected"]["champions"]> = [
   { divisionRef: "d-tiny", entrant: "e-alpha" },
 ];
 
+// The league's four attributed `generic.score` events, read off the streams
+// above: rr-r2-c1 credits Bo once (2 points) and Ana twice (1 + 1), and
+// rr-r3-c1 credits Ana once (1). rr-r1-c1 and se-r0-i0 are typed results and
+// credit nobody. So Ana is 3 scores / 3 points and Bo 1 / 2.
+// Bench run 41208936894 (2026-10-31): Ana's row read 2 / 2 until rr-r3-c1's
+// point named her (see that stream's note). The 2 was right only on the API
+// route. The live run plays d-tiny by tap, and the pad credited her with that
+// point.
 const TINY_LEADERBOARDS: NonNullable<PackInput["expected"]["leaderboards"]> = [
   {
     divisionRef: "d-tiny",
     metricKey: "scores",
     entries: [
-      { person: "p-ana", name: "Ana Alvarez", count: 2 },
+      { person: "p-ana", name: "Ana Alvarez", count: 3 },
       { person: "p-bo", name: "Bo Baptiste", count: 1 },
     ],
   },
@@ -502,7 +516,7 @@ const TINY_LEADERBOARDS: NonNullable<PackInput["expected"]["leaderboards"]> = [
     divisionRef: "d-tiny",
     metricKey: "points",
     entries: [
-      { person: "p-ana", name: "Ana Alvarez", count: 2 },
+      { person: "p-ana", name: "Ana Alvarez", count: 3 },
       { person: "p-bo", name: "Bo Baptiste", count: 2 },
     ],
   },
@@ -521,14 +535,16 @@ const TINY_LEADERBOARDS: NonNullable<PackInput["expected"]["leaderboards"]> = [
 //
 // Ana Alvarez plays in d-tiny (e-alpha) and d-tiebreak (seat 3) — both
 // `generic`, so `personCareerStats` files them under ONE `sports[]` entry
-// and sums them. `scores` counts her three `generic.score` events (two in
-// d-tiny's rr-r2-c1, one in d-tiebreak's rr-r2-c1); `points` sums their
-// `points` fields (1 + 1 + 1). Both totals differ from EITHER division's own
-// leaderboard count (2 and 1), so a rollup that served one division's total
-// in place of the career cannot pass.
+// and sums them. `scores` counts her four `generic.score` events (two in
+// d-tiny's rr-r2-c1, one in d-tiny's rr-r3-c1, one in d-tiebreak's
+// rr-r2-c1); `points` sums their `points` fields (1 + 1 + 1 + 1). Both totals
+// differ from EITHER division's own leaderboard count (3 and 1), so a rollup
+// that served one division's total in place of the career cannot pass.
+// Bench run 41208936894 (2026-10-31): 3 -> 4, for the same reason as Ana's
+// d-tiny row (rr-r3-c1's point now names her; see that stream's note).
 const TINY_CAREERS: NonNullable<PackInput["expected"]["careers"]> = [
-  { person: "p-ana", name: "Ana Alvarez", metricKey: "scores", count: 3 },
-  { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 3 },
+  { person: "p-ana", name: "Ana Alvarez", metricKey: "scores", count: 4 },
+  { person: "p-ana", name: "Ana Alvarez", metricKey: "points", count: 4 },
 ];
 
 const TINY_SPECIALS: NonNullable<PackInput["expected"]["specials"]> = [
