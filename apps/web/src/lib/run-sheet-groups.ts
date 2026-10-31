@@ -25,6 +25,7 @@
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import type { FixtureRow } from "@/server/usecases/stages";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
+import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
 import type { CameraPolicy } from "@/lib/camera-policy";
 import type { NeedsReason } from "@/server/external-play/types";
 
@@ -154,8 +155,13 @@ export const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladd
  *
  *  R116-3 (owner ruling 116): an empty seat the award names a LOSER in — a withdrawn winner's, walked over by the side
  *  that arrived — is HER seat, so the line is a walkover like any other, not a bye. `unseatedForfeitLoser` is the one
- *  reader of that shape; an award with no loser (a bye, a dead feeder's seat, a DQ'd winner's) still answers yes. */
+ *  reader of that shape; an award with no loser (a bye, a dead feeder's seat, a DQ'd winner's) still answers yes.
+ *
+ *  W3 T3 (X-SW-29, RB3-23): a Swiss stage's bye row is a bye before Pair seats it, too — an unseated `sw-r{N}-bye`
+ *  shell has no seat and no award yet, but it is never a match, takes no court or time (the server refuses one,
+ *  SWISS_BYE_NOT_PLACEABLE) and is never actionable. `isUnseatedSwissByeShell` (lib/swiss-shell.ts) is the shell alone. */
 export function isBye(f: RunSheetFixture): boolean {
+  if (isUnseatedSwissByeShell(f)) return true;
   const o = f.outcome as { kind?: string } | null;
   if (o?.kind !== "award") return false;
   const empty = f.home_entrant_id === null ? "home" : f.away_entrant_id === null ? "away" : null;
@@ -206,6 +212,8 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
     // FIRST, before the scheduled_at test, or an untimed bye reaches the
     // unscheduled pile and is offered a "Set time" for a match nobody plays.
     if (isBye(f)) {
+      // W3 T3 (X-SW-29): a Swiss bye shell nobody is seated in yet is no row at all — there is no one to name.
+      if (isUnseatedSwissByeShell(f)) continue;
       // (b) a bracket stage keeps its byes as ghost rows in their round.
       // Swiss: show the award in settled-untimed (never unscheduled — R7a).
       // Other non-bracket kinds: leave the sheet (R7c).

@@ -495,6 +495,58 @@ describe("buildRunSheet — byes are structural, never schedulable (R7)", () => 
     ]);
   });
 
+  it("X-SW-29 an unseated Swiss bye shell is not scheduling work: it leaves the sheet, the round's board stays", () => {
+    // W3 T3 (RB3-23): a Swiss stage mints each round's bye row (`sw-r{N}-bye`) as a `scheduled` shell with no seat and
+    // no award until Pair. It takes no court and no time (the server refuses one: SWISS_BYE_NOT_PLACEABLE), so it must
+    // not reach the unscheduled pile and be offered a "Set time" that can only refuse (R7: byes are never actionable).
+    const SWISS = { id: "sw", seq: 1, kind: "swiss" };
+    const shell = fx({
+      id: "r2bye",
+      stage_id: "sw",
+      round_no: 2,
+      seq_in_round: 3,
+      scheduled_at: null,
+      status: "scheduled",
+      home_entrant_id: null,
+      away_entrant_id: null,
+      ext_key: "sw-r2-bye",
+    });
+    const board = fx({
+      id: "r2b1",
+      stage_id: "sw",
+      round_no: 2,
+      seq_in_round: 1,
+      scheduled_at: null,
+      status: "scheduled",
+      home_entrant_id: null,
+      away_entrant_id: null,
+      ext_key: "sw-r2-b1",
+    });
+    expect(isBye(shell), "the bye shell is structural, like a seated bye").toBe(true);
+    expect(isBye(board), "positive pair: the round's board shell is not").toBe(false);
+    const out = buildRunSheet(input({ stages: [SWISS], fixtures: [shell, board] }));
+    const ids = out.flatMap((b) => ("fixtures" in b ? b.fixtures.map((f) => f.id) : []));
+    expect(ids, "the shell is nowhere on the sheet; the board shell is still work to schedule").toEqual(["r2b1"]);
+    expect(out.map((b) => b.kind)).toEqual(["unscheduled"]);
+  });
+
+  it("X-SW-29 a seated Swiss bye is still the settled award row (the shell rule does not hide it)", () => {
+    const SWISS = { id: "sw", seq: 1, kind: "swiss" };
+    const seated = bye({
+      id: "r1bye",
+      stage_id: "sw",
+      round_no: 1,
+      home_entrant_id: "gus",
+      away_entrant_id: null,
+      status: "forfeited",
+      outcome: { kind: "award", winner: "gus", loser: null, reason: "bye" },
+      ext_key: "sw-r1-bye",
+    });
+    const out = buildRunSheet(input({ stages: [SWISS], fixtures: [seated] }));
+    const settled = out.find((b) => b.kind === "settled");
+    expect(settled?.kind === "settled" && settled.fixtures.map((f) => f.id)).toEqual(["r1bye"]);
+  });
+
   it("a league awarded bye still leaves the sheet (R7c unchanged)", () => {
     const out = buildRunSheet(
       input({

@@ -26,6 +26,7 @@ import {
   type PhaseStage,
 } from "@/lib/division-phase";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
+import { isUnseatedSwissByeShell } from "@/lib/swiss-shell";
 import { rowAwaitsSettle, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { listDivisionCardStats, type NextFixture } from "./card-stats";
@@ -188,6 +189,8 @@ type FixtureRaw = {
   division_id: string;
   status: string;
   scheduled_at: string | null;
+  /** Read only to tell an unseated Swiss bye shell (`isUnseatedSwissByeShell`), which is no scheduling work. */
+  ext_key: string | null;
   fixture_no: number;
   stage_id: string;
   round_no: number | null;
@@ -344,7 +347,7 @@ export async function getCompetitionDesk(
     // table; EXPLAIN ANALYZE before/after in fix-round-b-report.md.
     const fixtures = ids.length
       ? await tx<FixtureRaw[]>`
-          select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id, f.round_no,
+          select f.id, f.division_id, f.status, f.scheduled_at, f.fixture_no, f.stage_id, f.round_no, f.ext_key,
                  -- The draw fact's raw inputs (fixtureAwaitsSeedDraw): an
                  -- unfilled SEED slot still carries its {key, params, seed}
                  -- descriptor, an unfilled sibling-fed slot has none unless
@@ -517,8 +520,12 @@ export async function getCompetitionDesk(
         proposal: (x.proposal_status ?? "none") as SeedProposalState,
       }));
     const rows = fixtures.filter((x) => x.division_id === d.id);
+    // W3 T3 (X-SW-29): an unseated Swiss bye shell is `scheduled` with no time, but no one can ever give it one
+    // (SWISS_BYE_NOT_PLACEABLE), so it is no fixture to the phase or the attentions — counting it would leave a red
+    // "unscheduled" on the division that no action clears. Once Pair seats it, it is a settled bye like any other.
+    const work = rows.filter((x) => !isUnseatedSwissByeShell(x));
     const stageKindById = new Map(divisionStages.map((x) => [x.id, x.kind]));
-    const phaseFixtures: PhaseFixture[] = rows.map((x) => ({
+    const phaseFixtures: PhaseFixture[] = work.map((x) => ({
       id: x.id,
       status: x.status,
       scheduledAt: x.scheduled_at,
@@ -578,7 +585,7 @@ export async function getCompetitionDesk(
       attention,
       played: s?.played ?? 0,
       total: s?.total ?? rows.length,
-      unscheduled: rows.filter((x) => x.status === "scheduled" && x.scheduled_at === null).length,
+      unscheduled: work.filter((x) => x.status === "scheduled" && x.scheduled_at === null).length,
       in_play: inPlay,
       entrants: s?.entrants ?? 0,
       next: resolveDivisionNext(rows, nowIso),

@@ -232,6 +232,8 @@ export type BoardFixtureRow = Omit<
    *  a start taken back, a walkover recorded in play), which every board
    *  write refuses to move (review 4 of #857). Sent only when true. */
   held?: true;
+  /** W3 T3 (X-SW-29): a Swiss bye row (`swissByeShellSql`), which no board write places. Sent only when true. */
+  bye_shell?: true;
 };
 
 export const BOARD_FIXTURE_COLS = [

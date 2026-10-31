@@ -8,13 +8,15 @@ import { type Session, newSession, check, signIn, tag, v1, v1data } from "../har
  * T1 (X-RB-1, #840, FX-G13): Rebuild keeps every time and court at its (pool, round, seq) position, in one transaction,
  * and reports what it could not keep. T2 (X-RB-1, SW-L8): a pre-Start Swiss reshape deletes an unscheduled board before a
  * pinned one. T4 (X-SW-21, RB3-15 A): an ad-hoc match on a Swiss stage is refused 422 SWISS_ADHOC_REFUSED and writes
- * nothing. Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
+ * nothing. T3 (X-SW-5, X-SW-29; SW-M7, SW-M13): a bye's format is frozen when Pair awards it, so a later format save
+ * leaves it, and a bye shell takes no court or time (422 SWISS_BYE_NOT_PLACEABLE). Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
  * is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissASuite(): Promise<void> {
   // T1: 2 (a rebuild keeps 3 slots; a shrinking rebuild counts the slots it freed) + T2: 1 (a pre-Start reshape keeps
-  // the pinned boards) + T4: 1 (no ad-hoc match on a Swiss stage; T4 runs before T3 by controller ruling C1).
-  const EXPECTED_CHECKS = 4;
+  // the pinned boards) + T4: 1 (no ad-hoc match on a Swiss stage; T4 runs before T3 by controller ruling C1) + T3: 2 (a
+  // bye's format is frozen at award; a bye shell is never placed).
+  const EXPECTED_CHECKS = 6;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -222,6 +224,74 @@ export async function w3SwissASuite(): Promise<void> {
         (ok ? "" : ` — players ${players.length}, pair ${paired.status}, before ${before}, after ${after}, POST ${res.status} ${JSON.stringify(res.json).slice(0, 160)}`),
       ok,
     );
+  }
+
+  // Checks 5 and 6 (T3) — a badminton Swiss of five (odd: every round has a bye), round 1 paired.
+  {
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", { name: "Bye", sport_key: "badminton", variant_key: "bwf" }),
+    )?.id;
+    const players =
+      v1data<{ id: string }[] | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+          Array.from({ length: 5 }, (_, i) => ({ kind: "individual", display_name: `B${i + 1} ${tag}`, seed: i + 1 }))),
+      ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } }),
+    )?.id;
+    const minted = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const rows = async () =>
+      (v1data<(Fx & { status: string })[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter(
+        (f) => f.stage_id === stageId,
+      );
+    const byKey = async (key: string) => (await rows()).find((f) => f.ext_key === key);
+    const bye1 = await byKey("sw-r1-bye");
+    const board2 = await byKey("sw-r2-b1");
+    const rulesOf = async (id: string | undefined) => v1data<{ cfg?: { bestOf?: number } } | undefined>(await v1(owner, `/api/v1/fixtures/${id}/rules`))?.cfg;
+    const setup = `players ${players.length}, mint ${minted.status}, pair ${paired.status}, bye ${bye1?.status ?? "missing"}, board ${board2 ? "found" : "missing"}`;
+
+    // Check 5 (X-SW-5, SW-M7): the seated bye's format is the one it was awarded under. A stage format save moves what an
+    // unplayed match plays (round 2's board: the witness the save landed) and leaves the bye's.
+    {
+      const byeBefore = await rulesOf(bye1?.id);
+      const put = await v1(owner, `/api/v1/stages/${stageId}/rules`, "PUT", { rules: { bestOf: 1 } });
+      const byeAfter = await rulesOf(bye1?.id);
+      const boardAfter = await rulesOf(board2?.id);
+      const ok =
+        players.length === 5 && paired.status === 200 && bye1?.status === "forfeited" &&
+        byeBefore !== undefined && byeBefore.bestOf !== 1 && put.status === 200 &&
+        JSON.stringify(byeAfter) === JSON.stringify(byeBefore) && boardAfter?.bestOf === 1;
+      w3Check(
+        "w3a X-SW-5: a Swiss bye keeps the format it was awarded under after a stage format save (an unplayed board takes the new one)" +
+          (ok ? "" : ` — ${setup}, bye bestOf ${byeBefore?.bestOf} -> ${byeAfter?.bestOf}, PUT ${put.status} ${JSON.stringify(put.json).slice(0, 160)}, board bestOf ${boardAfter?.bestOf}`),
+        ok,
+      );
+    }
+
+    // Check 6 (X-SW-29, SW-M13): round 2's bye shell is refused a court and a time by name, and stays slotless; the round's
+    // board takes the same slot (the positive pair: the refusal is the bye's, not the slot's). Round 1's seated bye holds
+    // no slot either.
+    {
+      const bye2 = await byKey("sw-r2-bye");
+      const slot = { scheduled_at: "2030-06-17T09:00:00.000Z", court_id: courts[0] ?? "", venue_id: venueId };
+      const refused = await v1(owner, `/api/v1/fixtures/${bye2?.id}`, "PATCH", slot);
+      const placed = await v1(owner, `/api/v1/fixtures/${board2?.id}`, "PATCH", slot);
+      const after = await rows();
+      const slotless = (key: string) => {
+        const f = after.find((r) => r.ext_key === key);
+        return f !== undefined && f.scheduled_at === null && f.court_id === null;
+      };
+      const ok =
+        bye2 !== undefined && refused.status === 422 && refused.json.error?.code === "SWISS_BYE_NOT_PLACEABLE" &&
+        slotless("sw-r2-bye") && slotless("sw-r1-bye") && placed.status === 200 &&
+        after.find((r) => r.ext_key === "sw-r2-b1")?.court_id === slot.court_id;
+      w3Check(
+        "w3a X-SW-29: a Swiss bye shell is refused a court and a time (422 SWISS_BYE_NOT_PLACEABLE) and holds none; the round's board takes the slot" +
+          (ok ? "" : ` — ${setup}, PATCH bye ${refused.status} ${JSON.stringify(refused.json).slice(0, 160)}, PATCH board ${placed.status}, bye2 slotless ${slotless("sw-r2-bye")}, bye1 slotless ${slotless("sw-r1-bye")}`),
+        ok,
+      );
+    }
   }
 
   check(`w3a: the W3 Swiss app-A suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked === EXPECTED_CHECKS);

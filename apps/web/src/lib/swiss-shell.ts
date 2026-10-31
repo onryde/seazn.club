@@ -49,6 +49,18 @@ export function isSwissByeShellExtKey(extKey: string | null | undefined): boolea
   return extKey != null && SWISS_BYE_SHELL_EXT_KEY.test(extKey);
 }
 
+/** A Swiss bye shell Pair has not seated yet (`isSwissByeShellExtKey`; no seat filled). It is `scheduled` with no
+ *  time, yet it is never scheduling work: a bye takes no court and no time (the server refuses one,
+ *  SWISS_BYE_NOT_PLACEABLE — W3 T3, X-SW-29). So the run sheet shows no row for it and the desk counts it as nothing
+ *  owed; once Pair seats it, it is an ordinary settled bye row. */
+export function isUnseatedSwissByeShell(f: {
+  ext_key?: string | null;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+}): boolean {
+  return isSwissByeShellExtKey(f.ext_key) && f.home_entrant_id === null && f.away_entrant_id === null;
+}
+
 /** A Swiss BOARD shell (`sw-r{n}-b{k}`), as opposed to the bye shell, an
  *  ad-hoc row or another format's key. Rebuild reads it to choose which of a
  *  shrinking round's boards keep their slots (`carrySlots`). */

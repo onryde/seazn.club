@@ -47,6 +47,7 @@ import { resolveCourtNames } from "@/components/v2/shared/court-multi-picker";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import {
   boardMovable,
+  inBoardTray,
   cardTitle,
   courtDisplayName,
   DENSITY_STORAGE_KEY,
@@ -687,7 +688,8 @@ export function ScheduleBoard({
   );
 
   const scheduled = board.filter((f) => f.scheduled_at !== null);
-  const unscheduled = board.filter((f) => f.scheduled_at === null && f.status === "scheduled");
+  // `inBoardTray`: an untimed scheduled card, never a Swiss bye shell (W3 T3, X-SW-29).
+  const unscheduled = board.filter(inBoardTray);
 
   // --------------------------------------------------- auto-schedule confirm
   // (#pins-ui, owner ruling 2026-08-12). BUILD moves any card not explicitly

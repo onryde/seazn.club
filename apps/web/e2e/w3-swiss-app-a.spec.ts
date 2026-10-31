@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, activeOrgIdFromRequest, divisionPath, seedVenueWithCourts } from "./helpers";
+import { TAG, apiJson, activeOrgIdFromRequest, competitionPath, divisionPath, seedVenueWithCourts } from "./helpers";
 
 // W3 Swiss app-A (spec 2026-10-31-format-matrix-w3-swiss-design.md). One
 // describe per rule, each driven through the real desk.
@@ -306,5 +306,118 @@ test.describe("X-SW-21 no Add match on a Swiss stage", () => {
       "Swiss rounds are paired by the system. Add friendlies in another stage.",
     );
     await expect(page.getByTestId("stage-add-match")).toHaveCount(0);
+  });
+});
+
+// X-SW-29 (W3 T3, SW-M13, RB3-23): a Swiss stage mints each round's bye row as
+// a shell before Pair, and every placement writer used to take it for one more
+// match — the auto pass gave it a court and a time, the board offered it a drag,
+// and a placed bye printed a scorer sheet. A bye is not played. Driven through
+// the auto pass and read back where an organiser looks: the schedule board's
+// unscheduled tray, the run sheet, and the print control's day list.
+test.describe("X-SW-29 a bye has no court and no sheet", () => {
+  test("an odd Swiss field, auto-scheduled: the boards take courts, the byes take none, are never offered to the board or the run sheet, and add no sheet day", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(150_000);
+    const orgId = await activeOrgIdFromRequest(request);
+    const { courts } = await seedVenueWithCourts(request, [`Bye Court A ${TAG}`, `Bye Court B ${TAG}`], { orgId });
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Bye no court ${TAG}`,
+      visibility: "private",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 5 }, (_, i) => ({ kind: "individual", display_name: `Bye P${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 2 },
+    });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    const minted = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+    expect(minted.status, JSON.stringify(minted.error)).toBe(200);
+    const shells = await stageFixtures(request, divisionId, stageId);
+    const byes = shells.filter((f) => /^sw-r\d+-bye$/.test(f.ext_key ?? ""));
+    const boards = shells.filter((f) => !/^sw-r\d+-bye$/.test(f.ext_key ?? ""));
+    expect([byes.length, boards.length], "premise: five players mint a bye and two boards a round").toEqual([2, 4]);
+
+    // The board, before any placement: the tray offers the four boards and no bye.
+    await page.goto(await divisionPath(request, divisionId, "/schedule"));
+    const tray = page.getByTestId("board-tray");
+    await expect(tray).toHaveAttribute("data-count", "4", { timeout: 20_000 });
+    for (const b of boards) await expect(page.locator(`[data-fixture-id="${b.id}"]`).first()).toBeAttached();
+    for (const b of byes) await expect(page.locator(`[data-fixture-id="${b.id}"]`)).toHaveCount(0);
+
+    // The run sheet: the board shells wait to be scheduled; a bye shell is no row at all.
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await expect(page.locator(`[data-fixture-no="${boards[0]!.fixture_no}"]`).first()).toBeAttached({ timeout: 20_000 });
+    for (const b of boards) await expect(page.locator(`[data-fixture-no="${b.fixture_no}"]`).first()).toBeAttached();
+    for (const b of byes) await expect(page.locator(`[data-fixture-no="${b.fixture_no}"]`)).toHaveCount(0);
+
+    // The auto pass. Midday UTC, so the day is the same date on any org clock within eleven hours of UTC.
+    const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: {
+        startAt: "2030-06-18T11:00:00.000Z",
+        matchMinutes: 30,
+        gapMinutes: 0,
+        courts: courts.map((c) => c.id),
+        perEntrantMinRest: 0,
+      },
+    });
+    expect(settings.status, JSON.stringify(settings.error)).toBe(200);
+    const auto = await apiJson<{ assignments: { fixture_id: string; scheduled_at: string; court_id: string }[] }>(
+      request,
+      `/api/v1/stages/${stageId}/schedule/auto`,
+      "POST",
+      {},
+    );
+    expect(auto.status, JSON.stringify(auto.error)).toBe(200);
+    const byeIds = new Set(byes.map((b) => b.id));
+    expect(auto.data!.assignments.filter((a) => byeIds.has(a.fixture_id)), "the pass proposes no bye").toEqual([]);
+    const applied = await apiJson(request, `/api/v1/stages/${stageId}/schedule/apply`, "POST", {
+      assignments: auto.data!.assignments.map((a) => ({ fixture_id: a.fixture_id, scheduled_at: a.scheduled_at, court_id: a.court_id })),
+      source: "auto",
+    });
+    expect(applied.status, JSON.stringify(applied.error)).toBe(200);
+    const after = await stageFixtures(request, divisionId, stageId);
+    let checked = 0;
+    for (const f of after) {
+      const isBye = byeIds.has(f.id);
+      expect(f.court_id === null && f.scheduled_at === null, `${f.ext_key}: ${isBye ? "a bye holds no slot" : "a board was placed"}`).toBe(isBye);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row was read back").toBe(6);
+
+    // The board after the pass: nothing left to place — the byes are not waiting in the tray.
+    await page.goto(await divisionPath(request, divisionId, "/schedule"));
+    await expect(page.getByTestId("board-tray")).toHaveAttribute("data-count", "0", { timeout: 20_000 });
+    for (const b of byes) await expect(page.locator(`[data-fixture-id="${b.id}"]`)).toHaveCount(0);
+
+    // The print control offers the boards' day and no other: a bye adds no sheet.
+    await page.goto(await competitionPath(request, comp.data!.id, "/schedule"));
+    const day = page.getByTestId("print-sheets-day");
+    await expect(day).toBeAttached({ timeout: 20_000 });
+    expect(await day.locator("option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value))).toEqual([
+      "2030-06-18",
+    ]);
   });
 });

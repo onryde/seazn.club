@@ -19,7 +19,11 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { playedFixtureIds } from "../fixture-results-sql";
 import { applySchedule, autoSchedule, isMovable, movableFixtureSql, moveFixture, putScheduleSettings, startDivision } from "../schedule";
+import { listDivisionFixtures, listDivisionFixturesForBoard } from "../fixtures";
+import { buildRunSheet } from "@/lib/run-sheet-groups";
+import { getCompetitionDesk } from "../competition-desk";
 import { createStages, generateStageFixtures } from "../stages";
+import { boardMovable, inBoardTray } from "@/components/v2/board/types";
 import { createCourt, createVenue } from "../venues";
 import { seedOrg } from "./_seed";
 
@@ -35,6 +39,7 @@ afterAll(async () => {
 
 interface Rig {
   auth: AuthCtx;
+  competitionId: string;
   divisionId: string;
   stageId: string;
   courts: string[];
@@ -78,7 +83,7 @@ async function oddSwiss(settings: { roundMinutes?: number } = {}): Promise<Rig> 
     },
     tz: "UTC",
   });
-  return { auth, divisionId: division.id, stageId: stage!.id, courts: [c1.id, c2.id] };
+  return { auth, competitionId: comp.id, divisionId: division.id, stageId: stage!.id, courts: [c1.id, c2.id] };
 }
 
 interface Row {
@@ -168,6 +173,85 @@ describe.runIf(HAS_DB)("W3 T3 X-SW-29 a Swiss bye shell never takes a court", ()
     expect(sqlIds, "the SQL twin moves what the builder moves").toEqual(jsIds);
     expect(sqlIds.filter((id) => byes.some((b) => b.id === id)), "no bye shell is movable").toEqual([]);
     expect(sqlIds.length, "anti-vacuity: the four boards are movable").toBe(4);
+  }, 120_000);
+
+  it("X-SW-29 the board read marks every Swiss bye row, and the board offers it no drag and no tray place", async () => {
+    // The real producer of the board's rows (`listDivisionFixturesForBoard`) into the board's own predicates.
+    const rig = await shells();
+    await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1: one seated bye, one unseated shell
+    const { byes, boards } = await split(rig.stageId);
+    const rows = await listDivisionFixturesForBoard(rig.auth, rig.divisionId);
+    expect(rows.length, "anti-vacuity: the board read every row").toBe(6);
+    const marked = rows.filter((r) => r.bye_shell === true).map((r) => r.id).sort();
+    expect(marked, "both bye rows are marked, seated or not").toEqual(byes.map((b) => b.id).sort());
+    for (const r of rows.filter((x) => x.bye_shell !== true)) {
+      expect(Object.prototype.hasOwnProperty.call(r, "bye_shell"), `${r.id}: sent only when true`).toBe(false);
+    }
+    const unseated = rows.find((r) => r.id === byes.find((b) => b.status === "scheduled")!.id)!;
+    expect([boardMovable(unseated), inBoardTray(unseated)], "the unseated shell: no drag, no tray").toEqual([false, false]);
+    const boardShells = rows.filter((r) => boards.some((b) => b.id === r.id) && r.status === "scheduled");
+    expect(boardShells.length, "anti-vacuity: the board shells").toBe(4);
+    expect(boardShells.every((r) => boardMovable(r) && inBoardTray(r)), "positive pair: every board shell is offered").toBe(true);
+  }, 120_000);
+
+  it("X-SW-29 the desk counts no Swiss bye shell as unscheduled work: once the boards are placed, nothing is owed", async () => {
+    // A bye shell can never be given a time (SWISS_BYE_NOT_PLACEABLE), so counting it would leave a red "N unscheduled"
+    // on the division that no organiser action clears. Sequence: minted (boards owed), boards placed (nothing owed),
+    // round 1 paired (its bye seated and settled; still nothing owed).
+    const rig = await shells();
+    const at = new Date("2030-07-01T10:00:00Z");
+    const owed = async () => {
+      const d = (await getCompetitionDesk(rig.auth, rig.competitionId, at)).divisions.get(rig.divisionId)!;
+      return { field: d.unscheduled, attention: d.attention.find((a) => a.kind === "unscheduled") ?? null };
+    };
+    expect(await owed(), "minted: the four board shells are owed a slot, the two bye shells are not").toEqual({
+      field: 4,
+      attention: { kind: "unscheduled", count: 4 },
+    });
+    const build = await autoSchedule(rig.auth, rig.stageId, { only_unlocked: false, mode: "build" });
+    await applySchedule(rig.auth, rig.stageId, {
+      assignments: build.assignments.map((a) => ({ fixture_id: a.fixture_id, scheduled_at: a.scheduled_at, court_id: a.court_id })),
+      source: "auto",
+    });
+    const { byes } = await split(rig.stageId);
+    expect(byes.filter((b) => b.status === "scheduled" && b.scheduled_at === null).length, "premise: two untimed bye shells remain").toBe(2);
+    expect(await owed(), "every board placed: nothing is owed").toEqual({ field: 0, attention: null });
+    await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
+    expect(await owed(), "round 1 paired: still nothing owed").toEqual({ field: 0, attention: null });
+  }, 120_000);
+
+  it("X-SW-29 the run sheet, fed the division page's own rows: no unseated bye shell; the seated bye is a settled row", async () => {
+    // The real producer (`listDivisionFixtures`, the division page's read) into the real builder, adapted the way
+    // stages-panel.tsx's `toRunSheetFixture` does (the optional feed columns defaulted, the row otherwise spread).
+    const rig = await shells();
+    const sheet = async () => {
+      const rows = await listDivisionFixtures(rig.auth, rig.divisionId);
+      const blocks = buildRunSheet({
+        fixtures: rows.map((f) => ({
+          ...f,
+          home_slot_label: f.home_slot_label ?? null,
+          away_slot_label: f.away_slot_label ?? null,
+          venue_name: f.venue_name ?? null,
+          officials: f.officials ?? [],
+        })),
+        stages: [{ id: rig.stageId, seq: 1, kind: "swiss" }],
+        tz: "UTC",
+        nowMs: Date.parse("2030-07-01T10:00:00Z"),
+      });
+      return new Map(blocks.flatMap((b) => ("fixtures" in b ? b.fixtures.map((f) => [f.id, b.kind] as const) : [])));
+    };
+    const { byes, boards } = await split(rig.stageId);
+    const minted = await sheet();
+    expect(byes.filter((b) => minted.has(b.id)), "minted: neither bye shell is on the sheet").toEqual([]);
+    expect(boards.every((b) => minted.get(b.id) === "unscheduled"), "positive pair: every board shell is owed a slot").toBe(true);
+
+    await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
+    const paired = await sheet();
+    const [r1, r2] = [byes.find((b) => b.round_no === 1)!, byes.find((b) => b.round_no === 2)!];
+    expect([paired.get(r1.id), paired.has(r2.id)], "round 1's seated bye is a settled row; round 2's shell is still nowhere").toEqual([
+      "settled",
+      false,
+    ]);
   }, 120_000);
 
   it("X-SW-29 moveFixture onto a bye shell refuses SWISS_BYE_NOT_PLACEABLE", async () => {
