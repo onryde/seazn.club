@@ -30,11 +30,23 @@ import "server-only";
 //      64-item cap, or refused itself); an already ended row ⇒ a re-send; an end earlier than its start ⇒ refused, and
 //      the row stays open for the session end to close.
 // CROSS-PLAN SEAM for console C3: `skipped` is set from the operator log (`operatorLogFor`, S5); S8 writes false.
-import type { Tx } from "@/lib/db";
+//
+// S9 (spec §3.6.3, plan P4): the FRAME — one JPEG the compositor grabs 1.5 s after a `start` and posts on its own, keyed
+// like the airing in sponsor_airing_frames (session_id, moment_id) with no foreign key to it, because the frame usually
+// arrives before the beat that carries its start. `storeAiringFrame` below; the report (S14) left-joins it, driven from
+// the airings, and `purgeOrphanFrames` (the daily relay sweep) removes the frames no airing ever claimed.
+import { builtinModules } from "@seazn/engine/sports";
+import { sql, type Tx } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { SCENE_CAROUSEL_MS, SPONSOR_STYLE_BY_SIZE } from "@/lib/sponsor-plan";
-import type { RelayAiring } from "@/server/api-v1/schemas";
+import { putStorageObject, removeStorageObjects } from "@/lib/supabase-storage";
+import { SPONSOR_CAROUSEL_SCENES } from "@/components/overlay/overlay-scenes";
+import { RelayAiring } from "@/server/api-v1/schemas";
+import { isTerminal, type SessionState } from "@/server/relay/domain/session";
+import { verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
+import { breakKindOfMomentId } from "./assign";
 
 /** Spec §3.6.4: "Times > 10 min from server time are refused." Exactly 10 min is written. */
 export const AIRING_CLOCK_SKEW_MS = 600_000;
@@ -220,4 +232,140 @@ export async function closeOpenAirings(tx: Tx, sessionId: string, sessionEndAt: 
      where session_id = ${sessionId} and ended_at is null
     returning id`;
   return closed.length;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// S9: the frame (spec §3.6.3).
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Spec §3.6.3: a frame is "≤ 256 KiB", and the bound is INCLUSIVE (SC2 addendum 3): 262 144 bytes is stored, 262 145 is a
+ *  413. The compositor never sends more (its `FRAME_UPLOAD_MAX_BYTES`). */
+export const AIRING_FRAME_MAX_BYTES = 262_144;
+
+/** A JPEG's Start Of Image marker and the first byte of the marker after it — the ONLY test a frame's bytes face (SC2
+ *  addendum 4: jpegenc writes JFIF, but no minimum size and no APP or EXIF rule is imposed). */
+const JPEG_SOI = [0xff, 0xd8, 0xff] as const;
+
+/** Plan ruling (S9, orphans): a frame no airing row claims is purged once its session ended more than this long ago. */
+export const ORPHAN_FRAME_GRACE_MS = 24 * 3_600_000;
+
+/** How many orphans one pass removes (one storage call); the rest wait for the next daily pass. */
+const ORPHAN_PURGE_BATCH = 500;
+
+/** The heartbeat's own bound on a moment id, read off its contract twin (RelayAiring, S8): a frame names a moment the
+ *  beat can carry. */
+const WIRE_MOMENT_ID = RelayAiring.options.find((o) => o.shape.kind.value === "start")!.shape.momentId;
+
+/** Every break kind a shipped sport declares (`naturalBreaks.kinds`): the kinds S5 can mint a break card's id for. */
+const DECLARED_BREAK_KINDS: ReadonlySet<string> = new Set(builtinModules.flatMap((m) => (m.naturalBreaks?.kinds ?? []).map((k) => k.kind)));
+
+/** S7's carousel showing (plan P5, `carouselMomentId` in components/overlay/sponsor-card.tsx): `scene:<scene>:<bucket>`,
+ *  the bucket a whole number with no leading zero. Which scenes is `SPONSOR_CAROUSEL_SCENES`' to say, below. */
+const SCENE_MOMENT_ID = /^scene:([^:]+):(?:0|[1-9][0-9]*)$/;
+
+/**
+ * Is `momentId` an id a sponsor airing can carry? S5's break id `<seq>:sponsor.<kind>` (`breakKindOfMomentId`, assign.ts)
+ * for a kind a shipped sport declares, or S7's carousel id for a scene the carousel airs in (`SPONSOR_CAROUSEL_SCENES`,
+ * the gate the overlay stage itself reads) — within the heartbeat's bound. Anything else names no airing and is refused
+ * (400) before a byte is stored, so a decoded `/` or `..` never gets near a storage key. The key does not lean on this:
+ * `airingFramePath` encodes the id, so a later, looser grammar still cannot add a path segment.
+ */
+export function isFrameMomentId(momentId: string): boolean {
+  if (!WIRE_MOMENT_ID.safeParse(momentId).success) return false;
+  const kind = breakKindOfMomentId(momentId);
+  if (kind !== null) return DECLARED_BREAK_KINDS.has(kind);
+  const scene = SCENE_MOMENT_ID.exec(momentId)?.[1];
+  return scene !== undefined && (SPONSOR_CAROUSEL_SCENES as readonly string[]).includes(scene);
+}
+
+/**
+ * The frame's object key in the private bucket: `<orgId>/<sessionId>/<base64url(momentId)>.jpg`. The id is ENCODED, never
+ * spliced in — base64url's alphabet is `A-Z a-z 0-9 - _` — so whatever the id holds (a `/`, a `..`, a NUL) the key keeps
+ * exactly three segments. Refused by name: the empty id, and an id the encoding cannot carry back (a lone surrogate
+ * encodes as U+FFFD's bytes, so two ids would share one key).
+ */
+export function airingFramePath(orgId: string, sessionId: string, momentId: string): string {
+  const encoded = Buffer.from(momentId, "utf8").toString("base64url");
+  if (momentId === "" || Buffer.from(encoded, "base64url").toString("utf8") !== momentId) {
+    throw new RangeError("airingFramePath: the moment id is empty, or cannot be read back from its encoding (a lone surrogate)");
+  }
+  return `${orgId}/${sessionId}/${encoded}.jpg`;
+}
+
+const isJpeg = (bytes: Uint8Array): boolean => JPEG_SOI.every((b, i) => bytes[i] === b);
+
+/**
+ * S9: stores one proof-of-play frame. `bytes` is the raw JPEG, or null when the body ran past AIRING_FRAME_MAX_BYTES (the
+ * route stops reading there). Each refusal comes before anything is stored, in this order:
+ *   401  not this session's relay JOB token — `verifyRelayToken`, the heartbeat's own check and its one refusal;
+ *   404  no such session; 410 SESSION_ENDED once it is terminal (`isTerminal`, as the heartbeat; SC2 then stops grabbing);
+ *   400  the id names no airing (`isFrameMomentId`);
+ *   413  past the bound (inclusive); 415 no JPEG SOI.
+ * Then the object is written (replacing an earlier frame of the moment) and the row upserted: one row per (session,
+ * moment), its path this frame's. The id is stored VERBATIM — the route hands it over decoded once — so it joins
+ * sponsor_airings.moment_id. A storage failure is a 502 and writes no row (SC2 retries a 5xx once). The token and the
+ * bytes are never logged. No lock: a frame racing the session's end is still a real frame of a real showing.
+ */
+export async function storeAiringFrame(sessionId: string, token: string, momentId: string, bytes: Uint8Array | null): Promise<void> {
+  await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
+  const [s] = await sql<{ id: string; org_id: string; state: SessionState }[]>`
+    select id, org_id, state from fixture_stream_sessions where id = ${sessionId}`;
+  if (!s) throw new HttpError(404, "session not found");
+  if (isTerminal(s.state)) throw new HttpError(410, "session has ended", "SESSION_ENDED");
+  if (!isFrameMomentId(momentId)) throw new HttpError(400, "the moment id names no sponsor airing", "FRAME_MOMENT_INVALID");
+  if (bytes === null || bytes.byteLength > AIRING_FRAME_MAX_BYTES) {
+    throw new HttpError(413, `a frame is at most ${AIRING_FRAME_MAX_BYTES} bytes`, "FRAME_TOO_LARGE");
+  }
+  if (!isJpeg(bytes)) throw new HttpError(415, "a frame is a JPEG (image/jpeg)", "FRAME_NOT_JPEG");
+  const path = airingFramePath(s.org_id, s.id, momentId);
+  try {
+    await putStorageObject(path, bytes, "image/jpeg");
+  } catch (err) {
+    log.error({ sid: s.id, orgId: s.org_id, bytes: bytes.byteLength, err }, "sponsor frame: the storage write failed — no row written");
+    captureError(err, { orgId: s.org_id, route: "relay.sponsor_frame.store", extra: { sessionId: s.id } });
+    throw new HttpError(502, "the frame could not be stored", "FRAME_STORAGE_FAILED");
+  }
+  await sql`
+    insert into sponsor_airing_frames (session_id, moment_id, org_id, path)
+    values (${s.id}, ${momentId}, ${s.org_id}, ${path})
+    on conflict (session_id, moment_id) do update set path = excluded.path, created_at = now()`;
+}
+
+/**
+ * Plan ruling (S9, orphans): a frame posted for an airing web never records — the compositor's 64-item buffer overflowed,
+ * a beat was refused, the final beat was lost — is claimed by no sponsor_airings row, and S14's report (driven from the
+ * airings) never shows it. Once its session has been over for longer than ORPHAN_FRAME_GRACE_MS no airing can still land
+ * (the heartbeat answers 410), so it goes: the objects first, in one storage call, then the rows. A remove that fails
+ * keeps every row of the batch, counted, for the next pass. Run by the daily relay sweep (relay-sweep.ts step 7d).
+ * "Over" is `ended_at`, set only by the session's terminal transitions (domain/session.ts) — a live session has none.
+ * `orgIds` is the sweep's TEST-ONLY scope; an empty one is refused, never read as "every org".
+ */
+export async function purgeOrphanFrames(now: Date, opts: { orgIds?: readonly string[] } = {}): Promise<{ purged: number; failed: number }> {
+  const orgIds = opts.orgIds === undefined ? undefined : [...opts.orgIds];
+  if (orgIds !== undefined && orgIds.length === 0) {
+    throw new Error("purgeOrphanFrames: orgIds is empty — omit it to purge every organisation, or name at least one");
+  }
+  const cutoff = new Date(now.getTime() - ORPHAN_FRAME_GRACE_MS);
+  const orphans = await sql<{ session_id: string; moment_id: string; path: string }[]>`
+    select f.session_id, f.moment_id, f.path
+      from sponsor_airing_frames f
+      join fixture_stream_sessions s on s.id = f.session_id
+     where s.ended_at < ${cutoff}
+       and not exists (select 1 from sponsor_airings a where a.session_id = f.session_id and a.moment_id = f.moment_id)
+       ${orgIds ? sql`and f.org_id in ${sql(orgIds)}` : sql``}
+     order by s.ended_at, f.session_id, f.moment_id
+     limit ${ORPHAN_PURGE_BATCH}`;
+  if (orphans.length === 0) return { purged: 0, failed: 0 };
+  try {
+    await removeStorageObjects(orphans.map((o) => o.path));
+  } catch (err) {
+    log.warn({ frames: orphans.length, err }, "sponsor frames: removing orphan frames from storage failed — their rows are kept for the next pass");
+    return { purged: 0, failed: orphans.length };
+  }
+  const deleted = await sql`
+    delete from sponsor_airing_frames f
+     using unnest(${orphans.map((o) => o.session_id)}::uuid[], ${orphans.map((o) => o.moment_id)}::text[]) as k(session_id, moment_id)
+     where f.session_id = k.session_id and f.moment_id = k.moment_id
+    returning f.session_id`;
+  return { purged: deleted.length, failed: 0 };
 }
