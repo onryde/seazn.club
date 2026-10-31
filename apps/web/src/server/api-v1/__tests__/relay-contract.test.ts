@@ -17,7 +17,10 @@
 //   * the beat's vocabularies, typed here from the compositor's own declarations, against the file and the twin;
 //   * optional-versus-null and absent-versus-zero for every field R2 adds to the beat;
 //   * R2007 PR B: the programme phase's `final` (C06's final hold), the beat's phaseChannel, and the loopback phase
-//     endpoint's reply and constants (overlay templates spec 2026-10-15 §4.3), typed here from the plan's declarations.
+//     endpoint's reply and constants (overlay templates spec 2026-10-15 §4.3), typed here from the plan's declarations;
+//   * R4 S8 (sponsors on stream spec 2026-10-27 §3.6): the beat's `airings` (the page's proof-of-play lines, tagged by
+//     `kind`) and `airingsDropped`, and that the page's REAL line builder writes exactly the item shape (Review Focus 2:
+//     web must accept a beat with airings before the compositor sends one).
 // Every sweep counts what it checked, and the counts are pinned: a skipped fixture, field or def fails the run.
 //
 // Pure — no DB. No sport: the relay is sport-agnostic, nothing on this contract reads one.
@@ -30,6 +33,9 @@ import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import * as S from "../schemas";
 import { RELAY_EXIT_REFUSED, RELAY_EXIT_RESTART } from "@/server/relay/config";
+import { AIRING_CLOCK_SKEW_MS } from "@/server/sponsors/airings";
+import { SIGNAL_SPONSOR_END, SIGNAL_SPONSOR_START, SPONSOR_LINE_MAX_BYTES, sponsorLine } from "@/lib/overlay-compositor";
+import { SPONSOR_STYLE_BY_SIZE } from "@/lib/sponsor-plan";
 import {
   PHASE_CHANNELS, PROGRAMME_PHASES, RELAY_PHASE_LONG_POLL_MAX_MS, RELAY_PHASE_PATH, RELAY_PHASE_PORT, parseRelayPhaseReply,
   type RelayPhaseReply as LibPhaseReply,
@@ -49,7 +55,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "90a21541970c566d71a0634503708643c7c1c8de1d36730b6ca907f396d321fe";
+const SHA256 = "725dbee11d651fd34bc3dfe0df69f550981b505ab47ed75bbbaa7249b3e351a6";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -98,7 +104,12 @@ const ADDED = ["programmePhase", "input", "output", "graphics", "inputKicks", "i
   // owner scope addition 2026-10-15: the final beat carries the exit reason.
   "exitReason", "exitDetail",
   // R2007 PR B (overlay templates spec 2026-10-15 §4.3): the channel the overlay page reads its phase from.
-  "phaseChannel"];
+  "phaseChannel",
+  // R4 S8 (sponsors spec 2026-10-27 §3.6.2): the proof-of-play items and the compositor's overflow count.
+  "airings", "airingsDropped"];
+/** R4 S8 (ruling R14): the one declared field `heartbeat-full` does NOT carry — the proof-of-play list rides its own vector,
+ *  `heartbeat-airings`, because the server records it as airings and keeps it out of both beat stores. */
+const AIRINGS_FIELD = "airings";
 /** Owner scope addition 2026-10-15: "exitDetail: z.string().max(200)" — compositor-redacted human text. zod's max counts
  *  UTF-16 code units (JS string length). */
 const EXIT_DETAIL_MAX = 200;
@@ -137,7 +148,8 @@ const OVERLAY_PATH = (fixtureId: string) => `/overlay/fixtures/${fixtureId}`;
 /** Per fixture prefix: its $def, its twin and the exact count (never 0). First match wins. */
 const ROUTES: [prefix: string, def: string, count: number][] = [
   ["session-", "session", 6],
-  ["heartbeat-", "heartbeat", 10],
+  // R4 S8: heartbeat-airings and heartbeat-invalid-airing-unknown-key.
+  ["heartbeat-", "heartbeat", 12],
   // reply-live, reply-ending, and Owed 108 fix (b)'s five: live-edge, live-edge-zero, live-edge-null, and the two invalid.
   ["reply-", "heartbeatReply", 7],
   // R2007 PR B: the compositor's loopback reply (never "reply-": that prefix is the web heartbeat's 200).
@@ -290,7 +302,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       total += count;
     }
     expect(names.length, "every fixture was routed").toBe(total);
-    expect(total).toBe(25);
+    expect(total).toBe(27);
     // Every REFUSED entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(refusedSeen).toBe(Object.keys(REFUSED).length);
     expect(refusedSeen).toBe(2);
@@ -494,7 +506,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(JSON.stringify(fixture(name)), name).not.toContain(RETIRED_RUNG);
       vectors++;
     }
-    expect(vectors, "anti-vacuity: every vector read").toBe(25);
+    expect(vectors, "anti-vacuity: every vector read").toBe(27);
   });
 
   it("optional-versus-null and absent-versus-zero: each field R2 adds is optional and nullable (file and twin); counters are whole and non-negative, a present 0 admitted; only `state` is required", () => {
@@ -508,7 +520,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(parses(S.RelayHeartbeat, { state: "playing", [field]: null }), `${field}: the twin admits null`).toBe(true);
       checked++;
     }
-    expect(checked).toBe(13);
+    expect(checked).toBe(15);
     // exitDetail's bound: the twin's 200 UTF-16 units, the file's 100 code points (review M1). Each refuses one past its
     // own bound, and a longer one is refused, never cut by the server.
     const fileAdmits = fileValidator();
@@ -544,11 +556,15 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     expect(Object.keys(fixture("heartbeat-minimal"))).toEqual(["state"]);
     const zero = fixture("heartbeat-zero-is-a-measurement");
     expect(zero).toHaveProperty("fps", 0);
-    // heartbeat-full carries every field the twin declares but the final beat's two; heartbeat-final-fatal carries those
-    // (review M6). Between them the route tests round-trip every declared field.
+    // heartbeat-full carries every field the twin declares but the final beat's two and the airing list (R14);
+    // heartbeat-final-fatal carries the two (review M6), heartbeat-airings the list. Between them the route tests
+    // round-trip every declared field.
     const declared = Object.keys(S.RelayHeartbeat.shape).sort();
-    expect(Object.keys(fixture("heartbeat-full")).sort()).toEqual(declared.filter((k) => !EXIT_FIELDS.includes(k)));
+    expect(declared, "premise: the twin declares the airing list").toContain(AIRINGS_FIELD);
+    expect(Object.keys(fixture("heartbeat-full")).sort()).toEqual(declared.filter((k) => !EXIT_FIELDS.includes(k) && k !== AIRINGS_FIELD));
+    expect(fixture("heartbeat-full"), "R14: the overflow count stays on the full beat").toHaveProperty("airingsDropped");
     expect(Object.keys(fixture("heartbeat-final-fatal")).sort()).toEqual(["state", ...EXIT_FIELDS].sort());
+    expect(Object.keys(fixture("heartbeat-airings")), "the airing vector carries the list").toContain(AIRINGS_FIELD);
   });
 
   it("review M1: the file is never looser than the twin on exitDetail — 150 emoji are refused by BOTH, 100 admitted by both, and every text the file admits the twin admits (counted)", () => {
@@ -758,5 +774,154 @@ describe("R2007 PR B: the programme phase gains `final`, the beat carries its ph
     expect(admitted, "anti-vacuity: some admitted").toBeGreaterThan(0);
     expect(refused, "anti-vacuity: some refused").toBeGreaterThan(0);
     expect([admitted, refused]).toEqual([1 + 5 + 2, 1 + 1 + 13]);
+  });
+});
+
+// R4 S8 (sponsors on stream spec 2026-10-27 §3.6): at `host=compositor` the overlay page logs
+// `seazn:sponsor:start|end <json>` (S7, lib/overlay-compositor.ts `sponsorLine`); the compositor (SC1) sets `kind` from the
+// line's name and sends the items on its next beat as `airings`, with its overflow count as `airingsDropped`. Review
+// Focus 2: the beat is STRICT, so a compositor that sends `airings` before web admits them 400s every beat and the session
+// dies — the vendored vector with airings must parse here, by the twin AND the published bytes.
+describe("R4 S8: the beat's proof-of-play airings", () => {
+  /** SC1's conversion (spec §3.6.2, brief P6): the line's name is the item's `kind`; its JSON body is the rest. */
+  function itemOf(line: string): Json {
+    const space = line.indexOf(" ");
+    const signal = line.slice(0, space);
+    expect([SIGNAL_SPONSOR_START, SIGNAL_SPONSOR_END], `a sponsor line: ${line}`).toContain(signal);
+    return { kind: signal === SIGNAL_SPONSOR_START ? "start" : "end", ...(JSON.parse(line.slice(space + 1)) as Json) };
+  }
+  const withoutKind = (item: Json): Json => Object.fromEntries(Object.entries(item).filter(([k]) => k !== "kind"));
+  const beatWith = (airings: unknown[]): Json => ({ state: "playing", airings });
+  /** The brief's P6 bounds (S8 Produces): the compositor's buffer cap (spec §3.6.2 "buffers ≤ 64") and the string limits. */
+  const AIRINGS_MAX = 64, MOMENT_ID_MAX = 80, CARD_ID_MAX = 80, BREAK_KIND_MAX = 40;
+  const start = (over: Json = {}): Json => ({ ...(fixture("heartbeat-airings").airings as Json[])[0]!, ...over });
+  const end = (over: Json = {}): Json => ({ ...(fixture("heartbeat-airings").airings as Json[])[1]!, ...over });
+
+  it("Review Focus 2: heartbeat-airings (a break card and a scene showing, each with its end) is admitted by the twin AND the published bytes; heartbeat-invalid-airing-unknown-key — ONE extra key on ONE item — is refused by both, at that item alone", () => {
+    const fileAdmits = fileValidator();
+    const good = fixture("heartbeat-airings");
+    const result = S.RelayHeartbeat.safeParse(good);
+    expect(result.success, JSON.stringify(result.error?.issues)).toBe(true);
+    expect(fileAdmits("heartbeat", good), "the file admits it").toBe(true);
+    const items = good.airings as Json[];
+    // Premise: the vector carries both kinds and both sources the page sends (ruling R5: `rotation` or `scene`).
+    expect(items.map((i) => `${i.kind}${i.kind === "start" ? `:${i.source as string}` : ""}`)).toEqual(["start:rotation", "end", "start:scene", "end"]);
+    // The refused vector is a one-key edit of it: same beat, same items, one key added to the first.
+    const bad = fixture("heartbeat-invalid-airing-unknown-key");
+    expect(Object.keys(bad).filter((k) => JSON.stringify(bad[k]) !== JSON.stringify(good[k])), "differs in airings alone").toEqual([AIRINGS_FIELD]);
+    const badItems = bad.airings as Json[];
+    expect(badItems).toHaveLength(items.length);
+    let differing = 0;
+    for (const [i, item] of badItems.entries()) {
+      const extra = Object.keys(item).filter((k) => !(k in items[i]!));
+      if (JSON.stringify(item) === JSON.stringify(items[i])) continue;
+      expect(extra, `item ${i}: one key the line never carries`).toHaveLength(1);
+      expect(Object.fromEntries(Object.entries(item).filter(([k]) => k !== extra[0])), `item ${i}: otherwise the same`).toEqual(items[i]);
+      differing++;
+    }
+    expect(differing, "exactly one item differs").toBe(1);
+    const refused = S.RelayHeartbeat.safeParse(bad);
+    expect(refused.success, "the twin refuses it (strict items)").toBe(false);
+    expect(refused.error?.issues.map((i) => i.path.join(".")), "refused at the item").toEqual(["airings.0"]);
+    expect(fileAdmits("heartbeat", bad), "the file refuses it").toBe(false);
+  });
+
+  it("the page's REAL line builder writes exactly the item shape: each vector item rebuilt through sponsorLine is byte-identical to the vector, and each kind's twin keys are the line's keys plus `kind` (counted)", () => {
+    let rebuilt = 0;
+    for (const item of fixture("heartbeat-airings").airings as Json[]) {
+      const kind = item.kind as "start" | "end";
+      const line = sponsorLine(kind, withoutKind(item));
+      expect(line, `${kind}: the page's line is the vector's body`).toBe(`${kind === "start" ? SIGNAL_SPONSOR_START : SIGNAL_SPONSOR_END} ${JSON.stringify(withoutKind(item))}`);
+      expect(itemOf(line), `${kind}: SC1's item is the vector's`).toEqual(item);
+      rebuilt++;
+    }
+    expect(rebuilt).toBe(4);
+    // Each branch of the twin declares the line's keys and `kind`, nothing more: the line builder throws on any other key
+    // set, so a body built from the twin's own keys must pass it, for both kinds.
+    let branches = 0;
+    for (const option of S.RelayAiring.options) {
+      const keys = Object.keys(option.shape);
+      const kind = (option.shape.kind as unknown as { value: "start" | "end" }).value;
+      const body = kind === "start" ? withoutKind(start()) : withoutKind(end());
+      expect(keys.filter((k) => k !== "kind").sort(), `${kind}: the twin's keys`).toEqual(Object.keys(body).sort());
+      expect(() => sponsorLine(kind, body), `${kind}: the page builds a line from exactly these keys`).not.toThrow();
+      branches++;
+    }
+    expect(branches).toBe(2);
+    // The styles the item admits are the planner's (S4: minor → lower third, major → banner), no more.
+    const styles = [...new Set(Object.values(SPONSOR_STYLE_BY_SIZE).map((v) => v.style))].sort();
+    expect([...S.RelayAiring.options[0].shape.style.options].sort()).toEqual(styles);
+  });
+
+  it("bounds, in the twin AND the file: 64 items admitted and 65 refused; momentId, cardId and breakKind at their bound admitted and one past refused; `at` in UTC `Z` only; an unknown kind or source refused — and an item at every ASCII bound still fits the page's 512-byte line", () => {
+    const fileAdmits = fileValidator();
+    const both = (value: Json, admitted: boolean, label: string) => {
+      expect(parses(S.RelayHeartbeat, value), `the twin: ${label}`).toBe(admitted);
+      expect(fileAdmits("heartbeat", value), `the file: ${label}`).toBe(admitted);
+    };
+    const cases: [label: string, value: Json, admitted: boolean][] = [
+      ["no items", beatWith([]), true],
+      [`${AIRINGS_MAX} items`, beatWith(Array.from({ length: AIRINGS_MAX }, () => end())), true],
+      [`${AIRINGS_MAX + 1} items`, beatWith(Array.from({ length: AIRINGS_MAX + 1 }, () => end())), false],
+      ["null (no report)", { state: "playing", airings: null }, true],
+      [`momentId ${MOMENT_ID_MAX}`, beatWith([end({ momentId: "m".repeat(MOMENT_ID_MAX) })]), true],
+      [`momentId ${MOMENT_ID_MAX + 1}`, beatWith([end({ momentId: "m".repeat(MOMENT_ID_MAX + 1) })]), false],
+      [`cardId ${CARD_ID_MAX}`, beatWith([start({ cardId: "c".repeat(CARD_ID_MAX) })]), true],
+      [`cardId ${CARD_ID_MAX + 1}`, beatWith([start({ cardId: "c".repeat(CARD_ID_MAX + 1) })]), false],
+      [`breakKind ${BREAK_KIND_MAX}`, beatWith([start({ breakKind: "k".repeat(BREAK_KIND_MAX) })]), true],
+      [`breakKind ${BREAK_KIND_MAX + 1}`, beatWith([start({ breakKind: "k".repeat(BREAK_KIND_MAX + 1) })]), false],
+      ["at with milliseconds, Z", beatWith([end({ at: "2026-10-31T14:02:19.270Z" })]), true],
+      ["at with an offset", beatWith([end({ at: "2026-10-31T15:02:19.270+01:00" })]), false],
+      ["at without a zone", beatWith([end({ at: "2026-10-31T14:02:19.270" })]), false],
+      ["kind outside start|end", beatWith([end({ kind: "skip" })]), false],
+      ["source outside the three", beatWith([start({ source: "deal" })]), false],
+      ["a start without breakKind", beatWith([Object.fromEntries(Object.entries(start()).filter(([k]) => k !== "breakKind"))]), false],
+      ["an end without cutShort", beatWith([{ kind: "end", momentId: "1:sponsor.over_end", at: "2026-10-31T14:02:19.270Z" }]), false],
+    ];
+    for (const [label, value, admitted] of cases) both(value, admitted, label);
+    expect(cases).toHaveLength(17);
+    // The bounds agree with the page's line bound: a start at every ASCII bound is a line the compositor's reader takes.
+    const widest = { momentId: "m".repeat(MOMENT_ID_MAX), cardId: "c".repeat(CARD_ID_MAX), style: "lower_third", source: "rotation", breakKind: "k".repeat(BREAK_KIND_MAX), at: "2026-10-31T14:02:19.270Z" };
+    const line = sponsorLine("start", widest);
+    expect(new TextEncoder().encode(line.slice(line.indexOf(" ") + 1)).length).toBeLessThanOrEqual(SPONSOR_LINE_MAX_BYTES);
+  });
+
+  it("airingsDropped is a whole non-negative count, optional and nullable (0 admitted: a measured zero; -1 and 1.5 refused), and a beat from a compositor built before S8 — no airings, no airingsDropped — still validates", () => {
+    const fileAdmits = fileValidator();
+    let checked = 0;
+    for (const [value, admitted] of [[0, true], [3, true], [4_294_967_295, true], [null, true], [-1, false], [1.5, false], ["2", false]] as const) {
+      expect(parses(S.RelayHeartbeat, { state: "playing", airingsDropped: value }), `the twin: ${String(value)}`).toBe(admitted);
+      expect(fileAdmits("heartbeat", { state: "playing", airingsDropped: value }), `the file: ${String(value)}`).toBe(admitted);
+      checked++;
+    }
+    expect(checked).toBe(7);
+    let old = 0;
+    for (const name of ["heartbeat-minimal", "heartbeat-final-hold", "heartbeat-final-fatal"]) {
+      const beat = fixture(name);
+      expect(beat, `premise: ${name} carries neither field`).not.toHaveProperty(AIRINGS_FIELD);
+      expect(beat).not.toHaveProperty("airingsDropped");
+      expect(parses(S.RelayHeartbeat, beat), name).toBe(true);
+      old++;
+    }
+    expect(old).toBe(3);
+  });
+
+  it("the file's prose states the rules SC1 builds against: the 64 cap with the OLDEST dropped, clearing on a 2xx only, validation before buffering, the FIRST start kept, the clock skew in minutes (AIRING_CLOCK_SKEW_MS), kept out of the beat stores; `at` is UTC `Z`", () => {
+    const beat = defOf(contract(), "heartbeat");
+    const prose = propOf(beat, AIRINGS_FIELD).description as string;
+    let rules = 0;
+    for (const words of [`at most ${AIRINGS_MAX}`, "OLDEST", "2xx", "Validate each item", "FIRST", `${AIRING_CLOCK_SKEW_MS / 60_000} minutes`, "not kept with the beat"]) {
+      expect(prose, words).toContain(words);
+      rules++;
+    }
+    expect(rules).toBe(7);
+    // The prose reached the items too (the generator walks into the array): `at` names its zone rule.
+    const startBranch = ((propOf(beat, AIRINGS_FIELD).anyOf as Json[]).find((b) => b.type === "array")!.items as Json).oneOf as Json[];
+    expect(startBranch).toHaveLength(2);
+    for (const branch of startBranch) expect(propOf(branch, "at").description as string).toContain("`Z`");
+    expect(beat.description as string, "the beat's own prose says the list is recorded, not stored").toContain("except `airings`");
+    // SC1 review addendum: the count travels alone, is a per-process total, and restarts with the process.
+    const dropped = propOf(beat, "airingsDropped").description as string;
+    for (const words of ["with or without airings", "upper bound", "restarts"]) expect(dropped, words).toContain(words);
   });
 });
