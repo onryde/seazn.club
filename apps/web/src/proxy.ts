@@ -261,16 +261,18 @@ export const config = {
   // Run on API routes (CSRF) and all page routes (CSP), but skip Next's static
   // assets, image optimizer, and the favicon — they don't need either.
   //
-  // ONE /api path is left out: the capture record upload
-  // (`/api/v1/capture/codes/{code}/records`, spec 2026-10-12 §5). While proxy
-  // runs on a path Next buffers the whole request body — up to
-  // `proxyClientMaxBodySize`, 10 MB — before the route's own 1 MB cap, rate
-  // limit and auth. That route is Bearer-only and cookie-less, so the CSRF
-  // Origin check above guards nothing there (src/__tests__/proxy-matcher.test.ts).
-  // Both entries carry the exclusion: the second pattern matches /api paths too.
+  // TWO /api paths are left out: the capture record upload
+  // (`/api/v1/capture/codes/{code}/records`, spec 2026-10-12 §5) and the
+  // sponsor frame upload (`/api/internal/relay/sessions/{sid}/airings/{momentId}/frame`,
+  // R4 S9). While proxy runs on a path Next buffers the whole request body —
+  // up to `proxyClientMaxBodySize`, 10 MB — before the route's own cap (1 MB;
+  // 256 KiB), rate limit and auth. Both routes are Bearer-only and cookie-less,
+  // so the CSRF Origin check above guards nothing there
+  // (src/__tests__/proxy-matcher.test.ts). Both entries carry the exclusions:
+  // the second pattern matches /api paths too.
   // The values must be literals — Next reads them statically at build time.
   matcher: [
-    "/api/((?!v1/capture/codes/[^/]+/records/?$).*)",
-    "/((?!_next/static|_next/image|favicon.ico|api/v1/capture/codes/[^/]+/records/?$).*)",
+    "/api/((?!v1/capture/codes/[^/]+/records/?$|internal/relay/sessions/[^/]+/airings/[^/]+/frame/?$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/v1/capture/codes/[^/]+/records/?$|api/internal/relay/sessions/[^/]+/airings/[^/]+/frame/?$).*)",
   ],
 };

@@ -6,6 +6,10 @@
 // (the CSRF Origin check) guards nothing there; the records path alone is left out of the matcher, and every other
 // path — the other capture routes, every other /api route, every page — still runs proxy.
 //
+// R4 S9: the sponsor frame upload (`/api/internal/relay/sessions/{sid}/airings/{momentId}/frame`) is left out for the
+// same reason: a 256 KiB JPEG, Bearer-only (the relay job token) and cookie-less, whose route reads the body under its
+// own bound — which proxy's 10 MB buffering would otherwise come before.
+//
 // ONE SPORT, on purpose: not applicable — a matcher reads no sport.
 import { describe, expect, it } from "vitest";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -28,6 +32,22 @@ describe("proxy matcher (review fix 5)", () => {
     expect(checked).toBe(3);
   });
 
+  it("R4 S9: the sponsor frame upload — SC2's percent-encoded break and scene ids, with or without a trailing slash — never runs proxy", () => {
+    const sid = "0b5f6f1e-8c8e-4c1a-9a51-6f1d2b3c4d5e";
+    const skipped = [
+      `/api/internal/relay/sessions/${sid}/airings/12%3Asponsor.over_end/frame`,
+      `/api/internal/relay/sessions/${sid}/airings/12%3Asponsor.over_end/frame/`,
+      `/api/internal/relay/sessions/${sid}/airings/scene%3Astarting%3A173000000/frame`,
+      `/api/internal/relay/sessions/${sid}/airings/a%2Fb/frame`,
+    ];
+    let checked = 0;
+    for (const url of skipped) {
+      expect(runs(url), url).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   it("everything else still runs it: the other capture routes, near misses of the records path, other /api routes and pages — counted", () => {
     const kept = [
       "/api/v1/capture/codes/abcdefghjkmn/beats", "/api/v1/capture/codes/abcdefghjkmn/start", "/api/v1/capture/codes/abcdefghjkmn",
@@ -41,6 +61,19 @@ describe("proxy matcher (review fix 5)", () => {
       checked++;
     }
     expect(checked).toBe(13);
+    // R4 S9's near misses: the session's other internal routes and paths that only look like the frame upload.
+    const relayKept = [
+      "/api/internal/relay/sessions/sid-1", "/api/internal/relay/sessions/sid-1/heartbeat",
+      "/api/internal/relay/sessions/sid-1/airings/12%3Asponsor.over_end", "/api/internal/relay/sessions/sid-1/airings/12%3Asponsor.over_end/frame-x",
+      "/api/internal/relay/sessions/sid-1/airings/12%3Asponsor.over_end/frame/x", "/api/internal/relay/sessions/sid-1/airings/a/b/frame",
+      "/api/internal/relay/sessions/airings/m/frame",
+    ];
+    let relayChecked = 0;
+    for (const url of relayKept) {
+      expect(runs(url), url).toBe(true);
+      relayChecked++;
+    }
+    expect(relayChecked).toBe(7);
     // Next's own exclusions stay excluded.
     expect(runs("/_next/static/chunk.js")).toBe(false);
     expect(runs("/favicon.ico")).toBe(false);
