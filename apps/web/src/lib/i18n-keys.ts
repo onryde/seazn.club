@@ -5311,6 +5311,7 @@ export type DictionaryKey =
   | "progression.rosterDrift.rebuildCta"
   | "progression.rosterDrift.rebuilding"
   | "progression.rosterDrift.rebuiltNotice"
+  | "progression.rosterDrift.rebuiltSlots"
   | "progression.rosterDrift.sheetsStop"
   | "progression.rosterDrift.swissHeading"
   | "progression.rosterDrift.swissLabel"

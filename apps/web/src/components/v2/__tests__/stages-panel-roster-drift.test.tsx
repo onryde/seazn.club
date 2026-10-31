@@ -13,6 +13,7 @@ import {
   attachmentWarning,
   classifyActError,
   rebuildBlockedMessage,
+  rebuiltNotice,
 } from "@/components/v2/stages-panel";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg } from "@/lib/messages";
@@ -309,3 +310,38 @@ describe("classifyActError — amber vs red, and whether the board is stale", ()
     expect(frOut.text).not.toBe(out.text);
   });
 });
+
+// W3 T1 (X-RB-1, #840): Rebuild keeps every time and court whose position
+// survives, and reports what did NOT survive. The notice says so only when
+// something moved off a slot — a rebuild that kept everything (or had nothing
+// laid out) stays the one-line "Rebuilt" it always was.
+describe("rebuiltNotice — what a Rebuild did to the stage's times and courts", () => {
+  const rebuilt = (removed: number, slots: { kept: number; freed: number; unscheduled: number }) => ({ removed, slots });
+
+  it("X-RB-1 says N slots kept, M freed, K unscheduled when anything was freed or left unscheduled", () => {
+    const out = rebuiltNotice(rebuilt(6, { kept: 5, freed: 1, unscheduled: 2 }), msg);
+    expect(out).toBe("Rebuilt — 6 fixture(s) replaced. 5 slot(s) kept, 1 freed, 2 unscheduled.");
+  });
+
+  it("speaks up for unscheduled alone, and for freed alone", () => {
+    expect(rebuiltNotice(rebuilt(3, { kept: 0, freed: 0, unscheduled: 3 }), msg)).toContain("0 slot(s) kept, 0 freed, 3 unscheduled.");
+    expect(rebuiltNotice(rebuilt(4, { kept: 3, freed: 1, unscheduled: 0 }), msg)).toContain("3 slot(s) kept, 1 freed, 0 unscheduled.");
+  });
+
+  it("stays the plain notice when every slot was kept, and when nothing was laid out", () => {
+    const plain = msg("progression.rosterDrift.rebuiltNotice", { removed: 9 });
+    expect(rebuiltNotice(rebuilt(9, { kept: 9, freed: 0, unscheduled: 0 }), msg)).toBe(plain);
+    expect(rebuiltNotice(rebuilt(9, { kept: 0, freed: 0, unscheduled: 0 }), msg)).toBe(plain);
+  });
+
+  it("localises — every locale carries its own sentence with all three numbers", () => {
+    for (const locale of ["es", "fr", "nl"] as const) {
+      const lmsg: typeof msg = (key, vars) => msgFor(locale, key, vars);
+      const out = rebuiltNotice(rebuilt(6, { kept: 5, freed: 1, unscheduled: 2 }), lmsg);
+      const en = rebuiltNotice(rebuilt(6, { kept: 5, freed: 1, unscheduled: 2 }), msg);
+      expect(out, locale).not.toBe(en);
+      expect(out, locale).toMatch(/5\D+1\D+2/);
+    }
+  });
+});
+

@@ -781,11 +781,11 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     setGameExists(false);
     setBusy(stageId);
     try {
-      const out = await apiV1<{ created: number; existing: number; removed: number }>(
+      const out = await apiV1<{ created: number; existing: number } & RebuiltOutcome>(
         `/api/v1/stages/${stageId}/rebuild`,
         { method: "POST", json: {} },
       );
-      setNotice(msg("progression.rosterDrift.rebuiltNotice", { removed: out.removed }));
+      setNotice(rebuiltNotice(out, msg));
       router.refresh();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
@@ -1844,6 +1844,27 @@ export function reshapeNotice(
   return reshaped.matches_removed > 0
     ? `${head} ${msg("schedule.notice.reshapedSlotsCleared")}`
     : head;
+}
+
+/** The part of POST /stages/{id}/rebuild's answer the notice reads (`RebuildResult`, schemas.ts). */
+export interface RebuiltOutcome {
+  removed: number;
+  slots: { kept: number; freed: number; unscheduled: number };
+}
+
+/**
+ * W3 T1 (X-RB-1, #840): the notice after a Rebuild. A rebuild keeps every time
+ * and court whose (pool, round, seq) survives, so the organiser is told what
+ * did NOT survive — slots freed because their position is gone, and fixtures
+ * at a new position with nothing to inherit — but only when there is such a
+ * thing. A rebuild that kept every slot, or had none laid out, stays the
+ * one-line notice it always was. Exported pure, like the classifiers below.
+ */
+export function rebuiltNotice(out: RebuiltOutcome, msg: Msg): string {
+  const head = msg("progression.rosterDrift.rebuiltNotice", { removed: out.removed });
+  const { kept, freed, unscheduled } = out.slots;
+  if (freed + unscheduled === 0) return head;
+  return `${head} ${msg("progression.rosterDrift.rebuiltSlots", { kept, freed, unscheduled })}`;
 }
 
 export function rebuildBlockedMessage(err: unknown, msg: Msg): string | null {

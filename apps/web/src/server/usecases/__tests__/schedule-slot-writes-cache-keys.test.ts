@@ -1033,24 +1033,27 @@ describe.skipIf(!HAS_DB)("a restore or rebuild that fails part-way still publish
     await expectDelThenPushes(rig.divisionId, competitionId, moved);
   }, 120_000);
 
-  it("rebuild whose regenerate throws after the delete committed: the error propagates, and the deleted fixtures ride the hub key's one DEL after commit; pushes wait for it", async () => {
+  // W3 T1 (FX-G13, X-RB-1): this case used to pin the split — the delete
+  // committed in its own transaction, so a regenerate that threw left an EMPTY
+  // stage whose deleted ids rode the DEL. The delete and the regenerate are now
+  // ONE transaction: the regenerate's lock is the second statement of it, and
+  // its failure takes the delete down with it. Nothing committed, so nothing is
+  // published either.
+  it("rebuild whose regenerate throws: the error propagates, the delete rolls back with it (FX-G13), and nothing is sent", async () => {
     const { auth } = await seedOrg();
     const rig = await divisionRig(auth, { entrants: 3, start: false });
-    const competitionId = await competitionOf(rig.divisionId);
     await quiesce();
     const before = await board(rig.divisionId);
+    expect(before.size, "a board to lose").toBeGreaterThan(0);
 
     probe.hold = true;
     probe.failAtLock = 2;
     await expect(rebuildStageFixtures(auth, rig.stages[0]!.stageId), "the regenerate's error reaches the caller")
       .rejects.toBe(probe.injected);
-    expect(probe.locks, "the regenerate's transaction, after the delete's, was the one that failed").toBe(2);
-    const { moved, deleted, created } = diff(before, await board(rig.divisionId));
-    expect(deleted.length, "the delete committed: the whole old board is gone").toBe(before.size);
-    expect(deleted.length).toBeGreaterThan(0);
-    expect([moved, created], "the regenerate rolled back: nothing new on the board").toEqual([[], []]);
-
-    await expectDelThenPushes(rig.divisionId, competitionId, deleted);
+    expect(probe.locks, "the rebuild's lock, then the regenerate's — the one that failed").toBe(2);
+    expect(diff(before, await board(rig.divisionId)), "the delete rolled back: the old board stands")
+      .toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
   }, 120_000);
 });
 

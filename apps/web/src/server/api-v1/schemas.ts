@@ -2741,9 +2741,17 @@ export const GenerateStageInput = z.object({ pairing: z.enum(["fold", "rank_adja
 export type GenerateStageInput = z.infer<typeof GenerateStageInput>;
 
 /** F3 Task 5 (5b) — POST /stages/{id}/rebuild's response: GenerateResult plus
- *  how many stale fixtures were deleted before regenerating. */
+ *  how many stale fixtures were deleted before regenerating, and (W3 T1, X-RB-1)
+ *  what became of the stage's times and courts: `kept` by a rebuilt fixture at
+ *  the same (pool, round, seq), `freed` because that position is gone, and the
+ *  rebuilt fixtures left `unscheduled` at a new position. */
 export const RebuildResult = GenerateResult.extend({
   removed: z.number().int(),
+  slots: z.object({
+    kept: z.number().int(),
+    freed: z.number().int(),
+    unscheduled: z.number().int(),
+  }),
 });
 
 /** POST /stages/{id}/unpair — clears the latest seated Swiss round onto kept shells. */

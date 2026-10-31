@@ -328,6 +328,7 @@
   "progression.rosterDrift.rebuildCta": "Reconstruir enfrentamientos",
   "progression.rosterDrift.rebuilding": "Reconstruyendo…",
   "progression.rosterDrift.rebuiltNotice": "Reconstruido — {removed} enfrentamiento(s) reemplazado(s).",
+  "progression.rosterDrift.rebuiltSlots": "{kept} franja(s) conservada(s), {freed} liberada(s), {unscheduled} sin programar.",
   "progression.rosterDrift.blockedNotice": "No se puede reconstruir — esta fase ya tiene resultados registrados. Complétala tal como está, o usa Generar para añadir los participantes que faltan.",
   "progression.rosterDrift.confirmTitle": "¿Reconstruir los enfrentamientos de esta fase?",
   "progression.rosterDrift.confirmBody": "Se elimina y vuelve a generar cada enfrentamiento de esta fase a partir de la lista actual de inscritos. Esto no se puede deshacer.",

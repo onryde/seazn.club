@@ -36,6 +36,7 @@ import { stageRulesFormatSmoke } from "./suites/stageRulesFormatSmoke.ts";
 import { w2cStageRulesSuite } from "./suites/w2cStageRules.ts";
 import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
+import { w3SwissASuite } from "./suites/w3SwissA.ts";
 import { w4aTimeModelSuite } from "./suites/w4aTimeModel.ts";
 import { cricketDlsSuite } from "./suites/cricketDls.ts";
 import { configSnapshotSuite } from "./suites/configSnapshot.ts";
@@ -1242,6 +1243,11 @@ export async function main() {
   // open session on the server, so no earlier suite has one left to be ended under it. Own two fresh orgs; needs DATABASE_URL and
   // CRON_SECRET, and a server on YOUTUBE_DRIVER=fake (the smoke-e2e job's first server).
   await suite("youtubeConnect", () => youtubeConnectSuite());
+
+  // Format matrix W3 Swiss app-A: one counted check per task that owes one (T1 X-RB-1: Rebuild keeps times and courts).
+  // After youtubeConnect only because the plan places every new suite after the last one: it opens no stream session, so
+  // youtubeConnect's "last on purpose" still holds. Own fresh owner; keyless.
+  await suite("w3SwissA", () => w3SwissASuite());
 }
 
 async function smokePlanMatrix(): Promise<void> {

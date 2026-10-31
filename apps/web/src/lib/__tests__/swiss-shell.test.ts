@@ -7,6 +7,8 @@ import {
   latestSeatedSwissRound,
   latestSwissRoundWithAnySeat,
   swissRoundHasPlayedResult,
+  isSwissByeShellExtKey,
+  mintSwissBoardExtKeys,
 } from "@/lib/swiss-shell";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 
@@ -609,5 +611,64 @@ describe("swiss — rounds damaged by a deleted entrant", () => {
       ];
       expect(swissRoundHasPlayedResult(fx, 1)).toBe(false);
     });
+  });
+});
+
+// W3 app-A (controller ruling on reviewer flag R1/C10): ONE predicate for "this
+// row is a Swiss bye shell". Rebuild's `carrySlots` (T1), the reshape (T2) and
+// the bye's slot and print rules (T3) all read it, so they cannot drift onto
+// two spellings of the same fact. The shape is the one `planSwissShells` mints.
+describe("isSwissByeShellExtKey — the one bye-shell predicate", () => {
+  it("is true exactly for `sw-r{n}-bye`", () => {
+    expect(isSwissByeShellExtKey("sw-r1-bye")).toBe(true);
+    expect(isSwissByeShellExtKey("sw-r12-bye")).toBe(true);
+    // Every bye planSwissShells mints reads as one (and every board does not).
+    const plan = planSwissShells(3, 7);
+    const byes = plan.filter((p) => isSwissByeShellExtKey(p.extKey));
+    expect(byes.map((p) => p.extKey)).toEqual(["sw-r1-bye", "sw-r2-bye", "sw-r3-bye"]);
+    expect(byes.every((p) => p.bye)).toBe(true);
+    expect(plan.filter((p) => !p.bye).every((p) => !isSwissByeShellExtKey(p.extKey))).toBe(true);
+  });
+
+  it("is false for a board, an ad-hoc row, another format's key, and no key at all", () => {
+    for (const k of ["sw-r1-b1", "sw-r1-b12", "adhoc-3", "r1-m1", "pA-r1-m1", "x-bye", "sw-r-bye", "sw-r1-bye-2", "", null, undefined]) {
+      expect(isSwissByeShellExtKey(k)).toBe(false);
+    }
+  });
+});
+
+// W3 app-A (controller ruling on reviewer flag R2/C9): ONE mint rule for a new
+// Swiss board key — the largest board index the round already holds, plus one.
+// Gap-safe by construction: a reshape that kept b1, b2 and b4 mints b5, never
+// b3, so a key is never handed to a second board while the first still exists
+// (fixtures_stage_ext_key_idx is unique per stage). T2's reshape and T9's late
+// entry both import it.
+describe("mintSwissBoardExtKeys — the one board-key mint", () => {
+  it("an empty round mints from b1", () => {
+    expect(mintSwissBoardExtKeys(2, [], 3)).toEqual(["sw-r2-b1", "sw-r2-b2", "sw-r2-b3"]);
+  });
+
+  it("continues past the largest index the round holds, skipping a gap", () => {
+    expect(mintSwissBoardExtKeys(3, ["sw-r3-b1", "sw-r3-b2", "sw-r3-b4", "sw-r3-bye"], 2)).toEqual([
+      "sw-r3-b5",
+      "sw-r3-b6",
+    ]);
+  });
+
+  it("reads only the round asked about, and ignores keys that are not boards", () => {
+    expect(mintSwissBoardExtKeys(1, ["sw-r2-b9", "sw-r1-b2", "adhoc-7", null, "sw-r1-bye"], 1)).toEqual(["sw-r1-b3"]);
+  });
+
+  it("orders numerically, not as text (b10 beats b9)", () => {
+    expect(mintSwissBoardExtKeys(1, ["sw-r1-b9", "sw-r1-b10"], 1)).toEqual(["sw-r1-b11"]);
+  });
+
+  it("zero asked → nothing minted", () => {
+    expect(mintSwissBoardExtKeys(1, ["sw-r1-b1"], 0)).toEqual([]);
+  });
+
+  it("a negative or fractional count is refused by name, never a silent empty mint", () => {
+    expect(() => mintSwissBoardExtKeys(1, [], -1)).toThrow(/count/);
+    expect(() => mintSwissBoardExtKeys(1, [], 1.5)).toThrow(/count/);
   });
 });

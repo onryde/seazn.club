@@ -328,6 +328,7 @@
   "progression.rosterDrift.rebuildCta": "Rebuild fixtures",
   "progression.rosterDrift.rebuilding": "Rebuilding…",
   "progression.rosterDrift.rebuiltNotice": "Rebuilt — {removed} fixture(s) replaced.",
+  "progression.rosterDrift.rebuiltSlots": "{kept} slot(s) kept, {freed} freed, {unscheduled} unscheduled.",
   "progression.rosterDrift.blockedNotice": "Can't rebuild — this stage already has recorded results. Complete it as it stands, or use Generate to add missing entrants instead.",
   "progression.rosterDrift.confirmTitle": "Rebuild this stage's fixtures?",
   "progression.rosterDrift.confirmBody": "Every fixture in this stage is deleted and regenerated from the current roster. This can't be undone.",

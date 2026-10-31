@@ -328,6 +328,7 @@
   "progression.rosterDrift.rebuildCta": "Reconstruire les matchs",
   "progression.rosterDrift.rebuilding": "Reconstruction…",
   "progression.rosterDrift.rebuiltNotice": "Reconstruit — {removed} match(s) remplacé(s).",
+  "progression.rosterDrift.rebuiltSlots": "{kept} créneau(x) conservé(s), {freed} libéré(s), {unscheduled} non programmé(s).",
   "progression.rosterDrift.blockedNotice": "Impossible de reconstruire — cette phase a déjà des résultats enregistrés. Terminez-la telle quelle, ou utilisez Générer pour ajouter les participants manquants.",
   "progression.rosterDrift.confirmTitle": "Reconstruire les matchs de cette phase ?",
   "progression.rosterDrift.confirmBody": "Chaque match de cette phase est supprimé puis régénéré à partir des inscrits actuels. Cette action est irréversible.",

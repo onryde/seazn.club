@@ -30,6 +30,52 @@ export type SwissShellFixtureRef = {
   bye: boolean;
 };
 
+/** A bye shell's ext_key, exactly as `planSwissShells` mints it. */
+const SWISS_BYE_SHELL_EXT_KEY = /^sw-r\d+-bye$/;
+
+/** A board's ext_key, exactly as `planSwissShells` mints it; group 1 is the
+ *  round, group 2 the board index. */
+const SWISS_BOARD_EXT_KEY = /^sw-r(\d+)-b(\d+)$/;
+
+/**
+ * THE predicate for "this row is a Swiss bye shell" (W3 app-A, controller
+ * ruling on reviewer flag R1/C10 — one authority per fact). Rebuild's
+ * `carrySlots` reads it so a bye never gives or takes a slot (RB3-23), the
+ * pre-Start reshape reads it to tell the bye from the boards, and the bye's
+ * court and print rules (W3 T3) read it too. An ad-hoc row (`adhoc-N`) and
+ * every other format's key are not byes, whatever their status.
+ */
+export function isSwissByeShellExtKey(extKey: string | null | undefined): boolean {
+  return extKey != null && SWISS_BYE_SHELL_EXT_KEY.test(extKey);
+}
+
+/**
+ * THE mint rule for new Swiss board keys (W3 app-A, controller ruling on
+ * reviewer flag R2/C9): `sw-r{round}-b{K}` from the largest board index the
+ * round already holds, plus one. Gap-safe by construction: a reshape that kept
+ * b1, b2 and b4 mints b5, never b3, so a new board can never collide with a
+ * surviving one under `fixtures_stage_ext_key_idx` (unique per stage). Keys of
+ * other rounds, byes, ad-hoc rows and nulls are ignored.
+ *
+ * `count` must be a whole number of 0 or more — a caller computing a negative
+ * shortfall has a bug, and minting nothing for it would hide that.
+ */
+export function mintSwissBoardExtKeys(
+  roundNo: number,
+  existing: readonly (string | null | undefined)[],
+  count: number,
+): string[] {
+  if (!Number.isInteger(count) || count < 0) {
+    throw new RangeError(`mintSwissBoardExtKeys: count must be a whole number >= 0, got ${count}`);
+  }
+  let max = 0;
+  for (const key of existing) {
+    const m = key == null ? null : SWISS_BOARD_EXT_KEY.exec(key);
+    if (m && Number(m[1]) === roundNo) max = Math.max(max, Number(m[2]));
+  }
+  return Array.from({ length: count }, (_, i) => `sw-r${roundNo}-b${max + i + 1}`);
+}
+
 export function swissBoardsForField(entrants: number): { boards: number; bye: boolean } {
   const n = Number.isFinite(entrants) ? Math.max(0, Math.trunc(entrants)) : 0;
   const boards = Math.floor(n / 2);

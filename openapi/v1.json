@@ -24243,13 +24243,40 @@
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "slots": {
+                          "type": "object",
+                          "properties": {
+                            "kept": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "freed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "unscheduled": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kept",
+                            "freed",
+                            "unscheduled"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
                         "created",
                         "existing",
                         "fixtures",
-                        "removed"
+                        "removed",
+                        "slots"
                       ],
                       "additionalProperties": false
                     },
@@ -24304,7 +24331,12 @@
                       "byes_added": -9007199254740991,
                       "byes_removed": -9007199254740991
                     },
-                    "removed": -9007199254740991
+                    "removed": -9007199254740991,
+                    "slots": {
+                      "kept": -9007199254740991,
+                      "freed": -9007199254740991,
+                      "unscheduled": -9007199254740991
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

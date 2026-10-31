@@ -328,6 +328,7 @@
   "progression.rosterDrift.rebuildCta": "Wedstrijden herbouwen",
   "progression.rosterDrift.rebuilding": "Herbouwen…",
   "progression.rosterDrift.rebuiltNotice": "Herbouwd — {removed} wedstrijd(en) vervangen.",
+  "progression.rosterDrift.rebuiltSlots": "{kept} slot(s) behouden, {freed} vrijgegeven, {unscheduled} niet ingepland.",
   "progression.rosterDrift.blockedNotice": "Kan niet herbouwen — deze fase heeft al geregistreerde resultaten. Rond de fase af zoals ze is, of gebruik Genereren om ontbrekende deelnemers toe te voegen.",
   "progression.rosterDrift.confirmTitle": "Wedstrijden van deze fase herbouwen?",
   "progression.rosterDrift.confirmBody": "Elke wedstrijd in deze fase wordt verwijderd en opnieuw gegenereerd op basis van de huidige deelnemerslijst. Dit kan niet ongedaan worden gemaakt.",
