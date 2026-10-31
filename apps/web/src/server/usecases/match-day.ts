@@ -29,6 +29,7 @@ import type {
   MatchDayCourtState,
   MatchDayFixture,
   MatchDayQueued,
+  MatchDaySummary,
   MatchDayView,
 } from "@/lib/match-day/types";
 import { resolveVenueTz } from "@/lib/tz";
@@ -108,6 +109,8 @@ interface FixtureRow {
   round_no: number | null;
   fixture_no: number;
   headline: string | null;
+  /** `match_states.summary`, whole (jsonb). */
+  summary: MatchDaySummary | null;
   started_at: Date | null;
   /** Its call's time while the call holds; null otherwise. */
   called_at: Date | null;
@@ -207,7 +210,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
            s.status as stage_status,
            f.status, f.court_id, f.scheduled_at, f.home_entrant_id, f.away_entrant_id,
            h.display_name as home, a.display_name as away, f.round_no, f.fixture_no,
-           ms.summary->>'headline' as headline,
+           ms.summary->>'headline' as headline, ms.summary,
            (select min(se.recorded_at) from score_events se where se.fixture_id = f.id and se.type = 'core.start') as started_at,
            ${liveCallOf(tx`f.id`)} as called_at
       from fixtures f
@@ -367,7 +370,10 @@ function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">)
     stage_label: r.stage_name,
     home: r.home,
     away: r.away,
+    home_entrant_id: r.home_entrant_id,
+    away_entrant_id: r.away_entrant_id,
     headline: r.headline,
+    summary: r.summary ?? null,
     started_at: r.status === IN_PLAY ? iso(r.started_at) : null,
     called_at: iso(r.called_at),
     stream: streams[r.id] ?? null,

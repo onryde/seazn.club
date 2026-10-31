@@ -1644,7 +1644,17 @@ export const MatchDayFixture = z.object({
   stage_label: z.string(),
   home: z.string().nullable(),
   away: z.string().nullable(),
+  home_entrant_id: Uuid.nullable(),
+  away_entrant_id: Uuid.nullable(),
   headline: z.string().nullable(),
+  // `match_states.summary`, the shape PublicFixtureSummarySchema declares (defined further down this module, so restated).
+  summary: z
+    .object({
+      headline: z.string().optional(),
+      perSide: z.array(z.object({ entrantId: z.string(), line: z.string() })).optional(),
+      detail: z.unknown().optional(),
+    })
+    .nullable(),
   started_at: z.iso.datetime({ offset: true }).nullable(),
   called_at: z.iso.datetime({ offset: true }).nullable(),
   stream: z.enum(["live", "waiting"]).nullable(),

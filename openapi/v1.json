@@ -3236,10 +3236,70 @@
                                           }
                                         ]
                                       },
+                                      "home_entrant_id": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "away_entrant_id": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
                                       "headline": {
                                         "anyOf": [
                                           {
                                             "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "summary": {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "headline": {
+                                                "type": "string"
+                                              },
+                                              "perSide": {
+                                                "type": "array",
+                                                "items": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "entrantId": {
+                                                      "type": "string"
+                                                    },
+                                                    "line": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "entrantId",
+                                                    "line"
+                                                  ],
+                                                  "additionalProperties": false
+                                                }
+                                              },
+                                              "detail": {}
+                                            },
+                                            "additionalProperties": false
                                           },
                                           {
                                             "type": "null"
@@ -3295,7 +3355,10 @@
                                       "stage_label",
                                       "home",
                                       "away",
+                                      "home_entrant_id",
+                                      "away_entrant_id",
                                       "headline",
+                                      "summary",
                                       "started_at",
                                       "called_at",
                                       "stream"
@@ -3381,10 +3444,70 @@
                                         }
                                       ]
                                     },
+                                    "home_entrant_id": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "away_entrant_id": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
                                     "headline": {
                                       "anyOf": [
                                         {
                                           "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "summary": {
+                                      "anyOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "headline": {
+                                              "type": "string"
+                                            },
+                                            "perSide": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "entrantId": {
+                                                    "type": "string"
+                                                  },
+                                                  "line": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "entrantId",
+                                                  "line"
+                                                ],
+                                                "additionalProperties": false
+                                              }
+                                            },
+                                            "detail": {}
+                                          },
+                                          "additionalProperties": false
                                         },
                                         {
                                           "type": "null"
@@ -3450,7 +3573,10 @@
                                     "stage_label",
                                     "home",
                                     "away",
+                                    "home_entrant_id",
+                                    "away_entrant_id",
                                     "headline",
+                                    "summary",
                                     "started_at",
                                     "called_at",
                                     "stream",
@@ -3581,7 +3707,14 @@
                           "stage_label": "example",
                           "home": "example",
                           "away": "example",
+                          "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                          "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                           "headline": "example",
+                          "summary": {
+                            "headline": null,
+                            "perSide": null,
+                            "detail": null
+                          },
                           "started_at": "2026-08-01T09:00:00Z",
                           "called_at": "2026-08-01T09:00:00Z",
                           "stream": "live"
@@ -3599,7 +3732,14 @@
                             "stage_label": "example",
                             "home": "example",
                             "away": "example",
+                            "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                            "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                             "headline": "example",
+                            "summary": {
+                              "headline": null,
+                              "perSide": null,
+                              "detail": null
+                            },
                             "started_at": "2026-08-01T09:00:00Z",
                             "called_at": "2026-08-01T09:00:00Z",
                             "stream": "live",
@@ -3872,10 +4012,70 @@
                                   }
                                 ]
                               },
+                              "home_entrant_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "away_entrant_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "headline": {
                                 "anyOf": [
                                   {
                                     "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "summary": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "headline": {
+                                        "type": "string"
+                                      },
+                                      "perSide": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "entrantId": {
+                                              "type": "string"
+                                            },
+                                            "line": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "entrantId",
+                                            "line"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "detail": {}
+                                    },
+                                    "additionalProperties": false
                                   },
                                   {
                                     "type": "null"
@@ -3931,7 +4131,10 @@
                               "stage_label",
                               "home",
                               "away",
+                              "home_entrant_id",
+                              "away_entrant_id",
                               "headline",
+                              "summary",
                               "started_at",
                               "called_at",
                               "stream"
@@ -4033,7 +4236,19 @@
                         "stage_label": "example",
                         "home": "example",
                         "away": "example",
+                        "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "headline": "example",
+                        "summary": {
+                          "headline": "example",
+                          "perSide": [
+                            {
+                              "entrantId": null,
+                              "line": null
+                            }
+                          ],
+                          "detail": null
+                        },
                         "started_at": "2026-08-01T09:00:00Z",
                         "called_at": "2026-08-01T09:00:00Z",
                         "stream": "live"

@@ -14,6 +14,13 @@ export type { NeedsYouItem, VenueNoun };
  *  - free: none of those. */
 export type MatchDayCourtState = "playing" | "called" | "free" | "in_use_elsewhere";
 
+/** `match_states.summary` as stored: the same shape the public live scoreboard reads (`LiveFixtureData.summary`). */
+export interface MatchDaySummary {
+  headline?: string;
+  perSide?: { entrantId: string; line: string }[];
+  detail?: unknown;
+}
+
 /** A match as Match Day shows it. Times are ISO instants. */
 export interface MatchDayFixture {
   id: string;
@@ -29,8 +36,15 @@ export interface MatchDayFixture {
   /** Entrant display names; null for a side still to be decided. */
   home: string | null;
   away: string | null;
+  /** The sides' entrant ids, in the same seats: the keys of `summary.perSide`, so a scoreboard names each line's side. */
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
   /** The live scoreline (`match_states.summary.headline`); null when the match has no state or its engine publishes none. */
   headline: string | null;
+  /** The engine's whole folded summary (`match_states.summary`): the headline, each side's line and the sport's detail (sets,
+   *  points, who serves, periods, innings). The playing court's scoreboard is the public match page's own `LiveScoreBody` fed
+   *  this, so every sport shows its own scorebug. Null when the match has no state yet. */
+  summary: MatchDaySummary | null;
   /** The real kick-off: the match's `core.start` score event. Null before it starts (fixtures have no start column). */
   started_at: string | null;
   /** When it was called onto its court; null unless its call still holds. */

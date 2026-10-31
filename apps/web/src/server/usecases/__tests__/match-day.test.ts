@@ -35,6 +35,7 @@ import { venueNoun } from "@/lib/venue";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
 import type { MatchDayCandidate, MatchDayCourt, MatchDayView } from "@/lib/match-day/types";
 import { rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { appendEvent } from "@/server/engine-db/append-event";
 import { createCompetition } from "../competitions";
 import { getCompetitionDesk } from "../competition-desk";
 import { createDivision, listDivisions } from "../divisions";
@@ -267,7 +268,10 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       stage_label: "League",
       home: day.comp.pairs.find((p) => p.id === f12.home)!.name,
       away: day.comp.pairs.find((p) => p.id === f12.away)!.name,
+      home_entrant_id: f12.home,
+      away_entrant_id: f12.away,
       headline: null,
+      summary: null,
       started_at: iso(5),
       called_at: null,
       stream: "live",
@@ -295,6 +299,26 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       [f34.id, 45, 65],
       [f24.id, 90, 95],
     ]);
+  });
+
+  it("a playing match carries the engine's whole folded summary and its sides' entrant ids (task A3 I1: the court's scoreboard)", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    await place(day, f12.id, 0, day.courts.c1);
+    // Through the real write path: the engine folds these and stores match_states.summary.
+    await appendEvent(day.orgId, f12.id, 0, { type: "core.start", payload: {} });
+    await appendEvent(day.orgId, f12.id, 1, { type: "generic.score", payload: { by: f12.home, points: 2 } });
+    await appendEvent(day.orgId, f12.id, 2, { type: "generic.score", payload: { by: f12.away, points: 1 } });
+
+    const current = courtOf(await getMatchDay(day.auth, day.comp.id, new Date()), day.courts.c1).current!;
+    const [stored] = await sql<{ summary: unknown }[]>`select summary from match_states where fixture_id = ${f12.id}`;
+    const summary = stored!.summary as { headline?: string; perSide?: { entrantId: string }[] };
+    // Not vacuous: the fold really published a two-sided summary.
+    expect(summary.perSide?.map((s) => s.entrantId)).toEqual([f12.home, f12.away]);
+    expect(current.summary).toEqual(summary);
+    expect(current.headline).toBe(summary.headline);
+    expect([current.home_entrant_id, current.away_entrant_id]).toEqual([f12.home, f12.away]);
   });
 
   it("what holds a court ends no earlier than now: an overrunning match holds it until now; a called match for a match length from now", async () => {
