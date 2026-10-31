@@ -469,6 +469,27 @@ describe("the competition page mounts the landing", () => {
     expect(h).toContain("Northbank Bank");
   });
 
+  // R4 S10 (spec 2026-10-27 §3.7): every tracked sponsor link on this page is
+  // a `site` click — the hero's title lockup as much as the board — so the
+  // sponsor report can tell it apart from a match page's or the stream's.
+  // Anchored on `="` (AGENTS.md): the tag must be IN the attribute.
+  it("sponsor links carry src=site on the competition page — hero and board alike (count reported)", async () => {
+    stub.hasFeature.mockResolvedValue(true);
+    stub.resolveSponsors.mockResolvedValue([
+      TITLE_SPONSOR,
+      { ...GOLD_SPONSOR, url: "https://harbour.example" },
+      { ...PARTNER_SPONSOR, url: "https://vale.example" },
+    ]);
+
+    const h = await render();
+    const hrefs = [...h.matchAll(/href="(\/s\/[^"]*)"/g)].map((m) => m[1]!);
+    expect(hrefs.sort()).toEqual(["/s/sp1?src=site", "/s/sp2?src=site", "/s/sp3?src=site"]);
+    // The title lockup is in the HERO here (the board leaves it there), and it is tagged too.
+    const hero = h.slice(h.indexOf(`data-testid="mh-hero"`), h.indexOf(`data-testid="mh-root"`));
+    expect(hero).toContain(`href="/s/sp1?src=site"`);
+    expect(h).not.toContain("src=match");
+  });
+
   it("draws no board at all when the only sponsor is the title one, which is in the hero", async () => {
     // The board owns a heading, so an empty one reads as content that failed to
     // load. It returns null instead — which is why the page may mount it

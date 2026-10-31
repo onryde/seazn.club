@@ -26,7 +26,7 @@ import uiNl from "@/dictionaries/nl/ui.json";
 import { msgFor } from "@/lib/messages-i18n";
 import { t } from "@/lib/i18n-runtime";
 import { resolveSlotLabel } from "@/lib/slot-label";
-import { toLocale } from "@/lib/i18n-constants";
+import { toLocale, type Dict } from "@/lib/i18n-constants";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 
 // Real dictionaries, not a table typed into this test (rule 19/reference_
@@ -40,6 +40,23 @@ const UI_DICTS: Record<string, Record<string, unknown>> = { en: uiEn, es: uiEs, 
 const getPublicFixture = vi.fn();
 vi.mock("@/server/public-site/data", () => ({
   getPublicFixture: (...a: unknown[]) => getPublicFixture(...a),
+}));
+
+// R4 S10 (D15 + R8) — the page reads the competition's sponsors for its board.
+// Stubbed here because this file's `baseData` ids are not uuids; the real
+// loader → resolver → board → route seam is `page-sponsors.test.ts`. The rest
+// of each module stays real (importOriginal), so no other import is starved.
+const sponsorReads = vi.hoisted(() => ({
+  resolveSponsors: vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []),
+  hasFeature: vi.fn<(...a: unknown[]) => Promise<boolean>>(async () => false),
+}));
+vi.mock("@/server/usecases/sponsors", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/sponsors")>()),
+  resolveSponsors: (...a: unknown[]) => sponsorReads.resolveSponsors(...a),
+}));
+vi.mock("@/lib/entitlements", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/entitlements")>()),
+  hasFeature: (...a: unknown[]) => sponsorReads.hasFeature(...a),
 }));
 
 // Task 14d — the page itself no longer reads `searchParams` (the ISR
@@ -854,5 +871,70 @@ describe("FixturePage — the 'Your board' island (T16)", () => {
       checked += 1;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// R4 S10 — owner rulings D15 ("the sponsor board also shows on the public match
+// page, links tagged with that fixture") and R8 (the title tier included, tiered
+// via `hasFeature`). Every href is read out of the real markup and anchored on
+// `="` (AGENTS.md): React writes the `&` as `&amp;`.
+describe("FixturePage — the match's sponsor board (R4 S10, D15 + R8)", () => {
+  const TITLE = { id: "sp-t", name: "Northbank Bank", url: "https://nb.example", logo: null, tier: "title" as const };
+  const GOLD = { id: "sp-g", name: "Harbour Motors", url: "https://harbour.example", logo: null, tier: "gold" as const };
+  const PARTNER = { id: "sp-p", name: "Vale Physio", url: "https://vale.example", logo: null, tier: "partner" as const };
+  const html = async () => renderToStaticMarkup(await render());
+  const sponsorHrefs = (h: string) => [...h.matchAll(/href="(\/s\/[^"]*)"/g)].map((m) => m[1]!);
+
+  it("reads the competition's sponsors the way the competition page does — (org, competition), tiered on that competition", async () => {
+    sponsorReads.hasFeature.mockResolvedValueOnce(true);
+    sponsorReads.resolveSponsors.mockResolvedValueOnce([]);
+    await html();
+    expect(sponsorReads.hasFeature).toHaveBeenLastCalledWith("o1", "sponsors.tiers", "c1");
+    expect(sponsorReads.resolveSponsors).toHaveBeenLastCalledWith("o1", "c1", { tiered: true });
+  });
+
+  it("the match page renders the board with links ?f=<that fixture>&src=match — the title sponsor included (count reported)", async () => {
+    sponsorReads.hasFeature.mockResolvedValueOnce(true);
+    sponsorReads.resolveSponsors.mockResolvedValueOnce([TITLE, GOLD, PARTNER]);
+    const h = await html();
+    expect(sponsorHrefs(h).sort()).toEqual([
+      "/s/sp-g?f=f1&amp;src=match",
+      "/s/sp-p?f=f1&amp;src=match",
+      "/s/sp-t?f=f1&amp;src=match",
+    ]);
+    // R8: no hero here, so the title sponsor leads the board's slab — once.
+    expect(h).toContain(`data-testid="mh-sponsors-title"`);
+    expect(h).toContain(t(publicEn as Dict, "landing.presentedBy", { sponsor: "Northbank Bank" }));
+    expect(h.match(/Northbank Bank/g)?.length).toBe(1);
+    expect(h).not.toContain("src=site");
+  });
+
+  it("puts the board below the match centre — the perimeter of the ground, not above the score", async () => {
+    sponsorReads.hasFeature.mockResolvedValueOnce(true);
+    sponsorReads.resolveSponsors.mockResolvedValueOnce([GOLD]);
+    const h = await html();
+    const centre = h.indexOf('data-testid="mc-court-card"');
+    expect(centre, "the match centre is in the markup").toBeGreaterThan(-1);
+    expect(h.indexOf('data-testid="mh-sponsors"')).toBeGreaterThan(centre);
+    expect(h.match(/data-testid="mh-sponsors"/g)?.length).toBe(1);
+  });
+
+  it("a free org: the flat strip, every row a name, still tagged with this match", async () => {
+    sponsorReads.hasFeature.mockResolvedValueOnce(false);
+    sponsorReads.resolveSponsors.mockResolvedValueOnce([{ ...TITLE, tier: "partner" as const }, { ...GOLD, tier: "partner" as const }]);
+    const h = await html();
+    expect(h).toContain(`data-testid="mh-sponsors-flat"`);
+    expect(h).not.toContain(`data-testid="mh-sponsors-title"`);
+    expect(sponsorHrefs(h).sort()).toEqual(["/s/sp-g?f=f1&amp;src=match", "/s/sp-t?f=f1&amp;src=match"]);
+  });
+
+  it("the match page renders no board when the competition has no active sponsors", async () => {
+    sponsorReads.hasFeature.mockResolvedValueOnce(true);
+    sponsorReads.resolveSponsors.mockResolvedValueOnce([]);
+    const h = await html();
+    expect(h).not.toContain('data-testid="mh-sponsors"');
+    expect(h).not.toContain(`href="/s/`);
+    // Positive pair: the page itself rendered (its headline and match centre), so this is the board being absent.
+    expect(h).toContain('data-testid="mc-court-card"');
   });
 });

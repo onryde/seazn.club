@@ -47,6 +47,9 @@ import type { MatchCentreDocT } from "@/server/public-site/match-centre-schema";
 import { decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import { linkOnlyRobots } from "@/lib/competition-listing";
 import { FORFEIT_SENTENCE_KEYS, creditsNobody as outcomeCreditsNobody } from "@/lib/forfeit-tag";
+import { hasFeature } from "@/lib/entitlements";
+import { resolveSponsors } from "@/server/usecases/sponsors";
+import { SponsorsBoard } from "@/components/public-site/sponsors-board";
 // P6 fix round 1, finding #2 (CRITICAL) — org.default_locale, same pattern
 // as data.ts:502-503 and every other public surface this fix round wires.
 // This IS a server component and getPublicFixture already carries `org`, so
@@ -259,6 +262,10 @@ export default async function FixturePage({ params }: Props) {
   const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key, data.matchCentre, dict);
   // T16 — the replay parts the player lists, and whether the club's own link still shows beside it (replay-plan.ts).
   const plan = replayPlan({ status: fixture.status, streamUrl: fixture.stream_url ?? null, parts: data.parts });
+  // R4 S10 (owner rulings D15 + R8) — the competition's sponsors, read exactly as the competition page reads them
+  // (its own two calls), so both pages show one board: tier grouping only with Pro `sponsors.tiers`.
+  const tiered = await hasFeature(org.id, "sponsors.tiers", competition.id);
+  const sponsors = await resolveSponsors(org.id, competition.id, { tiered });
 
   const jsonLd = sportsEventJsonLd({
     name: t(ui, "fixture.meta.jsonLdName", { home, away, division: division.name, competition: competition.name }),
@@ -462,6 +469,18 @@ export default async function FixturePage({ params }: Props) {
           realtime={realtime}
           dict={dict}
           replay={plan.parts.length > 0 ? <ReplayEmbed parts={plan.parts} /> : undefined}
+        />
+
+        {/* R4 S10 (owner rulings D15 + R8) — the sponsor board, below the match centre: the perimeter of the ground,
+            never above the score. Every link counts for THIS match (`?f=<fixture>&src=match`). There is no hero on
+            this page, so the title sponsor leads the board's slab (`includeTitle`). It renders nothing when the
+            competition has no active sponsors, so it is mounted unconditionally. */}
+        <SponsorsBoard
+          sponsors={sponsors}
+          tiered={tiered}
+          dict={dict}
+          clickTag={{ source: "match", fixtureId: fixture.id }}
+          includeTitle
         />
       </div>
     </DictProvider>

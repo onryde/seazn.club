@@ -61,6 +61,7 @@ import { getDictionary, plural, t } from "@/lib/i18n";
 import { hubDict } from "@/lib/hub-dict";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 import { SponsorsBoard, SponsorsHeroTitle } from "@/components/public-site/sponsors-board";
+import type { BoardClickTag } from "@/lib/sponsor-clicks";
 import { CompetitionLanding } from "@/components/public-site/matches-hub/competition-landing";
 // ONE producer for the competition's date line, shared with the Info tab that
 // renders the same two dates a tab away. Two implementations of "1 September
@@ -70,6 +71,9 @@ import { competitionDateLine } from "@/components/public-site/matches-hub/info-t
 import { ShareBar } from "@/components/share-bar";
 import { shareLabels } from "@/components/public-site/share-labels";
 import { linkOnlyRobots } from "@/lib/competition-listing";
+
+/** R4 S10: every sponsor link on this page counts as a `site` click (the match page tags its own fixture). */
+const SITE_CLICK_TAG: BoardClickTag = { source: "site" };
 
 export const revalidate = 30;
 
@@ -298,7 +302,7 @@ export default async function CompetitionHomePage({ params }: Props) {
                   construction — so no predicate is needed here and an absent
                   sponsor costs no space. The rest of the board is below the
                   tabs; `sponsors-board.tsx`'s header carries the reasoning. */}
-              <SponsorsHeroTitle sponsors={sponsors} tiered={tiered} dict={dict} />
+              <SponsorsHeroTitle sponsors={sponsors} tiered={tiered} dict={dict} clickTag={SITE_CLICK_TAG} />
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <ShareBar path={sharePath} title={hub.name} labels={shareBarLabels} />
                 {/* v13 (PROMPT-64): kiosk mode — cast this URL to any screen.
@@ -411,7 +415,7 @@ export default async function CompetitionHomePage({ params }: Props) {
           Mounted unconditionally: it returns `null` when it has nothing to draw
           — no sponsors at all, or a tiered org whose only sponsor is the title
           tier now rendered in the hero. */}
-      <SponsorsBoard sponsors={sponsors} tiered={tiered} dict={dict} />
+      <SponsorsBoard sponsors={sponsors} tiered={tiered} dict={dict} clickTag={SITE_CLICK_TAG} />
     </div>
   );
 }
