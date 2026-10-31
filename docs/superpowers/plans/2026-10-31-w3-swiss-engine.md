@@ -74,7 +74,7 @@ export interface SwissConstraints {
   lookAhead?: boolean;
   /** Task 4c (RB3-10, X-SW-11): only when pairing the stage's LAST round, the most points an entrant could hold before
    *  it ((rounds − 1) × win, in the standings' score units). An entrant whose score is over half of it is a topscorer
-   *  (FIDE C.04.3 A.6). */
+   *  (FIDE C.04.3 (1 Feb 2026) Art. 1.8). */
   finalRoundMaxScore?: number;
 }
 // SwissRound gains `nextRound?: "pairable" | "unpairable" | "unknown"`, present iff `lookAhead` was set. The app warns
@@ -446,7 +446,7 @@ it("X-SW-10 an exhausted budget during the look-ahead returns the first legal pa
 
 ---
 
-### Task 4c: Topscorer colour exception in the final round (RB3-10; FIDE C.04.3 A.6 and [C3]; X-SW-11)
+### Task 4c: Topscorer colour exception in the final round (RB3-10; FIDE C.04.3 Art. 1.8 and [C3] Art. 2.1.3; X-SW-11)
 
 **Files:**
 - Modify: `src/scheduling/swiss.ts:82-88` (`canTake`), `:181-186` (`colourLegal`), `:299-331` (`assignColours`)
@@ -456,7 +456,7 @@ it("X-SW-10 an exhausted budget during the look-ahead returns the first legal pa
 **Interfaces:**
 - Consumes: `SwissConstraints.finalRoundMaxScore?: number`. The app sets it only when pairing the stage's last round, as (rounds − 1) × the win in its pairing score units.
 - Rule (A3):
-  - A topscorer is an entrant whose score is **over** 50% of `finalRoundMaxScore` (A.6).
+  - A topscorer is an entrant whose score is **over** 50% of `finalRoundMaxScore` (Art. 1.8).
   - The hard colour limits (|W−B| ≤ 2, never three in a row; [C3] "non-topscorers with the same absolute colour preference shall not meet") bind only a board where BOTH sides are non-topscorers. A board with a topscorer is colour-legal whatever the history.
   - Assignment on an exempt board: if exactly one assignment keeps the non-topscorer within its limits, use it. Otherwise use today's preference order (`preferredColour`, the larger imbalance, the upper board).
   - When `finalRoundMaxScore` is absent, nothing changes. A value that is not finite or is ≤ 0 throws `CONFIG_INVALID`.
@@ -475,7 +475,7 @@ it("X-SW-11 two topscorers (3 > ½·4) may meet in the final round despite the s
 it("X-SW-11 two non-topscorers (1, 1) stay refused in the final round", () => {
   expect(pairRound(at(1, 1), { played: new Set(), colours: ww }, { chess: true, finalRoundMaxScore: 4 })).toMatchObject({ ok: false, reason: "colour" });
 });
-it("X-SW-11 exactly half is not a topscorer (A.6 'over 50%'): 2 and 2 of 4 are refused", …);
+it("X-SW-11 exactly half is not a topscorer (Art. 1.8 'over 50%'): 2 and 2 of 4 are refused", …);
 it("X-SW-11 a topscorer v a non-topscorer: the non-topscorer keeps its limit (b, score 1, gets Black; a takes a third White)", () => {
   const r = pairRound(at(3, 1), { played: new Set(), colours: ww }, { chess: true, finalRoundMaxScore: 4 });
   expect(r.ok && r.pairings).toEqual([{ home: "a", away: "b" }]);
@@ -492,7 +492,7 @@ it("X-SW-11 a non-finite or non-positive finalRoundMaxScore is CONFIG_INVALID", 
   - (d) Drop the "keep the non-topscorer's limit" assignment → the mixed test reds.
 - [ ] **Step 6: Write row X-SW-11:**
   - rule: "With chess colours on, in the final round of a Swiss stage a board with a topscorer (over half the maximum possible score before that round) is exempt from the colour limits; two non-topscorers with the same absolute colour preference still never meet, and on an exempt board the non-topscorer keeps its limit where it can."
-  - citation: "FIDE C.04.3 (1 Feb 2026) A.6, [C3]; rulebook RB3-10"
+  - citation: "FIDE C.04.3 (1 Feb 2026) Art. 1.8, [C3] Art. 2.1.3; rulebook RB3-10"
   - status: `signed 252 2026-10-31`
   - enforced at: `packages/engine/src/scheduling/swiss.ts`
   - proved by: `packages/engine/src/scheduling/swiss-w3.test.ts`
