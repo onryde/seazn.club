@@ -1853,12 +1853,15 @@ export interface RebuiltOutcome {
 }
 
 /**
- * W3 T1 (X-RB-1, #840): the notice after a Rebuild. A rebuild keeps every time
- * and court whose (pool, round, seq) survives, so the organiser is told what
- * did NOT survive — slots freed because their position is gone, and fixtures
- * at a new position with nothing to inherit — but only when there is such a
- * thing. A rebuild that kept every slot, or had none laid out, stays the
- * one-line notice it always was. Exported pure, like the classifiers below.
+ * W3 T1 (X-RB-1, #840): the notice after a Rebuild. A rebuild keeps every slot
+ * (time, court, venue or pin) whose (pool, round, seq) survives, so the
+ * organiser is told what did NOT survive — slots freed because no rebuilt
+ * fixture inherits them, and fixtures at a new position with nothing to
+ * inherit — but only when there is such a thing. A rebuild that kept every
+ * slot stays the one-line notice it always was, and so does one of a stage
+ * nobody laid out: the server counts `unscheduled` only when the stage had a
+ * layout (`carrySlots`), so it reports 0/0/0. Exported pure, like the
+ * classifiers below.
  */
 export function rebuiltNotice(out: RebuiltOutcome, msg: Msg): string {
   const head = msg("progression.rosterDrift.rebuiltNotice", { removed: out.removed });

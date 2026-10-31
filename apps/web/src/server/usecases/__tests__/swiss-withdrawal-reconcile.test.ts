@@ -37,7 +37,8 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant } from "../entrants";
 import { publishSchedule, startDivision } from "../schedule";
-import { addFixture, chooseDoomedBoards, createStages, generateStageFixtures, unpairSwissRound } from "../stages";
+import { addFixture, createStages, generateStageFixtures, unpairSwissRound, type SwissExistingFixture } from "../stages";
+import { chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { swissBoardsForField } from "@/lib/swiss-shell";
 import { createVenue, createCourt } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -265,11 +266,12 @@ describe("swiss — the expected-key helper matches the shipped shell naming", (
 });
 
 // W3 T2 (SW-L8, X-RB-1): which boards a shrinking pre-Start round loses. The
-// rule, from the brief: a board with no time AND no court goes first, then one
-// that is not `schedule_locked`, then the highest seq. Each key is pinned by a
+// rule: a board that holds no slot (`holdsSlot` — no time, court, venue or pin;
+// the one predicate, W3 fix round 1) goes first, then one that is not
+// `schedule_locked`, then the highest seq. Each key is pinned by a
 // case where it — and only it — changes the answer (an ordering differential),
 // so dropping any one of them reds exactly its own case.
-type Board = Parameters<typeof chooseDoomedBoards>[0][number];
+type Board = SwissExistingFixture;
 function board(seq: number, over: Partial<Board> = {}): Board {
   return {
     id: `id-b${seq}`,
@@ -282,6 +284,7 @@ function board(seq: number, over: Partial<Board> = {}): Board {
     outcome: null,
     scheduled_at: null,
     court_id: null,
+    venue_id: null,
     schedule_locked: false,
     ...over,
   };
@@ -301,9 +304,13 @@ describe("X-RB-1 chooseDoomedBoards — which boards a shrinking pre-Start round
   it("key 1: an unscheduled board goes before a higher-seq board that holds a time or a court", () => {
     const rows = [board(1, { scheduled_at: AT }), board(2, { court_id: "c" }), board(3), board(4, { scheduled_at: AT, court_id: "c" })];
     expect(doomedKeys(rows, 3)).toEqual(["sw-r2-b3"]);
-    // A court alone, and a time alone, each count as holding a slot.
-    expect(doomedKeys([board(1), board(2, { court_id: "c" })], 1)).toEqual(["sw-r2-b1"]);
-    expect(doomedKeys([board(1), board(2, { scheduled_at: AT })], 1)).toEqual(["sw-r2-b1"]);
+    // A court, a time, a venue, or a pin alone each count as holding a slot.
+    let checked = 0;
+    for (const over of [{ court_id: "c" }, { scheduled_at: AT }, { venue_id: "v" }, { schedule_locked: true }]) {
+      expect(doomedKeys([board(1), board(2, over)], 1), JSON.stringify(over)).toEqual(["sw-r2-b1"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   it("key 2: among boards that all hold a slot, an unlocked one goes before a higher-seq locked one", () => {
@@ -994,6 +1001,35 @@ describe.runIf(HAS_DB)("X-RB-1 swiss — a pre-Start reshape keeps the boards th
 
     const rows = await fixturesOf(stageId);
     // Seven ⇒ three boards and a bye: b3 went, b4 sits at seq 3, the bye at 4.
+    expect(inRound(rows, 2).map((f) => `${f.seq_in_round}:${f.ext_key}`)).toEqual([
+      "1:sw-r2-b1", "2:sw-r2-b2", "3:sw-r2-b4", "4:sw-r2-bye",
+    ]);
+    expectKept(rows, 2, laid);
+    const [gone] = await sql<{ id: string }[]>`select id from fixtures where id = ${bare.id}`;
+    expect(gone, "the unscheduled board is the one deleted").toBeUndefined();
+  });
+
+  // The brief's word is "withdraw": the status-flip departure
+  // (`withdrawEntrantCascade`, what POST /entrants/{id}/withdraw runs), not the
+  // delete the cases around it use. The field shrinks the same way, and the
+  // next press reshapes with the same choice.
+  it("X-RB-1 a pre-Start WITHDRAWAL (status flip) reshapes round 2 and keeps the pinned b4", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, stageId } = await seedSwissStage(auth, 3, 8);
+    const courts = await twoCourts(auth);
+    await generateStageFixtures(auth, stageId); // eight ⇒ four boards, no bye
+    const laid = await layOut(stageId, 2, ["sw-r2-b1", "sw-r2-b2", "sw-r2-b4"], courts);
+    const bare = inRound(await fixturesOf(stageId), 2).find((f) => f.ext_key === "sw-r2-b3")!;
+
+    const [leaving] = await sql<{ id: string }[]>`
+      select id from entrants where division_id = ${divisionId} order by seed desc limit 1`;
+    await withdrawEntrantCascade(auth, leaving!.id);
+    const [row] = await sql<{ status: string }[]>`select status from entrants where id = ${leaving!.id}`;
+    expect(row?.status, "a status flip, not a delete").toBe("withdrawn");
+    expect(await activeFieldSize(divisionId)).toBe(7);
+    await generateStageFixtures(auth, stageId);
+
+    const rows = await fixturesOf(stageId);
     expect(inRound(rows, 2).map((f) => `${f.seq_in_round}:${f.ext_key}`)).toEqual([
       "1:sw-r2-b1", "2:sw-r2-b2", "3:sw-r2-b4", "4:sw-r2-bye",
     ]);

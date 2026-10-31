@@ -141,7 +141,7 @@ import {
   type SlotLabel,
 } from "./stage-seeding";
 import { fixtureEvidenceSql, fixtureHasResultSql } from "./fixture-results-sql";
-import { carrySlots } from "@/lib/rebuild-slots";
+import { carriedSlotCounts, carrySlots, chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { firstOwnFormat, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
 
 type Tx = postgres.TransactionSql;
@@ -1231,47 +1231,13 @@ export type SwissExistingFixture = {
   away_entrant_id: string | null;
   outcome: unknown;
   /** W3 T2 (SW-L8): the slot a shrinking pre-Start round weighs before it
-   *  deletes a board (`chooseDoomedBoards`). postgres.js parses `timestamptz`
-   *  into a Date. */
+   *  deletes a board (`chooseDoomedBoards`, lib/rebuild-slots.ts — the same
+   *  order Rebuild's carry uses). postgres.js parses `timestamptz` into a Date. */
   scheduled_at: Date | string | null;
   court_id: string | null;
+  venue_id: string | null;
   schedule_locked: boolean;
 };
-
-/**
- * W3 T2 (SW-L8, X-RB-1; spec §4 "Before Start" inherits G3): which of a
- * round's BOARD shells a shrinking pre-Start reshape deletes, and where the
- * rest sit. The surplus is chosen so an organiser's advance layout survives:
- * a board with no time AND no court goes first, then one that is not
- * `schedule_locked`, then the highest `seq_in_round` (the old rule, now the
- * last tie-break). Survivors keep their id and `ext_key`, in their prior seq
- * order, re-packed to `seq_in_round` 1..keep.
- *
- * Board rows only: a bye shell is never a board, and is refused by name.
- */
-export function chooseDoomedBoards(
-  rows: readonly SwissExistingFixture[],
-  keep: number,
-): { survivors: SwissExistingFixture[]; doomed: SwissExistingFixture[] } {
-  if (!Number.isInteger(keep) || keep < 0) {
-    throw new RangeError(`chooseDoomedBoards: keep must be a whole number >= 0, got ${keep}`);
-  }
-  const bye = rows.find((r) => isSwissByeShellExtKey(r.ext_key));
-  if (bye) throw new RangeError(`chooseDoomedBoards: ${bye.ext_key} is a bye shell, not a board`);
-  const inOrder = [...rows].sort((a, b) => a.seq_in_round - b.seq_in_round);
-  const holdsSlot = (r: SwissExistingFixture) => r.scheduled_at !== null || r.court_id !== null;
-  const doomOrder = [...inOrder].sort(
-    (a, b) =>
-      Number(holdsSlot(a)) - Number(holdsSlot(b)) ||
-      Number(a.schedule_locked) - Number(b.schedule_locked) ||
-      b.seq_in_round - a.seq_in_round,
-  );
-  const doomedIds = new Set(doomOrder.slice(0, Math.max(0, inOrder.length - keep)).map((r) => r.id));
-  return {
-    survivors: inOrder.filter((r) => !doomedIds.has(r.id)).map((r, i) => ({ ...r, seq_in_round: i + 1 })),
-    doomed: inOrder.filter((r) => doomedIds.has(r.id)),
-  };
-}
 
 type SwissGenResult = {
   gen: GenFixture[];
@@ -1716,10 +1682,12 @@ interface SwissRoundReconcile {
  * `apps/web/e2e/swiss-shell.spec.ts` pins a TBD shell's `scheduled_at` and
  * asserts it survives Pair and re-Pair. Recreating the round would change
  * fixture ids and discard `scheduled_at` / `court_id`, silently losing an
- * organiser's advance layout. So only the DELTA moves: surplus boards go from
- * the highest `seq_in_round` down, only the shortfall is minted, and the bye
- * shell is added or removed exactly as parity requires. Surviving rows keep
- * their ids and their slots. `swissBoardsForField` is the one authority for
+ * organiser's advance layout. So only the DELTA moves: the surplus boards are
+ * the ones holding the least (`chooseDoomedBoards`, lib/rebuild-slots.ts: a
+ * board with no slot first, then an unlocked one, then the highest seq — W3
+ * T2, SW-L8), survivors are re-packed to seq 1..n, only the shortfall is
+ * minted (`mintSwissBoardExtKeys`), and the bye shell is added or removed
+ * exactly as parity requires. Surviving rows keep their ids and their slots. `swissBoardsForField` is the one authority for
  * the shape — shared with `planSwissShells`, so the mint and the reconcile can
  * never drift onto different arithmetic.
  *
@@ -1729,10 +1697,11 @@ interface SwissRoundReconcile {
  * round; after Start it is only the round being paired. Either way this
  * function reshapes exactly the round it was handed, under the same guards.
  *
- * GUARDS. The advisory lock is already held — `generateStageFixturesWrite`
- * takes `pg_advisory_xact_lock` before it reads either the entrant list or
- * `existing` — so everything below is read UNDER the lock, which is this
- * file's stated convention. Three arms on the round, none covering for another: the round
+ * GUARDS. The advisory lock is already held — `generateStageFixturesTx` (the
+ * one caller, through `swissGen`) takes `pg_advisory_xact_lock` before it reads
+ * either the entrant list or `existing`, in Generate's transaction or inside
+ * Rebuild's one transaction — so everything below is read UNDER the lock,
+ * which is this file's stated convention. Three arms on the round, none covering for another: the round
  * must be wholly unseated, must show no played status or award, and must carry
  * no recorded match data under the CANONICAL `fixtureEvidenceSql` (not a
  * subset — a subset guard on a destructive path is how C1 happened). A
@@ -1884,6 +1853,7 @@ async function reconcileSwissRoundShells(
       outcome: null,
       scheduled_at: null,
       court_id: null,
+      venue_id: null,
       schedule_locked: false,
     });
   }
@@ -2474,7 +2444,7 @@ export async function unseatSwissRoundsSeatingEntrant(
   for (const { stage_id, round_no } of rounds) {
     const inRound = await tx<SwissExistingFixture[]>`
       select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
-             scheduled_at, court_id, schedule_locked
+             scheduled_at, court_id, venue_id, schedule_locked
       from fixtures where stage_id = ${stage_id} and round_no = ${round_no}`;
     if (swissRoundHasPlayedResult(inRound, round_no)) {
       throw new EngineError(
@@ -2521,7 +2491,7 @@ export async function unpairSwissRound(
 
     const existing = await tx<SwissExistingFixture[]>`
       select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
-             scheduled_at, court_id, schedule_locked
+             scheduled_at, court_id, venue_id, schedule_locked
       from fixtures where stage_id = ${stageId}`;
 
     // PARTLY seated counts (2026-09-22). This used to ask for a WHOLLY seated
@@ -2846,7 +2816,7 @@ export async function generateStageFixturesTx(
 
   const existing = await tx<SwissExistingFixture[]>`
     select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
-           scheduled_at, court_id, schedule_locked
+           scheduled_at, court_id, venue_id, schedule_locked
     from fixtures where stage_id = ${stageId}`;
 
   let swissSeatedCount = 0;
@@ -3403,9 +3373,10 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
 export interface RebuildOutcome extends GenerateOutcome {
   /** Fixtures deleted before regenerating (0 only when the stage had none). */
   removed: number;
-  /** W3 T1 (X-RB-1): what became of the stage's times and courts (`carrySlots`). `kept` — slots a rebuilt fixture
-   *  inherited at its old position; `freed` — slots whose position is gone, so the time or court is no longer used;
-   *  `unscheduled` — rebuilt fixtures at a new position, with nothing to inherit. */
+  /** W3 T1 (X-RB-1): what became of the stage's slots (`carrySlots`; a slot is a time, a court, a venue or a pin —
+   *  `holdsSlot`). `kept` — slots a rebuilt fixture inherited at its old position (a shrinking Swiss round keeps the
+   *  boards `chooseDoomedBoards` keeps); `freed` — slots no rebuilt fixture inherits; `unscheduled` — rebuilt fixtures
+   *  at a new position with nothing to inherit, counted only when the stage had a layout. */
   slots: { kept: number; freed: number; unscheduled: number };
 }
 
@@ -3424,7 +3395,9 @@ export interface RebuildOutcome extends GenerateOutcome {
  * first, so a regenerate that threw left the organiser an EMPTY stage; now the
  * old board survives any refusal with its times and courts. And the rebuilt
  * fixtures inherit those times and courts by POSITION — `(pool, round, seq)`,
- * `carrySlots` — instead of every one of them being wiped (#840). Only the
+ * `carrySlots`; a shrinking Swiss round keeps the boards `chooseDoomedBoards`
+ * keeps, the pre-Start reshape's own order — instead of every one of them
+ * being wiped (#840). Only the
  * work that has always followed a commit (the publish, the table refold, the
  * revalidation, analytics) runs after it.
  *
@@ -3638,7 +3611,7 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     return {
       generated: { ...generated, outcome: { ...generated.outcome, fixtures } },
       removedIds: deleted.map((row) => row.id),
-      slots: { kept: carry.assign.size, freed: carry.freed.length, unscheduled: carry.unscheduled.length },
+      slots: carriedSlotCounts(carry),
     };
   });
 

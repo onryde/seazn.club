@@ -175,7 +175,37 @@ describe.skipIf(!HAS_DB)("X-RB-1 Rebuild keeps times and courts", () => {
     expect(out.slots).toEqual({ kept: 9, freed: 0, unscheduled: 0 });
   });
 
-  it("X-RB-1 a Swiss Rebuild that shrinks a round frees the last board's slot, and the new bye never takes it", async () => {
+  // W3 fix round 1 (controller ruling): a Rebuild that SHRINKS a Swiss round
+  // dooms boards in the pre-Start reshape's order (`chooseDoomedBoards`), not
+  // by seq. b4 holds a slot and b3 does not, so b4's slot lands on the new b3
+  // and nothing is freed — the positional carry used to free b4's slot here
+  // while the bare b3 kept its (empty) place.
+  it("X-RB-1 a shrinking Swiss Rebuild keeps the pinned b4's slot when the bare b3 is the board that goes", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrants } = await seedDivision(auth, BADMINTON, 8); // four boards a round
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 }, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const { venueId, courts } = await twoCourts(auth);
+    const round1 = (await rowsOf(stage!.id)).filter((r) => r.round_no === 1);
+    const pick = (key: string) => round1.find((r) => r.ext_key === key)!;
+    // layOut pins its first row (b1); b2 and b4 hold a time and a court; b3 is bare.
+    const written = await layOut([pick("sw-r1-b1"), pick("sw-r1-b2"), pick("sw-r1-b4")], venueId, courts);
+
+    await patchEntrant(auth, entrants[7]!, { status: "withdrawn" }); // seven: three boards and a bye
+    const out = await rebuildStageFixtures(auth, stage!.id);
+
+    const after = (await rowsOf(stage!.id)).filter((r) => r.round_no === 1);
+    expect(after.map((r) => r.ext_key)).toEqual(["sw-r1-b1", "sw-r1-b2", "sw-r1-b3", "sw-r1-bye"]);
+    expect(slotOf(after[0]!)).toEqual(written.get("-|1|1"));
+    expect(slotOf(after[1]!)).toEqual(written.get("-|1|2"));
+    expect(slotOf(after[2]!), "the new b3 holds the old b4's slot").toEqual(written.get("-|1|4"));
+    expect(slotOf(after[3]!)).toEqual({ scheduled_at: null, court_id: null, venue_id: null, schedule_locked: false });
+    expect(out.slots).toEqual({ kept: 3, freed: 0, unscheduled: 0 });
+  });
+
+  it("X-RB-1 a shrinking Swiss Rebuild with every board laid out frees an unlocked board's slot, keeps the pinned b4's, and the new bye takes none", async () => {
     const { auth } = await seedOrg();
     const { divisionId, entrants } = await seedDivision(auth, BADMINTON, 8); // four boards a round
     const [stage] = await createStages(auth, divisionId, {
@@ -185,17 +215,19 @@ describe.skipIf(!HAS_DB)("X-RB-1 Rebuild keeps times and courts", () => {
     const { venueId, courts } = await twoCourts(auth);
     const round1 = (await rowsOf(stage!.id)).filter((r) => r.round_no === 1);
     expect(round1.map((r) => r.ext_key)).toEqual(["sw-r1-b1", "sw-r1-b2", "sw-r1-b3", "sw-r1-b4"]);
+    // Every board holds a slot; layOut pins every third row, so b1 and b4 are locked.
     const written = await layOut(round1, venueId, courts);
+    expect([...written.values()].map((w) => w.schedule_locked)).toEqual([true, false, false, true]);
 
     await patchEntrant(auth, entrants[7]!, { status: "withdrawn" }); // seven: three boards and a bye
     const out = await rebuildStageFixtures(auth, stage!.id);
 
     const after = (await rowsOf(stage!.id)).filter((r) => r.round_no === 1);
     expect(after.map((r) => r.ext_key)).toEqual(["sw-r1-b1", "sw-r1-b2", "sw-r1-b3", "sw-r1-bye"]);
-    for (const r of after.slice(0, 3)) expect(slotOf(r), r.ext_key!).toEqual(written.get(position(r)));
-    const bye = after[3]!;
-    expect(slotOf(bye)).toEqual({ scheduled_at: null, court_id: null, venue_id: null, schedule_locked: false });
-    // Board 4's slot has nowhere to go and is counted, never silently dropped.
+    // Unlocked first, highest seq among them: b3 goes, the locked b4 survives onto the new b3.
+    expect(after.slice(0, 3).map(slotOf)).toEqual([written.get("-|1|1"), written.get("-|1|2"), written.get("-|1|4")]);
+    expect(slotOf(after[3]!)).toEqual({ scheduled_at: null, court_id: null, venue_id: null, schedule_locked: false });
+    // b3's slot has nowhere to go and is counted, never silently dropped.
     // Round 2's boards held nothing, so they are neither kept nor unscheduled.
     expect(out.slots).toEqual({ kept: 3, freed: 1, unscheduled: 0 });
   });

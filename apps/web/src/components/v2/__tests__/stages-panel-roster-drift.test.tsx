@@ -15,6 +15,7 @@ import {
   rebuildBlockedMessage,
   rebuiltNotice,
 } from "@/components/v2/stages-panel";
+import { carriedSlotCounts, carrySlots } from "@/lib/rebuild-slots";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
@@ -328,10 +329,33 @@ describe("rebuiltNotice — what a Rebuild did to the stage's times and courts",
     expect(rebuiltNotice(rebuilt(4, { kept: 3, freed: 1, unscheduled: 0 }), msg)).toContain("3 slot(s) kept, 1 freed, 0 unscheduled.");
   });
 
-  it("stays the plain notice when every slot was kept, and when nothing was laid out", () => {
+  it("stays the plain notice when every slot was kept", () => {
     const plain = msg("progression.rosterDrift.rebuiltNotice", { removed: 9 });
     expect(rebuiltNotice(rebuilt(9, { kept: 9, freed: 0, unscheduled: 0 }), msg)).toBe(plain);
-    expect(rebuiltNotice(rebuilt(9, { kept: 0, freed: 0, unscheduled: 0 }), msg)).toBe(plain);
+  });
+
+  // W3 fix round 1: the "nothing laid out" case is driven from an outcome
+  // SHAPED LIKE THE SERVER'S — the very `carrySlots` + `carriedSlotCounts` the
+  // Rebuild runs (stage-roster-drift.test.ts pins the same counts end to end).
+  // A 3-entrant league nobody laid out (three positions, no slot) grows to six
+  // positions: the server reports kept 0, freed 0, unscheduled 0, and the desk
+  // says nothing about slots. The positive pair: one laid-out slot, same growth.
+  it("X-RB-1 a growth rebuild of a stage nobody laid out stays the plain notice (server-shaped counts)", () => {
+    const old = [1, 2, 3].map((r) => ({
+      round_no: r, seq_in_round: 1, pool_id: null, ext_key: null,
+      scheduled_at: null, court_id: null, venue_id: null, schedule_locked: false,
+    }));
+    const grown = [1, 2, 3].flatMap((r) => [1, 2].map((q) => ({ id: `n${r}${q}`, round_no: r, seq_in_round: q, pool_id: null, ext_key: null })));
+    const slots = carriedSlotCounts(carrySlots(old, grown));
+    expect(slots).toEqual({ kept: 0, freed: 0, unscheduled: 0 });
+    expect(rebuiltNotice({ removed: 3, slots }, msg)).toBe(msg("progression.rosterDrift.rebuiltNotice", { removed: 3 }));
+
+    const laid = old.map((r, i) => (i === 0 ? { ...r, scheduled_at: "2030-06-15T09:00:00.000Z" } : r));
+    const laidSlots = carriedSlotCounts(carrySlots(laid, grown));
+    expect(laidSlots).toEqual({ kept: 1, freed: 0, unscheduled: 3 });
+    expect(rebuiltNotice({ removed: 3, slots: laidSlots }, msg)).toBe(
+      "Rebuilt — 3 fixture(s) replaced. 1 slot(s) kept, 0 freed, 3 unscheduled.",
+    );
   });
 
   it("localises — every locale carries its own sentence with all three numbers", () => {

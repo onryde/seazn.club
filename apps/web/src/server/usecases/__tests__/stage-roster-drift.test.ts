@@ -648,12 +648,13 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
     expect(out.slots).toEqual({ kept: 0, freed: 0, unscheduled: 0 });
   });
 
-  // W3 T1 (X-RB-1): the slot report on the drift path's other direction — a
-  // late registration with nobody withdrawn. Nothing was laid out, so nothing
-  // is kept or freed; every position the grown board has that the old board
-  // did not is reported unscheduled. The expected count is the set difference
-  // of the positions read back from the database, not a number from the code.
-  it("X-RB-1 a growth rebuild of an unscheduled stage reports only its new positions, as unscheduled", async () => {
+  // W3 T1 (X-RB-1) + fix round 1: the slot report on the drift path's other
+  // direction — a late registration with nobody withdrawn, on a stage nobody
+  // laid out. The board grows new positions, but every fixture was unscheduled
+  // before the rebuild and still is, so the rebuild left NOTHING unscheduled:
+  // kept 0, freed 0, unscheduled 0 — the shape the desk reads as "say nothing
+  // about slots" (stages-panel-roster-drift.test.tsx drives this same shape).
+  it("X-RB-1 a growth rebuild of a stage nobody laid out reports no slot change at all", async () => {
     const { auth } = await seedOrg();
     const { divisionId } = await seedDivision(auth, ["A", "B", "C"]);
     const [stage] = await createStages(auth, divisionId, {
@@ -670,7 +671,7 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
 
     const fresh = (await positions()).filter((p) => !before.has(p)).length;
     expect(fresh).toBeGreaterThan(0); // anti-vacuity: the board really did grow new positions
-    expect(out.slots).toEqual({ kept: 0, freed: 0, unscheduled: fresh });
+    expect(out.slots).toEqual({ kept: 0, freed: 0, unscheduled: 0 });
   });
 });
 

@@ -7,6 +7,7 @@ import {
   latestSeatedSwissRound,
   latestSwissRoundWithAnySeat,
   swissRoundHasPlayedResult,
+  isSwissBoardExtKey,
   isSwissByeShellExtKey,
   mintSwissBoardExtKeys,
 } from "@/lib/swiss-shell";
@@ -618,6 +619,19 @@ describe("swiss — rounds damaged by a deleted entrant", () => {
 // row is a Swiss bye shell". Rebuild's `carrySlots` (T1), the reshape (T2) and
 // the bye's slot and print rules (T3) all read it, so they cannot drift onto
 // two spellings of the same fact. The shape is the one `planSwissShells` mints.
+// W3 fix round 1: Rebuild's carry tells a Swiss board from everything else
+// with this, so a shrinking round's boards are chosen like the reshape's.
+describe("isSwissBoardExtKey — a Swiss board shell, nothing else", () => {
+  it("is true for sw-r{n}-b{k} and false for the bye, an ad-hoc row, another format's key, and no key", () => {
+    const yes = ["sw-r1-b1", "sw-r12-b10"];
+    const no = ["sw-r1-bye", "adhoc-3", "rr-1:1", "ko-r1-m1", "sw-r1-b", "sw-r1-b1x", "", null, undefined];
+    let checked = 0;
+    for (const k of yes) { expect(isSwissBoardExtKey(k), String(k)).toBe(true); checked++; }
+    for (const k of no) { expect(isSwissBoardExtKey(k), String(k)).toBe(false); checked++; }
+    expect(checked).toBe(11);
+  });
+});
+
 describe("isSwissByeShellExtKey — the one bye-shell predicate", () => {
   it("is true exactly for `sw-r{n}-bye`", () => {
     expect(isSwissByeShellExtKey("sw-r1-bye")).toBe(true);

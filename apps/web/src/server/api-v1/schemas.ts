@@ -2742,9 +2742,11 @@ export type GenerateStageInput = z.infer<typeof GenerateStageInput>;
 
 /** F3 Task 5 (5b) — POST /stages/{id}/rebuild's response: GenerateResult plus
  *  how many stale fixtures were deleted before regenerating, and (W3 T1, X-RB-1)
- *  what became of the stage's times and courts: `kept` by a rebuilt fixture at
- *  the same (pool, round, seq), `freed` because that position is gone, and the
- *  rebuilt fixtures left `unscheduled` at a new position. */
+ *  what became of the stage's slots (a time, a court, a venue or a pin): `kept`
+ *  by a rebuilt fixture at the same (pool, round, seq) — a shrinking Swiss round
+ *  keeps the boards that hold the most — `freed` because no rebuilt fixture
+ *  inherits them, and the rebuilt fixtures left `unscheduled` at a new position
+ *  (counted only when the stage had a layout). */
 export const RebuildResult = GenerateResult.extend({
   removed: z.number().int(),
   slots: z.object({

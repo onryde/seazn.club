@@ -49,6 +49,13 @@ export function isSwissByeShellExtKey(extKey: string | null | undefined): boolea
   return extKey != null && SWISS_BYE_SHELL_EXT_KEY.test(extKey);
 }
 
+/** A Swiss BOARD shell (`sw-r{n}-b{k}`), as opposed to the bye shell, an
+ *  ad-hoc row or another format's key. Rebuild reads it to choose which of a
+ *  shrinking round's boards keep their slots (`carrySlots`). */
+export function isSwissBoardExtKey(extKey: string | null | undefined): boolean {
+  return extKey != null && SWISS_BOARD_EXT_KEY.test(extKey);
+}
+
 /**
  * THE mint rule for new Swiss board keys (W3 app-A, controller ruling on
  * reviewer flag R2/C9): `sw-r{round}-b{K}` from the largest board index the

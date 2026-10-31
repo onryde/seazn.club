@@ -11,7 +11,7 @@
 // Every expected value below is written out by hand from the rule as the brief
 // states it, never read off `carrySlots` itself.
 import { describe, expect, it } from "vitest";
-import { carrySlots, type CarriedSlot } from "@/lib/rebuild-slots";
+import { carriedSlotCounts, carrySlots, holdsSlot, type CarriedSlot } from "@/lib/rebuild-slots";
 
 type BeforeRow = Parameters<typeof carrySlots>[0][number];
 type AfterRow = Parameters<typeof carrySlots>[1][number];
@@ -51,14 +51,26 @@ function after(
 }
 
 describe("X-RB-1 carrySlots — the empty cases first (R13)", () => {
-  it("X-RB-1 empty before → every new row unscheduled, freed = []", () => {
+  // W3 fix round 1: `unscheduled` counts only on a stage that had a layout. A
+  // stage nobody laid out was unscheduled before the rebuild and after it, so
+  // the rebuild left nothing unscheduled — and the desk says nothing about slots.
+  it("X-RB-1 empty before → nothing was laid out: nothing unscheduled, nothing freed", () => {
     const out = carrySlots([], [after("n1", 1, 1), after("n2", 1, 2), after("n3", 2, 1)]);
     expect(out.assign.size).toBe(0);
     expect(out.freed).toEqual([]);
-    expect(out.unscheduled).toEqual(["n1", "n2", "n3"]);
+    expect(out.unscheduled).toEqual([]);
   });
 
-  it("X-RB-1 empty after → every slot that held a time or court is freed, nothing assigned", () => {
+  it("X-RB-1 a growth rebuild of a stage nobody laid out reports kept 0, freed 0, unscheduled 0", () => {
+    const bare = [1, 2, 3].map((r) => before(r, 1, EMPTY));
+    const grown = [1, 2, 3].flatMap((r) => [after(`r${r}a`, r, 1), after(`r${r}b`, r, 2)]);
+    expect(carriedSlotCounts(carrySlots(bare, grown))).toEqual({ kept: 0, freed: 0, unscheduled: 0 });
+    // The positive pair: ONE slot laid out anywhere makes the new positions count.
+    const laid = [before(1, 1, slot("09")), before(2, 1, EMPTY), before(3, 1, EMPTY)];
+    expect(carriedSlotCounts(carrySlots(laid, grown))).toEqual({ kept: 1, freed: 0, unscheduled: 3 });
+  });
+
+  it("X-RB-1 empty after → every slot that held a time, court, venue or pin is freed, nothing assigned", () => {
     const a = slot("09");
     const out = carrySlots([before(1, 1, a), before(1, 2, EMPTY)], []);
     expect(out.assign.size).toBe(0);
@@ -68,6 +80,26 @@ describe("X-RB-1 carrySlots — the empty cases first (R13)", () => {
 
   it("both empty → nothing at all", () => {
     expect(carrySlots([], [])).toEqual({ assign: new Map(), freed: [], unscheduled: [] });
+  });
+});
+
+describe("X-RB-1 holdsSlot — the one \"holds a slot\" predicate", () => {
+  it("a time, a court, a venue or a pin each holds a slot alone; none of them holds nothing", () => {
+    const at = new Date("2030-06-15T09:00:00.000Z");
+    const cases: [Partial<CarriedSlot> | { scheduled_at: Date }, boolean][] = [
+      [{}, false],
+      [{ scheduled_at: "2030-06-15T09:00:00.000Z" }, true],
+      [{ scheduled_at: at }, true],
+      [{ court_id: "c" }, true],
+      [{ venue_id: "v" }, true],
+      [{ schedule_locked: true }, true],
+    ];
+    let checked = 0;
+    for (const [over, want] of cases) {
+      expect(holdsSlot({ ...EMPTY, ...over }), JSON.stringify(over)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(6);
   });
 });
 
@@ -218,6 +250,49 @@ describe("X-RB-1 carrySlots — a Swiss shell set", () => {
     expect(checked).toBe(9); // anti-vacuity: the sweep really looked at nine boards
     expect(out.freed).toEqual([slot("14"), slot("24"), slot("34")]);
     expect(out.unscheduled).toEqual([]);
+  });
+});
+
+// W3 fix round 1 (controller ruling): a Rebuild that SHRINKS a Swiss round
+// chooses which old boards keep a slot in the pre-Start reshape's order
+// (`chooseDoomedBoards`): a board holding nothing goes first, so a pinned b4
+// hands its slot to the new b3 instead of being freed beside a bare b3.
+describe("X-RB-1 carrySlots — a shrinking Swiss round dooms the bare board first", () => {
+  it("X-RB-1 b4 holds a slot and b3 does not: b4's slot lands on the new b3, and nothing is freed", () => {
+    const old = [
+      before(2, 1, slot("09"), "sw-r2-b1"),
+      before(2, 2, slot("10"), "sw-r2-b2"),
+      before(2, 3, EMPTY, "sw-r2-b3"),
+      before(2, 4, slot("12", { schedule_locked: true }), "sw-r2-b4"),
+    ];
+    const fresh = [
+      after("n1", 2, 1, "sw-r2-b1"),
+      after("n2", 2, 2, "sw-r2-b2"),
+      after("n3", 2, 3, "sw-r2-b3"),
+      after("bye", 2, 4, "sw-r2-bye"),
+    ];
+    const out = carrySlots(old, fresh);
+    expect(out.assign.get("n1")).toEqual(slot("09"));
+    expect(out.assign.get("n2")).toEqual(slot("10"));
+    expect(out.assign.get("n3")).toEqual(slot("12", { schedule_locked: true }));
+    expect(out.assign.has("bye")).toBe(false);
+    expect(carriedSlotCounts(out)).toEqual({ kept: 3, freed: 0, unscheduled: 0 });
+  });
+
+  it("every board laid out: an unlocked board goes before a locked one, and its slot is the one freed", () => {
+    const old = [1, 2, 3, 4].map((b) => before(1, b, slot(`0${b}`, { schedule_locked: b === 1 || b === 4 }), `sw-r1-b${b}`));
+    const fresh = [after("n1", 1, 1, "sw-r1-b1"), after("n2", 1, 2, "sw-r1-b2"), after("n3", 1, 3, "sw-r1-b3"), after("bye", 1, 4, "sw-r1-bye")];
+    const out = carrySlots(old, fresh);
+    expect(out.assign.get("n3")).toEqual(slot("04", { schedule_locked: true }));
+    expect(out.freed).toEqual([slot("03")]);
+  });
+
+  it("a league row is never re-packed: the same seq keeps the same slot", () => {
+    const old = [before(1, 1, slot("09")), before(1, 2, EMPTY), before(1, 3, slot("11"))];
+    const out = carrySlots(old, [after("a", 1, 1), after("b", 1, 2)]);
+    expect(out.assign.get("a")).toEqual(slot("09"));
+    expect(out.assign.has("b")).toBe(false);
+    expect(out.freed).toEqual([slot("11")]);
   });
 });
 
