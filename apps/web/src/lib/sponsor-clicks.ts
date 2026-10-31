@@ -1,9 +1,14 @@
-// Sponsor click tags (R4 sponsors on stream, spec 2026-10-27 §3.7; ruling R6). CLIENT-SAFE: imports only the short-code
-// pattern, so the overlay card (a client component) and the redirect route can both read it. S10 adds the server's
-// `recordClick` in `server/`, never here — a server import from a client file breaks the client build.
+// Sponsor click tags (R4 sponsors on stream, spec 2026-10-27 §3.7; rulings R6, R7). CLIENT-SAFE: imports only the
+// short-code pattern, so the overlay card (a client component), the public boards and the redirect route all read it.
+// The server's `recordClick` lives in `server/sponsors/clicks.ts`, never here — a server import from a client file
+// breaks the client build.
 //
-// `/s/[sponsorId]?f=<fixtureId>&src=match|stream|site` tags a click; anything else is `unknown`. The four sources are
-// the V483 CHECK on `sponsor_clicks.source` (`lib/__tests__/sponsor-clicks.test.ts` reads it back).
+// ONE route, `/s/[key]`, serves two shapes (controller addendum 2026-10-31), told apart by SHAPE alone:
+//   • a sponsor uuid — the boards' links, `/s/<sponsorId>?f=<fixtureId>&src=match|site`; an absent or unknown tag reads
+//     as `unknown`;
+//   • a short code (R7) — what the stream prints, `seazn.club/s/<code>`; the code IS the tag (that sponsor, that
+//     fixture, `stream`), so its query string is ignored.
+// The four sources are the V483 CHECK on `sponsor_clicks.source` (`lib/__tests__/sponsor-clicks.test.ts` reads it back).
 import { SPONSOR_SHORT_CODE_PATTERN } from "@/lib/sponsor-short-code";
 
 export const CLICK_SOURCES = ["match", "stream", "site", "unknown"] as const;
@@ -27,10 +32,24 @@ export function parseClickTag(q: URLSearchParams): { fixtureId: string | null; s
   };
 }
 
-/** The tracked path for a sponsor seen on a fixture's stream (§3.7). Both parts encoded, so neither can add a
- *  parameter. */
-export function streamClickPath(sponsorId: string, fixtureId: string): string {
-  return `/s/${encodeURIComponent(sponsorId)}?f=${encodeURIComponent(fixtureId)}&src=stream`;
+/** What a public board's links claim: the competition page's (`site`) or a match page's, for that match (D15). */
+export type BoardClickTag = { source: "site" } | { source: "match"; fixtureId: string };
+
+/** A board's tracked link to a sponsor. Every part encoded, so none can add a parameter or a path segment. */
+export function sponsorClickPath(sponsorId: string, tag: BoardClickTag): string {
+  const q = new URLSearchParams(tag.source === "match" ? { f: tag.fixtureId, src: "match" } : { src: "site" });
+  return `/s/${encodeURIComponent(sponsorId)}?${q.toString()}`;
+}
+
+/** Which of the route's two shapes a `/s/[key]` key is, or null for neither (the route answers 404 without a query).
+ *  The shapes cannot overlap: a uuid is 36 characters with hyphens, a code at most `SPONSOR_SHORT_CODE_MAX_LENGTH`
+ *  alphabet characters. The case rule is the short-code pattern's own (uppercase only). */
+export function classifySponsorLink(
+  key: string,
+): { kind: "sponsor"; sponsorId: string } | { kind: "code"; code: string } | null {
+  if (UUID.test(key)) return { kind: "sponsor", sponsorId: key };
+  if (SPONSOR_SHORT_CODE_PATTERN.test(key)) return { kind: "code", code: key };
+  return null;
 }
 
 /** What the card prints for a short code (R7), or null — no code, or one outside the pattern, prints nothing

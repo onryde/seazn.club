@@ -1,5 +1,5 @@
-// R4 sponsors on stream, S7 (ruling R6): the client-safe click helpers. S10 adds the server's `recordClick` beside them
-// in `server/`; the overlay card (client code) and the redirect route share these.
+// R4 sponsors on stream, S7 (ruling R6) and S10: the client-safe click helpers. The server's `recordClick` lives in
+// `server/sponsors/clicks.ts`; the overlay card (client code), the boards and the redirect route share these.
 //
 // Where the expected values come from: the click sources from the V483 CHECK on `sponsor_clicks.source` (the
 // database's own declaration, read back from the migration), the tag shape from spec 2026-10-27 §3.7
@@ -11,11 +11,16 @@ import { describe, expect, it } from "vitest";
 import {
   CLICK_SOURCES,
   SPONSOR_LINK_HOST,
+  classifySponsorLink,
   parseClickTag,
+  sponsorClickPath,
   sponsorShortLinkText,
-  streamClickPath,
 } from "../sponsor-clicks";
-import { SPONSOR_SHORT_CODE_ALPHABET, SPONSOR_SHORT_CODE_MIN_LENGTH } from "../sponsor-short-code";
+import {
+  SPONSOR_SHORT_CODE_ALPHABET,
+  SPONSOR_SHORT_CODE_MAX_LENGTH,
+  SPONSOR_SHORT_CODE_MIN_LENGTH,
+} from "../sponsor-short-code";
 
 const SPONSOR = "6f1c2b9e-1d2a-4c3b-9e8f-7a6b5c4d3e2f";
 const FIXTURE = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
@@ -68,20 +73,88 @@ describe("parseClickTag", () => {
   });
 });
 
-describe("streamClickPath", () => {
-  it("is the §3.7 shape, and parses back to the stream tag (round trip)", () => {
-    const path = streamClickPath(SPONSOR, FIXTURE);
-    expect(path).toBe(`/s/${SPONSOR}?f=${FIXTURE}&src=stream`);
+// S10: the boards' tagged links. `streamClickPath` (S7) is gone: owner ruling R7 put a SHORT CODE on the stream, so no
+// caller ever printed a uuid stream link (controller addendum 2026-10-31: superseded, an inert seam if kept).
+describe("sponsorClickPath — the boards' tagged links (S10, D15)", () => {
+  it("the competition page's tag: `?src=site`, no fixture — and it parses back to itself (round trip)", () => {
+    const path = sponsorClickPath(SPONSOR, { source: "site" });
+    expect(path).toBe(`/s/${SPONSOR}?src=site`);
     const url = new URL(path, "https://seazn.club");
-    expect(url.pathname).toBe(`/s/${SPONSOR}`);
-    expect(parseClickTag(url.searchParams)).toEqual({ fixtureId: FIXTURE, source: "stream" });
+    expect(classifySponsorLink(url.pathname.slice("/s/".length))).toEqual({ kind: "sponsor", sponsorId: SPONSOR });
+    expect(parseClickTag(url.searchParams)).toEqual({ fixtureId: null, source: "site" });
   });
 
-  it("encodes its parts: a stray character cannot add a parameter", () => {
-    const path = streamClickPath("a&src=site", "b#c");
+  it("the match page's tag: `?f=<fixture>&src=match` — and it parses back to that fixture (round trip)", () => {
+    const path = sponsorClickPath(SPONSOR, { source: "match", fixtureId: FIXTURE });
+    expect(path).toBe(`/s/${SPONSOR}?f=${FIXTURE}&src=match`);
     const url = new URL(path, "https://seazn.club");
-    expect(url.searchParams.getAll("src")).toEqual(["stream"]);
-    expect(url.searchParams.get("f")).toBe("b#c");
+    expect(parseClickTag(url.searchParams)).toEqual({ fixtureId: FIXTURE, source: "match" });
+  });
+
+  it("encodes its parts: a stray character cannot add a parameter or a path segment", () => {
+    const url = new URL(sponsorClickPath("a/b?src=site", { source: "match", fixtureId: "b&src=site#c" }), "https://seazn.club");
+    expect(url.pathname).toBe("/s/a%2Fb%3Fsrc%3Dsite");
+    expect(url.searchParams.getAll("src")).toEqual(["match"]);
+    expect(url.searchParams.get("f")).toBe("b&src=site#c");
+  });
+});
+
+// The controller addendum (2026-10-31): ONE route serves both shapes, told apart by SHAPE, never by trying both lookups.
+// Expected values come from lib/sponsor-short-code.ts's declarations (alphabet, lengths, uppercase only) and the uuid
+// grammar, never from the classifier.
+describe("classifySponsorLink — the /s/ key's shape (S10)", () => {
+  const UPPER = "6F1C2B9E-1D2A-4C3B-9E8F-7A6B5C4D3E2F";
+  /** Codes of every allowed length, cycling through the WHOLE alphabet so every character is used at least once. */
+  const codesOfEveryLength = (): string[] => {
+    const out: string[] = [];
+    let i = 0;
+    for (let len = SPONSOR_SHORT_CODE_MIN_LENGTH; len <= SPONSOR_SHORT_CODE_MAX_LENGTH; len++) {
+      for (let k = 0; k < Math.ceil(SPONSOR_SHORT_CODE_ALPHABET.length / len); k++) {
+        out.push(Array.from({ length: len }, () => SPONSOR_SHORT_CODE_ALPHABET[i++ % SPONSOR_SHORT_CODE_ALPHABET.length]).join(""));
+      }
+    }
+    return out;
+  };
+
+  it("a sponsor uuid, either case, is the sponsor-id path", () => {
+    expect(classifySponsorLink(SPONSOR)).toEqual({ kind: "sponsor", sponsorId: SPONSOR });
+    expect(classifySponsorLink(UPPER)).toEqual({ kind: "sponsor", sponsorId: UPPER });
+  });
+
+  it("every allowed length and every alphabet character is the code path (counts reported)", () => {
+    const codes = codesOfEveryLength();
+    const lengths = new Set<number>();
+    const chars = new Set<string>();
+    for (const code of codes) {
+      expect(classifySponsorLink(code), code).toEqual({ kind: "code", code });
+      lengths.add(code.length);
+      for (const c of code) chars.add(c);
+    }
+    expect(codes.length, "codes checked").toBeGreaterThan(0);
+    expect(lengths.size, "lengths covered").toBe(SPONSOR_SHORT_CODE_MAX_LENGTH - SPONSOR_SHORT_CODE_MIN_LENGTH + 1);
+    expect(chars.size, "alphabet characters covered").toBe(SPONSOR_SHORT_CODE_ALPHABET.length);
+  });
+
+  it("one character short or long of the declared lengths is neither shape: no lookup", () => {
+    const c = SPONSOR_SHORT_CODE_ALPHABET[SPONSOR_SHORT_CODE_ALPHABET.length - 1]!;
+    expect(classifySponsorLink(c.repeat(SPONSOR_SHORT_CODE_MIN_LENGTH - 1))).toBeNull();
+    expect(classifySponsorLink(c.repeat(SPONSOR_SHORT_CODE_MAX_LENGTH + 1))).toBeNull();
+  });
+
+  it("a character outside the alphabet — the misread ones, lowercase — is neither shape (counts reported)", () => {
+    const base = SPONSOR_SHORT_CODE_ALPHABET.slice(-SPONSOR_SHORT_CODE_MIN_LENGTH);
+    const outside = [..."0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"].filter((c) => !SPONSOR_SHORT_CODE_ALPHABET.includes(c));
+    for (const c of outside) expect(classifySponsorLink(c + base.slice(1)), c).toBeNull();
+    expect(outside.length, "characters outside the alphabet checked").toBeGreaterThan(0);
+    // The case rule the lib declares (uppercase only): a typed-lowercase code is refused, not folded.
+    expect(base.toLowerCase(), "premise: the code has a letter to lower").not.toBe(base);
+    expect(classifySponsorLink(base.toLowerCase())).toBeNull();
+  });
+
+  it("anything else is neither shape (the route answers 404 without a query)", () => {
+    for (const key of ["", "s", "not-a-uuid", `${SPONSOR}x`, `{${SPONSOR}}`, SPONSOR.replace(/-/g, ""), " ABCD", "AB CD", "../ABCD"]) {
+      expect(classifySponsorLink(key), JSON.stringify(key)).toBeNull();
+    }
   });
 });
 
