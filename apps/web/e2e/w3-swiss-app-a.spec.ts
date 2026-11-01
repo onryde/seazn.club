@@ -1176,7 +1176,10 @@ for (const sport of LATE_SPORTS) {
 
       const { status, body } = await addLatePlayer(page, request, r.divisionId, `LateR Zoe ${TAG}`);
       expect([status, body.error?.code]).toEqual([409, "SWISS_NO_ROUND_LEFT"]);
-      await expect(page.getByTestId("entrants-error")).toHaveText(uiEn["swiss.refusal.SWISS_NO_ROUND_LEFT"]!);
+      // 6 players × 1 round: round 2 fits (hard max 5), so the sentence names Add a round (T12 Fix round 1, review I1).
+      await expect(page.getByTestId("entrants-error")).toHaveText(
+        `${uiEn["swiss.refusal.SWISS_NO_ROUND_LEFT"]!} ${uiEn["swiss.rounds.noRoundLeft.add"]!}`,
+      );
       await expect(page.getByTestId("entrants-late-entry-line")).toHaveCount(0);
       expect(await count(), "nothing written").toBe(n);
 
@@ -1382,7 +1385,10 @@ test.describe("X-SW-17 edit rounds, then add a round after play", () => {
       const late = `RoundsLate Zoe ${TAG}`;
       const refused = await addLatePlayer(page, request, r.divisionId, late);
       expect([refused.status, refused.body.error?.code]).toEqual([409, "SWISS_NO_ROUND_LEFT"]);
-      await expect(page.getByTestId("entrants-error")).toHaveText(uiEn["swiss.refusal.SWISS_NO_ROUND_LEFT"]!);
+      // 6 players × 1 round: round 2 fits (hard max 5), so the sentence names Add a round (T12 Fix round 1, review I1).
+      await expect(page.getByTestId("entrants-error")).toHaveText(
+        `${uiEn["swiss.refusal.SWISS_NO_ROUND_LEFT"]!} ${uiEn["swiss.rounds.noRoundLeft.add"]!}`,
+      );
       const recover = page.getByTestId("entrants-add-round");
       await expect(recover, "the recovery the sentence names").toHaveText(uiEn["stage.more.addRound"]!);
       const added = page.waitForResponse((res) => res.url().endsWith(`/api/v1/stages/${r.stageId}/swiss/add-round`) && res.request().method() === "POST");

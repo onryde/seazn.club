@@ -37,6 +37,11 @@ const PLURAL = {
   en: (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(DICTS.en as unknown as Dict, key, count, "en", vars),
   fr: (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(DICTS.fr as unknown as Dict, key, count, "fr", vars),
 };
+// The chip portals its dialog to <body>; in this node harness the portal is its children, so the dialog shows in the tree.
+vi.mock("react-dom", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  createPortal: (node: unknown) => node,
+}));
 vi.mock("@/components/i18n/dict-provider", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useMsg: () => MSG[active.locale],
@@ -173,21 +178,28 @@ describe.each(LOCALES)("SwissRoundsDialog (X-SW-17, owner pick B) [%s]", (locale
     expect(d.find("stage-rounds-removed")).toBeUndefined();
   });
 
-  it("SWISS_ROUNDS_LOCKED from Save (a match started meanwhile): the rounds sentence, and Add a round beside it only when it goes through", async () => {
+  it("SWISS_ROUNDS_LOCKED from Save (a match started meanwhile): the panel's sentence, and Add a round beside it only when it goes through", async () => {
+    // The sentence is the panel's (`swissStageRefusal`, pinned per locale in stages-panel-swiss-rounds-edit.test.tsx);
+    // the dialog says the text it is handed and decides the recovery and the lock from the code and details.
+    const said = (canAddRound: boolean) => `the panel's LOCKED sentence (canAddRound ${String(canAddRound)})`;
     const locked = (canAddRound: boolean): SwissRoundsRefusal => ({
       code: "SWISS_ROUNDS_LOCKED",
       extra: { canFinish: false, canAddRound },
-      message: "server English",
+      text: said(canAddRound),
     });
     const d = open({ control: control({ field: 6, rounds: 3 }), fixtures: shells(6, 3), onSave: async () => locked(true) });
     d.press("stage-rounds-fewer");
+    expect(d.find("stage-rounds-preview"), "premise: a change is previewed").toBeDefined();
+    expect(d.disabled("stage-rounds-save"), "premise: Save is live").toBe(false);
     d.press("stage-rounds-save");
     await flush();
     expect(d.calls.closed, "a refusal keeps the dialog open").toBe(0);
-    // Phase 2 fix: only the recovery offered is named (canFinish false, canAddRound true), never "Finish now".
-    expect(textOf(d.get("stage-rounds-error"))).toContain(`${D["swiss.refusal.SWISS_ROUNDS_LOCKED"]} ${D["swiss.rounds.locked.add"]}`);
-    expect(textOf(d.get("stage-rounds-error"))).not.toContain(D["swiss.rounds.locked.finishOrAdd"]);
-    expect(textOf(d.get("stage-rounds-error")), "never the server's English").not.toContain("server English");
+    expect(textOf(d.get("stage-rounds-error"))).toContain(said(true));
+    // T12 Fix round 1 (review m4): the count is fixed now — nothing here can change it.
+    expect(d.disabled("stage-rounds-save"), "Save off after LOCKED").toBe(true);
+    expect(d.disabled("stage-rounds-fewer"), "− off after LOCKED").toBe(true);
+    expect(d.disabled("stage-rounds-more"), "+ off after LOCKED").toBe(true);
+    expect(d.find("stage-rounds-preview"), "no preview of a change that will not happen").toBeUndefined();
     expect(textOf(d.get("stage-rounds-add-round"))).toBe(D["stage.more.addRound"]);
     d.press("stage-rounds-add-round");
     await flush();
@@ -199,8 +211,32 @@ describe.each(LOCALES)("SwissRoundsDialog (X-SW-17, owner pick B) [%s]", (locale
     n.press("stage-rounds-fewer");
     n.press("stage-rounds-save");
     await flush();
-    expect(textOf(n.get("stage-rounds-error"))).toContain(`${D["swiss.refusal.SWISS_ROUNDS_LOCKED"]} ${D["swiss.rounds.locked.none"]}`);
+    expect(textOf(n.get("stage-rounds-error"))).toBe(said(false));
     expect(n.find("stage-rounds-add-round")).toBeUndefined();
+    expect(n.disabled("stage-rounds-save")).toBe(true);
+  });
+
+  it("another refusal (a frozen timetable) says its text and leaves the count editable — only LOCKED fixes it", async () => {
+    const d = open({
+      control: control({ field: 6, rounds: 3 }),
+      fixtures: shells(6, 3),
+      onSave: async () => ({ code: "SCHEDULE_LOCKED", extra: {}, text: "the panel's frozen sentence" }),
+    });
+    d.press("stage-rounds-fewer");
+    d.press("stage-rounds-save");
+    await flush();
+    expect(textOf(d.get("stage-rounds-error"))).toBe("the panel's frozen sentence");
+    expect(d.find("stage-rounds-add-round")).toBeUndefined();
+    expect(d.disabled("stage-rounds-save"), "Save stays live: unfreeze, then save again").toBe(false);
+    expect(d.disabled("stage-rounds-more")).toBe(false);
+    expect(d.find("stage-rounds-preview")).toBeDefined();
+  });
+
+  it("a dialog opened on a read that says started (the desk refreshed) is fixed from the start", () => {
+    const d = open({ control: control({ field: 6, rounds: 3, started: true }), fixtures: shells(6, 3) });
+    expect(d.disabled("stage-rounds-save")).toBe(true);
+    expect(d.disabled("stage-rounds-fewer")).toBe(true);
+    expect(d.disabled("stage-rounds-more")).toBe(true);
   });
 });
 
@@ -227,6 +263,30 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
     expect(fixed).toMatch(/^<span[^>]*data-testid="stage-rounds"[^>]*data-state="fixed"/);
     expect(fixed).toContain(fill(D["stage.rounds.chip"]!, { n: 5 }));
     expect(fixed, "nothing to edit once play starts").not.toContain(`>${D["stage.rounds.edit"]}<`);
+  });
+
+  it("a dialog open when the desk refreshes to started stays open over the fixed chip, and closes back to the chip (review m4)", () => {
+    const g = globalThis as { document?: unknown };
+    const had = "document" in g;
+    g.document = {};
+    try {
+      const before = rail(control({ field: 6, rounds: 3 }));
+      const chip = renderIsland(SwissRoundsChip, { stageId: "s1", busy: null, rail: before, onOpen: () => {} });
+      const find = (id: string) => chip.tree().find((e) => propsOf(e)["data-testid"] === id);
+      const dialog = () => chip.tree().find((e) => e.type === SwissRoundsDialog);
+      (propsOf(find("stage-rounds")!).onClick as () => void)();
+      expect(dialog(), "premise: the dialog opened").toBeDefined();
+      chip.rerender({ stageId: "s1", busy: null, rail: rail(control({ field: 6, rounds: 3, started: true })), onOpen: () => {} });
+      expect(propsOf(find("stage-rounds")!)["data-state"], "the chip is fixed now").toBe("fixed");
+      expect(dialog(), "and the dialog is still open over it").toBeDefined();
+      expect((propsOf(dialog()!).control as SwissRoundControl).started, "reading the refreshed control").toBe(true);
+      (propsOf(dialog()!).onClose as () => void)();
+      expect(dialog(), "closed").toBeUndefined();
+      expect(propsOf(find("stage-rounds")!)["data-state"]).toBe("fixed");
+    } finally {
+      if (had) g.document = undefined;
+      else delete g.document;
+    }
   });
 
   it("pressing the chip asks the rail to close its phone sheet first", () => {

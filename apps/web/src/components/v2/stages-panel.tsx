@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ruleRefusalText } from "@/lib/rule-errors";
+import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
 import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches-refusal";
 import { rulesWriteErrorText } from "@/lib/config-issue-copy";
@@ -683,7 +684,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // W3 T12 Phase 2 (X-SW-17, BG-SW-1) — the Swiss stage writes outside `act`: the rounds dialog's Save, "Add a round"
   // (the rail's More item, and the recovery a SWISS_ROUNDS_LOCKED refusal offers in the dialog) and the chess switch.
   // Each resolves null when it landed (said in the notice channel, the page refreshed), else the refusal; `report` says
-  // it in this panel's own error line too — false when the dialog says it inside itself.
+  // it in this panel's own error line too — false when the dialog says it inside itself. A refusal refreshes the page as
+  // well (T12 Fix round 1, review m4): these doors offer only what the desk's last read says goes through, so a server
+  // refusal means that read is stale — after a LOCKED answer the chip turns fixed and More offers Add a round.
   async function swissStageWrite(
     stageId: string,
     write: () => Promise<string>,
@@ -699,13 +702,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       router.refresh();
       return null;
     } catch (err) {
-      const refusal: SwissRoundsRefusal =
-        err instanceof ApiV1Error
-          ? { code: err.code, extra: err.extra, message: err.message }
-          : { code: "", extra: {}, message: err instanceof Error ? err.message : "Failed" };
-      if (report) {
-        setError(isSwissRefusalCode(refusal.code) ? swissRefusalText(refusal.code, refusal.extra, msg, msgPlural) : refusal.message);
-      }
+      const refusal = swissStageRefusal(err, msg, msgPlural, locale);
+      if (report) setError(refusal.text);
+      if (err instanceof ApiV1Error) router.refresh();
       return refusal;
     } finally {
       setBusy(null);
@@ -716,13 +715,20 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     swissStageWrite(
       stageId,
       async () => {
-        const out = await apiV1<{ rounds: number; swiss_rounds: SwissRoundsNotice | null }>(`/api/v1/stages/${stageId}`, {
+        const out = await apiV1<{
+          rounds: number;
+          swiss_rounds: SwissRoundsNotice | null;
+          shells?: { slots_freed?: number };
+        }>(`/api/v1/stages/${stageId}`, {
           method: "PATCH",
           json: { rounds },
         });
         // Above the safe maximum: the same amber caution a Generate's answer carries (T11).
         setWarning(out.swiss_rounds ? swissRoundsWarnNotice(out.swiss_rounds, msgPlural) : null);
-        return msgPlural("schedule.notice.roundsSaved", out.rounds);
+        // T12 Fix round 1 (review m3): removed rounds that held a time or court free it — said, as a Rebuild says it.
+        const freed = out.shells?.slots_freed ?? 0;
+        const saved = msgPlural("schedule.notice.roundsSaved", out.rounds);
+        return freed > 0 ? `${saved} ${msgPlural("schedule.notice.roundsSlotsFreed", freed)}` : saved;
       },
       false,
     );
@@ -2176,6 +2182,23 @@ export function undoRefusalMessage(err: unknown, msg: Msg): string {
   // W3 T5 (X-SW-28): Undo of Pair next over a started round, or across an undo barrier.
   if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) return msg(swissRefusalKey(err.code));
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
+}
+
+/** W3 T12 Fix round 1 (review m1): a refused Swiss stage write — the rounds dialog's Save, Add a round, the chess switch
+ *  — in the reader's language, never the server's English sentence: a Swiss refusal with what to do next
+ *  (`swissRefusalText`), a frozen timetable (SCHEDULE_LOCKED — the freeze lives on the division's Schedule page), and
+ *  anything else through this panel's own classifier (a rule lock such as FIXTURE_HAS_OWN_FORMAT, STAGE_NOT_READY).
+ *  Exported pure for `classifyActError`'s reason. */
+export function swissStageRefusal(err: unknown, msg: Msg, msgPlural: MsgPlural, locale: Locale): SwissRoundsRefusal {
+  if (!(err instanceof ApiV1Error)) {
+    return { code: "", extra: {}, text: err instanceof Error ? err.message : msg("schedule.error.failed") };
+  }
+  const text = isSwissRefusalCode(err.code)
+    ? swissRefusalText(err.code, err.extra, msg, msgPlural)
+    : err.code === SCHEDULE_LOCKED_CODE
+      ? msg("stage.error.scheduleFrozen")
+      : classifyActError(err, msg, locale).text;
+  return { code: err.code, extra: err.extra, text };
 }
 
 /** W2c batch-3 M1: a rule-lock refusal (`FIXTURE_HAS_OWN_FORMAT` from a rebuild, an Undo or a Swiss reshape, and the

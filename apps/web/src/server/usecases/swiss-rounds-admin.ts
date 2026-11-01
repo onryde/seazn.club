@@ -17,7 +17,10 @@ import "server-only";
 //                           A bye alone is not a start (Task 3); a device link is not one (T9 re-ruling I1).
 //   `swissAddRoundState`    whether "Add a round" goes through (controller ruling C11): every emitter of `canAddRound` —
 //                           the late-entry refusal (`swiss-late-entry.ts`), SWISS_ROUNDS_LOCKED here — and
-//                           `addSwissRound` itself read it, so the button the desk offers never leads to a refusal.
+//                           `addSwissRound` itself read it, so the button the desk offers never leads to SWISS_OVER,
+//                           STAGE_NOT_READY or SWISS_ROUNDS_ABOVE_MAX. The timetable freeze is NOT part of it: it is
+//                           checked first, outside (`lockedSwissStage`, the ruled order), so a frozen division still
+//                           answers an offered Add a round 422 SCHEDULE_LOCKED (review m2).
 //
 // Both writes take the late-entry and Unpair lock order: the division's freeze (SCHEDULE_LOCKED), the `division:`
 // advisory lock, then the boards' `fixture:` append locks before any "started" read (`lockSwissBoardAppends`). A round
@@ -435,7 +438,8 @@ export async function addSwissRound(auth: AuthCtx, stageId: string): Promise<{ r
 /**
  * The desk's read of every Swiss stage of a division (T12 Phase 2): the rail's "Rounds: N · Edit" (editable until
  * `started`), its More menu's "Add a round" (`addRound`, the predicate `addSwissRound` judges by — ruling C11) and the
- * chess switch, each from THE predicate its write refuses by, so what the desk offers is what goes through. A display
+ * chess switch, each from THE predicate its write refuses by, so what the desk offers is what that predicate lets through
+ * (a frozen timetable still refuses first, SCHEDULE_LOCKED — outside these predicates, by the ruled order). A display
  * read: no locks — every write re-judges under its own. Another organisation's division reads as none (RLS). A stage
  * with no valid stored count is left out (no control is offered on a stage its own Generate refuses, CONFIG_INVALID).
  */

@@ -22,12 +22,13 @@ import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 import type { SwissRoundsRail } from "@/components/v2/desk/swiss-rounds-dialog";
 
 const apiV1Mock = vi.hoisted(() => vi.fn());
+const routerRefresh = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client-v1", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   apiV1: apiV1Mock,
 }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+  useRouter: () => ({ refresh: routerRefresh, push: vi.fn(), replace: vi.fn() }),
   usePathname: () => "/",
   useSearchParams: () => new URLSearchParams(""),
 }));
@@ -96,6 +97,7 @@ const errors = (tree: ReactElement[]) => byClass(tree, "bg-red-50");
 
 async function mount(props: Record<string, unknown>, answer: (path: string, init?: { method?: string; json?: unknown }) => Promise<unknown>) {
   apiV1Mock.mockReset();
+  routerRefresh.mockReset();
   apiV1Mock.mockImplementation((path: string, init?: { method?: string; json?: unknown }) =>
     init?.method === "PATCH" || String(path).includes("/swiss/add-round") ? answer(path, init) : Promise.resolve({}),
   );
@@ -140,9 +142,73 @@ describe.each(LOCALES)("StagesPanel — Swiss rounds and chess colours (X-SW-17,
       throw new ApiV1Error("server English", 409, "SWISS_ROUNDS_LOCKED", { canFinish: false, canAddRound: true });
     });
     const r = propsOf(railOf(refused.tree(), "s1")).swissRounds as SwissRoundsRail;
-    expect(await r.onSave("s1", 2)).toEqual({ code: "SWISS_ROUNDS_LOCKED", extra: { canFinish: false, canAddRound: true }, message: "server English" });
+    // The dialog says the panel's sentence: the rounds one, then only the recovery offered (Phase 2 fix) — this locale's.
+    expect(await r.onSave("s1", 2)).toEqual({
+      code: "SWISS_ROUNDS_LOCKED",
+      extra: { canFinish: false, canAddRound: true },
+      text: `${D["swiss.refusal.SWISS_ROUNDS_LOCKED"]} ${D["swiss.rounds.locked.add"]}`,
+    });
     await flush();
     expect(errors(refused.tree()), "the dialog says it; the panel does not say it twice").toEqual([]);
+    // T12 Fix round 1 (review m4): the desk's read was stale — refreshed, so the chip turns fixed and More offers Add a round.
+    expect(routerRefresh, "a refusal refreshes the desk").toHaveBeenCalledTimes(1);
+  });
+
+  it("Save says the scheduled slots the removed rounds freed, as a Rebuild does — and nothing more when none (review m3)", async () => {
+    let checked = 0;
+    for (const [freed, form] of [
+      [1, "one"],
+      [2, "other"],
+    ] as const) {
+      const island = await mount({ swissRoundControls: { s1: control({ rounds: 5 }) } }, async () => ({
+        rounds: 3,
+        chess: true,
+        swiss_rounds: null,
+        shells: { added: 0, removed: 6, slots_freed: freed },
+      }));
+      await (propsOf(railOf(island.tree(), "s1")).swissRounds as SwissRoundsRail).onSave("s1", 3);
+      await flush();
+      expect(notices(island.tree()), `${freed} freed`).toEqual([
+        `${fill(D["schedule.notice.roundsSaved.other"]!, { count: 3 })} ${fill(D[`schedule.notice.roundsSlotsFreed.${form}`]!, { count: freed })}`,
+      ]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both plural forms").toBe(2);
+  });
+
+  it("a frozen timetable or a match's own format is said in this locale on every door — never the server's English (review m1)", async () => {
+    let checked = 0;
+    for (const [code, extra, said] of [
+      ["SCHEDULE_LOCKED", {}, D["stage.error.scheduleFrozen"]!],
+      [
+        "FIXTURE_HAS_OWN_FORMAT",
+        { fixture_id: "f7", fixture_no: 7 },
+        fill(D["rules.err.fixtureHasOwnFormat"]!, { match: fill(D["rules.err.match"]!, { n: 7 }) }),
+      ],
+    ] as const) {
+      const refuse = async () => {
+        throw new ApiV1Error("server English", code === "SCHEDULE_LOCKED" ? 422 : 409, code, { ...extra });
+      };
+      // The dialog's Save: handed back for the dialog to say.
+      const save = await mount({ swissRoundControls: { s1: control({ rounds: 5 }) } }, refuse);
+      expect(await (propsOf(railOf(save.tree(), "s1")).swissRounds as SwissRoundsRail).onSave("s1", 3), `${code} Save`).toEqual({
+        code,
+        extra,
+        text: said,
+      });
+      // More → Add a round, and the chess switch: said in the panel's own error line.
+      const more = await mount({ swissRoundControls: { s1: control({ started: true }) } }, refuse);
+      await (propsOf(railOf(more.tree(), "s1")).swissRounds as SwissRoundsRail).onAddRound("s1", "more");
+      await flush();
+      expect(errors(more.tree()), `${code} Add a round`).toEqual([said]);
+      const chess = await mount({ swissRoundControls: { s1: control({ chess: true }) } }, refuse);
+      (propsOf(chess.tree().find((e) => propsOf(e)["data-testid"] === "stage-chess-switch")!).onClick as () => void)();
+      await flush();
+      expect(errors(chess.tree()), `${code} chess`).toEqual([said]);
+      expect(said, "premise: not the server's words").not.toContain("server English");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: codes").toBe(2);
   });
 
   it("Add a round POSTs and says the round; refused from the More menu the panel says why, from the dialog it does not", async () => {

@@ -15,7 +15,8 @@ import { judgeSwissRounds, type SwissRoundsJudgement } from "./swiss-rounds";
 import { isSwissByeShellExtKey, latestSwissRoundWithAnySeat, swissBoardsForField } from "./swiss-shell";
 
 /** The add-round half of the server's `SwissAddRoundState` (swiss-rounds-admin.ts) — the predicate `addSwissRound` judges
- *  by, so the desk offers "Add a round" exactly when it goes through (controller ruling C11). */
+ *  by, so the desk offers "Add a round" exactly when that predicate lets it through (controller ruling C11). A frozen
+ *  timetable is outside it: checked first, it still answers 422 SCHEDULE_LOCKED (review m2). */
 export interface SwissAddRoundControl {
   canAddRound: boolean;
   /** Why it would be refused, or null when it goes through: the Swiss is over, the field is under two, or N + 1 is

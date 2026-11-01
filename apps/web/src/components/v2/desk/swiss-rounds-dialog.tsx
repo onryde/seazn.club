@@ -24,16 +24,16 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { Modal } from "@/components/modal";
-import { swissRefusalText } from "@/lib/swiss-refusal-text";
-import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
+import { swissRefusalKey } from "@/lib/swiss-refusals";
 import { swissRoundsGuidanceLine, swissRoundsWarnNotice } from "@/lib/swiss-rounds";
 import { swissRoundsEditPreview, type SwissRoundControl, type SwissRoundsEditFixture } from "@/lib/swiss-rounds-edit";
 
-/** What a refused write answered (`ApiV1Error`'s code, details and English message). */
+/** What a refused write answered: `ApiV1Error`'s code and details, and `text`, the refusal in the reader's language as
+ *  the panel says it (`swissStageRefusal`) — never the server's English sentence (T12 Fix round 1, review m1). */
 export interface SwissRoundsRefusal {
   code: string;
   extra: Record<string, unknown>;
-  message: string;
+  text: string;
 }
 
 export interface SwissRoundsDialogProps {
@@ -76,15 +76,34 @@ export function SwissRoundsChip({
   const msg = useMsg();
   const [editing, setEditing] = useState(false);
   const label = msg("stage.rounds.chip", { n: rail.control.rounds });
+  const dialog =
+    editing &&
+    typeof document !== "undefined" &&
+    createPortal(
+      <SwissRoundsDialog
+        stageId={stageId}
+        control={rail.control}
+        fixtures={rail.fixtures}
+        onSave={rail.onSave}
+        onAddRound={(id) => rail.onAddRound(id, "dialog")}
+        onClose={() => setEditing(false)}
+      />,
+      document.body,
+    );
   if (rail.control.started) {
+    // A dialog open when the stage started (a LOCKED answer refreshes the desk under it) stays open over the fixed chip,
+    // so the refusal and its Add a round recovery are not swept away by the refresh (T12 Fix round 1, review m4).
     return (
-      <span
-        data-testid="stage-rounds"
-        data-state="fixed"
-        className="inline-flex min-h-11 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold tabular-nums text-slate-600"
-      >
-        {label}
-      </span>
+      <>
+        <span
+          data-testid="stage-rounds"
+          data-state="fixed"
+          className="inline-flex min-h-11 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs font-semibold tabular-nums text-slate-600"
+        >
+          {label}
+        </span>
+        {dialog}
+      </>
     );
   }
   return (
@@ -104,19 +123,7 @@ export function SwissRoundsChip({
         <span className="font-semibold tabular-nums text-slate-800">{label}</span>
         <span className="border-l border-purple-200 pl-3">{msg("stage.rounds.edit")}</span>
       </button>
-      {editing &&
-        typeof document !== "undefined" &&
-        createPortal(
-          <SwissRoundsDialog
-            stageId={stageId}
-            control={rail.control}
-            fixtures={rail.fixtures}
-            onSave={rail.onSave}
-            onAddRound={(id) => rail.onAddRound(id, "dialog")}
-            onClose={() => setEditing(false)}
-          />,
-          document.body,
-        )}
+      {dialog}
     </>
   );
 }
@@ -165,7 +172,10 @@ export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRou
   const refused = preview.judgement?.verdict === "refuse";
   const guidance = control.field === null ? null : swissRoundsGuidanceLine(control.field, plural);
   const warn = preview.judgement ? swissRoundsWarnNotice(preview.judgement, plural) : null;
-  const canSave = changed && !refused && value >= preview.min && !saving;
+  // T12 Fix round 1 (review m4): once the server says the count is fixed (or the refreshed read does), nothing here can
+  // change it — the stepper and Save go inactive and the preview of a change that will not happen goes.
+  const locked = control.started || refusal?.code === "SWISS_ROUNDS_LOCKED";
+  const canSave = changed && !refused && !locked && value >= preview.min && !saving;
   const labelId = `stage-rounds-label-${stageId}`;
 
   const run = async (write: () => Promise<SwissRoundsRefusal | null>) => {
@@ -187,11 +197,7 @@ export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRou
       ? plural("stage.rounds.preview.addOne", preview.added.matchesPerRound, { round: preview.added.from })
       : plural("stage.rounds.preview.addMany", preview.added.matchesPerRound, { from: preview.added.from, to: preview.added.to })
     : null;
-  const refusalText = refusal
-    ? isSwissRefusalCode(refusal.code)
-      ? swissRefusalText(refusal.code, refusal.extra, msg, plural)
-      : refusal.message
-    : null;
+  const refusalText = refusal?.text ?? null;
   const offerAddRound = refusal?.code === "SWISS_ROUNDS_LOCKED" && refusal.extra.canAddRound === true;
 
   const stepClass =
@@ -214,7 +220,7 @@ export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRou
               type="button"
               aria-label={msg("stage.rounds.dialog.fewer")}
               data-testid="stage-rounds-fewer"
-              disabled={saving || value <= preview.min}
+              disabled={saving || locked || value <= preview.min}
               onClick={() => setValue((v) => v - 1)}
               className={stepClass}
             >
@@ -231,7 +237,7 @@ export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRou
               type="button"
               aria-label={msg("stage.rounds.dialog.more")}
               data-testid="stage-rounds-more"
-              disabled={saving || value >= preview.max}
+              disabled={saving || locked || value >= preview.max}
               onClick={() => setValue((v) => v + 1)}
               className={stepClass}
             >
@@ -257,7 +263,7 @@ export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRou
             {warn}
           </p>
         )}
-        {changed && !refused && (
+        {changed && !refused && !locked && (
           <div
             data-testid="stage-rounds-preview"
             className="space-y-1 rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-slate-800"
