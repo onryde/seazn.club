@@ -17090,7 +17090,7 @@
     },
     "/api/v1/stages/{id}/generate": {
       "post": {
-        "summary": "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored. An americano or mexicano stage mints pair entrants, so in a chess division it is 422 CHESS_INDIVIDUAL_ONLY.",
+        "summary": "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored. An americano or mexicano stage mints pair entrants, so in a chess division it is 422 CHESS_INDIVIDUAL_ONLY. A Swiss whose rounds exceed the hard maximum of the field being paired (n − 1 for an even field, n for an odd one) is refused SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish}` — 422 as sent, 409 when withdrawals shrank the field after a completed round (`canFinish: true`); above the safe maximum ⌊n/2⌋ it goes through with `swiss_rounds` (verdict warn).",
         "tags": [
           "stages"
         ],
@@ -17470,6 +17470,41 @@
                             "byes_removed"
                           ],
                           "additionalProperties": false
+                        },
+                        "swiss_rounds": {
+                          "type": "object",
+                          "properties": {
+                            "verdict": {
+                              "type": "string",
+                              "enum": [
+                                "ok",
+                                "warn",
+                                "refuse"
+                              ]
+                            },
+                            "recommended": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "safeMax": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "hardMax": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "verdict",
+                            "recommended",
+                            "safeMax",
+                            "hardMax"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -17626,6 +17661,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -18382,6 +18461,41 @@
                             "matches_removed",
                             "byes_added",
                             "byes_removed"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "swiss_rounds": {
+                          "type": "object",
+                          "properties": {
+                            "verdict": {
+                              "type": "string",
+                              "enum": [
+                                "ok",
+                                "warn",
+                                "refuse"
+                              ]
+                            },
+                            "recommended": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "safeMax": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "hardMax": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "verdict",
+                            "recommended",
+                            "safeMax",
+                            "hardMax"
                           ],
                           "additionalProperties": false
                         },
@@ -32756,7 +32870,7 @@
     },
     "/api/v1/divisions/{id}/start": {
       "post": {
-        "summary": "Start the tournament (quick-start generates fixtures). Publishes the schedule on the way through, validated server-side: blocking conflicts 422 SCHEDULE_BLOCKING_CONFLICTS; warnings 422 SCHEDULE_UNACKNOWLEDGED_WARNINGS until acknowledge_warnings",
+        "summary": "Start the tournament (quick-start generates fixtures). Publishes the schedule on the way through, validated server-side: blocking conflicts 422 SCHEDULE_BLOCKING_CONFLICTS; warnings 422 SCHEDULE_UNACKNOWLEDGED_WARNINGS until acknowledge_warnings. A root Swiss whose rounds exceed its field's hard maximum is 422 SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish: false}`",
         "tags": [
           "scheduling"
         ],

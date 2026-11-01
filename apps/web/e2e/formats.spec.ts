@@ -271,7 +271,8 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   await qualify.selectOption({ label: "Top 3" });
   // Three rounds is a full round robin for four entrants — the strict Ann >
   // Bo > Cy > Di table the knockout half reads below. Default wizard rounds
-  // is 5; pin the organiser-set budget here rather than trusting the default.
+  // is 3 (W3 T11: the band for up to 8); pin the organiser-set budget here
+  // rather than trusting the default.
   await page.getByLabel("Rounds", { exact: true }).fill("3");
 
   await page.getByRole("button", { name: "Scheduling", exact: true }).click();

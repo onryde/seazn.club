@@ -35,7 +35,8 @@ import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { CourtMultiPicker } from "@/components/v2/shared/court-multi-picker";
 // P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
-import { useMsg, useLocale } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural, useLocale } from "@/components/i18n/dict-provider";
+import { swissRoundsGuidanceLine } from "@/lib/swiss-rounds";
 import type { MessageKey } from "@/lib/messages";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantHint, variantOptionLabel } from "@/lib/variant-label-keys";
@@ -259,6 +260,7 @@ export function DivisionBuilder({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  const msgPlural = useMsgPlural();
   const locale = useLocale();
   const router = useRouter();
   const [name, setName] = useState("");
@@ -282,7 +284,9 @@ export function DivisionBuilder({
 
   const [template, setTemplate] = useState("league");
   const [qualified, setQualified] = useState(4);
-  const [swissRounds, setSwissRounds] = useState(5);
+  // W3 T11 (RB3-3): the owner's band for a field of up to 8 (lib/swiss-rounds.ts) — 5 dead-ended a field of 6 in 15.5% of
+  // events (rulebook-W3-swiss.md §3.1). A literal: tools/matrix's catalogue reads it off this line.
+  const [swissRounds, setSwissRounds] = useState(3);
   const [poolCount, setPoolCount] = useState(2);
   const [legs, setLegs] = useState(1);
   const [standingsCarry, setStandingsCarry] = useState<StandingsCarry>("none");
@@ -887,17 +891,30 @@ export function DivisionBuilder({
             </label>
           )}
           {["swiss", "swiss_playoff", "swiss_knockout"].includes(template) && (
-            <label className="block">
-              <span className="label">{msg("wizard.rounds")}</span>
-              <input
-                type="number"
-                min={1}
-                max={15}
-                value={swissRounds}
-                onChange={(e) => setSwissRounds(Number(e.target.value))}
-                className="input"
-              />
-            </label>
+            <div>
+              <label className="block">
+                <span className="label">{msg("wizard.rounds")}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={15}
+                  value={swissRounds}
+                  onChange={(e) => setSwissRounds(Number(e.target.value))}
+                  aria-describedby="builder-swiss-rounds-guidance"
+                  className="input"
+                />
+              </label>
+              {/* W3 T11 (X-SW-16): the builder has no roster yet, so the field is its one entrant count — the example
+                  draw's — and the line moves with it. OUTSIDE the label: inside it, the line would join the box's
+                  accessible name ("Rounds For 8 entrants: …"); it is the box's description instead. */}
+              <p
+                id="builder-swiss-rounds-guidance"
+                data-testid="builder-swiss-rounds-guidance"
+                className="mt-1 text-xs text-slate-500"
+              >
+                {swissRoundsGuidanceLine(previewCount, msgPlural)}
+              </p>
+            </div>
           )}
           {hasSecondStage && (
             <label className="block">

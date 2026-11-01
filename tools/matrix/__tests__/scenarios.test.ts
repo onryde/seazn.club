@@ -1879,18 +1879,21 @@ describe("snapshot — byes are declared, pools stay separate (Task 5 carries)",
     expect(byeDeclared("generic", cfg, "swiss", bye("x", null))).toBeNull();
   });
 
-  it("a 5-entrant 5-round swiss gives everyone a bye and I3 still checks all 5 (not vacuous)", async () => {
+  // W3 T11: the builder's Swiss default is 3 rounds (it was 5 — rulebook-W3-swiss.md §3.2's band for up to 8), so the
+  // field whose every entrant takes a bye is 3: an odd field of n playing n rounds byes each entrant once (§3.1).
+  it("a 3-entrant 3-round swiss gives everyone a bye and I3 still checks all 3 (not vacuous)", async () => {
+    expect(stagesForRow("swiss")[0]!.config.rounds, "premise: the swiss row posts the builder's 3 rounds").toBe(3);
     const driver = new FakeSwissDriver();
     const ctx = ctxFor(driver, "LIFECYCLE", { row: "swiss" });
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, 5);
+    const setup = await setUpDivision(ctx, rec, 3);
     await playStage(ctx, rec, setup);
     const complete = await finishStage(ctx, rec, setup.stage.id);
     const observed = await snapshot(ctx, rec, setup, [{ stage: setup.stage, field: setup.entrants.map((e) => e.id), advance: null, complete }], { configEdit: null, withdrawal: null });
     const byes = observed.stages[0]!.fixtures.filter((f) => f.away === null);
     expect(new Set(byes.map((f) => f.home))).toEqual(new Set(setup.entrants.map((e) => e.id)));
     expect(byes.every((f) => f.declared !== null)).toBe(true);
-    expect(evaluateInvariants(observed).find((c) => c.id === "I3-table-points-equal-declared")).toMatchObject({ verdict: "pass", checked: 5 });
+    expect(evaluateInvariants(observed).find((c) => c.id === "I3-table-points-equal-declared")).toMatchObject({ verdict: "pass", checked: 3 });
   });
 
   it("each pool's table is read on its own and keeps its poolId (a merged table would red I1/I3)", async () => {

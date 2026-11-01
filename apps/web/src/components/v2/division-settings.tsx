@@ -62,6 +62,7 @@ import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import type { ViewerPlan } from "@/lib/viewer-plan";
+import { swissRoundsDefault, swissRoundsGuidanceLine } from "@/lib/swiss-rounds";
 
 // The three entrant shapes, in a stable display order. The effective model
 // (module default ← division override) decides which are ticked.
@@ -418,6 +419,7 @@ export function DivisionSettings({
   viewerPlan,
   onlineChessOffered,
   lichessGaps,
+  swissField,
 }: {
   division: DivisionSettingsInfo;
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
@@ -478,6 +480,11 @@ export function DivisionSettings({
    *  when somebody is in it, and never blocks the switch
    *  (owner ruling 2026-10-25). Absent or both counts `0` ⇒ no warning. */
   lichessGaps?: LinkGapsSummary;
+  /** W3 T11 (X-SW-16): the field a root Swiss would pair — the division's active entrants (the page's
+   *  `activeEntrantIds`). Read only where the Rounds box renders, i.e. before Start (`structureLocked` hides it), when no
+   *  late-entry stamp can exist yet. Under 2 (or absent) ⇒ no guidance line, and a switch to a Swiss seeds the band for a
+   *  field of up to 8. */
+  swissField?: number;
 }) {
   const msg = useMsg();
   const plural = useMsgPlural();
@@ -502,8 +509,10 @@ export function DivisionSettings({
     ((stages.find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | null)?.pools?.count) ?? 2,
   );
   const [swissRounds, setSwissRounds] = useState(
-    ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ?? 5,
+    ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ??
+      swissRoundsDefault(swissField),
   );
+  const swissGuidance = swissField === undefined ? null : swissRoundsGuidanceLine(swissField, plural);
   const templateHasSwissRounds = ["swiss", "swiss_playoff", "swiss_knockout"].includes(template);
   const [legs, setLegs] = useState(
     ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
@@ -1184,19 +1193,33 @@ export function DivisionSettings({
                   </label>
                 )}
                 {templateHasSwissRounds && (
-                  <label className="block text-xs text-slate-500">
-                    {msg("divset.rounds")}
-                    <input
-                      type="number"
-                      min={3}
-                      max={15}
-                      disabled={!canEdit}
-                      value={swissRounds}
-                      data-testid="division-settings-swiss-rounds"
-                      onChange={(e) => setSwissRounds(Number(e.target.value))}
-                      className="input mt-1 w-full"
-                    />
-                  </label>
+                  <div>
+                    <label className="block text-xs text-slate-500">
+                      {msg("divset.rounds")}
+                      <input
+                        type="number"
+                        min={1}
+                        max={15}
+                        disabled={!canEdit}
+                        value={swissRounds}
+                        data-testid="division-settings-swiss-rounds"
+                        onChange={(e) => setSwissRounds(Number(e.target.value))}
+                        {...(swissGuidance !== null ? { "aria-describedby": "division-settings-swiss-rounds-guidance" } : {})}
+                        className="input mt-1 w-full"
+                      />
+                    </label>
+                    {/* W3 T11 (X-SW-16): the field's guidance, OUTSIDE the label so it describes the box rather than
+                        joining its accessible name. */}
+                    {swissGuidance !== null && (
+                      <p
+                        id="division-settings-swiss-rounds-guidance"
+                        data-testid="division-settings-swiss-rounds-guidance"
+                        className="mt-0.5 text-[11px] text-slate-500"
+                      >
+                        {swissGuidance}
+                      </p>
+                    )}
+                  </div>
                 )}
                 {["league", "league_ko", "groups_ko"].includes(template) && (
                   <label className="block text-xs text-slate-500">

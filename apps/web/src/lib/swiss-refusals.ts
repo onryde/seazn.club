@@ -35,6 +35,9 @@ export interface SwissRefusalRow {
   /** The server's English sentence (the `message` of the error body); `en/ui.json[key]` says the same. */
   message: string;
   key: MessageKey;
+  /** W3 T11: the status when the same refusal is resolvable another way (`swissRefusal(code, details, { resolvable })`).
+   *  Only a code whose cause can be either kind declares it; every other code has one status. */
+  resolvableStatus?: 409;
 }
 
 export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
@@ -89,9 +92,13 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     message: "This Swiss is over.",
     key: "swiss.refusal.SWISS_OVER",
   },
-  // W3 T11/T12 (RB3-3): more rounds than the field's hard maximum.
+  // W3 T11/T12 (RB3-3): more rounds than the field's hard maximum. 422 as sent — a Generate or a Start with that round
+  // count over that field can never succeed. 409 when the field SHRANK under a Swiss that has completed a round
+  // (withdrawals before Pair next): the organiser resolves it another way — Finish the Swiss after the rounds played
+  // (`canFinish: true` in the details, T13), or a late player who grows the field back.
   SWISS_ROUNDS_ABOVE_MAX: {
     status: 422,
+    resolvableStatus: 409,
     message: "That is more rounds than this field can pair.",
     key: "swiss.refusal.SWISS_ROUNDS_ABOVE_MAX",
   },

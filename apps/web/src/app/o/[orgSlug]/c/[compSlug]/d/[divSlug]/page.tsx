@@ -351,7 +351,8 @@ export default async function DivisionPage({
   // a value that is neither departed nor in the field.
   //
   // Feeds StagesPanel's swiss shape legend and its round-1 pairing menu, and
-  // nothing else. Ids, not a count: a swiss stage carrying `config.qualified`
+  // (its count, W3 T11) the Settings tab's Swiss round guidance — nothing
+  // else. Ids, not a count: a swiss stage carrying `config.qualified`
   // pairs only the qualifiers still in the field, which is an intersection.
   const activeEntrantIds = entrants.filter((e) => !DEPARTED_STATUSES.has(e.status)).map((e) => e.id);
   // Swiss round-1 pairing, review ruling R1: the menu's hint prints seed
@@ -1151,6 +1152,7 @@ export default async function DivisionPage({
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
             lichessGaps={lichessGaps}
+            swissField={activeEntrantIds.length}
             variants={await listVariantOptions(auth, division.sport_key)}
             // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
             // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).

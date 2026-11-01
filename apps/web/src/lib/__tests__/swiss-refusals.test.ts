@@ -99,6 +99,27 @@ describe("swissRefusal (server)", () => {
     });
   });
 
+  // W3 T11 (controller status rule): SWISS_ROUNDS_ABOVE_MAX is a 422 as sent (Generate or Start with that round count can
+  // never succeed), and a 409 when the field shrank under a running Swiss — resolvable another way (Finish the Swiss
+  // after the completed rounds; a late player). Every other code has ONE status, and asking it for a second is refused.
+  it("SWISS_ROUNDS_ABOVE_MAX: 422 as sent, 409 when resolvable; no other code declares a resolvable status", () => {
+    expect(SWISS_REFUSALS.SWISS_ROUNDS_ABOVE_MAX).toMatchObject({ status: 422, resolvableStatus: 409 });
+    expect(swissRefusal("SWISS_ROUNDS_ABOVE_MAX", { canFinish: false })).toMatchObject({ status: 422, code: "SWISS_ROUNDS_ABOVE_MAX" });
+    expect(swissRefusal("SWISS_ROUNDS_ABOVE_MAX", { canFinish: true }, { resolvable: true })).toMatchObject({
+      status: 409,
+      code: "SWISS_ROUNDS_ABOVE_MAX",
+      message: SWISS_REFUSALS.SWISS_ROUNDS_ABOVE_MAX.message,
+      extra: { canFinish: true },
+    });
+    let others = 0;
+    for (const code of PLAN_CODES.filter((c) => c !== "SWISS_ROUNDS_ABOVE_MAX")) {
+      expect(SWISS_REFUSALS[code].resolvableStatus, code).toBeUndefined();
+      expect(() => swissRefusal(code, undefined, { resolvable: true }), code).toThrow(/declares no resolvable status/);
+      others++;
+    }
+    expect(others, "anti-vacuity: every other code judged").toBe(PLAN_CODES.length - 1);
+  });
+
   it("with no details carries no extra (the envelope adds nothing)", () => {
     const err = swissRefusal("SWISS_ADHOC_REFUSED");
     expect(err).toMatchObject({ status: 422, code: "SWISS_ADHOC_REFUSED" });

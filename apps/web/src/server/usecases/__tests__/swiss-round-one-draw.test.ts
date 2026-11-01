@@ -377,7 +377,10 @@ describe.runIf(HAS_DB)("X-SW-22 / BG-SW-1 sequences", () => {
   });
 
   it("the smallest field: two unseeded players, one board, coloured by the lot", async () => {
-    const r = await rig({ sport: "boardgame", n: 2, seeded: false, door: "createStages" });
+    // One round: a field of two pairs at most one (rulebook-W3-swiss.md §3.2, n = 2 → hard max 1; W3 Task 11 refuses the
+    // rig's default of 3 at Start with SWISS_ROUNDS_ABOVE_MAX).
+    const r = await rig({ sport: "boardgame", n: 2, seeded: false, door: "createStages", config: { rounds: 1 } });
+    expect((await stageConfig(r.stageId)).chess, "premise: still a chess Swiss (the lot applies)").toBe(true);
     await startDivision(r.auth, r.divisionId);
     await generateStageFixtures(r.auth, r.stageId);
     const field = await activeOrder(r.divisionId);

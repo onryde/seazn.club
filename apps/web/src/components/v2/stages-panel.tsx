@@ -19,6 +19,8 @@ import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches
 import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
+import { swissRoundsWarnNotice, type SwissRoundsJudgement } from "@/lib/swiss-rounds";
+import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import type { HoldState } from "@/server/relay/domain/session";
@@ -691,30 +693,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         await apiV1(`/api/v1/stages/${stageId}`, { method: "DELETE" });
         setNotice(msg("schedule.notice.stageDeleted"));
       } else if (action === "generate") {
-        const out = await apiV1<{
-          created: number;
-          existing: number;
-          reshaped?: SwissReshapeWire;
-        }>(`/api/v1/stages/${stageId}/generate`, {
+        const out = await apiV1<GenerateNoticeWire>(`/api/v1/stages/${stageId}/generate`, {
           method: "POST",
           // `{}` stays the body for every ordinary press — the server still
           // accepts it and applies its own default.
           json: opts?.pairing ? { pairing: opts.pairing } : {},
         });
-        setNotice(
-          [
-            out.created > 0
-              ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
-              : msg("schedule.notice.nothingNew"),
-            // Swiss pre-Start: this press may also have resized rounds nobody
-            // paired, deleting boards along with the times and courts pinned on
-            // them. Silent before this; `reshapeNotice` returns null when
-            // nothing moved, so the ordinary Pair reads exactly as it did.
-            reshapeNotice(out.reshaped, msg, msgPlural, locale),
-          ]
-            .filter((line): line is string => line !== null)
-            .join(" "),
-        );
+        setNotice(generateNoticeText(out, msg, msgPlural, locale));
       } else if (action === "unpair") {
         const out = await apiV1<{ cleared: number; round: number }>(
           `/api/v1/stages/${stageId}/unpair`,
@@ -751,6 +736,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           setGameExists(true);
         } else if (action === "unpair") {
           setError(msg("schedule.error.unpairFailed"));
+        } else if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
+          // W3 T11: a Swiss refusal (SWISS_ROUNDS_ABOVE_MAX on a Generate or Pair next) in the reader's language, with
+          // what to do next — never the server's English sentence.
+          setError(swissRefusalText(err.code, err.extra, msg, msgPlural));
         } else {
           // The stage list lets an early Generate on a waiting stage name
           // both stages (generatePreconditionMessage).
@@ -1865,6 +1854,36 @@ export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, loca
  * Exported (pure) for the same reason `attachmentWarning` is: `apps/web` vitest
  * runs in `environment: "node"`, so this is testable only outside the component.
  */
+/** POST /stages/{id}/generate's answer, as far as the desk's notice reads it (`GenerateResult`). */
+export type GenerateNoticeWire = {
+  created: number;
+  existing: number;
+  reshaped?: SwissReshapeWire;
+  swiss_rounds?: SwissRoundsJudgement;
+};
+
+/**
+ * The green notice after a Generate — what was minted or paired, then (Swiss) what reshaped, then (W3 T11, X-SW-16) the
+ * round-count warning when the server judged the count above the field's safe maximum. The panel's one composition,
+ * exported so the M8 render test and the island read the same lines.
+ */
+export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural: MsgPlural, locale: string): string {
+  return [
+    out.created > 0
+      ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
+      : msg("schedule.notice.nothingNew"),
+    // Swiss pre-Start: this press may also have resized rounds nobody
+    // paired, deleting boards along with the times and courts pinned on
+    // them. Silent before this; `reshapeNotice` returns null when
+    // nothing moved, so the ordinary Pair reads exactly as it did.
+    reshapeNotice(out.reshaped, msg, msgPlural, locale),
+    // W3 T11: null unless the verdict is "warn" — an ordinary Pair reads exactly as it did.
+    swissRoundsWarnNotice(out.swiss_rounds, msgPlural),
+  ]
+    .filter((line): line is string => line !== null)
+    .join(" ");
+}
+
 export function reshapeNotice(
   reshaped: SwissReshapeWire | undefined,
   msg: Msg,

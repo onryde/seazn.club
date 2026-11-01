@@ -90,7 +90,7 @@ import {
 } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { generateStageFixturesUnpublished } from "./stages";
+import { generateStageFixturesUnpublished, refuseSwissRoundsAboveMaxAtStart } from "./stages";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
 
 type Tx = postgres.TransactionSql;
@@ -3947,6 +3947,10 @@ export async function startDivision(
       from stages s where s.division_id = ${divisionId}
       order by s.seq limit 1`;
     if (!firstStage) throw new HttpError(422, "division has no stages to start");
+    // W3 T11 (X-SW-16): a Swiss above its field's hard maximum is refused here, before Start's first write (the
+    // quick-start Generate below runs in its own transaction). A withdrawal racing past this read is caught by the Pair's
+    // own judgement (`swissGen`), which every Generate runs. An active division's Start is a no-op, never refused.
+    if (division.status !== "active") await refuseSwissRoundsAboveMaxAtStart(tx, divisionId);
     // Read here, ACTED ON below — see the two guards further down. The freeze
     // does not bind the start TRANSITION (that is deliberate: the design's own
     // customer story is freeze-then-publish, and `schedule-board.tsx` gates its

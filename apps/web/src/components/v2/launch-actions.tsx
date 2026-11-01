@@ -12,7 +12,9 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { routes } from "@/lib/routes";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { isSwissRefusalCode } from "@/lib/swiss-refusals";
+import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startEntrantsLine, type EntryStage } from "@/lib/open-entry-stages";
@@ -73,6 +75,7 @@ export function LaunchActions({
   viewerPlan,
 }: Props) {
   const msg = useMsg();
+  const msgPlural = useMsgPlural();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,6 +129,10 @@ export function LaunchActions({
           kind: err.code === PUBLISH_BLOCKED ? "blocking" : "warnings",
           conflicts: (err.extra.conflicts as BoardConflict[] | undefined) ?? [],
         });
+      } else if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
+        // W3 T11 (X-SW-16): a Swiss with more rounds than its field can pair — the refusal and the field's guidance in
+        // the reader's language, never the server's English sentence.
+        setError(swissRefusalText(err.code, err.extra, msg, msgPlural));
       } else {
         setError(err instanceof Error ? err.message : msg("launch.failedStart"));
       }

@@ -49,7 +49,7 @@ export function cellId(row: RowKey, sport: string): string {
 /** division-builder.tsx:289-292 — pinned by catalogue.test.ts. */
 export const BUILDER_DEFAULT_KNOBS: Readonly<TemplateKnobs> = Object.freeze({
   qualified: 4,
-  swissRounds: 5,
+  swissRounds: 3,
   poolCount: 2,
   legs: 1,
 });

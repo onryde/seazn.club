@@ -313,6 +313,79 @@ test.describe("X-SW-21 no Add match on a Swiss stage", () => {
   });
 });
 
+// X-SW-16 (W3 T11, SW-H2, RB3-3; rulebook-W3-swiss.md §3.1/§3.2): a field of 4 pairs at most 3 rounds (hard maximum
+// n − 1 for an even field). A 5-round Swiss over it used to start and dead-end; Start now refuses it before anything is
+// written, and the console says why in the reader's language with the field's guidance (§3.2: 2 recommended, at most 3).
+// The Settings tab's Rounds box names the same guidance before the organiser presses anything. Generic sport: the bounds
+// are arithmetic on the field, which no sport field reaches (swiss-rounds-cap.test.ts sweeps every sport on the server).
+test.describe("X-SW-16 rounds above the hard max are refused at Start", () => {
+  test("4 entrants × 5 rounds: Start is refused with the field's guidance, the division stays in setup, and Settings names the guidance", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(120_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Rounds cap ${TAG}`,
+      visibility: "private",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Cap P${i + 1} ${TAG}`, seed: i + 1 })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 5 },
+    });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+
+    const guidance = uiEn["swiss.rounds.guidance.other"]!.replace("{n}", "4").replace("{count}", "2").replace("{hardMax}", "3");
+    expect(guidance, "premise: the copy names the field, the recommendation and the hard maximum").toBe(
+      "For 4 entrants: 2 rounds recommended, at most 3.",
+    );
+
+    // The console's Start, then its confirmation: refused, said in English copy from the dictionary, not the wire's.
+    await page.goto(await divisionPath(request, divisionId));
+    await page.getByRole("button", { name: "Start tournament" }).click();
+    await page.getByTestId("start-confirm-confirm").click();
+    await expect(page.getByText(`${uiEn["swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"]} ${guidance}`)).toBeVisible({ timeout: 20_000 });
+
+    // Nothing was written: the division is still in setup and the stage holds no fixture.
+    const after = await apiJson<{ status: string }>(request, `/api/v1/divisions/${divisionId}`);
+    expect(after.status, JSON.stringify(after.error)).toBe(200);
+    expect(after.data!.status).toBe("setup");
+    expect(await stageFixtures(request, divisionId, stageId)).toEqual([]);
+
+    // The API answers the same: 422 SWISS_ROUNDS_ABOVE_MAX naming the rounds, the field and the hard maximum.
+    const refused = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(refused.status).toBe(422);
+    expect(refused.error).toMatchObject({ code: "SWISS_ROUNDS_ABOVE_MAX", rounds: 5, field: 4, hardMax: 3, canFinish: false });
+
+    // Settings, before Start: the Rounds box takes 1 and names the field's guidance under it.
+    await page.goto(await divisionPath(request, divisionId, "?tab=settings"));
+    await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: /Format/ }).click();
+    await expect(page.getByTestId("division-settings-swiss-rounds")).toHaveAttribute("min", "1");
+    await expect(page.getByTestId("division-settings-swiss-rounds")).toHaveValue("5");
+    await expect(page.getByTestId("division-settings-swiss-rounds-guidance")).toHaveText(guidance);
+  });
+});
+
 // X-SW-29 (W3 T3, SW-M13, RB3-23): a Swiss stage mints each round's bye row as
 // a shell before Pair, and every placement writer used to take it for one more
 // match — the auto pass gave it a court and a time, the board offered it a drag,

@@ -6,7 +6,14 @@ import "server-only";
 import { HttpError } from "@/lib/errors";
 import { SWISS_REFUSALS, type SwissRefusalCode } from "@/lib/swiss-refusals";
 
-export function swissRefusal(code: SwissRefusalCode, details?: Record<string, unknown>): HttpError {
-  const { status, message } = SWISS_REFUSALS[code];
-  return new HttpError(status, message, code, details);
+export function swissRefusal(
+  code: SwissRefusalCode,
+  details?: Record<string, unknown>,
+  /** W3 T11: `resolvable` raises the row's `resolvableStatus` (a 409) — only for a code that declares one. */
+  opts?: { resolvable?: boolean },
+): HttpError {
+  const { status, resolvableStatus, message } = SWISS_REFUSALS[code];
+  const chosen = opts?.resolvable === true ? resolvableStatus : status;
+  if (chosen === undefined) throw new Error(`swiss refusal ${code} declares no resolvable status`);
+  return new HttpError(chosen, message, code, details);
 }

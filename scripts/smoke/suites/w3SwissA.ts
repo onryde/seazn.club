@@ -14,7 +14,9 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * puts the round back onto its shells — no round-1 row is left seated. T6 (X-SW-12, ruling 251): an entrant whose first
  * Swiss round is 2 is on no round-1 row and is seated from round 2. T7 (X-SW-15, RB3-2; rulebook P-A2): a double-walkover
  * pair has not met, so the next Pair may seat it again. T8 (X-SW-22, SW-L6, RB3-16): an unseeded round 1 is the stage's
- * seeded random draw, not registration order. T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
+ * seeded random draw, not registration order. T11 (X-SW-16; SW-H2, RB3-3): a Swiss whose rounds exceed its field's hard
+ * maximum (4 entrants × 5 rounds; hard max 3) is refused 422 SWISS_ROUNDS_ABOVE_MAX at Generate and writes nothing.
+ * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
  * registration confirmed during a live round takes (c) and moves no pairing. Own fresh owner. Every read is a v1 route;
@@ -29,8 +31,9 @@ export async function w3SwissASuite(): Promise<void> {
   // bye's format is frozen at award; a bye shell is never placed) + T5: 1 (Undo of Pair next clears the round's seats) +
   // T6: 1 (an entrant with a first Swiss round is on no round below it) + T7: 1 (a double-walkover pair meets again) +
   // T8: 1 (an unseeded round 1 seats the stage's draw, not registration order) + T9: 4 (a late player's case (a), (b)
-  // and (c) through the organiser's Add, and one automatic arrival — a public registration — taking (c)).
-  const EXPECTED_CHECKS = 14;
+  // and (c) through the organiser's Add, and one automatic arrival — a public registration — taking (c)) + T11: 1 (a
+  // Swiss above its field's hard maximum is refused at Generate and writes nothing).
+  const EXPECTED_CHECKS = 15;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -204,6 +207,8 @@ export async function w3SwissASuite(): Promise<void> {
 
   // Check 4 (T4, X-SW-21) — Swiss rounds are paired by the system: an ad-hoc match on a paired Swiss stage is refused by
   // name (422 SWISS_ADHOC_REFUSED) and the stage's fixtures are exactly what they were.
+  // Its division (4 entrants) is reused by check 15: every competition of this owner is at the community plan's cap.
+  let fourFieldDivId: string | undefined;
   {
     const divId = v1data<{ id: string } | undefined>(
       await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", {
@@ -230,12 +235,41 @@ export async function w3SwissASuite(): Promise<void> {
       away_entrant_id: players[1]?.id,
     });
     const after = await count();
+    fourFieldDivId = players.length === 4 ? divId : undefined;
     const ok =
       players.length === 4 && paired.status === 200 && before > 0 &&
       res.status === 422 && res.json.error?.code === "SWISS_ADHOC_REFUSED" && after === before;
     w3Check(
       "w3a X-SW-21: Add match on a Swiss stage is refused 422 SWISS_ADHOC_REFUSED and writes nothing" +
         (ok ? "" : ` — players ${players.length}, pair ${paired.status}, before ${before}, after ${after}, POST ${res.status} ${JSON.stringify(res.json).slice(0, 160)}`),
+      ok,
+    );
+  }
+
+  // Check 15 (T11, X-SW-16; rulebook-W3-swiss.md §3.1/§3.2) — a field of 4 pairs at most 3 rounds (hard maximum n − 1 for
+  // an even field), so a Swiss of 5 rounds over it is refused at Generate: 422 SWISS_ROUNDS_ABOVE_MAX naming the rounds,
+  // the field and the hard maximum, and the stage holds no fixture. A second ROOT Swiss in check 4's division (its four
+  // entrants are the field), since no competition here has a division to spare.
+  {
+    const stageRes = await v1(owner, `/api/v1/divisions/${fourFieldDivId}/stages`, "POST", {
+      seq: 2,
+      kind: "swiss",
+      name: "Swiss 5",
+      config: { rounds: 5 },
+    });
+    const stageId = v1data<{ id: string } | undefined>(stageRes)?.id;
+    const res = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const minted = (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${fourFieldDivId}/fixtures`)) ?? []).filter(
+      (f) => f.stage_id === stageId,
+    ).length;
+    // The refusal's details ride beside `code` on the v1 envelope (api-v1/http.ts merges HttpError `extra`).
+    const err: { code?: string; rounds?: number; field?: number; hardMax?: number } | undefined = res.json.error;
+    const ok =
+      fourFieldDivId !== undefined && stageId !== undefined && res.status === 422 && err?.code === "SWISS_ROUNDS_ABOVE_MAX" &&
+      err.rounds === 5 && err.field === 4 && err.hardMax === 3 && minted === 0;
+    w3Check(
+      "w3a X-SW-16: a Swiss of 5 rounds over 4 entrants is refused 422 SWISS_ROUNDS_ABOVE_MAX (hard max 3) and writes nothing" +
+        (ok ? "" : ` — division ${fourFieldDivId ?? "none"}, stage ${stageRes.status} ${stageId ?? JSON.stringify(stageRes.json).slice(0, 160)}, generate ${res.status} ${JSON.stringify(res.json).slice(0, 200)}, minted ${minted}`),
       ok,
     );
   }

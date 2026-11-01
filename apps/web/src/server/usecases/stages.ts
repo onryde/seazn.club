@@ -22,6 +22,8 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./forma
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
 import { swissRefusal } from "./swiss-refusal";
+import { judgeSwissRounds, type SwissRoundsJudgement } from "@/lib/swiss-rounds";
+import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -1276,7 +1278,55 @@ export type SwissGenResult = {
   /** W3 T8 (BG-SW-1): the colour board 1's upper player took when this pass coloured round 1 by lot (chess on); else
    *  null. */
   colourLot: "white" | "black" | null;
+  /** W3 T11 (X-SW-16): the round count judged against the field this pass minted or paired for (`judgeSwissRoundsAt`) —
+   *  never a refusal (that throws); null when the pass had nothing to pair. A warn rides on the Generate's answer. */
+  swissRounds: SwissRoundsJudgement | null;
 };
+
+/**
+ * W3 T11 (SW-H2, RB3-3; rule X-SW-16): a Swiss's round count against the field paired NOW — rulebook-W3-swiss.md §3.1
+ * ("n = active field at the time of pairing") and §3.2 ("Above the hard maximum: refused … check runs … again at Start and
+ * at every Generate (the field can shrink after creation)"). Refused with SWISS_ROUNDS_ABOVE_MAX `{ rounds, field,
+ * hardMax, canFinish }` before any write; the judgement otherwise. `canFinish`: a round is complete, so the Swiss can be
+ * finished after it (T13) — the refusal is then resolvable another way, a 409; else it can never succeed as sent, a 422.
+ */
+export function judgeSwissRoundsAt(rounds: number, fieldSize: number, canFinish: boolean): SwissRoundsJudgement {
+  const judgement = judgeSwissRounds(rounds, fieldSize);
+  if (judgement.verdict === "refuse") {
+    throw swissRefusal(
+      "SWISS_ROUNDS_ABOVE_MAX",
+      { rounds, field: fieldSize, hardMax: judgement.hardMax, canFinish },
+      { resolvable: canFinish },
+    );
+  }
+  return judgement;
+}
+
+/**
+ * W3 T11 (X-SW-16; rulebook §3.2 "check runs … again at Start"): Start judges every ROOT Swiss of the division
+ * (`isRootSwissStage` — a Swiss fed by an earlier stage has no field until that stage ends, and its own Generate judges it)
+ * against the field its next Pair would seat: the active roster at that round (`swissFieldForRound` over the per-stage
+ * stamps), so a withdrawal after the shells were minted is caught here, before the division opens. Refused as sent (a
+ * 422, `canFinish: false`: nothing is played before Start). A field under 2 is left to the Generate's own refusal, and a
+ * Swiss with every round seated has nothing left to pair. Reads only — the caller runs it before its first write.
+ */
+export async function refuseSwissRoundsAboveMaxAtStart(tx: Tx, divisionId: string): Promise<void> {
+  const stages = await tx<{ id: string; kind: string; progression: unknown; config: Record<string, unknown> }[]>`
+    select id, kind, progression, config from stages where division_id = ${divisionId} and kind = 'swiss' order by seq`;
+  for (const stage of stages.filter(isRootSwissStage)) {
+    const rounds = stage.config.rounds;
+    if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
+      throw new EngineError("CONFIG_INVALID", "swiss stage requires config.rounds >= 1", { stageId: stage.id });
+    }
+    const existing = await tx<{ round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown; ext_key: string | null }[]>`
+      select round_no, home_entrant_id, away_entrant_id, outcome, ext_key from fixtures where stage_id = ${stage.id}`;
+    const target = existing.length === 0 ? 1 : nextUnseatedSwissRound(existing);
+    if (target === null) continue;
+    const field = swissFieldForRound(await swissActiveEntrants(tx, divisionId, stage.id), target);
+    if (field.length < 2) continue;
+    judgeSwissRoundsAt(rounds, field.length, false);
+  }
+}
 
 /**
  * W3 T6 (spec §4 "Scoring for the newcomer", ruling 251; rule X-SW-12): the field of Swiss round `target` — every entrant
@@ -1503,6 +1553,8 @@ export async function swissGen(
     // Minted at round 1's field; every later round is resized to its own field when its Pair reaches it.
     const mintField = swissFieldForRound(entrants, 1);
     refuseSwissFieldUnderTwo(stageId, mintField.length);
+    // W3 T11 (X-SW-16): the mint is a Generate — nothing is played yet, so nothing can be finished.
+    const swissRounds = judgeSwissRoundsAt(rounds, mintField.length, false);
     return {
       gen: planSwissShells(rounds, mintField.length).map((shell) => ({
         extKey: shell.extKey,
@@ -1520,6 +1572,7 @@ export async function swissGen(
       drawSeed: null,
       drawOrder: null,
       colourLot: null,
+      swissRounds,
     };
   }
 
@@ -1539,6 +1592,7 @@ export async function swissGen(
       drawSeed: null,
       drawOrder: null,
       colourLot: null,
+      swissRounds: null,
     };
   }
 
@@ -1596,6 +1650,9 @@ export async function swissGen(
   // plus latecomers whose first round is later). Refused here, before the reconcile below would size the round to 0 or 1
   // and delete its unseated shells.
   refuseSwissFieldUnderTwo(stageId, field.length);
+  // W3 T11 (X-SW-16): this round's field against the round count, before any write — withdrawals since the last Generate
+  // can have shrunk it under the rounds. Past round 1 the previous round is decided (checked above), so Finish resolves it.
+  const swissRounds = judgeSwissRoundsAt(rounds, field.length, target > 1);
   // The division's pinned module: the bye's frozen cfg below, and what "played" means for a forfeit (ruling 118).
   const [division] = await tx<{ config: unknown; sport_key: string; module_version: string }[]>`
     select config, sport_key, module_version from divisions where id = ${divisionId}`;
@@ -1809,6 +1866,7 @@ export async function swissGen(
     drawSeed,
     drawOrder: target === 1 ? drawOrder : null,
     colourLot,
+    swissRounds,
   };
 }
 
@@ -2469,6 +2527,10 @@ export interface GenerateOutcome {
    *  that changed no round's shape must stay silent rather than announce four
    *  zeroes. See `SwissReshape`. */
   reshaped?: SwissReshape;
+  /** W3 T11 (X-SW-16): Swiss only, and ABSENT unless the round count is above the safe maximum of the field this pass
+   *  minted or paired for (`verdict: "warn"`, rulebook §3.2 "allowed, with a plain warning"). A count above the hard
+   *  maximum never reaches here — it is refused (SWISS_ROUNDS_ABOVE_MAX). */
+  swiss_rounds?: SwissRoundsJudgement;
 }
 
 /**
@@ -3117,6 +3179,7 @@ export async function generateStageFixturesTx(
 
   let swissSeatedCount = 0;
   let swissReshaped: SwissReshape | undefined;
+  let swissRoundsWarn: SwissRoundsJudgement | undefined;
   // Rides on this pass's `fixtures_generated` row when it seated a round.
   let swissAudit: Record<string, unknown> | undefined;
   let gen: GenFixture[];
@@ -3125,6 +3188,7 @@ export async function generateStageFixturesTx(
     gen = swiss.gen;
     swissSeatedCount = swiss.seatedCount;
     if (!isEmptySwissReshape(swiss.reshaped)) swissReshaped = swiss.reshaped;
+    if (swiss.swissRounds?.verdict === "warn") swissRoundsWarn = swiss.swissRounds;
     // `override` is true only when the body named a mode OTHER than the one
     // this round would have used anyway — picking the default is no override.
     swissAudit =
@@ -3495,6 +3559,7 @@ export async function generateStageFixturesTx(
       existing: gen.length - newRows.length,
       fixtures,
       ...(swissReshaped ? { reshaped: swissReshaped } : {}),
+      ...(swissRoundsWarn ? { swiss_rounds: swissRoundsWarn } : {}),
     },
     divisionId: stage.division_id,
     competitionId: division!.competition_id,

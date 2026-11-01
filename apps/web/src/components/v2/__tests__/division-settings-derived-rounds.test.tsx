@@ -37,7 +37,9 @@ const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
   maxTeamMembers: null,
 };
 
-const KNOBS = { swissRounds: 5, poolCount: 2, legs: 1, qualified: 4 };
+// The builder's default round count (division-builder.tsx `useState(3)` — W3 T11: the band for a field of up to 8,
+// rulebook-W3-swiss.md §3.2; it was 5 before, which dead-ends a field of 6 in 15.5% of events, §3.1).
+const KNOBS = { swissRounds: 3, poolCount: 2, legs: 1, qualified: 4 };
 
 type StageProp = Parameters<typeof DivisionSettings>[0]["stages"][number];
 
@@ -51,7 +53,7 @@ function stagesFor(templateKey: string, rounds: number): StageProp[] {
 }
 
 /** Persisted stage rows — `rounds` is layered on AFTER buildTemplateStages
- *  (which used the default KNOBS.swissRounds of 5) so the input must read the
+ *  (which used the default KNOBS.swissRounds of 3) so the input must read the
  *  STAGE config, not the knob default. AGENTS.md #19: a reachability check
  *  satisfied by ANY value; pin persisted ≠ default. */
 function persistedStagesFor(templateKey: string, persistedRounds: number): StageProp[] {
@@ -66,8 +68,9 @@ function persistedStagesFor(templateKey: string, persistedRounds: number): Stage
   }));
 }
 
-function mount(stages: StageProp[], locked: boolean) {
+function mount(stages: StageProp[], locked: boolean, swissField?: number) {
   return renderIsland(DivisionSettings, {
+    ...(swissField !== undefined ? { swissField } : {}),
     division: {
       id: "d1",
       name: "Open",
@@ -117,10 +120,10 @@ describe("division settings — editable swiss rounds on every swiss template", 
       expect(roundsInputValue(stagesFor(template, 7), true)).toBeNull();
     });
 
-    it(`${template}: input seeds from persisted stage config, not the knob default of 5`, () => {
+    it(`${template}: input seeds from persisted stage config, not the knob default of 3`, () => {
       activeDict.current = enUi as Record<string, string>;
       expect(roundsInputValue(persistedStagesFor(template, 4), false)).toBe("4");
-      expect(roundsInputValue(persistedStagesFor(template, 4), false)).not.toBe("5");
+      expect(roundsInputValue(persistedStagesFor(template, 4), false)).not.toBe(String(KNOBS.swissRounds));
     });
   }
 
@@ -136,5 +139,78 @@ describe("division settings — editable swiss rounds on every swiss template", 
     expect(
       walk(tree).some((e) => propsOf(e)["data-testid"] === "division-settings-swiss-rounds"),
     ).toBe(false);
+  });
+});
+
+// W3 Task 11 (SW-H2, RB3-3; X-SW-16): the Rounds box takes any count from 1 (rulebook §3.2 "Organiser may choose any value
+// from 1 to the hard maximum"; it was min 3), names the field's guidance under it, and a switch to a Swiss format seeds
+// the field's recommendation rather than a flat 5. Expected numbers are §3.2's table typed here: a field of 6 → 3
+// recommended, at most 5; a field of 4 → 2 recommended, at most 3.
+describe("division settings — Swiss round guidance (X-SW-16)", () => {
+  const fill = (s: string, v: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_m, k: string) => String(v[k]));
+  const EN = enUi as Record<string, string>;
+  const byTestId = (tree: ReturnType<ReturnType<typeof mount>["tree"]>, id: string) =>
+    tree.find((e) => propsOf(e)["data-testid"] === id);
+  const guidanceText = (tree: ReturnType<ReturnType<typeof mount>["tree"]>): string | null => {
+    const node = byTestId(tree, "division-settings-swiss-rounds-guidance");
+    return node ? String(propsOf(node).children) : null;
+  };
+
+  it("the Rounds box accepts 1 (it was 3) and still caps at 15", () => {
+    activeDict.current = EN;
+    const input = byTestId(mount(stagesFor("swiss", 3), false, 6).tree(), "division-settings-swiss-rounds");
+    expect(input, "the Rounds box").toBeDefined();
+    expect(propsOf(input!).min).toBe(1);
+    expect(propsOf(input!).max).toBe(15);
+  });
+
+  it("names the field's guidance under the Rounds box, for each field size", () => {
+    activeDict.current = EN;
+    let checked = 0;
+    for (const [n, count, hardMax] of [
+      [6, 3, 5],
+      [4, 2, 3],
+      [8, 3, 7],
+      [20, 5, 19],
+    ] as const) {
+      expect(guidanceText(mount(stagesFor("swiss", 3), false, n).tree()), `field ${n}`).toBe(
+        fill(EN["swiss.rounds.guidance.other"]!, { n, count, hardMax }),
+      );
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("no guidance without a pairable field (none passed, an empty division, one entrant)", () => {
+    activeDict.current = EN;
+    for (const field of [undefined, 0, 1]) {
+      expect(guidanceText(mount(stagesFor("swiss", 3), false, field).tree()), String(field)).toBeNull();
+    }
+  });
+
+  it("a switch to a Swiss format seeds the field's recommendation, not a flat 5", () => {
+    activeDict.current = EN;
+    const league = buildTemplateStages("league", KNOBS).map((d) => ({
+      name: d.name,
+      kind: d.kind,
+      config: d.config as Record<string, unknown>,
+      progression: d.progression,
+    }));
+    let checked = 0;
+    for (const [field, seeded] of [
+      [6, "3"],
+      [4, "2"],
+      [40, "6"],
+    ] as const) {
+      const island = mount(league, false, field);
+      expect(roundsInputValue(league, false), "premise: a league shows no rounds box").toBeNull();
+      const select = byTestId(island.tree(), "format-template");
+      (propsOf(select!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "swiss" } });
+      const rounds = byTestId(island.tree(), "division-settings-swiss-rounds");
+      expect(rounds, `field ${field}: the Rounds box after the switch`).toBeDefined();
+      expect(String(propsOf(rounds!).value), `field ${field}`).toBe(seeded);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });

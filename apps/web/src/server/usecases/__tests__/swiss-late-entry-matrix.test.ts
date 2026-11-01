@@ -662,10 +662,14 @@ const CUT_TEMPLATES = SWISS_TEMPLATES.filter(
   (t) => buildTemplateStages(t, { qualified: QUALIFIED, swissRounds: 3, poolCount: 2, legs: 1 }).length > 1,
 );
 
-/** The cut rig's Swiss rounds (the template's `swissRounds` knob). Four, so that in `top-seed-first` the latecomer, who
- *  plays three and can lose only to seed 1, ends on at least two wins: with five entrants that is always inside the
- *  top four whatever the tie-breaks, so its seed — and the lower bound under it — is always asserted. */
-const CUT_ROUNDS = 4;
+/** The cut rig's seeded field and Swiss rounds (the template's `swissRounds` knob). W3 Task 11 (X-SW-16) refuses a Swiss
+ *  above its field's hard maximum (rulebook-W3-swiss.md §3.1: n − 1 for an even n), so the old rig — four seeded and four
+ *  rounds — no longer mints. Six seeded and three rounds is §3.2's recommendation for a field of 6 (and still within 7's
+ *  safe maximum once the latecomer joins), and keeps round 1 — the missed one — even, with no bye row. Three rounds:
+ *  the latecomer plays two, and can lose only to seed 1 in `top-seed-first`. Whether it then qualifies whatever the
+ *  tie-breaks is a premise the test asserts, never assumed. */
+const CUT_SEEDED = 6;
+const CUT_ROUNDS = 3;
 
 /** Who wins a board in the cut rig. `latecomer-first`: the latecomer beats everyone, otherwise the better seed wins.
  *  `top-seed-first` (review round 2): seed 1 beats everyone — the latecomer included — so seed 1 ends on CUT_ROUNDS wins
@@ -673,10 +677,10 @@ const CUT_ROUNDS = 4;
 const CUT_ORDERS = ["latecomer-first", "top-seed-first"] as const;
 type CutOrder = (typeof CUT_ORDERS)[number];
 
-/** Four seeded entrants; round 1 starts, so a late entrant takes (c) and misses round 1 (no bye row in it). The Swiss is
+/** CUT_SEEDED seeded entrants; round 1 starts, so a late entrant takes (c) and misses round 1 (no bye row in it). The Swiss is
  *  played out in `order`, then completed through the real `completeStage`, which computes the tail's seed proposal. */
 async function toTheCut(template: string, kind: Kind, order: CutOrder = "latecomer-first") {
-  const rig = await templateRig(template, kind, 4, CUT_ROUNDS);
+  const rig = await templateRig(template, kind, CUT_SEEDED, CUT_ROUNDS);
   await pair(rig);
   await startBoard(rig, boardsOf(await rowsOf(rig.swissStageId), 1)[0]!);
   const late = await addLate(rig, "Late");
@@ -690,7 +694,10 @@ async function toTheCut(template: string, kind: Kind, order: CutOrder = "latecom
     await playRound(rig, r, better);
   }
   const rows = await rowsOf(rig.swissStageId);
-  expect(swissPremise(rows, 1), "premise: round 1, the missed one, seated four and no bye row").toEqual({ seated: 4, byeRows: 0 });
+  expect(swissPremise(rows, 1), "premise: round 1, the missed one, seated the whole seeded field and no bye row").toEqual({
+    seated: CUT_SEEDED,
+    byeRows: 0,
+  });
   expect(seatedIn(roundOf(rows, 1)), "premise: the latecomer sat out round 1").not.toContain(late.id);
   const done = await completeStage(rig.auth, rig.swissStageId);
   expect(done.completed, "the Swiss completes").toBe(true);

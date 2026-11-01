@@ -2039,7 +2039,9 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     let checked = 0;
     for (const game of [false, true]) {
       const rtk = fakeRtk();
-      const s = await seedOnlineSwiss({ players: 2, pairing: "fold", cameraPolicy: "required" });
+      // One round: a field of two pairs at most one (rulebook-W3-swiss.md §3.2, n = 2 → hard max 1); the seed's default
+      // of 3 is refused SWISS_ROUNDS_ABOVE_MAX since W3 Task 11.
+      const s = await seedOnlineSwiss({ players: 2, rounds: 1, pairing: "fold", cameraPolicy: "required" });
       const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
       const t0 = new Date();
       expect(await open(s, 1, t0)).toMatchObject({ opened: true });

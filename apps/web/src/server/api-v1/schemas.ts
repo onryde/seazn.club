@@ -2750,11 +2750,23 @@ export const SwissReshapeResult = z.object({
   byes_removed: z.number().int(),
 });
 
+/** W3 T11 (X-SW-16; rulebook-W3-swiss.md §3.1/§3.2): a Swiss round count against the field a Generate minted or paired
+ *  for — the field's recommended count, safe maximum ⌊n/2⌋ and hard maximum (n − 1 even, n odd). On a Generate's answer
+ *  only when `verdict` is "warn" (above the safe maximum); above the hard maximum the Generate is refused instead
+ *  (SWISS_ROUNDS_ABOVE_MAX). */
+export const SwissRoundsJudgementResult = z.object({
+  verdict: z.enum(["ok", "warn", "refuse"]),
+  recommended: z.number().int(),
+  safeMax: z.number().int(),
+  hardMax: z.number().int(),
+});
+
 export const GenerateResult = z.object({
   created: z.number().int(),
   existing: z.number().int(),
   fixtures: z.array(Fixture),
   reshaped: SwissReshapeResult.optional(),
+  swiss_rounds: SwissRoundsJudgementResult.optional(),
 });
 
 /** POST /stages/{id}/generate body. `pairing` = a ROUND-1-ONLY Swiss override
