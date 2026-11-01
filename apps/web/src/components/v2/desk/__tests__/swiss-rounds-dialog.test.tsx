@@ -232,6 +232,21 @@ describe.each(LOCALES)("SwissRoundsDialog (X-SW-17, owner pick B) [%s]", (locale
     expect(d.find("stage-rounds-preview")).toBeDefined();
   });
 
+  it("after LOCKED the caution about the count it would have saved goes too (above the safe maximum: 4 on a field of 6)", async () => {
+    const d = open({
+      control: control({ field: 6, rounds: 3 }),
+      fixtures: shells(6, 3),
+      onSave: async () => ({ code: "SWISS_ROUNDS_LOCKED", extra: { canFinish: false, canAddRound: true }, text: "locked" }),
+    });
+    d.press("stage-rounds-more");
+    // Rulebook §3.1: safe max ⌊6/2⌋ = 3, so 4 carries the caution.
+    expect(d.find("stage-rounds-warn"), "premise: 4 > safe max 3 is cautioned").toBeDefined();
+    d.press("stage-rounds-save");
+    await flush();
+    expect(d.find("stage-rounds-warn"), "nothing to caution about once the count is fixed").toBeUndefined();
+    expect(d.find("stage-rounds-guidance"), "the field's guidance stays").toBeDefined();
+  });
+
   it("a dialog opened on a read that says started (the desk refreshed) is fixed from the start", () => {
     const d = open({ control: control({ field: 6, rounds: 3, started: true }), fixtures: shells(6, 3) });
     expect(d.disabled("stage-rounds-save")).toBe(true);
