@@ -146,6 +146,10 @@ export interface StageRailProps {
    *  an already-built element — a slot, not a component reference — so the
    *  rail keeps owning no data hook of its own. */
   courtTagsSlot: React.ReactNode;
+  /** Match Day C3 (review round 1, phone ruling): the stage's Match format / Points / Tie-breaks rows, built by the panel (it owns which
+   *  panel is open) and mounted as the TOP rows of this sheet below `md` - the card's one phone trigger. The slot carries its own
+   *  `md:hidden` (the header's buttons are the desktop twin). Absent: nothing, so the rail's other callers are unchanged. */
+  toolsSlot?: React.ReactNode;
   /** Task 4, fix round 2 (ruling T4-B) — the unscheduled-count badge,
    *  already-built by the panel, same `courtTagsSlot` shape and same reason:
    *  a non-editing viewer must still see this badge (it carried NO `canEdit`
@@ -174,10 +178,6 @@ export interface StageRailProps {
    *  not specific to this button) — only this component's OWN use of it
    *  is gone. */
   unscheduledBadgeSlot: React.ReactNode;
-  /** Match Day C3 (review round 1, phone ruling): the stage's Match format / Points / Tie-breaks rows, built by the panel (it owns which
-   *  panel is open) and mounted as the TOP rows of this sheet below `md` - the card's one phone trigger. The slot carries its own
-   *  `md:hidden` (the header's buttons are the desktop twin). Absent: nothing, so the rail's other callers are unchanged. */
-  toolsSlot?: React.ReactNode;
 }
 
 export function StageRail({

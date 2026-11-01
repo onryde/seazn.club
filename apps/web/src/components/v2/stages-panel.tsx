@@ -1590,6 +1590,15 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   swissHasUnseated={swissHasUnseated}
                   canUnpairSwiss={canUnpairSwiss}
                   swissPairingMenu={swissPairingMenu}
+                  // #622 — court tags editor moves onto the rail (Task 3). Stays
+                  // constructed HERE, not inside StageRail: it reads
+                  // `courtTagSuggestions` off this panel's own `venues` prop, and
+                  // the rail keeps owning no data of its own (see stage-rail.tsx's
+                  // own comment on why). `StageRail` only actually renders this
+                  // slot when `canEdit` is true (its own early-return guard) — the
+                  // `!canEdit` inline placement above is what a non-editing viewer
+                  // sees instead.
+                  courtTagsSlot={courtTagsEditor}
                   toolsSlot={
                     settingsTools.length > 0 ? (
                       <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
@@ -1615,15 +1624,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       </div>
                     ) : null
                   }
-                  // #622 — court tags editor moves onto the rail (Task 3). Stays
-                  // constructed HERE, not inside StageRail: it reads
-                  // `courtTagSuggestions` off this panel's own `venues` prop, and
-                  // the rail keeps owning no data of its own (see stage-rail.tsx's
-                  // own comment on why). `StageRail` only actually renders this
-                  // slot when `canEdit` is true (its own early-return guard) — the
-                  // `!canEdit` inline placement above is what a non-editing viewer
-                  // sees instead.
-                  courtTagsSlot={courtTagsEditor}
                   unscheduledBadgeSlot={unscheduledBadge}
                 />
               </div>

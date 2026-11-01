@@ -501,11 +501,12 @@ test("a locked stage says it is locked once; an open editor has one Cancel and f
   const said = (await row.innerText()).split(sentence).length - 1;
   expect(said, "closed: the lock sentence appears once in the row").toBe(1);
   for (const text of await row.getByTestId("stage-format-summary").allInnerTexts()) expect(text, "the summary carries the format alone").not.toMatch(/locked/i);
-  await openStagePanel(enclosingStageCard(row), "format");
-  await expect(row.getByTestId("stage-format-chips"), "a locked stage still reads its format as chips").toBeVisible();
-  // Review I3 (controller ruling): exactly ONE lock line on the card, panels closed AND with every panel open.
+  // Review I3 (controller ruling): exactly ONE lock line on the card, panels closed AND with every panel open. The closed count is
+  // taken BEFORE any panel opens (a count taken after the format panel is open is a one-panel-open count, not an all-closed one).
   const card = enclosingStageCard(row);
   expect(await lockLinesOn(card), "all panels closed: one lock line on the card").toBe(1);
+  await openStagePanel(card, "format");
+  await expect(row.getByTestId("stage-format-chips"), "a locked stage still reads its format as chips").toBeVisible();
   let opened = 0;
   for (const panel of ["format", "points", "tiebreaks"] as const) {
     if ((await card.getByTestId(`stage-tool-${panel}`).count()) === 0) continue;
