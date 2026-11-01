@@ -94,6 +94,66 @@ export function isIsoDay(s: string): boolean {
   return !Number.isNaN(d.getTime()) && isoDay(d) === s;
 }
 
+/** S14: a report link's INCLUSIVE dates (V483 from_date / to_date) as the half-open UTC window its report counts:
+ *  `[from 00:00 UTC, to + 1 day 00:00 UTC)` - S13's rule (controller addendum 2026-11-01), the inverse of `windowDates`.
+ *  Anything but two real dates in order is refused by name (the table checks the order too; a NaN window would compare
+ *  false with every row and report zeros). */
+export function linkWindow(from: string, to: string): { from: Date; to: Date } {
+  if (!isIsoDay(from) || !isIsoDay(to) || to < from) {
+    throw new RangeError(`sponsor report: ${JSON.stringify(from)}..${JSON.stringify(to)} is not a pair of dates in order`);
+  }
+  return { from: new Date(`${from}T00:00:00.000Z`), to: new Date(new Date(`${to}T00:00:00.000Z`).getTime() + DAY_MS) };
+}
+
+/** S14: the most showings the public report lists (newest first). The numbers above them count every showing in the period;
+ *  the list is bounded because each listed frame is one signed storage read, made as the page renders for an anonymous
+ *  visitor (a season can hold hundreds of showings). */
+export const REPORT_SHOWINGS_MAX = 48;
+
+/** One showing on the public report (S14; spec §5.2): the card on air once. */
+export interface SponsorReportShowing {
+  airingId: string;
+  startedAt: string;
+  /** Time on screen of a CLOSED airing; null while it is still open (on air, or its session not closed): never measured to
+   *  now, and it adds nothing to the report's total (S13's rule). */
+  onScreenMs: number | null;
+  /** The match it aired in, its sides' public names (null for an empty seat); null when the fixture has since been deleted. */
+  match: { home: string | null; away: string | null } | null;
+  /** The break it filled (a `naturalBreaks` kind), null for a scene carousel showing. */
+  breakKind: string | null;
+  source: "rotation" | "scene" | "operator";
+  /** A SIGNED url for the programme frame (private bucket, TTL at most an hour), never the bare storage path; null when there
+   *  is no frame, or it could not be signed - the page draws a neutral placeholder. */
+  frameUrl: string | null;
+  /** Null in PR A (Y1 fills it): shown as a dash. */
+  viewers: number | null;
+  /** Null in PR A (Y2: it needs the broadcast's actual start time). */
+  watchUrl: string | null;
+}
+
+/** The public report a link opens (S14; spec §5.2); `server/sponsors/report.ts` `sponsorReport` builds it. */
+export interface SponsorReport {
+  sponsor: { name: string; logoUrl: string | null };
+  orgName: string;
+  /** The link's inclusive dates, YYYY-MM-DD. */
+  period: { from: string; to: string };
+  /** The competition the link is limited to, by name, or null for every match of the org. */
+  competition: string | null;
+  /** The instant the figures were read at (ISO). */
+  asOf: string;
+  /** Every showing in the period, open ones included (S13's "times shown"). */
+  timesShown: number;
+  /** Σ time on screen of the period's CLOSED showings. */
+  onScreenMs: number;
+  /** Null in PR A (Y1 fills it): shown as a dash, never 0. */
+  viewerImpressions: number | null;
+  /** Spec §5.2's "visits from the stream": the sponsor's `sponsor_clicks` with source `stream` in the period - never the
+   *  all-sources Overview number. */
+  streamVisits: number;
+  /** The newest REPORT_SHOWINGS_MAX showings of the period, newest first. */
+  showings: SponsorReportShowing[];
+}
+
 /** The period a raw `?period=` names: "last_30_days", one of THIS org's competitions by id, else "This year" (absent,
  *  repeated, unknown, or another org's competition). `find` over the org's own list, never a keyed lookup. */
 export function resolveSponsorPeriod(raw: string | string[] | undefined, competitions: readonly { id: string }[]): SponsorPeriod {

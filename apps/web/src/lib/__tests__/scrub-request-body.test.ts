@@ -129,6 +129,7 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/auth/magic-link": "the body is an email and a `next`; the token is minted and emailed, never received; a `next` secret path is scrubbed in place",
   "api/funnel/start": "the body is an email and the draft; the claim token is minted and emailed, never received",
   "api/orgs/[id]/invites": "the body is the invite's role, email and limits; the token is only in the response",
+  "api/v1/orgs/[id]/sponsors/[sponsorId]/report-links": "the body is the report link's competition and dates; its token is minted and returned once (R4 S13), never received",
   "api/users/me": "the body is a profile patch or the delete confirmation; `token` is a comment about a sealed Lichess token held server-side",
   "api/internal/relay/sessions/[sid]/heartbeat": "the relay token is the Bearer header; the body is heartbeat metrics",
   "api/v1/competitions/[id]/schedule/apply": "`token` is the plan's sequence token (a concurrency check); the body is the plan",

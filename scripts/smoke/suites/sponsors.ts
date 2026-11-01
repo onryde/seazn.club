@@ -1,6 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
 import {
-  CONNECT_TEST_ACCOUNT, type Session, newSession, call, check, signIn, tag, setConnect, pageRedirect, html, v1, v1data,
+  CONNECT_TEST_ACCOUNT, type Session, newSession, call, check, signIn, tag, setConnect, pageRedirect, html, v1, v1data, smokeDb,
 } from "../harness.ts";
 
 /** v10 sponsor CRM smoke: tiered manager + public placement + tracked click
@@ -113,6 +113,30 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
     "sponsors: a report link ending before it starts is refused (400)",
     (await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${goldId}/report-links`, "POST", { competitionId: null, from: "2026-06-02", to: "2026-06-01" })).status === 400,
   );
+
+  // --- R4 S14: the public report renders a seeded airing - with no session at all - and 404s once the link is revoked. The
+  // airing is written straight to its table (the overlay read path writes it in production): 8 s on screen, in the link's dates.
+  const db = smokeDb();
+  try {
+    await db`
+      insert into sponsor_airings (org_id, sponsor_id, sponsor_name, fixture_id, moment_id, source, break_kind, style, started_at, ended_at)
+      values (${proOrgId}, ${goldId}, ${`Goldco ${tag}`}, null, ${`smoke-${tag}:sponsor.over_end`}, 'rotation', 'over_end', 'lower_third',
+              '2026-03-02T10:00:00Z', '2026-03-02T10:00:08Z')`;
+  } finally {
+    await db.end();
+  }
+  const reportMade = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${goldId}/report-links`, "POST", { competitionId: null, from: "2026-03-01", to: "2026-03-31" });
+  const report = reportMade.status === 201 ? v1data<{ id: string; url: string }>(reportMade) : null;
+  const opened = report ? await html(newSession(), report.url) : null;
+  check(
+    "sponsors: the report renders a seeded airing",
+    opened !== null && opened.status === 200 && opened.body.includes('data-testid="sponsor-report"') &&
+      opened.body.includes(`Goldco ${tag}`) && (opened.body.match(/data-testid="report-showing"/g) ?? []).length === 1 &&
+      /<meta name="robots" content="noindex/.test(opened.body),
+  );
+  if (report) await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-report-links/${report.id}`, "DELETE");
+  const closed = report ? await html(newSession(), report.url) : null;
+  check("sponsors: a revoked report link is the 404", closed !== null && closed.status === 404 && closed.body.includes('data-testid="sponsor-report-not-found"'));
 
   // --- Monetization: package + order-first Connect checkout.
   const pkgRes = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-packages`, "POST", {
