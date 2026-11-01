@@ -104,12 +104,16 @@ async function sponsorStreamRows(admin: Session, proOrgId: string, competitionId
     const passed = await frame(jobToken);
     check("relay: frame with a bad token → 401", refused.status === 401 && passed.status === 413);
   } finally {
-    if (sid) await db`update fixture_stream_sessions set state = 'completed', desired_state = 'ending' where id = ${sid}`;
+    // Retire the hand-seeded session the way the relay's own end leaves one: `completed` AND `runner_state = 'destroyed'`.
+    // The relay sweep (relay-sweep.ts) picks up any session whose runner is not 'none'/'destroyed', whatever its state,
+    // so a completed row still `playing` would be swept as a live Machine that smoke never started.
+    if (sid) await db`update fixture_stream_sessions set state = 'completed', desired_state = 'ending', runner_state = 'destroyed' where id = ${sid}`;
     await db.end();
   }
 
-  // S10: the board's tagged link, the stream code, and HEAD (a link preview, I3: never a click). The HEAD goes FIRST and the
-  // tagged click's row is its fence: once that row has landed, any row the HEAD's tail work wrote has landed too.
+  // S10: the board's tagged link, the stream code, and HEAD (a link preview, I3: never a click). The HEAD goes FIRST. Two
+  // fences then prove it wrote nothing: once the tagged click's row has landed, the total is before + 1; once the code's
+  // row has landed too, before + 2. A HEAD row that landed late still trips the second.
   const clicks = smokeDb();
   try {
     const count = async (where: { fixture?: string; source?: string } = {}) => {
@@ -134,11 +138,17 @@ async function sponsorStreamRows(admin: Session, proOrgId: string, competitionId
       "sponsors: /s/<id>?f=&src=match 302s to the sponsor and records a match click on that fixture",
       tagged.status === 302 && (tagged.location ?? "").startsWith("https://goldco.example") && (await landed({ fixture: vb.fixtureId, source: "match" })),
     );
-    check("sponsors: HEAD /s/<id> 302s and records no click", head.status === 302 && (await count()) === before + 1);
+    const afterTagged = await count();
     const coded = await pageRedirect(newSession(), `/s/${card?.shortCode ?? "NOCODE"}`);
+    const codeLanded = await landed({ fixture: vb.fixtureId, source: "stream" });
     check(
       "sponsors: /s/<CODE> 302s to the sponsor and records a stream click on the code's fixture",
-      coded.status === 302 && (coded.location ?? "").startsWith("https://goldco.example") && (await landed({ fixture: vb.fixtureId, source: "stream" })),
+      coded.status === 302 && (coded.location ?? "").startsWith("https://goldco.example") && codeLanded,
+    );
+    const afterCode = await count();
+    check(
+      "sponsors: HEAD /s/<id> 302s and records no click (both fences)",
+      head.status === 302 && afterTagged === before + 1 && codeLanded && afterCode === before + 2,
     );
   } finally {
     await clicks.end();

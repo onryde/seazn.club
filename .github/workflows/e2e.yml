@@ -115,12 +115,12 @@ on:
         required: false
         type: boolean
         default: false
-      # R4 S15: OFF unless asked for. On, the `walkthrough rest 1/2` leg also runs
+      # R4 S15: OFF unless asked for. On, the `walkthrough rest 2/2` leg also runs
       # e2e/walkthrough/sponsors-capture.spec.ts with SPONSOR_CAPTURE_DIR set (without it every test there skips) and
       # uploads the PNGs as the `sponsor-captures` artifact — the owner's sign-off pictures of the sponsor pages at
       # 320/768/1280, never committed. Off (and on every `push`), both steps are skipped by their `if:`.
       sponsor_captures:
-        description: "Also capture the sponsor pages (walkthrough rest 1/2 leg) and upload them as an artifact"
+        description: "Also capture the sponsor pages (walkthrough rest 2/2 leg) and upload them as an artifact"
         required: false
         type: boolean
         default: false
@@ -1329,13 +1329,15 @@ jobs:
           retention-days: 7
 
       # R4 S15, the same shape as the overlay gallery's two steps above: opt-in (`sponsor_captures`), one leg so the
-      # artifact name is unique, `!cancelled()` so a red spec step elsewhere does not cost the pictures. The spec's own
+      # artifact name is unique, `!cancelled()` so a red spec step elsewhere does not cost the pictures. The leg is
+      # rest 2/2: the capture spec's own skipped tests count toward that shard, so it carries fewer real ones (run
+      # 41277565323: rest 1/2 650 s, rest 2/2 586 s; the capture step itself took 21 s). The spec's own
       # last test refuses a missing, non-PNG or byte-identical capture (AGENTS.md class 10); the count below refuses an
       # empty directory, which is what a run with the env var lost would leave.
       - name: Sponsor captures (opt-in)
         id: sponsor_captures
-        if: ${{ !cancelled() && inputs.sponsor_captures && matrix.slug == 'walkthrough-rest-1' }}
-        timeout-minutes: 8
+        if: ${{ !cancelled() && inputs.sponsor_captures && matrix.slug == 'walkthrough-rest-2' }}
+        timeout-minutes: 5
         run: |
           mkdir -p "$SPONSOR_CAPTURE_DIR"
           npx playwright test --project=walkthrough e2e/walkthrough/sponsors-capture.spec.ts
@@ -1348,7 +1350,7 @@ jobs:
           SPONSOR_CAPTURE_DIR: ${{ github.workspace }}/sponsor-captures
 
       - name: Upload sponsor captures (opt-in)
-        if: ${{ !cancelled() && inputs.sponsor_captures && matrix.slug == 'walkthrough-rest-1' }}
+        if: ${{ !cancelled() && inputs.sponsor_captures && matrix.slug == 'walkthrough-rest-2' }}
         uses: actions/upload-artifact@v4
         with:
           name: sponsor-captures
@@ -1356,6 +1358,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           overwrite: true
+
+      # The leg's own report upload (above) runs BEFORE the capture step, so a red capture would leave no trace to read.
+      # This is the capture run's own report, under its own name so it never collides with `playwright-report-<slug>`.
+      - name: Upload sponsor capture report (on failure)
+        if: ${{ !cancelled() && steps.sponsor_captures.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sponsor-captures-report
+          path: apps/web/playwright-report
+          retention-days: 7
 
       - name: Dev server log (on failure)
         if: failure()
