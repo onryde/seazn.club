@@ -8,9 +8,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sportThemeAttr, sportThemeStyle } from "@/components/v2/scorepad/v3/sport-theme";
 import { useLiveFixture } from "@/components/public-site/match-centre/use-live-fixture";
-import { maxSeq, momentsFor, sponsorMoments } from "@/lib/overlay-moments";
-import { endOfOverMoment, closedOverBaselineOf } from "@/lib/overlay-end-of-over";
-import { tossMoment } from "@/lib/overlay-openers";
+import { maxSeq } from "@/lib/overlay-moments";
+import { closedOverBaselineOf } from "@/lib/overlay-end-of-over";
+import { stageIncoming } from "@/lib/overlay-incoming";
 import { useMomentQueue } from "./use-moment-queue";
 import { OverlayMomentSlab } from "./overlay-moment";
 import { OverlayEndOfOverCard } from "./overlay-end-of-over";
@@ -139,9 +139,6 @@ function sponsorSlotVars(box: CanvasBox): React.CSSProperties {
   } as React.CSSProperties;
 }
 
-/** Stable identity: a fresh `[]` every render would re-run the enqueue effect
- *  on every poll for nothing. */
-const EMPTY_MOMENTS: never[] = [];
 
 /**
  * SSR-safe `prefers-reduced-motion`, live if the viewer flips it.
@@ -279,39 +276,25 @@ export function OverlayStage(props: OverlayStageProps) {
   // it — the next card, and never a start inside a 10 s bucket a showing on this page already used (one id, one card).
   const [carouselMemory] = useState(carouselMemoryStore);
 
-  // Moments first, then end-of-over (so OUT precedes the over card), then toss
-  // (only when the match card is NOT up — card owns warming openers).
+  // The ONE incoming list — moments, end-of-over, toss, sponsor cards, behind the mount's tip and inside the delay gate.
+  // Its order and filters live in `stageIncoming` (lib/overlay-incoming.ts), which the sponsor seam test runs too.
   const sideShorts: [string, string] = [model.sides[0].short, model.sides[1].short];
   const sideNames: [string, string] = [model.sides[0].name, model.sides[1].name];
-  const incoming = awaitingDelay
-    ? EMPTY_MOMENTS
-    : (() => {
-        const moments = momentsFor(
-          props.sportKey,
-          data.recent ?? [],
-          momentBaseline,
-          msg,
-          sideShorts,
-        );
-        const eoo = endOfOverMoment({
-          closed: data.lastClosedOver,
-          since: closedOverBaseline,
-          msg,
-        });
-        const toss = showMatchCard
-          ? null
-          : tossMoment({
-              toss: data.cricketToss,
-              sideNames,
-              scoringStarted: data.scoringStarted === true,
-              msg,
-            });
-        // R4 S7 (S6 addendum): the sponsor cards join the ONE list — the queue's `sync` drops every id missing from it,
-        // so a second list would lose a queued card on the next poll — behind the mount's tip like every moment (OBS
-        // opened mid-broadcast must not replay a break), and inside this delay gate.
-        const cards = sponsorMoments(sponsorPlan).filter((m) => m.seq > momentBaseline);
-        return [...moments, ...(eoo ?? []), ...(toss ? [toss] : []), ...cards];
-      })();
+  const incoming = stageIncoming({
+    sportKey: props.sportKey,
+    recent: data.recent,
+    lastClosedOver: data.lastClosedOver,
+    cricketToss: data.cricketToss,
+    scoringStarted: data.scoringStarted === true,
+    sponsorPlan,
+    momentBaseline,
+    closedOverBaseline,
+    msg,
+    sideShorts,
+    sideNames,
+    showMatchCard,
+    awaitingDelay,
+  });
 
   // R2005 change 7 (spec §4.8, D14): the active scene's own `momentsFire` decides — Final discards, so nothing it drops
   // can ever replay. Read off the declaration (`momentsFireIn`), never off a scene id.
