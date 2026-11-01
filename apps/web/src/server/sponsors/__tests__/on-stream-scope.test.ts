@@ -67,7 +67,7 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     expect(breaksChecked, `${breaksChecked} breaks compared`).toBeGreaterThan(3);
   });
 
-  it("the seam to the planner: cricket on Light / Normal / Busy - the strip's break count is the module's majors (+ every 3rd minor), derived from the seeded ledger, not from previewForSport", async () => {
+  it("preview for cricket on Light equals the planner's count over the seeded finished fixture's events (and Normal, Busy): the module's majors, + every 3rd minor, derived from the seeded ledger, not from previewForSport", async () => {
     const o = await org();
     const rig = await seedDivision(o.auth, o.competitionId, "cricket", VARIANT.cricket!, "cricket div");
     const walk = chooseWalk("cricket", rig.cfg);
