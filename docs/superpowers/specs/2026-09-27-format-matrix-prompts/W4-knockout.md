@@ -37,6 +37,21 @@ same-club/country separation in draw placement (W5 groups consume it) and the
 Unlisted gaps on these formats go to you under the §8 preamble — enumerate them
 from the audits at start and record each assignment in the decision log.
 
+## Carry from W3 (late entry, owner 2026-11-01)
+
+The owner wants late entry after Start in **every format and for every entrant kind** (individual, pair, team), not
+only Swiss. W3 shipped the Swiss half (ruling 250); this wave owns the knockout half. Reuse W3's shape so organisers learn
+one action, and brainstorm only the format-specific rule:
+- One organiser action, **"Add late player"**, in the stage rail's "More" menu, opening the Entrants tab's existing add
+  form (W3 app-A Task 10). Never a second add form.
+- The server decides the case and returns `late_entry` (W3 `LateEntryResult`); the desk shows one notice per case.
+- The client start-lock mirror (`lib/open-entry-stages.ts`) and the Start dialog copy must agree with the server's
+  per-format rule (W3 found them drifted).
+- Automatic arrivals (registration confirm, waitlist, import, Reinstate) never reshape a published round.
+- An undo barrier (`swiss_late_entry`-style ledger row) stops Undo from crossing the arrival.
+- Prove it per format × entrant kind × case, counted, through the real usecases (W3 Task 10c is the template).
+Rule to settle with the owner here: where a late entrant can be placed in a bracket that is already drawn (an open bye slot, an unplayed first-round match, a qualifier), and what happens when none is free.
+
 ## Lifecycle (design §10)
 
 1. Rulebook `rulebook-W4-knockout.md` (drafted when the wave starts; BWF, ITF,

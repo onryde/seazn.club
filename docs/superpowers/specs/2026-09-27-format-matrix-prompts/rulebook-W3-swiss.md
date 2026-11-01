@@ -1,6 +1,6 @@
 # Rulebook W3 — Swiss (swiss, swiss_playoff, swiss_knockout × 11 sports)
 
-> **DRAFT — recommendations only; nothing here is an owner ruling until signed (_INDEX.md)**
+> **SIGNED 2026-10-31 by owner ruling 252 ("all per rec"), with RB3-13 superseded by ruling 250, RB3-7(a) by ruling 251, and RB3-7(b) settled by the W3 design §5.** Code facts below are from 2026-09-27; re-pinned in `.superpowers/handoff/2026-10-31-w3/`.
 
 - **Date:** 2026-09-27 · **Wave:** W3 (design §8) · **Rows:** `swiss`, `swiss_playoff`
   (swiss → page_playoff, top 4), `swiss_knockout` (swiss → knockout, top q) × football,
@@ -218,10 +218,10 @@ stage override). "Win points" means the table's `win` value. For chess that is 1
 | **Half- or zero-point requested bye** | ½ win or 0 | cat. 16.2.3 or 16.2.5 | 16.2.5 evaluated as a draw (16.3.2) | **Not a product feature today (🚫).** RB3-7 |
 | **Walkover, one side absent (M1)** | Winner: win points **via the sport's walkover credit** (the set/point credit is owned by W2, SC-S*). Loser: loss points (0 in chess). | Winner: forfeit win, 16.2.2, dummy = own score, capped at the absent opponent's adjusted score (16.4.1). Loser: forfeit loss, 16.2.4, a VUR. | Evaluated at the awarded result (16.3.1). | **Not met** (P-A2, A2 3.5). No colour for either (A2 3.4). The winner may not later take the bye (P-A4). |
 | **Double walkover (M2)** | Both: loss points (0). Neither side is credited a win. | Both: forfeit loss, 16.2.4. | Evaluated as losses (16.3.1). | Not met. No colour. **Both remain bye-eligible** (neither scored a win's points without playing). The round counts as **decided**, so it must not block Pair next. The engine outcome is owned by W2 (SC-S6); its Swiss handling is W3's (SW-M9). |
-| **Retirement mid-match (M3)** | Sport's retirement result (W2). A played game. | Played game | Played game | **Met.** Colour counts (the game was played). |
+| **Retirement mid-match (M3)** | Sport's retirement result (W2). A played game. | Played game | Played game | **Met.** **No colour (recorded deviation, ruling 254):** FIDE counts a played game's colour; the engine's BG-WO-1 excludes every chess forfeit, post-start included, from colour history. |
 | **Withdrawal between rounds (R4)** | Results stand; **Swiss never expunges** (the product rule 2026-09-24 matches A2 3.2). | Later rounds = **zero-point byes** (16.1.1 note), category 16.2.5 | **Stays in the table and in every opponent's Buchholz**. Its post-withdrawal rounds count as **draws** there (16.3.2, the "adjusted score"). | Not paired again (P-A7). The field shrinks, so a bye appears or disappears. |
 | **Withdrawal with a paired, undecided board** | That board is a **walkover to the opponent** (today's cascade, `withdrawal.ts:106-114`). Then as above. | forfeit loss (VUR) + later zero-point byes | as above | as above |
-| **Late entry after Start (R2)** | **0 for each missed round** (A2 2.4, "unless the rules of the tournament say otherwise"). The organiser may set ½ per missed round as a house rule (RB3-13). | Missed rounds are zero-point byes before the first played round: category **16.2.3** (followed by non-VUR rounds), evaluated at 0 for opponents | — | Joins from the next unpaired round. TPN is provisional (A2 2.5). **Refused today (SW-L7, 🚫).** |
+| **Late entry after Start (R2)** | **0 for each missed round, no score recorded** (A2 2.4; ruling 251). No ½ option. | Missed rounds are zero-point byes before the first played round: category **16.2.3** (followed by non-VUR rounds), evaluated at 0 for opponents | — | **Ruling 250:** (a) no board in the current round started → the round is re-paired, slots keep time and court (a deviation from A2 4.4); (b) the round has a bye → the newcomer plays the bye holder; (c) otherwise joins from the next round. Automatic arrivals always take (c). No round left → refused ("Add a round" while the Swiss runs; "This Swiss is over" after). TPN is provisional (A2 2.5). |
 | **Disqualification (R7)** | Recommended: a withdrawal from that moment (future boards walk over). Retroactive annulment is a separate, explicit C4 action (RB3-17). | as withdrawal | as withdrawal | not paired again |
 
 **The withdrawn entrant in opponents' Buchholz — explicit rule:** the entrant **remains
@@ -304,7 +304,7 @@ groups and the tie-breaks all read one number.
 | Pairing mode round 1 (fold / rank_adjacent) | — | ✅ stored mode; plus the existing per-press round-1 override (#844) | — | — |
 | Pairing mode rounds ≥ 2 | — | ✅ stage setting only; per-press refused (422 today, keep) | — | — |
 | Chess colour rules (`chess`) | — | ✅ default **on** for boardgame, off otherwise (RB3-10) | — | — |
-| Pairing-allocated bye value | — | ✅ win (default, FIDE) / draw / zero, if RB3-7 wires `byeScore` | — | — |
+| Pairing-allocated bye value | — | **Not a setting.** Always win points, no score (ruling 251); `byeScore` removed (W3 design §5) | — | — |
 | Requested half/zero-point byes | — | — | per round, per entrant, before that round is paired (if built, RB3-7) | — |
 | Tie-break chain | as fallback | ✅ (§5) | **never** | — |
 | Table points (win/draw/loss/forfeit) | as fallback | ✅ | **never** | — |
@@ -419,7 +419,7 @@ prediction for the truth run, not an observation.
 | ID | Scenario | Expected outcome (rule) | today |
 |---|---|---|---|
 | R1 | Late entry before Start | Enrolled; every unseated round is reshaped (eager pre-Start reconcile); paired from round 1. | ✅ predicted |
-| R2 | Late entry after Start | **(if RB3-13 is accepted)** Joins from the next unpaired round with 0 per missed round; missed rounds are zero-point byes (16.2.3). Otherwise ⛔ with guidance. | 🚫 (SW-L7) |
+| R2 | Late entry after Start | **Ruling 250:** cases (a) re-pair / (b) take the bye / (c) next round, as §4; 0 per missed round, no score (ruling 251); missed rounds are zero-point unplayed rounds (16.2.3). | 🚫 today (SW-L7) → built in W3 |
 | R3 | Withdrawal before Start | Removed from pairing; shells reshaped; no result. | ✅ predicted |
 | R4a | Withdrawal between rounds, some results | Results stand (no expunge); not paired again; field parity flips the bye; stays in opponents' Buchholz with post-withdrawal rounds as draws. | ❌ T3 |
 | R4b | Withdrawal with a paired undecided board | That board is a walkover to the opponent (P-A2: not met), then as R4a. | ❌ P2 (if RB3-2) |
@@ -433,7 +433,7 @@ prediction for the truth run, not an observation.
 | R11 | Duplicate entrant | Not Swiss-specific. Swiss requires only P-A1 per entrant id; the refusal belongs to the roster rulebook (W5). | ⬜ → W5 |
 | R12 | Doubles partner withdraws | Substitute: same entrant, history kept. Dissolved: = R4. | ⬜ (W5 roster rule) |
 | R13 | Moved to another division | 🚫 (design §4). Recommend ⛔ "withdraw here, enter there". | 🚫 |
-| R14 | Retires from one match, plays the next | Retirement = loss (W2); a played game (met, colour counts); paired next round. | ✅ predicted (W2 credit ⏳) |
+| R14 | Retires from one match, plays the next | Retirement = loss (W2); a played game (met); **no colour in chess** (deviation from FIDE, ruling 254); paired next round. | ✅ predicted (W2 credit ⏳) |
 | R15 | Leaves after their last match, still paired next round | If the organiser withdraws them before pairing, not paired (A2 3.3). If paired and absent, M1 walkover. | ✅ predicted |
 | R16 | Substitute or other lineup in a team match | No Swiss effect; stats attribution is W2. | n/a |
 | M1 | Walkover in one match | Winner gets win points (W2 credit), not bye-eligible later, **not met** (P-A2), no colour; tie-breaks per §4. | ❌ P2, T4 |
@@ -514,9 +514,10 @@ Each item is a recommendation with its owner value. Nothing here is ruled.
     what an arbiter computes, so cut and seeding disputes go away.
 - **RB3-7 — Byes.**
   - (a) The pairing-allocated bye = **win points, no for/against, frozen at award**, for
-    all sports (fixes SW-M6, SW-M7).
-  - (b) `byeScore`: wire it as a boardgame stage setting (win / draw / zero, default
-    win), or delete it. Recommend **wire it**, because it is a common house rule.
+    all sports (fixes SW-M6, SW-M7). **OWNER, ruling 251.** Under a score-keyed points rule, win
+    points = the clean-sweep win's points (X-WO-1).
+  - (b) ~~`byeScore`: wire it as a boardgame stage setting~~ **Settled 2026-10-31 by ruling 251 + W3 design §5:
+    a bye is win points in every sport, so `byeScore` is removed (a stored key is ignored).**
   - (c) Requested half/zero-point byes: 🚫 today. Recommend **defer** (⛔ with guidance)
     and revisit when a chess customer asks.
 - **RB3-8 — Swiss-aware default tie-break chains per sport family** (§5). The Swiss stage
@@ -538,7 +539,8 @@ Each item is a recommendation with its owner value. Nothing here is ruled.
 - **RB3-12 — Rank-adjacent pairing from round 2 in swiss_playoff/swiss_knockout** is a
   recorded deviation from Dutch fold (Hammes preset, Jul3/08 §7). Recommend **keep**:
   it was an earlier product choice, and the reference tolerates it.
-- **RB3-13 — Late entry after Start into a Swiss** (R2). Recommend **build**: 0 per
+- **RB3-13 — Late entry after Start into a Swiss** (R2). **Superseded by rulings 250/251 (2026-10-31):** build it, in
+  three cases (re-pair / take the bye / next round); 0 per missed round, no score; **no ½ option**. Original rec: 0 per
   missed round (A2 2.4), optional house-rule ½. *Owner value:* Swiss is the one format
   that absorbs a latecomer cleanly.
   - Alternative: ⛔ with guidance.
