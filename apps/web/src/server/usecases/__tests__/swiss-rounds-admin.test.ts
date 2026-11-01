@@ -51,7 +51,19 @@ const SPORTS = [
 type Sport = { sport: string; variant: string };
 type Kind = "individual" | "pair" | "team";
 
-const refusal = (code: SwissRefusalCode) => ({ status: SWISS_REFUSALS[code].status, code });
+/** The HTTP status each refusal this file meets was RULED to answer — typed here from the brief and the controller's
+ *  status rule ("422 when the request can never succeed as sent, 409 when it is resolvable another way"), never read
+ *  off `SWISS_REFUSALS`, the table under test (Fix round 1, review m6). */
+const RULED_STATUS = {
+  STAGE_NOT_SWISS: 422, // never succeeds on that stage
+  SWISS_CHESS_LOCKED: 422, // Phase 2 ruling: the colours' own code, 422
+  SWISS_NO_ROUND_LEFT: 409, // T10: resolvable by Add a round
+  SWISS_OVER: 422, // T12 brief: the Swiss is over, nothing resolves it
+  SWISS_ROUNDS_BELOW_SEATED: 409, // T12 ruling: Unpair resolves it
+  SWISS_ROUNDS_CHANGE_NOT_UNDOABLE: 422, // controller 2026-11-01: a barrier is a permanent ledger row
+  SWISS_ROUNDS_LOCKED: 409, // T12 ruling: Finish now / Add a round resolve it
+} as const satisfies Partial<Record<SwissRefusalCode, 409 | 422>>;
+const refusal = (code: keyof typeof RULED_STATUS) => ({ status: RULED_STATUS[code], code });
 
 /** Rulebook §3.1 "Bounds": hard max n − 1 for an even field, n for an odd one. Typed here, never read off the code. */
 const HARD_MAX = (n: number) => (n % 2 === 0 ? n - 1 : n);
@@ -287,8 +299,13 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
       const out = await patchSwissStage(rig.auth, rig.stageId, { rounds: 3 });
       expect(out).toMatchObject({ rounds: 3, shells: { added: 0, removed: 0, slots_freed: 0 } });
       expect(await rowsOf(rig.stageId)).toEqual([]);
+      // Fix round 1 (review I2 MB): a RAISE before Generate stores the count too — no round 4 shell with no rounds 1-3.
+      const raised = await patchSwissStage(rig.auth, rig.stageId, { rounds: 4 });
+      expect(raised).toMatchObject({ rounds: 4, shells: { added: 0, removed: 0, slots_freed: 0 } });
+      expect(await rowsOf(rig.stageId), "nothing minted before Generate").toEqual([]);
+      expect((await storedConfig(rig.stageId)).rounds).toBe(4);
       await pair(rig);
-      expect(roundsIn(await rowsOf(rig.stageId)), "Generate mints the stored count").toEqual([1, 2, 3]);
+      expect(roundsIn(await rowsOf(rig.stageId)), "Generate mints the stored count").toEqual([1, 2, 3, 4]);
     });
 
     it(`X-SW-17 a bye alone does not lock rounds (${s.sport})`, async () => {
@@ -512,6 +529,34 @@ describe.runIf(HAS_DB)("patchSwissStage guards (badminton — the guards read ro
 // ---------------------------------------------------------------------------------------------------------------------
 
 describe.runIf(HAS_DB)("X-SW-17 Add a round", () => {
+  it("a field under two is refused STAGE_NOT_READY (the Generate rule), never ABOVE_MAX; the desk read agrees (badminton — arithmetic on the field)", async () => {
+    // Fix round 1 (review m5): 3 players × 2 rounds, round 1 played, two withdraw — round 3's field is 1, which pairs nobody.
+    const rig = await swissRig(SPORTS[0], 3, 2);
+    await startDivision(rig.auth, rig.divisionId);
+    await pair(rig);
+    await playRound(rig, 1);
+    await withdrawEntrantCascade(rig.auth, rig.entrants[1]!);
+    await withdrawEntrantCascade(rig.auth, rig.entrants[2]!);
+    const before = await rowsOf(rig.stageId);
+    await expect(addSwissRound(rig.auth, rig.stageId)).rejects.toMatchObject({ code: "STAGE_NOT_READY" });
+    expect(await rowsOf(rig.stageId), "nothing written").toEqual(before);
+    expect((await storedConfig(rig.stageId)).rounds).toBe(2);
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]?.addRound).toMatchObject({
+      canAddRound: false,
+      refusal: "field",
+      field: 1,
+    });
+
+    // Before any Generate there is no shell to mint, so the mint's own field check never runs: this early refusal is the
+    // only guard (mutation-checked) — without it a field of 1 would silently store one more round.
+    const bare = await swissRig(SPORTS[0], 3, 2);
+    await withdrawEntrantCascade(bare.auth, bare.entrants[1]!);
+    await withdrawEntrantCascade(bare.auth, bare.entrants[2]!);
+    await expect(addSwissRound(bare.auth, bare.stageId)).rejects.toMatchObject({ code: "STAGE_NOT_READY" });
+    expect((await storedConfig(bare.stageId)).rounds, "the count is not stored").toBe(2);
+    expect(await rowsOf(bare.stageId)).toEqual([]);
+  });
+
   for (const s of SPORTS) {
     it(`X-SW-17 Add a round mints round N+1 for the current field and is an undo barrier (${s.sport})`, async () => {
       // 6 players × 2 rounds, both played; then one withdraws. Round 3 is for the field of 5 that is left — 2 boards and
@@ -654,8 +699,11 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
           await expect(addSwissRound(rig.auth, rig.stageId), `n=${n} rounds=${rounds}: offered → it adds`).resolves.toMatchObject({ rounds: rounds + 1 });
           offered++;
         } else {
+          // No round complete yet (one board started): Finish now cannot resolve it — 422 as sent (T12 status rule).
           await expect(addSwissRound(rig.auth, rig.stageId), `n=${n} rounds=${rounds}: not offered`).rejects.toMatchObject({
+            status: 422,
             code: "SWISS_ROUNDS_ABOVE_MAX",
+            extra: { canFinish: false, hardMax: HARD_MAX(n) },
           });
         }
         checked++;
@@ -681,7 +729,12 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
       // Phase 2: the stage it names is where the entrants panel's "Add a round" recovery posts.
       extra: { canAddRound: false, stageId: four.stageId },
     });
-    await expect(addSwissRound(four.auth, four.stageId), "and indeed it refuses").rejects.toMatchObject({ code: "SWISS_ROUNDS_ABOVE_MAX" });
+    // Rounds 1 and 2 are complete, so Finish now resolves it: the controller's ruled 409 (review I2 MA), not the 422 above.
+    await expect(addSwissRound(four.auth, four.stageId), "and indeed it refuses").rejects.toMatchObject({
+      status: 409,
+      code: "SWISS_ROUNDS_ABOVE_MAX",
+      extra: { rounds: 4, field: 4, hardMax: 3, canFinish: true },
+    });
 
     // The positive pair: 6 players × 3 rounds (hard max 5) — offered, and Add a round goes through; the late player then
     // joins the added round. (An even field: an odd one's round 3 has a bye, and the newcomer would take it — case (b).)
@@ -862,8 +915,11 @@ describe.runIf(HAS_DB)("listSwissRoundControls (the desk's view of the rounds lo
             field: n,
             hardMax: HARD_MAX(n),
           });
+          // No round complete yet (one board started): Finish now cannot resolve it — 422 as sent (T12 status rule).
           await expect(addSwissRound(rig.auth, rig.stageId), `n=${n} rounds=${rounds}: not offered`).rejects.toMatchObject({
+            status: 422,
             code: "SWISS_ROUNDS_ABOVE_MAX",
+            extra: { canFinish: false, hardMax: HARD_MAX(n) },
           });
         }
         checked++;
