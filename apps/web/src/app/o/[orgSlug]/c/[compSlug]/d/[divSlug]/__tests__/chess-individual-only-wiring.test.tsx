@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
   moduleEntrantModel: null as unknown,
   /** Match Day C4: a billing-frozen competition makes the page's `editable` false while `canEdit` stays true. */
   frozen: false,
+  /** Match Day E1 item 7: the roster the page reads; `[]` is the empty division. */
+  entrants: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@/server/page-auth", () => pageAuth);
@@ -53,7 +55,10 @@ vi.mock("@/server/usecases/fixtures", () => ({
   listDivisionFixtures: vi.fn(async () => []),
   listFixtureHeadlines: vi.fn(async () => ({})),
 }));
-vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+vi.mock("@/server/usecases/entrants", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/entrants")>();
+  return { ...actual, listEntrants: vi.fn(async () => state.entrants) };
+});
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
 }));
@@ -138,6 +143,7 @@ beforeEach(() => {
   state.config = {};
   state.moduleEntrantModel = null;
   state.frozen = false;
+  state.entrants = [];
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
 });
 
@@ -230,6 +236,35 @@ describe("division page: the entrant kinds block (Match Day C4)", () => {
     expect(keys, "premise: the props were read").toContain("structureLocked");
     expect(keys).not.toContain("entrantModel");
     expect(keys).not.toContain("entrantModelSource");
+  });
+
+  // Match Day E1 item 7 (owner): the block opens by default on an EMPTY division - the organiser is about to add entrants and this decides
+  // what the form offers - and stays folded once there is a roster. The page owns the decision (the component's `defaultOpen` seam),
+  // so it is read off the page's own tree, both directions, over the whole sport registry.
+  const entrantRow = (n: number) => ({ id: `e${n}`, display_name: `Entrant ${n}`, status: "active", seed: n, kind: "individual" });
+  it("an empty division opens the kinds block; one with entrants leaves it folded - every sport in the registry (counted)", async () => {
+    let checked = 0;
+    for (const m of builtinModules) {
+      state.sport_key = m.key;
+      state.config = {};
+      state.moduleEntrantModel = m.entrantModel ?? null;
+      for (const [roster, open] of [[[], true], [[entrantRow(1)], false], [[entrantRow(1), entrantRow(2), entrantRow(3)], false]] as const) {
+        state.entrants = [...roster];
+        const kinds = findAll(await renderPage("entrants"), (el) => el.type === EntrantKindsSettings);
+        expect(kinds, `${m.key} / ${roster.length} entrants`).toHaveLength(1);
+        expect((kinds[0]!.props as { defaultOpen?: boolean }).defaultOpen, `${m.key} / ${roster.length} entrants`).toBe(open);
+        checked++;
+      }
+    }
+    expect(checked).toBe(builtinModules.length * 3);
+    expect(checked).toBeGreaterThan(3);
+  });
+
+  it("a division whose only entrant has withdrawn is not empty: the block stays folded", async () => {
+    state.entrants = [{ ...entrantRow(1), status: "withdrawn" }];
+    const kinds = findAll(await renderPage("entrants"), (el) => el.type === EntrantKindsSettings);
+    expect(kinds).toHaveLength(1);
+    expect((kinds[0]!.props as { defaultOpen?: boolean }).defaultOpen).toBe(false);
   });
 
   it("every sport in the registry gets the block on its Entrants tab, handed its own sport key (counted)", async () => {

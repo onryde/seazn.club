@@ -49,7 +49,8 @@ export function EntrantKindsSettings({
   entrantModel: EffectiveEntrantModel;
   /** False for a billing-frozen club: the block shows, read-only. A viewer never gets the block at all (the page). */
   canEdit: boolean;
-  /** Test seam and nothing else: the page never passes it, so the block opens folded under one row naming the kinds. */
+  /** Whether the block opens unfolded. The page passes `true` for a division with no entrants (Match Day E1 item 7); otherwise it
+   *  opens folded under one row naming the kinds. */
   defaultOpen?: boolean;
 }) {
   const msg = useMsg();

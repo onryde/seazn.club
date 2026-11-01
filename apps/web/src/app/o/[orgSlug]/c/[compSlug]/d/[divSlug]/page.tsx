@@ -852,7 +852,10 @@ export default async function DivisionPage({
           <div className="space-y-6">
             {/* Match Day C4 (owner, 2026-10-31): the entrant kinds left Settings for the top of this tab, organiser only - they decide
                 what the add-entrant form below offers. `canEdit` here is the PAGE-level organiser (a viewer never gets the block);
-                the block itself is handed `editable`, so a billing-frozen club's organiser sees it read-only, as Settings showed it. */}
+                the block itself is handed `editable`, so a billing-frozen club's organiser sees it read-only, as Settings showed it.
+                Match Day E1 item 7 (owner): it opens by default on a division with NO entrants - the organiser is about to add the
+                first one and this is what the form offers - and stays folded under its one summary row once there is a roster. A row
+                counts whatever its status (a withdrawn entrant keeps its row): this asks "has anyone been added", not "who is playing". */}
             {canEdit && (
               <EntrantKindsSettings
                 divisionId={id}
@@ -860,6 +863,7 @@ export default async function DivisionPage({
                 config={division.config}
                 entrantModel={entrantModel}
                 canEdit={editable}
+                defaultOpen={entrants.length === 0}
               />
             )}
             <EntrantsPanel

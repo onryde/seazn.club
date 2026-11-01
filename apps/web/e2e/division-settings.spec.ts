@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { TAG, apiJson, activeOrg, expectNoHorizontalScroll, linkPersonToUserBySql, loginUi, withDb } from "./helpers";
+import { TAG, addEntrantsViaApi, apiJson, activeOrg, expectNoHorizontalScroll, linkPersonToUserBySql, loginUi, withDb } from "./helpers";
 import { seedOnlineRound, seedUser } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
 import { openDivisionRules, saveFormat, savePoints } from "./helpers/rules-strip";
@@ -883,15 +883,24 @@ test("entrant kinds: on the Entrants tab above the roster, not in Settings; Save
   await expect(page.locator("[data-kind]"), "no kind chip in Settings").toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Format/ }), "Format stays in Settings").toBeVisible();
 
-  // Entrants tab: the group is there, folded, and sits ABOVE the roster's add form.
+  // Entrants tab: the group is there and sits ABOVE the roster's add form. Match Day E1 item 7: this rig has NO entrants yet, so it
+  // opens by default (the organiser is about to add the first one and this decides what the form offers) - and with a roster it is
+  // folded under its one summary row. Both directions, in the browser: add one entrant, reload, and it folds.
   await page.goto(`${base}?tab=entrants`);
   await expect(toggle).toBeVisible({ timeout: 20_000 });
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle, "an empty division opens the kinds block by default").toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("entrant-kinds"), "its body is drawn").toBeVisible();
   const header = await toggle.boundingBox();
   const addForm = await page.getByRole("heading", { name: "Add entrant" }).boundingBox();
   expect(header, "the group header is laid out").not.toBeNull();
   expect(addForm, "the add-entrant form is laid out").not.toBeNull();
   expect(header!.y, "the entrant kinds sit above the roster").toBeLessThan(addForm!.y);
+  const first = await addEntrantsViaApi(request, rig.divisionId, ["Kinds Probe"]);
+  expect(first.status, "adding the first entrant").toBeLessThan(300);
+  await page.goto(`${base}?tab=entrants`);
+  await expect(toggle).toBeVisible({ timeout: 20_000 });
+  await expect(toggle, "a division with an entrant leaves the block folded").toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("entrant-kinds"), "folded: no body").toHaveCount(0);
 
   // Open it: the sport default is named; tick the opposite of Pair and Save.
   await toggle.click();
