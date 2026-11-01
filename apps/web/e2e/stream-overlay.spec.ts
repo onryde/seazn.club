@@ -2003,9 +2003,11 @@ test.describe("cricket end-of-over card (EOO)", () => {
  * bowled at once, so it lands inside the cooldown by construction (asserted, not assumed); the positive pair (a break
  * past the cooldown gets a card) is the planner's unit tests', where the clock is the test's.
  *
- * "A score cuts the card" is NOT driven here: on OBS's poll a score sent during the card's hold reaches the page on the
- * NEXT poll, which lands after the hold has run out (POLL_MS > the hold) — a race, not a test. It is driven at the seam
- * instead (`server/sponsors/__tests__/seam.test.ts`, the real reducer over the real loader's moments).
+ * "A score cuts the card" runs on the PAGE's clock (`page.clock`, installed before the page loads, paused once it has):
+ * the poll interval and every queue timer are fake, so the test steps time and nothing moves between steps. A score
+ * sent during the hold reaches the page on the next poll, and with the clock paused the only way the card can leave
+ * `hold` is that poll's data. The hold cannot run out on its own. The seam drives the same cut through the real
+ * reducer (`server/sponsors/__tests__/seam.test.ts`).
  */
 test.describe("R4 sponsors: the break card on OBS", () => {
   const CYCLE_MS = OVERLAY_MOMENT_FOLD_MS * 2 + OVERLAY_MOMENT_HOLD_MS;
@@ -2128,6 +2130,105 @@ test.describe("R4 sponsors: the break card on OBS", () => {
       expect((await servedPlan(anon, rig.fixtureId)).airings.map((a) => a.momentId), "and the served plan still airs only the first").toEqual(
         plan.airings.map((a) => a.momentId),
       );
+    } finally {
+      await anon.context().close();
+      await owner.close();
+    }
+  });
+
+  test("cricket, page clock: a six during the card's hold cuts it — the card folds out on the poll that brings the six, with no time passing", async ({
+    browser,
+  }) => {
+    const look = SPONSOR_STYLE_BY_SIZE[sizeOf("cricket", "over_end")];
+    // One step is a FIFTH of the fold, the shortest phase, so every queue timer is re-armed (React's effect, real
+    // time) before its own deadline comes up: no phase is skipped and no deadline drifts.
+    const STEP_MS = OVERLAY_MOMENT_FOLD_MS / 5;
+    // The card holds from (the poll that brought the over) + the end-of-over card's two beats + its own fold in. The
+    // NEXT poll must land inside that hold, or the score cannot reach the card in time. These are the declared constants.
+    const holdFrom = EOO_CYCLE_MS + OVERLAY_MOMENT_FOLD_MS;
+    expect(POLL_MS, "premise: the next poll lands after the card's hold begins").toBeGreaterThan(holdFrom + 2 * STEP_MS);
+    expect(POLL_MS, "premise: and before the hold runs out").toBeLessThan(holdFrom + look.holdMs - 2 * STEP_MS);
+    // Real time is the seed and the steps' round trips (fake time costs nothing): a bounded number of steps, each one
+    // CDP round trip, plus the waits for two fetches to render.
+    const MAX_STEPS = Math.ceil((2 * POLL_MS) / STEP_MS) + 20;
+    test.setTimeout(SEED_MS + MAX_STEPS * 250 + 60_000);
+    const owner = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    const ownerPage = await owner.newPage();
+    const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(ownerPage);
+    const [other] = await withDb((sql) => sql<{ person_id: string }[]>`
+      select person_id from entrant_members where entrant_id = ${rig.awayEntrantId} and person_id <> ${bowler} order by person_id limit 1`);
+    expect(other, "premise: the fielding side has a second bowler").toBeTruthy();
+    await sponsorsOn(ownerPage, rig.orgId, [{ name: LONG_NAME, tier: "title", url: "https://harbourside.example/" }]);
+
+    const anon = await anonPage(browser);
+    try {
+      // Counts the stage's poll requests in the page, so a step knows at once whether its timers fired a poll.
+      // `window.fetch` is wrapped before any app code runs. The count is read in the page, never off a network event
+      // that could arrive after the step.
+      const pollPath = `/api/v1/public/fixtures/${rig.fixtureId}/overlay`;
+      await anon.addInitScript((path: string) => {
+        const w = window as unknown as { __ovlPolls: number; fetch: typeof fetch };
+        w.__ovlPolls = 0;
+        const real = w.fetch.bind(window);
+        w.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          if (new URL(url, location.href).pathname === path) w.__ovlPolls += 1;
+          return real(input, init);
+        };
+      }, pollPath);
+      const polls = () => anon.evaluate(() => (window as unknown as { __ovlPolls: number }).__ovlPolls);
+      const fakeNow = () => anon.evaluate(() => Date.now());
+      await anon.clock.install();
+      await anon.goto(`/overlay/fixtures/${rig.fixtureId}?style=bar`);
+      await expect(anon.locator('[data-testid="ovl-side-home"]')).toBeVisible({ timeout: 30_000 });
+      await anon.clock.pauseAt((await fakeNow()) + 1_000);
+      const card = anon.getByTestId("ovl-sponsor-card");
+      const eoo = anon.getByTestId("ovl-end-of-over");
+      const phaseOf = async (l: Locator) => ((await l.count()) === 0 ? null : l.getAttribute("data-phase"));
+      let steps = 0;
+      const step = async () => {
+        expect(++steps, "the step budget").toBeLessThanOrEqual(MAX_STEPS);
+        await anon.clock.runFor(STEP_MS);
+      };
+
+      // --- The over, bowled with the page's clock stopped; the next poll brings it.
+      for (let ballInOver = 1; ballInOver <= 6; ballInOver += 1) {
+        await sendEvent(ownerPage.request, rig.fixtureId, "cricket.ball", {
+          over: 0, ballInOver, striker, nonStriker, bowler, runs: { bat: 0 },
+        });
+      }
+      const beforeOver = await polls();
+      while ((await polls()) === beforeOver) await step();
+      await expect(eoo, "the poll brings the over: its end-of-over card folds in, the clock still stopped").toHaveAttribute("data-phase", "in", { timeout: 15_000 });
+      expect(await card.count(), "no card beside the end-of-over card").toBe(0);
+
+      // --- Step through the end-of-over card's beats to the sponsor card's hold.
+      while ((await phaseOf(card)) !== "hold") await step();
+      const holdSeenAt = await fakeNow();
+      await expect(card, "the card on air is the over's (its declared style)").toHaveAttribute("data-style", look.style);
+
+      // --- A six off the next over's first ball (Law 17.1: the batters changed ends; Law 17.6: another bowler).
+      // `sendEvent` throws on anything but a 201 with an event id.
+      await sendEvent(ownerPage.request, rig.fixtureId, "cricket.ball", {
+        over: 1, ballInOver: 1, striker: nonStriker, nonStriker: striker, bowler: other!.person_id, runs: { bat: 6 }, boundary: 6,
+      });
+      const beforeSix = await polls();
+      let held = 0;
+      while ((await polls()) === beforeSix) {
+        expect(await phaseOf(card), "premise: the card is still holding when the next poll fires").toBe("hold");
+        held += 1;
+        await step();
+      }
+      console.log(`score-cut: ${held} held steps before the poll`);
+      expect(held, "anti-vacuity: the card held across steps before the poll").toBeGreaterThan(0);
+      const cutAt = await fakeNow();
+      expect(cutAt - holdSeenAt, "the poll fired inside the card's declared hold").toBeLessThan(look.holdMs - STEP_MS);
+
+      // --- With the clock stopped, the poll's data alone folds the card out. No timer can.
+      await expect(card, "the score cuts the card: it folds out on the poll's data").toHaveAttribute("data-phase", "out", { timeout: 15_000 });
+      expect(await fakeNow(), "and no page time passed: the fold is the data's doing, not the hold running out").toBe(cutAt);
+      await anon.clock.runFor(OVERLAY_MOMENT_FOLD_MS + STEP_MS);
+      await expect(card, "gone one fold later").toHaveCount(0);
     } finally {
       await anon.context().close();
       await owner.close();
