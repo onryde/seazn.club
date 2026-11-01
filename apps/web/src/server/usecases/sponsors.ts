@@ -172,7 +172,7 @@ export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
                   where o.sponsor_id = sponsors.id and o.status = 'refunded'
                     and o.dispute_id is not null) as dispute_lost
     from sponsors
-    order by array_position(array['title','gold','silver','partner'], tier),
+    order by array_position(${[...SPONSOR_TIERS]}::text[], tier),
              display_order, created_at, id`);
 }
 
@@ -344,7 +344,7 @@ export async function resolveSponsors(
       and (competition_id is null or competition_id = ${competitionId ?? null})
       ${onStream ? sql`and on_stream` : sql``}
     order by (competition_id is null),
-             array_position(array['title','gold','silver','partner'], tier),
+             array_position(${[...SPONSOR_TIERS]}::text[], tier),
              display_order, created_at, id`;
 
   let resolved: ResolvedSponsor[];

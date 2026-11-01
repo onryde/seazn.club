@@ -47,7 +47,7 @@ import { TERMINAL_STATES, isTerminal, supersededAttempt, type SessionState } fro
 import { verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
-import { breakKindOfMomentId } from "./assign";
+import { breakKindOfMomentId, sceneOfMomentId } from "@/lib/sponsor-moment-id";
 
 /** Spec §3.6.4: "Times > 10 min from server time are refused." Exactly 10 min is written. */
 export const AIRING_CLOCK_SKEW_MS = 600_000;
@@ -264,13 +264,9 @@ const WIRE_MOMENT_ID = RelayAiring.options.find((o) => o.shape.kind.value === "s
 /** Every break kind a shipped sport declares (`naturalBreaks.kinds`): the kinds S5 can mint a break card's id for. */
 const DECLARED_BREAK_KINDS: ReadonlySet<string> = new Set(builtinModules.flatMap((m) => (m.naturalBreaks?.kinds ?? []).map((k) => k.kind)));
 
-/** S7's carousel showing (plan P5, `carouselMomentId` in components/overlay/sponsor-card.tsx): `scene:<scene>:<bucket>`,
- *  the bucket a whole number with no leading zero. Which scenes is `SPONSOR_CAROUSEL_SCENES`' to say, below. */
-const SCENE_MOMENT_ID = /^scene:([^:]+):(?:0|[1-9][0-9]*)$/;
-
 /**
- * Is `momentId` an id a sponsor airing can carry? S5's break id `<seq>:sponsor.<kind>` (`breakKindOfMomentId`, assign.ts)
- * for a kind a shipped sport declares, or S7's carousel id for a scene the carousel airs in (`SPONSOR_CAROUSEL_SCENES`,
+ * Is `momentId` an id a sponsor airing can carry? S5's break id `<seq>:sponsor.<kind>` for a kind a shipped sport
+ * declares, or S7's carousel id for a scene the carousel airs in (both shapes: lib/sponsor-moment-id.ts; the scenes: `SPONSOR_CAROUSEL_SCENES`,
  * the gate the overlay stage itself reads) — within the heartbeat's bound. Anything else names no airing and is refused
  * (400) before a byte is stored, so a decoded `/` or `..` never gets near a storage key. The key does not lean on this:
  * `airingFramePath` encodes the id, so a later, looser grammar still cannot add a path segment.
@@ -279,8 +275,8 @@ export function isFrameMomentId(momentId: string): boolean {
   if (!WIRE_MOMENT_ID.safeParse(momentId).success) return false;
   const kind = breakKindOfMomentId(momentId);
   if (kind !== null) return DECLARED_BREAK_KINDS.has(kind);
-  const scene = SCENE_MOMENT_ID.exec(momentId)?.[1];
-  return scene !== undefined && (SPONSOR_CAROUSEL_SCENES as readonly string[]).includes(scene);
+  const scene = sceneOfMomentId(momentId);
+  return scene !== null && (SPONSOR_CAROUSEL_SCENES as readonly string[]).includes(scene);
 }
 
 /**

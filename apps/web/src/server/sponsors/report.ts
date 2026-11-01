@@ -31,6 +31,7 @@ import type postgres from "postgres";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { mayHoldBearerCredential } from "@/lib/types";
+import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
 import { SIGNED_READ_MAX_TTL_SEC, signedReadUrl } from "@/lib/supabase-storage";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { ENDS_BEFORE_STARTS } from "@/server/api-v1/schemas";
@@ -112,7 +113,7 @@ export async function sponsorOverview(auth: AuthCtx, orgId: string, p: SponsorPe
       select sponsor_id, name, shown, on_ms, clicks from (
         select s.id as sponsor_id, s.name, coalesce(air.shown, 0)::int as shown, coalesce(air.on_ms, 0)::float8 as on_ms,
                coalesce(clk.clicks, 0)::int as clicks,
-               0 as gone, array_position(array['title','gold','silver','partner'], s.tier) as rank, s.display_order,
+               0 as gone, array_position(${[...SPONSOR_TIERS]}::text[], s.tier) as rank, s.display_order,
                s.created_at
           from sponsors s
           left join air on air.sponsor_id = s.id

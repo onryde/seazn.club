@@ -22,7 +22,8 @@ import { builtinModules } from "@seazn/engine/sports";
 const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
 
-import { OnStreamTab, BREAK_MSG, DEFAULT_FREQUENCY, FREQ_MSG, previewCards, sponsorsInScope, type OnStreamSponsor, type OnStreamTabProps } from "../on-stream-tab";
+import { BREAK_FALLBACK_MSG, BREAK_MSG } from "../break-labels";
+import { OnStreamTab, DEFAULT_FREQUENCY, FREQ_MSG, previewCards, sponsorsInScope, type OnStreamSponsor, type OnStreamTabProps } from "../on-stream-tab";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { SPONSOR_FREQUENCIES, SPONSOR_STYLE_BY_SIZE, type BreakOpened, type SponsorFrequency } from "@/lib/sponsor-plan";
 import { onStreamHref } from "@/lib/sponsors-hub";
@@ -460,6 +461,14 @@ describe("the preview - the planner's count over a real match's breaks (R11)", (
     expect(line, "no numbers: nothing was counted").not.toMatch(/\d/);
     expect(m.has("on-stream-preview-count-football")).toBe(false);
     expect(m.has("on-stream-strip-football")).toBe(false);
+  });
+
+  it("final review m5: a kind with no label reads as the ONE fallback (a break in play, the report's too) - never the raw kind", () => {
+    const m = mount({ sports: [{ sportKey: "football", kinds: [{ kind: "made_up_kind", size: "major" }, ...kindsOf("football")!], sample: null, sampleCompetitionId: null }] });
+    const line = m.text("on-stream-preview-kinds-football");
+    expect(line).toContain(msg(BREAK_FALLBACK_MSG));
+    expect(line, "the raw kind never reaches the screen").not.toContain("made_up_kind");
+    expect(line, "the labelled kinds still read as themselves").toContain(msg(BREAK_MSG.half_time!));
   });
 
   it("a sport that declares no breaks (generic) says sponsors appear on scene screens - no strip, no count", () => {

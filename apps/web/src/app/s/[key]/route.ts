@@ -13,7 +13,7 @@
 import { deferred } from "@/lib/deferred";
 import { HttpError } from "@/lib/errors";
 import { rateLimit, SPONSOR_LINK_MISS_LIMIT } from "@/lib/rate-limit";
-import { clientIpOf } from "@/server/api-v1/capture-http";
+import { clientIp } from "@/lib/client-ip";
 import { clientIpDigest, countsAsClick, recordClickOnce, resolveSponsorLink } from "@/server/sponsors/clicks";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,7 @@ type Ctx = { params: Promise<{ key: string }> };
 
 export async function GET(req: Request, { params }: Ctx) {
   const { key } = await params;
-  const ip = clientIpOf(req);
+  const ip = clientIp(req.headers);
   const link = await resolveSponsorLink(key, new URL(req.url).searchParams);
   if (link === null) return miss(ip);
   if (countsAsClick(req)) deferred(() => recordClickOnce(link, ip));

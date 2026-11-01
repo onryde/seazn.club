@@ -13,11 +13,12 @@ import {
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
+import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
-export const SPONSOR_TIERS = ["title", "gold", "silver", "partner"] as const;
-export type SponsorTier = (typeof SPONSOR_TIERS)[number];
+/** The tier list's one authority is lib/sponsor-tiers.ts; re-exported for the console's own importers. */
+export { SPONSOR_TIERS, type SponsorTier };
 
 /** Client-safe mirror of the usecase SponsorRow. */
 export interface SponsorItem {

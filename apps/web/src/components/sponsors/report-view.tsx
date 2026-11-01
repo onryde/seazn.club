@@ -11,30 +11,11 @@
 // `title`; the sponsor's own name WRAPS (`break-words`) - a report never cuts off the name of the company it is for.
 import type { CSSProperties } from "react";
 import type { Dict, Locale } from "@/lib/i18n-constants";
-import type { DictionaryKey } from "@/lib/i18n-keys";
 import { plural, t } from "@/lib/i18n-runtime";
 import { fmtNumber } from "@/lib/format";
 import { fmtIsoDay, fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
 import { PrintButton } from "@/components/print-button";
-
-/** The break a showing filled, by the `naturalBreaks` kind its airing carries: the On stream tab's own labels (S11's
- *  `sponsors.onStream.break.*`). Its own map, not that tab's `BREAK_MSG`: that module is a client module, and a server component
- *  cannot read a plain object out of one. `report-view.test.tsx` holds the two to the same kinds, and to every kind a shipped
- *  sport declares. A kind not here reads as a break in play - never the raw kind. */
-export const REPORT_BREAK_MSG: Readonly<Record<string, DictionaryKey>> = {
-  half_time: "sponsors.onStream.break.half_time",
-  period_end: "sponsors.onStream.break.period_end",
-  shootout_break: "sponsors.onStream.break.shootout_break",
-  after_goal: "sponsors.onStream.break.after_goal",
-  over_end: "sponsors.onStream.break.over_end",
-  innings_break: "sponsors.onStream.break.innings_break",
-  set_end: "sponsors.onStream.break.set_end",
-  timeout: "sponsors.onStream.break.timeout",
-  game_end: "sponsors.onStream.break.game_end",
-  interval: "sponsors.onStream.break.interval",
-  changeover: "sponsors.onStream.break.changeover",
-  quarter_end: "sponsors.onStream.break.quarter_end",
-};
+import { breakMsgKey } from "@/components/sponsors/break-labels";
 
 /** The root layout mounts Barlow Condensed as `--font-barlow`; the public theme's `font-display` reads `--ps-font-display`. */
 const DISPLAY_FACE = { "--ps-font-display": "var(--font-barlow)" } as CSSProperties;
@@ -49,9 +30,11 @@ function Dash({ words }: { words: string }) {
   );
 }
 
+/** The break a showing filled, by the `naturalBreaks` kind its airing carries: the ONE map the On stream tab reads too
+ *  (`break-labels.ts`), with its one fallback. A carousel showing with no kind is the stream's break screen. */
 export function breakLabel(ui: Dict, s: Pick<SponsorReportShowing, "breakKind" | "source">): string {
-  if (s.breakKind !== null && Object.hasOwn(REPORT_BREAK_MSG, s.breakKind)) return t(ui, REPORT_BREAK_MSG[s.breakKind]!);
-  return t(ui, s.source === "scene" ? "sponsorReport.break.scene" : "sponsorReport.break.other");
+  if (s.breakKind === null && s.source === "scene") return t(ui, "sponsorReport.break.scene");
+  return t(ui, breakMsgKey(s.breakKind));
 }
 
 export function matchLabel(ui: Dict, match: SponsorReportShowing["match"]): string {

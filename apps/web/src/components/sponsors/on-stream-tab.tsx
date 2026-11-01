@@ -22,6 +22,7 @@ import { useRouter } from "next/navigation";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import Link from "@/components/ui/console-link";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
+import { breakMsgKey } from "@/components/sponsors/break-labels";
 import { sportLabel } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
 import { SPONSOR_FREQUENCIES, SPONSOR_STYLE_BY_SIZE, sponsorMomentId, type SponsorCard, type SponsorFrequency } from "@/lib/sponsor-plan";
@@ -42,21 +43,6 @@ const FREQ_HINT_MSG: Record<SponsorFrequency, MessageKey> = {
   light: "sponsors.onStream.freqHint.light",
   normal: "sponsors.onStream.freqHint.normal",
   busy: "sponsors.onStream.freqHint.busy",
-};
-/** One label per break kind the engine declares (swept against `builtinModules` in the component test). */
-export const BREAK_MSG: Record<string, MessageKey> = {
-  half_time: "sponsors.onStream.break.half_time",
-  period_end: "sponsors.onStream.break.period_end",
-  shootout_break: "sponsors.onStream.break.shootout_break",
-  after_goal: "sponsors.onStream.break.after_goal",
-  over_end: "sponsors.onStream.break.over_end",
-  innings_break: "sponsors.onStream.break.innings_break",
-  set_end: "sponsors.onStream.break.set_end",
-  timeout: "sponsors.onStream.break.timeout",
-  game_end: "sponsors.onStream.break.game_end",
-  interval: "sponsors.onStream.break.interval",
-  changeover: "sponsors.onStream.break.changeover",
-  quarter_end: "sponsors.onStream.break.quarter_end",
 };
 
 export interface OnStreamSponsor {
@@ -384,7 +370,7 @@ function renderSportPreview({
   const sport = sportLabel(src.sportKey, msg);
   const { kinds, sample } = src;
   const preview = sample === null ? null : previewForSport(frequency, sample, cards);
-  const label = (kind: string) => (kind in BREAK_MSG ? msg(BREAK_MSG[kind]!) : kind);
+  const label = (kind: string) => msg(breakMsgKey(kind));
   const kindsOf = (size: "major" | "minor") => (kinds ?? []).filter((k) => k.size === size).map((k) => label(k.kind)).join(", ");
 
   return (

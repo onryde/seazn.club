@@ -26,6 +26,7 @@ import "server-only";
 // NEVER FAILS THE OVERLAY. A planner refusal (`SponsorPlanInputError`) serves no plan and logs; the overlay loader
 // catches anything else (load.ts). A short code that cannot be minted costs that card its link, never the plan.
 import { sql, type Tx } from "@/lib/db";
+import { breakKindOfMomentId } from "@/lib/sponsor-moment-id";
 import { log } from "@/server/logger";
 import {
   planSponsors,
@@ -53,16 +54,9 @@ export async function lockSponsorRotation(tx: Tx, orgId: string): Promise<void> 
   await tx`select pg_advisory_xact_lock(hashtext(${sponsorRotationLockKey(orgId)}))`;
 }
 
-/** A break card's moment id, as S5 mints it (`sponsorMomentId`, lib/sponsor-plan.ts): `<seq>:sponsor.<breakKind>`, seq
- *  a decimal integer with no leading zero, breakKind non-empty. */
-const BREAK_MOMENT_ID = /^(?:0|[1-9][0-9]*):sponsor\.(.+)$/;
-
-/** The inverse of `sponsorMomentId`: the break kind a break card's moment id names, or null for any other id (a scene
- *  carousel showing's `scene:<id>:<bucket>`, or anything malformed). For S8's void-race fallback, which may refuse a
- *  start whose `breakKind` disagrees with its moment id's. */
-export function breakKindOfMomentId(momentId: string): string | null {
-  return BREAK_MOMENT_ID.exec(momentId)?.[1] ?? null;
-}
+/** The break kind a break card's moment id names, or null for any other id - for S8's void-race fallback, which may
+ *  refuse a start whose `breakKind` disagrees with its moment id's. The grammar's one authority is lib/sponsor-moment-id.ts. */
+export { breakKindOfMomentId };
 
 /** Where a fixture's sponsors come from: its org, and its division's competition. Null: no such fixture. */
 export async function sponsorScopeOf(

@@ -71,14 +71,16 @@ import {
   CompetitionHubDoc,
   type CompetitionHubDocT,
 } from "@/server/public-site/competition-hub-schema";
+import { clientIp } from "@/lib/client-ip";
 
 // s-maxage=30 at the edge (doc 08 §6); Redis mirrors that window.
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
 const TTL_SECONDS = 30;
 
-/** The client IP both public limiters key on. */
+/** The client IP both public limiters key on: the shared reader (`lib/client-ip.ts`, R4 final review S10 M1 / S14 m10),
+ *  so the first X-Forwarded-For hop - which a client writes - no longer leads on a Fly-direct origin. */
 function publicClientIp(req: Request): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? req.headers.get("x-real-ip") ?? "unknown";
+  return clientIp(req.headers);
 }
 
 /** Per-IP limit for unauthenticated reads (doc 08 §6: 60/min). */

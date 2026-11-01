@@ -101,12 +101,12 @@ async function seedSponsor(orgId: string, url: string | null = "https://clicky.e
 
 const BROWSER = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36";
 
-/** GET `/s/<key><search>`, the way a visitor's browser asks for it (from `ip`, as Cloudflare names it). */
+/** GET `/s/<key><search>`, the way a visitor's browser asks for it (from `ip`, as Fly's proxy names it: lib/client-ip.ts). */
 const click = (key: string, search = "", o: { method?: string; ua?: string; ip?: string } = {}) =>
   GET(
     new Request(`https://seazn.club/s/${key}${search}`, {
       method: o.method ?? "GET",
-      headers: { "user-agent": o.ua ?? BROWSER, "cf-connecting-ip": o.ip ?? "198.51.100.1" },
+      headers: { "user-agent": o.ua ?? BROWSER, "fly-client-ip": o.ip ?? "198.51.100.1" },
     }),
     { params: Promise.resolve({ key }) },
   );

@@ -270,7 +270,7 @@ test("overview: a stream click - the code a viewer types, through the real /s/ r
     const pick = (from: readonly string[]) => from[Math.floor(Math.random() * from.length)]!;
     const code = Array.from({ length: SPONSOR_SHORT_CODE_MAX_LENGTH }, () => pick([...SPONSOR_SHORT_CODE_ALPHABET])).join("");
     await withDb((sql) => sql`insert into sponsor_short_codes (code, org_id, sponsor_id, fixture_id) values (${code}, ${seeded.orgId}, ${sponsorId}, null)`);
-    const res = await page.request.get(`/s/${code}`, { maxRedirects: 0, headers: { "cf-connecting-ip": "198.51.100.77" } });
+    const res = await page.request.get(`/s/${code}`, { maxRedirects: 0, headers: { "fly-client-ip": "198.51.100.77" } });
     expect(res.status(), "the code redirects").toBe(302);
     expect(res.headers()["location"]).toBe("https://harbourside.example/s13");
 

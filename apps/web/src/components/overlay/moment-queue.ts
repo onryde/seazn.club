@@ -99,8 +99,9 @@ export type QueueAction =
    *  of them, so none can air later either — not when the scene ends, not on the next poll. */
   | { type: "discard"; moments: readonly OverlayMoment[] }
   /** Owner ruling (4), 2026-10-19 (PR #982 review round 1, item 8): Final arrives — a moment already QUEUED must not
-   *  play under it. The queue is dropped; every dropped id stays SEEN (a re-sent window cannot queue it again, while a
-   *  scorer's undo still forgets it through `sync`). The slab already on air keeps its own run. */
+   *  play under it. The queue is dropped; every dropped id stays SEEN (a re-sent window cannot queue it again). A scorer's
+   *  undo still forgets a dropped SCORE moment's id through `sync`; a dropped SPONSOR card's id is never forgotten (R4 S6
+   *  fix round 1, see `sync`), so a flushed card never airs, undo or not. The slab already on air keeps its own run. */
   | { type: "flush" }
   /** R4 S6, for the operator console's "Skip this card" (C4 dispatches it — inert until then). Folds ONLY the named
    *  sponsor moment: on air → `out` and `cutShort`; queued → removed (it stays seen, so it never airs). A score moment
