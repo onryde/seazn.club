@@ -6,6 +6,7 @@ import {
   divisionPath,
   addEntrantsViaApi,
   expectNoHorizontalScroll,
+  stageCardOf,
 } from "./helpers";
 
 // PROMPT-28 formats: the new stage presets are reachable from the division
@@ -374,8 +375,18 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   // Two knockout round groups on the run sheet and no third: a Top 3 pads to
   // a 4-slot bracket, which is a semi-final round and a final. A quarter-final
   // here would mean the bracket was sized to 8.
-  await expect(page.getByText("Knockout — Semi-finals")).toBeVisible();
-  await expect(page.getByText("Knockout — Final", { exact: true })).toBeVisible();
+  //
+  // Match Day C3: each stage's rows live inside THAT stage's card, whose header names the stage, so the round header no longer
+  // repeats it ("Knockout - Semi-finals" is now "2. Knockout" over "Semi-finals"). The same fact is asserted scoped to the
+  // Knockout card: the card is the one the knockout stage's id names, its header says Knockout, and the two round headers sit in it.
+  const koCard = stageCardOf(page, koId);
+  await expect(koCard.getByRole("heading", { level: 3 }), "the card is the Knockout stage's").toContainText("Knockout");
+  const koRounds = koCard.getByRole("heading", { level: 4 });
+  await expect(koRounds.filter({ hasText: "Semi-finals" }), "the Knockout card has a Semi-finals round").toBeVisible();
+  await expect(koRounds.filter({ hasText: /^Final$/ }), "the Knockout card has a Final round").toBeVisible();
+  // Exactly those two round headers: a third would be a quarter-final round (the bracket sized to 8), and a card with none
+  // would make the two checks above pass on a heading that is not a round header.
+  await expect(koRounds, "two round headers in the Knockout card, no third").toHaveCount(2);
   await expect(page.getByText("Quarter-final")).toHaveCount(0);
   // Di finished 4th and did not qualify: she is nowhere in the bracket.
   await expect(bracket.getByText("Di", { exact: true })).toHaveCount(0);
