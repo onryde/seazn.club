@@ -26,14 +26,18 @@ export const EDITOR_ROLES = ["owner", "admin"] as const;
 /** Roles with org-wide read access. */
 export const READ_ROLES = ["owner", "admin", "viewer"] as const;
 
-/** May this caller hold a WRITE-CAPABLE credential (today: a team join code)?
+/** May this caller hold a bearer credential: a WRITE-CAPABLE one (a team join
+ *  code) or a READ-ONLY one (a sponsor report link, R4 S13 - anyone holding the
+ *  url reads that sponsor's numbers without signing in)?
  *
  *  An API key resolves `role: null` whatever its scopes, so it cannot be shown
  *  to be write-capable and is refused — an integration that needs join codes
  *  gets a deliberate scope check, not a default. Declared once here because the
- *  rule is enforced on two different surfaces (the list read model and every
- *  single-registration action response) and a second copy would drift the first
- *  time the role set changes. */
+ *  rule is enforced on three different surfaces (the registration list read
+ *  model, every single-registration action response, and creating / revoking /
+ *  listing sponsor report links in server/sponsors/report.ts `assertEditor`) and
+ *  a second copy would drift the first time the role set changes. A change made
+ *  for join codes changes who may mint report links too: check both. */
 export function mayHoldBearerCredential(role: OrgRole | null): boolean {
   return role !== null && (EDITOR_ROLES as readonly string[]).includes(role);
 }

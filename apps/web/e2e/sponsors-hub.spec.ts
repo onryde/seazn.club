@@ -258,7 +258,12 @@ test("overview: a stream click - the code a viewer types, through the real /s/ r
     const row = page.getByTestId(`sponsor-overview-row-${sponsorId}`);
     await expect(row).toBeVisible();
     await expect(row.getByTestId("sponsor-overview-clicks")).toHaveText("0");
-    await expect(row.getByTestId("sponsor-overview-viewers")).toHaveText("—");
+    // The dash is two parts: the mark on screen (hidden from screen readers) and the words a screen reader says instead.
+    // `toHaveText` on the cell would read both, so each is asserted on its own.
+    const viewers = row.getByTestId("sponsor-overview-viewers");
+    await expect(viewers.locator('[aria-hidden="true"]')).toHaveText("—");
+    await expect(viewers.locator(".sr-only")).toHaveText(UI["sponsors.overview.notMeasured"] ?? "");
+    expect(UI["sponsors.overview.notMeasured"], "the dictionary has the spoken words").toBeTruthy();
 
     // The stream's short code (S5 mints it from a live overlay poll; written straight to its table here, as public-fixture.spec.ts
     // does). Drawn from the declared alphabet at the longest length so no other run collides.
