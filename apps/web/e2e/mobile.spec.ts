@@ -1210,7 +1210,7 @@ test("competition desk: the tool row is a phone composition below md, not the de
     expect(await items.nth(0).getAttribute("target"), "Match Day opens in the same tab").toBeNull();
     await expect(items.nth(1)).toHaveText("Slideshow ↗");
     await expect(items.nth(2)).toHaveText("View Public Page ↗");
-    await expect(items.nth(3)).toHaveText("QR");
+    await expect(items.nth(3)).toHaveText("QR ↗");
     for (let i = 1; i < 4; i++) await expect(items.nth(i)).toHaveAttribute("target", "_blank");
     for (let i = 0; i < 4; i++) {
       const item = items.nth(i);
@@ -1372,7 +1372,7 @@ test("division header: Slideshow, View Public Page and QR are one Open menu at e
   await expect(items).toHaveCount(3);
   await expect(items.nth(0)).toHaveText("Slideshow ↗");
   await expect(items.nth(1)).toHaveText("View Public Page ↗");
-  await expect(items.nth(2)).toHaveText("QR");
+  await expect(items.nth(2)).toHaveText("QR ↗");
   await expect(items.nth(0)).toHaveAttribute("href", slideshowHref);
   await expect(items.nth(1)).toHaveAttribute("href", publicHref);
   await expect(items.nth(2)).toHaveAttribute("href", qrHref);

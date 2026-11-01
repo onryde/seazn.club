@@ -192,6 +192,7 @@ export default async function CompetitionPage({
             ariaLabel: t(dict, "aria.qrPoster"),
             href: `${publicPath}/poster.pdf`,
             newTab: true,
+            arrow: true,
             plainAnchor: true,
           },
         ]

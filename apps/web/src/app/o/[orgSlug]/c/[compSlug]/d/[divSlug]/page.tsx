@@ -701,6 +701,7 @@ export default async function DivisionPage({
             ariaLabel: t(dict, "aria.qrPoster"),
             href: `/shared/${orgSlug}/${competition.slug}/poster.pdf?division=${divSlug}`,
             newTab: true,
+            arrow: true,
             plainAnchor: true,
           },
         ]

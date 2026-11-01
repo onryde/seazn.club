@@ -376,7 +376,35 @@ describe("the competition page's Open menu (C5)", () => {
       t(en, "aria.qrPoster"),
     ]);
     const visible = [...panel.matchAll(/<a [^>]*>([\s\S]*?)<\/a>/g)].map((m) => m[1]!.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<[^>]+>/g, ""));
-    expect(visible).toEqual([`${t(en, "action.slideshow")} ↗`, `${t(en, "action.viewPublic")} ↗`, t(en, "action.qr")]);
+    expect(visible).toEqual([`${t(en, "action.slideshow")} ↗`, `${t(en, "action.viewPublic")} ↗`, `${t(en, "action.qr")} ↗`]);
+  });
+
+  // Owner 2026-11-01 (screenshot of the Open menu): QR opened a new tab like its two neighbours but was the one item without the
+  // ↗ mark. The rule is "opens a new tab => marked", so state it as that, not as three typed strings: every new-tab item of the
+  // menu AND of the phone's More fold wears the mark, and Match Day (same tab) does not.
+  it("every new-tab item wears the ↗ mark - in the Open menu and in the phone's More fold - and a same-tab item does not", async () => {
+    const html = await render(deskWith({ fixturesToday: 0 }), true, "public"); // off the day: Match Day is in both
+    let newTab = 0;
+    let sameTab = 0;
+    for (const where of ["desk-open-menu", "desk-tools-more"]) {
+      const region = subtreeOf(html, where);
+      expect(region, `${where} rendered`).not.toBeNull();
+      const items = [...region!.matchAll(/<a [^>]*>[\s\S]*?<\/a>/g)].map((m) => m[0]);
+      for (const a of items) {
+        const text = a.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<[^>]+>/g, "").trim();
+        const href = attrOf(a, "href");
+        if (attrOf(a, "target") === "_blank") {
+          expect(text, `${where}: ${href} opens a new tab`).toMatch(/ ↗$/);
+          newTab++;
+        } else {
+          expect(text, `${where}: ${href} stays in this tab`).not.toContain("↗");
+          sameTab++;
+        }
+      }
+    }
+    // Anti-vacuity: Open holds 3 new-tab items + Match Day; More holds 3 new-tab items + Match Day + Settings.
+    expect(newTab, "new-tab items checked (3 in Open, 3 in More)").toBe(6);
+    expect(sameTab, "same-tab items checked (Match Day in each, Settings in More)").toBe(3);
   });
 
   it("leaves NO top-level Slideshow / public-page / QR button in the row — only the Open menu and the phone's More fold hold them", async () => {
@@ -410,6 +438,17 @@ describe("the competition page's Open menu (C5)", () => {
       at(`href="${SETTINGS}"`), // the first one is the desktop link; the phone fold comes after it
     ];
     expect(order, "source order: Match Day door, Open, schedule board, registration, settings").toEqual([...order].sort((a, b) => a - b));
+  });
+
+  // Keyboard Tab follows the DOM, not the paint. The desktop row is therefore in source order only if CSS `order` never reaches it:
+  // every `order-*` class in the row must be phone-only (`max-md:`), where the Open menu is hidden anyway. (Owner 2026-11-01 asked
+  // for Open before Settings; it already was - this is what keeps "before" meaning the same thing to a mouse and a keyboard.)
+  it("reorders nothing at 768 and up: every order-* class in the tool row is phone-only, so Tab order is the source order above", async () => {
+    const html = await render(deskWith({ fixturesToday: 2 }), true, "public");
+    const row = subtreeOf(html, "desk-tool-row")!;
+    const orderTokens = [...row.matchAll(/[^\s"]*\border-[a-z0-9-]+/g)].map((m) => m[0]);
+    expect(orderTokens.length, "anti-vacuity: the phone stack does use order-*").toBeGreaterThan(0);
+    for (const tok of orderTokens) expect(tok, "a desktop-reaching order class would split Tab order from paint order").toMatch(/^max-md:order-/);
   });
 
   it("is desktop-only: below md the row keeps its own More fold, so the same links are not offered twice on a phone", async () => {

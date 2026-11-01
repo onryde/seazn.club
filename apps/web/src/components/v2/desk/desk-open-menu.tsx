@@ -42,7 +42,7 @@ export interface DeskOpenItem {
   href: string;
   /** Opens in a new tab. Required, not defaulted: a forgotten flag would silently keep the organiser's console behind them. */
   newTab: boolean;
-  /** The ↗ mark. Slideshow and View Public Page have it; QR never did. */
+  /** The ↗ mark: set on every item that opens a new tab (Slideshow, View Public Page and QR, since 2026-11-01), never on a same-tab one. */
   arrow?: boolean;
   /** A plain `<a>` rather than a router link: the QR poster is a PDF route handler, not a page. */
   plainAnchor?: boolean;

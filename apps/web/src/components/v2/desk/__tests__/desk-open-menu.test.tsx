@@ -38,6 +38,7 @@ const ITEMS: DeskOpenItem[] = [
     ariaLabel: t(en, "aria.qrPoster"),
     href: `${PUBLIC_PATH}/poster.pdf`,
     newTab: true,
+    arrow: true,
     plainAnchor: true,
   },
 ];
@@ -104,7 +105,7 @@ describe("DeskOpenMenu, as the server sends it (C5)", () => {
       expect(attr(a, "aria-label"), `${item.id} keeps its accessible name`).toBe(item.ariaLabel);
       expect(a, `${item.id} keeps its icon`).toContain(ICON_CLASS[item.id]);
       const visible = a.replace(/<svg[\s\S]*?<\/svg>/g, "").replace(/<[^>]+>/g, "").trim();
-      // Slideshow and View Public Page carry the arrow; QR has never had one.
+      // All three open a new tab, so all three carry the arrow (QR got it 2026-11-01; it had been the odd one out).
       expect(visible, `${item.id} visible text`).toBe(item.arrow ? `${item.label} ↗` : item.label);
     });
     // The two "dictionary says" facts the arrows hang on: labels are the existing keys, not new strings.

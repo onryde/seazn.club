@@ -229,10 +229,20 @@ describe("division page — Slideshow, View Public Page and QR fold into one Ope
         ariaLabel: "aria.qrPoster",
         href: "/shared/org/comp-one/poster.pdf?division=div",
         newTab: true,
+        arrow: true,
         plainAnchor: true,
       },
     ]);
     expect((menus[0]!.props as { label: string }).label).toBe("desk.tools.open");
+  });
+
+  // Owner 2026-11-01: QR opens a new tab like the other two but was the one item without the ↗ mark. The rule is stated as
+  // "new tab => marked", not as three literals, so a fourth new-tab item cannot be added unmarked.
+  it("every item that opens a new tab carries the ↗ mark, QR included", async () => {
+    const items = itemsOf(openMenus(await renderPage())[0]!);
+    const newTab = items.filter((i) => i.newTab);
+    expect(newTab.map((i) => i.id), "anti-vacuity: all three tools open a new tab").toEqual(["slideshow", "public", "qr"]);
+    for (const i of newTab) expect(i.arrow, `${i.id} is marked`).toBe(true);
   });
 
   it("leaves NOTHING top-level: no public-site <a>, no Slideshow Link beside the menu (each destination once, at every width)", async () => {
