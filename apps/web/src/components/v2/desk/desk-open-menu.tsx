@@ -14,9 +14,12 @@
 // No arrow-key roving: no menu in this house has it (card-menu, help-menu, org-switcher), and a lone menu growing a different
 // keyboard model from its siblings is worse than none — the items are ordinary links, reachable with Tab.
 //
-// DESKTOP ONLY (the caller supplies `max-md:hidden`). Below `md` the masthead already folds these same three destinations, plus
-// Settings, into the labelled "More" disclosure (`DeskToolsMore`, F2 round J) at the 44px floor; a second drop-down listing the
-// same links beside it would be the duplication that fold exists to avoid.
+// TWO CALLERS, one component, each choosing its phone treatment through `className` / `panelClassName`:
+//   - the COMPETITION page is desktop only (it supplies `max-md:hidden`). Below `md` its masthead already folds these same three
+//     destinations, plus Settings, into the labelled "More" disclosure (`DeskToolsMore`, F2 round J) at the 44px floor; a second
+//     drop-down listing the same links beside it would be the duplication that fold exists to avoid.
+//   - the DIVISION page (C5b) has no phone fold, so Open is its one menu at every width. Below `md` the trigger clears the 44px
+//     floor (`max-md:min-h-11`, here, so it holds for any caller) and the panel opens as a full-width sheet under the header row.
 //
 // A fourth item, "Match Day", leads the menu on a day that is NOT a match day (owner addition 2026-11-01): the filled Open Match Day
 // button only exists on the day, and the door should not vanish the rest of the week. The page decides which of the two the
@@ -51,10 +54,16 @@ export function DeskOpenMenu({
   label,
   items,
   className = "",
+  panelClassName = "",
 }: {
   label: string;
   items: DeskOpenItem[];
+  /** On the wrapper. The competition page adds `max-md:hidden`; the division page adds `max-md:static` (see `panelClassName`). */
   className?: string;
+  /** Appended to the panel. A caller that wants the panel to open as a full-width sheet under a positioned row on a phone says so
+   *  here (`max-md:inset-x-0 max-md:w-auto max-md:max-w-none`) and makes the wrapper `max-md:static`: the division page, whose
+   *  trigger sits at an x that depends on how its title wraps, so no fixed anchor side is safe at 320. */
+  panelClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
@@ -92,7 +101,7 @@ export function DeskOpenMenu({
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((v) => !v)}
-        className={`btn btn-ghost gap-1.5 ${open ? "bg-purple-50 text-purple-700" : ""}`}
+        className={`btn btn-ghost gap-1.5 max-md:min-h-11 ${open ? "bg-purple-50 text-purple-700" : ""}`}
       >
         <span>{label}</span>
         <ChevronDown
@@ -106,7 +115,7 @@ export function DeskOpenMenu({
         role="menu"
         aria-label={label}
         hidden={!open}
-        className="absolute left-0 top-full z-30 mt-1 w-max min-w-full max-w-[85vw] rounded-xl border border-purple-100 bg-white py-1 shadow-lg"
+        className={`absolute left-0 top-full z-30 mt-1 w-max min-w-full max-w-[85vw] rounded-xl border border-purple-100 bg-white py-1 shadow-lg ${panelClassName}`}
       >
         {items.map((item) => {
           const Icon = ICONS[item.id];

@@ -288,7 +288,9 @@ export default async function CompetitionPage({
             </div>
           </div>
           {/* Header actions.
-              `md` and up: unchanged — icon + label, wrapped in a row.
+              `md` and up: a wrapped row of labelled buttons — the "Open" menu
+              (Slideshow, View Public Page, QR; C5), Schedule board,
+              Registration and Settings, each labelled.
               Below `md` (F2, round J): NOT the same row shrunk. It stacks,
               full width, and the set itself changes — one primary action
               (Schedule board), the one tool that carries status
@@ -444,10 +446,12 @@ export default async function CompetitionPage({
               <Settings className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden md:inline">{t(dict, "action.settings")}</span>
             </Link>
-            {/* Phone only, and the counterpart of the four `max-md:hidden`
-                tools above: the same destinations, as labelled full-width
-                rows at the tap floor instead of unreadable glyphs. Its own
-                `md:hidden` is what keeps 768-and-up literally unchanged.
+            {/* Phone only, and the counterpart of the two `max-md:hidden`
+                controls above - the Open menu (C5: Slideshow, View Public
+                Page, QR) and Settings: the same destinations, as labelled
+                full-width rows at the tap floor instead of unreadable
+                glyphs. Its own `md:hidden` is what keeps 768-and-up free of
+                a second copy of them.
                 W3 Task 8 (ruling 15): unified from `sm:` (640) to `md:` (768)
                 with the rest of the desk. */}
             <DeskToolsMore

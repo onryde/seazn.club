@@ -12,8 +12,10 @@
 // Here the trigger carries the WORD and the panel is a full-width stack of
 // labelled rows, each at the tap floor.
 //
-// It renders only below `md` (the caller supplies `md:hidden`); at `md` and up
-// the labelled row is unchanged and must stay that way.
+// It renders only below `md` (the caller supplies `md:hidden`). At `md` and up
+// the row shows the same destinations as labelled buttons instead - Settings
+// beside the "Open" menu (`desk-open-menu.tsx`, C5) that holds Slideshow, View
+// Public Page and the QR poster - and none of them is offered twice at a width.
 //
 // W3 Task 8 (ruling 15): this used to switch at `sm:` (640) — unified on
 // `md:` (768) so the masthead agrees with the ledger about where "phone"

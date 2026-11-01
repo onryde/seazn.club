@@ -152,6 +152,18 @@ describe("DeskOpenMenu, as the server sends it (C5)", () => {
     expect(hrefs).toEqual([ITEMS[0]!.href]);
   });
 
+  it("passes panelClassName to the panel (after the base classes), and the trigger clears the 44px floor below md", () => {
+    const html = renderToStaticMarkup(<DeskOpenMenu label={LABEL} items={ITEMS} panelClassName="max-md:inset-x-0 max-md:w-auto" />);
+    const panel = tagWith(html, 'role="menu"');
+    expect(panel).not.toBeNull();
+    expect(attr(panel, "class")).toMatch(/(^|\s)absolute(\s|$)/); // the base classes are still there
+    expect(attr(panel, "class")).toMatch(/(^|\s)max-md:inset-x-0(\s|$)/);
+    expect(attr(panel, "class")).toMatch(/(^|\s)max-md:w-auto(\s|$)/);
+    expect(attr(tagWith(html, 'data-testid="desk-open-menu-toggle"'), "class"), "a phone tap target").toMatch(/(^|\s)max-md:min-h-11(\s|$)/);
+    // Without the prop the panel carries nothing extra (no stray "undefined").
+    expect(attr(tagWith(markup(), 'role="menu"'), "class")).not.toMatch(/undefined|inset-x-0/);
+  });
+
   it("passes the caller's className to the wrapper (the page uses it to keep the phone on its own More fold)", () => {
     const html = renderToStaticMarkup(<DeskOpenMenu label={LABEL} items={ITEMS} className="max-md:hidden" />);
     expect(tagWith(html, 'data-testid="desk-open-menu"')).toContain("max-md:hidden");

@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 // Division console (PROMPT-15 task 1): entrants & rosters, fixture console
 // (per stage: generate/complete/schedule), standings with the cascade trace.
 import Link from "@/components/ui/console-link";
-import { Globe, MonitorPlay, Printer, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
 import { StatusChip, divisionChipState } from "@/components/ui/status-chip";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -45,6 +45,7 @@ import { defaultMatchMinutes, listFixturesAwaitingSettle } from "@/server/usecas
 import { competitionFixturesToday, findCourtForDivision } from "@/server/usecases/match-day";
 import { findCourtHref } from "@/lib/match-day/view";
 import { needsYouHome } from "@/components/v2/desk/needs-you";
+import { DeskOpenMenu, type DeskOpenItem } from "@/components/v2/desk/desk-open-menu";
 import { comparePools } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
@@ -654,11 +655,52 @@ export default async function DivisionPage({
     ? entryLine(entryStatus(openViews, attentionCount(needsOrganiserExternalPlay, flaggedExternalPlay.boards), new Date().getTime()))
     : null;
 
+  // Match Day C5b: the header's "Open" menu - the three tools that were buttons, with the labels, hrefs, new tabs, arrows and
+  // accessible names they had, gated as they were (Slideshow always; the public page and the QR poster only on a non-private
+  // competition; nothing on `canEdit`). The competition page builds the same menu from the competition's own routes.
+  //   G9: View Public Page goes straight to this division's public view - the HUB with the division selected, not the standalone
+  //   division page (owner ruling 2026-09-17; that page is slated for a 308 into the hub). Both spellings are the hub's own:
+  //   "matches" is one of `deriveHubTabs`' ids (`lib/matches-hub.ts`), and `?division=` is what `readDivisionParam` reads and
+  //   `competition-landing.tsx` seeds into the Matches tab. Its accessible name is the DIVISION's (`aria.viewPublic`).
+  //   v3/10 #3: the QR is the division-scoped poster PDF for the venue wall.
+  // No Match Day item: this header never linked Match Day (its "Find a court" link lives in the run sheet), and C5b adds none.
+  const openItems: DeskOpenItem[] = [
+    {
+      id: "slideshow",
+      label: t(dict, "action.slideshow"),
+      ariaLabel: t(dict, "aria.slideshowNewTab"),
+      href: routes.slideshowDivision(id),
+      newTab: true,
+      arrow: true,
+    },
+    ...(competition.visibility !== "private"
+      ? [
+          {
+            id: "public" as const,
+            label: t(dict, "action.viewPublic"),
+            ariaLabel: t(dict, "aria.viewPublic"),
+            href: `/shared/${orgSlug}/${competition.slug}?tab=matches&division=${divSlug}`,
+            newTab: true,
+            arrow: true,
+            plainAnchor: true,
+          },
+          {
+            id: "qr" as const,
+            label: t(dict, "action.qr"),
+            ariaLabel: t(dict, "aria.qrPoster"),
+            href: `/shared/${orgSlug}/${competition.slug}/poster.pdf?division=${divSlug}`,
+            newTab: true,
+            plainAnchor: true,
+          },
+        ]
+      : []),
+  ];
+
   return (
     <>
       <main className="mx-auto max-w-6xl px-4 py-8">
         <div className="mb-6">
-          <div className="mt-1 flex flex-wrap items-center gap-3">
+          <div className="relative mt-1 flex flex-wrap items-center gap-3">
             <h1 className="page-title">
               {division.name}
             </h1>
@@ -671,16 +713,18 @@ export default async function DivisionPage({
             <StatusChip state={divisionChipState(division.status)} locale={locale} />
             {billingFrozen && <StatusChip state="frozen" locale={locale} />}
             <div className="flex-1" />
-            {/* Icon + label on desktop, icon-only under `sm` (v3/02 pattern 5). */}
-            <Link
-              href={routes.slideshowDivision(id)}
-              target="_blank"
-              aria-label={t(dict, "aria.slideshowNewTab")}
-              className="btn btn-ghost gap-1.5"
-            >
-              <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden sm:inline">{t(dict, "action.slideshow")} ↗</span>
-            </Link>
+            {/* Match Day C5b (owner approved 2026-11-01): Slideshow, View Public Page and the QR poster were three buttons
+                here - icon-only under `sm` (v3/02 pattern 5), unlabelled tiles on a phone. They are ONE "Open" menu now, the
+                competition page's own component, in the place Slideshow sat (see `openItems` above). Unlike the competition
+                page this header has no phone fold, so it is NOT hidden below `md`: one menu at every width, each destination
+                once. Below `md` the panel opens as a full-width sheet under this row (`max-md:static` here, the row is
+                `relative`) rather than under the trigger, whose x depends on how the title and chips wrap. */}
+            <DeskOpenMenu
+              className="max-md:static"
+              panelClassName="max-md:inset-x-0 max-md:w-auto max-md:max-w-none"
+              label={t(dict, "desk.tools.open")}
+              items={openItems}
+            />
             {/* Division-level registration nav link removed (RS001
                 demolition); RS004 built the competition-level Registration
                 hub as its replacement but deliberately left this page's own
@@ -693,7 +737,7 @@ export default async function DivisionPage({
                 (UserPlus) — same destination, same concept, one fewer
                 dictionary key.
                 NOT gated on competition.visibility, unlike View Public/QR
-                below: this is an ORGANISER surface behind /o/, not the
+                in the Open menu above: this is an ORGANISER surface behind /o/, not the
                 public register link the deleted surface used to gate — a
                 private competition still has registrants to manage.
                 requireDivisionPage already routes through
@@ -710,36 +754,6 @@ export default async function DivisionPage({
               <UserPlus className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden sm:inline">{t(dict, "action.registration")}</span>
             </Link>
-            {competition.visibility !== "private" && (
-              // G9: straight to this division's public view — which is now the
-              // HUB with the division selected, not the standalone division
-              // page (owner ruling 2026-09-17; that page is slated for a 308
-              // into the hub). Both spellings are the hub's own: "matches" is
-              // one of `deriveHubTabs`' ids (`lib/matches-hub.ts`), and
-              // `?division=` is what `readDivisionParam` reads and
-              // `competition-landing.tsx` seeds into the Matches tab.
-              <a
-                href={`/shared/${orgSlug}/${competition.slug}?tab=matches&division=${divSlug}`}
-                target="_blank"
-                aria-label={t(dict, "aria.viewPublic")}
-                className="btn btn-ghost gap-1.5"
-              >
-                <Globe className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "action.viewPublic")} ↗</span>
-              </a>
-            )}
-            {competition.visibility !== "private" && (
-              // v3/10 #3: division-scoped QR poster PDF for the venue wall.
-              <a
-                href={`/shared/${orgSlug}/${competition.slug}/poster.pdf?division=${divSlug}`}
-                target="_blank"
-                aria-label={t(dict, "aria.qrPoster")}
-                className="btn btn-ghost gap-1.5"
-              >
-                <Printer className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "action.qr")}</span>
-              </a>
-            )}
           </div>
           {/* v8: primary actions live on their own row under the title —
               Start / Schedule / Invite wrap cleanly at 390px. */}
