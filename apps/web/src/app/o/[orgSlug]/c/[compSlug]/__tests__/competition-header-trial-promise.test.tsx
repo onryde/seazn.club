@@ -86,7 +86,7 @@ beforeEach(() => {
  * the assertions are about the actual prop the page computed, not a stand-in.
  */
 async function renderEnded(): Promise<string> {
-  const el = await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }) });
+  const el = await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }), searchParams: Promise.resolve({}) });
   return renderToStaticMarkup(
     <CompetitionPassProvider passKey="event_pass" paidPlan={false} lockReason="terminal">
       {el}

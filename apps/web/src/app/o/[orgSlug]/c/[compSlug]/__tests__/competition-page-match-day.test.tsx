@@ -127,7 +127,7 @@ function deskWith(o: {
 async function render(desk: CompetitionDesk, canEdit = true): Promise<string> {
   h.desk = desk;
   h.canEdit = canEdit;
-  const el = await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }) });
+  const el = await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }), searchParams: Promise.resolve({}) });
   return renderToStaticMarkup(
     <CompetitionPassProvider passKey={null} paidPlan>
       {el}

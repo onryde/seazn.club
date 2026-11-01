@@ -5,6 +5,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { sportEmoji } from "@/components/discovery-cards";
 import { whenLabel } from "@/lib/division-status-line";
+import { ledgerHref, pageLedger } from "@/lib/ledger-page";
 import type { Attention } from "@/lib/division-phase";
 import type { DeskDivision } from "@/server/usecases/competition-desk";
 import { BansToReviewPill, PhasePill } from "./phase-pill";
@@ -112,9 +113,16 @@ function redAction(dict: Dict, d: DeskDivision, org: string, comp: string, slug:
 }
 
 export function DivisionLedger({
-  dict, rows, org, comp, locale, now, canEdit,
+  dict, rows: allRows, org, comp, locale, now, canEdit, page, showFinished, query = [],
 }: {
   dict: Dict; rows: LedgerRow[]; org: string; comp: string; locale: string; now: string;
+  /** Match Day B2 (spec 2026-10-31 §9, owner request): the list shows five at a time and hides finished divisions until asked.
+   *  Both are REQUIRED, not defaulted: a ledger whose page forgot to hand them over would silently show every division again,
+   *  which is the seam this prop exists to keep from going inert (the page reads them from `?dpage=` / `?finished=1`). */
+  page: number;
+  showFinished: boolean;
+  /** The page's other query params, which the pager and the toggle keep (`ledgerQueryOf(...).rest`). */
+  query?: readonly (readonly [string, string])[];
   /** IMPORTANT (review 7): the phone card's red action was NOT gated, while
    *  `needsYouItems` on the page above it always has been. A viewer — an
    *  ordinary org role that reaches this page, and one RS005 deliberately let
@@ -139,6 +147,14 @@ export function DivisionLedger({
   // The page captures one `now` and passes it down explicitly so the
   // "is this kick-off past?" check (below) agrees with whatever instant
   // the rest of the render used.
+  // B2: the page of rows to draw. A row whose desk failed to load has no phase to be finished in, and no attention to
+  // exempt - it is never hidden (`pageLedger` reads "unknown" as a phase that is not finished).
+  const view = pageLedger(
+    allRows.map((row) => ({ row, phase: row.desk?.phase ?? "unknown", attention: row.desk?.attention ?? [] })),
+    { page, showFinished },
+  );
+  const rows = view.rows.map((v) => v.row);
+  const base = routes.competition(org, comp);
   const nowMs = Date.parse(now);
   const nextByRow = rows.map((r) => (r.desk ? nextLine(dict, r.desk, locale, nowMs) : ""));
   const hasNext = nextByRow.some((n) => n !== "");
@@ -151,7 +167,30 @@ export function DivisionLedger({
           the "+ Add division" control) already owns this section — a second
           "DIVISIONS · N" heading here duplicated it. The page passes the
           count into its own heading now. */}
+      {/* B2: the filter. Nothing to toggle - no finished division the default view hides - prints nothing at all. A link, not a
+          button: the state is the URL (`?finished=1`), so a reload or the back button keeps it, and it opens page 1 because
+          the rows the pages are cut from have changed. 44px tall below `md`, the tap floor. */}
+      {view.finishedCount > 0 && (
+        <div className="mb-2 flex justify-end">
+          <Link
+            href={ledgerHref(base, query, { page: 1, showFinished: !showFinished })}
+            data-testid="desk-ledger-finished-toggle"
+            data-showing={showFinished ? "1" : "0"}
+            data-finished-count={view.finishedCount}
+            className="btn btn-ghost px-3 py-1.5 text-xs max-md:min-h-11"
+          >
+            {t(dict, showFinished ? "desk.ledger.hideFinished" : "desk.ledger.showFinished", { n: view.finishedCount })}
+          </Link>
+        </div>
+      )}
       <div className="card divide-y divide-purple-50">
+        {/* Every division is finished and hidden: the card says so and the toggle above is the way out. Not an empty box - an
+            empty list would read as "this competition has no divisions", which is the page's own, different empty state. */}
+        {rows.length === 0 && view.finishedCount > 0 && (
+          <p data-testid="desk-ledger-all-finished" className="p-6 text-center text-sm text-slate-500">
+            {t(dict, "desk.ledger.allFinished")}
+          </p>
+        )}
         {rows.map((r, i) => {
           const d = r.desk;
           const pct = d && d.total > 0 ? Math.round((d.played / d.total) * 100) : 0;
@@ -302,6 +341,49 @@ export function DivisionLedger({
           );
         })}
       </div>
+      {/* B2: the pager, only when there is a second page. Previous/Next are links that keep the other query params; at either
+          end the missing one is an inert placeholder of the same size, so "Next" does not jump left on the last page. */}
+      {view.pages > 1 && (
+        <nav
+          aria-label={t(dict, "desk.ledger.pager.label")}
+          data-testid="desk-ledger-pager"
+          data-page={view.page}
+          data-pages={view.pages}
+          className="mt-3 flex items-center justify-between gap-2"
+        >
+          {view.page > 1 ? (
+            <Link
+              href={ledgerHref(base, query, { page: view.page - 1, showFinished })}
+              rel="prev"
+              data-testid="desk-ledger-prev"
+              className="btn btn-ghost px-3 py-1.5 text-xs max-md:min-h-11"
+            >
+              {t(dict, "desk.ledger.pager.prev")}
+            </Link>
+          ) : (
+            <span aria-disabled="true" data-testid="desk-ledger-prev" className="btn btn-ghost pointer-events-none px-3 py-1.5 text-xs opacity-40 max-md:min-h-11">
+              {t(dict, "desk.ledger.pager.prev")}
+            </span>
+          )}
+          <span className="text-xs text-slate-600" data-testid="desk-ledger-page-of">
+            {t(dict, "desk.ledger.pager.page", { page: view.page, pages: view.pages })}
+          </span>
+          {view.page < view.pages ? (
+            <Link
+              href={ledgerHref(base, query, { page: view.page + 1, showFinished })}
+              rel="next"
+              data-testid="desk-ledger-next"
+              className="btn btn-ghost px-3 py-1.5 text-xs max-md:min-h-11"
+            >
+              {t(dict, "desk.ledger.pager.next")}
+            </Link>
+          ) : (
+            <span aria-disabled="true" data-testid="desk-ledger-next" className="btn btn-ghost pointer-events-none px-3 py-1.5 text-xs opacity-40 max-md:min-h-11">
+              {t(dict, "desk.ledger.pager.next")}
+            </span>
+          )}
+        </nav>
+      )}
     </section>
   );
 }

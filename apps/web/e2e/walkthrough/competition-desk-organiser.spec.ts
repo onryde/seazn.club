@@ -206,6 +206,11 @@ test("an organiser watches the desk go Setting up → Scheduled → In play (a m
   for (const id of ids) await scoreFixture(request, id, 2, 1);
   await setStageStatusSql(stage.data!.id, "complete");
   await page.goto(compPath);
+  // Match Day B2: the divisions list hides a finished division until asked, and says so with the count on a toggle.
+  await expect(row).toHaveCount(0);
+  await expect(page.getByTestId("desk-ledger-finished-toggle")).toContainText("Show finished (1)");
+  await page.getByTestId("desk-ledger-finished-toggle").click();
+  await expect(page).toHaveURL(/[?&]finished=1(&|$)/);
   await expect(row).toHaveAttribute("data-phase", "finished");
   await expect(row).toContainText("complete");
   // Nothing needs the organiser, on either surface: no list here, and no line pointing at one in Match Day.

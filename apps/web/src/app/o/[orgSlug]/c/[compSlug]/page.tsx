@@ -25,6 +25,7 @@ import { checkoutTrialDays } from "@/lib/billing";
 import { getCompetitionDesk, competitionPhase } from "@/server/usecases/competition-desk";
 import { statusLine, nextDateLabel } from "@/lib/division-status-line";
 import { ledgerRank, leadingAttention } from "@/lib/division-phase";
+import { ledgerQueryOf } from "@/lib/ledger-page";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { DeskToolsMore } from "@/components/v2/desk/desk-tools-more";
 import {
@@ -41,10 +42,15 @@ import { log } from "@/server/logger";
 
 export default async function CompetitionPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ orgSlug: string; compSlug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { orgSlug, compSlug } = await params;
+  // Match Day B2: the divisions list's page and its "show finished" switch live in the URL (`?dpage=`, `?finished=1`), so a
+  // reload or the back button keeps them. Total - a malformed value is the default - and every other param is carried through.
+  const ledgerQuery = ledgerQueryOf(await searchParams);
   const page = await requireCompetitionPage(orgSlug, compSlug);
   const { auth, canEdit } = page;
   const id = page.competition.id;
@@ -508,6 +514,7 @@ export default async function CompetitionPage({
               <DivisionLedger
                 dict={dict} rows={ledgerRows} org={orgSlug} comp={compSlug} locale={locale} now={now}
                 canEdit={canEdit}
+                page={ledgerQuery.page} showFinished={ledgerQuery.showFinished} query={ledgerQuery.rest}
               />
             )}
           </section>
