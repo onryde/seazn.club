@@ -50,4 +50,18 @@ describe("patchOf", () => {
     const Refined = z.object({ a: z.number().default(1) }).refine(() => true);
     expect(() => patchOf(Refined)).toThrow(/refinements/);
   });
+
+  // Only an outermost default is unwrapped; one under another wrapper would still fill, so the build refuses it by name.
+  // Each shape is first shown to be a real filler (its `.partial()` fills it), or the refusal could be refusing nothing.
+  for (const [label, wrapped] of [
+    [".default(v).nullable()", z.number().default(7).nullable()],
+    [".default(v).optional()", z.number().default(7).optional()],
+    [".default(v).readonly()", z.number().default(7).readonly()],
+  ] as const) {
+    it(`refuses a default under another wrapper, naming the key: ${label}`, () => {
+      const Wrapped = z.object({ name: z.string(), deep: wrapped });
+      expect(Wrapped.partial().parse({})).toEqual({ deep: 7 });
+      expect(() => patchOf(Wrapped)).toThrow(/patchOf: field "deep" still fills an omitted value \(7\)/);
+    });
+  }
 });

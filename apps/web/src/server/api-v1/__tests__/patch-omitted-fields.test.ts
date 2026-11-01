@@ -8,9 +8,11 @@
 // name rewrote its roles to ["referee"]; and an AI plan suggesting one constraint came back carrying five more,
 // ticked, at their defaults.
 //
-// The sweep reads every PATCH body from the OpenAPI route registry (`ROUTES`, which openapi-coverage pins 1:1 to the
-// route files on disk), plus every `Patch…Input` a usecase exports (what a route actually hands `parseBody`), plus
-// the one patch-shaped input that is neither: the AI's constraint delta. A new PATCH route is swept with no edit here.
+// The sweep reads every PATCH body of the /api/v1 route registry (`ROUTES`, which openapi-coverage pins 1:1 to the
+// route files under app/api/v1), plus every `Patch…Input` a usecase exports (what a route actually hands `parseBody`),
+// plus the NAMED inputs below that are neither. A new /api/v1 PATCH route is swept with no edit here. NOT swept: the
+// five PATCH routes outside /api/v1 (api/admin/size-packs/[key], api/admin/coupons/[promoId], api/admin/entitlements,
+// api/orgs/[id], api/users/me) — no registry lists them; none carried a `.default()` or `.partial()` on 2026-11-01.
 //
 // The probe, per body: zod's object parse sets a key the input omitted exactly when that key's schema answers
 // `undefined` with a value, so each field is parsed from `undefined` on its own. That is what `parse({})` returns,
@@ -24,6 +26,7 @@ import { z } from "zod";
 import { ROUTES } from "../openapi";
 import { CreateCourt } from "../schemas";
 import { AiConstraintDelta } from "../../usecases/schedule-ai-prompt";
+import { LockInput } from "../../usecases/history";
 
 const USECASES = join(__dirname, "..", "..", "usecases");
 
@@ -90,10 +93,18 @@ const NAMED: Swept[] = [
   // The AI plan's `constraint_suggestions`: the console ticks every key it carries and Apply overlays the ticked ones
   // on the division's saved constraints, so a key the model never sent must not appear.
   { name: "AiConstraintDelta", schema: AiConstraintDelta },
+  // PATCH /divisions/{id}/locks parses with this usecase schema, not the registry's `S.DivisionLocks` (kept identical by
+  // hand), and its name is not `Patch…Input`, so neither source above reaches it.
+  { name: "usecases/history LockInput", schema: LockInput },
 ];
 
+/** The usecase scan's own floor: the `Patch…Input` exports found on 2026-11-01 (officials 2, sponsors 1, venues 2).
+ *  A scan that matches fewer has lost what routes actually parse with — lower this only by removing one on purpose. */
+const USECASE_INPUTS_FLOOR = 5;
+
 /** Fixed on ANOTHER branch, and so deliberately left alone here. Each entry must still fill: one that no longer does
- *  is a stale entry and reds, so it is deleted the moment the fix lands on this tree (whichever merges first). */
+ *  is a stale entry and reds, so it is deleted the moment the fix lands on this tree (whichever merges second does it);
+ *  the last entry goes together with this map and the it() that reads it. */
 const FIXED_ELSEWHERE: Readonly<Record<string, string>> = {
   "PATCH /orgs/{id}/sponsors/{sponsorId}":
     "feat/r4-sponsors 2cebfffccb splits SponsorWriteFields; the sponsor schemas are that branch's to change",
@@ -101,15 +112,16 @@ const FIXED_ELSEWHERE: Readonly<Record<string, string>> = {
 };
 
 describe("PATCH bodies: an omitted field stays omitted", async () => {
-  const swept = [...registry, ...(await usecaseInputs()), ...NAMED];
+  const usecase = await usecaseInputs();
+  const swept = [...registry, ...usecase, ...NAMED];
   const probes = swept.map((s) => ({ ...s, ...omissionProbe(s.schema, s.name) }));
   const fields = probes.reduce((n, p) => n + p.fields, 0);
   const accepting = probes.filter((p) => p.schema.safeParse({}).success).length;
 
-  it(`sweeps ${swept.length} patch schemas (${registry.length} from the route registry), ${fields} fields; ${accepting} accept {}`, () => {
-    // Anti-vacuity: an empty registry, a usecase scan that matched nothing, or a probe that read no field is a red.
+  it(`sweeps ${swept.length} patch schemas (${registry.length} registry, ${usecase.length} usecase, ${NAMED.length} named), ${fields} fields; ${accepting} accept {}`, () => {
+    // Anti-vacuity, per source: an empty registry, a usecase scan below its floor, or a probe that read no field is a red.
     expect(registry.length).toBeGreaterThan(0);
-    expect(swept.length).toBeGreaterThan(registry.length);
+    expect(usecase.length, "the usecase Patch…Input scan found fewer than its floor").toBeGreaterThanOrEqual(USECASE_INPUTS_FLOOR);
     expect(fields).toBeGreaterThan(swept.length);
     // Every PATCH route documents its body: one without would be a PATCH this sweep silently never reads.
     expect(patchRows.filter((r) => !r.request).map((r) => r.path)).toEqual([]);
@@ -125,11 +137,10 @@ describe("PATCH bodies: an omitted field stays omitted", async () => {
   }
 
   it(`the fixed-elsewhere entries are swept and still fill (${Object.keys(FIXED_ELSEWHERE).length} entries)`, () => {
-    expect(Object.keys(FIXED_ELSEWHERE).length).toBeGreaterThan(0);
     for (const name of Object.keys(FIXED_ELSEWHERE)) {
       const p = probes.find((x) => x.name === name);
       expect(p, `${name} is not swept: a stale or misspelt entry`).toBeDefined();
-      expect(Object.keys(p!.filled), `${name} no longer fills: delete its FIXED_ELSEWHERE entry`).not.toEqual([]);
+      expect(Object.keys(p!.filled), `${name} no longer fills: delete its FIXED_ELSEWHERE entry (the last one goes with the map and this whole it())`).not.toEqual([]);
     }
   });
 

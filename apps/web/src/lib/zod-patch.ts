@@ -19,7 +19,17 @@ export function patchOf<S extends z.ZodRawShape>(schema: z.ZodObject<S>): z.ZodO
   const fields: z.core.$ZodShape = schema.shape;
   const shape: Record<string, z.core.$ZodType> = {};
   for (const [key, field] of Object.entries(fields)) {
-    shape[key] = z.optional(field instanceof z.ZodDefault || field instanceof z.ZodPrefault ? field.unwrap() : field);
+    const built = z.optional(field instanceof z.ZodDefault || field instanceof z.ZodPrefault ? field.unwrap() : field);
+    // Only an OUTERMOST default is unwrapped. One under another wrapper (`.default(v).nullable()`, `.optional()`,
+    // `.readonly()`) still answers `undefined` with its value, so the twin would fill it: refuse at build, naming the key.
+    const omitted = built.safeParse(undefined);
+    if (omitted.success && omitted.data !== undefined) {
+      throw new Error(
+        `patchOf: field "${key}" still fills an omitted value (${JSON.stringify(omitted.data)}) — its default sits under ` +
+          `another wrapper; make .default() the outermost call or give the patch its own field`,
+      );
+    }
+    shape[key] = built;
   }
   // `.partial()` first for what it refuses (an object with refinements: they would run on a partial body) and what it
   // keeps (the object's unknown-key policy); `.extend()` then replaces every field with its undefaulted optional.
