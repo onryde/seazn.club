@@ -23,6 +23,8 @@ const en = enUi as Record<string, string>;
 const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }] };
 const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: [{ key: "bwf", name: "BWF", system: true }] };
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
+// Retired from every sport's offer (owner ruling 2026-11-01, Match Day D1): triple-rr-retired.test.tsx sweeps it.
+const OFFERED = STAGE_TEMPLATES.filter((t) => t.key !== "triple_rr");
 
 function picker(first: SportOption): string {
   const html = renderToStaticMarkup(
@@ -43,19 +45,19 @@ const label = (key: string): string => en[`format.template.${key}.label`]!;
 describe("the division builder offers chess no americano or mexicano (follow-up to #1027)", () => {
   it("chess: every card but americano and mexicano renders, and the two are absent (counts)", () => {
     const grid = picker(CHESS);
-    expect(cards(grid)).toBe(STAGE_TEMPLATES.length - REFUSED_FOR_CHESS.length);
+    expect(cards(grid)).toBe(OFFERED.length - REFUSED_FOR_CHESS.length);
     for (const k of REFUSED_FOR_CHESS) expect(grid, k).not.toContain(label(k));
     let shown = 0;
-    for (const t of STAGE_TEMPLATES.filter((x) => !REFUSED_FOR_CHESS.includes(x.key))) {
+    for (const t of OFFERED.filter((x) => !REFUSED_FOR_CHESS.includes(x.key))) {
       expect(grid, t.key).toContain(label(t.key));
       shown++;
     }
-    expect(shown).toBeGreaterThanOrEqual(14);
+    expect(shown).toBeGreaterThanOrEqual(13); // 16 templates, less Triple RR (retired) and the two refused
   });
 
   it("the positive pair: badminton still renders every card, americano and mexicano among them", () => {
     const grid = picker(BADMINTON);
-    expect(cards(grid)).toBe(STAGE_TEMPLATES.length);
+    expect(cards(grid)).toBe(OFFERED.length);
     for (const k of REFUSED_FOR_CHESS) expect(grid, k).toContain(label(k));
   });
 

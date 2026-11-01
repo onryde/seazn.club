@@ -24,7 +24,6 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   await page.getByRole("button", { name: "Format", exact: true }).click();
 
   // The new presets are visible on the format picker.
-  await expect(page.getByText("Triple round robin")).toBeVisible();
   await expect(page.getByText("Americano (padel)")).toBeVisible();
   await expect(page.getByText("Mexicano (padel)")).toBeVisible();
   await expect(page.getByText("Ladder", { exact: true })).toBeVisible();
@@ -37,6 +36,11 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   await expect(page.getByText("Swiss Playoff", { exact: true })).toBeVisible();
   await expect(page.getByText("Swiss Knockout", { exact: true })).toBeVisible();
   await expect(page.getByText("Swiss", { exact: true })).toBeVisible();
+  // Owner ruling 2026-11-01 (Match Day D1, legs Option A): the Triple round
+  // robin is offered to no sport any more. Asserted only now, with the
+  // picker's cards on screen, so an unrendered picker cannot pass it.
+  await expect(page.locator('input[name="template"]').first()).toBeAttached();
+  await expect(page.getByText("Triple round robin")).toHaveCount(0);
 
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 812 });

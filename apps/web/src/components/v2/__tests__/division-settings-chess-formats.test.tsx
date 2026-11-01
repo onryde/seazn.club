@@ -15,7 +15,9 @@ vi.mock("next/navigation", () => ({
 }));
 
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
-const ALL_KEYS = STAGE_TEMPLATES.map((t) => t.key);
+// Every template but the Triple round robin, which no sport is offered (owner ruling 2026-11-01, Match Day D1;
+// triple-rr-retired.test.tsx sweeps it).
+const OFFERED_KEYS = STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr");
 
 type Stage = { name: string; kind: string; config: Record<string, unknown> | null; progression: null };
 
@@ -56,29 +58,29 @@ const LEAGUE: Stage = { name: "League", kind: "league", config: { legs: 1 }, pro
 describe("division Settings offers a chess division no americano or mexicano (follow-up to #1027)", () => {
   it("a chess league: every template but americano and mexicano is an option, the league selected (counts)", () => {
     const s = formatSelect(mount("boardgame", "blitz", [LEAGUE]));
-    expect(s.values).toEqual(ALL_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
-    expect(s.values).toHaveLength(ALL_KEYS.length - 2);
+    expect(s.values).toEqual(OFFERED_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
+    expect(s.values).toHaveLength(OFFERED_KEYS.length - 2);
     expect(s.value).toBe("league");
   });
 
   it("empty case: a chess division with no stages yet is offered the same list and opens at league", () => {
     const s = formatSelect(mount("boardgame", "blitz", []));
-    expect(s.values).toEqual(ALL_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
+    expect(s.values).toEqual(OFFERED_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
     expect(s.value).toBe("league");
   });
 
   it("a chess division stored with americano (or mexicano) before the ruling still shows it: listed and selected, the other one absent", () => {
     const a = formatSelect(mount("boardgame", "blitz", [AMERICANO]));
     expect(a.value).toBe("americano");
-    expect(a.values).toEqual(ALL_KEYS.filter((k) => k !== "mexicano"));
+    expect(a.values).toEqual(OFFERED_KEYS.filter((k) => k !== "mexicano"));
     const m = formatSelect(mount("boardgame", "blitz", [MEXICANO]));
     expect(m.value).toBe("mexicano");
-    expect(m.values).toEqual(ALL_KEYS.filter((k) => k !== "americano"));
+    expect(m.values).toEqual(OFFERED_KEYS.filter((k) => k !== "americano"));
   });
 
   it("the positive pair: a badminton division is offered every template, americano and mexicano among them", () => {
     const s = formatSelect(mount("badminton", "bwf", [LEAGUE]));
-    expect(s.values).toEqual(ALL_KEYS);
+    expect(s.values).toEqual(OFFERED_KEYS);
     for (const k of REFUSED_FOR_CHESS) expect(s.values).toContain(k);
   });
 });

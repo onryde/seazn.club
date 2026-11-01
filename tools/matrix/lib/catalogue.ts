@@ -1,6 +1,9 @@
 // The frozen row list of the format × sport matrix (design §3; R11 — changing
 // it is a reviewed diff, never a runtime draw). Rows are the 16 builder
-// templates in offered-matrix order, then the 5 API-only shapes. Columns are
+// templates in offered-matrix order, then the 5 API-only shapes. One template
+// row, triple_rr, is no longer OFFERED by the builder (owner ruling 2026-11-01:
+// STAGE_TEMPLATES marks it `retired`), but it stays a row: the API still takes
+// it and stored divisions still play it. Columns are
 // the engine's own registry order (builtinModules), which is the order the
 // offered matrix was written in.
 //

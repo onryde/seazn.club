@@ -120,9 +120,12 @@ describe("catalogue — rows", () => {
     // absent — a single-stage row cannot see a wrong carry, a finals stage can.
     expect(stagesForRow("league_ko")[1]!.progression!.carry).toBeUndefined();
     expect(stagesForRow("swiss")[0]!.config.rounds).toBe(BUILDER_DEFAULT_KNOBS.swissRounds);
-    // buildTemplateStages overwrites legs with the knob (format-templates.ts:340):
-    // triple_rr through the builder defaults is legs 1, not 3 — recorded as a
-    // false premise, pinned here so a product change is seen.
+    // buildTemplateStages overwrites legs with the knob (format-templates.ts
+    // buildTemplateStages): triple_rr through the builder defaults was legs 1,
+    // not 3 — recorded as a false premise. The builder no longer offers it at
+    // all (owner ruling 2026-11-01, Match Day D1: STAGE_TEMPLATES marks it
+    // `retired`, applicability.test.ts pins the offer); the row stays, as the
+    // body the builder used to post, because the API still takes it.
     expect(stagesForRow("triple_rr")[0]!.config.legs).toBe(BUILDER_DEFAULT_KNOBS.legs);
   });
 

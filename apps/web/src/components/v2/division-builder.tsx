@@ -80,7 +80,6 @@ const TEMPLATE_FAMILY: Record<string, string> = {
   swiss_knockout: "swiss_knockout",
   knockout: "knockout",
   double_elim: "double_elim",
-  triple_rr: "league",
   americano: "americano",
   mexicano: "americano",
   ladder: "ladder",
