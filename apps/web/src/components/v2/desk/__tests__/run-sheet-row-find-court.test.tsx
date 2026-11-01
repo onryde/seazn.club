@@ -6,6 +6,11 @@ import { buildRunSheet, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { messages } from "@/lib/messages";
 import { routes } from "@/lib/routes";
 import { Fixture } from "@/server/api-v1/schemas";
+import { VENUE_NOUNS, type VenueNoun } from "@/lib/venue";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
+import en from "@/dictionaries/en/ui.json";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -16,7 +21,8 @@ vi.mock("next/navigation", () => ({
 // Match Day B2 (spec 2026-10-31 §9: "Unscheduled fixtures link to the free-court candidate list as well as the schedule
 // board"). On a match day an unscheduled match with nobody on a court gets a "Find a court" link into Match Day beside its
 // "Set time". Match Day has no deep link into one court's candidate list (the list is the focused court's own panel), so
-// the link is to Match Day itself.
+// the link is to Match Day itself. The word is the sport's own playing area (fix round 1, I1): a football match is asked a
+// "pitch", a chess game a "board" - `lib/venue.ts`'s nouns, the same ones Match Day's headers use.
 //
 // Rendered with no DOM (`apps/web` vitest is node-env); every expected string is the dictionary's or the router's own.
 
@@ -24,7 +30,8 @@ const TZ = "UTC";
 const NOW_MS = Date.UTC(2026, 8, 5, 12, 0, 0);
 const ENTRANTS = { e1: "Alpha", e2: "Bravo" };
 const MATCH_DAY = routes.competitionMatchDay("org", "comp");
-const LABEL = messages["runsheet.action.findCourt"];
+/** The default noun is the court (an absent sport reads `venueNoun`'s own default), so the label every row-level case below reads. */
+const LABEL = messages["runsheet.action.findCourt.court"];
 /** Every fixture status the v1 contract declares - the engine's own list, never typed here. */
 const STATUSES: readonly string[] = Fixture.shape.status.options;
 
@@ -38,11 +45,11 @@ function fx(o: Partial<RunSheetFixture> = {}): RunSheetFixture {
   };
 }
 
-function row(f: RunSheetFixture, o: { canEdit?: boolean; matchDayHref?: string } = {}): string {
+function row(f: RunSheetFixture, o: { canEdit?: boolean; matchDayHref?: string; venueNoun?: VenueNoun } = {}): string {
   return renderToStaticMarkup(
     <RunSheetRow
       fixture={f} href="/f/1" tz={TZ} orgTz={TZ} nowMs={NOW_MS}
-      canEdit={o.canEdit ?? true} entrantNames={ENTRANTS} matchDayHref={o.matchDayHref}
+      canEdit={o.canEdit ?? true} entrantNames={ENTRANTS} matchDayHref={o.matchDayHref} venueNoun={o.venueNoun}
     />,
   );
 }
@@ -137,12 +144,12 @@ describe("the run sheet row's Find a court link", () => {
     const blocks = buildRunSheet({ fixtures, stages, tz: TZ, nowMs: NOW_MS });
     // The grouping really made the shapes this test claims to cover.
     expect(blocks.map((b) => b.kind).sort()).toEqual(["bracket", "day", "unscheduled"]);
-    const render = (matchDayHref?: string) =>
+    const render = (matchDayHref?: string, venueNoun?: VenueNoun) =>
       renderToStaticMarkup(
         <RunSheet
           blocks={blocks} stages={stages} tz={TZ} orgTz={TZ} nowMs={NOW_MS} matchMinutes={30}
           entrantNames={ENTRANTS} canEdit hrefFor={(f) => `/f/${f.fixture_no}`}
-          filter="all" onFilter={() => {}} stageId={null} onStageFilter={() => {}} matchDayHref={matchDayHref}
+          filter="all" onFilter={() => {}} stageId={null} onStageFilter={() => {}} matchDayHref={matchDayHref} venueNoun={venueNoun}
         />,
       );
     expect(findCourts(render()), "not a match day: none anywhere").toBe(0);
@@ -151,5 +158,58 @@ describe("the run sheet row's Find a court link", () => {
     expect(on.match(/data-row-action="set_time"/g)?.length, "untimed rows rendered").toBe(3);
     expect(findCourts(on), "one link per untimed row, in the pile AND the bracket block").toBe(3);
     expect(on.match(new RegExp(`href="${MATCH_DAY}"`, "g"))?.length).toBe(3);
+    // The sport's noun rides the same two paths (fix round 1, I1): every link in the pile AND the bracket block says "pitch".
+    const pitch = render(MATCH_DAY, "pitch");
+    const word = messages["runsheet.action.findCourt.pitch"];
+    expect(pitch.match(new RegExp(`>${word}<`, "g"))?.length, "pitch label on all three").toBe(3);
+    expect(pitch, "and no row fell back to the court word").not.toContain(`>${messages["runsheet.action.findCourt.court"]}<`);
+  });
+});
+
+// Fix round 1 (I1): the word follows the sport's playing area, one WHOLE string per noun per locale (es/fr/nl carry grammatical
+// gender, so there is no `{noun}` slot to fill). Every expected string below is read from the dictionaries.
+describe("the Find link names the sport's playing area", () => {
+  const LOCALES: Record<string, Record<string, string>> = { en, es, fr, nl };
+  const labelKey = (noun: string) => `runsheet.action.findCourt.${noun}`;
+
+  it("every noun lib/venue.ts can answer: the link reads that noun's own string, and the five differ", () => {
+    expect(VENUE_NOUNS.length).toBeGreaterThan(1);
+    let checked = 0;
+    const read = new Set<string>();
+    for (const noun of VENUE_NOUNS) {
+      const html = row(fx(), { matchDayHref: MATCH_DAY, venueNoun: noun });
+      const want = (messages as Record<string, string>)[labelKey(noun)]!;
+      expect(want, `${noun}: the English string exists`).toBeTruthy();
+      expect(findCourts(html), noun).toBe(1);
+      expect(html, noun).toContain(`data-testid="run-sheet-find-court"`);
+      expect(html, noun).toContain(`>${want}<`);
+      read.add(want);
+      checked += 1;
+    }
+    expect(checked).toBe(VENUE_NOUNS.length);
+    // Five nouns, five sentences: a lookup that ignored the noun could not read five different strings.
+    expect(read.size).toBe(VENUE_NOUNS.length);
+  });
+
+  it("absent noun is the court (the default `venueNoun` itself answers)", () => {
+    expect(row(fx(), { matchDayHref: MATCH_DAY })).toContain(`>${messages["runsheet.action.findCourt.court"]}<`);
+  });
+
+  it("all four locales carry all five, each naming the locale's own Match Day word for that noun; the old single key is gone", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(LOCALES)) {
+      expect(d["runsheet.action.findCourt"], `${locale}: the one-size key is retired`).toBeUndefined();
+      for (const noun of VENUE_NOUNS) {
+        const label = d[labelKey(noun)];
+        const word = d[`matchDay.noun.${noun}`];
+        expect(typeof label, `${locale} ${labelKey(noun)}`).toBe("string");
+        expect(label!.trim().length, `${locale} ${noun}`).toBeGreaterThan(0);
+        expect(typeof word, `${locale} matchDay.noun.${noun}`).toBe("string");
+        // The label is a whole sentence about the SAME word the Match Day headers use for this noun.
+        expect(label!.toLocaleLowerCase(locale), `${locale} ${noun}`).toContain(word!.toLocaleLowerCase(locale));
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(Object.keys(LOCALES).length * VENUE_NOUNS.length);
   });
 });

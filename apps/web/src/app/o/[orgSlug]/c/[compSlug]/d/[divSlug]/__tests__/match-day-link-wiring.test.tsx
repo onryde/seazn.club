@@ -4,8 +4,10 @@
 // component called directly, its returned tree walked) with each gate flipped alone, and the day's count asked through the one
 // rule the competition page's Open Match Day asks (`needsYouHome`, left REAL here; only the database read is doubled).
 //
-// One sport (generic): the href reads the tab, the editing gate and the day's count, never the sport - the sport enters this page
-// only through reads this scaffold doubles. Same scaffold as online-start-hint-wiring.test.tsx beside it.
+// The href reads the tab, the editing gate and the day's count, never the sport, so those cases run on one sport (generic). The
+// sport enters the link by another road (fix round 1, I1: the word is the sport's playing area - pitch, board - chosen by the stage
+// panel from the `sportKey` this page hands it), and the last describe drives that hand-off per sport. Same scaffold as
+// online-start-hint-wiring.test.tsx beside it.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
@@ -163,6 +165,7 @@ const panelHref = async (tab = "fixtures") => {
 };
 
 beforeEach(() => {
+  division.sport_key = "generic";
   division.status = "active";
   comp.frozen = false;
   fx.rows = [];
@@ -227,5 +230,27 @@ describe("division page: the run sheet is told where Match Day is, only on a mat
     today.count.mockResolvedValue(3);
     await renderPage("standings");
     expect(today.count).not.toHaveBeenCalled();
+  });
+});
+
+describe("division page: the run sheet's Find link is worded for the division's sport", () => {
+  // The page's whole part is handing the panel the division's sport; the panel picks the noun (stages-panel-find-court-noun.test.tsx
+  // renders the real panel per registered sport). A page that dropped or mis-keyed `sportKey` would say "court" in a football
+  // division with every other test here green.
+  it("football and chess (boardgame) divisions: the panel is handed that sport and the match day's href", async () => {
+    today.count.mockResolvedValue(3);
+    const seen: Array<{ sportKey: unknown; matchDayHref: unknown }> = [];
+    for (const sport of ["football", "boardgame", "generic"]) {
+      division.sport_key = sport;
+      const panels = findAll(await renderPage("fixtures"), StagesPanel);
+      expect(panels, sport).toHaveLength(1);
+      const props = panels[0]!.props as { sportKey?: unknown; matchDayHref?: unknown };
+      seen.push({ sportKey: props.sportKey, matchDayHref: props.matchDayHref });
+    }
+    expect(seen).toEqual([
+      { sportKey: "football", matchDayHref: MATCH_DAY },
+      { sportKey: "boardgame", matchDayHref: MATCH_DAY },
+      { sportKey: "generic", matchDayHref: MATCH_DAY },
+    ]);
   });
 });

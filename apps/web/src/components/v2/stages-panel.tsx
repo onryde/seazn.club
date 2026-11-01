@@ -105,6 +105,7 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { isOnlineGameExists } from "@/lib/open-round";
+import { venueNoun } from "@/lib/venue";
 import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
@@ -394,7 +395,7 @@ interface Props {
   arbiterHref?: string | null;
   /** Match Day B2 (spec 2026-10-31 §9): Match Day's address, handed down ONLY on a match day to an organiser who can edit (the
    *  division page asks the one `needsYouHome` rule the competition page's Open Match Day asks). The run sheet's unscheduled
-   *  rows then carry "Find a court". null/absent ⇒ not a match day: no link. */
+   *  rows then carry "Find a court" (the word follows `sportKey`: pitch, table, board, rink). null/absent ⇒ not a match day: no link. */
   matchDayHref?: string | null;
 }
 
@@ -1510,6 +1511,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         onlinePlay={onlinePlay}
         arbiterHrefFor={arbiterHref === null ? undefined : (fixtureId) => routes.divisionArbiter(orgSlug, compSlug, divSlug, fixtureId)}
         matchDayHref={matchDayHref ?? undefined}
+        /* Fix round 1 (I1): "Find a pitch / table / board / rink", by the division's sport (an absent one is the court). */
+        venueNoun={venueNoun(sportKey)}
         /* An unfilled bracket seat is named by its FEEDER ("Winner of R1·3"),
            not "TBD" — the same `feedLabels()` builder and the same
            `slot.winner_match`/`slot.loser_match` vocabulary the schedule board

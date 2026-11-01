@@ -36,6 +36,7 @@ import { forfeitLedgerOfReason, unseatedForfeitLoser, unseatedWithdrew } from "@
 import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import { formatChangedTag } from "./run-sheet-tags";
 import type { PatchFixture } from "@/server/api-v1/schemas";
+import type { VenueNoun } from "@/lib/venue";
 // Both halves of the round trip resolve in `orgTz` (#448): `zonedDateTimeInput`
 // seeds the field from an existing instant, `isoFromZonedDateTime` turns the
 // typed wall clock back into one. Never `tz` — that is display-only.
@@ -158,6 +159,7 @@ export function RunSheetRow({
   onlinePlay,
   arbiterHref,
   matchDayHref,
+  venueNoun = "court",
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -215,6 +217,10 @@ export function RunSheetRow({
    *  Match Day has no deep link into one court's candidate list (that list is the focused court's own panel), so it is the
    *  page itself. Absent = not a match day: the row is exactly what it was. */
   matchDayHref?: string;
+  /** Match Day B2, fix round 1 (I1): the sport's playing-area noun (`lib/venue.ts`'s `venueNoun`; the stage panel knows the
+   *  division's sport and chooses it), so the link asks for a "pitch" in football and a "board" in chess rather than a court
+   *  everywhere. Absent = the court, `venueNoun`'s own default. One whole string per noun per locale (`runsheet.action.findCourt.<noun>`). */
+  venueNoun?: VenueNoun;
   /** W2a fix round 1 (M10) — this fixture is a recorded abandon awaiting its settle (stored `abandoned`): held, like
    *  a `needs_decision` one — the chip and Settle. From the division page's `listFixturesAwaitingSettle`. */
   awaitsSettle?: boolean;
@@ -811,7 +817,7 @@ export function RunSheetRow({
                 data-testid="run-sheet-find-court"
                 className="btn btn-ghost min-h-11 shrink-0 px-3 text-xs"
               >
-                {msg("runsheet.action.findCourt")}
+                {msg(`runsheet.action.findCourt.${venueNoun}`)}
               </Link>
             )}
           </div>

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
@@ -467,6 +469,11 @@ test.describe("Match Day — the board keeps itself current (B1, moved from desk
   });
 });
 
+/** The en ui dictionary: the link's words are read from it, never typed. */
+const UI_EN = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
+
 test.describe("Match Day — Find a court on the division's run sheet (B2)", () => {
   // Spec §9: "Unscheduled fixtures link to the free-court candidate list". Match Day has no deep link into one court's
   // candidate list (that list is the focused court's own panel), so the link is to Match Day itself. The seed is a match day (three
@@ -501,7 +508,8 @@ test.describe("Match Day — Find a court on the division's run sheet (B2)", () 
       await expect(findCourt, `width ${width}`).toHaveCount(unscheduled);
       for (const link of await findCourt.all()) {
         await expect(link).toHaveAttribute("href", `${compPath}/match-day`);
-        await expect(link).toHaveText("Find a court");
+        // generic/score plays on a court (the default noun); football's pitch and chess's board are the unit suites' (the seed is one sport).
+        await expect(link).toHaveText(UI_EN["runsheet.action.findCourt.court"]!);
         await expect(link).toBeVisible();
         const box = await link.boundingBox();
         expect(box, "the link has a box").not.toBeNull();

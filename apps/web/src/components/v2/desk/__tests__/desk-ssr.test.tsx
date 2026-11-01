@@ -937,7 +937,10 @@ describe("DivisionLedger paging and the finished filter", () => {
   });
 
   it("a finished division that still owes something is never hidden, and is not counted as hidden", () => {
-    const owed: Attention[] = [{ kind: "result_missing", count: 1 } as Attention];
+    // `bans_waiting` is raised in every status (`resolveAttention`: "not gated by divisionStatus ... a pending ban is owed its review
+    // in every status"), so it is an attention a truly finished division can really carry; a result missing or a red kind would
+    // have kept the phase from resolving to finished at all, which made the earlier fixture a row the desk cannot produce.
+    const owed: Attention[] = [{ kind: "bans_waiting", count: 1 }];
     // Guard the assumption this test stands on: the fixture attention is a real kind of the engine's own list.
     expect(Object.keys(ATTENTION_SEVERITY)).toContain(owed[0]!.kind);
     const rows = [ledgerRowOf(1, "scheduled"), ledgerRowOf(2, "finished", owed), ledgerRowOf(3, "finished")];

@@ -14,7 +14,8 @@ interface Row {
 const row = (id: string, phase = "scheduled", attention: readonly unknown[] = []): Row => ({ id, phase, attention });
 const many = (n: number, phase = "scheduled", from = 1): Row[] => Array.from({ length: n }, (_, i) => row(`r${from + i}`, phase));
 const ids = (rows: readonly Row[]) => rows.map((r) => r.id);
-const RED = [{ kind: "needs_draw" }];
+/** An attention a truly finished division can still carry: a suspension to review (`bans_waiting`, raised in every status, discipline 3A). */
+const OWED = [{ kind: "bans_waiting", count: 1 }];
 
 describe("pageLedger", () => {
   // The empty case first (TEST-STRATEGY): no rows is one empty page, never zero pages and never a negative offset.
@@ -61,7 +62,7 @@ describe("pageLedger", () => {
   });
 
   it("a finished row with attention is never filtered", () => {
-    const rows = [row("a", "scheduled"), row("b", "finished", RED), row("c", "finished")];
+    const rows = [row("a", "scheduled"), row("b", "finished", OWED), row("c", "finished")];
     const p = pageLedger(rows, { page: 1, showFinished: false });
     expect(ids(p.rows)).toEqual(["a", "b"]);
     // ...and it is not counted as a hidden finished division either: nothing about it is hidden.

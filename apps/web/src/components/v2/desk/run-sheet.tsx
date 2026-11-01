@@ -22,6 +22,7 @@ import type { FeedLabelPair } from "@/lib/schedule-board";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
 import type { MessageKey } from "@/lib/messages";
+import type { VenueNoun } from "@/lib/venue";
 import { RunSheetRow } from "./run-sheet-row";
 import type { HoldState } from "@/server/relay/domain/session";
 
@@ -126,6 +127,7 @@ export function RunSheet({
   onlinePlay,
   arbiterHrefFor,
   matchDayHref,
+  venueNoun,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -189,6 +191,10 @@ export function RunSheet({
    *  unscheduled pile and a knockout's bracket block (`buildRunSheet`); a day block holds only dated matches and the settled
    *  block only played ones, neither of which is ever asked for a court, so neither is handed it. Absent = no link. */
   matchDayHref?: string;
+  /** Match Day B2, fix round 1 (I1): the sport's playing-area noun, chosen by the stage panel from the division's sport and
+   *  handed to the same two blocks as `matchDayHref`, so "Find a court" says pitch / table / board / rink where it should.
+   *  Absent = court. */
+  venueNoun?: VenueNoun;
   /** Feeder labels for unfilled bracket seats, keyed by fixture id —
    *  `feedLabels()`'s output (lib/schedule-board.ts). Threaded straight
    *  through to every `RunSheetRow` below and never read here, exactly as
@@ -465,7 +471,8 @@ export function RunSheet({
                     streamState={streamStates?.[f.id]}
                     onlinePlay={onlinePlay?.[f.id]}
                     arbiterHref={arbiterHrefFor?.(f.id)}
-                matchDayHref={matchDayHref}
+                    matchDayHref={matchDayHref}
+                    venueNoun={venueNoun}
                     awaitsSettle={settleIds.has(f.id)}
                     feedLabels={feedLabels}
                   />
@@ -507,6 +514,7 @@ export function RunSheet({
                 onlinePlay={onlinePlay?.[f.id]}
                 arbiterHref={arbiterHrefFor?.(f.id)}
                 matchDayHref={matchDayHref}
+                venueNoun={venueNoun}
                 awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
@@ -788,8 +796,9 @@ function RowWithNow({
   /** T16 — survive `...rest` into `RunSheetRow`, like `streamState`. */
   onlinePlay?: RunSheetOnlinePlay;
   arbiterHref?: string;
-  /** Match Day B2 - survives `...rest` into `RunSheetRow`, like `arbiterHref`. */
+  /** Match Day B2 - survive `...rest` into `RunSheetRow`, like `arbiterHref`. */
   matchDayHref?: string;
+  venueNoun?: VenueNoun;
   /** Declared here only so it survives `...rest` into `RunSheetRow` — this
    *  wrapper reads nothing off it (same posture as `streamState`/`venues`). */
   feedLabels?: Record<string, FeedLabelPair>;
