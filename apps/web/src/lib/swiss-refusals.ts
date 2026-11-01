@@ -50,9 +50,12 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     message: "A bye is not played, so it takes no court or time.",
     key: "swiss.refusal.SWISS_BYE_NOT_PLACEABLE",
   },
-  // W3 T5 (RB3-22, X-SW-28): Undo of Pair next over a round with a started board.
+  // W3 T5 (RB3-22, X-SW-28): Undo of Pair next over a round with a started board. 422 by the rule above (batch-1
+  // review, controller 2026-11-01): a started round never un-starts — a void keeps the start's events, which still count
+  // as a result (`fixtureEvidenceSql`), and no organiser path removes score events — so the Undo can never succeed as
+  // sent.
   SWISS_UNDO_ROUND_STARTED: {
-    status: 409,
+    status: 422,
     message: "A match in this round has started, so its pairing can't be undone.",
     key: "swiss.refusal.SWISS_UNDO_ROUND_STARTED",
   },

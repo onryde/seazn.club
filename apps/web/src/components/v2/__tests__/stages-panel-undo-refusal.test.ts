@@ -36,7 +36,8 @@ describe("undoRefusalMessage — StagesPanel's Undo-last refusal", () => {
     for (const code of codes) {
       const local = EN[SWISS_REFUSALS[code].key];
       expect(typeof local, `${code}: en/ui.json has its sentence`).toBe("string");
-      expect(undoRefusalMessage(new ApiV1Error(`server: ${code}`, 409, code), msg), code).toBe(local);
+      // At the status the server answers with for this code (the table's): SWISS_UNDO_ROUND_STARTED is a 422.
+      expect(undoRefusalMessage(new ApiV1Error(`server: ${code}`, SWISS_REFUSALS[code].status, code), msg), code).toBe(local);
       checked++;
     }
     expect(checked).toBe(3);

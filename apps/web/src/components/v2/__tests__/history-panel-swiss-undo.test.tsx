@@ -136,7 +136,10 @@ describe("HistoryPanel — a Swiss refusal of Undo, Redo or Restore is said in t
     ]);
     const SERVER = `server says ${code} in English`;
     apiV1.mockImplementation(async (path: string) => {
-      if (/\/(undo|redo|restore)$/.test(path)) throw new ApiV1Error(SERVER, 409, code);
+      // The status the server answers with for a table code (the table's own), never one typed in for all of them; a
+      // code outside the table (the look-alike case below) has no row, so it answers a plain 409.
+      const status = Object.hasOwn(SWISS_REFUSALS, code) ? SWISS_REFUSALS[code as SwissRefusalCode].status : 409;
+      if (/\/(undo|redo|restore)$/.test(path)) throw new ApiV1Error(SERVER, status, code);
       return path.endsWith("/history") ? { watermark: null, seq: 2, events: [] } : CHECKPOINTS;
     });
     const button = ctx.byTestid(control)[0];
