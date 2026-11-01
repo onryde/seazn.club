@@ -2209,8 +2209,6 @@
   "schedule.addStageBtn": "Fase toevoegen",
   "schedule.cancel": "Annuleren",
   "schedule.stageFormat.heading": "Regels",
-  "schedule.stageFormat.inherited": "Zelfde als divisie",
-  "schedule.stageFormat.overridden": "Fase-instelling",
   "schedule.stageFormat.useDivision": "Divisieregels gebruiken",
   "schedule.stageFormat.save": "Regels opslaan",
   "schedule.stageFormat.hint": "Leeg laten betekent dat deze fase de divisieregels volgt.",

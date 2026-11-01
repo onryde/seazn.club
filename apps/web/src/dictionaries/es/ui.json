@@ -2209,8 +2209,6 @@
   "schedule.addStageBtn": "Añadir fase",
   "schedule.cancel": "Cancelar",
   "schedule.stageFormat.heading": "Reglas",
-  "schedule.stageFormat.inherited": "Igual que la división",
-  "schedule.stageFormat.overridden": "Ajuste de la fase",
   "schedule.stageFormat.useDivision": "Usar las reglas de la división",
   "schedule.stageFormat.save": "Guardar reglas",
   "schedule.stageFormat.hint": "En blanco, esta fase sigue las reglas de la división.",

@@ -6653,8 +6653,6 @@ export type DictionaryKey =
   | "schedule.sstatus.pending"
   | "schedule.stageFormat.heading"
   | "schedule.stageFormat.hint"
-  | "schedule.stageFormat.inherited"
-  | "schedule.stageFormat.overridden"
   | "schedule.stageFormat.save"
   | "schedule.stageFormat.useDivision"
   | "schedule.stageTools"

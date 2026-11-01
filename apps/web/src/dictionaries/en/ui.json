@@ -2209,8 +2209,6 @@
   "schedule.addStageBtn": "Add stage",
   "schedule.cancel": "Cancel",
   "schedule.stageFormat.heading": "Rules",
-  "schedule.stageFormat.inherited": "Same as division",
-  "schedule.stageFormat.overridden": "Stage override",
   "schedule.stageFormat.useDivision": "Use division rules",
   "schedule.stageFormat.save": "Save rules",
   "schedule.stageFormat.hint": "Blank means this stage follows the division's rules.",
