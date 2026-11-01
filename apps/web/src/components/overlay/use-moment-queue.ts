@@ -21,6 +21,7 @@
 // it each committed state and prints what it returns, and only when the caller
 // says `sponsorLines` (the stage: `host=compositor`, never a preview).
 import { useEffect, useReducer, useRef } from "react";
+import { incomingKey } from "@/lib/overlay-incoming";
 import type { OverlayMoment } from "@/lib/overlay-moments";
 import { droppingSponsorLine, sponsorQueueLines, type SponsorLineBuilder } from "@/lib/overlay-compositor";
 import { INITIAL, momentQueueReducer, nextDeadline, type Phase } from "./moment-queue";
@@ -70,7 +71,7 @@ export function useMomentQueue(
   // Sync runs even when the live set is EMPTY: that is the undo case — the
   // only moment on air was voided and `momentsFor` returns nothing. Enqueue
   // alone would early-return and leave the lie on screen.
-  const key = incoming.map((m) => `${m.seq}:${m.kind}`).join(",");
+  const key = incomingKey(incoming);
   useEffect(() => {
     const now = Date.now();
     dispatch({ type: "sync", live: incoming, now, foldMs, holdMs });

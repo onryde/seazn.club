@@ -1,18 +1,20 @@
 // R4 sponsors on stream, S15 — THE WHOLE CHAIN, driven for real (AGENTS.md class 1, spec 2026-10-27 §7 "Seam, driven for
 // real"; the S15 brief's Step 1 and the controller's 2026-11-01 addendum: plan → airing → click → overview → report).
 //
-// One cricket match, one composed session, two ticked sponsors on Busy. Nothing below hand-builds a plan, a break, a moment,
-// a wire line, an airing row, a click row or a figure:
+// One cricket match, one composed session, two ticked sponsors on Busy. Nothing below hand-builds a plan, a break, a moment
+// list, a wire line, an airing row, a click row or a figure. What IS the test's own: the page's clock, and the queue hook's
+// React shell, replayed by hand below from use-moment-queue's dispatch rules:
 //
 //   the organiser's writes  createSponsor + patchSponsor (the tick, R12's org row) + putStreamSettings (Busy)
 //   the scorer's writes     appendEvent: six legal balls (Law 17.1: an over is six) — the engine's own `opensAt` opens the
 //                           break in the fold's replay
 //   the plan                loadOverlayLiveData at the relay door (the composed page's) and the public door (OBS's): the
 //                           REAL loader, so S5 writes the assignment and mints the card's short code
-//   the page                the stage's own `incoming` (momentsFor + endOfOverMoment + sponsorMoments, behind the mount's
-//                           tip), the REAL momentQueueReducer driven the way `use-moment-queue` drives it (sync + enqueue on
-//                           each poll, one tick per deadline, a re-poll between ticks), and the REAL `sponsorQueueLines`
-//                           over each committed state — the lines the compositor host prints
+//   the page                `stageIncoming` (lib/overlay-incoming.ts) — the very function overlay-stage.tsx composes its
+//                           list with — over the loader's payload; the REAL momentQueueReducer, dispatched the way
+//                           `use-moment-queue` does (sync + enqueue only when `incomingKey` changes, one tick per deadline,
+//                           a re-poll between ticks); and the REAL `sponsorQueueLines` over each committed state — the lines
+//                           the compositor host prints
 //   the compositor          SC1's conversion (the line's name is `kind`, its JSON the rest), wrapped as a `RelayHeartbeat`
 //                           body and parsed by the route's own schema, handed to the REAL `heartbeat` usecase
 //   proof of play           the `sponsor_airings` row, read back
@@ -61,8 +63,9 @@ import { sql } from "@/lib/db";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { RelayAiring, RelayHeartbeat } from "@/server/api-v1/schemas";
 import { SIGNAL_SPONSOR_END, SIGNAL_SPONSOR_START, sponsorQueueLines } from "@/lib/overlay-compositor";
-import { maxSeq, momentsFor, sponsorMoments, type OverlayMoment } from "@/lib/overlay-moments";
-import { END_OF_OVER_HOLD_MS, closedOverBaselineOf, endOfOverMoment } from "@/lib/overlay-end-of-over";
+import { maxSeq, momentsFor, type OverlayMoment } from "@/lib/overlay-moments";
+import { END_OF_OVER_HOLD_MS, closedOverBaselineOf } from "@/lib/overlay-end-of-over";
+import { incomingKey, stageIncoming } from "@/lib/overlay-incoming";
 import {
   SPONSOR_COOLDOWN_MS, SPONSOR_STYLE_BY_SIZE, sponsorMomentId, type BreakOpened, type SponsorPlan,
 } from "@/lib/sponsor-plan";
@@ -207,8 +210,9 @@ async function cricketComposedRig() {
     home: side(fx.home_entrant_id), away: side(fx.away_entrant_id),
     now: () => now,
     tick: (ms: number) => { now += ms; },
-    async append(type: string, payload: unknown) {
-      const r = await appendEvent(auth.orgId, fx.id, tip, { type, payload });
+    /** `voids`: the id of the event a `core.void` takes back (the scorer's undo). */
+    async append(type: string, payload: unknown, voids?: string) {
+      const r = await appendEvent(auth.orgId, fx.id, tip, { type, payload, ...(voids === undefined ? {} : { voids }) });
       tip = r.seq;
       return r;
     },
@@ -235,23 +239,37 @@ async function bowlOver(r: Rig, over: number) {
 // ---------------------------------------------------------------------------------------------------------------------
 const msg = (key: string, vars?: Record<string, string | number>) => (vars ? `${key} ${JSON.stringify(vars)}` : key);
 
-/** `overlay-stage.tsx`'s `incoming`, from its own builders: moments behind the mount's tip, then the end-of-over card
- *  newer than the mount's closed over, then the plan's sponsor cards behind the mount's tip. (No toss: none was called,
- *  so `tossMoment` is null.) */
-function stageIncoming(data: OverlayLiveData, mount: { tip: number; closed: ReturnType<typeof closedOverBaselineOf> }): OverlayMoment[] {
-  const moments = momentsFor("cricket", data.recent ?? [], mount.tip, msg, ["HAR", "RID"]);
-  const eoo = endOfOverMoment({ closed: data.lastClosedOver, since: mount.closed, msg });
-  const cards = sponsorMoments(data.sponsorPlan ?? null).filter((m) => m.seq > mount.tip);
-  return [...moments, ...(eoo ?? []), ...cards];
+/** The stage's OWN composition (`stageIncoming`, lib/overlay-incoming.ts — the function overlay-stage.tsx calls) over the
+ *  loader's payload, with the inputs a composed page in the `live` phase has: no scene, so no match card; no URL delay;
+ *  the mount's tip and closed over. `msg` answers keys (copy is not under test here). */
+function incomingFor(data: OverlayLiveData, mount: { tip: number; closed: ReturnType<typeof closedOverBaselineOf> }): readonly OverlayMoment[] {
+  return stageIncoming({
+    sportKey: "cricket",
+    recent: data.recent,
+    lastClosedOver: data.lastClosedOver,
+    cricketToss: data.cricketToss,
+    scoringStarted: data.scoringStarted === true,
+    sponsorPlan: data.sponsorPlan ?? null,
+    momentBaseline: mount.tip,
+    closedOverBaseline: mount.closed,
+    msg,
+    sideShorts: ["HAR", "RID"],
+    sideNames: ["Harbour XI", "Ridge XI"],
+    showMatchCard: false,
+    awaitingDelay: false,
+  });
 }
 
-/** `use-moment-queue.ts`, minus React: each poll dispatches `sync` then `enqueue` (one commit), each timer one `tick`, and
- *  every committed state goes through `sponsorQueueLines` — the lines the compositor host prints. */
+/** `use-moment-queue.ts`, minus React: a poll whose moment ids changed (`incomingKey`, the hook's own key) dispatches
+ *  `sync` then `enqueue` (one commit) and a poll with the same ids dispatches NOTHING; each timer is one `tick`; every
+ *  committed state goes through `sponsorQueueLines` — the lines the compositor host prints. The first poll always
+ *  dispatches (the hook's effect runs on mount). */
 function composedPage(clock: () => number, advance: (ms: number) => void) {
   const foldMs = OVERLAY_MOMENT_FOLD_MS;
   const holdMs = OVERLAY_MOMENT_HOLD_MS;
   let state: MomentQueueState = INITIAL;
   let onAir: string | null = null;
+  let lastKey: string | null = null;
   const lines: { at: number; line: string }[] = [];
   const phases: { at: number; id: string; phase: string }[] = [];
   const dispatch = (a: QueueAction) => { state = momentQueueReducer(state, a); };
@@ -264,11 +282,16 @@ function composedPage(clock: () => number, advance: (ms: number) => void) {
   return {
     lines, phases,
     get state() { return state; },
-    poll(incoming: readonly OverlayMoment[]) {
+    /** Returns whether the poll dispatched (its key changed). */
+    poll(incoming: readonly OverlayMoment[]): boolean {
+      const key = incomingKey(incoming);
+      if (key === lastKey) return false;
+      lastKey = key;
       const now = clock();
       dispatch({ type: "sync", live: incoming, now, foldMs, holdMs });
       if (incoming.length > 0) dispatch({ type: "enqueue", moments: incoming, now, foldMs, holdMs });
       commit();
+      return true;
     },
     /** Fire the armed timer once: the clock moves to its deadline, then one tick. Returns false when nothing is armed. */
     fire(): boolean {
@@ -324,7 +347,7 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
     for (const c of mounted.sponsorPlan!.cards) expect(c.shortCode, "S5 mints every linkable card's code").toMatch(SPONSOR_SHORT_CODE_PATTERN);
     const mount = { tip: maxSeq(mounted.recent), closed: closedOverBaselineOf(mounted.lastClosedOver) };
     const page = composedPage(r.now, r.tick);
-    page.poll(stageIncoming(mounted, mount));
+    page.poll(incomingFor(mounted, mount));
     while (page.fire());
     expect(page.lines, "nothing on air before the first break").toEqual([]);
     expect(await assignmentRows(r.fixtureId)).toEqual([]);
@@ -346,18 +369,26 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
 
     // --- THE PAGE: the poll lands; the queue airs the end-of-over card's two beats FIRST, then the sponsor card.
     const polledAt = r.now();
-    const incoming = stageIncoming(relay, mount);
+    const incoming = incomingFor(relay, mount);
     expect(incoming.filter((m) => m.graphic === "endOfOver"), "premise: the over's end-of-over card (two beats) is incoming").toHaveLength(2);
     expect(incoming.filter((m) => m.graphic === "sponsor"), "premise: one sponsor card is incoming").toHaveLength(1);
-    page.poll(incoming);
+    expect(page.poll(incoming), "the poll that brings the break dispatches").toBe(true);
     let rePolls = 0;
+    let rePollDispatches = 0;
     while (page.fire()) {
-      // A poll lands between timers (the 2 s edge): the same window again, which must add nothing (the queue's `seen`).
-      page.poll(stageIncoming(await loadOverlayLiveData(r.fixtureId, { relay: true }), mount));
+      // A poll lands between timers (the 2 s edge): the same window again. Same moment ids, so the hook dispatches
+      // nothing (its `incomingKey`), and the loader writes nothing twice.
+      if (page.poll(incomingFor(await loadOverlayLiveData(r.fixtureId, { relay: true }), mount))) rePollDispatches++;
       rePolls++;
     }
     expect(rePolls, "the page re-polled through the showing").toBeGreaterThan(0);
+    expect(rePollDispatches, "a re-poll with the same moment ids dispatches nothing").toBe(0);
     expect(await assignmentRows(r.fixtureId), "a re-poll writes nothing twice").toHaveLength(1);
+    // OBS opened AFTER the break (mounted at today's tip) composes no card for it: the stage's mount-tip filter, over
+    // the real payload — the break is the page's past, never replayed.
+    const lateMount = { tip: maxSeq(relay.recent), closed: closedOverBaselineOf(relay.lastClosedOver) };
+    expect(lateMount.tip, "premise: the late page mounted at the break's own seq").toBe(sixth.seq);
+    expect(incomingFor(relay, lateMount).filter((m) => m.graphic === "sponsor"), "a page mounted after the break replays no card").toEqual([]);
     const lineItems = page.lines.map((l) => itemOf(l.line));
     expect(lineItems.map((i) => i.kind), "exactly one start, then one end, however many polls").toEqual(["start", "end"]);
     const [start, end] = page.lines;
@@ -393,7 +424,7 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
     expect(gapMs, "premise: the second break is inside the cooldown (event time)").toBeLessThan(SPONSOR_COOLDOWN_MS);
     expect(again.sponsorPlan!.airings.map((a) => a.momentId), "the cooldown: the second over's break gets no card").toEqual([momentId]);
     const linesBefore = page.lines.length;
-    page.poll(stageIncoming(again, mount));
+    page.poll(incomingFor(again, mount));
     while (page.fire());
     expect(page.lines.length, "the page logs no line for it").toBe(linesBefore);
     expect(page.phases.some((p) => p.id === sponsorMomentId(twelfth.seq, "over_end")), "and never queues a card for it").toBe(false);
@@ -450,11 +481,11 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
     const mounted = await loadOverlayLiveData(r.fixtureId, { relay: true });
     const mount = { tip: maxSeq(mounted.recent), closed: closedOverBaselineOf(mounted.lastClosedOver) };
     const page = composedPage(r.now, r.tick);
-    page.poll(stageIncoming(mounted, mount));
+    page.poll(incomingFor(mounted, mount));
 
     const sixth = await bowlOver(r, 0);
     const momentId = sponsorMomentId(sixth.seq, "over_end");
-    page.poll(stageIncoming(await loadOverlayLiveData(r.fixtureId, { relay: true }), mount));
+    page.poll(incomingFor(await loadOverlayLiveData(r.fixtureId, { relay: true }), mount));
     // Run the end-of-over beats out until the CARD holds — the state a score has to cut.
     let fired = 0;
     while (!(page.state.current?.kind === "sponsor.over_end" && page.state.phase === "hold")) {
@@ -468,7 +499,7 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
     const withSix = await loadOverlayLiveData(r.fixtureId, { relay: true });
     const sixMoments = momentsFor("cricket", withSix.recent ?? [], mount.tip, msg, ["HAR", "RID"]).filter((m) => m.seq === six.seq);
     expect(sixMoments.length, "premise: the six is a score moment the stage sends").toBeGreaterThan(0);
-    page.poll(stageIncoming(withSix, mount));
+    page.poll(incomingFor(withSix, mount));
     expect(page.state.phase, "the card folds out on the poll that brings the six").toBe("out");
     expect(page.state.cutShort, "and is recorded cut short").toContain(momentId);
     while (page.fire()) {
@@ -487,5 +518,65 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
     expect(rows, "ONE row, closed, cut short, naming the card's sponsor").toEqual([expect.objectContaining({
       sponsor_id: only.id, moment_id: momentId, started_at: new Date(start!.at), ended_at: new Date(end!.at), cut_short: true, ended_estimated: false,
     })]);
+  });
+
+  it("an undo takes the card off air: the sixth ball voided while the card holds ⇒ S5 deletes the unaired assignment, the page folds the card (its end line cutShort: true, ruling 2026-11-01), and the beats still make ONE row for the card's sponsor (S8's void-race fallback) that the report counts once", async () => {
+    const r = await cricketComposedRig();
+    const only = await createSponsor(r.auth, { name: "Kingsway Dairy", url: "https://kingsway.example/", tier: "gold", status: "active" } as never);
+    await patchSponsor(r.auth, only.id, { on_stream: true } as never);
+    await putStreamSettings(r.auth, r.orgId, { competitionId: null, enabled: true, frequency: "busy" });
+    const look = SPONSOR_STYLE_BY_SIZE[cricketSize("over_end")];
+    await r.append("core.start", {});
+    const mounted = await loadOverlayLiveData(r.fixtureId, { relay: true });
+    const mount = { tip: maxSeq(mounted.recent), closed: closedOverBaselineOf(mounted.lastClosedOver) };
+    const page = composedPage(r.now, r.tick);
+    page.poll(incomingFor(mounted, mount));
+
+    const sixth = await bowlOver(r, 0);
+    const momentId = sponsorMomentId(sixth.seq, "over_end");
+    page.poll(incomingFor(await loadOverlayLiveData(r.fixtureId, { relay: true }), mount));
+    expect(await assignmentRows(r.fixtureId), "premise: S5 assigned the over's break").toEqual([expect.objectContaining({ moment_id: momentId, sponsor_id: only.id })]);
+    let fired = 0;
+    while (!(page.state.current?.kind === "sponsor.over_end" && page.state.phase === "hold")) {
+      expect(page.fire(), "premise: the over's card reaches its hold").toBe(true);
+      expect(++fired, "premise: within the end-of-over card's beats").toBeLessThan(20);
+    }
+    expect(page.lines.map((l) => itemOf(l.line).kind), "the card is on air: its start line is written").toEqual(["start"]);
+    const startAt = page.lines[0]!.at;
+
+    // One second into the hold, BEFORE the start line has ridden a beat, the scorer takes back the sixth ball: a REAL
+    // void through the ledger. The break no longer exists.
+    r.tick(1_000);
+    await r.append("core.void", {}, sixth.event.id);
+    const after = await loadOverlayLiveData(r.fixtureId, { relay: true });
+    expect(after.sponsorPlan?.airings, "the plan no longer airs the undone break").toEqual([]);
+    expect(await assignmentRows(r.fixtureId), "S5: the unaired assignment is deleted").toEqual([]);
+    expect(page.poll(incomingFor(after, mount)), "the poll that carries the undo dispatches").toBe(true);
+    expect(page.state.phase, "the card folds out on that poll").toBe("out");
+    expect(page.state.cutShort, "and is recorded cut short (it left before its hold)").toContain(momentId);
+    while (page.fire());
+
+    const items = page.lines.map((l) => itemOf(l.line));
+    expect(items.map((i) => [i.kind, i.momentId]), "one start, one end, for the card").toEqual([["start", momentId], ["end", momentId]]);
+    expect(items[1], "RULING 2026-11-01: an undo-folded card reports cutShort: true").toMatchObject({ kind: "end", cutShort: true });
+    const endAt = page.lines[1]!.at;
+    expect(endAt - startAt, "it left at the undo's poll plus its fold, not after its hold").toBe(1_000 + OVERLAY_MOMENT_FOLD_MS);
+
+    // The compositor beats both lines in. The assignment is gone, so S8 attributes the start to the card's own sponsor.
+    for (const item of items) await r.beat({ state: "playing", airings: [item] });
+    const rows = await airingRows(r.sessionId);
+    expect(rows, "exactly ONE row, for the card's sponsor, cut short").toEqual([{
+      sponsor_id: only.id, sponsor_name: only.name, fixture_id: r.fixtureId, moment_id: momentId, source: "rotation",
+      break_kind: "over_end", style: look.style, started_at: new Date(startAt), ended_at: new Date(endAt), cut_short: true,
+      ended_estimated: false,
+    }]);
+    const now = new Date(Math.max(r.now(), Date.now()) + 1_000);
+    const day = 86_400_000;
+    const link = await createReportLink(r.auth, r.orgId, {
+      sponsorId: only.id, competitionId: null, from: isoDay(new Date(now.getTime() - day)), to: isoDay(new Date(now.getTime() + day)),
+    });
+    const report = await sponsorReport(link.url.split("/").at(-1)!, now);
+    expect(report, "the report counts the showing once, at its real length").toMatchObject({ timesShown: 1, onScreenMs: endAt - startAt, streamVisits: 0 });
+    expect(report!.showings).toHaveLength(1);
   });
 });
