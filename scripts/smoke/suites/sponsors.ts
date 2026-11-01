@@ -1,7 +1,149 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
+import { createHmac } from "node:crypto";
 import {
-  CONNECT_TEST_ACCOUNT, type Session, newSession, call, check, signIn, tag, setConnect, pageRedirect, html, v1, v1data, smokeDb,
+  BASE, CONNECT_TEST_ACCOUNT, type Session, newSession, call, check, signIn, tag, setConnect, pageRedirect, html, v1, v1data, smokeDb,
+  ledger, timedFixture,
 } from "../harness.ts";
+import { SPONSOR_SHORT_CODE_PATTERN } from "../../../apps/web/src/lib/sponsor-short-code.ts";
+
+/** The compositor's job token, as `mintRelayToken` writes it (apps/web/src/server/relay/tokens.ts): HS256 over AUTH_SECRET,
+ *  audience `seazn-relay`, `{ sid, scope: "relay-job" }`. Hand-rolled (no jose in this process): smoke has no Machine, and
+ *  the server shares the job's AUTH_SECRET. */
+function relayJobToken(sid: string, secret: string): string {
+  const part = (o: object) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const now = Math.floor(Date.now() / 1000);
+  const signed = `${part({ alg: "HS256", typ: "JWT" })}.${part({ sid, scope: "relay-job", aud: "seazn-relay", iat: now, exp: now + 600 })}`;
+  return `${signed}.${createHmac("sha256", secret).update(signed).digest("base64url")}`;
+}
+
+type SmokePlan = {
+  cards: { id: string; shortCode: string | null }[];
+  airings: { momentId: string; seq: number; cardId: string; style: string; breakKind: string }[];
+} | null;
+
+/**
+ * R4 S15 — the sponsor-on-stream rows owed by S5, S8, S9 and S10, on a real server, each able to fail:
+ *   S5   overlay: sponsorPlan present on a seeded live fixture with a ticked sponsor
+ *   S8   relay: heartbeat with airings answers 200 (and the airing row is read back)
+ *   S9   relay: frame with a bad token → 401 (positive pair: the SAME frame with the job token gets past it, to 413)
+ *   S10  /s/<id>?f=&src=match, /s/<CODE> and HEAD /s/<id>
+ * The composed session is written straight to its table: smoke has no Machine, and the only composed start a smoke server
+ * admits runs on the second (compositor-image) server, inside captureV2. Retired at the end, so the later relay-sweep row
+ * never finds a live session with no Machine behind it.
+ */
+async function sponsorStreamRows(admin: Session, proOrgId: string, competitionId: string, goldId: string): Promise<void> {
+  const vb = await timedFixture(admin, competitionId, {
+    name: `Sponsor VB ${tag}`,
+    sport_key: "volleyball",
+    variant_key: "indoor",
+    entrants: [
+      { kind: "team", display_name: `Sponsor Home ${tag}`, seed: 1 },
+      { kind: "team", display_name: `Sponsor Away ${tag}`, seed: 2 },
+    ],
+  });
+  const led = ledger(admin, vb.fixtureId);
+  const started = await led.send("core.start", {});
+  // Indoor set 1 is to 25: one summary closes it, and a closed set opens the sport's set_end break (the engine's opensAt).
+  const setClosed = await led.send("volleyball.set.summary", { home: 25, away: 20 });
+  const overlay = await v1(newSession(), `/api/v1/public/fixtures/${vb.fixtureId}/overlay`);
+  const plan = overlay.status === 200 ? v1data<{ sponsorPlan: SmokePlan }>(overlay).sponsorPlan : null;
+  const card = plan?.cards[0];
+  const airing = plan?.airings[0];
+  check(
+    "overlay: sponsorPlan present on a seeded live fixture with a ticked sponsor",
+    started.status === 201 && setClosed.status === 201 && card?.id === goldId && SPONSOR_SHORT_CODE_PATTERN.test(card?.shortCode ?? "") &&
+      airing?.cardId === goldId && airing.breakKind === "set_end" && airing.momentId === `${led.seq}:sponsor.set_end`,
+  );
+
+  const secret = process.env.AUTH_SECRET ?? "";
+  const db = smokeDb();
+  let sid: string | null = null;
+  try {
+    const [target] = await db<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${proOrgId}, 'youtube', ${`Sponsor beat ${tag}`}, ${Buffer.from("smoke")})
+      returning id`;
+    const [owner] = await db<{ user_id: string }[]>`select user_id from org_members where org_id = ${proOrgId} order by created_at limit 1`;
+    const [session] = await db<{ id: string }[]>`
+      insert into fixture_stream_sessions (org_id, fixture_id, mode, state, runner_state, target_id, sport_key, competition_id, division_id,
+                                           entitlement_via_override, created_by)
+      values (${proOrgId}, ${vb.fixtureId}, 'composed', 'live', 'playing', ${target.id}, 'volleyball', ${competitionId}, ${vb.divisionId},
+              false, ${owner.user_id})
+      returning id`;
+    sid = session.id;
+    const jobToken = relayJobToken(sid, secret);
+    const beat = (body: unknown) =>
+      fetch(`${BASE}/api/internal/relay/sessions/${sid}/heartbeat`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${jobToken}`, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    // The page's two lines for the plan's airing, as SC1 converts them: a start on one beat, its end on the next.
+    const startBeat = airing
+      ? await beat({ state: "playing", airings: [{ kind: "start", momentId: airing.momentId, cardId: airing.cardId, style: airing.style, source: "rotation", breakKind: airing.breakKind, at: new Date().toISOString() }] })
+      : null;
+    const endBeat = airing
+      ? await beat({ state: "playing", airings: [{ kind: "end", momentId: airing.momentId, at: new Date().toISOString(), cutShort: false }] })
+      : null;
+    const rows = await db<{ sponsor_id: string | null; break_kind: string | null; closed: boolean }[]>`
+      select sponsor_id, break_kind, ended_at is not null as closed from sponsor_airings where session_id = ${sid}`;
+    check(
+      "relay: heartbeat with airings answers 200",
+      secret !== "" && startBeat?.status === 200 && endBeat?.status === 200 &&
+        rows.length === 1 && rows[0].sponsor_id === goldId && rows[0].break_kind === "set_end" && rows[0].closed,
+    );
+
+    // A frame over the bound, so the good token's answer is the body's refusal (413) — never a stored JPEG — and the bad
+    // token's 401 is the token's alone. "Bad" = well-formed and signed, with the wrong secret.
+    const frame = (token: string) =>
+      fetch(`${BASE}/api/internal/relay/sessions/${sid}/airings/${encodeURIComponent(airing?.momentId ?? "0:sponsor.set_end")}/frame`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "image/jpeg" },
+        body: new Uint8Array(262_145),
+      });
+    const refused = await frame(relayJobToken(sid, `${secret}-not-it`));
+    const passed = await frame(jobToken);
+    check("relay: frame with a bad token → 401", refused.status === 401 && passed.status === 413);
+  } finally {
+    if (sid) await db`update fixture_stream_sessions set state = 'completed', desired_state = 'ending' where id = ${sid}`;
+    await db.end();
+  }
+
+  // S10: the board's tagged link, the stream code, and HEAD (a link preview, I3: never a click). The HEAD goes FIRST and the
+  // tagged click's row is its fence: once that row has landed, any row the HEAD's tail work wrote has landed too.
+  const clicks = smokeDb();
+  try {
+    const count = async (where: { fixture?: string; source?: string } = {}) => {
+      const [{ n }] = await clicks<{ n: number }[]>`
+        select count(*)::int as n from sponsor_clicks
+         where sponsor_id = ${goldId}
+           and (${where.fixture ?? null}::uuid is null or fixture_id = ${where.fixture ?? null}::uuid)
+           and (${where.source ?? null}::text is null or source = ${where.source ?? null}::text)`;
+      return n;
+    };
+    const landed = async (where: { fixture: string; source: string }) => {
+      for (let i = 0; i < 20; i++) {
+        if ((await count(where)) === 1) return true;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      return false;
+    };
+    const before = await count();
+    const head = await fetch(`${BASE}/s/${goldId}`, { method: "HEAD", redirect: "manual" });
+    const tagged = await pageRedirect(newSession(), `/s/${goldId}?f=${vb.fixtureId}&src=match`);
+    check(
+      "sponsors: /s/<id>?f=&src=match 302s to the sponsor and records a match click on that fixture",
+      tagged.status === 302 && (tagged.location ?? "").startsWith("https://goldco.example") && (await landed({ fixture: vb.fixtureId, source: "match" })),
+    );
+    check("sponsors: HEAD /s/<id> 302s and records no click", head.status === 302 && (await count()) === before + 1);
+    const coded = await pageRedirect(newSession(), `/s/${card?.shortCode ?? "NOCODE"}`);
+    check(
+      "sponsors: /s/<CODE> 302s to the sponsor and records a stream click on the code's fixture",
+      coded.status === 302 && (coded.location ?? "").startsWith("https://goldco.example") && (await landed({ fixture: vb.fixtureId, source: "stream" })),
+    );
+  } finally {
+    await clicks.end();
+  }
+}
 
 /** v10 sponsor CRM smoke: tiered manager + public placement + tracked click
  *  on the pro org; free path keeps the flat partner strip and gets 402 on
@@ -137,6 +279,11 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   if (report) await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-report-links/${report.id}`, "DELETE");
   const closed = report ? await html(newSession(), report.url) : null;
   check("sponsors: a revoked report link is the 404", closed !== null && closed.status === 404 && closed.body.includes('data-testid="sponsor-report-not-found"'));
+
+  // --- R4 S15: the rows S5, S8, S9 and S10 owed, chained off ONE live volleyball match in `comp` — whose own settings row
+  // is Normal and on (the S12 rows above), and where the gold sponsor is the only ticked one. AFTER the Overview and report
+  // rows on purpose: those count gold's clicks and airings, and every row below adds to them.
+  await sponsorStreamRows(admin, proOrgId, comp.id, goldId);
 
   // --- Monetization: package + order-first Connect checkout.
   const pkgRes = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-packages`, "POST", {
