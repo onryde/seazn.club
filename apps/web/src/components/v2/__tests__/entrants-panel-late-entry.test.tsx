@@ -28,7 +28,7 @@ vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));
 
 const api = vi.hoisted(() => ({
   next: null as null | (() => unknown),
-  personsPage: null as null | Promise<unknown>,
+  personsPage: null as null | (() => unknown),
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -41,7 +41,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         return answer();
       }
       if (url.startsWith("/api/v1/persons?"))
-        return api.personsPage ?? { items: [], nextCursor: null };
+        return api.personsPage ? api.personsPage() : { items: [], nextCursor: null };
       return [];
     }),
   };
@@ -320,7 +320,8 @@ describe("EntrantsPanel — the running-Swiss note above the add form (W3 T10)",
 describe("EntrantsPanel — New player waits for Players to load (owner ruling 2026-11-01)", () => {
   it("hands the form `personsReady` only once the directory has loaded, so the duplicate check sees everyone", async () => {
     let release!: (page: unknown) => void;
-    api.personsPage = new Promise((r) => (release = r));
+    const pending = new Promise((r) => (release = r));
+    api.personsPage = () => pending;
     try {
       const p = mount();
       const form = () => p.island.tree().find((el) => propsOf(el).importControls !== undefined)!;
@@ -328,6 +329,28 @@ describe("EntrantsPanel — New player waits for Players to load (owner ruling 2
       release({ items: [], nextCursor: null });
       await new Promise((r) => setTimeout(r, 0));
       expect(propsOf(form()).personsReady, "loaded").toBe(true);
+    } finally {
+      api.personsPage = null;
+    }
+  });
+});
+
+describe("EntrantsPanel — Players fails to load (review m1)", () => {
+  it("says so under New player, keeps it off, and Retry loads Players and turns it on", async () => {
+    api.personsPage = () => Promise.reject(new Error("network"));
+    try {
+      const p = mount();
+      await new Promise((r) => setTimeout(r, 0));
+      const form = () => p.island.tree().find((el) => propsOf(el).importControls !== undefined)!;
+      expect(propsOf(form()).personsFailed, "the failure reaches the form").toBe(true);
+      expect(propsOf(form()).personsReady, "New player stays off: its duplicate check has no list").toBe(false);
+
+      api.personsPage = null; // the next load succeeds
+      (propsOf(form()).onRetryPersons as () => void)();
+      expect(propsOf(form()).personsFailed, "retrying clears the failure").toBe(false);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(propsOf(form()).personsReady, "loaded on retry").toBe(true);
+      expect(propsOf(form()).personsFailed).toBe(false);
     } finally {
       api.personsPage = null;
     }

@@ -2941,6 +2941,8 @@
   "entrants.add.newPlayer.existing": "Staat al bij Spelers, geselecteerd.",
   "entrants.add.newPlayer.empty": "Typ eerst de naam van de nieuwe speler.",
   "entrants.add.newPlayer.failed": "Kan de speler niet aanmaken. Probeer het opnieuw.",
+  "entrants.add.newPlayer.loadFailed": "Spelers konden niet worden geladen. Nieuwe speler wacht tot ze geladen zijn.",
+  "entrants.add.newPlayer.retry": "Opnieuw proberen",
   "entrants.import.noRows": "Geen deelnemers gevonden in dat bestand — controleer of het het voorbeeldformaat volgt.",
   "entrants.import.importing": "Bezig met importeren…",
   "entrants.import.button": "CSV importeren",

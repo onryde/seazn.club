@@ -11,16 +11,20 @@ import {
   divisionTakesSwissLateEntry,
   entrantListLocked,
   isRootSwissStage,
+  swissLateEntryOffered,
   startClosesEntrantList,
   startEntrantsLine,
   type EntryStage,
 } from "@/lib/open-entry-stages";
 
-/** A stage row as the page holds it: kind, progression and config are what the guard reads. */
-const st = (kind: string, extra: Partial<EntryStage> = {}): EntryStage => ({
+/** A stage row as the page holds it: kind, progression, config and status are what the guards read. A stage is
+ *  running (`active`) unless a row says otherwise. */
+type Row = EntryStage & { status: string };
+const st = (kind: string, extra: Partial<Row> = {}): Row => ({
   kind,
   progression: null,
   config: {},
+  status: "active",
   ...extra,
 });
 const stages = (...kinds: string[]) => kinds.map((k) => st(k));
@@ -159,8 +163,17 @@ describe("a running root Swiss keeps the entrant list open", () => {
     // The old SQL restatement is gone: a second copy is a second thing to drift.
     expect(lateEntry).not.toMatch(/progression is null/);
     expect(lateEntry).not.toMatch(/config \? 'qualified'/);
-    const calls = [...lateEntry.matchAll(/\.filter\(isRootSwissStage\)/g)].length;
-    expect(calls, "both reads (the Start-lock exemption and the stage admitted into) filter through it").toBeGreaterThanOrEqual(1);
+    // The one read filters through it, and BOTH callers go through that read (review m7: a count of the filter alone
+    // could not witness "both").
+    expect([...lateEntry.matchAll(/\.filter\(isRootSwissStage\)/g)].length, "rootSwissStages filters through it").toBe(1);
+    const body = (name: string) => {
+      const start = lateEntry.indexOf(`async function ${name}(`);
+      expect(start, `${name} is no longer in swiss-late-entry.ts`).toBeGreaterThanOrEqual(0);
+      return lateEntry.slice(start, lateEntry.indexOf("\n}\n", start));
+    };
+    expect(body("rootSwissStages"), "the read filters its rows").toContain(".filter(isRootSwissStage)");
+    expect(body("hasRootSwissStage"), "the Start-lock exemption reads rootSwissStages").toContain("await rootSwissStages(");
+    expect(lateEntry, "the admission's stage is rootSwissStages' first row").toMatch(/const \[stage\] = await rootSwissStages\(/);
   });
 });
 
@@ -187,5 +200,64 @@ describe("divisionTakesSwissLateEntry", () => {
     }
     expect(checked).toBe(ROWS.length);
     expect(ROWS.some((r) => r.late) && ROWS.some((r) => !r.late)).toBe(true);
+  });
+});
+
+// Review I1 (2026-11-01): a FINISHED root Swiss takes nobody (the admission refuses SWISS_OVER), so the list is
+// closed again once it is complete: a completed Swiss division, and the whole playoff phase of swiss_playoff /
+// swiss_knockout. Before this the form and Import CSV rendered there and every add came back 422.
+describe("a finished root Swiss closes the list again", () => {
+  const ROWS: { name: string; status: string; stages: Row[]; locked: boolean }[] = [
+    { name: "completed division, its Swiss complete", status: "completed", stages: [st("swiss", { status: "complete" })], locked: true },
+    {
+      name: "playoff phase: the Swiss complete, the knockout running",
+      status: "active",
+      stages: [st("swiss", { status: "complete" }), st("knockout", { status: "active" })],
+      locked: true,
+    },
+    { name: "the Swiss still running", status: "active", stages: [st("swiss", { status: "active" })], locked: false },
+    { name: "the Swiss paired, nothing started", status: "active", stages: [st("swiss", { status: "pending" })], locked: false },
+    {
+      name: "a finished Swiss beside a ladder (the ladder still exempts)",
+      status: "active",
+      stages: [st("swiss", { status: "complete" }), st("ladder", { status: "active" })],
+      locked: false,
+    },
+  ];
+  it("locks once every root Swiss is complete; stays open while one runs", () => {
+    let checked = 0;
+    for (const r of ROWS) {
+      expect(entrantListLocked(r.status, r.stages), r.name).toBe(r.locked);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+    expect(ROWS.some((r) => r.locked) && ROWS.some((r) => !r.locked), "both directions").toBe(true);
+  });
+
+  it("one rule answers the list lock, the late-add note and the rail's More, across every Swiss shape", () => {
+    // Without an open-format stage, "the list is open after Start" IS "this add is a late add", and the rail offers
+    // More on exactly the running root Swiss stages (given a seated round).
+    const SHAPES: Row[] = [
+      st("swiss", { status: "active" }),
+      st("swiss", { status: "pending" }),
+      st("swiss", { status: "complete" }),
+      st("swiss", { status: "active", progression: { from: "s1", top: 4 } }),
+      st("swiss", { status: "active", config: { qualified: [] } }),
+      st("knockout", { status: "active" }),
+    ];
+    let checked = 0;
+    for (const divisionStatus of ENTRANT_LIST_LOCKED_STATUSES) {
+      for (const a of SHAPES) {
+        for (const b of [null, st("knockout", { status: "pending" })]) {
+          const rows = b ? [a, b] : [a];
+          const late = divisionTakesSwissLateEntry(divisionStatus, rows);
+          expect(!entrantListLocked(divisionStatus, rows), JSON.stringify(rows)).toBe(late);
+          const offered = rows.some((stage) => swissLateEntryOffered({ stage, divisionStatus, roundSeated: true }));
+          expect(offered, JSON.stringify(rows)).toBe(late);
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(ENTRANT_LIST_LOCKED_STATUSES.length * SHAPES.length * 2);
   });
 });

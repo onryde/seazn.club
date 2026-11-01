@@ -1053,6 +1053,15 @@ for (const sport of LATE_SPORTS) {
       expect(mine, "the latecomer is seated in round 3").toBeDefined();
       const opponent = mine!.home_entrant_id === lateId ? mine!.away_entrant_id : mine!.home_entrant_id;
       expect(opponent === null || !twoWins.includes(opponent), "never paired with a two-win entrant (0, not +2)").toBe(true);
+      // Review m4: pin the bye too, from the rulebook (the bye goes to the LOWEST score group; within it the order is
+      // sport tie-break, so not WHO). Seven entrants, so round 3 has one. The latecomer counts 0: the lowest group is
+      // the 0-win entrants plus the latecomer, and a +2 latecomer could only hold the bye if the bye left that group.
+      const byeRow = (await r.round(3)).find(isByeRow);
+      expect(byeRow?.home_entrant_id, "an odd round 3 seats a bye").toBeTruthy();
+      const lowest = new Set([...[...wins].filter(([, w]) => w === 0).map(([id]) => id), lateId]);
+      expect(lowest.has(byeRow!.home_entrant_id!), "the bye is in the lowest score group").toBe(true);
+      if (opponent !== null) expect(wins.get(opponent), "a 0-point latecomer meets the lowest group it can").toBeLessThanOrEqual(1);
+      else expect(byeRow!.home_entrant_id, "or holds the bye itself").toBe(lateId);
       if (opponent === null) await expect(page.getByTestId("run-sheet-bye")).toContainText(late, { timeout: 20_000 });
       else await expect(page.locator(`li[data-fixture-no="${mine!.fixture_no}"]`)).toContainText(late, { timeout: 20_000 });
     });

@@ -39,9 +39,18 @@ export function isRootSwissStage(stage: EntryStage): boolean {
   return !Object.hasOwn(config, "qualified");
 }
 
-/** One stage exempts the WHOLE division: an open-format stage, or a running root Swiss (`exists`, not "every"). */
+/** One stage exempts the WHOLE division at Start: an open-format stage, or a root Swiss (`exists`, not "every"). */
 function keepsListOpen(stages: readonly EntryStage[]): boolean {
   return stages.some((s) => OPEN_ENTRY_STAGE_KINDS.includes(s.kind) || isRootSwissStage(s));
+}
+
+/**
+ * A root Swiss that still takes a late player: not `complete`. A finished one refuses every add by name (SWISS_OVER),
+ * so it exempts nothing RIGHT NOW. The ONE rule behind the list lock, the late-add note and the rail's More
+ * (review I1, 2026-11-01).
+ */
+export function isRunningRootSwiss(stage: EntryStage & { status: string }): boolean {
+  return isRootSwissStage(stage) && stage.status !== "complete";
 }
 
 /**
@@ -81,9 +90,13 @@ export const ENTRANT_LIST_LOCKED_STATUSES: readonly string[] = ["active", "compl
  * Note this is the INVERSE question to `startClosesEntrantList`, which asks
  * what starting WILL do. They share the exemption and nothing else.
  */
-export function entrantListLocked(divisionStatus: string, stages: readonly EntryStage[]): boolean {
+export function entrantListLocked(
+  divisionStatus: string,
+  stages: readonly (EntryStage & { status: string })[],
+): boolean {
   if (!ENTRANT_LIST_LOCKED_STATUSES.includes(divisionStatus)) return false;
-  return !keepsListOpen(stages);
+  // Right now, a finished root Swiss exempts nothing: the add would only come back SWISS_OVER (review I1).
+  return !stages.some((s) => OPEN_ENTRY_STAGE_KINDS.includes(s.kind) || isRunningRootSwiss(s));
 }
 
 /**
@@ -101,8 +114,7 @@ export function swissLateEntryOffered(args: {
 }): boolean {
   return (
     ENTRANT_LIST_LOCKED_STATUSES.includes(args.divisionStatus) &&
-    isRootSwissStage(args.stage) &&
-    args.stage.status !== "complete" &&
+    isRunningRootSwiss(args.stage) &&
     args.roundSeated
   );
 }
@@ -118,6 +130,6 @@ export function divisionTakesSwissLateEntry(
 ): boolean {
   return (
     ENTRANT_LIST_LOCKED_STATUSES.includes(divisionStatus) &&
-    stages.some((s) => isRootSwissStage(s) && s.status !== "complete")
+    stages.some(isRunningRootSwiss)
   );
 }

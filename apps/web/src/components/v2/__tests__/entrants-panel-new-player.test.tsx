@@ -290,6 +290,37 @@ describe("New player on the add-entrant form (owner ruling 2026-11-01)", () => {
     expect(f.note()?.text ?? "").toBe("");
   });
 
+  it("when Players failed to load: says so with a Retry, keeps New player off, and never claims Players is empty", async () => {
+    api.posts = [];
+    api.answers = [];
+    const onRetryPersons = vi.fn();
+    const island = renderIsland(NewEntrantFields, {
+      persons: [],
+      personsReady: false,
+      personsFailed: true,
+      onRetryPersons,
+      entrantModel: modelOf("individual"),
+      busy: false,
+      onSubmit: async () => undefined,
+    } as never);
+    const el = (id: string) => island.tree().find((e) => propsOf(e)["data-testid"] === id);
+    expect(textOf([el("new-player-load-failed")!])).toContain(EN["entrants.add.newPlayer.loadFailed"]);
+    (propsOf(el("new-player-name")!).onChange as (e: unknown) => void)({ target: { value: "Zoe Ng" } });
+    expect(propsOf(el("new-player-add")!).disabled, "off while Players is unknown").toBe(true);
+    await (propsOf(el("new-player-add")!).onClick as () => Promise<void>)();
+    expect(api.posts, "no person minted blind").toEqual([]);
+    expect(island.text(), "the picker does not say Players is empty").not.toContain(EN["entrants.add.noPlayers"]);
+    const retry = el("new-player-retry")!;
+    expect(textOf([retry])).toBe(EN["entrants.add.newPlayer.retry"]);
+    (propsOf(retry).onClick as () => void)();
+    expect(onRetryPersons).toHaveBeenCalledTimes(1);
+  });
+
+  it("no load-failed line when Players loaded (the positive pair)", () => {
+    const f = mount("individual");
+    expect(f.byTestId("new-player-load-failed")).toBeUndefined();
+  });
+
   it("the field caps at the API's own name bound", () => {
     const f = mount("individual");
     expect(propsOf(f.must("new-player-name")).maxLength).toBe(200);

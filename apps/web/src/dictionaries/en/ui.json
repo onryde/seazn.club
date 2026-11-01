@@ -2994,6 +2994,8 @@
   "entrants.add.newPlayer.existing": "Already in Players, selected.",
   "entrants.add.newPlayer.empty": "Type the new player's name first.",
   "entrants.add.newPlayer.failed": "Couldn't create the player. Try again.",
+  "entrants.add.newPlayer.loadFailed": "Couldn't load Players. New player waits until they load.",
+  "entrants.add.newPlayer.retry": "Retry",
   "entrants.import.noRows": "No entrants found in that file — check it matches the sample format.",
   "entrants.import.importing": "Importing…",
   "entrants.import.button": "Import CSV",

@@ -2994,6 +2994,8 @@
   "entrants.add.newPlayer.existing": "Déjà dans Joueurs, sélectionné.",
   "entrants.add.newPlayer.empty": "Tapez d'abord le nom du nouveau joueur.",
   "entrants.add.newPlayer.failed": "Impossible de créer le joueur. Réessayez.",
+  "entrants.add.newPlayer.loadFailed": "Impossible de charger Joueurs. Nouveau joueur attend leur chargement.",
+  "entrants.add.newPlayer.retry": "Réessayer",
   "entrants.import.noRows": "Aucun participant trouvé dans ce fichier — vérifiez qu'il suit le format de l'exemple.",
   "entrants.import.importing": "Importation…",
   "entrants.import.button": "Importer un CSV",

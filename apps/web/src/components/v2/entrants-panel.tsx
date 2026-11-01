@@ -256,23 +256,34 @@ export function EntrantsPanel({
   // Bumped after every mutation to force a roster-map refetch.
   const [rosterBump, setRosterBump] = useState(0);
 
-  // New player's duplicate check is only as good as the list it checks: it stays off until Players has loaded.
-  const [personsLoaded, setPersonsLoaded] = useState(false);
-
-  useEffect(() => {
+  // New player's duplicate check is only as good as the list it checks: it stays off until Players has loaded. A
+  // failed load says so under New player, with a Retry (review m1), instead of leaving it silently off.
+  const [personsLoad, setPersonsLoad] = useState<"loading" | "ready" | "failed">("loading");
+  const fetchPersons = useCallback(() => {
     loadAllPersons()
       .then((all) => {
         setPersons(all);
-        setPersonsLoaded(true);
+        setPersonsLoad("ready");
       })
-      .catch(() => setPersons([]));
+      .catch(() => {
+        setPersons([]);
+        setPersonsLoad("failed");
+      });
+  }, []);
+  const retryPersons = useCallback(() => {
+    setPersonsLoad("loading");
+    fetchPersons();
+  }, [fetchPersons]);
+
+  useEffect(() => {
+    fetchPersons();
     apiV1<{ id: string; name: string }[]>("/api/v1/clubs")
       .then(setClubs)
       .catch(() => setClubs([]));
     apiV1<TeamOption[]>("/api/v1/teams")
       .then(setTeams)
       .catch(() => setTeams([]));
-  }, []);
+  }, [fetchPersons]);
 
   const enteredTeamIds = useMemo(
     () => new Set(entrants.map((e) => e.team_id).filter((id): id is string => id != null)),
@@ -491,7 +502,9 @@ export function EntrantsPanel({
           )}
           <AddEntrantForm
             persons={persons}
-            personsReady={personsLoaded}
+            personsReady={personsLoad === "ready"}
+            personsFailed={personsLoad === "failed"}
+            onRetryPersons={retryPersons}
             onPersonCreated={(person) =>
               setPersons((prev) => (prev.some((p) => p.id === person.id) ? prev : [...prev, person]))
             }
@@ -802,6 +815,8 @@ const STORAGE_BASE = `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/storage/v1/o
 function AddEntrantForm({
   persons,
   personsReady,
+  personsFailed,
+  onRetryPersons,
   onPersonCreated,
   teams,
   enteredTeamIds,
@@ -813,6 +828,9 @@ function AddEntrantForm({
   persons: Person[];
   /** Players has finished loading, so New player's duplicate check sees the whole directory. */
   personsReady?: boolean;
+  /** Players failed to load: New player says so and offers Retry. */
+  personsFailed?: boolean;
+  onRetryPersons?: () => void;
   /** A New player was created in Players (owner ruling 2026-11-01): the panel's list learns them. */
   onPersonCreated?: (person: Person) => void;
   teams: TeamOption[];
@@ -873,6 +891,8 @@ function AddEntrantForm({
         <NewEntrantFields
           persons={persons}
           personsReady={personsReady}
+          personsFailed={personsFailed}
+          onRetryPersons={onRetryPersons}
           onPersonCreated={onPersonCreated}
           entrantModel={entrantModel}
           busy={busy}
@@ -1060,6 +1080,8 @@ export function ExistingTeamFields({
 export function NewEntrantFields({
   persons: directory,
   personsReady = true,
+  personsFailed = false,
+  onRetryPersons,
   onPersonCreated,
   entrantModel,
   busy,
@@ -1068,6 +1090,9 @@ export function NewEntrantFields({
   persons: Person[];
   /** False while Players is still loading: New player waits, or its duplicate check would miss people. */
   personsReady?: boolean;
+  /** Players failed to load: say so, offer Retry, and keep New player off. */
+  personsFailed?: boolean;
+  onRetryPersons?: () => void;
   onPersonCreated?: (person: Person) => void;
   entrantModel: EffectiveEntrantModel;
   busy: boolean;
@@ -1306,7 +1331,7 @@ export function NewEntrantFields({
               </button>
             );
           })}
-          {persons.length === 0 && (
+          {persons.length === 0 && !personsFailed && (
             <span className="text-xs text-slate-400">{msg("entrants.add.noPlayers")}</span>
           )}
         </div>
@@ -1344,6 +1369,25 @@ export function NewEntrantFields({
               {creating ? msg("entrants.add.newPlayer.creating") : msg("entrants.add.newPlayer.create")}
             </button>
           </div>
+          {personsFailed && (
+            <div
+              role="alert"
+              data-testid="new-player-load-failed"
+              className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-red-600"
+            >
+              <span className="min-w-0">{msg("entrants.add.newPlayer.loadFailed")}</span>
+              {onRetryPersons && (
+                <button
+                  type="button"
+                  data-testid="new-player-retry"
+                  onClick={onRetryPersons}
+                  className="btn btn-ghost min-h-11 px-3 py-1 text-xs"
+                >
+                  {msg("entrants.add.newPlayer.retry")}
+                </button>
+              )}
+            </div>
+          )}
           <p
             role="status"
             data-testid="new-player-note"
