@@ -144,7 +144,8 @@ async function expectReadsBefore(first: Locator, second: Locator, label: string)
 /** The top gantry fits: every link in its <nav> shares one row (no wrap) and ends inside the viewport (nothing clipped or pushed), the
  *  Sign-out button (the control that used to be pushed out) ends inside it too, and each link's centre hit-tests to the link itself.
  *  And the labels (owner 2026-11-01): Settings is its icon alone at every width - no painted words, named by aria-label with the same
- *  words as its title tooltip, the last link - while every other shown link paints its label exactly from `labelsFrom`. */
+ *  words as its title tooltip, the last link - while every other shown link paints its label exactly from `labelsFrom`. Sign out is
+ *  its icon alone at every width too (a second owner ruling the same day), named and tooltipped the same way. */
 async function expectGantryFits(page: Page, where: string, opts: { playerHome?: boolean; labelsFrom: number }): Promise<void> {
   const seen = await page.evaluate(() => {
     const links = Array.from(document.querySelectorAll("header.app-gantry nav a")).filter((a) => {
@@ -154,7 +155,8 @@ async function expectGantryFits(page: Page, where: string, opts: { playerHome?: 
     const rects = links.map((a) => a.getBoundingClientRect());
     const tops = rects.map((r) => Math.round(r.top));
     const header = document.querySelector("header.app-gantry")!.getBoundingClientRect();
-    const signOut = document.querySelector("header.app-gantry button[title]")!.getBoundingClientRect();
+    const signOutEl = document.querySelector("header.app-gantry button[title]") as HTMLElement;
+    const signOut = signOutEl.getBoundingClientRect();
     const covered = links.filter((a) => {
       const r = a.getBoundingClientRect();
       const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -163,6 +165,7 @@ async function expectGantryFits(page: Page, where: string, opts: { playerHome?: 
     return {
       vw: document.documentElement.clientWidth,
       signOutRight: signOut.right,
+      signOutName: { aria: signOutEl.getAttribute("aria-label"), title: signOutEl.getAttribute("title"), text: signOutEl.textContent?.trim() ?? "" },
       covered,
       n: links.length,
       tops,
@@ -185,6 +188,10 @@ async function expectGantryFits(page: Page, where: string, opts: { playerHome?: 
   expect(seen.settings!.text, `${where}: Settings has no words, painted or hidden`).toBe("");
   expect(seen.settings!.aria, `${where}: Settings is named`).toBeTruthy();
   expect(seen.settings!.title, `${where}: Settings' tooltip says what its name says`).toBe(seen.settings!.aria);
+  // Sign out, the door icon alone (owner ruling 2026-11-01): no words in it at any width, named, and the tooltip says the same.
+  expect(seen.signOutName.text, `${where}: Sign out has no words, painted or hidden`).toBe("");
+  expect(seen.signOutName.aria, `${where}: Sign out is named`).toBeTruthy();
+  expect(seen.signOutName.title, `${where}: Sign out's tooltip says what its name says`).toBe(seen.signOutName.aria);
   // Every other shown link paints its label from the bar's rung, and not before: icons-together or labels-together.
   const labelled = seen.painted.filter((_, i) => seen.testids[i] !== "nav-settings");
   expect(labelled.length, `${where}: labelled links to look at`).toBeGreaterThanOrEqual(2);
@@ -351,7 +358,7 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
     await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url()).origin }]);
     await open(page, "/streaming");
     await expect(page.getByTestId("nav-streaming")).toHaveAttribute("aria-label", dictOf("console", locale)["nav.streaming"] ?? "");
-    // Below lg Sign out is its icon alone: it is still NAMED, in this locale's words (by role + name, not by its painted text).
+    // Sign out is its icon alone at every width: it is still NAMED, in this locale's words (by role + name, not by painted text).
     await expect(page.locator("header.app-gantry").getByRole("button", { name: dictOf("console", locale)["nav.signOut"] ?? "" })).toBeVisible();
     for (const w of NAV_WIDTHS) {
       await page.setViewportSize({ width: w, height: 800 });
@@ -371,7 +378,7 @@ test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (
     await page.setViewportSize({ width: 1280, height: 900 });
     await open(page, "/streaming");
     // The locale witness: the page really is in this locale (a cookie that silently failed would measure English four times). The Streaming
-    // item's name and, below lg, Sign-out's name (its label is hidden there) come from this locale's own dictionary, by role + name.
+    // item's name and Sign-out's name (it paints no label at any width) come from this locale's own dictionary, by role + name.
     await expect(page.getByTestId("nav-streaming"), `${locale}: the nav speaks ${locale}`).toHaveAttribute("aria-label", dictOf("console", locale)["nav.streaming"] ?? "");
     await expect(
       page.locator("header.app-gantry").getByRole("button", { name: dictOf("console", locale)["nav.signOut"] ?? "" }),
