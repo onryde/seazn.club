@@ -637,6 +637,22 @@ for (const s of SPORTS) {
       expect(await undoSteps(rig, 2)).toEqual(["cleared", "gone"]);
     }, 120_000);
 
+    it(`Redo of the shells' Generate re-mints them as a fresh generation, so the next Undo takes them back (${s.sport})`, async () => {
+      // Review m6: only a generation that names NO rows (a Pair) is re-applied in the step (`namesNoRows`). The shells'
+      // Generate names the shells it minted, so its Redo re-runs the generator after the commit, as a fresh row at the
+      // head, and the next Undo deletes the shells it minted. Re-minted inside the step instead, the new shells would sit
+      // on the Redo's row while the Undo inverted the original Generate, whose ids are the shells the first Undo deleted.
+      const rig = await swissRig(s, 5, 2, false); // Generate: the shells
+      expect(await round1State(rig), "premise: Generate minted round 1's shells").toBe("cleared");
+      await undoDivision(rig.auth, rig.divisionId);
+      const walk: string[] = [await round1State(rig)];
+      await redoDivision(rig.auth, rig.divisionId);
+      walk.push(await round1State(rig));
+      expect((await ledgerState(rig.divisionId)).watermark, "the Redo re-ran the generator as a fresh edit").toBeNull();
+      walk.push(...(await undoSteps(rig, 1)));
+      expect(walk).toEqual(["gone", "cleared", "gone"]);
+    }, 120_000);
+
     it(`Undo after a re-Pair walks the linear timeline: clear, the first Pair back, clear, the shells gone (${s.sport})`, async () => {
       const rig = await swissRig(s, 5, 2, false);
       await generateStageFixtures(rig.auth, rig.stageId); // Pair
@@ -724,6 +740,36 @@ describe.runIf(HAS_DB)("W3 T5 batch-1 I1 control: a league's generation walks th
       walk.push(await idsOf());
     }
     expect(walk).toEqual([[], first, []]);
+  }, 120_000);
+});
+
+describe.runIf(HAS_DB)("W3 T5 review m6 control: only a SWISS generation naming no rows is re-applied in the step", () => {
+  it("a league generation row naming no rows regenerates after the commit as a fresh edit; the next Undo takes it back", async () => {
+    // single-sport: the guard is the stage KIND, not the sport. No writer records a non-Swiss generation naming no rows
+    // (a generate appends only when it created something), so the row is planted in the Pair's own shape — the shape the
+    // Swiss branch keys on. Its Swiss counterpart is the I1 describe above: there a Pair row is re-applied in the step.
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Undo league m6 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open-" + randomUUID().slice(0, 6),
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    const n = 4;
+    await createEntrants(auth, division.id, Array.from({ length: n }, (_, i) => ({ kind: "individual" as const, display_name: `L${i + 1}`, seed: i + 1, members: [] })));
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "RR", config: {}, progression: null });
+    const count = async () => (await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id}`).length;
+    await appendLedgerRow(division.id, "fixtures_generated", { stage_id: stage!.id, fixture_ids: [] });
+    await undoDivision(auth, division.id);
+    expect(await count(), "premise: the planted row's Undo deletes nothing, and nothing was there").toBe(0);
+    await redoDivision(auth, division.id);
+    // A single round robin of n: n(n-1)/2 matches.
+    expect(await count(), "the Redo re-ran the league's generator").toBe((n * (n - 1)) / 2);
+    expect((await ledgerState(division.id)).watermark, "as a fresh generation at the head, after the commit").toBeNull();
+    await undoDivision(auth, division.id);
+    expect(await count(), "so the next Undo deletes what it made").toBe(0);
   }, 120_000);
 });
 

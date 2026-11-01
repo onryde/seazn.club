@@ -59,15 +59,19 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     message: "A match in this round has started, so its pairing can't be undone.",
     key: "swiss.refusal.SWISS_UNDO_ROUND_STARTED",
   },
-  // W3 T5 (design §10.8): Undo across an organiser's "Add late player" — it points to Withdraw.
+  // W3 T5 (design §10.8): Undo across an organiser's "Add late player" — it points to Withdraw. 422 by the rule above
+  // (batch-1 re-review, controller 2026-11-01): a barrier is a permanent ledger row, so the same step re-sent can never
+  // succeed — Withdraw is a different request, not a state the organiser clears for this one.
   SWISS_LATE_ENTRY_NOT_UNDOABLE: {
-    status: 409,
+    status: 422,
     message: "Adding a late player can't be undone. Withdraw the player instead.",
     key: "swiss.refusal.SWISS_LATE_ENTRY_NOT_UNDOABLE",
   },
-  // W3 T5 (design §10.8): Undo across a change to the round count (edit, Add a round, Finish now).
+  // W3 T5 (design §10.8): Undo across a change to the round count (edit, Add a round, Finish now). 422 by the rule
+  // above (batch-1 re-review, controller 2026-11-01): a barrier is a permanent ledger row, so the same step re-sent can
+  // never succeed.
   SWISS_ROUNDS_CHANGE_NOT_UNDOABLE: {
-    status: 409,
+    status: 422,
     message: "A change to the number of rounds can't be undone.",
     key: "swiss.refusal.SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
   },
