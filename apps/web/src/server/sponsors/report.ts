@@ -34,34 +34,20 @@ import { HttpError } from "@/lib/errors";
 import { EDITOR_ROLES } from "@/lib/types";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { ENDS_BEFORE_STARTS } from "@/server/api-v1/schemas";
-import { isIsoDay, isoDay, periodWindow, reportLinkPath, timeWindow, windowDates, type SponsorPeriod } from "@/lib/sponsor-report";
+import {
+  isIsoDay,
+  isoDay,
+  periodWindow,
+  reportLinkPath,
+  timeWindow,
+  windowDates,
+  type ReportLinkDefaults,
+  type ReportLinkSummary,
+  type SponsorOverviewRow,
+  type SponsorPeriod,
+} from "@/lib/sponsor-report";
 
-export type { SponsorPeriod };
-
-export interface SponsorOverviewRow {
-  /** Null for a DELETED sponsor: its airings survive on their name snapshot, and nothing can link to it any more. */
-  sponsorId: string | null;
-  name: string;
-  timesShown: number;
-  onScreenMs: number;
-  /** Null in PR A (Y1 fills it): shown as a dash, never 0. */
-  viewerImpressions: number | null;
-  peakViewers: number | null;
-  /** Null for a deleted sponsor: its click rows were deleted with it, so the count is unknown, not zero. */
-  linkClicks: number | null;
-}
-
-/** A live report link as the console lists it: never its token (nobody holds that but the person it was shown to). */
-export interface ReportLinkSummary {
-  id: string;
-  sponsorId: string;
-  competitionId: string | null;
-  competitionName: string | null;
-  /** Inclusive dates, YYYY-MM-DD. */
-  from: string;
-  to: string;
-  createdAt: string;
-}
+export type { ReportLinkDefaults, ReportLinkSummary, SponsorOverviewRow, SponsorPeriod };
 
 /** sha256 over the token's UTF-8: what `sponsor_report_links.token_hash` holds, and what S14 looks a visitor's token up by. */
 export function hashReportToken(token: string): Buffer {
@@ -230,7 +216,7 @@ export async function reportLinkDefaults(
   orgId: string,
   p: SponsorPeriod,
   now: Date,
-): Promise<{ from: string; to: string; competitionId: string | null }> {
+): Promise<ReportLinkDefaults> {
   assertOrg(auth, orgId);
   if (p.kind !== "competition") return { ...windowDates(timeWindow(p, now)), competitionId: null };
   const { competitionId } = p;

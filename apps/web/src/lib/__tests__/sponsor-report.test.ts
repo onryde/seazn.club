@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LAST_DAYS,
+  fmtIsoDay,
   fmtOnScreen,
   isIsoDay,
   overviewHref,
@@ -160,5 +161,24 @@ describe("fmtOnScreen - time on screen, to the second (a card holds for seconds,
     expect(fmtOnScreen("en", 8_499)).toBe(unit("en", 8, "second"));
     expect(fmtOnScreen("en", 8_500)).toBe(unit("en", 9, "second"));
     expect(fmtOnScreen("en", -5_000)).toBe(unit("en", 0, "second"));
+  });
+});
+
+describe("fmtIsoDay - a link's date in the reader's locale, the UTC day it names", () => {
+  it("formats the named day in every locale, whatever the process time zone (counted)", () => {
+    // Expected from Intl itself at UTC, never retyped per locale.
+    const want = (locale: string, iso: string) =>
+      new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)));
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      for (const day of ["2026-01-01", "2026-12-31", "2028-02-29"]) {
+        expect(fmtIsoDay(locale, day), `${locale} ${day}`).toBe(want(locale, day));
+        checked++;
+      }
+    }
+    expect(checked).toBe(12);
+    // The day, not its neighbour: 1 January stays 1 January (a zone west of UTC would otherwise read 31 December).
+    expect(fmtIsoDay("en", "2026-01-01")).toMatch(/2026/);
+    expect(fmtIsoDay("en", "2026-01-01")).toMatch(/\b1\b/);
   });
 });

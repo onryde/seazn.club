@@ -19,6 +19,7 @@
 //   bad dates, one-day link ....................... "dates"
 //   a deleted sponsor's links ...................... "deleted sponsor"
 //   the list: empty, after revoke .................. "listReportLinks"
+//   the form's opening dates per period ............ "reportLinkDefaults"
 // SINGLE SPORT (none): a link reads no sport.
 //
 // Killers (one at a time, restore from a cp backup):
@@ -36,7 +37,7 @@ import { makeUser, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { createCompetition } from "@/server/usecases/competitions";
 import { deleteSponsor } from "@/server/usecases/sponsors";
 import { ENDS_BEFORE_STARTS } from "@/server/api-v1/schemas";
-import { createReportLink, hashReportToken, listReportLinks, revokeReportLink } from "../report";
+import { createReportLink, hashReportToken, listReportLinks, reportLinkDefaults, revokeReportLink } from "../report";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -250,5 +251,31 @@ describe.skipIf(!HAS_DB)("S13: report links", () => {
     expect((await listReportLinks(o.auth, o.orgId)).map((l) => l.id)).toEqual([newer.id, older.id]);
     await revokeReportLink(o.auth, o.orgId, newer.id);
     expect((await listReportLinks(o.auth, o.orgId)).map((l) => l.id)).toEqual([older.id]);
+  });
+
+  it("reportLinkDefaults: a time period opens at its own whole days; a competition at its start (or creation, if earlier or unset) to its end or today, whichever is later; another org's competition is 404", async () => {
+    const o = await organiser();
+    const now = new Date("2026-06-15T12:00:00.000Z");
+    // The rule's dates, typed by hand: This year = 1 Jan .. 31 Dec; Last 30 days = 17 May .. 15 Jun (half-open window, inclusive dates).
+    expect(await reportLinkDefaults(o.auth, o.orgId, { kind: "this_year" }, now)).toEqual({ from: "2026-01-01", to: "2026-12-31", competitionId: null });
+    expect(await reportLinkDefaults(o.auth, o.orgId, { kind: "last_30_days" }, now)).toEqual({ from: "2026-05-17", to: "2026-06-15", competitionId: null });
+
+    const cases: { starts: string | null; ends: string; created: string; want: { from: string; to: string } }[] = [
+      { starts: "2026-03-01", ends: "2026-04-30", created: "2026-02-10T09:00:00Z", want: { from: "2026-02-10", to: "2026-06-15" } }, // created first; ended before today
+      { starts: "2026-03-01", ends: "2030-12-31", created: "2026-05-01T09:00:00Z", want: { from: "2026-03-01", to: "2030-12-31" } }, // starts first; ends after today
+      { starts: null, ends: "2026-04-30", created: "2026-01-20T23:30:00Z", want: { from: "2026-01-20", to: "2026-06-15" } },          // no start date: its creation (UTC day)
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      await sql`update competitions set starts_on = ${c.starts}, ends_on = ${c.ends}, created_at = ${new Date(c.created)} where id = ${o.competitionId}`;
+      expect(await reportLinkDefaults(o.auth, o.orgId, { kind: "competition", competitionId: o.competitionId }, now), JSON.stringify(c))
+        .toEqual({ ...c.want, competitionId: o.competitionId });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+
+    const b = await organiser();
+    await expect(reportLinkDefaults(o.auth, o.orgId, { kind: "competition", competitionId: b.competitionId }, now)).rejects.toMatchObject({ status: 404, message: "competition not found" });
+    await expect(reportLinkDefaults(b.auth, o.orgId, { kind: "this_year" }, now)).rejects.toMatchObject({ status: 404, message: "organization not found" });
   });
 });

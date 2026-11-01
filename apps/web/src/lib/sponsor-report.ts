@@ -14,6 +14,40 @@ import { sponsorsHref } from "@/lib/sponsors-hub";
 
 export type SponsorPeriod = { kind: "this_year" } | { kind: "last_30_days" } | { kind: "competition"; competitionId: string };
 
+/** One row of the Overview (server/sponsors/report.ts `sponsorOverview` writes it; the Overview island and S14's page read it).
+ *  Declared here, in the client-safe module, so a client component can name it without importing a server file. */
+export interface SponsorOverviewRow {
+  /** Null for a DELETED sponsor: its airings survive on their name snapshot, and nothing can link to it any more. */
+  sponsorId: string | null;
+  name: string;
+  timesShown: number;
+  onScreenMs: number;
+  /** Null in PR A (Y1 fills it): shown as a dash, never 0. */
+  viewerImpressions: number | null;
+  peakViewers: number | null;
+  /** Null for a deleted sponsor: its click rows were deleted with it, so the count is unknown, not zero. */
+  linkClicks: number | null;
+}
+
+/** A live report link as the console lists it: never its token (nobody holds that but the person it was shown to). */
+export interface ReportLinkSummary {
+  id: string;
+  sponsorId: string;
+  competitionId: string | null;
+  competitionName: string | null;
+  /** Inclusive dates, YYYY-MM-DD. */
+  from: string;
+  to: string;
+  createdAt: string;
+}
+
+/** What the Share report form opens at: inclusive dates and, for a competition period, that competition. */
+export interface ReportLinkDefaults {
+  from: string;
+  to: string;
+  competitionId: string | null;
+}
+
 /** "Last 30 days". */
 export const LAST_DAYS = 30;
 
@@ -86,6 +120,11 @@ export function overviewHref(orgSlug: string, p: SponsorPeriod): string {
  *  against the origin the organiser is on. */
 export function reportLinkPath(token: string): string {
   return `/r/sponsor/${token}`;
+}
+
+/** A `YYYY-MM-DD` date in the reader's locale, read as the UTC calendar day it names (never shifted by the viewer's zone). */
+export function fmtIsoDay(locale: string, day: string): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${day}T00:00:00.000Z`));
 }
 
 /** Time on screen to the nearest second - a card holds for seconds, so the house `fmtDuration` (whole minutes) would read
