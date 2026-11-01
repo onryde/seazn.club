@@ -125,6 +125,7 @@ export function RunSheet({
   feedLabels,
   onlinePlay,
   arbiterHrefFor,
+  matchDayHref,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -183,6 +184,11 @@ export function RunSheet({
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
   /** T16 — the arbiter panel opened on one board: where a row's camera / off-Seazn chip leads. */
   arbiterHrefFor?: (fixtureId: string) => string;
+  /** Match Day B2 - set ONLY on a match day, for an organiser: where an unscheduled match's "Find a court" leads (the division
+   *  page decides; read nowhere here, like `arbiterHrefFor`). Threaded to the two blocks that can hold an untimed, open match - the
+   *  unscheduled pile and a knockout's bracket block (`buildRunSheet`); a day block holds only dated matches and the settled
+   *  block only played ones, neither of which is ever asked for a court, so neither is handed it. Absent = no link. */
+  matchDayHref?: string;
   /** Feeder labels for unfilled bracket seats, keyed by fixture id —
    *  `feedLabels()`'s output (lib/schedule-board.ts). Threaded straight
    *  through to every `RunSheetRow` below and never read here, exactly as
@@ -459,6 +465,7 @@ export function RunSheet({
                     streamState={streamStates?.[f.id]}
                     onlinePlay={onlinePlay?.[f.id]}
                     arbiterHref={arbiterHrefFor?.(f.id)}
+                matchDayHref={matchDayHref}
                     awaitsSettle={settleIds.has(f.id)}
                     feedLabels={feedLabels}
                   />
@@ -499,6 +506,7 @@ export function RunSheet({
                 streamState={streamStates?.[f.id]}
                 onlinePlay={onlinePlay?.[f.id]}
                 arbiterHref={arbiterHrefFor?.(f.id)}
+                matchDayHref={matchDayHref}
                 awaitsSettle={settleIds.has(f.id)}
                 feedLabels={feedLabels}
                 stageName={stageNameFor(f)}
@@ -780,6 +788,8 @@ function RowWithNow({
   /** T16 — survive `...rest` into `RunSheetRow`, like `streamState`. */
   onlinePlay?: RunSheetOnlinePlay;
   arbiterHref?: string;
+  /** Match Day B2 - survives `...rest` into `RunSheetRow`, like `arbiterHref`. */
+  matchDayHref?: string;
   /** Declared here only so it survives `...rest` into `RunSheetRow` — this
    *  wrapper reads nothing off it (same posture as `streamState`/`venues`). */
   feedLabels?: Record<string, FeedLabelPair>;

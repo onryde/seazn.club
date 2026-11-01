@@ -42,6 +42,8 @@ import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
 import { divisionScoringClosed, fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes, listFixturesAwaitingSettle } from "@/server/usecases/competition-desk";
+import { competitionFixturesToday } from "@/server/usecases/match-day";
+import { needsYouHome } from "@/components/v2/desk/needs-you";
 import { comparePools } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
@@ -633,6 +635,14 @@ export default async function DivisionPage({
   // thing: the attention count is the column title's own function over the same two lists (C6), and the phase is the column's
   // own reader of the open rounds.
   const arbiterHref = arbiterOffered ? routes.divisionArbiter(orgSlug, compSlug, divSlug) : null;
+  // Match Day B2 (spec 2026-10-31 §9): on a match day an unscheduled match's row says "Find a court", into Match Day. A match day
+  // is the one rule the competition page's Open Match Day asks (`needsYouHome` of the day's fixture count), and the link goes
+  // to the same organiser-only page, so it is read for the organiser - `editable`, the gate Set time beside it already has -
+  // and on the one tab that draws the run sheet. Anyone else reads nothing: no query, no link.
+  const matchDayHref =
+    tab === "fixtures" && editable && needsYouHome(await competitionFixturesToday(auth, competition.id)) === "match_day"
+      ? routes.competitionMatchDay(orgSlug, compSlug)
+      : null;
   const arbiterEntryLine = arbiterOffered
     ? entryLine(entryStatus(openViews, attentionCount(needsOrganiserExternalPlay, flaggedExternalPlay.boards), new Date().getTime()))
     : null;
@@ -943,6 +953,7 @@ export default async function DivisionPage({
               onlinePlay={runSheetOnlinePlay}
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
+              matchDayHref={matchDayHref}
             />
           </>
         )}

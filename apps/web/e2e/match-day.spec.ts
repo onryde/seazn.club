@@ -466,3 +466,62 @@ test.describe("Match Day — the board keeps itself current (B1, moved from desk
     await expect(row(page, seed.court1), "a quiet board never noticed the first match start").toHaveAttribute("data-state", "playing");
   });
 });
+
+test.describe("Match Day — Find a court on the division's run sheet (B2)", () => {
+  // Spec §9: "Unscheduled fixtures link to the free-court candidate list". Match Day has no deep link into one court's
+  // candidate list (that list is the focused court's own panel), so the link is to Match Day itself. The seed is a match day (three
+  // matches dated today, one in play) in a league of four whose other three matches have no time and no court: those are the rows
+  // that offer it. The NOT-a-match-day half is in competition-desk.spec.ts, which owns the rig with nothing dated today.
+  test("on a match day each unscheduled match links to Match Day; the dated ones do not; at 1280, 768 and 320", async ({ page, request }) => {
+    const seed = await seedMatchDay(request, "FindCourt");
+    const compPath = await competitionPath(request, seed.competitionId);
+    const slug = await withDb(async (sql) => {
+      const [d] = await sql<{ slug: string }[]>`select slug from divisions where competition_id = ${seed.competitionId}`;
+      return d!.slug;
+    });
+    // Which matches have no time and no court: read where the server reads it, never counted off the seed's own arithmetic.
+    const unscheduled = await withDb(async (sql) => {
+      const rows = await sql<{ n: number }[]>`
+        select count(*)::int as n from fixtures f join divisions d on d.id = f.division_id
+         where d.competition_id = ${seed.competitionId} and f.scheduled_at is null and f.court_id is null and f.status = 'scheduled'`;
+      return rows[0]!.n;
+    });
+    expect(unscheduled, "the seed leaves matches with no time and no court").toBeGreaterThanOrEqual(1);
+
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`${compPath}/d/${slug}?tab=fixtures`, { waitUntil: "load" });
+      const sheet = page.getByTestId("run-sheet");
+      await expect(sheet).toBeVisible();
+      // A division with matches today opens on "Today"; the unscheduled ones live under their own chip.
+      await sheet.locator('[data-filter="unscheduled"]').click();
+      const setTime = sheet.locator('[data-row-action="set_time"]');
+      await expect(setTime).toHaveCount(unscheduled);
+      const findCourt = sheet.getByTestId("run-sheet-find-court");
+      await expect(findCourt, `width ${width}`).toHaveCount(unscheduled);
+      for (const link of await findCourt.all()) {
+        await expect(link).toHaveAttribute("href", `${compPath}/match-day`);
+        await expect(link).toHaveText("Find a court");
+        await expect(link).toBeVisible();
+        const box = await link.boundingBox();
+        expect(box, "the link has a box").not.toBeNull();
+        expect(box!.x + box!.width, `inside the ${width}px viewport`).toBeLessThanOrEqual(width);
+        if (width === 320) expect(box!.height, "tap height at 320").toBeGreaterThanOrEqual(44);
+      }
+      await expectNoHorizontalScroll(page);
+    }
+
+    // The dated matches (today's) carry Set time's cousin, not this: nothing is asked of a match that already has its court and time.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${compPath}/d/${slug}?tab=fixtures`, { waitUntil: "load" });
+    await page.getByTestId("run-sheet").locator('[data-filter="today"]').click();
+    await expect(page.getByTestId("run-sheet").locator("li[data-fixture-no]").first()).toBeVisible();
+    await expect(page.getByTestId("run-sheet-find-court")).toHaveCount(0);
+
+    // Following it lands on Match Day, which is where the free court's candidates are.
+    await page.getByTestId("run-sheet").locator('[data-filter="unscheduled"]').click();
+    await page.getByTestId("run-sheet-find-court").first().click();
+    await expect(page).toHaveURL(/\/match-day$/);
+    await expect(page.getByTestId("md-header").getByRole("heading", { level: 1 })).toContainText("Match Day");
+  });
+});

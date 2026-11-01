@@ -78,6 +78,15 @@ export async function countFixturesToday(tx: Tx, competitionId: string, now: Dat
   return row?.n ?? 0;
 }
 
+/**
+ * `countFixturesToday`, read in a tenant transaction of its own: for a caller that needs only the count (the division page's
+ * "is it a match day" question) and not the whole board or the competition desk. The same count, the same rule - the caller
+ * asks `needsYouHome` of it, exactly as the competition page asks it of the desk's `fixtures_today`.
+ */
+export async function competitionFixturesToday(auth: AuthCtx, competitionId: string, now: Date = new Date()): Promise<number> {
+  return withTenant(auth.orgId, (tx) => countFixturesToday(tx, competitionId, now));
+}
+
 interface CompRow {
   id: string;
   name: string;

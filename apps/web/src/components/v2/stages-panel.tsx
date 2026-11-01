@@ -392,6 +392,10 @@ interface Props {
    *  behind a board it would clear (409 ONLINE_GAME_EXISTS) - null ⇒ the notice alone. Phase 2: it also decides whether the run
    *  sheet's online chips are links into the panel at all (null ⇒ plain text, never a link to a 404). */
   arbiterHref?: string | null;
+  /** Match Day B2 (spec 2026-10-31 §9): Match Day's address, handed down ONLY on a match day to an organiser who can edit (the
+   *  division page asks the one `needsYouHome` rule the competition page's Open Match Day asks). The run sheet's unscheduled
+   *  rows then carry "Find a court". null/absent ⇒ not a match day: no link. */
+  matchDayHref?: string | null;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -506,7 +510,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1505,6 +1509,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         awaitingSettle={awaitingSettle}
         onlinePlay={onlinePlay}
         arbiterHrefFor={arbiterHref === null ? undefined : (fixtureId) => routes.divisionArbiter(orgSlug, compSlug, divSlug, fixtureId)}
+        matchDayHref={matchDayHref ?? undefined}
         /* An unfilled bracket seat is named by its FEEDER ("Winner of R1·3"),
            not "TBD" — the same `feedLabels()` builder and the same
            `slot.winner_match`/`slot.loser_match` vocabulary the schedule board

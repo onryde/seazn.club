@@ -157,6 +157,7 @@ export function RunSheetRow({
   feedLabels,
   onlinePlay,
   arbiterHref,
+  matchDayHref,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -208,6 +209,12 @@ export function RunSheetRow({
   onlinePlay?: RunSheetOnlinePlay;
   /** T16 — the arbiter panel opened on this board: where a flag chip leads. */
   arbiterHref?: string;
+  /** Match Day B2 (spec 2026-10-31 §9: "Unscheduled fixtures link to the free-court candidate list"). Present ONLY on a match
+   *  day, for an organiser (the division page decides both: it is the same `needsYouHome` rule that puts Open Match Day on the
+   *  competition page, read for `editable`), and then it is where the "Find a court" link on an unscheduled match leads.
+   *  Match Day has no deep link into one court's candidate list (that list is the focused court's own panel), so it is the
+   *  page itself. Absent = not a match day: the row is exactly what it was. */
+  matchDayHref?: string;
   /** W2a fix round 1 (M10) — this fixture is a recorded abandon awaiting its settle (stored `abandoned`): held, like
    *  a `needs_decision` one — the chip and Settle. From the division page's `listFixturesAwaitingSettle`. */
   awaitsSettle?: boolean;
@@ -504,6 +511,14 @@ export function RunSheetRow({
     }
   }
 
+  // Match Day B2: an unscheduled match may be asked for a court on a match day. Exactly the matches Match Day lists as "no court
+  // yet" (match-day.ts `noCourt`: a movable - `scheduled` - match with no court and both sides seated), and the row's own
+  // `set_time` action already says it is scheduled, untimed, and the viewer may edit it - so a viewer, a settled match and a
+  // timed one fall out here without a second copy of those rules. A court it already holds, or a side still to be drawn, is not
+  // a candidate there, so the link would lead to a list this match is not on.
+  const findCourtHref =
+    matchDayHref !== undefined && action.kind === "set_time" && fixture.court_id === null && !awaitingDraw ? matchDayHref : null;
+
   const actionLabel =
     action.kind === "open_pad"
       ? msg("runsheet.action.openPad")
@@ -787,6 +802,16 @@ export function RunSheetRow({
                 className="btn btn-ghost min-h-11 shrink-0 px-3 text-xs"
               >
                 {actionLabel}
+              </Link>
+            )}
+            {/* Match Day B2: the quieter sibling of Set time (which stays THE action, filled) - a ghost link, 44px on a phone. */}
+            {findCourtHref !== null && (
+              <Link
+                href={findCourtHref}
+                data-testid="run-sheet-find-court"
+                className="btn btn-ghost min-h-11 shrink-0 px-3 text-xs"
+              >
+                {msg("runsheet.action.findCourt")}
               </Link>
             )}
           </div>
