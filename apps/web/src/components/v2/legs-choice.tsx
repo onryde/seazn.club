@@ -18,10 +18,13 @@ const LEGS_LABEL: Readonly<Record<number, MessageKey>> = {
 };
 
 /** The legs values both forms offer: every whole number in FORMAT_BOUNDS.legs, each with its label. A value the bounds
- *  admit that no label names is refused here, loudly, rather than shown as a bare number. */
-export function legsChoices(): { value: number; labelKey: MessageKey }[] {
+ *  admit that no label names is refused here, loudly, rather than shown as a bare number. `bounds` is there for the test
+ *  that reaches that refusal; the forms never pass it. */
+export function legsChoices(
+  bounds: Readonly<{ min: number; max: number }> = FORMAT_BOUNDS.legs,
+): { value: number; labelKey: MessageKey }[] {
   const out: { value: number; labelKey: MessageKey }[] = [];
-  for (let value = FORMAT_BOUNDS.legs.min; value <= FORMAT_BOUNDS.legs.max; value++) {
+  for (let value = bounds.min; value <= bounds.max; value++) {
     const labelKey = LEGS_LABEL[value];
     if (!labelKey) throw new Error(`legs-choice: FORMAT_BOUNDS.legs admits ${value}, which has no label`);
     out.push({ value, labelKey });

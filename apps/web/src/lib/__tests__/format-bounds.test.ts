@@ -167,6 +167,31 @@ function sweep(h: Island, pick: (h: Island, key: string) => void) {
 }
 
 describe("FORMAT_BOUNDS — the owner's legs ruling", () => {
+  it("is the brief's literal, every field (task D1 brief: legs 1-2, pools 2-8, Swiss rounds 1-15, Top N 2-32)", () => {
+    // Typed from the brief, never read off the module: Swiss rounds 1-15 is pinned nowhere else.
+    expect(FORMAT_BOUNDS).toEqual({
+      legs: { min: 1, max: 2 },
+      pools: { min: 2, max: 8 },
+      swissRounds: { min: 1, max: 15 },
+      qualify: { min: 2, max: 32 },
+    });
+  });
+
+  it("the legs control refuses, loudly, bounds that admit a value with no label — either end — and labels both of today's", () => {
+    let refused = 0;
+    for (const [bounds, unnamed] of [
+      [{ min: 1, max: 3 }, 3],
+      [{ min: 0, max: 2 }, 0],
+    ] as const) {
+      expect(() => legsChoices(bounds), JSON.stringify(bounds)).toThrow(`FORMAT_BOUNDS.legs admits ${unnamed}, which has no label`);
+      refused++;
+    }
+    expect(refused).toBe(2);
+    // The positive pair: the default reads FORMAT_BOUNDS.legs, whose every value is named.
+    expect(legsChoices().map((c) => c.value)).toEqual([1, 2]);
+    expect(legsChoices(FORMAT_BOUNDS.legs)).toEqual(legsChoices());
+  });
+
   it("legs is 1 or 2 (owner, 2026-10-31), and the shared control offers exactly those, as Once / Home & away", () => {
     expect(FORMAT_BOUNDS.legs).toEqual({ min: 1, max: 2 });
     expect(legsChoices().map((c) => [c.value, uiEn[c.labelKey as keyof typeof uiEn]])).toEqual([
