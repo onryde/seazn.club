@@ -32,7 +32,7 @@ import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { mayHoldBearerCredential } from "@/lib/types";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
-import { SIGNED_READ_MAX_TTL_SEC, signedReadUrl } from "@/lib/supabase-storage";
+import { SIGNED_READ_MAX_TTL_SEC, signedReadUrls } from "@/lib/supabase-storage";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { ENDS_BEFORE_STARTS } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
@@ -232,7 +232,7 @@ export async function reportLinkDefaults(
   });
 }
 
-/** How long a report's frame urls stay readable: the most `signedReadUrl` allows (an hour). The page is rendered per visit
+/** How long a report's frame urls stay readable: the most `signedReadUrls` allows (an hour). The page is rendered per visit
  *  (never cached), so a reader who keeps the tab open past it reloads to see the pictures again. */
 export const REPORT_FRAME_TTL_SEC = SIGNED_READ_MAX_TTL_SEC;
 
@@ -346,17 +346,12 @@ export async function sponsorReport(token: string, now: Date): Promise<SponsorRe
   }
   const side = (id: string | null) => (id === null ? null : (names.get(id) ?? null));
 
-  let unsigned = 0;
-  const frameUrls = await Promise.all(
-    read.showings.map((r) =>
-      r.frame_path === null
-        ? null
-        : signedReadUrl(orgId, r.frame_path, REPORT_FRAME_TTL_SEC).catch(() => {
-            unsigned++;
-            return null;
-          }),
-    ),
-  );
+  // ONE provider call for every framed showing (final review S14 m5); a failed call is every frame's placeholder.
+  const framed = read.showings.flatMap((r, i) => (r.frame_path === null ? [] : [{ i, path: r.frame_path }]));
+  const signed = await signedReadUrls(orgId, framed.map((f) => f.path), REPORT_FRAME_TTL_SEC).catch(() => framed.map(() => null));
+  const frameUrls: (string | null)[] = read.showings.map(() => null);
+  framed.forEach((f, k) => (frameUrls[f.i] = signed[k] ?? null));
+  const unsigned = signed.filter((u) => u === null).length;
   // Never the path, the token or the provider's message (which can name the object): the org and a count.
   if (unsigned > 0) log.warn({ orgId, unsigned }, "sponsor report: frames could not be signed; shown as placeholders");
 

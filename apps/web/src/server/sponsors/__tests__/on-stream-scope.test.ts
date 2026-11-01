@@ -29,11 +29,18 @@ vi.mock("@/lib/sentry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/sentry")>();
   return { ...actual, captureError: vi.fn() };
 });
+// The overlay's own tier question, passed through untouched - one test reads WHICH competition the preview asked it about
+// (final review S12: the sample's, not the page's any-pass gate).
+vi.mock("@/server/sponsors/card-source", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/sponsors/card-source")>();
+  return { ...actual, sponsorTiersOn: vi.fn(actual.sponsorTiersOn) };
+});
 
 import { builtinModules } from "@seazn/engine/sports";
 import { replayDerived } from "@/server/overlay/recent";
 import { loadFoldInputs } from "@/server/engine-db/fold";
 import { captureError } from "@/lib/sentry";
+import { sponsorTiersOn } from "@/server/sponsors/card-source";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { SPONSOR_FREQUENCIES, type SponsorCard } from "@/lib/sponsor-plan";
@@ -91,6 +98,28 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     expect(breaksChecked, `${breaksChecked} breaks compared`).toBeGreaterThan(3);
   });
 
+  // Final review S12: the overlay draws a fixture's cards with the tiers of THAT fixture's competition (`sponsorTiersOn`, an
+  // Event Pass counts there only), so the preview weights its cards by the sample's competition, not the page's any-pass gate.
+  it("S12: each sample's tiers are the overlay's question asked of the SAMPLE's competition; no sample asks nothing (count reported)", async () => {
+    const o = await org();
+    const rig = await seedDivision(o.auth, o.competitionId, "cricket", VARIANT.cricket!, "cricket div");
+    await finishWith(o.orgId, rig, chooseWalk("cricket", rig.cfg), daysAgo(1));
+    await seedDivision(o.auth, o.competitionId, "generic", VARIANT.generic!, "generic div");
+    let checked = 0;
+    for (const answer of [true, false]) {
+      vi.mocked(sponsorTiersOn).mockClear();
+      vi.mocked(sponsorTiersOn).mockImplementationOnce(async (orgId, competitionId) => answer && orgId === o.orgId && competitionId === o.competitionId);
+      const scope = await loadOnStreamScope(o.orgId, null);
+      const cricket = scope.sports.find((s) => s.sportKey === "cricket")!;
+      expect(cricket.sampleCompetitionId).toBe(o.competitionId);
+      expect(cricket.sampleTiered, `the sample competition answered ${answer}`).toBe(answer);
+      expect(scope.sports.find((s) => s.sportKey === "generic")!.sampleTiered, "no sample: no tiers asked").toBeNull();
+      expect(vi.mocked(sponsorTiersOn).mock.calls, "asked once, of the sample's own competition").toEqual([[o.orgId, o.competitionId]]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("preview for cricket on Light equals the planner's count over the seeded finished fixture's events (and Normal, Busy): the module's majors, + every 3rd minor, derived from the seeded ledger, not from previewForSport", async () => {
     const o = await org();
     const rig = await seedDivision(o.auth, o.competitionId, "cricket", VARIANT.cricket!, "cricket div");
@@ -122,7 +151,7 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     await sql`update fixtures set status = 'decided' where id = ${g.fixtureId}`;
     await sql`insert into score_events (fixture_id, org_id, seq, type, payload) values (${g.fixtureId}, ${o.orgId}, 1, 'core.start', '{}')`;
     const scope = await loadOnStreamScope(o.orgId, null);
-    expect(scope.sports).toEqual([{ sportKey: "generic", kinds: null, sample: null, sampleCompetitionId: null }]);
+    expect(scope.sports).toEqual([{ sportKey: "generic", kinds: null, sample: null, sampleCompetitionId: null, sampleTiered: null }]);
     expect(moduleOf("generic").naturalBreaks, "premise: generic declares none (spec §3.1)").toBeUndefined();
   });
 

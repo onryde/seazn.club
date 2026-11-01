@@ -7,8 +7,8 @@
 // the figures in a row from `sm`, the showings in two then three columns. Print: the sheet loses its card chrome, the button
 // hides, and a showing never splits across a page.
 //
-// Long names (Review Focus 5): a showing's match line truncates with `min-w-0` on every box down to it, the full name kept in
-// `title`; the sponsor's own name WRAPS (`break-words`) - a report never cuts off the name of the company it is for.
+// Long names (Review Focus 5): a showing's match is two lines (home; the join and away - final review S14 m2), each truncating
+// with `min-w-0` on every box down to it, the full label kept in `title`; the sponsor's own name WRAPS (`break-words`) - a report never cuts off the name of the company it is for.
 import type { CSSProperties } from "react";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
@@ -43,6 +43,15 @@ export function matchLabel(ui: Dict, match: SponsorReportShowing["match"]): stri
   return t(ui, "sponsorReport.match.sides", { home: match.home ?? tbd, away: match.away ?? tbd });
 }
 
+/** The match line as TWO lines (final review S14 m2): the home side, then the dictionary's own join and the away side, so a
+ *  long home name can never truncate the away side out of sight at 320. Every locale's label leads with `{home}` (pinned in
+ *  the tests), so the second line is the label with an empty home. Null for a deleted fixture: one line, as before. */
+export function matchLines(ui: Dict, match: SponsorReportShowing["match"]): [string, string] | null {
+  if (match === null) return null;
+  const tbd = t(ui, "sponsorReport.match.tbd");
+  return [match.home ?? tbd, t(ui, "sponsorReport.match.sides", { home: "", away: match.away ?? tbd }).trimStart()];
+}
+
 /** Two initials for a sponsor with no logo (the hub's tile rule): the first letters of the first two words. */
 function initials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
@@ -51,6 +60,7 @@ function initials(name: string): string {
 
 function Showing({ s, ui, locale }: { s: SponsorReportShowing; ui: Dict; locale: Locale }) {
   const match = matchLabel(ui, s.match);
+  const lines = matchLines(ui, s.match);
   return (
     <li data-testid="report-showing" className="min-w-0 break-inside-avoid">
       <figure className="min-w-0 overflow-hidden rounded-xl border border-accent-line bg-surface print:rounded-md">
@@ -59,7 +69,7 @@ function Showing({ s, ui, locale }: { s: SponsorReportShowing; ui: Dict; locale:
           <img
             src={s.frameUrl}
             alt={t(ui, "sponsorReport.frame.alt", { match })}
-            loading="lazy"
+            loading="eager"
             referrerPolicy="no-referrer"
             className="block aspect-video w-full bg-court object-cover"
           />
@@ -72,8 +82,16 @@ function Showing({ s, ui, locale }: { s: SponsorReportShowing; ui: Dict; locale:
           </div>
         )}
         <figcaption className="min-w-0 px-3 pt-2.5 pb-3">
-          <p className="min-w-0 truncate text-sm font-semibold text-ink" title={match}>
-            {match}
+          <p className="min-w-0 text-sm font-semibold text-ink" title={match}>
+            {lines === null ? (
+              <span className="block truncate">{match}</span>
+            ) : (
+              <>
+                {/* The space keeps the label's own words in the text (a reader, a copy, `textContent`); two blocks draw it as two lines. */}
+                <span className="block truncate">{lines[0]}</span>{" "}
+                <span className="block truncate">{lines[1]}</span>
+              </>
+            )}
           </p>
           <p className="mt-1 flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-xs text-ink-muted">
             <span className="min-w-0">{breakLabel(ui, s)}</span>

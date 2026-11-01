@@ -28,6 +28,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, withDb } from "../helpers";
 import { releaseSettingsOrg, seedCompetition, seedSettingsOrg, sponsorsUrl, type SeededOrg } from "../settings-support";
 import { reportLinkPath } from "../../src/lib/sponsor-report";
+import { dismissCookieBanner } from "../scorepad-a11y-kit";
 
 const DIR = process.env.SPONSOR_CAPTURE_DIR;
 const WIDTHS = [320, 768, 1280] as const;
@@ -206,6 +207,8 @@ for (const width of WIDTHS) {
         const report = page.getByTestId("sponsor-report");
         await expect(page.getByRole("heading", { level: 1 }), "witness: the long name heads it").toContainText(LONG_SPONSOR);
         await expect(page.getByTestId("report-showing"), "witness: the two showings").toHaveCount(2);
+        // Final review S14: the stranger's empty jar shows the cookie banner, which would sit over the report in the shot.
+        await dismissCookieBanner(page);
         await capture(page, "report", width, report);
       } finally {
         await ctx.close();

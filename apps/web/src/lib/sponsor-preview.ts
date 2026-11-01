@@ -27,6 +27,9 @@ export interface SportPreviewSource {
   /** The competition the sample's fixture belongs to; null exactly when `sample` is. The overlay draws a fixture's cards from
    *  the org-wide sponsors plus its OWN competition's, so the preview counts the same and not another competition's. */
   sampleCompetitionId: string | null;
+  /** Whether the sample's competition carries sponsor tiers (`sponsorTiersOn`, the overlay's own question: an Event Pass
+   *  counts on its competition only); null exactly when `sample` is (final review S12). */
+  sampleTiered: boolean | null;
 }
 
 export interface SponsorPreview {

@@ -2227,8 +2227,18 @@ test.describe("R4 sponsors: the break card on OBS", () => {
       // --- With the clock stopped, the poll's data alone folds the card out. No timer can.
       await expect(card, "the score cuts the card: it folds out on the poll's data").toHaveAttribute("data-phase", "out", { timeout: 15_000 });
       expect(await fakeNow(), "and no page time passed: the fold is the data's doing, not the hold running out").toBe(cutAt);
-      await anon.clock.runFor(OVERLAY_MOMENT_FOLD_MS + STEP_MS);
-      await expect(card, "gone one fold later").toHaveCount(0);
+      // Final review S15 m2: the fold out is STEPPED like every phase above (one jump of a whole fold could pass the
+      // fold's deadline before React re-armed its timer), until the card is gone: never before its fold, and within a
+      // fold plus two steps (the step the deadline lands in, and one for the render to land).
+      let folding = 0;
+      while ((await card.count()) > 0) {
+        folding += 1;
+        await step();
+      }
+      expect(folding, "anti-vacuity: the fold took steps").toBeGreaterThan(0);
+      const goneAfter = (await fakeNow()) - cutAt;
+      expect(goneAfter, "the card stayed for its whole fold").toBeGreaterThanOrEqual(OVERLAY_MOMENT_FOLD_MS);
+      expect(goneAfter, "and was gone one fold later").toBeLessThanOrEqual(OVERLAY_MOMENT_FOLD_MS + 2 * STEP_MS);
     } finally {
       await anon.context().close();
       await owner.close();

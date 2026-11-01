@@ -522,8 +522,14 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
 
   it("an undo takes the card off air: the sixth ball voided while the card holds ⇒ S5 deletes the unaired assignment, the page folds the card (its end line cutShort: true, ruling 2026-11-01), and the beats still make ONE row for the card's sponsor (S8's void-race fallback) that the report counts once", async () => {
     const r = await cricketComposedRig();
-    const only = await createSponsor(r.auth, { name: "Kingsway Dairy", url: "https://kingsway.example/", tier: "gold", status: "active" } as never);
-    await patchSponsor(r.auth, only.id, { on_stream: true } as never);
+    // Final review S15: TWO ticked sponsors, so the void-race fallback has a wrong answer to give - "a sponsor of this org"
+    // is not "the card's sponsor". The one the break does NOT pick is created FIRST, so a fallback that read the org's
+    // first sponsor would name it.
+    expect(SPONSOR_TIER_WEIGHTS.gold, "premise: the tiers are not tied, so P7's first pick is decided").not.toBe(SPONSOR_TIER_WEIGHTS.partner);
+    const [heavyTier, lightTier] = SPONSOR_TIER_WEIGHTS.gold > SPONSOR_TIER_WEIGHTS.partner ? (["gold", "partner"] as const) : (["partner", "gold"] as const);
+    const other = await createSponsor(r.auth, { name: "Quay Fisheries", url: "https://quay.example/", tier: lightTier, status: "active" } as never);
+    const only = await createSponsor(r.auth, { name: "Kingsway Dairy", url: "https://kingsway.example/", tier: heavyTier, status: "active" } as never);
+    for (const s of [other, only]) await patchSponsor(r.auth, s.id, { on_stream: true } as never);
     await putStreamSettings(r.auth, r.orgId, { competitionId: null, enabled: true, frequency: "busy" });
     const look = SPONSOR_STYLE_BY_SIZE[cricketSize("over_end")];
     await r.append("core.start", {});
@@ -578,5 +584,10 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
     const report = await sponsorReport(link.url.split("/").at(-1)!, now);
     expect(report, "the report counts the showing once, at its real length").toMatchObject({ timesShown: 1, onScreenMs: endAt - startAt, streamVisits: 0 });
     expect(report!.showings).toHaveLength(1);
+    // The other ticked sponsor was never on air: its report holds nothing.
+    const otherLink = await createReportLink(r.auth, r.orgId, {
+      sponsorId: other.id, competitionId: null, from: isoDay(new Date(now.getTime() - day)), to: isoDay(new Date(now.getTime() + day)),
+    });
+    expect(await sponsorReport(otherLink.url.split("/").at(-1)!, now), "the other ticked sponsor: never shown").toMatchObject({ timesShown: 0, onScreenMs: 0, showings: [] });
   });
 });

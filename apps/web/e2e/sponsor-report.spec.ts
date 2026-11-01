@@ -107,6 +107,8 @@ for (const width of [320, 768, 1280]) {
       expect(res?.status()).toBe(200);
       expect(res?.headers()["cache-control"] ?? "", "never cached").toContain("no-store");
       await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
+      // Final review S14 m9: the no-referrer policy is RENDERED (a signed frame url never leaves in a Referer), not just declared.
+      await expect(page.locator('meta[name="referrer"]')).toHaveAttribute("content", "no-referrer");
       await expect(page.getByTestId("sponsor-report")).toBeVisible();
       await expect(page.getByRole("heading", { level: 1 })).toHaveText(ui("sponsorReport.heading", { sponsor: SPONSOR, org: org.name }));
 
@@ -126,8 +128,22 @@ for (const width of [320, 768, 1280]) {
       const name = ui("sponsorReport.match.sides", { home: HOME, away: AWAY });
       const line = cards.first().getByTitle(name);
       await expect(line).toHaveText(name);
-      const box = await line.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
-      expect(box.scroll, `the 86-character match line truncates inside its card at ${width}px`).toBeGreaterThan(box.client);
+      // Final review S14 m2: two lines - the home side, then the join and the away side - so the away side is on screen at
+      // every width, each line truncating inside the card rather than one line cutting the away side off.
+      const parts = line.locator(":scope > span");
+      await expect(parts).toHaveCount(2);
+      await expect(parts.nth(0)).toHaveText(HOME);
+      await expect(parts.nth(1)).toHaveText(ui("sponsorReport.match.sides", { home: "", away: AWAY }).trimStart());
+      const card = await cards.first().boundingBox();
+      for (const i of [0, 1]) {
+        const box = await parts.nth(i).evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return { scroll: el.scrollWidth, client: el.clientWidth, left: r.left, right: r.right };
+        });
+        expect(box.left, `line ${i + 1} starts inside its card at ${width}px`).toBeGreaterThanOrEqual(card!.x);
+        expect(box.right, `line ${i + 1} ends inside its card at ${width}px`).toBeLessThanOrEqual(card!.x + card!.width + 0.5);
+        if (width === 320) expect(box.scroll, `the 43-character line ${i + 1} truncates at 320`).toBeGreaterThan(box.client);
+      }
       await expectNoHorizontalScroll(page);
       expect(await page.locator("body").innerText(), "the token is not printed on the page").not.toContain(token);
       await page.context().close();

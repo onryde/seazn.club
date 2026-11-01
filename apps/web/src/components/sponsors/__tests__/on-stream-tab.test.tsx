@@ -21,14 +21,19 @@ import { builtinModules } from "@seazn/engine/sports";
 
 const nav = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => nav }));
+// The preview's planner, passed through untouched: one test reads the cards each sport's preview was handed (S12).
+vi.mock("@/lib/sponsor-preview", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sponsor-preview")>();
+  return { ...actual, previewForSport: vi.fn(actual.previewForSport) };
+});
 
 import { BREAK_FALLBACK_MSG, BREAK_MSG } from "../break-labels";
 import { OnStreamTab, DEFAULT_FREQUENCY, FREQ_MSG, previewCards, sponsorsInScope, type OnStreamSponsor, type OnStreamTabProps } from "../on-stream-tab";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
-import { SPONSOR_FREQUENCIES, SPONSOR_STYLE_BY_SIZE, type BreakOpened, type SponsorFrequency } from "@/lib/sponsor-plan";
+import { SPONSOR_FREQUENCIES, SPONSOR_STYLE_BY_SIZE, type BreakOpened, type SponsorCard, type SponsorFrequency } from "@/lib/sponsor-plan";
 import { onStreamHref } from "@/lib/sponsors-hub";
 import { t } from "@/lib/i18n-runtime";
-import type { SportPreviewSource } from "@/lib/sponsor-preview";
+import { previewForSport, type SportPreviewSource } from "@/lib/sponsor-preview";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -75,13 +80,14 @@ function breaksOf(sportKey: string): BreakOpened[] {
 }
 const kindsOf = (sportKey: string) => builtinModules.find((m) => m.key === sportKey)!.naturalBreaks?.kinds.map((k) => ({ kind: k.kind, size: k.size })) ?? null;
 /** A sport whose sample fixture belongs to `competitionId` (the loader reports it; the overlay draws that fixture's cards). */
-const sportWith = (sportKey: string, competitionId = "c1"): SportPreviewSource => ({
+const sportWith = (sportKey: string, competitionId = "c1", tiered = true): SportPreviewSource => ({
   sportKey,
   kinds: kindsOf(sportKey),
   sample: kindsOf(sportKey) === null ? null : breaksOf(sportKey),
   sampleCompetitionId: kindsOf(sportKey) === null ? null : competitionId,
+  sampleTiered: kindsOf(sportKey) === null ? null : tiered,
 });
-const sportWithout = (sportKey: string): SportPreviewSource => ({ sportKey, kinds: kindsOf(sportKey), sample: null, sampleCompetitionId: null });
+const sportWithout = (sportKey: string): SportPreviewSource => ({ sportKey, kinds: kindsOf(sportKey), sample: null, sampleCompetitionId: null, sampleTiered: null });
 
 const base = (over: Partial<OnStreamTabProps> = {}): OnStreamTabProps => ({
   orgId: ORG,
@@ -389,9 +395,9 @@ describe("the preview - the planner's count over a real match's breaks (R11)", (
 
   it("one card reads singular ('≈1 card'), zero reads plural", () => {
     const one: BreakOpened[] = [{ seq: 1, at: new Date(T0).toISOString(), kind: "innings_break", size: "major" }];
-    const m = mount({ sports: [{ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: "c1" }], settings: { enabled: true, frequency: "light" } });
+    const m = mount({ sports: [{ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: "c1", sampleTiered: true }], settings: { enabled: true, frequency: "light" } });
     expect(m.text("on-stream-preview-count-cricket")).toBe("≈1 card over that match");
-    const none = mount({ sponsors: [], sports: [{ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: "c1" }] });
+    const none = mount({ sponsors: [], sports: [{ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: "c1", sampleTiered: true }] });
     expect(none.text("on-stream-preview-count-cricket")).toBe("≈0 cards over that match");
     expect(none.has("on-stream-preview-noticks"), "no ticked sponsor: says no card would air").toBe(true);
   });
@@ -401,7 +407,7 @@ describe("the preview - the planner's count over a real match's breaks (R11)", (
     const inC1 = sponsor({ id: "c1only", competition_id: "c1", on_stream: true });
     const inC2 = sponsor({ id: "c2only", competition_id: "c2", on_stream: true });
     const one: BreakOpened[] = [{ seq: 1, at: new Date(T0).toISOString(), kind: "innings_break", size: "major" }];
-    const sample = (competitionId: string): SportPreviewSource => ({ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: competitionId });
+    const sample = (competitionId: string): SportPreviewSource => ({ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: competitionId, sampleTiered: true });
     const count = (sponsors: OnStreamSponsor[], competitionId: string) =>
       mount({ scope: null, sponsors, sports: [sample(competitionId)], settings: { enabled: true, frequency: "light" } }).text("on-stream-preview-count-cricket");
     const zero = msg("sponsors.onStream.previewCards.other", { count: 0 });
@@ -454,6 +460,40 @@ describe("the preview - the planner's count over a real match's breaks (R11)", (
     expect(previewCards(rows, true).map((c) => c.tier)).toEqual(["title"]);
   });
 
+  // Final review S12: the overlay's card source (resolveSponsors, onStream) keeps ONE card per name - the competition's own
+  // row before the org-wide one, then the higher tier - so the preview draws on the same cards, not one per row.
+  it("S12: two ticked rows of one name are ONE card, as the overlay's: the competition's own first, then the higher tier; the exact list", () => {
+    const rows = [
+      sponsor({ id: "org-gold", name: "Harbour Bank", tier: "gold", on_stream: true }),
+      sponsor({ id: "comp-silver", name: "Harbour Bank", tier: "silver", competition_id: "c1", on_stream: true }),
+      sponsor({ id: "org-silver", name: "Quay Cafe", tier: "silver", on_stream: true }),
+      sponsor({ id: "org-title", name: "Quay Cafe", tier: "title", on_stream: true }),
+      sponsor({ id: "unticked", name: "Mill Lane", on_stream: false }),
+      sponsor({ id: "ticked", name: "Mill Lane", on_stream: true }),
+    ];
+    expect(previewCards(rows, true).map((c) => [c.id, c.name, c.tier])).toEqual([
+      ["comp-silver", "Harbour Bank", "silver"],
+      ["org-title", "Quay Cafe", "title"],
+      ["ticked", "Mill Lane", "partner"],
+    ]);
+  });
+
+  it("S12: each sport's preview draws its cards with ITS sample's tiers, never the page's gate (count reported)", () => {
+    vi.mocked(previewForSport).mockClear();
+    const rows = [sponsor({ id: "t", name: "Title Co", tier: "title", on_stream: true })];
+    const withBreaks = builtinModules.filter((mod) => mod.naturalBreaks && mod.key !== "cricket");
+    const other = withBreaks[0]!.key;
+    mount({ hasTiers: true, sponsors: rows, sports: [sportWith("cricket", "c1", false), sportWith(other, "c1", true)], settings: { enabled: true, frequency: "busy" } });
+    const tiersBySport = new Map<number, string[]>();
+    let checked = 0;
+    for (const [i, call] of vi.mocked(previewForSport).mock.calls.entries()) {
+      tiersBySport.set(i, (call[2] as SponsorCard[]).map((c) => c.tier));
+      checked++;
+    }
+    expect(checked, "one preview per sport").toBe(2);
+    expect([...tiersBySport.values()]).toEqual([["partner"], ["title"]]);
+  });
+
   it("the preview says the rotation is off when it is - and still shows the count it would give", () => {
     const m = mount({ settings: null, ownRow: false });
     expect(m.text("on-stream-preview-off")).toBe(msg("sponsors.onStream.previewOff"));
@@ -476,7 +516,7 @@ describe("the preview - the planner's count over a real match's breaks (R11)", (
   });
 
   it("final review m5: a kind with no label reads as the ONE fallback (a break in play, the report's too) - never the raw kind", () => {
-    const m = mount({ sports: [{ sportKey: "football", kinds: [{ kind: "made_up_kind", size: "major" }, ...kindsOf("football")!], sample: null, sampleCompetitionId: null }] });
+    const m = mount({ sports: [{ sportKey: "football", kinds: [{ kind: "made_up_kind", size: "major" }, ...kindsOf("football")!], sample: null, sampleCompetitionId: null, sampleTiered: null }] });
     const line = m.text("on-stream-preview-kinds-football");
     expect(line).toContain(msg(BREAK_FALLBACK_MSG));
     expect(line, "the raw kind never reaches the screen").not.toContain("made_up_kind");
