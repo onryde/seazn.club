@@ -9,7 +9,7 @@
 // The sweep is over EVERY shipped module that declares breaks (spec §3.1: 8 of the 11), and reports how many it checked.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import { SPONSOR_COOLDOWN_MS, SponsorPlanInputError, type BreakOpened, type SponsorCard, type SponsorFrequency } from "@/lib/sponsor-plan";
+import { SPONSOR_COOLDOWN_MS, SponsorPlanInputError, sponsorMomentId, type BreakOpened, type SponsorCard, type SponsorFrequency } from "@/lib/sponsor-plan";
 import { previewForSport } from "../sponsor-preview";
 
 const T0 = Date.parse("2026-10-31T10:00:00.000Z");
@@ -65,30 +65,32 @@ describe("previewForSport - the dial over a sport's own declared breaks", () => 
   it("a sport that declares no breaks has nothing to preview: generic, boardgame and carrom (counted)", () => {
     const without = builtinModules.filter((m) => m.naturalBreaks === undefined).map((m) => m.key).sort();
     expect(without).toEqual(["boardgame", "carrom", "generic"]);
-    for (const f of FREQUENCIES) expect(previewForSport(f, [], [CARD])).toEqual({ breaks: 0, cards: 0 });
+    for (const f of FREQUENCIES) expect(previewForSport(f, [], [CARD])).toEqual({ breaks: 0, cards: 0, aired: [] });
   });
 });
 
 describe("previewForSport - the planner's other rules reach the count", () => {
   const minor = (seq: number, atMs: number): BreakOpened => ({ seq, at: iso(atMs), kind: "timeout", size: "minor" });
   const major = (seq: number, atMs: number): BreakOpened => ({ seq, at: iso(atMs), kind: "set_end", size: "major" });
+  const moment = (b: BreakOpened): string => sponsorMomentId(b.seq, b.kind);
 
   it("the 90 s cooldown thins MINOR breaks only: 0, 30, 60, 120 s on Busy -> breaks 4, cards 2 (the 30 s and 60 s minors are thinned)", () => {
     const breaks = [0, 30, 60, 120].map((s, i) => minor(i + 1, T0 + s * 1000));
-    expect(previewForSport("busy", breaks, [CARD])).toEqual({ breaks: 4, cards: 2 });
+    // aired: the first minor, and the one 120 s on (seq 4); the 30 s and 60 s minors (seq 2, 3) fall inside the cooldown.
+    expect(previewForSport("busy", breaks, [CARD])).toEqual({ breaks: 4, cards: 2, aired: [moment(breaks[0]!), moment(breaks[3]!)] });
     expect(SPONSOR_COOLDOWN_MS, "premise: the spec's 90 s").toBe(90_000);
   });
 
   it("a MAJOR inside the cooldown still draws its card, and starts a new cooldown for the minor after it", () => {
     // minor@0 (card), major@30 s (card, cooldown restarts at 30 s), minor@100 s: 70 s after the major -> thinned.
     const breaks = [minor(1, T0), major(2, T0 + 30_000), minor(3, T0 + 100_000)];
-    expect(previewForSport("busy", breaks, [CARD])).toEqual({ breaks: 3, cards: 2 });
+    expect(previewForSport("busy", breaks, [CARD])).toEqual({ breaks: 3, cards: 2, aired: [moment(breaks[0]!), moment(breaks[1]!)] });
   });
 
   it("no ticked sponsor: the breaks are counted, no card is drawn", () => {
     const breaks = [major(1, T0), major(2, T0 + 10 * MIN)];
-    expect(previewForSport("light", breaks, [])).toEqual({ breaks: 2, cards: 0 });
-    expect(previewForSport("light", breaks, [CARD])).toEqual({ breaks: 2, cards: 2 });
+    expect(previewForSport("light", breaks, [])).toEqual({ breaks: 2, cards: 0, aired: [] });
+    expect(previewForSport("light", breaks, [CARD])).toEqual({ breaks: 2, cards: 2, aired: breaks.map(moment) });
   });
 
   it("is pure: frozen inputs, and a second call answers the same (the sequence)", () => {
@@ -96,7 +98,7 @@ describe("previewForSport - the planner's other rules reach the count", () => {
     const cards = Object.freeze([Object.freeze({ ...CARD })]);
     const first = previewForSport("busy", breaks, cards);
     expect(previewForSport("busy", breaks, cards)).toEqual(first);
-    expect(first).toEqual({ breaks: 2, cards: 2 });
+    expect(first).toEqual({ breaks: 2, cards: 2, aired: breaks.map(moment) });
   });
 
   it("an unknown frequency is refused, never read as a default (the planner's own guard)", () => {

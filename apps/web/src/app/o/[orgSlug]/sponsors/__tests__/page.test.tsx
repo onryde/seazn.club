@@ -11,6 +11,8 @@
 //   - Sponsors keeps `sponsors.tiers`, Packages keeps `sponsors.monetize` - granted AND denied
 //   - a non-editor gets the read-only view Settings gave (canEdit false, no Packages) - NOT a refusal (R19)
 //   - the data each tab needs is loaded for that tab only, and never twice across a sequence
+//   - On stream (S12): an editor gets the tab with the org's sponsors, tiers gate and the scope the URL names - kept only if it
+//     is one of THIS org's competitions; a non-editor gets Overview and the On stream loader is never called (R19)
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";
 
@@ -20,6 +22,7 @@ const h = vi.hoisted(() => ({
   listSponsorRows: vi.fn(),
   hasFeatureOnAnyPass: vi.fn(),
   sql: vi.fn(),
+  loadOnStreamScope: vi.fn(),
 }));
 
 vi.mock("@/server/page-auth", () => ({ requireOrgPage: h.requireOrgPage }));
@@ -27,6 +30,7 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: h.resolveLocale }));
 vi.mock("@/server/usecases/sponsors", () => ({ listSponsorRows: h.listSponsorRows }));
 vi.mock("@/lib/entitlements", () => ({ hasFeatureOnAnyPass: h.hasFeatureOnAnyPass }));
 vi.mock("@/lib/db", () => ({ sql: h.sql }));
+vi.mock("@/server/sponsors/on-stream", () => ({ loadOnStreamScope: h.loadOnStreamScope }));
 
 // The existing active-tab scroller (Settings and Directory use it): a marker, so the test can see WHAT it wraps. The real one is a
 // client effect (`scrollIntoView` on `[aria-current="page"]`) that prerender never runs.
@@ -48,6 +52,32 @@ vi.mock("@/components/org-sponsors", () => ({
     />
   ),
 }));
+vi.mock("@/components/sponsors/on-stream-tab", () => ({
+  OnStreamTab: (p: {
+    orgId: string;
+    orgSlug: string;
+    sponsors: { id: string; on_stream: boolean }[];
+    competitions: unknown[];
+    scope: string | null;
+    hasTiers: boolean;
+    settings: { enabled: boolean; frequency: string } | null;
+    ownRow: boolean;
+    sports: unknown[];
+  }) => (
+    <div
+      data-testid="on-stream-island"
+      data-org={p.orgId}
+      data-slug={p.orgSlug}
+      data-sponsors={p.sponsors.map((s) => `${s.id}:${s.on_stream}`).join(",")}
+      data-competitions={p.competitions.length}
+      data-scope={p.scope ?? "org"}
+      data-has-tiers={String(p.hasTiers)}
+      data-settings={p.settings === null ? "none" : `${p.settings.enabled}/${p.settings.frequency}`}
+      data-own-row={String(p.ownRow)}
+      data-sports={p.sports.length}
+    />
+  ),
+}));
 vi.mock("@/components/sponsor-packages", () => ({
   SponsorPackages: (p: { orgId: string; competitions: unknown[]; hasMonetize: boolean; billingHref: string }) => (
     <div data-testid="sponsor-packages-island" data-org={p.orgId} data-has-monetize={String(p.hasMonetize)} data-competitions={p.competitions.length} />
@@ -66,10 +96,10 @@ const UI_BY_LOCALE = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string
 
 const ORG = { id: "org-1", name: "Riverside", slug: "riverside", role: "owner" };
 
-async function render(tab?: string): Promise<string> {
+async function render(tab?: string, scope?: string | string[]): Promise<string> {
   const element = await SponsorsHubPage({
     params: Promise.resolve({ orgSlug: ORG.slug }),
-    searchParams: Promise.resolve(tab === undefined ? {} : { tab }),
+    searchParams: Promise.resolve({ ...(tab === undefined ? {} : { tab }), ...(scope === undefined ? {} : { scope }) }),
   });
   const { prelude } = await prerender(element);
   const reader = (prelude as ReadableStream<Uint8Array>).getReader();
@@ -114,7 +144,11 @@ function asMember(role: "owner" | "admin" | "viewer", canEdit: boolean): void {
 beforeEach(() => {
   vi.clearAllMocks();
   h.resolveLocale.mockResolvedValue("en");
-  h.listSponsorRows.mockResolvedValue([{ id: "s1" }, { id: "s2" }]);
+  h.listSponsorRows.mockResolvedValue([
+    { id: "s1", name: "Harbour", tier: "gold", status: "active", competition_id: null, on_stream: true },
+    { id: "s2", name: "Ridge", tier: "partner", status: "active", competition_id: "c1", on_stream: false },
+  ]);
+  h.loadOnStreamScope.mockResolvedValue({ settings: { enabled: true, frequency: "busy" }, ownRow: true, sports: [{ sportKey: "cricket", kinds: [], sample: null }] });
   h.hasFeatureOnAnyPass.mockResolvedValue(true);
   h.sql.mockResolvedValue([{ id: "c1", name: "Spring Cup" }, { id: "c2", name: "Autumn Cup" }, { id: "c3", name: "Cup 3" }]);
   asMember("owner", true);
@@ -311,12 +345,12 @@ describe("a non-editor gets the same read-only view Settings gave - canEdit fals
 });
 
 describe("the page loads only what the tab it shows needs, and nothing is carried between renders", () => {
-  it("Overview and On stream read no sponsor rows and ask no sponsor gate (their bodies are S13's and S12's)", async () => {
+  it("Overview reads no sponsor rows, asks no sponsor gate and loads no stream scope (its body is S13's)", async () => {
     await render();
-    await render("on_stream");
     expect(h.listSponsorRows).not.toHaveBeenCalled();
     expect(h.hasFeatureOnAnyPass).not.toHaveBeenCalled();
     expect(h.sql).not.toHaveBeenCalled();
+    expect(h.loadOnStreamScope).not.toHaveBeenCalled();
   });
 
   it("Sponsors then Packages in sequence: each render asks for its own gate once, so a second call carries nothing over", async () => {
@@ -343,15 +377,64 @@ describe("the page loads only what the tab it shows needs, and nothing is carrie
   });
 });
 
-describe("the placeholder bodies S12 and S13 drop into", () => {
-  it("Overview and On stream mount a labelled, otherwise empty panel (no feature claims) for an editor", async () => {
-    for (const tab of ["overview", "on_stream"] as const) {
-      const html = await render(tab);
-      const panel = new RegExp(`<section[^>]*data-testid="sponsors-tab-${tab}"[^>]*>([\\s\\S]*?)</section>`).exec(html)?.[1];
-      expect(panel, `${tab} panel`).toBeDefined();
-      // A heading carrying the tab's own label, and nothing a person could read as a promise.
-      expect(panel).toMatch(/<h2[^>]*>[^<]+<\/h2>/);
-      expect(panel!.replace(/<[^>]+>/g, "").trim().length, `${tab}: only its label`).toBeLessThan(40);
+describe("the On stream tab (S12)", () => {
+  it("an editor gets the island with the org's sponsors, its competitions, the tiers gate and the loader's answer", async () => {
+    const html = await render("on_stream");
+    expect(panels(html)).toEqual(["on_stream"]);
+    expect(attr(html, "on-stream-island", "data-org")).toBe(ORG.id);
+    expect(attr(html, "on-stream-island", "data-slug")).toBe(ORG.slug);
+    expect(attr(html, "on-stream-island", "data-sponsors")).toBe("s1:true,s2:false");
+    expect(attr(html, "on-stream-island", "data-competitions")).toBe("3");
+    expect(attr(html, "on-stream-island", "data-has-tiers")).toBe("true");
+    expect(attr(html, "on-stream-island", "data-settings")).toBe("true/busy");
+    expect(attr(html, "on-stream-island", "data-own-row")).toBe("true");
+    expect(attr(html, "on-stream-island", "data-sports")).toBe("1");
+    expect(h.hasFeatureOnAnyPass.mock.calls.map((c) => c[1])).toEqual(["sponsors.tiers"]);
+    expect(h.listSponsorRows).toHaveBeenCalledWith(ORG.id);
+  });
+
+  it("no ?scope= is the organisation-wide scope; the loader is asked about null", async () => {
+    const html = await render("on_stream");
+    expect(attr(html, "on-stream-island", "data-scope")).toBe("org");
+    expect(h.loadOnStreamScope).toHaveBeenCalledWith(ORG.id, null);
+  });
+
+  it("?scope= naming one of the org's competitions is that scope - and ONLY one of the org's: a foreign, empty, repeated or inherited-key value is the org scope (counted)", async () => {
+    expect(attr(await render("on_stream", "c2"), "on-stream-island", "data-scope")).toBe("c2");
+    expect(h.loadOnStreamScope).toHaveBeenLastCalledWith(ORG.id, "c2");
+    let refused = 0;
+    for (const raw of ["not-mine", "", "__proto__", ["c1", "c2"]]) {
+      h.loadOnStreamScope.mockClear();
+      const html = await render("on_stream", raw);
+      expect(attr(html, "on-stream-island", "data-scope"), JSON.stringify(raw)).toBe("org");
+      expect(h.loadOnStreamScope, JSON.stringify(raw)).toHaveBeenCalledWith(ORG.id, null);
+      refused++;
     }
+    expect(refused).toBe(4);
+  });
+
+  it("a non-editor gets Overview: the island is never mounted and the loader and the sponsor reads never run (R19)", async () => {
+    asMember("viewer", false);
+    const html = await render("on_stream", "c1");
+    expect(panels(html)).toEqual(["overview"]);
+    expect(html).not.toContain('data-testid="on-stream-island"');
+    expect(h.loadOnStreamScope).not.toHaveBeenCalled();
+    expect(h.listSponsorRows).not.toHaveBeenCalled();
+  });
+
+  it("the scope belongs to On stream only: ?scope= on any other tab reads no stream scope", async () => {
+    for (const tab of ["overview", "sponsors", "packages"]) await render(tab, "c1");
+    expect(h.loadOnStreamScope).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Overview placeholder S13 drops its body into", () => {
+  it("Overview mounts a labelled, otherwise empty panel (no feature claims) for an editor", async () => {
+    const html = await render("overview");
+    const panel = /<section[^>]*data-testid="sponsors-tab-overview"[^>]*>([\s\S]*?)<\/section>/.exec(html)?.[1];
+    expect(panel, "overview panel").toBeDefined();
+    // A heading carrying the tab's own label, and nothing a person could read as a promise.
+    expect(panel).toMatch(/<h2[^>]*>[^<]+<\/h2>/);
+    expect(panel!.replace(/<[^>]+>/g, "").trim().length, "overview: only its label").toBeLessThan(40);
   });
 });

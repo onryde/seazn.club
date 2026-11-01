@@ -37,6 +37,22 @@ export function sponsorsHref(orgSlug: string, tab?: SponsorsTab): string {
   return routes.orgSponsors(orgSlug, tab);
 }
 
+/** `/o/<slug>/sponsors?tab=on_stream`, or with `&scope=<competitionId>` for one competition's own setting (the On stream tab's
+ *  picker; no scope = the organisation-wide one). */
+export function onStreamHref(orgSlug: string, competitionId?: string | null): string {
+  const base = sponsorsHref(orgSlug, "on_stream");
+  return competitionId ? `${base}&scope=${encodeURIComponent(competitionId)}` : base;
+}
+
+/** The competition a raw `?scope=` names, or null (the organisation-wide scope) when it is absent, repeated, empty or not one
+ *  of THIS org's competitions - a foreign or made-up id is never a scope, so the loader is only ever asked about the org's own. */
+export function resolveOnStreamScope(
+  raw: string | string[] | undefined,
+  competitions: readonly { id: string }[],
+): string | null {
+  return typeof raw === "string" ? (competitions.find((c) => c.id === raw)?.id ?? null) : null;
+}
+
 /**
  * Where `/o/<slug>/settings?tab=sponsors` goes now: the hub's Sponsors tab.
  *

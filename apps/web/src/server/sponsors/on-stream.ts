@@ -18,21 +18,14 @@ import { log } from "@/server/logger";
 import { foldFrom, loadFoldInputs } from "@/server/engine-db/fold";
 import { replayDerived } from "@/server/overlay/recent";
 import type { BreakDecl, BreakOpened } from "@/lib/sponsor-plan";
+import type { SportPreviewSource } from "@/lib/sponsor-preview";
 import { resolveStreamSettings, type StreamSettings } from "./stream-settings";
+
+export type { SportPreviewSource };
 
 /** How many of a sport's most recent finished fixtures are tried before giving up on a sample (a fold that refuses one, or a
  *  ledger with no breaks, moves on to the next). */
 export const PREVIEW_CANDIDATES = 5;
-
-export interface SportPreviewSource {
-  sportKey: string;
-  /** The sport's declared break kinds with their sizes (`naturalBreaks.kinds`); null when it declares none (generic, chess,
-   *  carrom): sponsors then appear on scene screens only. */
-  kinds: readonly BreakDecl[] | null;
-  /** The breaks of the org's most recent finished fixture of this sport, ascending seq; null when there is no such fixture,
-   *  its replay did not run to the end, or it opened no break. Always null when `kinds` is. */
-  sample: BreakOpened[] | null;
-}
 
 export interface OnStreamScopeData {
   /** The settings in force for the scope (S5's resolver), or null: no row for the scope or its org - the rotation is off. */
