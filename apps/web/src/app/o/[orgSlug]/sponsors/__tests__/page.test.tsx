@@ -148,7 +148,7 @@ beforeEach(() => {
     { id: "s1", name: "Harbour", tier: "gold", status: "active", competition_id: null, on_stream: true },
     { id: "s2", name: "Ridge", tier: "partner", status: "active", competition_id: "c1", on_stream: false },
   ]);
-  h.loadOnStreamScope.mockResolvedValue({ settings: { enabled: true, frequency: "busy" }, ownRow: true, sports: [{ sportKey: "cricket", kinds: [], sample: null }] });
+  h.loadOnStreamScope.mockResolvedValue({ settings: { enabled: true, frequency: "busy" }, ownRow: true, sports: [{ sportKey: "cricket", kinds: [], sample: null, sampleCompetitionId: null }] });
   h.hasFeatureOnAnyPass.mockResolvedValue(true);
   h.sql.mockResolvedValue([{ id: "c1", name: "Spring Cup" }, { id: "c2", name: "Autumn Cup" }, { id: "c3", name: "Cup 3" }]);
   asMember("owner", true);

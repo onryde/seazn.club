@@ -73,8 +73,14 @@ function breaksOf(sportKey: string): BreakOpened[] {
   return out;
 }
 const kindsOf = (sportKey: string) => builtinModules.find((m) => m.key === sportKey)!.naturalBreaks?.kinds.map((k) => ({ kind: k.kind, size: k.size })) ?? null;
-const sportWith = (sportKey: string): SportPreviewSource => ({ sportKey, kinds: kindsOf(sportKey), sample: kindsOf(sportKey) === null ? null : breaksOf(sportKey) });
-const sportWithout = (sportKey: string): SportPreviewSource => ({ sportKey, kinds: kindsOf(sportKey), sample: null });
+/** A sport whose sample fixture belongs to `competitionId` (the loader reports it; the overlay draws that fixture's cards). */
+const sportWith = (sportKey: string, competitionId = "c1"): SportPreviewSource => ({
+  sportKey,
+  kinds: kindsOf(sportKey),
+  sample: kindsOf(sportKey) === null ? null : breaksOf(sportKey),
+  sampleCompetitionId: kindsOf(sportKey) === null ? null : competitionId,
+});
+const sportWithout = (sportKey: string): SportPreviewSource => ({ sportKey, kinds: kindsOf(sportKey), sample: null, sampleCompetitionId: null });
 
 const base = (over: Partial<OnStreamTabProps> = {}): OnStreamTabProps => ({
   orgId: ORG,
@@ -142,6 +148,11 @@ describe("the rotation - the dial opens AT the stored value (D12)", () => {
     const none = mount({ settings: null, ownRow: false });
     expect(none.checked("on-stream-switch")).toBe(false);
     expect(none.text("on-stream-off-note")).toBe(msg("sponsors.onStream.offNoRow"));
+    // A competition scope without a row: ticking switches on the ORGANISATION's rotation, and the note says so.
+    const comp = mount({ scope: "c1", settings: null, ownRow: false });
+    expect(comp.text("on-stream-off-note")).toBe(msg("sponsors.onStream.offNoRowCompetition"));
+    expect(msg("sponsors.onStream.offNoRowCompetition")).toMatch(/organisation/i);
+    expect(msg("sponsors.onStream.offNoRowCompetition")).not.toBe(msg("sponsors.onStream.offNoRow"));
     const paused = mount({ settings: { enabled: false, frequency: "light" } });
     expect(paused.checked("on-stream-switch")).toBe(false);
     expect(paused.text("on-stream-off-note")).toBe(msg("sponsors.onStream.offPaused"));
@@ -288,6 +299,15 @@ describe("the tick list", () => {
     expect(sponsors.filter((s) => m.has(`on-stream-sponsor-${s.id}`)).map((s) => s.id)).toEqual(["s1", "s2", "s3", "s4"]);
   });
 
+  it("the checklist help names the tier line ('Higher tiers take more turns') only when the org has tiers", () => {
+    const tiered = mount({ hasTiers: true }).text("on-stream-checklist-help");
+    const flatOrg = mount({ hasTiers: false }).text("on-stream-checklist-help");
+    expect(tiered).toBe(flat(`${msg("sponsors.onStream.checklistHelp")} ${msg("sponsors.onStream.checklistTiersNote")}`));
+    expect(flatOrg, "no tiers: the base help only, no claim about turns").toBe(msg("sponsors.onStream.checklistHelp"));
+    expect(msg("sponsors.onStream.checklistTiersNote")).toMatch(/higher tiers/i);
+    expect(flatOrg).not.toMatch(/tier/i);
+  });
+
   it("no sponsors: says so and points at the Sponsors tab - and there is no 'Add a deal' here", () => {
     const m = mount({ sponsors: [] });
     expect(m.has("on-stream-checklist-empty")).toBe(true);
@@ -356,11 +376,56 @@ describe("the preview - the planner's count over a real match's breaks (R11)", (
 
   it("one card reads singular ('≈1 card'), zero reads plural", () => {
     const one: BreakOpened[] = [{ seq: 1, at: new Date(T0).toISOString(), kind: "innings_break", size: "major" }];
-    const m = mount({ sports: [{ sportKey: "cricket", kinds: cricket, sample: one }], settings: { enabled: true, frequency: "light" } });
+    const m = mount({ sports: [{ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: "c1" }], settings: { enabled: true, frequency: "light" } });
     expect(m.text("on-stream-preview-count-cricket")).toBe("≈1 card over that match");
-    const none = mount({ sponsors: [], sports: [{ sportKey: "cricket", kinds: cricket, sample: one }] });
+    const none = mount({ sponsors: [], sports: [{ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: "c1" }] });
     expect(none.text("on-stream-preview-count-cricket")).toBe("≈0 cards over that match");
     expect(none.has("on-stream-preview-noticks"), "no ticked sponsor: says no card would air").toBe(true);
+  });
+
+  it("org scope: the preview draws on the org-wide sponsors plus the SAMPLE fixture's own competition - never another competition's (counted)", () => {
+    const orgWide = sponsor({ id: "ow", on_stream: true });
+    const inC1 = sponsor({ id: "c1only", competition_id: "c1", on_stream: true });
+    const inC2 = sponsor({ id: "c2only", competition_id: "c2", on_stream: true });
+    const one: BreakOpened[] = [{ seq: 1, at: new Date(T0).toISOString(), kind: "innings_break", size: "major" }];
+    const sample = (competitionId: string): SportPreviewSource => ({ sportKey: "cricket", kinds: cricket, sample: one, sampleCompetitionId: competitionId });
+    const count = (sponsors: OnStreamSponsor[], competitionId: string) =>
+      mount({ scope: null, sponsors, sports: [sample(competitionId)], settings: { enabled: true, frequency: "light" } }).text("on-stream-preview-count-cricket");
+    const zero = msg("sponsors.onStream.previewCards.other", { count: 0 });
+    const oneCard = msg("sponsors.onStream.previewCards.one", { count: 1 });
+    let checked = 0;
+    // Granted: a sponsor ticked in the sample's own competition, and an org-wide one.
+    expect(count([inC1], "c1"), "the sample's own competition's sponsor draws a card").toBe(oneCard);
+    expect(count([orgWide], "c1"), "an org-wide sponsor draws a card").toBe(oneCard);
+    // Denied: a sponsor ticked ONLY in another competition gives 0 cards (the picker still lists it).
+    expect(count([inC2], "c1"), "ticked only in another competition: 0 cards").toBe(zero);
+    expect(count([inC1], "c2"), "the same sponsor against the other sample: 0 cards").toBe(zero);
+    expect(mount({ scope: null, sponsors: [inC2], sports: [sample("c1")] }).has("on-stream-sponsor-c2only"), "still listed in the org scope's checklist").toBe(true);
+    checked += 5;
+    // Sequence: ticking the other competition's sponsor never moves the count; ticking the sample's own does.
+    const m = mount({ scope: null, sponsors: [inC1, inC2], sports: [sample("c1")], settings: { enabled: true, frequency: "light" } });
+    m.tick("c1only", false);
+    expect(m.text("on-stream-preview-count-cricket"), "c1only unticked, c2only still ticked: still 0").toBe(zero);
+    m.tick("c2only", false);
+    m.tick("c1only", true);
+    expect(m.text("on-stream-preview-count-cricket")).toBe(oneCard);
+    checked += 2;
+    expect(checked).toBe(7);
+  });
+
+  it("two sports with samples from DIFFERENT competitions each count their own fixture's cards", () => {
+    const withBreaks = builtinModules.filter((mod) => mod.naturalBreaks && mod.key !== "cricket");
+    expect(withBreaks.length, "premise: a second sport declares breaks").toBeGreaterThan(0);
+    const other = withBreaks[0]!.key;
+    const rows = [sponsor({ id: "c1only", competition_id: "c1", on_stream: true })];
+    const m = mount({
+      scope: null,
+      sponsors: rows,
+      sports: [sportWith("cricket", "c1"), sportWith(other, "c2")],
+      settings: { enabled: true, frequency: "busy" },
+    });
+    expect(m.text("on-stream-preview-count-cricket"), "cricket's sample is in c1: the c1 sponsor airs").not.toBe(msg("sponsors.onStream.previewCards.other", { count: 0 }));
+    expect(m.text(`on-stream-preview-count-${other}`), `${other}'s sample is in c2: the c1 sponsor does not air there`).toBe(msg("sponsors.onStream.previewCards.other", { count: 0 }));
   });
 
   it("a parked sponsor is not a card: ticked but inactive/pending draws no card (the rotation never airs it)", () => {
@@ -405,7 +470,7 @@ describe("the preview - the planner's count over a real match's breaks (R11)", (
   });
 
   it("one strip per sport the org plays, in the order given (cricket, football, generic, badminton - counted)", () => {
-    const sports = ["cricket", "football", "generic", "badminton"].map(sportWith);
+    const sports = ["cricket", "football", "generic", "badminton"].map((k) => sportWith(k));
     const m = mount({ sports });
     const shown = sports.filter((s) => m.has(`on-stream-preview-${s.sportKey}`));
     expect(shown.map((s) => s.sportKey)).toEqual(["cricket", "football", "generic", "badminton"]);

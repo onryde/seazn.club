@@ -12,20 +12,12 @@ import {
 } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import type { MessageKey } from "@/lib/messages";
+import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
 export const SPONSOR_TIERS = ["title", "gold", "silver", "partner"] as const;
 export type SponsorTier = (typeof SPONSOR_TIERS)[number];
-
-// Typed key map — the i18n house rule bans dynamic `msg()` keys.
-export const TIER_MSG: Record<SponsorTier, MessageKey> = {
-  title: "sponsors.tier.titleTier",
-  gold: "sponsors.tier.gold",
-  silver: "sponsors.tier.silver",
-  partner: "sponsors.tier.partner",
-};
 
 /** Client-safe mirror of the usecase SponsorRow. */
 export interface SponsorItem {
@@ -43,13 +35,6 @@ export interface SponsorItem {
   /** The paid package order that activated this placement, if any. */
   paid_order_id?: string | null;
 }
-
-export const TIER_BADGE: Record<SponsorTier, string> = {
-  title: "bg-amber-100 text-amber-800",
-  gold: "bg-yellow-50 text-yellow-700",
-  silver: "bg-slate-200 text-slate-600",
-  partner: "bg-slate-100 text-slate-500",
-};
 
 interface Draft {
   name: string;
