@@ -13,7 +13,8 @@
 // Client-safe and import-free: the desk can ask the same question the server answers.
 
 /** One row of the stage as the decision reads it. `started` and `decided` are the server's (spec §4 "started": a score
- *  event, live, or decided other than the bye; an online game or an open device link counts too, ruling C5). */
+ *  event, live, or decided other than the bye; an online game counts too. A device link does not — ruling C5, re-ruled
+ *  after the T9 review: a printed sheet mints one for every board, and a link that was used wrote a score event). */
 export type LateEntryBoard = {
   id: string;
   round: number;

@@ -27,10 +27,10 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { ScheduleConfig, type LateEntryResult } from "@/server/api-v1/schemas";
 import { decideSwissLateEntry, type LateEntryBoard } from "@/lib/swiss-late-entry";
 import { isSwissByeShellExtKey, mintSwissBoardExtKeys } from "@/lib/swiss-shell";
-import { recomputeStandings, resolveModule } from "@/server/engine-db";
+import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
+import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
 import { withTenant } from "@/lib/db";
-import { log } from "@/server/logger";
 import { fixtureHasResultSql } from "./fixture-results-sql";
 import { swissRefusal } from "./swiss-refusal";
 import { OCCUPYING, afterScheduleWrite, courtVenueIds, divisionLockState } from "./schedule";
@@ -40,6 +40,7 @@ import {
   clearSwissFixtureSeats,
   divisionHasStarted,
   lockSwissBoardAppends,
+  refoldStageTable,
   swissActiveEntrants,
   swissGen,
   type SwissExistingFixture,
@@ -83,15 +84,15 @@ async function stageRows(tx: Tx, stageId: string): Promise<SwissExistingFixture[
 }
 
 /** Spec §4 "started": a score event, live, or decided — `fixtureHasResultSql`, read on the row itself — and (Review Focus
- *  1, ruling C5) a board an online game stands behind (any `fixture_external_play` row) or an open device link points at
- *  (unrevoked, unexpired): a scorer may already be on court. */
+ *  1) a board an online game stands behind (any `fixture_external_play` row). A device link is NOT a start (ruling C5
+ *  re-ruled after the T9 review, I1): a link carries no opened or claimed marker, and printing a day's scorer sheets mints
+ *  a never-expiring link for every printable board — counting one would switch case (a) off for the whole printed day.
+ *  A link that was used has written a score event, which is a start already. */
 async function stageRowsWithStarts(tx: Tx, stageId: string): Promise<StageRow[]> {
   return tx<StageRow[]>`
     select ${STAGE_ROW_COLS(tx)},
            (${fixtureHasResultSql(tx, "f")}
-            or exists (select 1 from fixture_external_play x where x.fixture_id = f.id)
-            or exists (select 1 from device_links d where d.fixture_id = f.id and d.revoked_at is null
-                         and (d.expires_at is null or d.expires_at > now()))) as started
+            or exists (select 1 from fixture_external_play x where x.fixture_id = f.id)) as started
     from fixtures f where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
 }
 
@@ -115,8 +116,10 @@ function toBoard(f: StageRow): LateEntryBoard {
   };
 }
 
-/** Each seated entrant's opponent in a round: the other side's id, or "bye". */
-function opponents(rows: readonly SwissExistingFixture[]): Map<string, string> {
+/** Each seated entrant's place in a round (T9 review m2): the board row (it carries the time and the court), the opponent
+ *  and the side (home or away — in chess, the colour). A player whose place differs after a re-pair is a changed one, even
+ *  when the opponent is the same. A bye is just "bye": it holds no slot, so the row it sits in means nothing. */
+function places(rows: readonly SwissExistingFixture[]): Map<string, string> {
   const out = new Map<string, string>();
   for (const f of rows) {
     if (isSwissByeShellExtKey(f.ext_key)) {
@@ -124,11 +127,25 @@ function opponents(rows: readonly SwissExistingFixture[]): Map<string, string> {
       continue;
     }
     if (f.home_entrant_id !== null && f.away_entrant_id !== null) {
-      out.set(f.home_entrant_id, f.away_entrant_id);
-      out.set(f.away_entrant_id, f.home_entrant_id);
+      out.set(f.home_entrant_id, `${f.id}|${f.away_entrant_id}|home`);
+      out.set(f.away_entrant_id, `${f.id}|${f.home_entrant_id}|away`);
     }
   }
   return out;
+}
+
+/** T9 review m1: the round-1 pairing override round 1's newest pairing row recorded — its Pair (`fixtures_generated`, a
+ *  Redo's step row included: it copies the audit) or an earlier late entry that re-paired round 1 (case (a), which records
+ *  the same `pairing`/`override` pair). Undefined: round 1 was paired in its own mode. Only a recognised mode is handed
+ *  on — anything else is a row this code never wrote (history.ts `recordedPairingOverride`, the Redo's sibling). */
+async function roundOnePairingOverride(tx: Tx, divisionId: string, stageId: string): Promise<SwissPairingMode | undefined> {
+  const [row] = await tx<{ payload: Record<string, unknown> }[]>`
+    select payload from division_events
+     where division_id = ${divisionId} and payload->>'stage_id' = ${stageId} and payload->>'round' = '1'
+       and (type = 'fixtures_generated' or (type = 'swiss_late_entry' and payload->>'case' = 'a'))
+     order by seq desc limit 1`;
+  if (row?.payload.override !== true) return undefined;
+  return SWISS_PAIRINGS.find((m) => m === row.payload.pairing);
 }
 
 const iso = (v: Date | string): string => (v instanceof Date ? v : new Date(v)).toISOString();
@@ -205,8 +222,14 @@ export async function admitSwissLateEntrant(
   entrantId: string,
   source: LateEntrySource,
 ): Promise<LateEntryResult | null> {
+  // T9 review m7: most arrivals land in a division with no running Swiss (setup, or another format) and must not queue on
+  // its lock, so both questions are read BEFORE it. Started is one-way (no write moves a division back from active or
+  // completed), so a "started" read here stays true under the lock; the stage itself is re-read under it below. A Start
+  // racing the unlocked read is benign: the read says "not started" only while Start has not committed, and the entrant
+  // then stands exactly as one added just before Start (C17: unstamped, so in round 1's field) — the state a locked read
+  // gives too, when the arrival takes the lock first.
+  if (!(await hasRootSwissStage(tx, divisionId)) || !(await divisionHasStarted(tx, divisionId))) return null;
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-  if (!(await divisionHasStarted(tx, divisionId))) return null;
   // A division holding two root Swiss stages admits into the first one still running (else the first, which is over).
   const [stage] = await tx<SwissStage[]>`
     select id, seq, status, config from stages where ${rootSwissSql(tx, divisionId)}
@@ -279,7 +302,13 @@ export async function admitSwissLateEntrant(
     const field = (await swissActiveEntrants(tx, divisionId, stage.id)).map((e) =>
       e.id === entrantId ? { ...e, swiss_first_round: latest } : e,
     );
+    const active = new Set(field.map((e) => e.id));
     canPlayBye = (holder) => {
+      // T9 review I2: a holder who has LEFT is no opponent. A withdrawal after the round was paired keeps the bye seated
+      // and its point awarded (`forfeited` is a played status for the cascade, lib/table-withdrawal.ts), so the bye row is
+      // still there — but taking it would delete a departed player's point and seat a board against someone gone home.
+      // Case (c) instead: nothing moves.
+      if (!active.has(holder)) return false;
       const hist = buildSwissHistory(rows, field, facts);
       if (hist.played.has(pairKey(holder, entrantId))) return false;
       const paired = pairRound(
@@ -349,7 +378,7 @@ interface ApplyCtx {
 async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
   const { divisionId, stage, entrantId, round } = ctx;
   const inRound = ctx.rows.filter((f) => f.round_no === round);
-  const before = opponents(inRound);
+  const before = places(inRound);
   const beforeIds = new Set(inRound.map((f) => f.id));
   // The append locks are held (taken over the latest seated round before "started" was read). The clear itself refuses
   // a board a live online game stands behind (409 ONLINE_GAME_EXISTS) — "started" already sent any board with a bridge
@@ -358,7 +387,9 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
   await stampFirstRound(tx, entrantId, stage.id, round);
   const existing = await stageRows(tx, stage.id);
   const active = await swissActiveEntrants(tx, divisionId, stage.id);
-  const gen = await swissGen(tx, stage.id, divisionId, stage.config, active, existing);
+  // T9 review m1 (the sibling of the T8 review's P1): a re-pair of round 1 replays the mode the organiser paired it with.
+  const override = round === 1 ? await roundOnePairingOverride(tx, divisionId, stage.id) : undefined;
+  const gen = await swissGen(tx, stage.id, divisionId, stage.config, active, existing, override);
   if (gen.round !== round) {
     // swissGen pairs the lowest unseated round; this round is the latest seated one and every earlier round stays
     // seated, so it is this one. Anything else is a broken premise — refused before the commit, by name.
@@ -377,7 +408,7 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
     if (slot) await placeBoard(tx, f.id, slot);
     newBoard = { fixture_id: f.id, scheduled: slot !== null };
   }
-  const now = opponents(after);
+  const now = places(after);
   const changed = [...before.keys()].filter((id) => id !== entrantId && now.get(id) !== before.get(id)).sort();
   await appendLateEntryRow(
     tx,
@@ -390,6 +421,8 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
       source: ctx.source,
       changed_entrant_ids: changed,
       seated_fixture_ids: gen.seatedIds,
+      // The Pair's own audit pair (stages.ts `swissAudit`): a later re-pair of round 1 replays an override from here.
+      ...(gen.pairing !== null ? { pairing: gen.pairing, override: override !== undefined && override !== gen.defaultPairing } : {}),
       // A re-pair of round 1 re-draws it with the newcomer in the field (T8 review n1): later rounds read this order.
       ...(gen.drawSeed !== null ? { draw_seed: gen.drawSeed } : {}),
       ...(gen.drawOrder !== null ? { draw_order: gen.drawOrder } : {}),
@@ -407,11 +440,13 @@ async function repairRound(tx: Tx, ctx: ApplyCtx): Promise<LateEntryResult> {
   };
 }
 
+/** A slot the system chose is an `auto` placement (T9 review m9; V214 `schedule_source`), as Start's sweep writes it —
+ *  never `manual`, which is the organiser's hand. */
 async function placeBoard(tx: Tx, fixtureId: string, slot: { scheduled_at: string; court_id: string }): Promise<void> {
   const venues = await courtVenueIds(tx);
   await tx`
     update fixtures set scheduled_at = ${slot.scheduled_at}, court_id = ${slot.court_id},
-                        venue_id = ${venues.get(slot.court_id) ?? null}
+                        venue_id = ${venues.get(slot.court_id) ?? null}, schedule_source = 'auto'
     where id = ${fixtureId}`;
 }
 
@@ -433,10 +468,10 @@ async function takeBye(
   const venues = slot ? await courtVenueIds(tx) : null;
   const [row] = await tx<{ id: string }[]>`
     insert into fixtures (stage_id, division_id, round_no, seq_in_round, ext_key, home_entrant_id, away_entrant_id,
-                          status, outcome, scheduled_at, court_id, venue_id)
+                          status, outcome, scheduled_at, court_id, venue_id, schedule_source)
     values (${stage.id}, ${divisionId}, ${round}, ${seq}, ${extKey!}, ${pairing.home}, ${pairing.away},
             'scheduled', null, ${slot?.scheduled_at ?? null}, ${slot?.court_id ?? null},
-            ${slot ? (venues!.get(slot.court_id) ?? null) : null})
+            ${slot ? (venues!.get(slot.court_id) ?? null) : null}, ${slot ? "auto" : "none"})
     returning id`;
   await stampFirstRound(tx, entrantId, stage.id, round);
   const holder = bye.home_entrant_id!;
@@ -489,11 +524,10 @@ export async function afterSwissLateEntry(
     return ids;
   });
   afterScheduleWrite(divisionId, competitionId, "schedule", fixtureIds);
+  // T9 review m4: the one post-write refold (`refoldStageTable`, Pair next's and a roster delete's), best-effort and logged
+  // inside. `"drop"`: a re-pair can take away the round's only result — the bye award — and the table it leaves must not
+  // outlive it. (`afterScheduleWrite` above already revalidated the division's public pages.)
   for (const stageId of new Set(moved.map((r) => r.stage_id))) {
-    try {
-      await recomputeStandings(orgId, stageId, undefined, { emptyFold: "drop" });
-    } catch (err) {
-      log.warn({ event: "swiss_late_entry_refold_failed", stageId, err: String(err) }, "late entry committed, but its table refold failed");
-    }
+    await refoldStageTable(orgId, { id: stageId, kind: "swiss" }, "drop");
   }
 }

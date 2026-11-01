@@ -226,10 +226,12 @@ const stageScopeText = stageScopeFiles.length === 1 ? readFileSync(resolve(DELTA
 const stageScopeCode = stageScopeText.replace(/--.*$/gm, "").trim();
 
 describe("W3 delta: swiss_first_round_stage_id, the file", () => {
-  it("exactly one delta carries the name, and it is one idempotent ADD COLUMN on entrants referencing stages — no data move", () => {
+  it("exactly one delta carries the name: an idempotent ADD COLUMN on entrants referencing stages, and its index — no data move", () => {
     expect(stageScopeFiles, "one delta named *__w3_swiss_first_round_stage.sql").toHaveLength(1);
-    expect(stageScopeCode.split(";").filter((s) => s.trim() !== "").length, "one statement").toBe(1);
-    expect(stageScopeCode).toMatch(/^alter table entrants add column if not exists swiss_first_round_stage_id uuid\s+references stages\(id\) on delete set null;$/);
+    expect(stageScopeCode.split(";").filter((s) => s.trim() !== "").length, "two statements").toBe(2);
+    expect(stageScopeCode).toMatch(
+      /^alter table entrants add column if not exists swiss_first_round_stage_id uuid\s+references stages\(id\) on delete set null;\s*create index if not exists entrants_swiss_first_round_stage_idx on entrants \(swiss_first_round_stage_id\)\s+where swiss_first_round_stage_id is not null;$/,
+    );
     expect(stageScopeCode, "no update statement").not.toMatch(/\bupdate\b/i);
   });
 });
@@ -261,14 +263,20 @@ describe.runIf(HAS_DB)("W3 delta: swiss_first_round_stage_id on entrants", () =>
       const stored = async () =>
         (await tx<{ r: number | null; s: string | null }[]>`
           select swiss_first_round as r, swiss_first_round_stage_id as s from entrants where id = ${id}`)[0]!;
+      const indexes = () =>
+        tx<{ def: string }[]>`
+          select indexdef as def from pg_indexes
+          where schemaname = current_schema() and tablename = 'entrants' and indexdef like '%swiss_first_round_stage_id%'`;
       const columnBefore = await column();
       const fksBefore = await fks();
+      const indexesBefore = await indexes();
       const fresh = await stored();
       await tx`update entrants set swiss_first_round = 2, swiss_first_round_stage_id = ${stage!.id} where id = ${id}`;
       await tx.unsafe(stageScopeCode);
       const kept = await stored();
+      const indexesAfter = await indexes();
       await tx`delete from stages where id = ${stage!.id}`;
-      return { columnBefore, fksBefore, fresh, kept, columnAfter: await column(), fksAfter: await fks(), orphaned: await stored() };
+      return { columnBefore, fksBefore, indexesBefore, indexesAfter, fresh, kept, columnAfter: await column(), fksAfter: await fks(), orphaned: await stored() };
     });
 
     expect(verdict.columnBefore, "the applied schema has the column: a uuid, nullable, no default").toEqual([
@@ -277,6 +285,11 @@ describe.runIf(HAS_DB)("W3 delta: swiss_first_round_stage_id on entrants", () =>
     expect(verdict.fksBefore.map((c) => c.def), "one foreign key, to stages, set null on delete").toEqual([
       "FOREIGN KEY (swiss_first_round_stage_id) REFERENCES stages(id) ON DELETE SET NULL",
     ]);
+    // T9 review m8: the foreign key's referencing column is indexed (a stage delete's set-null finds its rows without a scan).
+    expect(verdict.indexesBefore.map((i) => i.def.replace(/\b\w+\.entrants\b/, "entrants")), "one partial index on the stage column").toEqual([
+      "CREATE INDEX entrants_swiss_first_round_stage_idx ON entrants USING btree (swiss_first_round_stage_id) WHERE (swiss_first_round_stage_id IS NOT NULL)",
+    ]);
+    expect(verdict.indexesAfter, "a second run adds no second index").toEqual(verdict.indexesBefore);
     expect(verdict.fresh, "an entrant enrolled the ordinary way has no stamp and no stage").toEqual({ r: null, s: null });
     expect(verdict.columnAfter, "a second run leaves the column as it was").toEqual(verdict.columnBefore);
     expect(verdict.fksAfter, "… adds no second key").toEqual(verdict.fksBefore);

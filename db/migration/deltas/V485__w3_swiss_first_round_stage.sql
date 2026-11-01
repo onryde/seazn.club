@@ -16,6 +16,13 @@
 -- A schema change only. A new nullable column moves no stored value: no writer of `swiss_first_round` has shipped
 -- (V484 is this branch's), so no stored stamp is left without its stage.
 --
--- Idempotent: `if not exists` makes a second run a no-op.
+-- The index (T9 review m8): deleting a stage runs the set-null as `update entrants ... where swiss_first_round_stage_id =
+-- $1`, and without an index on the referencing column that is a scan of every entrant (the V275 advisor's rule for an
+-- unindexed foreign key). Partial: almost every entrant holds no stamp, and `= $1` implies `is not null`, so the planner
+-- may use it for that update.
+--
+-- Idempotent: `if not exists` makes a second run of either statement a no-op.
 alter table entrants add column if not exists swiss_first_round_stage_id uuid
   references stages(id) on delete set null;
+create index if not exists entrants_swiss_first_round_stage_idx on entrants (swiss_first_round_stage_id)
+  where swiss_first_round_stage_id is not null;

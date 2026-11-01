@@ -8,8 +8,9 @@
 // Every case runs for badminton AND chess (boardgame) through one body. Expected values come from the rulebook and the
 // plan's rule list — the case, the round the newcomer plays first, the colours FIDE allows — and from the rows as they
 // stood BEFORE the add, never from the code under test.
-import { afterAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { randomBytes as kekBytes, randomUUID } from "node:crypto";
+import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { byeAward } from "@/lib/fixture-bye";
 import { SWISS_REFUSALS, type SwissRefusalCode } from "@/lib/swiss-refusals";
@@ -18,20 +19,36 @@ import { pairRound, type Colour } from "@seazn/engine/scheduling";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
+import { appendEventInTx } from "@/server/engine-db/append-event";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
+import type { StandingsSnapshotRow } from "@/server/public-site/data";
 import { createCompetition } from "../competitions";
+import { ensureDeviceLinks } from "../device-links";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { undoDivision } from "../history";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { buildSwissHistory, createStages, generateStageFixtures, type SwissExistingFixture } from "../stages";
+import {
+  buildSwissHistory,
+  createStages,
+  generateStageFixtures,
+  generateStageFixturesTx,
+  swissActiveEntrants,
+  type SwissExistingFixture,
+} from "../stages";
 import { admitSwissLateEntrant } from "../swiss-late-entry";
 import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+// Every device-link mint seals (scorer sheets §4.1): a throwaway key of this file's own, as device-links.test.ts does —
+// CI's unit job has no DEVICE_LINK_KEK at all, so an ambient one would make a local run test something CI cannot.
+vi.stubEnv("DEVICE_LINK_KEK", kekBytes(32).toString("hex"));
+
+type Tx = postgres.TransactionSql;
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -60,6 +77,7 @@ const LOCKED_SENTENCE = "This tournament has started — the entrant list is loc
 interface Rig {
   sport: Sport;
   auth: AuthCtx;
+  competitionId: string;
   divisionId: string;
   stageId: string;
   kind: EntrantKind;
@@ -91,7 +109,7 @@ async function swissRig(sport: Sport, n: number, rounds: number): Promise<Rig> {
   );
   const [stage] = await createStages(auth, division.id, { seq: 1, kind: "swiss", name: "Swiss", config: { rounds }, progression: null });
   await startDivision(auth, division.id);
-  return { sport, auth, divisionId: division.id, stageId: stage!.id, kind, entrants: made.map((e) => e.id) };
+  return { sport, auth, competitionId: comp.id, divisionId: division.id, stageId: stage!.id, kind, entrants: made.map((e) => e.id) };
 }
 
 interface Row {
@@ -187,18 +205,71 @@ async function placeRound(rig: Rig, round: number, courtCount: number, settingsC
   return { courts, at };
 }
 
-/** Each seated player's opponent in a round ("bye" for the bye). */
-function opponentsIn(rows: readonly Row[]): Map<string, string> {
+/** Each seated player's place in a round (T9 review m2): the board row (its time and court), the opponent and the side —
+ *  "bye" for the bye, which holds no slot. A player whose place differs is one whose board changed. */
+function placesIn(rows: readonly Row[]): Map<string, string> {
   const out = new Map<string, string>();
   for (const f of rows) {
     if (isBye(f)) {
       if (f.home_entrant_id) out.set(f.home_entrant_id, "bye");
     } else if (f.home_entrant_id && f.away_entrant_id) {
-      out.set(f.home_entrant_id, f.away_entrant_id);
-      out.set(f.away_entrant_id, f.home_entrant_id);
+      out.set(f.home_entrant_id, `${f.id}|${f.away_entrant_id}|home`);
+      out.set(f.away_entrant_id, `${f.id}|${f.home_entrant_id}|away`);
     }
   }
   return out;
+}
+
+/** The stage's STORED table (what the public pages read), by entrant — written by the product, read here only. */
+async function tableOf(stageId: string): Promise<Map<string, StandingsSnapshotRow>> {
+  const snaps = await sql<{ rows: StandingsSnapshotRow[] }[]>`select rows from standings_snapshots where stage_id = ${stageId}`;
+  return new Map(snaps.flatMap((t) => t.rows).map((r) => [r.entrantId, r]));
+}
+
+/** A round's boards as unordered pairs, sorted — `"a|b"` with the ids in order. */
+const pairKeysOf = (rows: readonly Row[], r: number) =>
+  boardsOf(rows, r)
+    .map((f) => [f.home_entrant_id, f.away_entrant_id].sort().join("|"))
+    .sort();
+const pairKey2 = (a: string, b: string) => [a, b].sort().join("|");
+
+/**
+ * T5's recipe (swiss-undo-pair-next.test.ts `againstAScorerInFlight`), for any advisory key: a holder transaction takes
+ * `key`, reports its backend pid and parks; the write under test starts; the poll stops as soon as the write waits on the
+ * holder (`blocked`) or settles without waiting. Then the holder runs `then` and commits. No sleeps as ordering.
+ */
+async function againstAHolder<T>(orgId: string, key: string, write: () => Promise<T>, then: (tx: Tx) => Promise<void> = async () => {}) {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let holding!: (pid: number) => void;
+  const held = new Promise<number>((r) => (holding = r));
+  const holder = withTenant(orgId, async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${key}))`;
+    const [{ pid }] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+    holding(pid);
+    await gate;
+    await then(tx);
+  }).then(
+    () => "committed" as const,
+    (e: unknown) => e,
+  );
+  const pid = await held;
+  let settled = false;
+  const wrote = write().then(
+    (v) => ({ ok: true as const, v }),
+    (e: unknown) => ({ ok: false as const, e }),
+  );
+  void wrote.then(() => (settled = true));
+  let blocked = false;
+  for (let i = 0; i < 400 && !settled && !blocked; i++) {
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity where ${pid}::int = any(pg_blocking_pids(pid))`;
+    blocked = n > 0;
+    if (!blocked) await new Promise((r) => setTimeout(r, 25));
+  }
+  const settledWhileHeld = settled;
+  release();
+  return { blocked, settledWhileHeld, holder: await holder, wrote: await wrote };
 }
 
 /** The stage's history as the next Pair would read it (T7's played facts included). */
@@ -231,6 +302,7 @@ for (const s of SPORTS) {
       const r2Before = roundOf(before, 2);
       expect(boardsOf(before, 2).length, "premise: round 2 holds two boards").toBe(2);
       expect(r2Before.some(isBye), "premise: and a bye (odd field)").toBe(true);
+      const tableBefore = await tableOf(rig.stageId);
 
       const late = await addLate(rig, "Late");
       expect(late.late_entry).toMatchObject({ entrant_id: late.id, stage_id: rig.stageId, case: "a", round: 2 });
@@ -256,14 +328,27 @@ for (const s of SPORTS) {
       expect(minted.length).toBe(1);
       expect({ at: minted[0]!.scheduled_at?.toISOString(), court: minted[0]!.court_id }).toEqual({ at, court: courts[2] });
       expect(late.late_entry!.new_board).toEqual({ fixture_id: minted[0]!.id, scheduled: true });
+      // T9 review m9: the system chose that slot — an `auto` placement (V214), never the organiser's `manual`.
+      const [{ schedule_source: placedBy }] = await sql<{ schedule_source: string }[]>`
+        select schedule_source from fixtures where id = ${minted[0]!.id}`;
+      expect(placedBy).toBe("auto");
       // Other rounds are untouched.
       expect(roundOf(after, 1)).toEqual(roundOf(before, 1));
-      // Changed players: exactly those whose opponent differs from before; never the newcomer.
-      const was = opponentsIn(r2Before);
-      const now = opponentsIn(r2);
+      // Changed players (review m2): exactly those whose PLACE differs — board row (time, court), opponent or side;
+      // never the newcomer.
+      const was = placesIn(r2Before);
+      const now = placesIn(r2);
       const expectedChanged = [...was.keys()].filter((id) => was.get(id) !== now.get(id)).sort();
       expect(late.late_entry!.repaired).toEqual({ changed_entrant_ids: expectedChanged });
-      expect(expectedChanged, "the old bye holder has an opponent now").toContain([...was].find(([, o]) => o === "bye")![0]);
+      const oldHolder = [...was].find(([, o]) => o === "bye")![0];
+      expect(expectedChanged, "the old bye holder has an opponent now").toContain(oldHolder);
+      // T9 review m4: the stored table is refolded after commit — the old holder's bye win is gone (a bye scores as a win,
+      // FIDE C.04.1(c)), and nobody else's record moved (no result was written).
+      const tableAfter = await tableOf(rig.stageId);
+      expect(tableAfter.get(oldHolder)?.won, "the bye's win left the stored table").toBe(tableBefore.get(oldHolder)!.won - 1);
+      const others = rig.entrants.filter((id) => id !== oldHolder);
+      for (const id of others) expect(tableAfter.get(id)?.won, `${id}'s record stands`).toBe(tableBefore.get(id)!.won);
+      expect(others.length, "anti-vacuity: four other records compared").toBe(4);
       // Written: the first round (scoped to this stage), one organiser ledger row; the watermark untouched.
       expect(await firstRoundOf(late.id)).toEqual({ swiss_first_round: 2, swiss_first_round_stage_id: rig.stageId });
       const ledger = await lateRows(rig.divisionId);
@@ -302,6 +387,8 @@ for (const s of SPORTS) {
       // FIDE C.04.2 / P-A4: the bye goes to the lowest-ranked player of the lowest score group not byed yet — the newcomer
       // (0 points: round 1 was missed, and a missed round scores 0; unseeded, so ranked below every seed).
       expect(byes[0]!.home_entrant_id).toBe(late.id);
+      // T9 review m4: the stored table shows the newcomer's bye win at once (refolded after commit, as Pair next's is).
+      expect((await tableOf(rig.stageId)).get(late.id)?.won, "the bye is a win in the stored table").toBe(1);
       for (const f of boardsOf(before, 2)) {
         const now = r2.find((x) => x.id === f.id)!;
         expect({ at: now.scheduled_at?.toISOString(), court: now.court_id }).toEqual({ at: f.scheduled_at?.toISOString(), court: f.court_id });
@@ -319,9 +406,18 @@ for (const s of SPORTS) {
       const byeRow = roundOf(before, 2).find(isBye)!;
       const holder = byeRow.home_entrant_id!;
       const ledgerBefore = await ledgerState(rig.divisionId);
+      const tableBefore = await tableOf(rig.stageId);
 
       const late = await addLate(rig, "Late");
       expect(late.late_entry).toMatchObject({ case: "b", round: 2, bye_holder_id: holder });
+      // T9 review m4: the stored table is refolded — the holder's bye win is gone; every other record stands.
+      const tableAfter = await tableOf(rig.stageId);
+      expect(tableAfter.get(holder)?.won, "the bye's win left the stored table").toBe(tableBefore.get(holder)!.won - 1);
+      const unmoved = rig.entrants.filter((id) => id !== holder);
+      // The record, not the rank: a rank moves when the holder drops a win, and that is the refold's job.
+      const record = (r: StandingsSnapshotRow | undefined) => r && { played: r.played, won: r.won, drawn: r.drawn, lost: r.lost, points: r.points };
+      for (const id of unmoved) expect(record(tableAfter.get(id)), `${id}'s record stands`).toEqual(record(tableBefore.get(id)));
+      expect(unmoved.length, "anti-vacuity: four other records compared").toBe(4);
       const after = await rowsOf(rig.stageId);
       expect(after.some((f) => f.id === byeRow.id), "the bye row is gone").toBe(false);
       const added = after.filter((f) => !before.some((b) => b.id === f.id));
@@ -434,24 +530,29 @@ for (const s of SPORTS) {
       expect(late.late_entry).toMatchObject({ case: "c", round: 2 });
     });
 
-    it(`X-SW-12 an open device link counts as started; a revoked one does not (C5) (${s.sport})`, async () => {
+    it(`X-SW-12 a printed scorer sheet's links start nothing: (a) still re-pairs; a score event does start (C5 re-ruled) (${s.sport})`, async () => {
       const rig = await swissRig(s, 4, 3);
       await pair(rig); // two boards, no bye
-      const board = boardsOf(await rowsOf(rig.stageId), 1)[0]!;
-      const [{ user_id: issuer }] = await sql<{ user_id: string }[]>`select user_id from org_members where org_id = ${rig.auth.orgId} limit 1`;
-      const [link] = await sql<{ id: string }[]>`
-        insert into device_links (org_id, fixture_id, token_hash, label, issued_by, expires_at)
-        values (${rig.auth.orgId}, ${board.id}, ${"t-" + randomUUID()}, null, ${issuer}, null) returning id`;
+      // What printing the day does (scorer-sheets.ts → ensureDeviceLinks): a sealed, never-expiring link for every
+      // printable board — every non-bye row, the later rounds' unpaired shells included.
+      const printable = (await rowsOf(rig.stageId)).filter((f) => !isBye(f));
+      await ensureDeviceLinks(rig.auth, rig.competitionId, printable.map((f) => f.id));
+      const [{ n: live }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from device_links
+        where fixture_id in ${sql(printable.map((f) => f.id))} and revoked_at is null and expires_at is null`;
+      expect(live, "premise: every printable board holds a live, never-expiring link").toBe(printable.length);
+      expect(live, "anti-vacuity: the rig printed boards").toBeGreaterThan(2);
       const first = await addLate(rig, "Late 1");
-      // A scorer may be on court: the round is started, it has no bye — (c).
-      expect(first.late_entry).toMatchObject({ case: "c", round: 2 });
-      // The positive pair: revoked, the link counts for nothing and the round re-pairs.
-      await sql`update device_links set revoked_at = now() where id = ${link!.id}`;
-      const second = await addLate(rig, "Late 2");
-      expect(second.late_entry).toMatchObject({ case: "a", round: 1 });
+      // A link carries no opened or claimed mark: printed and never used, it is no start. Nothing started — (a).
+      expect(first.late_entry).toMatchObject({ case: "a", round: 1 });
       const r1 = roundOf(await rowsOf(rig.stageId), 1);
-      expect(seatedIn(r1), "the re-pair seats the second newcomer").toContain(second.id);
-      expect(seatedIn(r1), "and not the first, whose first round is 2").not.toContain(first.id);
+      expect(seatedIn(r1), "the re-pair seats the newcomer").toContain(first.id);
+      // The positive pair: a link USED to score writes a score event — that is a start, so no re-pair runs over it.
+      const board = boardsOf(r1, 1)[0]!;
+      await startBoard(rig, board);
+      const second = await addLate(rig, "Late 2");
+      // Five players: round 1's bye is the first newcomer's; the round has started, so the second plays them — (b).
+      expect(second.late_entry).toMatchObject({ case: "b", round: 1, bye_holder_id: first.id });
     });
 
     it(`X-SW-12 sequence: a second late player in the same round — (a) then (a); (b) then (c) (${s.sport})`, async () => {
@@ -529,6 +630,103 @@ for (const s of SPORTS) {
       const hist = await historyOf(rig);
       expect(hist.score.get(holder), "the walkover pays the holder a win (rulebook §4: 1 point)").toBe(scoreBefore + 1);
       expect(hist.byes.has(holder)).toBe(true);
+    });
+
+    it(`X-SW-12 (a) names a player whose board moved though the opponent stayed (review m2) (${s.sport})`, async () => {
+      // Seeds 2..5, round 1 paired top-v-bottom: P1-P3 and P2-P4. The newcomer arrives as seed 1, so the re-pair ranks it
+      // first: P4 (now last) takes the bye, and top-v-bottom over N, P1, P2, P3 is N-P2 and P1-P3 — P1 and P3 keep each
+      // other but not their board. "Changed" is the place (row, opponent, side), so they are named.
+      const rig = await swissRig(s, 4, 3);
+      for (const [i, id] of rig.entrants.entries()) await sql`update entrants set seed = ${i + 2} where id = ${id}`;
+      await pair(rig);
+      const before = roundOf(await rowsOf(rig.stageId), 1);
+      const [row] = await createEntrants(rig.auth, rig.divisionId, [{ kind: rig.kind, display_name: "Top seed", seed: 1, members: [] }]);
+      expect(row!.late_entry).toMatchObject({ case: "a", round: 1 });
+      const after = roundOf(await rowsOf(rig.stageId), 1);
+      const opp = (rows: readonly Row[], id: string) => {
+        const f = rows.find((x) => x.home_entrant_id === id || x.away_entrant_id === id)!;
+        return isBye(f) ? "bye" : f.home_entrant_id === id ? f.away_entrant_id : f.home_entrant_id;
+      };
+      const was = placesIn(before);
+      const now = placesIn(after);
+      const sameOpponentMoved = [...was.keys()].filter((id) => opp(before, id) === opp(after, id) && was.get(id) !== now.get(id));
+      expect(sameOpponentMoved.length, "premise: a pair kept each other but moved").toBeGreaterThan(0);
+      expect(row!.late_entry!.repaired!.changed_entrant_ids).toEqual(expect.arrayContaining(sameOpponentMoved));
+      expect(row!.late_entry!.repaired!.changed_entrant_ids).toEqual([...was.keys()].filter((id) => was.get(id) !== now.get(id)).sort());
+    });
+
+    it(`X-SW-12 (b) the new board takes the round's next free slot — an auto placement (${s.sport})`, async () => {
+      // T9 review m5: every other (b) rig has no free court; here the settings name a third court the round leaves free.
+      const rig = await swissRig(s, 5, 3);
+      await pair(rig);
+      await playRound(rig, 1);
+      await pair(rig);
+      const { courts, at } = await placeRound(rig, 2, 3, 3);
+      await startBoard(rig, boardsOf(await rowsOf(rig.stageId), 2)[0]!);
+      const late = await addLate(rig, "Late");
+      expect(late.late_entry).toMatchObject({ case: "b", round: 2, new_board: { scheduled: true } });
+      const [board] = await sql<{ scheduled_at: Date | null; court_id: string | null; venue_id: string | null; schedule_source: string }[]>`
+        select scheduled_at, court_id, venue_id, schedule_source from fixtures where id = ${late.late_entry!.new_board!.fixture_id}`;
+      // The round's own kick-off time, on the one court no board of the round holds; the court's venue with it.
+      const [{ venue_id: courtVenue }] = await sql<{ venue_id: string }[]>`select venue_id from courts where id = ${courts[2]!}`;
+      expect({ at: board!.scheduled_at?.toISOString(), court: board!.court_id, venue: board!.venue_id }).toEqual({ at, court: courts[2], venue: courtVenue });
+      expect(board!.schedule_source, "the system chose the slot (m9)").toBe("auto");
+    });
+
+    it(`X-SW-12 a bye holder who has withdrawn is no opponent: (c), the bye and its point untouched (${s.sport})`, async () => {
+      // T9 review I2: round 2 under way, its bye holder withdraws (goes home), then the organiser adds a late player.
+      const rig = await swissRig(s, 5, 3);
+      await pair(rig);
+      await playRound(rig, 1);
+      await pair(rig);
+      const r2 = roundOf(await rowsOf(rig.stageId), 2);
+      await startBoard(rig, boardsOf(r2, 2)[0]!);
+      const byeRow = r2.find(isBye)!;
+      const holder = byeRow.home_entrant_id!;
+      await withdrawEntrantCascade(rig.auth, holder);
+      const [{ status }] = await sql<{ status: string }[]>`select status from entrants where id = ${holder}`;
+      expect(status, "premise: the holder has left").toBe("withdrawn");
+      const before = await rowsOf(rig.stageId);
+      const byeBefore = before.find((f) => f.id === byeRow.id);
+      expect(byeBefore?.outcome, "premise: the withdrawal kept the bye and its award").toMatchObject({ kind: "award", winner: holder });
+
+      const late = await addLate(rig, "Late");
+      // The round has started and its bye is held by someone gone: nothing to take — the next round.
+      expect(late.late_entry).toEqual({ entrant_id: late.id, stage_id: rig.stageId, case: "c", round: 3 });
+      const after = await rowsOf(rig.stageId);
+      expect(after.find((f) => f.id === byeRow.id), "the departed player's bye and point stand, byte for byte").toEqual(byeBefore);
+      expect(after, "nothing moved at all").toEqual(before);
+      // No unplayed board faces a departed player.
+      const departed = new Set(
+        (await sql<{ id: string }[]>`
+          select id from entrants where division_id = ${rig.divisionId} and status not in ('registered', 'confirmed')`).map((e) => e.id),
+      );
+      const open = after.filter((f) => !isBye(f) && f.status === "scheduled" && f.home_entrant_id !== null);
+      for (const f of open) expect([f.home_entrant_id, f.away_entrant_id].filter((id) => id !== null && departed.has(id))).toEqual([]);
+      expect(open.length, "anti-vacuity: round 2's unplayed board was checked").toBeGreaterThan(0);
+    });
+
+    it(`X-SW-12 (a) on round 1 replays the organiser's round-1 pairing, and records it for the next re-pair (${s.sport})`, async () => {
+      // T9 review m1 (the T8 review P1's sibling): round 1 paired as Neighbours — 1st v 2nd, 3rd v 4th — not the default
+      // top-v-bottom (1st v 3rd, 2nd v 4th). A late player's re-pair must keep the organiser's choice.
+      const rig = await swissRig(s, 4, 3);
+      await generateStageFixtures(rig.auth, rig.stageId, { pairing: "rank_adjacent" });
+      const [P1, P2, P3, P4] = rig.entrants as [string, string, string, string];
+      expect(pairKeysOf(await rowsOf(rig.stageId), 1), "premise: Neighbours over four seeds").toEqual([pairKey2(P1, P2), pairKey2(P3, P4)].sort());
+      const l1 = await addLate(rig, "Late 1");
+      expect(l1.late_entry).toMatchObject({ case: "a", round: 1 });
+      const once = await rowsOf(rig.stageId);
+      // Five: the unseeded newcomer ranks last and takes the bye (P-A4); the seeds stay neighbours.
+      expect(roundOf(once, 1).find(isBye)?.home_entrant_id).toBe(l1.id);
+      expect(pairKeysOf(once, 1), "still Neighbours").toEqual([pairKey2(P1, P2), pairKey2(P3, P4)].sort());
+      expect((await lateRows(rig.divisionId)).map((e) => [e.payload.pairing, e.payload.override]), "the re-pair records the mode it used").toEqual([
+        ["rank_adjacent", true],
+      ]);
+      // A second late player: round 1 is re-paired again, read from the first late entry's row — Neighbours over six puts
+      // the two newcomers (ranks 5 and 6, both unseeded) together.
+      const l2 = await addLate(rig, "Late 2");
+      expect(l2.late_entry).toMatchObject({ case: "a", round: 1 });
+      expect(pairKeysOf(await rowsOf(rig.stageId), 1)).toEqual([pairKey2(P1, P2), pairKey2(P3, P4), pairKey2(l1.id, l2.id)].sort());
     });
 
     it(`C17 before Start an entrant added to a Swiss division is no late player: no stamp, no ledger row (${s.sport})`, async () => {
@@ -668,4 +866,110 @@ describe.runIf(HAS_DB)("W3 T9 (b) colours (boardgame)", () => {
     expect(coloursLegal(["W", "W", "B"])).toBe(true);
     expect({ home: board.home_entrant_id, away: board.away_entrant_id }).toEqual({ home: late.id, away: H });
   });
+});
+
+describe.runIf(HAS_DB)("W3 T9 the locks a late entry takes (badminton)", () => {
+  // single-sport: badminton — the locks are advisory keys on the division and its boards; no sport field is read.
+  it("an organiser's add waits on the division lock: a Pair next committing under it is seen, and the round re-pairs (a)", async () => {
+    // T9 review m3. Round 1 played; round 2 waits. A holder takes `division:` and, released, pairs round 2 in its own
+    // transaction. The add must wait for it, then find round 2 paired and unstarted — (a). Without the lock it would read
+    // the round-1 state (all decided, no bye) and take (c) round 2 behind the Pair's back.
+    const rig = await swissRig(SPORTS[0], 4, 3);
+    await pair(rig);
+    await playRound(rig, 1);
+    const out = await againstAHolder(
+      rig.auth.orgId,
+      "division:" + rig.divisionId,
+      () => addLate(rig, "Late"),
+      async (tx) => {
+        await generateStageFixturesTx(tx, rig.auth, rig.stageId, {});
+      },
+    );
+    expect(out.blocked, "the add waited on the division lock").toBe(true);
+    expect(out.holder, "the Pair committed").toBe("committed");
+    expect(out.wrote.ok && out.wrote.v.late_entry).toMatchObject({ case: "a", round: 2 });
+    const late = out.wrote.ok ? out.wrote.v : null;
+    expect(seatedIn(roundOf(await rowsOf(rig.stageId), 2)), "the re-pair seats the newcomer in round 2").toContain(late!.id);
+  }, 120_000);
+
+  it("an organiser's add waits on the round's board append locks: a first event in flight commits first, and the round is not re-paired", async () => {
+    // T9 review m3. A scorer holds `fixture:<board>` (as `appendEventInTx` does) with the first event of round 1 in
+    // flight. The add must wait, then see the board started — four players, no bye: (c). Without the board locks it reads
+    // "nothing started" and re-pairs the round under the scorer's event.
+    const rig = await swissRig(SPORTS[0], 4, 3);
+    await pair(rig);
+    const board = boardsOf(await rowsOf(rig.stageId), 1)[0]!;
+    const out = await againstAHolder(
+      rig.auth.orgId,
+      "fixture:" + board.id,
+      () => addLate(rig, "Late"),
+      async (tx) => {
+        await appendEventInTx(tx, rig.auth.orgId, board.id, 0, { type: "core.start", payload: {} });
+      },
+    );
+    expect(out.blocked, "the add waited on the board's append lock").toBe(true);
+    expect(out.holder, "the first event committed").toBe("committed");
+    expect(out.wrote.ok && out.wrote.v.late_entry).toMatchObject({ case: "c", round: 2 });
+    const now = (await rowsOf(rig.stageId)).find((f) => f.id === board.id)!;
+    expect([now.home_entrant_id, now.away_entrant_id], "the scored board keeps its players").toEqual([board.home_entrant_id, board.away_entrant_id]);
+  }, 120_000);
+
+  it("an arrival into a division with no running Swiss never queues on its division lock (review m7)", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "No queue " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const mk = async (stageKind: "ladder" | "swiss", started: boolean) => {
+      const division = await createDivision(auth, comp.id, {
+        name: "Open " + stageKind,
+        slug: "open-" + randomUUID().slice(0, 6),
+        sport_key: "badminton",
+        variant_key: "bwf",
+        config: {},
+      });
+      await createEntrants(auth, division.id, Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `P${i + 1}`, seed: i + 1, members: [] })));
+      await createStages(auth, division.id, { seq: 1, kind: stageKind, name: stageKind, config: stageKind === "swiss" ? { rounds: 3 } : {}, progression: null });
+      if (started) await sql`update divisions set status = 'active' where id = ${division.id}`;
+      return division.id;
+    };
+    // A started division of another format, and a Swiss still in setup: neither has a running Swiss to join.
+    let checked = 0;
+    for (const divisionId of [await mk("ladder", true), await mk("swiss", false)]) {
+      const out = await againstAHolder(auth.orgId, "division:" + divisionId, () =>
+        createEntrants(auth, divisionId, [{ kind: "individual", display_name: "Walk-in", members: [] }]),
+      );
+      expect(out.blocked, "the arrival did not wait on the division lock").toBe(false);
+      expect(out.settledWhileHeld, "it committed while the lock was still held").toBe(true);
+      expect(out.wrote.ok && out.wrote.v[0]!.late_entry).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  }, 120_000);
+});
+
+describe.runIf(HAS_DB)("W3 T9 a division with two root Swiss stages (badminton)", () => {
+  // single-sport: badminton — the stage scope (V485) is a column read; no sport field is read.
+  it("X-SW-13 a late player stamped by stage 1 plays stage 2 from its round 1 (review m6)", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Two Swiss " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: "badminton", variant_key: "bwf", config: {} });
+    await createEntrants(auth, division.id, Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `P${i + 1}`, seed: i + 1, members: [] })));
+    const [one] = await createStages(auth, division.id, { seq: 1, kind: "swiss", name: "Swiss A", config: { rounds: 3 }, progression: null });
+    const [two] = await createStages(auth, division.id, { seq: 2, kind: "swiss", name: "Swiss B", config: { rounds: 3 }, progression: null });
+    await startDivision(auth, division.id);
+    const rigOne: Rig = { sport: SPORTS[0], auth, competitionId: comp.id, divisionId: division.id, stageId: one!.id, kind: "individual", entrants: [] };
+    await pair(rigOne);
+    await startBoard(rigOne, boardsOf(await rowsOf(one!.id), 1)[0]!);
+    const late = await addLate(rigOne, "Late");
+    expect(late.late_entry, "stage 1 admits: started, no bye — the next round").toMatchObject({ stage_id: one!.id, case: "c", round: 2 });
+    expect(await firstRoundOf(late.id)).toEqual({ swiss_first_round: 2, swiss_first_round_stage_id: one!.id });
+    // The read every Pair makes: stage 1 sees the stamp, stage 2 does not.
+    const field = async (stageId: string) =>
+      (await withTenant(auth.orgId, (tx) => swissActiveEntrants(tx, division.id, stageId))).find((e) => e.id === late.id)?.swiss_first_round;
+    expect(await field(one!.id)).toBe(2);
+    expect(await field(two!.id), "stage 1's stamp counts nowhere else").toBeNull();
+    // And the Pair itself: stage 2's round 1 seats the late player (mint first if its shells are not there yet).
+    for (let i = 0; i < 2 && seatedIn(roundOf(await rowsOf(two!.id), 1)).length === 0; i++) await generateStageFixtures(auth, two!.id);
+    const r1 = roundOf(await rowsOf(two!.id), 1);
+    expect(seatedIn(r1), "stage 2's round 1 seats the late player").toContain(late.id);
+    expect(new Set(seatedIn(r1)).size, "all five").toBe(5);
+  }, 120_000);
 });
