@@ -441,6 +441,10 @@ type TiebreakerKey = /* … */ | "opp_diff";
   - `toTableStage` `:588-610`: `...(inputs.stage.kind === "swiss" && absent.size > 0 ? { swissAbsentRounds: absent } : {})`.
 - Modify: `apps/web/src/server/engine-db/table-rules.ts` `tableRulesOf` (~:167). This is the only place where the sport module and the merged cfg meet.
   - Fill `swissDraw: swissDrawFactsOf(module, mergedCfg)` on every Swiss stage. That covers both the bye/absence draw value (engine T7 fix round, ruling R4) and the clean-sweep win.
+  - Engine T8 makes the field type-required whenever `swiss: true` (engine T8 review m3).
+    - The usual `cond ? { swiss: true, swissDraw } : {}` spread no longer type-checks.
+    - Write an explicit `{ swiss: false }` branch instead. Never use an `as never` / `as TableStage` cast.
+    - Engine T8 also lists the other two fields owed at `competition.ts:~605`: `TableFixture.unplayed` from `unplayedSidesOf`, and post-withdrawal rounds in `swissAbsentRounds`.
   - The engine refuses a Swiss stage with no `swissDraw` eagerly (engine T8 carry). If the field is missing, every Swiss standings read fails.
   - Pin it with `X-SW-7 a Swiss stage with a bye ranks through the real producer (odd field)`, and add the even-field case beside it. A test with an even field only never reaches the old lazy throw.
 - Test:
