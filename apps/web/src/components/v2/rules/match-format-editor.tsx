@@ -28,7 +28,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { RefusedField } from "@/lib/rule-errors";
 import { rulesChipText } from "@/lib/rules-line";
 import { configIssueText } from "@/lib/config-issue-copy";
-import { lockLineFor, lockSentence } from "@/components/v2/division-settings-locks";
+import { lockLineFor } from "@/components/v2/division-settings-locks";
 import { MatchRulesBlock, type MatchRulesBlockProps } from "@/components/v2/match-rules-block";
 import { ruleProblemsOf, type RuleFormState } from "@/components/v2/match-rules-state";
 import { RuleFieldControl, type OptionState } from "@/components/v2/stage-rules/rule-field-control";
@@ -180,6 +180,19 @@ export function StageRuleFields({
   );
 }
 
+/** The fields the division's grid draws: the sport's visible rule fields, less those another control stands in for (`omit`)
+ *  and those the variant has no use for (`state.hidden`). The grid and the strip's lock count read this one list, so the
+ *  section's "every field is locked" is asked of exactly what is on screen. */
+export function divisionGridFields(
+  sportKey: string,
+  values: Record<string, string>,
+  inherited: Record<string, unknown> | undefined,
+  omit: readonly string[] | undefined,
+  state: RuleFormState | undefined,
+): RuleField[] {
+  return visibleRuleFields(sportKey, values, inherited).filter((f) => !omit?.includes(f.key) && state?.hidden.has(f.key) !== true);
+}
+
 /** The division's field grid (absorbed verbatim from `match-rules.tsx`): the builder's Basics and the Division rules strip. */
 export function MatchRuleFields({
   sportKey,
@@ -203,19 +216,22 @@ export function MatchRuleFields({
    *  `values` and are still built on save — they are only not drawn. */
   omit?: readonly string[];
   /** W2c Task 20 (S4): the fields a started stage locks (`divisionLockedFields`, plus whatever a save has since refused). A
-   *  locked field renders read-only with its lock line - said before the organiser types, not after Save. Matched by the
-   *  field's own key or any engine key it edits (`lockLineFor`). Left out by the division builder, which has no stage yet. */
+   *  locked field renders read-only (`data-locked`) before the organiser types, not after Save. Matched by the field's own
+   *  key or any engine key it edits (`lockLineFor`). The lock is SAID once, by the section that holds the grid (Match Day C2
+   *  fix round 1, I1: spec §12 items 4 and 13 - one lock line per section, never one per field). Left out by the division
+   *  builder, which has no stage yet. */
   lockedFields?: readonly RefusedField[];
   /** W2e Task 29: what the form knows before Save (`ruleFormState`) - the write doors' sentences beside the fields they are
    *  about, the fields the variant has no use for (not drawn), and the detail a switch holds (drawn disabled, with why). */
   state?: RuleFormState;
 }) {
   const msg = useMsg();
-  const fields = visibleRuleFields(sportKey, values, inherited).filter((f) => !omit?.includes(f.key) && state?.hidden.has(f.key) !== true);
+  const fields = divisionGridFields(sportKey, values, inherited, omit, state);
   if (fields.length === 0) return null;
   const edit = (key: string, raw: string) => onChange(setRuleValue(sportKey, values, key, raw, inherited));
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
+    // Every box and picker holds the 44px tap floor (fix round 1, M7).
+    <div className="grid gap-4 sm:grid-cols-3 [&_input]:min-h-11 [&_select]:min-h-11">
       {fields.map((field) => {
         const lock = lockLineFor(field.key, lockedFields, field.edits);
         const heldBy = state?.held.get(field.key);
@@ -226,6 +242,7 @@ export function MatchRuleFields({
             key={field.key}
             data-testid={`rule-field-${field.key}`}
             data-held={heldBy === undefined ? undefined : "true"}
+            data-locked={lock === undefined ? undefined : "true"}
             className={field.kind === "sequence" ? "sm:col-span-3" : undefined}
           >
             <RuleFieldControl
@@ -240,12 +257,6 @@ export function MatchRuleFields({
             {heldBy !== undefined && (
               <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={`rule-field-off-${field.key}`}>
                 {msg("stageRules.detail.off", { decider: msg(heldBy) })}
-              </p>
-            )}
-            {lock !== undefined && (
-              <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={`division-locked-${field.key}`}>
-                <span aria-hidden="true">🔒 </span>
-                {lockSentence(lock, msg)}
               </p>
             )}
           </div>

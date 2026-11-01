@@ -61,6 +61,23 @@ vi.mock("@/server/engine-db/serving", async (importOriginal) => {
     },
   };
 });
+// C2 fix round 1, M5: the format lines are decorative on a polled read, so a throw from their reader must not take the board
+// down. The fault replaces the reader's answer with a throw while `formatFault.fail` is set; every other call is the real one.
+const formatFault = vi.hoisted(() => ({ fail: false, hits: 0 }));
+vi.mock("@/server/usecases/fixtures", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/usecases/fixtures")>();
+  return {
+    ...real,
+    fixtureFormatLines: async (...args: Parameters<typeof real.fixtureFormatLines>) => {
+      if (formatFault.fail) {
+        formatFault.hits++;
+        throw new Error("format lines fault (test)");
+      }
+      return real.fixtureFormatLines(...args);
+    },
+  };
+});
+import { log } from "@/server/logger";
 import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
 import { MatchDayView as MatchDayViewSchema } from "@/server/api-v1/schemas";
 import { apiSessionOnTarget, rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
@@ -598,6 +615,36 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     expect(checked, "courts compared").toBeGreaterThanOrEqual(2);
     expect(courtOf(view, day.courts.c1).current!.serving).toBe(engineSays(events).serving);
     expect(courtOf(view, day.courts.c3).state).toBe("called");
+  });
+
+  it("C2 guard (M5) — a format-line read that throws leaves the board answering: every match as before but format_line null, and the fault logged", async () => {
+    const day = await seedDay();
+    const [f] = await badmintonFixtures(day, day.courts.c1);
+    await place(day, f!.id, 0, day.courts.c1);
+    await record(day, f!, BWF.events.slice(0, 12));
+    const before = await getMatchDay(day.auth, day.comp.id, at(5));
+    const playing = courtOf(before, day.courts.c1).current!;
+    expect(playing.id, "premise: the match is playing on court 1").toBe(f!.id);
+    expect(playing.format_line, "premise: its line reads before the fault").not.toBeNull();
+
+    const warn = vi.spyOn(log, "warn");
+    formatFault.fail = true;
+    formatFault.hits = 0;
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(5));
+      expect(formatFault.hits, "the faulty reader was asked").toBe(1);
+      const now = courtOf(view, day.courts.c1).current!;
+      expect(now.format_line).toBeNull();
+      // Nothing else moved: the board is the one read before the fault, with the decorative line left out.
+      expect({ ...view, courts: view.courts.map((c) => (c.current === null ? c : { ...c, current: { ...c.current, format_line: null } })) }).toEqual({
+        ...before,
+        courts: before.courts.map((c) => (c.current === null ? c : { ...c, current: { ...c.current, format_line: null } })),
+      });
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error), fixtureIds: [f!.id] }), expect.stringContaining("format lines failed"));
+    } finally {
+      formatFault.fail = false;
+      warn.mockRestore();
+    }
   });
 
   it("A4 — a playing match carries the desk's own scorer attention: no scorer (nobody nominated), not recording (the nominee silent past the grace); a match with a ledger, and every queued one, none — each mark is a Needs-you row of the same kind", async () => {

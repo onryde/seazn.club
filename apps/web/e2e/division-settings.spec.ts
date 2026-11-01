@@ -141,11 +141,16 @@ test("settings tab: sections render, rename works, structure locks with fixtures
     payload: {},
   });
   expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+  // The started stage plays the variant and every rule field, so the Match format section reads (C2 fix round 1, I1): ONE
+  // line naming the stage, no variant picker, no field and no Save.
   const lockedStrip = await openDivisionRules(page, divisionUrl, "format");
-  const variantLine = lockedStrip.getByTestId("division-locked-variant_key");
-  await expect(variantLine).toBeVisible();
-  await expect(variantLine).toContainText(uiString("en", "ruleLock.DIVISION_FORMAT_LOCKED", { stage: firstStage.name }));
-  await expect(lockedStrip.getByRole("combobox", { name: new RegExp(`^${uiString("en", "divset.variant")}`) })).toBeDisabled();
+  const formatPanel = lockedStrip.getByTestId("division-rules-panel-format");
+  const formatLine = formatPanel.getByTestId("division-locked-format");
+  await expect(formatLine).toBeVisible();
+  await expect(formatLine).toContainText(uiString("en", "ruleLock.DIVISION_FORMAT_LOCKED", { stage: firstStage.name }));
+  await expect(formatPanel.locator('[data-testid^="division-locked-"]'), "one line for the section").toHaveCount(1);
+  await expect(formatPanel.getByRole("combobox"), "no variant picker, no rule field").toHaveCount(0);
+  await expect(formatPanel.getByTestId("division-rules-format-save"), "no Save").toHaveCount(0);
   // ...and the server agrees: the same variant change that landed above is now refused, naming the field.
   const refused = await page.request.patch(`/api/v1/divisions/${rig.divisionId}`, { data: { variant_key: "score" } });
   expect(refused.status()).toBe(409);
@@ -416,12 +421,29 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     await openCameraGroup(page);
     await expect(page.getByTestId("division-camera-policy")).toBeDisabled();
     await expect(page.getByTestId("division-camera-save")).toBeDisabled();
-    await expect(page.getByTestId("division-camera-needs-online")).toHaveText(uiString("en", "divset.camera.needsOnlinePlay"));
+    await expect(page.getByTestId("division-camera-needs-online")).toContainText(uiString("en", "divset.camera.needsOnlinePlay"));
+
+    // ...and the hint says where online play is set now: a link to the Fixtures tab's Division rules (C2 fix round 1, M3).
+    await expect(page.getByTestId("division-camera-needs-online")).toContainText(uiString("en", "divset.camera.needsOnlinePlay"));
+    const onlineLink = page.getByTestId("division-camera-online-link");
+    await expect(onlineLink).toHaveText(uiString("en", "divset.rulesMovedLink"));
 
     // Online play moved with the match rules to the Division rules strip (Match Day C2). An unsaved choice there does not
-    // unlock the camera: the camera follows the SAVED value.
+    // unlock the camera: the camera follows the SAVED value (C2 fix round 1, M2 - asserted, not just said).
     const divisionUrl = rig.settings.split("?")[0]!;
+    await onlineLink.click();
+    await expect(page, "the link lands on the Fixtures tab").toHaveURL(/[?&]tab=fixtures\b/);
+    const unsaved = await openDivisionRules(page, divisionUrl, "format");
+    await unsaved.getByTestId("division-online-play").selectOption("lichess");
+    await expect(unsaved.getByTestId("division-online-play"), "premise: chosen, not saved").toHaveValue("lichess");
+    await gotoSettings(page, rig.settings);
+    await openCameraGroup(page);
+    await expect(page.getByTestId("division-camera-policy"), "an unsaved choice does not unlock the camera").toBeDisabled();
+    await expect(page.getByTestId("division-camera-needs-online")).toBeVisible();
+    expect((await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${rig.divisionId}`)).data!.config.onlinePlay, "nothing stored").toBeUndefined();
+
     const strip = await openDivisionRules(page, divisionUrl, "format");
+    await expect(strip.getByTestId("division-online-play"), "the strip reads what is stored").toHaveValue("off");
     await strip.getByTestId("division-online-play").selectOption("lichess");
     // Saving the rules turns it on — and (M-6) the refreshed config re-syncs the strip without crashing the tab.
     await saveFormat(strip).click();

@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MatchFormatEditor, buildRuleOverride, rulesFor } from "./rules/match-format-editor";
 import { PointsEditor, divisionPointsDirty, divisionPointsOf, divisionPointsPatch, hydrateDivisionPoints } from "./rules/points-editor";
-import { TiebreaksEditor } from "./rules/tiebreaks-editor";
+import { TiebreaksEditor, divisionOrderRefusals } from "./rules/tiebreaks-editor";
 import { stageTakesPoints } from "./stage-rules/stage-points-model";
 import { moduleFor } from "@/lib/rule-scope";
 import type { TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
@@ -439,6 +439,13 @@ export function DivisionBuilder({
     if (pointsValues !== null && divisionPointsDirty(sportKey, builderPoints, pointsValues)) {
       overrides.points = divisionPointsPatch(sportKey, builderPoints, pointsValues);
     }
+    // The Format tab's tie-break order, asked again of the structure it is sent with (fix round 1, M6): a template changed
+    // since the order was edited can leave no table to rank (the editor is gone, the order with it) or a kind the order does
+    // not fit - sent as it stands, the order would ride into a division that cannot use it.
+    const sentOrder =
+      tiebreakOrder !== null && sportModule !== null && draftTableKinds.length > 0 && divisionOrderRefusals(sportModule, builderCfg, draftTableKinds, tiebreakOrder).length === 0
+        ? tiebreakOrder
+        : null;
 
     setBusy(true);
     // Declared here, outside try{}, purely so the catch block below can
@@ -460,7 +467,7 @@ export function DivisionBuilder({
             config: overrides,
             // The Format tab's tie-break order: the division's own (`divisions.tiebreakers`), the field every stage on
             // "Use the division's order" reads. Absent while untouched: the sport's.
-            ...(tiebreakOrder === null ? {} : { tiebreakers: tiebreakOrder }),
+            ...(sentOrder === null ? {} : { tiebreakers: sentOrder }),
             ...eligibilityPatch(),
           },
         },
@@ -705,6 +712,8 @@ export function DivisionBuilder({
               onChange={(e) => {
                 setVariantKey(e.target.value);
                 setPointsValues(null);
+                // The order was edited against the old variant's cascade (fix round 1, M6): it starts again from the sport's.
+                setTiebreakOrder(null);
                 if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(sportKey, e.target.value));
               }}
               aria-describedby={hint === undefined ? undefined : "division-variant-hint"}

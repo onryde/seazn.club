@@ -965,8 +965,12 @@ export function DivisionSettings({
             ))}
           </select>
           {!onlinePlaySaved && (
+            // Online play is set on the Fixtures tab's Division rules strip now (Match Day C2; fix round 1, M3): say where.
             <p data-testid="division-camera-needs-online" className="text-[11px] text-slate-500">
-              {msg("divset.camera.needsOnlinePlay")}
+              {msg("divset.camera.needsOnlinePlay")}{" "}
+              <Link href={fixturesHref} className="font-semibold text-purple-700 underline underline-offset-2" data-testid="division-camera-online-link">
+                {msg("divset.rulesMovedLink")}
+              </Link>
             </p>
           )}
           {cameraHint && (

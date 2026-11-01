@@ -35,7 +35,8 @@ import { configUnderVariant, divisionFormatPatch, ruleValuesAfterVariantSwitch }
 import { RULE_LOCK_PARTIAL_KEY, lockLineFor, lockSentence, mergeLocks, refusedLines, type RefusedLine } from "@/components/v2/division-settings-locks";
 import { ruleFormState } from "@/components/v2/match-rules-state";
 import { divisionSummaryClauses } from "@/components/v2/stage-rules/stage-row-model";
-import { MatchFormatEditor } from "./match-format-editor";
+import { LockLine } from "./lock-line";
+import { MatchFormatEditor, divisionGridFields } from "./match-format-editor";
 import { PointsEditor, divisionPointsDirty, divisionPointsKeys, divisionPointsOf, divisionPointsPatch, hydrateDivisionPoints } from "./points-editor";
 import { TiebreaksEditor } from "./tiebreaks-editor";
 
@@ -154,6 +155,21 @@ export function DivisionRulesStrip({
   const pointsLock = lockLineFor("points", locks);
   const clockLock = lockLineFor("clock", locks, ["variant"]);
   const hint = savedVariantKey === null ? undefined : variantHint(sportKey, variantKey, locale);
+  // The Match format section says its lock ONCE (fix round 1, I1; spec §12 items 4 and 13): every control it draws, each with
+  // its lock (undefined: open), in the order they are drawn - the variant, online play (never locked: a started stage does not
+  // play it), the Lichess clock, then the rule grid's own fields (`divisionGridFields`, the grid's own list). The first lock
+  // names the stage for the whole section; when EVERY control is locked the section is read-only - its chips, no Save.
+  const variantShown = savedVariantKey !== null && variants.length > 0;
+  const onlineShown = sportKey === "boardgame" && onlineChessOffered;
+  const omitted = lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined;
+  const formatControls: (RefusedField | undefined)[] = [
+    ...(variantShown ? [variantLock] : []),
+    ...(onlineShown ? [undefined] : []),
+    ...(lichessClock ? [clockLock] : []),
+    ...divisionGridFields(sportKey, ruleValues, inheritedCfg, omitted, ruleState).map((f) => lockLineFor(f.key, locks, f.edits)),
+  ];
+  const formatLock = formatControls.find((l): l is RefusedField => l !== undefined);
+  const formatAllLocked = formatLock !== undefined && formatControls.every((l) => l !== undefined);
   const offersTable = tableKinds.length > 0;
   const pointsKeys = divisionPointsKeys(sportKey, points);
 
@@ -330,13 +346,6 @@ export function DivisionRulesStrip({
     );
   };
 
-  const lockLine = (lock: RefusedField, testId: string) => (
-    <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={testId}>
-      <span aria-hidden="true">🔒 </span>
-      {lockSentence(lock, msg)}
-    </p>
-  );
-
   const summary = ruleDict === undefined ? [] : divisionSummaryClauses(sportKey, sportModule, divisionConfig).map((c) => rulesChipText(ruleDict, c));
   const panels: { id: RulesPanel; label: string }[] = [
     { id: "format", label: msg("rulesStrip.format") },
@@ -387,9 +396,17 @@ export function DivisionRulesStrip({
           <h3 className="text-xs font-semibold text-slate-800">{msg("rulesStrip.format")}</h3>
           {mode === "locked" ? (
             <MatchFormatEditor scope="division" mode="locked" sportKey={sportKey} module={sportModule} values={ruleValues} onChange={setRuleValues} inherited={divisionConfig} ruleDict={ruleDict} />
+          ) : formatAllLocked ? (
+            // Every control is locked: the section reads, it does not offer a form it would refuse whole.
+            <>
+              <LockLine testId="division-locked-format" text={lockSentence(formatLock, msg)} />
+              <MatchFormatEditor scope="division" mode="locked" sportKey={sportKey} module={sportModule} values={ruleValues} onChange={setRuleValues} inherited={divisionConfig} ruleDict={ruleDict} />
+              {feedbackFor("format")}
+            </>
           ) : (
             <>
-              {savedVariantKey !== null && variants.length > 0 && (
+              {formatLock !== undefined && <LockLine testId="division-locked-format" text={lockSentence(formatLock, msg)} />}
+              {variantShown && (
                 <div>
                   <label className="block text-xs text-slate-600">
                     {msg("divset.variant")}
@@ -413,11 +430,10 @@ export function DivisionRulesStrip({
                       {msg(hint.key, hint.vars)}
                     </p>
                   )}
-                  {variantLock !== undefined && lockLine(variantLock, "division-locked-variant_key")}
                 </div>
               )}
 
-              {sportKey === "boardgame" && onlineChessOffered && (
+              {onlineShown && (
                 <div>
                   <label className="block text-xs text-slate-600">
                     {msg("divset.onlinePlay.label")}
@@ -484,7 +500,6 @@ export function DivisionRulesStrip({
                   </label>
                   <p className="mt-1 text-[11px] text-slate-600">{msg("divset.timeControl.help")}</p>
                   {timeControl === "" && <p className="mt-1 text-[11px] text-amber-700">{msg("divset.timeControl.unsupported")}</p>}
-                  {clockLock !== undefined && lockLine(clockLock, "division-locked-clock")}
                 </div>
               )}
 
@@ -498,7 +513,7 @@ export function DivisionRulesStrip({
                 inherited={inheritedCfg}
                 ruleDict={ruleDict}
                 lockedFields={locks}
-                omit={lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined}
+                omit={omitted}
                 state={ruleState}
                 disabled={busy}
               />

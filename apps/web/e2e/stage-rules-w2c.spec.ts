@@ -22,7 +22,8 @@ import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPORT_RULES, type RuleField } from "../src/lib/match-rules";
 import { stageFieldsFor } from "../src/lib/rule-scope";
 import { pointsLine } from "../src/lib/points-line";
-import { rulesChipText, rulesLineText } from "../src/lib/rules-line";
+import { RULES_LINE_JOINER, rulesChipText, rulesLineText } from "../src/lib/rules-line";
+import { describeAbandon, describeDeciders, describeMatchRules } from "../src/server/public-site/describe-rules";
 import { RULEBOOK_SPLITS } from "../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import { openPanels } from "./helpers/rules-strip";
 
@@ -352,7 +353,24 @@ test("a stage whose first match is scored: the lock line, the format read-only a
   // Read-only: the format is said as chips, and the row holds no control and no editor - nothing to change, no Save.
   const chips = row.getByTestId("stage-format-chips");
   await expect(chips).toBeVisible();
-  expect((await chips.innerText()).trim().length, "the chips say the format").toBeGreaterThan(0);
+  // The chips say the format the stage's matches fold under, in the public line's words (C2 fix round 1, M2): the cfg the server
+  // folds one of its fixtures under (`GET /fixtures/{id}/rules`, no override on it - the stage's stored format), described by
+  // the public site's own describers (the stage line: its match rules, its deciders, its abandon policy), clause for clause.
+  // A chip stands alone, so each is capitalised; the line capitalises only its first - compared case-blind.
+  const fixtures = await apiJson<{ id: string; stage_id: string }[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+  const fixtureId = fixtures.data!.find((f) => f.stage_id === stageId)!.id;
+  const read = await apiJson<{ cfg: Record<string, unknown> }>(request, `/api/v1/fixtures/${fixtureId}/rules`);
+  expect(read.status, `GET rules: ${JSON.stringify(read.error)}`).toBe(200);
+  const generic = builtinModules.find((m) => m.key === "generic")!;
+  const clauses = [
+    ...(describeMatchRules("generic", generic, read.data!.cfg) ?? []),
+    ...describeDeciders(generic, "league", read.data!.cfg),
+    ...describeAbandon(generic, read.data!.cfg),
+  ];
+  expect(clauses.length, "premise: the stored format has words").toBeGreaterThan(0);
+  const said = await chips.locator("li").allInnerTexts();
+  expect(said.length, "one chip per clause").toBe(clauses.length);
+  expect(said.join(RULES_LINE_JOINER).toLowerCase(), "the chips are the stored format's own line").toBe(rulesLineText(PUB, clauses).toLowerCase());
   await expect(row.getByTestId("stage-format-editor")).toHaveCount(0);
   await expect(row.locator("input, select, textarea")).toHaveCount(0);
   await expect(row.getByTestId("stage-format-save")).toHaveCount(0);

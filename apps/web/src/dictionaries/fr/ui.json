@@ -7219,6 +7219,6 @@
   "rulesStrip.tiebreaks.sportDefault": "L'ordre propre au sport. Modifiez une étape pour donner à cette division le sien.",
   "rulesStrip.tiebreaks.own": "L'ordre propre à cette division. Chaque phase qui suit l'ordre de la division classe avec lui.",
   "rulesStrip.tiebreaks.useSport": "Utiliser l'ordre du sport",
-  "divset.rulesMoved": "Le format de match, les points et les départages se règlent dans l'onglet Rencontres, sous Règles de la division.",
+  "divset.rulesMoved": "Le format de match, le jeu en ligne, les points et les départages se règlent dans l'onglet Rencontres, sous Règles de la division.",
   "divset.rulesMovedLink": "Ouvrir Règles de la division"
 }

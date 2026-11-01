@@ -42,7 +42,6 @@ import {
 } from "./scorepad-a11y-kit";
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
-import { SPORT_RULES } from "../src/lib/match-rules";
 import { openPanels } from "./helpers/rules-strip";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
@@ -6699,8 +6698,8 @@ test("W2c match rules block at every width: the fold opens, the controls hold th
 });
 
 // W2c Task 20 (S4): the division's rule lock lines at every width (Match Day C2: on the Division rules strip's Match format
-// panel, on the Fixtures tab - they left Settings with the match rules). A started stage makes the match-rule fields read-only and
-// puts one line under each ("Locked: Pool A has started and plays this format"). The lines are plain text in the existing
+// panel, on the Fixtures tab - they left Settings with the match rules). A started stage locks the match-rule fields, and the
+// section says so ONCE ("Locked: Pool A has started and plays this format"; C2 fix round 1, I1 - never a line per field). The lines are plain text in the existing
 // field grid - no second phone tree - so the evidence is that every line is on screen, readable (its text is not clipped by its
 // own box), inside the viewport, that nothing scrolls the page sideways, and that the SET of lines (membership, order, repeats)
 // is the one 1280 shows. Owner 2026-10-20: the settings tab is being redesigned, so no design bar here beyond "readable, no
@@ -6739,9 +6738,12 @@ test("W2c division lock lines at every width: each line is on screen and readabl
   await openPanels(strip, "format");
 
   const lines = page.locator('[data-testid^="division-locked-"]');
-  // One per badminton field plus the variant (the fields are the form's own table, not a number typed here).
-  const expectedLines = SPORT_RULES.badminton!.length + 1;
-  await expect(lines, "every locked field says so").toHaveCount(expectedLines, { timeout: 20_000 });
+  // ONE for the section, however many of its fields the stage locks (every badminton field and the variant, here); the section
+  // then reads, with no Save over a form the server would refuse whole.
+  const expectedLines = 1;
+  await expect(lines, "the section says its lock once").toHaveCount(expectedLines, { timeout: 20_000 });
+  await expect(page.getByTestId("division-locked-format")).toBeVisible();
+  await expect(page.getByTestId("division-rules-format-save"), "no Save").toHaveCount(0);
   const ids = (): Promise<string[]> => lines.evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!));
   const here = await ids();
 

@@ -584,9 +584,15 @@ export async function getMatchDay(
     ...board.playingNoCourt.map((r) => r.id),
   ];
   // The playing matches' formats (C2), in the public line's words: the fixture page's own reader, in the reader's language.
+  // Decorative on a polled read (fix round 1, M5): a line that cannot be read is logged and left out, never a 500 for the board.
   const [videos, formatLines] = await Promise.all([
     liveSessionVideos(auth.orgId, liveIds),
-    getDictionary(locale, "public").then((publicDict) => fixtureFormatLines(auth, playingIds, publicDict)),
+    getDictionary(locale, "public")
+      .then((publicDict) => fixtureFormatLines(auth, playingIds, publicDict))
+      .catch((err: unknown) => {
+        log.warn({ err, competitionId, fixtureIds: playingIds }, "match-day: format lines failed; format_line left null");
+        return new Map<string, string>();
+      }),
   ]);
   const extras = (fixtureId: string): PlayingExtras => {
     const video = videos[fixtureId];

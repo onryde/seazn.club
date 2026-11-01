@@ -15,18 +15,21 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import enPublic from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
+import type { RefusedField } from "@/lib/rule-errors";
 import { rulesFor } from "@/lib/match-rules";
 import { rulesLineDict } from "@/lib/rules-line";
 import { foldTiebreaks, unitLabelKey } from "@/lib/stage-card/summaries";
-import { MatchFormatEditor } from "../match-format-editor";
-import { PointsEditor, divisionPointsKeys, divisionPointsOf, hydrateDivisionPoints } from "../points-editor";
-import { TiebreaksEditor, divisionSportOrder } from "../tiebreaks-editor";
+import { MatchFormatEditor, type MatchFormatEditorProps } from "../match-format-editor";
+import { PointsEditor, divisionPointsKeys, divisionPointsOf, hydrateDivisionPoints, type PointsEditorProps } from "../points-editor";
+import { TiebreaksEditor, divisionSportOrder, type TiebreaksEditorProps } from "../tiebreaks-editor";
 import { DivisionRulesStrip } from "../division-rules-strip";
 import { cfgOf, tableRulesOf } from "../../stage-rules/__tests__/_table-rules-fixture";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined, replace: () => undefined, push: () => undefined }) }));
 
 const UI = enUi as Record<string, string>;
+/** true only when A and B are the same type (the usual invariance trick; `extends` alone would let `never` pass for anything). */
+type Same<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 const RULE_DICT = rulesLineDict(enPublic as Dict);
 const ID = "33333333-3333-4333-8333-333333333333";
 const SPORTS: readonly AnySportModule[] = builtinModules;
@@ -214,18 +217,29 @@ describe("Tie-breaks — every scope × mode, every sport", () => {
     expect(has(html(<TiebreaksEditor scope="division" mode="edit" value={null} stored={null} {...base} />), "division-tiebreaks-save")).toBe(false);
   });
 
-  it("Points and Tie-breaks refuse scope 'fixture' at the type level (a match has no table)", () => {
-    // @ts-expect-error — PointsEditorProps has no fixture scope
-    const p = <PointsEditor scope="fixture" mode="locked" />;
-    // @ts-expect-error — TiebreaksEditorProps has no fixture scope
-    const t = <TiebreaksEditor scope="fixture" mode="locked" />;
-    expect(p.props.scope).toBe("fixture");
+  it("Points and Tie-breaks refuse scope 'fixture' at the type level (a match has no table); Match format takes it", () => {
+    // Checked by tsc, not by the run (fix round 1, M1): each line is a type that only compiles while the claim holds.
+    const pointsHasNoFixture: Same<Extract<PointsEditorProps["scope"], "fixture">, never> = true;
+    const tiebreaksHasNoFixture: Same<Extract<TiebreaksEditorProps["scope"], "fixture">, never> = true;
+    const pointsScopes: Same<PointsEditorProps["scope"], "division" | "stage"> = true;
+    const tiebreaksScopes: Same<TiebreaksEditorProps["scope"], "division" | "stage"> = true;
+    // The positive pair: the format editor does take a fixture (the match pages' read-only line).
+    const formatTakesFixture: Same<Extract<MatchFormatEditorProps["scope"], "fixture">, "fixture"> = true;
+    expect([pointsHasNoFixture, tiebreaksHasNoFixture, pointsScopes, tiebreaksScopes, formatTakesFixture]).toEqual([true, true, true, true, true]);
+    // And a call that is valid in every other prop is refused for its scope alone.
+    const football = SPORTS.find((m) => m.key === "football")!;
+    const cfg = divisionCfg(football);
+    const valid = { mode: "edit", module: football, value: null, onChange: () => undefined, divisionConfig: cfg, kinds: ["league"] } as const;
+    // @ts-expect-error — the division's props, scope "fixture": refused for the scope alone
+    const t = <TiebreaksEditor {...valid} scope="fixture" />;
+    const d = <TiebreaksEditor {...valid} scope="division" />;
+    expect(d.props.scope, "the same props under 'division' compile").toBe("division");
     expect(t.props.scope).toBe("fixture");
   });
 });
 
 describe("the Division rules strip", () => {
-  const strip = (m: AnySportModule, canEdit: boolean, tableKinds: TableStageKind[]) =>
+  const strip = (m: AnySportModule, canEdit: boolean, tableKinds: TableStageKind[], lockedFields: readonly RefusedField[] = [], onlineChessOffered = false) =>
     html(
       <DivisionRulesStrip
         divisionId={ID}
@@ -237,8 +251,8 @@ describe("the Division rules strip", () => {
         canEdit={canEdit}
         ruleDict={RULE_DICT}
         variants={Object.entries(m.variants).map(([key, config]) => ({ key, name: key, system: true, config: config as Record<string, unknown> }))}
-        lockedFields={[]}
-        onlineChessOffered={false}
+        lockedFields={lockedFields}
+        onlineChessOffered={onlineChessOffered}
         initialOpen={["format", "points", "tiebreaks"]}
       />,
     );
@@ -284,5 +298,63 @@ describe("the Division rules strip", () => {
     expect(h).not.toContain('aria-expanded="true"');
     expect(has(h, "division-rules-panel-format")).toBe(false);
     expect(has(h, "division-rules-summary")).toBe(true);
+  });
+
+  // Fix round 1, I1 (ruling: spec §12 items 4 and 13 over W2c S4) - the strip must not repeat the owner-rejected Settings lock
+  // defects: a lock line under every field, and a Save offered over a section the server would refuse whole.
+  const lockOf = (field: string): RefusedField => ({ field, code: "DIVISION_FORMAT_LOCKED", stageId: ID, stageName: "Pool Zed" });
+  const SENTENCE = UI["ruleLock.DIVISION_FORMAT_LOCKED"]!.replace("{stage}", "Pool Zed");
+  /** One panel's markup: from its own testid to the next panel's (or the end). */
+  const panelOf = (h: string, p: string): string => {
+    const at = h.indexOf(`data-testid="division-rules-panel-${p}"`);
+    if (at < 0) return "";
+    const next = h.indexOf('data-testid="division-rules-panel-', at + 1);
+    return h.slice(at, next < 0 ? undefined : next);
+  };
+  const lockLines = (h: string): number => h.split('data-testid="division-locked-').length - 1;
+  /** Every lock a started stage could put on the sport's format section: the variant and every key a rule field edits. */
+  const everyLock = (m: AnySportModule): RefusedField[] => [
+    ...new Set(["variant_key", ...rulesFor(m.key).flatMap((f) => [f.key, ...f.edits.map((e) => e.split(".")[0]!)])]),
+  ].map(lockOf);
+
+  it("one locked field: the Match format section says it ONCE, naming the stage; the field is read-only, the rest and Save stay (every sport, every field)", () => {
+    let drawn = 0;
+    for (const m of SPORTS) {
+      for (const f of rulesFor(m.key)) {
+        const format = panelOf(strip(m, true, ["league"], [lockOf(f.key)]), "format");
+        expect(lockLines(format), `${m.key}/${f.key}: never more than one line`).toBeLessThanOrEqual(1);
+        if (!format.includes(`data-testid="rule-field-${f.key}"`)) continue; // not drawn for this config (best of 1, a variant's)
+        expect(lockLines(format), `${m.key}/${f.key}: one line for the section`).toBe(1);
+        expect(format, `${m.key}/${f.key}: the section's line`).toContain('data-testid="division-locked-format"');
+        expect(text(format), `${m.key}/${f.key}: names the stage`).toContain(SENTENCE);
+        expect(format, `${m.key}/${f.key}: the field is marked locked`).toMatch(new RegExp(`data-testid="rule-field-${f.key}"[^>]*data-locked="true"`));
+        expect(has(format, "division-rules-format-save"), `${m.key}/${f.key}: the open controls keep their Save`).toBe(true);
+        drawn++;
+      }
+    }
+    expect(drawn, "fields drawn and locked across the registry").toBeGreaterThan(40);
+  });
+
+  it("every control locked: the section reads - one line, the chips, no field and no Save (every sport); online play left open keeps the form", () => {
+    let checked = 0;
+    for (const m of SPORTS) {
+      const format = panelOf(strip(m, true, ["league"], everyLock(m)), "format");
+      expect(lockLines(format), `${m.key}: one line`).toBe(1);
+      expect(text(format), `${m.key}: naming the stage`).toContain(SENTENCE);
+      expect(writable(format), `${m.key}: no input, select or button`).toBe(false);
+      expect(has(format, "division-rules-format-save"), `${m.key}: no Save`).toBe(false);
+      expect(has(format, "match-format-chips"), `${m.key}: what it plays, in chips`).toBe(true);
+      // The other sections are not dragged along: their own lock decides them.
+      expect(has(panelOf(strip(m, true, ["league"], everyLock(m)), "tiebreaks"), "division-tiebreaks"), `${m.key}: the order panel stands`).toBe(true);
+      checked++;
+    }
+    expect(checked, "sports swept").toBe(SPORTS.length);
+    // Chess with online play offered: that select is never locked (a started stage does not play it), so the section is a form
+    // with one line and its Save, and only the locked controls are read-only.
+    const chess = SPORTS.find((m) => m.key === "boardgame")!;
+    const online = panelOf(strip(chess, true, ["league"], everyLock(chess), true), "format");
+    expect(lockLines(online), "one line").toBe(1);
+    expect(has(online, "division-rules-format-save"), "Save stays for the open control").toBe(true);
+    expect(online, "online play is open").toMatch(/<select(?![^>]*disabled="")[^>]*data-testid="division-online-play"/);
   });
 });

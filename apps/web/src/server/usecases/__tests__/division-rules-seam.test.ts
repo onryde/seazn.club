@@ -248,3 +248,76 @@ describe.skipIf(!HAS_DB)("Match Day C2: what the builder's Format tab saves roun
     expect(strip.tree().some((e) => propsOf(e)["data-testid"] === "division-tiebreaks-save"), "untouched: no Save").toBe(false);
   });
 });
+
+// Fix round 1, M6: the builder's order is edited against one variant and one structure, and either can change after it. Asked
+// of the builder through its real handlers (the variant select's, a format card's radio, Create), the POST captured; no DB.
+describe("Match Day C2: the builder's tie-break order follows the variant and the structure it is sent with", () => {
+  const football = () => {
+    const m = mod("football");
+    const RAW = m.variants as Record<string, Record<string, unknown>>;
+    const rows = Object.keys(RAW).map((key) => ({ sport_key: "football", key, name: key, is_system: true, config: RAW[key]! }));
+    expect(rows.length, "premise: football offers a second variant").toBeGreaterThan(1);
+    return { m, sports: sportOptionsFrom([{ key: "football", name: "Football" }], rows) };
+  };
+  const mountBuilder = (sports: ReturnType<typeof sportOptionsFrom>) =>
+    renderIsland(DivisionBuilder, {
+      competitionId: "c1",
+      orgSlug: "org",
+      compSlug: "comp",
+      sports,
+      constraintsAllowed: true,
+      archivedSlotsExplainRefusal: false,
+      viewerPlan: "community",
+    });
+  type H = ReturnType<typeof mountBuilder>;
+  const setOrder = (h: H, m: AnySportModule): TiebreakerKey[] => {
+    const order = divisionOrder(m, propsOf(find(h.tree(), TiebreaksEditor)).divisionConfig);
+    (propsOf(find(h.tree(), TiebreaksEditor)).onChange as (next: TiebreakerKey[] | null) => void)(order);
+    expect(propsOf(find(h.tree(), TiebreaksEditor)).value, "premise: the editor holds the order").toEqual(order);
+    return order;
+  };
+  const pickTemplate = (h: H, key: string): void => {
+    const label = h.tree().find((e) => e.type === "label" && e.key === key);
+    const radio = label === undefined ? undefined : walk((propsOf(label).children as ReactNode) ?? null).find((e) => e.type === "input" && propsOf(e).name === "template");
+    if (radio === undefined) throw new Error(`no ${key} card on screen`);
+    (propsOf(radio).onChange as () => void)();
+  };
+  /** Name, Scheduling, Create - the organiser's path - and the division POST's body. */
+  async function create(h: H): Promise<Record<string, unknown>> {
+    apiV1Mock.mockImplementation(async (url: string) => (String(url).endsWith("/divisions") ? { id: "d1", slug: "open" } : {}));
+    const nameInput = h.tree().find((e) => e.type === "input" && propsOf(e).placeholder === UI["wizard.divisionNamePlaceholder"]);
+    (propsOf(nameInput!).onChange as (e: unknown) => void)({ target: { value: "Open" } });
+    const button = (label: string) => h.tree().find((e) => e.type === "button" && textOf(e).trim() === label)!;
+    (propsOf(button(UI["wizard.tab.scheduling"]!)).onClick as () => void)();
+    (propsOf(button(UI["wizard.create"]!)).onClick as () => void)();
+    await vi.waitFor(() => expect(apiV1Mock.mock.calls.some(([url]) => String(url).endsWith("/divisions"))).toBe(true));
+    return (apiV1Mock.mock.calls.find(([url]) => String(url).endsWith("/divisions"))![1] as { json: Record<string, unknown> }).json;
+  }
+
+  it("a variant change starts the order again from the sport's (the edited one was asked of the old variant's cascade)", () => {
+    const { m, sports } = football();
+    const h = mountBuilder(sports);
+    setOrder(h, m);
+    const select = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-variant")!;
+    const from = propsOf(select).value as string;
+    const to = Object.keys(m.variants).find((k) => k !== from)!;
+    (propsOf(select).onChange as (e: unknown) => void)({ target: { value: to } });
+    expect(propsOf(h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-variant")!).value, "premise: the variant moved").toBe(to);
+    expect(propsOf(find(h.tree(), TiebreaksEditor)).value, "the order is the sport's again").toBeNull();
+  });
+
+  it("an order edited on a league, then a knockout picked: no table, so no order is sent; the league itself sends it (the pair)", async () => {
+    const { m, sports } = football();
+    const league = mountBuilder(sports);
+    const order = setOrder(league, m);
+    expect((await create(league)).tiebreakers, "a league sends the order").toEqual(order);
+
+    apiV1Mock.mockReset();
+    const knockout = mountBuilder(sports);
+    setOrder(knockout, m);
+    pickTemplate(knockout, "knockout");
+    expect(knockout.tree().some((e) => e.type === TiebreaksEditor), "premise: a knockout has no table, so no order editor").toBe(false);
+    const body = await create(knockout);
+    expect(Object.hasOwn(body, "tiebreakers"), "the hidden order is not sent").toBe(false);
+  });
+});

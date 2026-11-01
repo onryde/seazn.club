@@ -2,8 +2,11 @@
 // types, and says what a save kept, instead of reading "saved" over a value that snapped back.
 //
 // Match Day C2: the match rules and the standings points moved from Settings' Match rules block to the Division rules strip on
-// the Fixtures tab (`components/v2/rules/division-rules-strip.tsx`) - the same form, the same lock lines and notices, each
-// panel with its own Save. The STRUCTURE note (`format-locked`) stays in Settings' Format group.
+// the Fixtures tab (`components/v2/rules/division-rules-strip.tsx`) - the same form and notices, each panel with its own Save.
+// The STRUCTURE note (`format-locked`) stays in Settings' Format group. C2 fix round 1, I1 (ruling: spec §12 items 4 and 13
+// over W2c S4): a section says its lock ONCE (`division-locked-format`, naming the stage), never a line per field; a section
+// whose every control is locked reads - its chips, no field and no Save; a partly locked one keeps its form, the locked
+// controls read-only.
 //
 // What a node-env vitest cannot see (AGENTS.md class 2): that the page really hands the form the lock the server will
 // enforce, that a locked control is truly inert in a browser, and that the stale-page route (a stage starts AFTER the page
@@ -147,7 +150,7 @@ test("the registry the page reads is not empty", () => {
 // ---------------------------------------------------------------------------------------------------------------------
 // The locks are said BEFORE anyone types (a set sport: badminton) - and not said when nothing has started.
 // ---------------------------------------------------------------------------------------------------------------------
-test("badminton: a started stage's fields and variant are read-only with their line before typing; the same division unstarted shows none", async ({ page, request }) => {
+test("badminton: a started stage locks every field and the variant before typing - the section reads, with ONE line and no Save; the same division unstarted shows none", async ({ page, request }) => {
   test.setTimeout(150_000);
   const rig = await seedLeague(request, "badminton", "short", "badminton-lines");
   const lockLines = page.locator('[data-testid^="division-locked-"]');
@@ -167,20 +170,18 @@ test("badminton: a started stage's fields and variant are read-only with their l
   await startMatch(request, rig.fixtureIds[0]!);
   await openFormat(page, request, rig.divisionId);
 
-  // Every field the form shows says which stage holds it, and is inert.
+  // A started league stage plays every field the section draws and the variant: the section says so ONCE, naming the stage,
+  // and reads - the format in chips, no field, no variant picker, and no Save over a form the server would refuse whole.
   const sentence = say("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" });
-  for (const f of SPORT_RULES.badminton!) {
-    const line = page.getByTestId(`division-locked-${f.key}`);
-    await expect(line, `${f.key} carries its lock line`).toBeVisible({ timeout: STEP_MS });
-    await expect(line).toContainText(sentence);
-    await expect(fieldControl(page, "badminton", f.key), `${f.key} is read-only`).toBeDisabled();
-  }
-  const variantLine = page.getByTestId("division-locked-variant_key");
-  await expect(variantLine).toContainText(sentence);
-  await expect(variantPicker(page)).toBeDisabled();
-  // The lock is a per-field one: the rest of the panel stays editable (its Save button).
-  await expect(saveRules(page)).toBeEnabled();
-  expect(await lockLines.count(), "one line per field plus the variant, no more").toBe(SPORT_RULES.badminton!.length + 1);
+  const line = formatCard(page).getByTestId("division-locked-format");
+  await expect(line, "the section's lock line").toBeVisible({ timeout: STEP_MS });
+  await expect(line).toContainText(sentence);
+  await expect(formatCard(page).locator('[data-testid^="division-locked-"]'), "exactly one line for the section").toHaveCount(1);
+  await expect(formatCard(page).getByTestId("match-format-chips"), "what it plays, read-only").toBeVisible();
+  await expect(formatCard(page).locator("input, select, textarea"), "no field to type into").toHaveCount(0);
+  for (const f of SPORT_RULES.badminton!) await expect(fieldControl(page, "badminton", f.key), `${f.key}: no control`).toHaveCount(0);
+  await expect(variantPicker(page), "no variant picker").toHaveCount(0);
+  await expect(saveRules(page), "no Save").toHaveCount(0);
 
   // The server agrees, field by field: the page's lock list is the writer's refusal list.
   const stored = await storedConfig(request, rig.divisionId);
@@ -230,12 +231,14 @@ test("generic: once a match has started the rule fields lock with their own sent
   await startMatch(request, rig.fixtureIds[0]!);
   await openFormat(page, request, rig.divisionId);
 
-  // The rule fields and the variant keep W2c's lock, with their own sentence (unchanged by W2d: §5.4 touches the points keys only).
-  for (const f of SPORT_RULES.generic!) {
-    await expect(page.getByTestId(`division-locked-${f.key}`), `${f.key} carries its lock line`).toBeVisible({ timeout: STEP_MS });
-    await expect(page.getByTestId(`division-locked-${f.key}`)).toContainText(say("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
-  }
-  await expect(page.getByTestId("division-locked-variant_key")).toBeVisible();
+  // The rule fields and the variant keep W2c's lock, with their own sentence (unchanged by W2d: §5.4 touches the points keys
+  // only) - said ONCE for the section, which reads with no field and no Save (fix round 1, I1).
+  const formatLine = formatCard(page).getByTestId("division-locked-format");
+  await expect(formatLine, "the section's lock line").toBeVisible({ timeout: STEP_MS });
+  await expect(formatLine).toContainText(say("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
+  await expect(formatCard(page).locator('[data-testid^="division-locked-"]'), "one line for the section").toHaveCount(1);
+  await expect(formatCard(page).locator("input, select, textarea"), "no rule field and no variant picker").toHaveCount(0);
+  await expect(saveRules(page), "no Save for the format").toHaveCount(0);
 
   // W2d §5.4 / §10 (replaces W2c's DIVISION_TABLE_RULES_LOCKED line and read-only boxes here): no points lock line, and the
   // boxes are editable. Their only lock keys left are `scoring`/`awardScore`, which have no box on this form (generic has
@@ -309,21 +312,24 @@ test("a stage starts after the page loaded: a mixed save says what landed and na
     expect(after.setTo, "the locked key kept its stored value").toBe(before.setTo);
   }).toPass({ timeout: STEP_MS });
 
-  // The page then locks what it was told: setTo read-only with its line (no reload needed), cap still open.
-  const line = page.getByTestId("division-locked-setTo");
+  // The page then locks what it was told: setTo read-only (no reload needed), cap still open, and the section says why ONCE.
+  const line = formatCard(page).getByTestId("division-locked-format");
   await expect(line).toBeVisible({ timeout: STEP_MS });
   await expect(line).toContainText(say("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
+  await expect(lockLines, "one line, the section's").toHaveCount(1);
   await expect(fieldControl(page, "badminton", "setTo")).toBeDisabled();
   await expect(fieldControl(page, "badminton", "cap")).toBeEnabled();
-  await expect(page.getByTestId("division-locked-cap")).toHaveCount(0);
   // The locked box shows what is STORED, not the value that was typed and kept out (T20 review I-2) - before any reload.
   await expect(fieldControl(page, "badminton", "setTo")).toHaveValue(String(before.setTo));
   await expect(fieldControl(page, "badminton", "cap")).toHaveValue(String(newCap));
 
-  // A reload reads the lock from the server: the same lines, with the stored values the notice promised.
+  // A reload reads the lock from the server (every key Pool A inherits; its own cap stays open): still one line, a form
+  // around the open cap, with the stored values the notice promised.
   await openFormat(page, request, rig.divisionId);
-  await expect(page.getByTestId("division-locked-setTo")).toBeVisible({ timeout: STEP_MS });
-  await expect(page.getByTestId("division-locked-cap")).toHaveCount(0);
+  await expect(formatCard(page).getByTestId("division-locked-format")).toBeVisible({ timeout: STEP_MS });
+  await expect(lockLines, "one line, the section's").toHaveCount(1);
+  await expect(fieldControl(page, "badminton", "setTo")).toBeDisabled();
+  await expect(fieldControl(page, "badminton", "cap")).toBeEnabled();
   await expect(fieldControl(page, "badminton", "setTo")).toHaveValue(String(before.setTo));
   await expect(fieldControl(page, "badminton", "cap")).toHaveValue(String(newCap));
 
@@ -364,10 +370,12 @@ test("a stage starts after the page loaded: a save of ONLY locked fields is refu
   const after = await storedConfig(request, rig.divisionId);
   expect([after.setTo, after.finalSetTo], "nothing landed").toEqual([before.setTo, before.finalSetTo]);
 
-  // And the form locks them from then on - and the locked boxes show the stored values, not what was typed (review I-2).
-  await expect(page.getByTestId("division-locked-setTo")).toBeVisible();
-  await expect(page.getByTestId("division-locked-finalSetTo")).toBeVisible();
+  // And the form locks them from then on - one line for the section, both read-only - and the locked boxes show the stored
+  // values, not what was typed (review I-2).
+  await expect(formatCard(page).getByTestId("division-locked-format")).toBeVisible();
+  await expect(formatCard(page).locator('[data-testid^="division-locked-"]'), "one line, not one per field").toHaveCount(1);
   await expect(fieldControl(page, "badminton", "setTo")).toBeDisabled();
+  await expect(fieldControl(page, "badminton", "finalSetTo")).toBeDisabled();
   await expect(fieldControl(page, "badminton", "setTo")).toHaveValue(String(before.setTo));
   await expect(fieldControl(page, "badminton", "finalSetTo")).toHaveValue(String(before.finalSetTo));
 });
@@ -402,5 +410,6 @@ test("a stage starts after the page loaded: a changed variant is refused, the pi
   expect((await apiJson<{ variant_key: string }>(request, `/api/v1/divisions/${rig.divisionId}`)).data!.variant_key).toBe("short");
   await expect(picker).toHaveValue("short");
   await expect(picker).toBeDisabled();
-  await expect(page.getByTestId("division-locked-variant_key")).toBeVisible();
+  await expect(formatCard(page).getByTestId("division-locked-format")).toContainText(say("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
+  await expect(formatCard(page).locator('[data-testid^="division-locked-"]'), "one line for the section").toHaveCount(1);
 });

@@ -7219,6 +7219,6 @@
   "rulesStrip.tiebreaks.sportDefault": "The sport's own order. Change a step to give this division its own.",
   "rulesStrip.tiebreaks.own": "This division's own order. Every stage that uses the division's order ranks by it.",
   "rulesStrip.tiebreaks.useSport": "Use the sport's order",
-  "divset.rulesMoved": "Match format, points and tie-breaks are set on the Fixtures tab, under Division rules.",
+  "divset.rulesMoved": "Match format, online play, points and tie-breaks are set on the Fixtures tab, under Division rules.",
   "divset.rulesMovedLink": "Open Division rules"
 }

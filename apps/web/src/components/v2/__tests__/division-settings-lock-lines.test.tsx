@@ -73,6 +73,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 import { PointsEditor } from "@/components/v2/rules/points-editor";
+import { LockLine } from "@/components/v2/rules/lock-line";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
@@ -134,8 +135,18 @@ const pointsEl = (tree: ReactElement[]): ReactElement => {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const byTestId = (tree: ReactElement[], id: string): ReactElement | undefined => tree.find((e) => propsOf(e)["data-testid"] === id);
+/** A `<LockLine>` is a component element in the tree (its `testId` becomes the `<p>`'s data-testid), so it is read by that prop. */
 const testIdsStartingWith = (tree: ReactElement[], prefix: string): string[] =>
-  tree.map((e) => propsOf(e)["data-testid"]).filter((t): t is string => typeof t === "string" && t.startsWith(prefix));
+  tree.map((e) => propsOf(e)["data-testid"] ?? (e.type === LockLine ? propsOf(e).testId : undefined)).filter((t): t is string => typeof t === "string" && t.startsWith(prefix));
+/** The Match format section's one lock line (fix round 1, I1), as the tree holds it: its sentence, or undefined. */
+const formatLockText = (tree: ReactElement[]): string | undefined => {
+  const lines = tree.filter((e) => e.type === LockLine && propsOf(e).testId === "division-locked-format");
+  expect(lines.length, "never more than one line for the section").toBeLessThanOrEqual(1);
+  return lines[0] === undefined ? undefined : String(propsOf(lines[0]).text);
+};
+/** The strip's static markup (every panel open), in the active dictionary. */
+const stripHtml = (over: Record<string, unknown> = {}, sportKey = "badminton", variantKey = "short", config: Record<string, unknown> = BADMINTON_CONFIG): string =>
+  renderToStaticMarkup(<DivisionRulesStrip {...stripProps(over, sportKey, variantKey, config)} />);
 const ruleFieldsEl = (tree: ReactElement[]): ReactElement => {
   const el = tree.find((e) => e.type === MatchRuleFields);
   if (!el) throw new Error("<MatchRuleFields> not found in tree");
@@ -171,17 +182,18 @@ beforeEach(() => {
   net.patch.fail = null;
 });
 
-describe("the match rule fields: a locked field is read-only, with its lock line before anyone types", () => {
+describe("the match rule fields: a locked field is read-only before anyone types; the section says why, once", () => {
   it("no locks: no lock line and no disabled control (the unlocked contrast)", () => {
     for (const sport of Object.keys(SPORT_RULES)) {
       const html = markup(sport, []);
       expect(count(html, 'data-testid="division-locked-'), sport).toBe(0);
+      expect(count(html, 'data-locked="true"'), `${sport}: nothing marked locked`).toBe(0);
       expect(disabledControls(html), `${sport}: nothing read-only`).toBe(0);
       expect(disabledSequenceControls(html), `${sport}: no ordered list read-only`).toBe(0);
     }
   });
 
-  it("a locked key disables every field that edits it and says which stage - every field of every sport (counted)", () => {
+  it("a locked key disables and marks every field that edits it - and the grid says no line of its own (the section says it once: fix round 1, I1) - every field of every sport (counted)", () => {
     let checked = 0;
     for (const [sport, fields] of Object.entries(SPORT_RULES)) {
       for (const f of fields) {
@@ -189,9 +201,9 @@ describe("the match rule fields: a locked field is read-only, with its lock line
         // The fields the sport itself declares as editing this config key (a key can have several: boardgame's clock, football's points).
         const expected = fields.filter((g) => g.key === key || g.edits.some((e) => topOf(e) === key));
         const html = markup(sport, [lock(key, { stageName: "Pool Zed" })]);
-        expect(count(html, 'data-testid="division-locked-'), `${sport}/${f.key}: one line per field that edits ${key}`).toBe(expected.length);
-        for (const g of expected) expect(html, `${sport}/${f.key}: ${g.key} says why`).toContain(`data-testid="division-locked-${g.key}"`);
-        expect(html, `${sport}/${f.key}`).toContain(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool Zed" }));
+        expect(count(html, 'data-testid="division-locked-'), `${sport}/${f.key}: no per-field line`).toBe(0);
+        expect(count(html, 'data-locked="true"'), `${sport}/${f.key}: every field that edits ${key} is marked, no other`).toBe(expected.length);
+        for (const g of expected) expect(html, `${sport}/${f.key}: ${g.key} is marked`).toMatch(new RegExp(`data-testid="rule-field-${g.key}"[^>]*data-locked="true"`));
         const sequences = expected.filter((g) => g.kind === "sequence").length;
         expect(disabledControls(html), `${sport}/${f.key}: exactly the locked fields' controls are read-only`).toBe(expected.length - sequences);
         if (sequences > 0) expect(disabledSequenceControls(html), `${sport}/${f.key}: a locked ordered list is read-only`).toBeGreaterThan(0);
@@ -204,13 +216,22 @@ describe("the match rule fields: a locked field is read-only, with its lock line
 
   it("a lock on one field leaves its neighbours editable and unmarked (badminton)", () => {
     const html = markup("badminton", [lock("setTo")]);
-    expect(count(html, 'data-testid="division-locked-')).toBe(1);
-    expect(html).toContain('data-testid="division-locked-setTo"');
+    expect(count(html, 'data-locked="true"')).toBe(1);
+    expect(html).toMatch(/data-testid="rule-field-setTo"[^>]*data-locked="true"/);
     expect(disabledControls(html)).toBe(1);
   });
 
+  it("the strip says the section's line once, whatever number of fields the lock reaches (badminton: three locked fields, one line)", () => {
+    const html = stripHtml({ lockedFields: [lock("setTo"), lock("cap"), lock("finalSetTo")] });
+    expect(count(html, 'data-testid="division-locked-'), "one line in the whole strip").toBe(1);
+    expect(count(html, 'data-testid="division-locked-format"')).toBe(1);
+    expect(count(html, L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" })), "the sentence, said once").toBe(1);
+    expect(count(html, 'data-locked="true"'), "the three fields read-only").toBe(3);
+    expect(html, "the open fields keep the Save").toContain('data-testid="division-rules-format-save"');
+  });
+
   it("the table code says the table sentence, not the format one", () => {
-    const html = markup("badminton", [lock("setTo", { code: "DIVISION_TABLE_RULES_LOCKED" })]);
+    const html = stripHtml({ lockedFields: [lock("setTo", { code: "DIVISION_TABLE_RULES_LOCKED" })] });
     expect(html).toContain(L("ruleLock.DIVISION_TABLE_RULES_LOCKED", { stage: "Pool A" }));
     expect(html).not.toContain(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
   });
@@ -222,8 +243,8 @@ describe("the match rule fields: a locked field is read-only, with its lock line
 
   it("in Spanish the line is the Spanish dictionary's", () => {
     activeDict.current = esUi as Record<string, string>;
-    // MatchRuleFields reads the dictionary through useMsg (mocked above to the active locale).
-    const html = markup("badminton", [lock("setTo", { stageName: "Grupo A" })]);
+    // The strip reads the dictionary through useMsg (mocked above to the active locale).
+    const html = stripHtml({ lockedFields: [lock("setTo", { stageName: "Grupo A" })] });
     expect(html).toContain(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Grupo A" }, esUi as Record<string, string>));
     expect(L("ruleLock.DIVISION_FORMAT_LOCKED", {}, esUi as Record<string, string>)).not.toBe(L("ruleLock.DIVISION_FORMAT_LOCKED"));
   });
@@ -248,12 +269,10 @@ describe("the settings island: what is locked, before the organiser types", () =
     expect(byTestId(tree, "format-locked")).toBeUndefined();
   });
 
-  it("the variant is read-only with its line when a started stage plays it, and the summary says so", () => {
+  it("the variant is read-only when a started stage plays it, the section's one line says why, and the summary says so", () => {
     const tree = mount({ lockedFields: [lock("variant_key")] }).tree();
     expect(propsOf(variantSelect(tree)).disabled).toBe(true);
-    const line = byTestId(tree, "division-locked-variant_key");
-    expect(line).toBeDefined();
-    expect(textOf(line)).toContain(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
+    expect(formatLockText(tree)).toBe(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
     const group = mountSettings({ lockedFields: [lock("variant_key")] }).tree().find((e) => propsOf(e).title === L("divset.format"))!;
     // The summary names the variant in words (main's #986 summary), so the lock wraps that word, never the stored key.
     const wordKey = variantWordKey("badminton", "short");
@@ -265,10 +284,10 @@ describe("the settings island: what is locked, before the organiser types", () =
     expect(propsOf(ruleFieldsEl(tree)).lockedFields).toEqual([lock("variant_key")]);
   });
 
-  it("an unlocked variant says nothing and is editable (the contrast)", () => {
+  it("an unlocked variant is editable (the contrast): the section's line is setTo's, and nothing else is said", () => {
     const tree = mount({ lockedFields: [lock("setTo")] }).tree();
     expect(propsOf(variantSelect(tree)).disabled).toBe(false);
-    expect(byTestId(tree, "division-locked-variant_key")).toBeUndefined();
+    expect(testIdsStartingWith(tree, "division-locked-"), "one line, the section's").toEqual(["division-locked-format"]);
     const group = mountSettings({ lockedFields: [lock("setTo")] }).tree().find((e) => propsOf(e).title === L("divset.format"))!;
     expect(String(propsOf(group).summary)).not.toContain("locked");
   });
@@ -306,6 +325,39 @@ describe("the settings island: what is locked, before the organiser types", () =
     await flush();
     expect(byTestId(island.tree(), "division-partial-save"), "a kept pin is not a refusal").toBeUndefined();
     expect(testIdsStartingWith(island.tree(), "division-refused-")).toEqual([]);
+  });
+
+  // Fix round 1, I1 (ruling: spec §12 items 4 and 13): a section whose every control is locked reads; it never offers a
+  // form the server would refuse whole.
+  const everyBadmintonLock = (): RefusedField[] =>
+    [...new Set(["variant_key", ...SPORT_RULES.badminton!.flatMap((f) => [f.key, ...f.edits.map(topOf)])])].map((k) => lock(k));
+
+  it("every control locked: the Match format section reads - one line, the format read-only, no grid, no variant picker, no Save", () => {
+    const tree = mount({ lockedFields: everyBadmintonLock() }).tree();
+    expect(formatLockText(tree)).toBe(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
+    expect(testIdsStartingWith(tree, "division-locked-"), "one line in the strip").toEqual(["division-locked-format"]);
+    expect(tree.find((e) => e.type === MatchRuleFields), "no grid").toBeUndefined();
+    expect(byTestId(tree, "division-settings-variant"), "no variant picker").toBeUndefined();
+    expect(byTestId(tree, "division-rules-format-save"), "no Save").toBeUndefined();
+    expect(byTestId(tree, "match-format-readonly"), "the format, read-only").toBeDefined();
+    // The contrast: one field short of all, and the section is a form again, with its Save.
+    const partial = mount({ lockedFields: everyBadmintonLock().filter((r) => r.field !== "cap") }).tree();
+    expect(byTestId(partial, "division-rules-format-save"), "an open field keeps the Save").toBeDefined();
+    expect(testIdsStartingWith(partial, "division-locked-")).toEqual(["division-locked-format"]);
+  });
+
+  it("the sequence: a save refused for EVERY field turns the section read-only and still lists what it refused, under it", async () => {
+    const refused = everyBadmintonLock();
+    net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused } };
+    const island = mount();
+    expect(byTestId(island.tree(), "division-rules-format-save"), "premise: a form on load").toBeDefined();
+    clickButton(island.tree(), L("rulesStrip.format.save"));
+    await flush();
+    const tree = island.tree();
+    expect(byTestId(tree, "division-rules-format-save"), "nothing left to save").toBeUndefined();
+    expect(formatLockText(tree)).toBe(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
+    expect(byTestId(tree, "division-refused-list"), "what it refused is still said").toBeDefined();
+    expect(byTestId(tree, "division-settings-error")).toBeDefined();
   });
 
   it("a viewer who cannot edit reads the rules with no control at all, whatever the locks say (the lock does not re-open anything)", () => {
@@ -450,7 +502,7 @@ describe("what the form learned from a save is dropped once the page knows bette
     // The page now says something else is locked (and not setTo): its list stands alone, the learned one is gone.
     island.rerender(stripProps({ lockedFields: [lock("cap")] }));
     expect(propsOf(ruleFieldsEl(island.tree())).lockedFields).toEqual([lock("cap")]);
-    expect(byTestId(island.tree(), "division-locked-setTo")).toBeUndefined();
+    expect(testIdsStartingWith(island.tree(), "division-locked-"), "still one line for the section").toEqual(["division-locked-format"]);
   });
 
   it("the page's own lock wins over a learned one for the same field (the stage it names stands)", async () => {
