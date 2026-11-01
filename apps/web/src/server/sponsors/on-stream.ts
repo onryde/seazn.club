@@ -15,7 +15,8 @@ import { builtinModules } from "@seazn/engine/sports";
 import { withTenant, type Tx } from "@/lib/db";
 import { EngineError } from "@seazn/engine/core";
 import { log } from "@/server/logger";
-import { foldFrom, loadFoldInputs } from "@/server/engine-db/fold";
+import { foldFrom, loadFoldInputs, type FoldInputs } from "@/server/engine-db/fold";
+import { captureError } from "@/lib/sentry";
 import { replayDerived } from "@/server/overlay/recent";
 import type { BreakDecl, BreakOpened } from "@/lib/sponsor-plan";
 import type { SportPreviewSource } from "@/lib/sponsor-preview";
@@ -49,9 +50,14 @@ const kindsOf = (sportKey: string): readonly BreakDecl[] | null =>
  * (`breaksComplete` false - a missing break would be unproven, not absent) or that opened no break is skipped for the next
  * most recent, up to `PREVIEW_CANDIDATES`.
  *
- * Only an `EngineError` is a skip. Anything else - above all an SQL error, which has already aborted the one transaction
- * this runs in - propagates: swallowing it would answer "no sample" from a dead transaction and fail the NEXT query with a
- * message that names nothing.
+ * Two failure rules, split by what can touch the one transaction this runs in (final review I2):
+ *   - `loadFoldInputs` is the only step that runs SQL. Only its `EngineError` (an unassigned entrant, a module this build no
+ *     longer ships - thrown by JS around its reads, never by them) is a skip. Anything else - above all an SQL error, which
+ *     has already aborted the transaction - propagates: swallowing it would answer "no sample" from a dead transaction and
+ *     fail the NEXT query with a message that names nothing.
+ *   - `foldFrom` and `replayDerived` are pure. NOTHING they throw can have touched the transaction, so any throw (an engine
+ *     refusal, or a TypeError from an odd legacy ledger) costs the preview that one candidate - warned and reported - and
+ *     never the tab: one bad fixture must not 500 the On stream tab for as long as it stays the most recent.
  */
 export async function latestFinishedBreaks(
   tx: Tx,
@@ -69,24 +75,32 @@ export async function latestFinishedBreaks(
      order by f.finished_at desc nulls last, f.id desc
      limit ${PREVIEW_CANDIDATES}`;
   for (const { id, competition_id: fixtureCompetition } of candidates) {
+    let inputs: FoldInputs | null;
     try {
-      const inputs = await loadFoldInputs(tx, id);
-      if (inputs === null) continue;
+      inputs = await loadFoldInputs(tx, id);
+    } catch (err) {
+      // An entrant deleted after scoring, a module version this build no longer ships: that one candidate, never the page.
+      if (!EngineError.is(err)) throw err;
+      log.warn({ fixtureId: id, code: err.code }, "sponsors on stream: preview fixture skipped");
+      continue;
+    }
+    if (inputs === null) continue;
+    let replay: ReturnType<typeof replayDerived>;
+    try {
       const folded = foldFrom(id, inputs);
-      const replay = replayDerived({
+      replay = replayDerived({
         sportKey: inputs.sportKey,
         module: inputs.module,
         cfg: inputs.cfg,
         lineups: inputs.lineups,
         active: folded.active,
       });
-      if (replay.breaksComplete && replay.breaks.length > 0) return { breaks: replay.breaks, competitionId: fixtureCompetition };
     } catch (err) {
-      // A fold the engine refuses (an entrant deleted after scoring, a module version this build no longer ships) costs the
-      // preview that one candidate, never the page.
-      if (!EngineError.is(err)) throw err;
-      log.warn({ fixtureId: id, code: err.code }, "sponsors on stream: preview fixture skipped");
+      log.warn({ fixtureId: id, code: EngineError.is(err) ? err.code : null, err: String(err) }, "sponsors on stream: preview fixture skipped");
+      captureError(err, { orgId, route: "sponsors.on_stream.preview_fixture", extra: { fixtureId: id, sportKey } });
+      continue;
     }
+    if (replay.breaksComplete && replay.breaks.length > 0) return { breaks: replay.breaks, competitionId: fixtureCompetition };
   }
   return null;
 }

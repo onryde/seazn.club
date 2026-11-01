@@ -182,6 +182,14 @@ call that needs the value (a composed start's Machine, the daily sweep), not at 
 deploy missing one starts and serves until then. The relay block of the root
 [`.env.example`](.env.example) documents each one.
 
+**Deploy step — sponsors on stream (R4).** Sponsor airings and proof frames stay off until
+web's `RELAY_AIRINGS=1`, which web copies into every composed Machine's env
+(`server/relay/runner-fly.ts`). Set it as a Fly secret on the **web** app only after, in this
+order: R4 PR A (web) is deployed; the **private** Supabase Storage bucket `sponsor-frames`
+exists; and the compositor carrying R4 PR C is deployed and named by `RELAY_IMAGE`. Before
+that, leave it unset — a Machine without it sends no airings and grabs no frames, so the
+report's "Times shown" stays 0. Streams already running keep the env they booted with.
+
 Two facts worth knowing before reading the design:
 
 - `stream.liveInputs.create()` returns `{ uid, rtmps, srt, webRTC }` from a single call,
