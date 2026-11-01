@@ -1041,9 +1041,14 @@ interface GenFixture {
   departedSeat?: "home" | "away";
 }
 
-interface ActiveEntrant {
+export interface ActiveEntrant {
   id: string;
   seed: number | null;
+  /** W3 T6 (spec §4, ruling 251): the first Swiss round this entrant is in the field for; null = from round 1, which is
+   *  every entrant enrolled before Start. Read only by the Swiss path (`swissFieldForRound`, `buildSwissHistory`);
+   *  written by Task 9's late entry. Every list built from something other than the active select (a qualified slate,
+   *  a preview, a slot placement) carries null: that field is fixed when the stage is drawn. */
+  swiss_first_round: number | null;
 }
 
 function bracketToGen(bracket: GeneratedBracket, laneDepth: number): GenFixture[] {
@@ -1258,11 +1263,132 @@ type SwissGenResult = {
   seatedIds: string[];
 };
 
+/**
+ * W3 T6 (spec §4 "Scoring for the newcomer", ruling 251; rule X-SW-12): the field of Swiss round `target` — every entrant
+ * whose first Swiss round is at or before it (null = from round 1). A latecomer given round 4 (case (c)) is not seated by
+ * a Pair of round 3, nor by its re-Pair after an Undo. The order is kept: it is the seeding order the standings rank by.
+ */
+export function swissFieldForRound(entrants: ActiveEntrant[], target: number): ActiveEntrant[] {
+  return entrants.filter((e) => (e.swiss_first_round ?? 1) <= target);
+}
+
+/** The round history `pairRound` is handed (scheduling `SwissHistory`), in the shape `swissGen` builds it. */
+export interface SwissHistoryState {
+  /** Each entrant's pairing score: 1 per win or bye, ½ per draw. */
+  score: Map<string, number>;
+  /** `pairKey`s of every pair that has met. */
+  played: Set<string>;
+  /** Each player's colours in round order; a game nobody played holds none. */
+  colours: Map<string, Colour[]>;
+  /** Who may no longer take the pairing-allocated bye (P-A4). */
+  byes: Set<string>;
+}
+
+/**
+ * The history loop of `swissGen` (its award loop plus its implicit-bye loop), extracted by W3 T6 UNCHANGED except for one
+ * rule: the implicit-bye loop credits and bye-marks an entrant for round r only when r is at or after their first Swiss
+ * round. For a stage where every first round is null it is the inline loop it replaced, row for row — proven over real
+ * seeded rows against a verbatim copy of that loop (swiss-late-field.test.ts). `swissGen` calls it; Task 7 changes its
+ * `played` rule; Task 9 reads it for case (b)'s colours.
+ *
+ * `existing` is the stage's rows in round order (generateStageFixturesTx's ORDER BY: the colours are a sequence).
+ * `entrants` is the field being paired (`swissFieldForRound`). `playedFacts` (fixture id → was it played) is Task 7's
+ * input; until then every caller passes an empty map and nothing reads it.
+ */
+export function buildSwissHistory(
+  existing: readonly SwissExistingFixture[],
+  entrants: readonly ActiveEntrant[],
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Task 7's input (its `played` rule); it reads it, and drops this line
+  playedFacts: ReadonlyMap<string, boolean>,
+): SwissHistoryState {
+  const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
+  const played = new Set<string>();
+  const colours = new Map<string, Colour[]>();
+  const byes = new Set<string>();
+  const inRound = new Map<number, Set<string>>();
+  for (const f of existing) {
+    const o = f.outcome as { kind?: string; winner?: string } | null;
+    // Only a system bye — one seat, won by the seated side — is a bye. Every
+    // sport kernel ALSO emits `{kind: "award"}` for a real two-sided walkover
+    // or retirement, and that is a played match: it falls through, so the pair
+    // is `played` (no rematch), both sides sat the round (no implicit bye for
+    // the absent loser) and the winner scores below. Case 3 of the 2026-09-24
+    // Saturday probe: reading every award as a bye re-paired A v H in round 2.
+    if (isOneSidedAwardBye(f) && o?.winner) {
+      const forRound = inRound.get(f.round_no) ?? new Set<string>();
+      forRound.add(o.winner);
+      inRound.set(f.round_no, forRound);
+      byes.add(o.winner);
+      score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+      continue;
+    }
+    if (!f.home_entrant_id || !f.away_entrant_id) continue;
+    played.add(pairKey(f.home_entrant_id, f.away_entrant_id));
+    const forRound = inRound.get(f.round_no) ?? new Set<string>();
+    forRound.add(f.home_entrant_id).add(f.away_entrant_id);
+    inRound.set(f.round_no, forRound);
+    // A forfeited game takes no colour — the engine's colour history skips
+    // byes and forfeits (`competition/tiebreakers.ts`, boardgame DOMAIN.md).
+    // Loop R M-8: a double walkover is a forfeit too (nobody played; boardgame's
+    // `colorOf` reads `state.forfeited`), so it holds no colour either.
+    if (o?.kind !== "award" && o?.kind !== "double_walkover") {
+      (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
+      (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
+    }
+    // FIDE C.04.1(d) (owner-approved 2026-09-24): a player who has scored a
+    // walkover win may not later receive the pairing-allocated bye. `byes`
+    // feeds ONLY `pairRound`'s bye pick, so this is eligibility and nothing
+    // else — no bye score (the +1 below is the win's), and `played`/`inRound`
+    // above treat it as any played match.
+    if (o?.kind === "award" && o.winner) byes.add(o.winner);
+    if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+    else if (o?.kind === "draw" || o?.kind === "tie") {
+      score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
+      score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
+    }
+  }
+  const latestSeated = latestSeatedSwissRound(existing);
+  for (let r = 1; r <= (latestSeated ?? 0); r++) {
+    const inRoundR = existing.filter((f) => f.round_no === r);
+    if (
+      !inRoundR.every((f) =>
+        isSwissBoardSeated({
+          home_entrant_id: f.home_entrant_id,
+          away_entrant_id: f.away_entrant_id,
+          outcome: f.outcome,
+        }),
+      )
+    ) {
+      continue;
+    }
+    // This round already carries an explicit bye row, so the award loop above
+    // has credited whoever sat out; inferring a second one here would
+    // double-count. (C1: this used to fire for a two-sided forfeit as well,
+    // which silently suppressed the implicit-bye inference for that round.)
+    if (inRoundR.some((f) => isOneSidedAwardBye(f))) continue;
+    const seen = inRound.get(r) ?? new Set();
+    for (const e of entrants) {
+      // W3 T6 (ruling 251; rulebook §4 late-entry row, FIDE C.04.2 2.4): a round before the entrant's first Swiss round
+      // is a MISSED round — 0 points, and not a bye, so they stay bye-eligible (P-A4) — never an implicit bye. Null is
+      // from round 1, so an entrant enrolled before Start is credited exactly as before.
+      if (!seen.has(e.id) && (e.swiss_first_round ?? 1) <= r) {
+        byes.add(e.id);
+        score.set(e.id, (score.get(e.id) ?? 0) + 1);
+      }
+    }
+  }
+  return { score, played, colours, byes };
+}
+
 // Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
 // every round the organiser declared in `config.rounds`; Pair next (a later
 // Generate when shells already exist) seats one round at a time onto those
 // shells. The organiser-set round budget is the only authority — nothing here
 // derives or persists `rounds` from field size.
+//
+// W3 T6 (spec §4, ruling 251): `entrants` is the whole active list; each round
+// is paired, sized and scored over its own field (`swissFieldForRound`), so a
+// latecomer whose first round is later is not seated before it.
 async function swissGen(
   tx: Tx,
   stageId: string,
@@ -1286,7 +1412,8 @@ async function swissGen(
       throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);
     }
     return {
-      gen: planSwissShells(rounds, entrants.length).map((shell) => ({
+      // Minted at round 1's field; every later round is resized to its own field when its Pair reaches it.
+      gen: planSwissShells(rounds, swissFieldForRound(entrants, 1).length).map((shell) => ({
         extKey: shell.extKey,
         roundNo: shell.roundNo,
         seqInRound: shell.seqInRound,
@@ -1365,79 +1492,11 @@ async function swissGen(
   const defaultPairing = effectiveSwissPairing({ stored, round: target });
   const pairing = effectiveSwissPairing({ override, stored, round: target });
   const rankAdjacent = pairing === "rank_adjacent";
-  const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
-  const played = new Set<string>();
-  const colours = new Map<string, Colour[]>();
-  const byes = new Set<string>();
-  const inRound = new Map<number, Set<string>>();
-  for (const f of existing) {
-    const o = f.outcome as { kind?: string; winner?: string } | null;
-    // Only a system bye — one seat, won by the seated side — is a bye. Every
-    // sport kernel ALSO emits `{kind: "award"}` for a real two-sided walkover
-    // or retirement, and that is a played match: it falls through, so the pair
-    // is `played` (no rematch), both sides sat the round (no implicit bye for
-    // the absent loser) and the winner scores below. Case 3 of the 2026-09-24
-    // Saturday probe: reading every award as a bye re-paired A v H in round 2.
-    if (isOneSidedAwardBye(f) && o?.winner) {
-      const forRound = inRound.get(f.round_no) ?? new Set<string>();
-      forRound.add(o.winner);
-      inRound.set(f.round_no, forRound);
-      byes.add(o.winner);
-      score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-      continue;
-    }
-    if (!f.home_entrant_id || !f.away_entrant_id) continue;
-    played.add(pairKey(f.home_entrant_id, f.away_entrant_id));
-    const forRound = inRound.get(f.round_no) ?? new Set<string>();
-    forRound.add(f.home_entrant_id).add(f.away_entrant_id);
-    inRound.set(f.round_no, forRound);
-    // A forfeited game takes no colour — the engine's colour history skips
-    // byes and forfeits (`competition/tiebreakers.ts`, boardgame DOMAIN.md).
-    // Loop R M-8: a double walkover is a forfeit too (nobody played; boardgame's
-    // `colorOf` reads `state.forfeited`), so it holds no colour either.
-    if (o?.kind !== "award" && o?.kind !== "double_walkover") {
-      (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
-      (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
-    }
-    // FIDE C.04.1(d) (owner-approved 2026-09-24): a player who has scored a
-    // walkover win may not later receive the pairing-allocated bye. `byes`
-    // feeds ONLY `pairRound`'s bye pick, so this is eligibility and nothing
-    // else — no bye score (the +1 below is the win's), and `played`/`inRound`
-    // above treat it as any played match.
-    if (o?.kind === "award" && o.winner) byes.add(o.winner);
-    if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-    else if (o?.kind === "draw" || o?.kind === "tie") {
-      score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
-      score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
-    }
-  }
-  const latestSeated = latestSeatedSwissRound(existing);
-  for (let r = 1; r <= (latestSeated ?? 0); r++) {
-    const inRoundR = existing.filter((f) => f.round_no === r);
-    if (
-      !inRoundR.every((f) =>
-        isSwissBoardSeated({
-          home_entrant_id: f.home_entrant_id,
-          away_entrant_id: f.away_entrant_id,
-          outcome: f.outcome,
-        }),
-      )
-    ) {
-      continue;
-    }
-    // This round already carries an explicit bye row, so the award loop above
-    // has credited whoever sat out; inferring a second one here would
-    // double-count. (C1: this used to fire for a two-sided forfeit as well,
-    // which silently suppressed the implicit-bye inference for that round.)
-    if (inRoundR.some((f) => isOneSidedAwardBye(f))) continue;
-    const seen = inRound.get(r) ?? new Set();
-    for (const e of entrants) {
-      if (!seen.has(e.id)) {
-        byes.add(e.id);
-        score.set(e.id, (score.get(e.id) ?? 0) + 1);
-      }
-    }
-  }
+  // W3 T6 (X-SW-12): this round's field — a latecomer whose first round is later is neither seated, sized for, nor
+  // scored here. Everything below that reads the field reads THIS list.
+  const field = swissFieldForRound(entrants, target);
+  // Task 7 gives `playedFacts` its first reader (its `played` rule); until then the map is empty.
+  const { score, played, colours, byes } = buildSwissHistory(existing, field, new Map());
 
   const cascadeRank = new Map<string, number>();
   if (rankAdjacent && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status))) {
@@ -1447,7 +1506,7 @@ async function swissGen(
     }
   }
   const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
-  const standings: SwissStanding[] = entrants.map((e, i) => ({
+  const standings: SwissStanding[] = field.map((e, i) => ({
     entrantId: e.id,
     score: score.get(e.id) ?? 0,
     rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
@@ -1499,7 +1558,7 @@ async function swissGen(
     divisionId,
     target,
     existing,
-    entrants.length,
+    field.length,
     "refuse",
   );
   // Summed across every round this pass touched, so the organiser is told what
@@ -1514,7 +1573,8 @@ async function swissGen(
       divisionId,
       roundNo,
       existing,
-      entrants.length,
+      // Each later round to ITS field (W3 T6): a latecomer whose first round is still ahead counts there, not here.
+      swissFieldForRound(entrants, roundNo).length,
       "skip",
     );
     reshaped = addSwissReshape(reshaped, later.delta);
@@ -2147,6 +2207,7 @@ export function previewDivisionFixtures(
       const entrants: ActiveEntrant[] = Array.from({ length: entrantCount }, (_, i) => ({
         id: `e${i + 1}`,
         seed: i + 1,
+        swiss_first_round: null,
       }));
       gen = generate(stage.kind, stage.config, entrants, poolIds);
     } catch {
@@ -2800,7 +2861,7 @@ export async function generateStageFixturesTx(
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
 
   const active = await tx<ActiveEntrant[]>`
-    select id, seed from entrants
+    select id, seed, swiss_first_round from entrants
     where division_id = ${stage.division_id} and status in ('registered', 'confirmed')
     order by seed nulls last, created_at, id`;
 
@@ -2827,7 +2888,7 @@ export async function generateStageFixturesTx(
       // and one that also robs the departed qualifier's opponent of the
       // walkover they are owed. Keep the published positions; the pairings
       // that hold a departed qualifier become walkovers below.
-      entrants = qualified.map((id, i) => ({ id, seed: i + 1 }));
+      entrants = qualified.map((id, i) => ({ id, seed: i + 1, swiss_first_round: null }));
       const gone = qualified.filter((id) => !activeIds.has(id));
       // Restored refusal (re-review C2). Keeping the full slate above means
       // `entrants.length` is now the PUBLISHED draw's size, so the
@@ -2850,7 +2911,9 @@ export async function generateStageFixturesTx(
       // A table stage has no draw to preserve and no opponent to walk over
       // to: nothing has been played, so spec 05 §5's policy for these kinds
       // is EXPUNGE — the departed entrant simply is not in the field.
-      entrants = qualified.filter((id) => activeIds.has(id)).map((id, i) => ({ id, seed: i + 1 }));
+      // W3 T6: a qualified field is fixed when the stage is drawn, so every qualifier plays from its round 1 — an
+      // entrant's `swiss_first_round` belongs to the Swiss stage that admitted them late, not to this one.
+      entrants = qualified.filter((id) => activeIds.has(id)).map((id, i) => ({ id, seed: i + 1, swiss_first_round: null }));
     }
   } else {
     entrants = active;
@@ -3826,7 +3889,7 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
     const entrants: ActiveEntrant[] = placed.map((slot, i) => {
       const id = `slot:${i + 1}`;
       slotOf.set(id, slot.descriptor);
-      return { id, seed: i + 1 };
+      return { id, seed: i + 1, swiss_first_round: null };
     });
 
     // Group-kind target (e.g. a "Super 8" round robin fed by group-stage

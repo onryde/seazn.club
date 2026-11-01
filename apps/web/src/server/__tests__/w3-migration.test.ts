@@ -139,3 +139,79 @@ describe.runIf(HAS_DB)("W3 delta: bye shells come off the court", () => {
     expect(verdict.again, "… and moves nothing").toEqual(verdict.after);
   }, 120_000);
 });
+
+// W3 Task 6 (spec §4, ruling 251; X-SW-8, X-SW-12) — the delta that gives each entrant a first Swiss round. A schema change
+// only: Task 0's count 4 was 0 on stg and prod's is unread, so it backfills nothing (its LOUD comment block says what is
+// owed if prod's count 4 is > 0). Read by glob like the delta above; its statement re-run inside a rolled-back transaction.
+// single-sport: badminton — the delta is a column on entrants and reads no sport field.
+const FIRST_ROUND_NAME = /^V\d+__w3_swiss_first_round\.sql$/;
+const firstRoundFiles = readdirSync(DELTAS).filter((f) => FIRST_ROUND_NAME.test(f));
+const firstRoundText = firstRoundFiles.length === 1 ? readFileSync(resolve(DELTAS, firstRoundFiles[0]!), "utf8") : "";
+const firstRoundCode = firstRoundText.replace(/--.*$/gm, "").trim();
+
+describe("W3 delta: swiss_first_round, the file", () => {
+  it("exactly one delta carries the name, and it is one idempotent ADD COLUMN on entrants — no data move", () => {
+    expect(firstRoundFiles, "one delta named *__w3_swiss_first_round.sql").toHaveLength(1);
+    expect(firstRoundCode.split(";").filter((s) => s.trim() !== "").length, "one statement").toBe(1);
+    expect(firstRoundCode).toMatch(/^alter table entrants add column if not exists swiss_first_round int\b/);
+    expect(firstRoundCode, "the column carries its check").toMatch(/check \(swiss_first_round >= 1\)/);
+    // A backfill would be a DATA CHANGE and must say so; this delta moves no stored value.
+    expect(firstRoundCode, "no update statement").not.toMatch(/\bupdate\b/i);
+  });
+});
+
+describe.runIf(HAS_DB)("W3 delta: swiss_first_round on entrants", () => {
+  it("the column exists, nullable; the check rejects 0 and accepts 1; a second run is a no-op", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W3 first round " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open-" + randomUUID().slice(0, 6),
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    const [entrant] = await createEntrants(auth, division.id, [{ kind: "individual" as const, display_name: "P1", seed: 1, members: [] }]);
+    const id = entrant!.id;
+
+    const verdict = await rolledBack(async (tx) => {
+      const column = () =>
+        tx<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+          select data_type, is_nullable, column_default from information_schema.columns
+          where table_schema = current_schema() and table_name = 'entrants' and column_name = 'swiss_first_round'`;
+      const checks = () =>
+        tx<{ def: string }[]>`
+          select pg_get_constraintdef(c.oid) as def from pg_constraint c
+          where c.conrelid = 'entrants'::regclass and c.contype = 'c' and pg_get_constraintdef(c.oid) like '%swiss_first_round%'`;
+      const stored = async () => (await tx<{ v: number | null }[]>`select swiss_first_round as v from entrants where id = ${id}`)[0]!.v;
+      /** The update's SQLSTATE, or "ok" — under a savepoint, so a refusal leaves the transaction usable. */
+      const set = async (v: number) => {
+        try {
+          await tx.savepoint((sp) => sp`update entrants set swiss_first_round = ${v} where id = ${id}`);
+          return "ok";
+        } catch (e) {
+          return (e as { code?: string }).code ?? "error";
+        }
+      };
+      const columnBefore = await column();
+      const checksBefore = await checks();
+      const fresh = await stored();
+      const zero = await set(0);
+      const one = await set(1);
+      const three = await set(3);
+      await tx.unsafe(firstRoundCode);
+      return { columnBefore, checksBefore, fresh, zero, one, three, columnAfter: await column(), checksAfter: await checks(), kept: await stored() };
+    });
+
+    expect(verdict.columnBefore, "the applied schema has the column: an integer, nullable, no default").toEqual([
+      { data_type: "integer", is_nullable: "YES", column_default: null },
+    ]);
+    expect(verdict.checksBefore.map((c) => c.def), "one check on it").toEqual(["CHECK ((swiss_first_round >= 1))"]);
+    expect(verdict.fresh, "an entrant enrolled the ordinary way plays from round 1 (null)").toBeNull();
+    expect(verdict.zero, "the check rejects 0 (23514 check_violation)").toBe("23514");
+    expect([verdict.one, verdict.three], "and accepts 1 and 3").toEqual(["ok", "ok"]);
+    expect(verdict.columnAfter, "a second run leaves the column as it was").toEqual(verdict.columnBefore);
+    expect(verdict.checksAfter, "… adds no second check").toEqual(verdict.checksBefore);
+    expect(verdict.kept, "… and moves no stored value").toBe(3);
+  }, 120_000);
+});

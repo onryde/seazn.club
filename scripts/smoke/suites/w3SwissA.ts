@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { type Session, newSession, check, signIn, tag, v1, v1data } from "../harness.ts";
+import { type Session, appendScoreEvent, newSession, check, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
 
 /**
  * Format matrix W3 Swiss app-A (spec 2026-10-31-format-matrix-w3-swiss-design.md) — the app PR's smoke proof, over real
@@ -10,14 +10,18 @@ import { type Session, newSession, check, signIn, tag, v1, v1data } from "../har
  * pinned one. T4 (X-SW-21, RB3-15 A): an ad-hoc match on a Swiss stage is refused 422 SWISS_ADHOC_REFUSED and writes
  * nothing. T3 (X-SW-5, X-SW-29; SW-M7, SW-M13): a bye's format is frozen when Pair awards it, so a later format save
  * leaves it, and a bye shell takes no court or time (422 SWISS_BYE_NOT_PLACEABLE). T5 (X-SW-28, #835): Undo of Pair next
- * puts the round back onto its shells — no round-1 row is left seated. Own fresh owner; keyless (no DATABASE_URL: every read is a v1 route). Every check
- * is counted, and a run that checked nothing fails. SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
+ * puts the round back onto its shells — no round-1 row is left seated. T6 (X-SW-12, ruling 251): an entrant whose first
+ * Swiss round is 2 is on no round-1 row and is seated from round 2. Own fresh owner. Every read is a v1 route; the one
+ * write that needs DATABASE_URL is T6's stamp of `entrants.swiss_first_round` (no route writes it until Task 9), and
+ * without it that check fails rather than skips. Every check is counted, and a run that checked nothing fails.
+ * SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissASuite(): Promise<void> {
   // T1: 2 (a rebuild keeps 3 slots; a shrinking rebuild counts the slots it freed) + T2: 1 (a pre-Start reshape keeps
   // the pinned boards) + T4: 1 (no ad-hoc match on a Swiss stage; T4 runs before T3 by controller ruling C1) + T3: 2 (a
-  // bye's format is frozen at award; a bye shell is never placed) + T5: 1 (Undo of Pair next clears the round's seats).
-  const EXPECTED_CHECKS = 7;
+  // bye's format is frozen at award; a bye shell is never placed) + T5: 1 (Undo of Pair next clears the round's seats) +
+  // T6: 1 (an entrant with a first Swiss round is on no round below it).
+  const EXPECTED_CHECKS = 8;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -336,6 +340,66 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-28: Undo of Pair next leaves 0 seated round-1 rows (3 before) and keeps every shell" +
           (ok ? "" : ` — players ${undoPlayers.length}, mint ${undoMint.status}, pair ${undoPair.status}, round 1 ${before.length} rows / ${seated(before)} seated, undo ${undone.status} ${JSON.stringify(undone.json).slice(0, 160)}, after ${after.length} rows / ${seated(after)} seated, same shells ${sameShells}`),
+        ok,
+      );
+    }
+
+    // Check 8 (T6, X-SW-12; spec §4, ruling 251): an entrant whose first Swiss round is 2 is on no round below it, and is
+    // seated from it. A generic Swiss of five in the same competition; the fifth is given first round 2 — this suite's one
+    // SQL write, because nothing writes the column over HTTP until Task 9's "Add late player" — then Start, Pair round 1
+    // (four players: two boards, no bye), both boards decided by walkover, and Pair round 2 (all five).
+    {
+      const lateDiv = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/competitions/${byeComp?.id}/divisions`, "POST", {
+          name: "Late",
+          sport_key: "generic",
+          variant_key: "score",
+          config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        }),
+      )?.id;
+      const latePlayers =
+        v1data<{ id: string; display_name: string }[] | undefined>(
+          await v1(owner, `/api/v1/divisions/${lateDiv}/entrants`, "POST",
+            Array.from({ length: 5 }, (_, i) => ({ kind: "individual", display_name: `L${i + 1} ${tag}`, seed: i + 1 }))),
+        ) ?? [];
+      const fifth = latePlayers.find((p) => p.display_name === `L5 ${tag}`)?.id ?? "";
+      const lateStage = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/divisions/${lateDiv}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } }),
+      )?.id;
+      // -1: no DATABASE_URL, so the stamp could not be written and the check cannot be judged (it fails, never skips).
+      let stamped = -1;
+      if (process.env.DATABASE_URL) {
+        const db = smokeDb();
+        try {
+          stamped = (await db`update entrants set swiss_first_round = 2 where id = ${fifth}`).count;
+        } finally {
+          await db.end();
+        }
+      }
+      const started = await v1(owner, `/api/v1/divisions/${lateDiv}/start`, "POST");
+      const pair1 = await v1(owner, `/api/v1/stages/${lateStage}/generate`, "POST");
+      type Seat = Fx & { home_entrant_id: string | null; away_entrant_id: string | null };
+      const roundRows = async (r: number) =>
+        (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${lateDiv}/fixtures`)) ?? []).filter(
+          (f) => f.stage_id === lateStage && f.round_no === r,
+        );
+      const on = (rs: Seat[], id: string) => rs.some((f) => f.home_entrant_id === id || f.away_entrant_id === id);
+      const r1 = await roundRows(1);
+      const r1Boards = r1.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
+      const othersOnR1 = latePlayers.filter((p) => p.id !== fifth && on(r1, p.id)).length;
+      const walkovers: number[] = [];
+      for (const b of r1Boards) {
+        walkovers.push((await appendScoreEvent(owner, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" })).status);
+      }
+      const pair2 = await v1(owner, `/api/v1/stages/${lateStage}/generate`, "POST");
+      const r2 = await roundRows(2);
+      const ok =
+        stamped === 1 && latePlayers.length === 5 && started.status < 300 && pair1.status === 200 &&
+        r1Boards.length === 2 && !on(r1, fifth) && othersOnR1 === 4 &&
+        walkovers.length === 2 && walkovers.every((s) => s < 300) && pair2.status === 200 && on(r2, fifth);
+      w3Check(
+        "w3a X-SW-12: an entrant whose first Swiss round is 2 is on no round-1 row (4 others on 2 boards) and is seated in round 2" +
+          (ok ? "" : ` — stamped ${stamped === -1 ? "no DATABASE_URL" : stamped}, players ${latePlayers.length}, start ${started.status}, pair 1 ${pair1.status} ${JSON.stringify(pair1.json).slice(0, 160)}, round 1 ${r1Boards.length} boards / fifth on it ${on(r1, fifth)} / others ${othersOnR1}, walkovers ${walkovers.join(",")}, pair 2 ${pair2.status} ${JSON.stringify(pair2.json).slice(0, 160)}, fifth on round 2 ${on(r2, fifth)}`),
         ok,
       );
     }
