@@ -11,6 +11,7 @@
 //   S2  range guard    drop the `to < from` disable                              -> "to before from"
 //   S3  two-step       Revoke sends at once (skip `setConfirming`)               -> "Revoke asks first"
 //   S4  once           Done keeps the url (skip `setCreated(null)`)              -> "the url is shown once"
+//   S5  period reset   drop the defaults render-phase reset (fix round 1, I1)     -> "a period change while the panel is open..."
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
@@ -105,6 +106,8 @@ describe("create", () => {
     await m.submit();
     await flush();
     expect(propsOf(m.find("sponsor-share-url"))).toMatchObject({ value: `${ORIGIN}/r/sponsor/${TOKEN_A}`, readOnly: true });
+    // A bearer secret painted in the DOM is kept out of session replay (the house class, fixture-stream-panel.tsx).
+    expect(String(propsOf(m.find("sponsor-share-url")).className)).toMatch(/(^|\s)ph-no-capture(\s|$)/);
     expect(m.has("sponsor-share-form"), "the form steps aside while the url is up").toBe(false);
     expect(m.text("sponsor-share-once")).toContain(msg("sponsors.share.onceHelp"));
 
@@ -157,6 +160,45 @@ describe("create", () => {
     expect(m.text("sponsor-share-error")).toBe("Insufficient permissions");
     expect(m.has("sponsor-share-once")).toBe(false);
     expect(nav.refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe("a period change while the panel is open (fix round 1, I1: Next keeps client state across ?period=)", () => {
+  const YEAR = { from: "2026-01-01", to: "2026-12-31", competitionId: null };
+  const CUP = { from: "2026-03-01", to: "2026-06-15", competitionId: "c1" };
+
+  it("the dates follow the new period's defaults, and Create sends the new scope WITH the new dates (never mixed)", async () => {
+    fetchMock.mockResolvedValueOnce(created(TOKEN_A));
+    const m = mount({ defaults: YEAR });
+    m.island.rerender(base({ defaults: CUP, competitionName: "Spring Cup" }));
+    expect(propsOf(m.find("sponsor-share-from")).value).toBe(CUP.from);
+    expect(propsOf(m.find("sponsor-share-to")).value).toBe(CUP.to);
+    await m.submit();
+    await flush();
+    expect(requests()).toEqual([{ url: "/api/v1/orgs/org-1/sponsors/s1/report-links", method: "POST", body: { competitionId: "c1", from: CUP.from, to: CUP.to } }]);
+  });
+
+  it("dates the organiser typed survive a refresh that hands the SAME period back as a new object, and give way to a real change", () => {
+    const m = mount({ defaults: YEAR });
+    m.type("sponsor-share-from", "2026-02-01");
+    m.island.rerender(base({ defaults: { ...YEAR } }));
+    expect(propsOf(m.find("sponsor-share-from")).value, "same values: kept").toBe("2026-02-01");
+    m.island.rerender(base({ defaults: { ...YEAR, to: "2026-11-01" } }));
+    expect(propsOf(m.find("sponsor-share-from")).value, "a new period: reset").toBe(YEAR.from);
+    expect(propsOf(m.find("sponsor-share-to")).value).toBe("2026-11-01");
+  });
+
+  it("a url already on screen survives the period change (it is shown only once); Done then shows the form at the NEW dates", async () => {
+    fetchMock.mockResolvedValueOnce(created(TOKEN_A));
+    const m = mount({ defaults: YEAR });
+    await m.submit();
+    await flush();
+    m.island.rerender(base({ defaults: CUP, competitionName: "Spring Cup" }));
+    expect(propsOf(m.find("sponsor-share-url")).value, "still the one url").toBe(`${ORIGIN}/r/sponsor/${TOKEN_A}`);
+    m.click("sponsor-share-done");
+    expect(propsOf(m.find("sponsor-share-from")).value).toBe(CUP.from);
+    expect(propsOf(m.find("sponsor-share-to")).value).toBe(CUP.to);
+    expect(m.text("sponsor-share-competition")).toBe(msg("sponsors.share.competition", { competition: "Spring Cup" }));
   });
 });
 

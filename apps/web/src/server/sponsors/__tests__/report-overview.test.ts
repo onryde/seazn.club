@@ -36,6 +36,7 @@
 //   K4  open airing   `a.ended_at` -> `coalesce(a.ended_at, ${now})`       -> "open airings"
 //   K5  clamp         drop `greatest(…, 0)`                                 -> "an inverted row"
 //   K6  org check     drop `if (auth.orgId !== orgId)`                     -> "tenancy: another org's auth"
+//   K15 time period also filtered to a fixture (`and ${fixture} is not null`) -> "fix round 1 (m5)..."
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
@@ -336,6 +337,35 @@ describe.skipIf(!HAS_DB)("S13: the Overview's numbers", () => {
     const rowsB = await sponsorOverview(auth, auth.orgId, { kind: "competition", competitionId: b.competitionId }, NOW);
     expect(numbersOf(byId(rowsB, wide))).toEqual({ timesShown: 1, onScreenMs: 15_000, linkClicks: 1 });
     expect(rowsB.map((r) => r.sponsorId).sort()).toEqual([wide, ownB].sort());
+  });
+
+  it("fix round 1 (m5): an org-wide sponsor aired in TWO competitions and with no fixture, read for This year - every row counted exactly once", async () => {
+    const auth = await org();
+    const a = await competitionWithFixture(auth);
+    const b = await competitionWithFixture(auth);
+    const wide = await sponsorRow(auth.orgId, "Org Wide Ltd");
+    const airings: SeededAiring[] = [
+      { sponsorId: wide, name: "Org Wide Ltd", fixtureId: a.fixtureId, start: at("2026-02-01T10:00:00.000Z"), end: at("2026-02-01T10:00:08.000Z") },
+      { sponsorId: wide, name: "Org Wide Ltd", fixtureId: a.fixtureId, source: "scene", start: at("2026-02-01T11:00:00.000Z"), end: at("2026-02-01T11:00:10.000Z") },
+      { sponsorId: wide, name: "Org Wide Ltd", fixtureId: b.fixtureId, start: at("2026-03-01T10:00:00.000Z"), end: at("2026-03-01T10:00:15.000Z") },
+      { sponsorId: wide, name: "Org Wide Ltd", fixtureId: null, start: at("2026-04-01T10:00:00.000Z"), end: at("2026-04-01T10:00:04.000Z") },
+      { sponsorId: wide, name: "Org Wide Ltd", fixtureId: null, start: at("2026-04-02T10:00:00.000Z"), end: null },
+    ];
+    const clicks: SeededClick[] = [
+      { sponsorId: wide, fixtureId: a.fixtureId, source: "match", at: at("2026-02-01T10:00:01.000Z") },
+      { sponsorId: wide, fixtureId: b.fixtureId, source: "stream", at: at("2026-03-01T10:00:01.000Z") },
+      { sponsorId: wide, fixtureId: null, source: "site", at: at("2026-04-01T10:00:01.000Z") },
+    ];
+    for (const x of airings) await airing(auth.orgId, x);
+    for (const c of clicks) await click(auth.orgId, c);
+    const want = expectedFor(airings, clicks, inWindow(YEAR_FROM, YEAR_TO));
+    expect(want, "premise: 5 showings, 8 + 10 + 15 + 4 s (the open one adds nothing), 3 clicks").toEqual({ timesShown: 5, onScreenMs: 37_000, linkClicks: 3 });
+    const rows = await sponsorOverview(auth, auth.orgId, THIS_YEAR, NOW);
+    expect(rows.filter((r) => r.sponsorId === wide), "one row for the sponsor").toHaveLength(1);
+    expect(numbersOf(byId(rows, wide))).toEqual(want);
+    // And each competition still sees only its own share of the same rows.
+    expect(numbersOf(byId(await sponsorOverview(auth, auth.orgId, { kind: "competition", competitionId: a.competitionId }, NOW), wide))).toEqual({ timesShown: 2, onScreenMs: 18_000, linkClicks: 1 });
+    expect(numbersOf(byId(await sponsorOverview(auth, auth.orgId, { kind: "competition", competitionId: b.competitionId }, NOW), wide))).toEqual({ timesShown: 1, onScreenMs: 15_000, linkClicks: 1 });
   });
 
   it("empty: no sponsor => []; sponsors with no airings => every row reads zeros (viewers null); a second call reads the same", async () => {
