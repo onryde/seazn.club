@@ -28,12 +28,14 @@ export async function venuesSuite(admin: Session, orgId: string): Promise<void> 
     courtRes.status === 201 && court.tags.join(",") === "indoor,hardwood",
   );
 
-  const patched = v1data<{ name: string }>(
+  const patched = v1data<{ name: string; tags: string[] }>(
     await v1(admin, `/api/v1/orgs/${orgId}/courts/${court.id}`, "PATCH", {
       name: `Court ${tag} Renamed`,
     }),
   );
   check("venues: patch court renames it", patched.name === `Court ${tag} Renamed`);
+  // fix/patch-schema-partial-defaults: the rename names no tags, so they stay (zod 4's `.partial()` used to fill `tags: []`).
+  check("venues: patch court rename keeps its tags", patched.tags?.join(",") === "indoor,hardwood");
 
   const calRes = await v1(admin, `/api/v1/orgs/${orgId}/courts/${court.id}/calendar`, "PUT", {
     hours: [{ weekday: 1, open_min: 9 * 60, close_min: 17 * 60 }],

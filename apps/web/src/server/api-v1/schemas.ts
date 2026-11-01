@@ -29,6 +29,8 @@ import { PointsRule } from "@seazn/engine/competition";
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
 import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
+// A PATCH twin whose omitted fields stay omitted (zod 4's `.partial()` fills a `.default()`); pure zod, relative + `.ts`.
+import { patchOf } from "../../lib/zod-patch.ts";
 // The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
 // The player name limit, shared with the directory's rename field (persons-panel.tsx).
@@ -4705,7 +4707,9 @@ export const CreateOfficial = z.object({
   max_per_day: z.number().int().positive().nullable().optional(),
 });
 
-export const PatchOfficial = CreateOfficial.partial();
+// `patchOf`, not `.partial()`: a partial still fills `role_keys`' default, so every edit that did not send roles
+// rewrote them to ["referee"] (fix/patch-schema-partial-defaults).
+export const PatchOfficial = patchOf(CreateOfficial);
 
 // Sponsor CRM (v10 PROMPT-56) -------------------------------------------------
 
@@ -6179,7 +6183,9 @@ export const CreateVenue = z.object({
   sort: z.number().int().default(0),
 });
 
-export const PatchVenue = CreateVenue.partial();
+// `patchOf`, not `.partial()`: a partial still fills the defaults, so saving a venue reset its `sort` to 0 and renaming
+// or reordering a court wiped its `tags` — every stage's required court tags with them (fix/patch-schema-partial-defaults).
+export const PatchVenue = patchOf(CreateVenue);
 
 export const CreateCourt = z.object({
   name: z.string().min(1).max(200),
@@ -6187,7 +6193,7 @@ export const CreateCourt = z.object({
   tags: RequiredCourtTags.default([]),
 });
 
-export const PatchCourt = CreateCourt.partial();
+export const PatchCourt = patchOf(CreateCourt);
 
 export const PutCourtCalendar = z.object({
   hours: z.array(CourtHoursRangeS).max(200).default([]),
