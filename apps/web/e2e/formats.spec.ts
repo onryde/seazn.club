@@ -252,24 +252,24 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   // The knob: scoped by "Qualify to finals", NOT bare "Qualify" — the
   // "Qualifying + Main draw" picker card matches that too and the locator
   // goes strict-mode ambiguous.
-  const qualify = page.locator("label", { hasText: "Qualify to finals" }).locator("select");
-  // A reachability check would pass on any list, so pin the MEMBERSHIP: a
-  // generic bracket makes 3 and 6 real shapes, and the power-of-two list the
-  // other templates use cannot express the case this test then drives.
+  // Match Day D1: the knob is a number input over the range Settings takes
+  // (lib/format-bounds.ts), no longer a fixed list per template.
+  const qualify = page.locator("label", { hasText: "Qualify to finals" }).getByRole("spinbutton");
   await expect(qualify).toHaveValue("4");
-  expect(
-    await qualify.evaluate((e) => [...(e as HTMLSelectElement).options].map((o) => o.text)),
-  ).toEqual(["Top 2", "Top 3", "Top 4", "Top 6", "Top 8", "Top 12", "Top 16", "Top 24", "Top 32"]);
-  // And pin the ENDS on their own. `format.swiss_knockout.body.1` promises
-  // "anything from 2 to 32" in all four locales, and the Settings tab's own
-  // Top N input is min 2 / max 32 — a wizard that stopped short of either end
-  // made that copy false and put the biggest brackets out of reach until
-  // after the division already existed.
-  const span = await qualify.evaluate((e) =>
-    [...(e as HTMLSelectElement).options].map((o) => Number(o.value)),
-  );
-  expect([Math.min(...span), Math.max(...span)]).toEqual([2, 32]);
-  await qualify.selectOption({ label: "Top 3" });
+  // Pin the ENDS, from the copy rather than the code: `format.swiss_knockout.body.1`
+  // promises "anything from 2 to 32" in all four locales — a wizard that
+  // stopped short of either end made that copy false and put the biggest
+  // brackets out of reach until after the division already existed. Judged
+  // by the browser's own validity, so each end is in and one past it is out.
+  const valid = async (n: number) => {
+    await qualify.fill(String(n));
+    return qualify.evaluate((e) => (e as HTMLInputElement).checkValidity());
+  };
+  expect([await valid(1), await valid(2), await valid(32), await valid(33)]).toEqual([false, true, true, false]);
+  // A reachability check would pass on any value, so drive the case a
+  // power-of-two list cannot express: a generic bracket makes 3 a real shape.
+  await qualify.fill("3");
+  await expect(qualify).toHaveValue("3");
   // Three rounds is a full round robin for four entrants — the strict Ann >
   // Bo > Cy > Di table the knockout half reads below. Default wizard rounds
   // is 5; pin the organiser-set budget here rather than trusting the default.
