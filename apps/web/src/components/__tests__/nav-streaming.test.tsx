@@ -252,6 +252,8 @@ describe("Nav › the width budget", () => {
   const signOut = (html: string) => {
     const b = html.match(/<button\b([^>]*)>([\s\S]*?)<\/button>/);
     return {
+      found: b !== null,
+      inner: b?.[2] ?? "",
       aria: b?.[1]?.match(/\baria-label="([^"]*)"/)?.[1],
       title: b?.[1]?.match(/\btitle="([^"]*)"/)?.[1],
       labelClass: tokens(b?.[2]?.match(/<span class="([^"]*)">/)?.[1]),
@@ -260,21 +262,19 @@ describe("Nav › the width budget", () => {
   };
   const dicts = { en: dictEn, es: dictEs, fr: dictFr, nl: dictNl } as Record<string, Record<string, string>>;
 
-  it("Sign-out shows its ICON only below lg: the label span is `hidden` and appears at `lg:` — and the accessible name is the translated Sign out in all four locales", async () => {
+  it("Sign-out is its ICON alone at every width (owner 2026-11-01): no label span at all, named by aria-label with the same words as its title tooltip, in all four locales", async () => {
     let checked = 0;
     for (const locale of LOCALES) {
       m.locale.value = locale;
       const expected = dicts[locale]!["nav.signOut"];
       expect(typeof expected, locale).toBe("string");
       const so = signOut(await render());
-      expect(so.labelClass, `${locale}: hidden until lg`).toContain("hidden");
-      expect(so.labelClass, `${locale}: the label returns at lg`).toContain("lg:inline");
-      // Token checks: `sm:inline` would show the label from 640, `max-lg:`/`md:` variants would be a different rule altogether.
-      expect(so.labelClass, `${locale}: not from sm (that is the 640-1023 band that overflowed)`).not.toContain("sm:inline");
-      expect(so.labelClass, `${locale}: exactly the two tokens`).toEqual(["hidden", "lg:inline"]);
+      expect(so.found, `${locale}: the gantry renders its Sign-out button`).toBe(true);
+      expect(so.labelClass, `${locale}: no label span, hidden or shown, at any width`).toEqual([]);
+      expect(so.labelText, `${locale}: no painted words`).toBeUndefined();
+      expect(so.inner, `${locale}: the words appear nowhere inside the button`).not.toContain(expected!);
       expect(so.aria, `${locale}: the icon-only button is still named`).toBe(expected);
-      expect(so.title, `${locale}: and still has its tooltip`).toBe(expected);
-      expect(so.labelText, `${locale}: the visible label is the same words`).toBe(expected);
+      expect(so.title, `${locale}: and the tooltip says the same`).toBe(expected);
       checked++;
     }
     expect(checked).toBe(LOCALES.length);
@@ -324,7 +324,7 @@ describe("Nav › the width budget", () => {
     expect(checked, "anti-vacuity: twenty links looked at").toBe(20);
   });
 
-  it("md..lg: where the labels are ON (the org nav) the labelled links take 4px of side padding (md:px-1) and 8px from lg (lg:px-2, R4: the bar has one more link than main), so the org chip keeps room for the club name; the dual-role nav is icon-only at md, keeps its 12px and has no md override", async () => {
+  it("md..lg: where the labels are ON (the org nav) the labelled links take 4px of side padding (md:px-1) and get 12px back at lg (lg:px-3), so the org chip keeps room for the club name; the dual-role nav is icon-only at md, keeps its 12px and has no md override", async () => {
     // B3 (CI e2e: the chip showed 37px of a 38-character club name at 768, 8 characters needing 64). Measured in a browser: 8px and 6px
     // leave fr/nl at 768 short of 8 characters, 4px clears every width x locale cell (the report's table). Settings has no label (owner
     // 2026-11-01) and its own padding rule (nav-sponsors.test.tsx); it is skipped here BY INDEX and counted, never silently.
@@ -345,8 +345,7 @@ describe("Nav › the width budget", () => {
         if (labels[i]!.includes("md:inline")) {
           labelsOnAtMd++;
           expect(l, `link ${i}: labels on at md, so tight padding there`).toContain("md:px-1");
-          expect(l, `link ${i}: 8px at lg`).toContain("lg:px-2");
-          expect(l, `link ${i}: not main's 12px at lg`).not.toContain("lg:px-3");
+          expect(l, `link ${i}: 12px returns at lg`).toContain("lg:px-3");
           // Not the 8px / 6px that measurement showed too wide for fr and nl at 768.
           expect(l, `link ${i}: not md:px-2`).not.toContain("md:px-2");
           expect(l, `link ${i}: not md:px-1.5`).not.toContain("md:px-1.5");

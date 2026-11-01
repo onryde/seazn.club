@@ -33,14 +33,18 @@ describe("console chrome i18n", () => {
     expect(html).not.toContain("Sign out");
   });
 
-  it("LogoutButton's visible label appears from `sm` by default (the player home's own header is unchanged) and from `lg` when the gantry asks; both are named by aria-label", () => {
+  it("LogoutButton's visible label appears from `sm` by default (the player home's own header is unchanged); `iconOnly` (the gantry, owner 2026-11-01) paints no words at any width; both are named by aria-label and title", () => {
     const tokens = (html: string) => (html.match(/<span class="([^"]*)">Sign out<\/span>/)?.[1] ?? "").split(/\s+/);
     const base = renderToStaticMarkup(<LogoutButton label="Sign out" />);
-    const gantry = renderToStaticMarkup(<LogoutButton label="Sign out" labelFrom="lg" />);
+    const gantry = renderToStaticMarkup(<LogoutButton label="Sign out" iconOnly />);
     expect(tokens(base)).toEqual(["hidden", "sm:inline"]);
-    expect(tokens(gantry)).toEqual(["hidden", "lg:inline"]);
-    expect(base).toContain('aria-label="Sign out"');
-    expect(gantry).toContain('aria-label="Sign out"');
+    // Icon-only: no label span at all, hidden or not - the words live only in the name and the tooltip.
+    expect(gantry).not.toContain("<span");
+    expect(gantry).not.toMatch(/>Sign out</);
+    for (const html of [base, gantry]) {
+      expect(html).toContain('aria-label="Sign out"');
+      expect(html).toContain('title="Sign out"');
+    }
   });
 
   it("HelpMenu labels its trigger from the provided labels slice", () => {

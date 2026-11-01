@@ -253,21 +253,36 @@ describe("Nav > Settings is its icon alone at every width (owner 2026-11-01)", (
     expect(checked).toBe(SHAPES.length);
   });
 
-  it("its padding: 6px on phones (a 28px icon, as every phone link), 12px in the sm band, and 6px again from md in every shape - never the labelled links' 4px (a 24px target)", async () => {
-    // From md the bar is at its fullest (labels on from md or lg, Sign out's word from lg), and the 12px a bare icon gets in the sm
-    // band would come straight out of the org chip: the 38-character club name lost its last characters at 1280 with it (nav-E report).
+  it("its padding: 6px on phones (a 28px icon, as every phone link), 12px in the sm band, and 6px again from where the bar's labels come on - md for the org nav, lg for the dual-role nav - never the labelled links' 4px (a 24px target)", async () => {
+    // Where the labels are on the bar is at its fullest, and the 12px a bare icon gets in the sm band would come straight out of the
+    // org chip: the 38-character club name lost its last characters at 1280 with it (nav-E report). Below its labels' rung the
+    // dual-role nav is all icons at sm's 12px (40px wide), and Settings matches them there (review of 2900e56916).
     let checked = 0;
     for (const shape of SHAPES) {
       const toks = tokens(settingsLink(await renderShape(shape))!.cls);
       const where = JSON.stringify(shape);
       expect(toks, where).toContain("px-1.5");
       expect(toks, where).toContain("sm:px-3");
-      expect(toks, where).toContain("md:px-1.5");
       expect(toks, `${where}: never 4px`).not.toContain("md:px-1");
-      expect(toks.filter((t) => /^(md|lg|xl):px-/.test(t)), `${where}: md's 6px holds through desktop`).toEqual(["md:px-1.5"]);
+      expect(toks.filter((t) => /^(md|lg|xl):px-/.test(t)), `${where}: 6px from the labels' rung, through desktop`).toEqual([shape.player ? "lg:px-1.5" : "md:px-1.5"]);
       checked++;
     }
     expect(checked).toBe(SHAPES.length);
+  });
+
+  it("with no organisation there is no club name to make room for: Settings keeps sm's 12px at every width from sm (player and not)", async () => {
+    let checked = 0;
+    for (const player of [false, true]) {
+      m.getUserOrgs.mockResolvedValue([]);
+      m.hasClaimedProfile.mockResolvedValue(player);
+      const html = await render();
+      expect(html, "no org chip").not.toContain('data-tour="org-chip"');
+      const toks = tokens(settingsLink(html)!.cls);
+      expect(toks, `player ${player}`).toEqual(expect.arrayContaining(["px-1.5", "sm:px-3"]));
+      expect(toks.filter((t) => /^(md|lg|xl):px-/.test(t)), `player ${player}: no override`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("with no organisation yet it still opens /orgs/new and is still an icon (the empty case)", async () => {
@@ -277,6 +292,32 @@ describe("Nav > Settings is its icon alone at every width (owner 2026-11-01)", (
     expect(a!.href).toBe("/orgs/new");
     expect(a!.label).toBeNull();
     expect(a!.title).toBe("Settings");
+  });
+});
+
+describe("Nav > one box height for every gantry control, icon or labelled (CI e2e 41298006103)", () => {
+  // A labelled link is 32px tall (a 20px line of text-sm + py-1.5) and a bare 16px icon only 28, so in the `items-center` nav
+  // the icon-only Settings sat 2px lower than its labelled neighbours wherever the labels were on - and the gantry probe in
+  // youtube-streaming.shots.spec.ts read that as a wrap (tops 12,12,12,12,14 at 768 en and dual-role 1024). Every nav link and
+  // the Sign-out button therefore carry the same `min-h-8` (32px): one height whether the words are painted or not, at every
+  // width. `min-`, not a fixed `h-8`, so a label that ever wrapped would still grow the box and show as a second row.
+  it("every nav link, in every org shape (with and without a logo), carries min-h-8 - 4+5+5+6 links x 2 = 40 counted", async () => {
+    let checked = 0;
+    for (const logo of [false, true]) {
+      for (const shape of SHAPES) {
+        for (const l of navLinks(await renderShape({ ...shape, logo }))) {
+          expect(tokens(l.cls), `${JSON.stringify({ ...shape, logo })} ${l.href}`).toContain("min-h-8");
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBe(2 * (4 + 5 + 5 + 6));
+  });
+
+  it("the Sign-out button carries the same min-h-8", async () => {
+    const cls = (await render()).match(/<button\b[^>]*\bclass="([^"]*)"/)?.[1];
+    expect(cls, "the gantry renders its Sign-out button").toBeDefined();
+    expect(tokens(cls)).toContain("min-h-8");
   });
 });
 
@@ -311,24 +352,43 @@ describe("Nav > the label rung is main's again (owner 2026-10-28: md for the org
   // The labelled links' spacing from md. The club name in the org chip is the row's only flexible item, so every px the links take
   // comes out of it; with one more link than main had, the links give the room back in their own padding and gaps (measured, nav-E
   // report: the 38-character club name keeps its last characters at 1280 and 8+ characters at 768, as on main).
-  //   org nav, labels on from md: md..lg 4px side padding and a 4px icon-to-word gap; from lg 8px padding and the 6px gap back.
-  //   dual-role nav, icons until lg: sm's 12px through the md band (a 4px pad on a bare icon is a 24px target); 8px from lg.
+  //   org nav, labels on from md: md..lg 4px side padding and a 4px icon-to-word gap; from lg main's 12px and 6px gap again.
+  //   dual-role nav, icons until lg: main's 12px from sm, with no override at all.
+  // From lg, Sign out paints no words (owner 2026-11-01, a second ruling the same day), and the width they took pays for main's 12px.
   const spacing = (toks: string[]): string[] => toks.filter((t) => /^(md|lg|xl):(px|gap)-/.test(t)).sort();
 
-  it("from md: the org nav's labelled links take md:px-1 md:gap-1 then lg:px-2 lg:gap-1.5; the dual-role nav's take lg:px-2 alone (16 labelled links)", async () => {
+  it("from md: the org nav's labelled links take md:px-1 md:gap-1 then main's lg:px-3 lg:gap-1.5; the dual-role nav's keep main's padding, no override (16 labelled links)", async () => {
     let md = 0;
     let other = 0;
     for (const shape of SHAPES) {
       for (const l of navLinks(await renderShape(shape))) {
         if (l.testid === "nav-settings") continue;
         const toks = tokens(l.cls);
-        if (l.label === "hidden md:inline") { expect(spacing(toks), l.href).toEqual(["lg:gap-1.5", "lg:px-2", "md:gap-1", "md:px-1"]); md++; }
-        else { expect(spacing(toks), l.href).toEqual(["lg:px-2"]); other++; }
-        expect(toks, `${l.href}: main's 12px desktop padding is gone`).not.toContain("lg:px-3");
+        if (l.label === "hidden md:inline") { expect(spacing(toks), l.href).toEqual(["lg:gap-1.5", "lg:px-3", "md:gap-1", "md:px-1"]); md++; }
+        else { expect(spacing(toks), l.href).toEqual([]); other++; }
+        expect(toks, `${l.href}: sm's 12px everywhere it is not overridden`).toContain("sm:px-3");
+        expect(toks, `${l.href}: not the 8px of the first 2026-11-01 build`).not.toContain("lg:px-2");
       }
     }
     expect(md).toBe(3 + 4);
     expect(other).toBe(4 + 5);
+  });
+
+  it("with no organisation (no chip to make room for) the bar keeps main's spacing: no md:gap-0 on the nav, no md:gap-1 on a link - the non-player bar keeps B3's md:px-1 lg:px-3, the player bar none (2 bars)", async () => {
+    let checked = 0;
+    for (const player of [false, true]) {
+      m.getUserOrgs.mockResolvedValue([]);
+      m.hasClaimedProfile.mockResolvedValue(player);
+      const html = await render();
+      const navToks = tokens(html.match(/<nav class="([^"]*)">/)?.[1]);
+      expect(navToks, `player ${player}`).toEqual(expect.arrayContaining(["gap-0", "sm:gap-0.5"]));
+      expect(navToks, `player ${player}: the links keep sm's 2px gap`).not.toContain("md:gap-0");
+      const labelled = navLinks(html).filter((l) => l.testid !== "nav-settings");
+      expect(labelled.length, `player ${player}: Dashboard, Directory (+ Player home)`).toBe(player ? 3 : 2);
+      for (const l of labelled) expect(spacing(tokens(l.cls)), `player ${player} ${l.href}`).toEqual(player ? [] : ["lg:px-3", "md:px-1"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("the links touch from md (md:gap-0): the 2px gap of the sm band is gone where the bar is full (4 shapes)", async () => {
