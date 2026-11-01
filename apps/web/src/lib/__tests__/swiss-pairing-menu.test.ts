@@ -234,6 +234,31 @@ describe("swissPairingMenuFor — when the menu exists, and what it carries", ()
     expect(menu?.fieldSize).toBe(swissActiveFieldSize(config, base.activeEntrantIds));
   });
 
+  // W3 T9 (T8 review m8): the menu's round field is the server's — an entrant whose first Swiss round in THIS stage is
+  // later than the round waiting is not in it (ruling 251: first round <= round). Expected from that rule, never from
+  // the menu: the field of a round is the entrants whose first round is at or before it.
+  it("m8 a late player whose first round is ahead neither draws round 1 nor counts in it; a stamp of another stage is ignored", () => {
+    const stageId = "stage-1";
+    // e1..e4 seeded, e5 unseeded and stamped to play from round 2 of this stage.
+    const seeds = { ...seeded(4), e5: null };
+    const late = { e5: { swiss_first_round: 2, swiss_first_round_stage_id: stageId } };
+    const args = { ...base, activeEntrantIds: ids(5), entrantSeeds: seeds, stageId };
+    const r1 = swissPairingMenuFor({ ...args, entrantFirstRounds: late, fixtures: shells(3, 4) });
+    // Round 1's field is e1..e4: four, wholly seeded 1..4 — numbered, and not drawn.
+    expect(r1).toMatchObject({ round: 1, fieldSize: 4, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false });
+    // The positive pair: with no stored first round, e5 is in round 1's field and draws it.
+    expect(swissPairingMenuFor({ ...args, fixtures: shells(3, 5) })).toMatchObject({ round: 1, fieldSize: 5, unseededDrawn: true });
+    // A stamp written by ANOTHER Swiss stage counts nowhere here (V485): e5 plays this stage from round 1.
+    const elsewhere = { e5: { swiss_first_round: 2, swiss_first_round_stage_id: "stage-2" } };
+    expect(swissPairingMenuFor({ ...args, entrantFirstRounds: elsewhere, fixtures: shells(3, 5) })).toMatchObject({
+      fieldSize: 5,
+      unseededDrawn: true,
+    });
+    // Round 2 waiting: e5's first round has come, so it counts.
+    const r2 = swissPairingMenuFor({ ...args, entrantFirstRounds: late, fixtures: seatRound(shells(3, 5), 1) });
+    expect(r2).toMatchObject({ round: 2, fieldSize: 5 });
+  });
+
   it("an unknown roster still offers the menu, with generic hints (fieldSize 0, no numbers)", () => {
     const menu = swissPairingMenuFor({ ...base, activeEntrantIds: undefined, fixtures: shells(3, 10) });
     expect(menu).toMatchObject({ round: 1, choosable: true, fieldSize: 0, seedsNumbered: false });

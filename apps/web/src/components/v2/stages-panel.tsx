@@ -98,7 +98,7 @@ import {
   SWISS_PAIRING_ROUND_ONE_ONLY_CODE,
   type SwissPairingMode,
 } from "@/lib/swiss-pairing";
-import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
+import { swissPairingMenuFor, type EntrantSwissFirstRounds } from "@/lib/swiss-pairing-menu";
 // Competition Desk W2 (Task 4) — the run sheet's grouping builder + the
 // component that renders it. `isBye` (and, inside `buildRunSheet` itself,
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
@@ -291,6 +291,10 @@ interface Props {
    *  are 1..N in pairing order. Optional like `activeEntrantIds`; ABSENT means
    *  "seeds unknown" and the hint falls back to its generic line. */
   entrantSeeds?: Record<string, number | null>;
+  /** W3 T9 (T8 review m8): entrant id -> its stored first Swiss round and the stage it belongs to (V484/V485). Feeds
+   *  ONLY the round-1 pairing menu, so its field is the server's round field (a late player whose first round is
+   *  ahead is not in it). Optional like `entrantSeeds`; ABSENT means everyone plays from round 1. */
+  entrantSwissFirstRounds?: EntrantSwissFirstRounds;
   /** Org venues with nested courts (`listVenues` shape, venues.ts) — feeds
    *  the per-fixture court editor's picker and the venue-qualified display
    *  name (P9 pass 4d, item 1). Same prop shape schedule-board.tsx's own
@@ -511,7 +515,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1062,6 +1066,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           fixtures: swissShellFixtures,
           activeEntrantIds,
           entrantSeeds,
+          stageId: stage.id,
+          entrantFirstRounds: entrantSwissFirstRounds,
         });
         // The swiss shape legend (owner-approved 2026-09-22, option B) — the
         // one line under this stage's title. `null` for every non-swiss kind,

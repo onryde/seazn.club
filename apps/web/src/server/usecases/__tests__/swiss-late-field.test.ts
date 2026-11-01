@@ -11,9 +11,11 @@
 //
 // The latecomer arrives through a real producer. `createEntrants` refuses once the division has started (the roster lock,
 // entrants.ts "the entrant list is locked"), so the post-Start door the app has today is the registration confirm
-// (`confirmRegistration` -> `materialise`: spec §4's "automatic arrival"). Nothing writes `swiss_first_round` until Task 9
-// ("Add late player", and an automatic arrival's case (c)), so these cases stamp it with the one UPDATE that writer
-// makes. Everything after the stamp is the product: the active select, the field filter, the history, the engine call.
+// (`confirmRegistration` -> `materialise`: spec §4's "automatic arrival"). Since Task 9 that confirm stamps the first
+// round itself (case (c): the next round, scoped to the stage by `swiss_first_round_stage_id`, V485); these cases then
+// set the round each one needs with the same UPDATE that writer makes — or clear it, for an entrant admitted before the
+// writer shipped (a legacy null). Everything after the stamp is the product: the active select, the field filter, the
+// history, the engine call.
 //
 // Expected values come from the rulebook (0 per missed round; one bye at most) and the engine's own declaration
 // (`pairRound`, scheduling/swiss.ts: "the lowest-ranked entrant not yet byed" takes the bye), never from swissGen. A
@@ -333,7 +335,8 @@ async function twoRoundsPlayed(sport: Sport): Promise<Rig> {
   return r;
 }
 
-/** A player arrives after Start through the registration confirm, and (Task 9's write) is given a first Swiss round. */
+/** A player arrives after Start through the registration confirm, and is given a first Swiss round in this stage — or,
+ *  with `null`, none at all: a legacy entrant (Task 9's confirm stamps one; the null case clears it, both columns). */
 async function arrive(r: Rig, name: string, firstRound: number | null): Promise<string> {
   const { registration } = await seedRegistration(
     r.competitionId,
@@ -346,7 +349,8 @@ async function arrive(r: Rig, name: string, firstRound: number | null): Promise<
   expect(id, `rig: confirming ${name}'s registration created an entrant`).toBeTruthy();
   const [row] = await sql<{ status: string; seed: number | null }[]>`select status, seed from entrants where id = ${id!}`;
   expect(row, `rig: ${name} is in the active field, unseeded`).toEqual({ status: "confirmed", seed: null });
-  if (firstRound !== null) await sql`update entrants set swiss_first_round = ${firstRound} where id = ${id!}`;
+  await sql`update entrants set swiss_first_round = ${firstRound}, swiss_first_round_stage_id = ${firstRound === null ? null : r.stageId}
+            where id = ${id!}`;
   r.idOf.set(name, id!);
   return id!;
 }
@@ -575,8 +579,8 @@ for (const sport of SPORTS) {
         Array.from({ length: 5 }, (_, i) => ({ kind: "individual" as const, display_name: `S${i + 1}`, seed: i + 1, members: [] })),
       );
       const fifth = players[4]!.id;
-      await sql`update entrants set swiss_first_round = 2 where id = ${fifth}`;
       const [stage] = await createStages(auth, division.id, { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3, ...sport.config }, progression: null });
+      await sql`update entrants set swiss_first_round = 2, swiss_first_round_stage_id = ${stage!.id} where id = ${fifth}`;
       const shape = async (round: number) => {
         const rows = await boardsOf(stage!.id, round);
         return { boards: rows.filter((f) => !/-bye$/.test(f.ext_key ?? "")).length, bye: rows.filter((f) => /-bye$/.test(f.ext_key ?? "")).length };
@@ -611,10 +615,12 @@ for (const sport of SPORTS) {
         div.id,
         players.map((p, i) => ({ kind: "individual" as const, display_name: p.name, seed: i + 1, members: [] })),
       );
-      for (const [i, p] of players.entries()) {
-        if (p.first !== null) await sql`update entrants set swiss_first_round = ${p.first} where id = ${made[i]!.id}`;
-      }
       const [stage] = await createStages(auth, div.id, { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3, ...sport.config }, progression: null });
+      for (const [i, p] of players.entries()) {
+        if (p.first !== null) {
+          await sql`update entrants set swiss_first_round = ${p.first}, swiss_first_round_stage_id = ${stage!.id} where id = ${made[i]!.id}`;
+        }
+      }
       return stage!.id;
     };
     const refusalOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);

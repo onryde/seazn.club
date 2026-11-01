@@ -349,7 +349,7 @@ describe.runIf(HAS_DB)("X-SW-22 / BG-SW-1 sequences", () => {
     expect(seats(await boards(r.stageId, 1)), "Redo re-pairs through the step path: the same seats").toEqual(first);
     const audits = await pairAudits(r.divisionId, r.stageId, 1);
     // Review m4 — exactly three, one per Pair: the first Pair and the Pair after Unpair each append their own row
-    // (`ledger: "record"`); Unpair and the Undo append rows of other types; the Redo appends no fresh row but re-pairs on
+    // (`ledger: "record"`); Unpair appends no ledger row at all and the Undo one of another type; the Redo appends no fresh row but re-pairs on
     // the step's own `fixtures_generated` row (history.ts, batch-1 I1: `ledger: "step"`), which carries the audit spread.
     // Two would mean the step path dropped its audit; four would mean the Redo appended a fresh Pair as well.
     expect(
@@ -580,8 +580,9 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
       for (const [k, b] of r1.entries()) {
         await sql`update fixtures set home_entrant_id = ${reg[k]!}, away_entrant_id = ${reg[k + 4]!} where id = ${b.id}`;
       }
+      // A pre-T8 row carries neither marker: no `draw_seed`, and no `draw_order` (T9 writes it beside the seed).
       const stripped = await sql`
-        update division_events set payload = payload - 'draw_seed'
+        update division_events set payload = payload - 'draw_seed' - 'draw_order'
          where division_id = ${r.divisionId} and type = 'fixtures_generated'
            and payload->>'stage_id' = ${r.stageId} and (payload->>'round')::int = 1 and payload ? 'draw_seed'`;
       expect(stripped.count, "premise: round 1's row lost its marker").toBe(1);
@@ -600,6 +601,56 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
     },
     120_000,
   );
+
+  // W3 T9 (T8 review n1): round 1's ledger row records the drawn order itself (`draw_order`), and a later round reads it
+  // as written instead of re-deriving it. The witness is relational: overwrite the stored order with a permutation that
+  // folds both score groups differently, and round 2 must move with the STORED order, not the re-derived one.
+  /** d with the last two of each half swapped: d1 d2 d4 d3 | d5 d6 d8 d7 — each group of four folds otherwise. */
+  const permuted = (d: readonly string[]) => [d[0]!, d[1]!, d[3]!, d[2]!, d[4]!, d[5]!, d[7]!, d[6]!];
+  it.each(["badminton", "boardgame"] as const)(
+    "n1 round 1's Pair records its drawn order, and round 2 ranks by the STORED order (%s)",
+    async (sport) => {
+      const r = await rig({ sport, n: 8, seeded: false, door: "createStages", config: NO_CHESS[sport] });
+      const d = await roundOneDecided(r, sport);
+      const [audit] = await pairAudits(r.divisionId, r.stageId, 1);
+      expect(audit?.draw_order, "round 1's row carries the order its seats were folded over").toEqual(d);
+      const p = permuted(d);
+      const moved = await sql`
+        update division_events set payload = jsonb_set(payload, '{draw_order}', ${sql.json(p as never)})
+         where division_id = ${r.divisionId} and type = 'fixtures_generated'
+           and payload->>'stage_id' = ${r.stageId} and (payload->>'round')::int = 1`;
+      expect(moved.count, "premise: one round-1 row rewritten").toBe(1);
+      expect(roundTwoByDraw(p), "witness: the stored order folds round 2 otherwise than the re-derived one").not.toEqual(roundTwoByDraw(d));
+      await generateStageFixtures(r.auth, r.stageId); // Pair round 2
+      expect(seats(await boards(r.stageId, 2))).toEqual(roundTwoByDraw(p));
+    },
+    120_000,
+  );
+
+  it("n1 a late player's re-pair of round 1 (case (a)) records the new drawn order, and round 2 reads that row", async () => {
+    // single-sport: badminton — the order and the row it rides on are the stage's, never the sport's (the Pair row test
+    // above runs both).
+    const r = await rig({ sport: "badminton", n: 7, seeded: false, door: "createStages", config: NO_CHESS.badminton });
+    await startDivision(r.auth, r.divisionId);
+    await generateStageFixtures(r.auth, r.stageId); // round 1: three boards and a bye
+    const [late] = await createEntrants(r.auth, r.divisionId, [{ kind: "individual", display_name: "Late", members: [] }]);
+    expect(late?.late_entry, "premise: nothing started, so (a) re-pairs round 1 with eight").toMatchObject({ case: "a", round: 1 });
+    const r1 = await boards(r.stageId, 1);
+    expect(r1, "eight: four boards").toHaveLength(4);
+    const d = [...r1.map((b) => b.home), ...r1.map((b) => b.away)];
+    expect(d).toContain(late!.id);
+    const [row] = await sql<{ payload: Record<string, unknown> }[]>`
+      select payload from division_events where division_id = ${r.divisionId} and type = 'swiss_late_entry'`;
+    expect(row?.payload.draw_order, "the late-entry row carries the re-drawn order of the eight seated").toEqual(d);
+    for (const b of r1) await win("badminton", r.auth, b, b.home);
+    // The newest round-1 row is the late entry's: rewrite ITS order, and round 2 follows it.
+    const p = permuted(d);
+    await sql`
+      update division_events set payload = jsonb_set(payload, '{draw_order}', ${sql.json(p as never)})
+       where division_id = ${r.divisionId} and type = 'swiss_late_entry'`;
+    await generateStageFixtures(r.auth, r.stageId);
+    expect(seats(await boards(r.stageId, 2))).toEqual(roundTwoByDraw(p));
+  }, 120_000);
 
   it("m7 a fully seeded field is unchanged: round 2 folds each score group by seed, and no draw is recorded", async () => {
     const r = await rig({ sport: "badminton", n: 8, seeded: true, door: "createStages", config: NO_CHESS.badminton });

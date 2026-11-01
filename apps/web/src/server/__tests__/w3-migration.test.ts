@@ -215,3 +215,72 @@ describe.runIf(HAS_DB)("W3 delta: swiss_first_round on entrants", () => {
     expect(verdict.kept, "… and moves no stored value").toBe(3);
   }, 120_000);
 });
+
+// W3 Task 9 (ruling 250; T6 carry 2) — the delta that scopes an entrant's first Swiss round to the stage that stamped it
+// (`swiss_first_round_stage_id`). A schema change only: no writer of `swiss_first_round` has shipped, so no stored stamp
+// is left without its stage. Read by glob like the deltas above; its statement re-run inside a rolled-back transaction.
+// single-sport: badminton — the delta is a column on entrants and reads no sport field.
+const STAGE_SCOPE_NAME = /^V\d+__w3_swiss_first_round_stage\.sql$/;
+const stageScopeFiles = readdirSync(DELTAS).filter((f) => STAGE_SCOPE_NAME.test(f));
+const stageScopeText = stageScopeFiles.length === 1 ? readFileSync(resolve(DELTAS, stageScopeFiles[0]!), "utf8") : "";
+const stageScopeCode = stageScopeText.replace(/--.*$/gm, "").trim();
+
+describe("W3 delta: swiss_first_round_stage_id, the file", () => {
+  it("exactly one delta carries the name, and it is one idempotent ADD COLUMN on entrants referencing stages — no data move", () => {
+    expect(stageScopeFiles, "one delta named *__w3_swiss_first_round_stage.sql").toHaveLength(1);
+    expect(stageScopeCode.split(";").filter((s) => s.trim() !== "").length, "one statement").toBe(1);
+    expect(stageScopeCode).toMatch(/^alter table entrants add column if not exists swiss_first_round_stage_id uuid\s+references stages\(id\) on delete set null;$/);
+    expect(stageScopeCode, "no update statement").not.toMatch(/\bupdate\b/i);
+  });
+});
+
+describe.runIf(HAS_DB)("W3 delta: swiss_first_round_stage_id on entrants", () => {
+  it("the column exists, nullable; deleting the stage clears the stamp's stage; a second run is a no-op", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W3 stage scope " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open-" + randomUUID().slice(0, 6),
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    const [entrant] = await createEntrants(auth, division.id, [{ kind: "individual" as const, display_name: "P1", seed: 1, members: [] }]);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 }, progression: null });
+    const id = entrant!.id;
+
+    const verdict = await rolledBack(async (tx) => {
+      const column = () =>
+        tx<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+          select data_type, is_nullable, column_default from information_schema.columns
+          where table_schema = current_schema() and table_name = 'entrants' and column_name = 'swiss_first_round_stage_id'`;
+      const fks = () =>
+        tx<{ def: string }[]>`
+          select pg_get_constraintdef(c.oid) as def from pg_constraint c
+          where c.conrelid = 'entrants'::regclass and c.contype = 'f' and pg_get_constraintdef(c.oid) like '%swiss_first_round_stage_id%'`;
+      const stored = async () =>
+        (await tx<{ r: number | null; s: string | null }[]>`
+          select swiss_first_round as r, swiss_first_round_stage_id as s from entrants where id = ${id}`)[0]!;
+      const columnBefore = await column();
+      const fksBefore = await fks();
+      const fresh = await stored();
+      await tx`update entrants set swiss_first_round = 2, swiss_first_round_stage_id = ${stage!.id} where id = ${id}`;
+      await tx.unsafe(stageScopeCode);
+      const kept = await stored();
+      await tx`delete from stages where id = ${stage!.id}`;
+      return { columnBefore, fksBefore, fresh, kept, columnAfter: await column(), fksAfter: await fks(), orphaned: await stored() };
+    });
+
+    expect(verdict.columnBefore, "the applied schema has the column: a uuid, nullable, no default").toEqual([
+      { data_type: "uuid", is_nullable: "YES", column_default: null },
+    ]);
+    expect(verdict.fksBefore.map((c) => c.def), "one foreign key, to stages, set null on delete").toEqual([
+      "FOREIGN KEY (swiss_first_round_stage_id) REFERENCES stages(id) ON DELETE SET NULL",
+    ]);
+    expect(verdict.fresh, "an entrant enrolled the ordinary way has no stamp and no stage").toEqual({ r: null, s: null });
+    expect(verdict.columnAfter, "a second run leaves the column as it was").toEqual(verdict.columnBefore);
+    expect(verdict.fksAfter, "… adds no second key").toEqual(verdict.fksBefore);
+    expect(verdict.kept, "… and moves no stored value").toEqual({ r: 2, s: stage!.id });
+    expect(verdict.orphaned, "the stage deleted: the stamp's stage is null, so the stamp counts nowhere").toEqual({ r: 2, s: null });
+  }, 120_000);
+});

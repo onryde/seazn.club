@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { type Session, appendScoreEvent, newSession, check, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
+import { type Session, appendScoreEvent, call, newSession, check, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
 import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swiss-draw.ts";
 
 /**
@@ -14,9 +14,13 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * puts the round back onto its shells — no round-1 row is left seated. T6 (X-SW-12, ruling 251): an entrant whose first
  * Swiss round is 2 is on no round-1 row and is seated from round 2. T7 (X-SW-15, RB3-2; rulebook P-A2): a double-walkover
  * pair has not met, so the next Pair may seat it again. T8 (X-SW-22, SW-L6, RB3-16): an unseeded round 1 is the stage's
- * seeded random draw, not registration order. Own fresh owner. Every read is a v1 route; the one
- * write that needs DATABASE_URL is T6's stamp of `entrants.swiss_first_round` (no route writes it until Task 9), and
- * without it that check fails rather than skips. Every check is counted, and a run that checked nothing fails.
+ * seeded random draw, not registration order. T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
+ * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
+ * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
+ * registration confirmed during a live round takes (c) and moves no pairing. Own fresh owner. Every read is a v1 route;
+ * the one write that needs DATABASE_URL is T6's stamp of `entrants.swiss_first_round` — a round-2 start set BEFORE Start,
+ * which no route writes (Task 9's writer stamps only an arrival after Start) — and without it that check fails rather
+ * than skips. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
  */
 export async function w3SwissASuite(): Promise<void> {
@@ -24,8 +28,9 @@ export async function w3SwissASuite(): Promise<void> {
   // the pinned boards) + T4: 1 (no ad-hoc match on a Swiss stage; T4 runs before T3 by controller ruling C1) + T3: 2 (a
   // bye's format is frozen at award; a bye shell is never placed) + T5: 1 (Undo of Pair next clears the round's seats) +
   // T6: 1 (an entrant with a first Swiss round is on no round below it) + T7: 1 (a double-walkover pair meets again) +
-  // T8: 1 (an unseeded round 1 seats the stage's draw, not registration order).
-  const EXPECTED_CHECKS = 10;
+  // T8: 1 (an unseeded round 1 seats the stage's draw, not registration order) + T9: 4 (a late player's case (a), (b)
+  // and (c) through the organiser's Add, and one automatic arrival — a public registration — taking (c)).
+  const EXPECTED_CHECKS = 14;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -235,6 +240,10 @@ export async function w3SwissASuite(): Promise<void> {
     );
   }
 
+  // The third and last competition the community plan allows active (`competitions.max_active`): check 10's, PUBLIC so
+  // check 14 can register through the public form; checks 11–14 add their divisions to it (four in all, the plan's cap).
+  let lastComp: { id: string; slug: string } | undefined;
+
   // Checks 5 and 6 (T3) — a badminton Swiss of five (odd: every round has a bye), round 1 paired. Its own competition: the
   // fresh owner's plan caps divisions per competition, and the one above already holds four.
   {
@@ -350,7 +359,7 @@ export async function w3SwissASuite(): Promise<void> {
 
     // Check 8 (T6, X-SW-12; spec §4, ruling 251): an entrant whose first Swiss round is 2 is on no round below it, and is
     // seated from it. A generic Swiss of five in the same competition; the fifth is given first round 2 — this suite's one
-    // SQL write, because nothing writes the column over HTTP until Task 9's "Add late player" — then Start, Pair round 1
+    // SQL write: no route writes a first round BEFORE Start (Task 9's writer stamps only an arrival after it) — then Start, Pair round 1
     // (four players: two boards, no bye), both boards decided by walkover, and Pair round 2 (all five).
     {
       const lateDiv = v1data<{ id: string } | undefined>(
@@ -375,7 +384,7 @@ export async function w3SwissASuite(): Promise<void> {
       if (process.env.DATABASE_URL) {
         const db = smokeDb();
         try {
-          stamped = (await db`update entrants set swiss_first_round = 2 where id = ${fifth}`).count;
+          stamped = (await db`update entrants set swiss_first_round = 2, swiss_first_round_stage_id = ${lateStage ?? null} where id = ${fifth}`).count;
         } finally {
           await db.end();
         }
@@ -462,11 +471,13 @@ export async function w3SwissASuite(): Promise<void> {
     // tie-break (`seed nulls last, created_at, id`) with no database read. Start, Pair round 1. Expected: the fold (position
     // k v k + 8, the upper at home — a generic Swiss has no colours) over `swissRoundOneOrder(swissDrawSeed(stage), field)`;
     // and the round is NOT the fold over registration order, which is what main seated (16! orders: equal by chance never).
-    // Its own competition: `byeComp` already holds four divisions, the community plan's cap per competition.
+    // Its own competition: `byeComp` already holds four divisions, the community plan's cap per competition. Public, and
+    // shared with checks 11–14 (see `lastComp`).
     {
-      const drawComp = v1data<{ id: string } | undefined>(
-        await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss A draw ${tag}`, visibility: "private" }),
+      const drawComp = v1data<{ id: string; slug: string } | undefined>(
+        await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss A draw ${tag}`, visibility: "public" }),
       );
+      lastComp = drawComp;
       const drawDiv = v1data<{ id: string } | undefined>(
         await v1(owner, `/api/v1/competitions/${drawComp?.id}/divisions`, "POST", {
           name: "Drawn",
@@ -505,6 +516,175 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-22: an unseeded round 1 of 16 seats the stage's draw (8 boards), not the fold over registration order" +
           (ok ? "" : ` — competition ${drawComp?.id ?? "none"}, division ${drawDiv ?? "none"}, players ${registered.length}, start ${drawStarted.status}, pair ${drawPair.status} ${JSON.stringify(drawPair.json).slice(0, 160)}, round 1 ${JSON.stringify(seated)} vs draw ${JSON.stringify(fold(drawn))}, registration fold ${JSON.stringify(fold(registered))}`),
+        ok,
+      );
+    }
+  }
+
+  // Checks 11–14 (T9, X-SW-12, X-SW-13; spec §4, ruling 250) — "Add late player" after Start. Three generic Swisses in
+  // check 10's public competition (`lastComp`): each started, round 1 paired over the seeded field, then a newcomer added.
+  // Check 14 reuses check 11's division, whose round 1 is still unstarted after the (a) re-pair. Expected values are the
+  // plan's rules and the rows read BEFORE the add, never the reply alone.
+  {
+    const lateComp = lastComp;
+    type Seat = Fx & { home_entrant_id: string | null; away_entrant_id: string | null; status: string };
+    type LateEntry = { case?: string; round?: number; bye_holder_id?: string; new_board?: { fixture_id: string; scheduled: boolean } };
+    type Added = { id: string; late_entry?: LateEntry; swiss_first_round?: number | null; swiss_first_round_stage_id?: string | null };
+    /** A generic Swiss of `n` seeded players and `rounds`, started and round 1 paired. `before` runs ahead of Start. */
+    async function startedSwiss(label: string, n: number, rounds: number, before?: (divId: string) => Promise<void>) {
+      const divRes = await v1(owner, `/api/v1/competitions/${lateComp?.id}/divisions`, "POST", {
+        name: label,
+        sport_key: "generic",
+        variant_key: "score",
+        config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      });
+      const divId = v1data<{ id: string } | undefined>(divRes)?.id;
+      const players =
+        v1data<{ id: string }[] | undefined>(
+          await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+            Array.from({ length: n }, (_, i) => ({ kind: "individual", display_name: `${label}${i + 1} ${tag}`, seed: i + 1 }))),
+        ) ?? [];
+      const stageId = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds } }),
+      )?.id;
+      if (before && divId) await before(divId);
+      const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+      const paired = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+      const rows = async () =>
+        (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+      const setup = `competition ${lateComp?.id ?? "none"}, division ${divId ?? `none ${divRes.status} ${JSON.stringify(divRes.json).slice(0, 160)}`}, players ${players.length}, start ${started.status}, pair ${paired.status} ${paired.status === 200 ? "" : JSON.stringify(paired.json).slice(0, 160)}`;
+      const ready = players.length === n && started.status < 300 && paired.status === 200;
+      return { divId, stageId, players, rows, setup, ready };
+    }
+    const addLate = async (divId: string | undefined, name: string) => {
+      const res = await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST", [{ kind: "individual", display_name: `${name} ${tag}` }]);
+      return { res, row: v1data<Added[] | undefined>(res)?.[0] };
+    };
+    const isBye = (f: Seat) => /-bye$/.test(f.ext_key ?? "");
+    const seatsOf = (rs: Seat[]) => rs.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null);
+    const sameRow = (a: Seat, b: Seat | undefined) =>
+      b !== undefined && a.home_entrant_id === b.home_entrant_id && a.away_entrant_id === b.away_entrant_id &&
+      a.status === b.status && a.scheduled_at === b.scheduled_at && a.court_id === b.court_id;
+
+    // Division A serves checks 11 and 14: its registration opens (free, auto-approval) before Start.
+    let settingsA = 0;
+    const swA = await startedSwiss("A", 5, 3, async (divId) => {
+      settingsA = (await v1(owner, `/api/v1/divisions/${divId}/registration-settings`, "PUT", {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, approval: "auto", form_fields: [],
+      })).status;
+    });
+    let lateA: string | undefined;
+
+    // Check 11 (X-SW-12 (a)): five players, round 1 two boards and a bye, both boards laid out, nothing started. The add
+    // re-pairs round 1 over six: three boards, no bye, the newcomer seated, and both laid-out boards keep their slot.
+    {
+      const sw = swA;
+      const r1 = (await sw.rows()).filter((f) => f.round_no === 1 && !isBye(f));
+      const placed: number[] = [];
+      for (const [i, f] of r1.entries()) {
+        placed.push((await v1(owner, `/api/v1/fixtures/${f.id}`, "PATCH", {
+          scheduled_at: "2030-06-18T10:00:00.000Z", court_id: courts[i] ?? "", venue_id: venueId,
+        })).status);
+      }
+      const before = (await sw.rows()).filter((f) => f.round_no === 1);
+      const { res, row } = await addLate(sw.divId, "LateA");
+      lateA = row?.id;
+      const after = (await sw.rows()).filter((f) => f.round_no === 1);
+      const boards = after.filter((f) => !isBye(f) && f.home_entrant_id !== null && f.away_entrant_id !== null);
+      const keptSlots = before.filter((f) => !isBye(f)).filter((f) => {
+        const now = after.find((x) => x.id === f.id);
+        return now !== undefined && f.scheduled_at !== null && now.scheduled_at === f.scheduled_at && now.court_id === f.court_id;
+      }).length;
+      const ok =
+        sw.ready && r1.length === 2 && placed.every((st) => st === 200) && res.status < 300 &&
+        row?.late_entry?.case === "a" && row.late_entry.round === 1 && boards.length === 3 &&
+        !after.some((f) => isBye(f) && f.home_entrant_id !== null) && seatsOf(boards).includes(row.id) &&
+        new Set(seatsOf(boards)).size === 6 && keptSlots === 2;
+      w3Check(
+        "w3a X-SW-12 (a): a late player re-pairs an unstarted round 1 — 3 boards over 6, no bye, both laid-out slots kept" +
+          (ok ? "" : ` — ${sw.setup}, placed ${placed.join(",")}, add ${res.status} ${JSON.stringify(res.json).slice(0, 200)}, boards ${boards.length}, seated ${new Set(seatsOf(boards)).size}, kept ${keptSlots}`),
+        ok,
+      );
+    }
+
+    // Check 12 (X-SW-12 (b)): five players, round 1 two boards and a bye, one board started. The newcomer plays the bye
+    // holder on a new board; the bye row is gone, and every other round-1 row is as it was.
+    {
+      const sw = await startedSwiss("B", 5, 3);
+      const before = (await sw.rows()).filter((f) => f.round_no === 1);
+      const bye = before.find(isBye);
+      const holder = bye?.home_entrant_id ?? "";
+      const first = before.find((f) => !isBye(f));
+      const begun = first ? (await appendScoreEvent(owner, first.id, "core.start", {})).status : 0;
+      const mid = (await sw.rows()).filter((f) => f.round_no === 1);
+      const { res, row } = await addLate(sw.divId, "LateB");
+      const after = (await sw.rows()).filter((f) => f.round_no === 1);
+      const added = after.find((f) => f.id === row?.late_entry?.new_board?.fixture_id);
+      const others = mid.filter((f) => f.id !== bye?.id);
+      const untouched = others.filter((f) => sameRow(f, after.find((x) => x.id === f.id))).length;
+      const ok =
+        sw.ready && holder !== "" && begun < 300 && res.status < 300 && row?.late_entry?.case === "b" &&
+        row.late_entry.bye_holder_id === holder && added !== undefined &&
+        new Set([added.home_entrant_id, added.away_entrant_id]).size === 2 &&
+        [added.home_entrant_id, added.away_entrant_id].includes(holder) && [added.home_entrant_id, added.away_entrant_id].includes(row.id) &&
+        !after.some((f) => f.id === bye?.id) && others.length === 2 && untouched === 2 && after.length === mid.length;
+      w3Check(
+        "w3a X-SW-12 (b): a late player in a started round plays the bye holder; the bye is gone and the 2 other boards are untouched" +
+          (ok ? "" : ` — ${sw.setup}, holder ${holder || "none"}, start ${begun}, add ${res.status} ${JSON.stringify(res.json).slice(0, 200)}, new board ${added ? `${added.home_entrant_id} v ${added.away_entrant_id}` : "missing"}, untouched ${untouched}/${others.length}, rows ${mid.length} -> ${after.length}`),
+        ok,
+      );
+    }
+
+    // Check 13 (X-SW-12 (c)): four players, round 1 two boards and no bye, one board started. Round 1 is frozen; the
+    // newcomer's first round is 2, and once round 1 is decided the round-2 Pair seats them.
+    {
+      const sw = await startedSwiss("C", 4, 3);
+      const r1 = (await sw.rows()).filter((f) => f.round_no === 1 && !isBye(f));
+      const begun = r1[0] ? (await appendScoreEvent(owner, r1[0].id, "core.start", {})).status : 0;
+      const mid = (await sw.rows()).filter((f) => f.round_no === 1);
+      const { res, row } = await addLate(sw.divId, "LateC");
+      const after = (await sw.rows()).filter((f) => f.round_no === 1);
+      const frozen = mid.length > 0 && mid.every((f) => sameRow(f, after.find((x) => x.id === f.id))) && after.length === mid.length;
+      const forfeits: number[] = [];
+      for (const b of r1) forfeits.push((await appendScoreEvent(owner, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" })).status);
+      const pair2 = await v1(owner, `/api/v1/stages/${sw.stageId}/generate`, "POST");
+      const r2 = (await sw.rows()).filter((f) => f.round_no === 2);
+      const ok =
+        sw.ready && r1.length === 2 && begun < 300 && res.status < 300 && row?.late_entry?.case === "c" && row.late_entry.round === 2 &&
+        row.swiss_first_round === 2 && row.swiss_first_round_stage_id === sw.stageId && frozen &&
+        forfeits.length === 2 && forfeits.every((st) => st < 300) && pair2.status === 200 && seatsOf(r2).includes(row.id);
+      w3Check(
+        "w3a X-SW-12 (c): a late player in a started round with no bye leaves round 1 untouched and is seated by the round-2 Pair" +
+          (ok ? "" : ` — ${sw.setup}, start ${begun}, add ${res.status} ${JSON.stringify(res.json).slice(0, 200)}, frozen ${frozen}, forfeits ${forfeits.join(",")}, pair 2 ${pair2.status} ${JSON.stringify(pair2.json).slice(0, 160)}, on round 2 ${row ? seatsOf(r2).includes(row.id) : "no row"}`),
+        ok,
+      );
+    }
+
+    // Check 14 (X-SW-13): an automatic arrival — a free, auto-approval public registration — into division A, whose round 1
+    // is still unstarted after check 11's re-pair (an organiser's add would re-pair it again), takes (c): round 1 keeps
+    // every seat, and the entrant's first round is 2.
+    {
+      const sw = swA;
+      const settings = settingsA;
+      const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+      const orgSlug = orgs.find((o) => o.id === orgId)?.slug ?? "";
+      const before = (await sw.rows()).filter((f) => f.round_no === 1);
+      const submitted = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${lateComp?.slug}/register`, "POST", {
+        contact: { name: `Arrival ${tag}`, email: `delivered+w3a_arrival_${tag}@resend.dev` },
+        privacy_consent: true,
+        entries: [{ division_id: sw.divId, entrant_kind: "individual", players: [{ full_name: `Arrival ${tag}` }], answers: {} }],
+      });
+      const status = v1data<{ entries?: { status: string }[] } | undefined>(submitted)?.entries?.[0]?.status;
+      const entrants = v1data<Added[] | undefined>(await v1(owner, `/api/v1/divisions/${sw.divId}/entrants`)) ?? [];
+      const arrival = entrants.find((e) => !sw.players.some((p) => p.id === e.id) && e.id !== lateA);
+      const after = (await sw.rows()).filter((f) => f.round_no === 1);
+      const unmoved = before.length > 0 && before.every((f) => sameRow(f, after.find((x) => x.id === f.id))) && after.length === before.length;
+      const ok =
+        sw.ready && settings === 200 && lateA !== undefined && orgSlug !== "" && submitted.status === 201 && status === "confirmed" && arrival !== undefined &&
+        arrival.swiss_first_round === 2 && arrival.swiss_first_round_stage_id === sw.stageId && unmoved;
+      w3Check(
+        "w3a X-SW-13: a registration confirmed during an unstarted round takes (c) — first round 2, round 1's seats unmoved" +
+          (ok ? "" : ` — ${sw.setup}, settings ${settings}, org slug ${orgSlug || "none"}, submit ${submitted.status} ${JSON.stringify(submitted.json).slice(0, 200)}, arrival ${arrival ? `first round ${arrival.swiss_first_round} stage ${arrival.swiss_first_round_stage_id}` : "missing"}, unmoved ${unmoved}`),
         ok,
       );
     }

@@ -85,6 +85,7 @@ import {
   SWISS_ROUNDS_REQUIRED_CODE,
   SWISS_ROUNDS_REQUIRED_MESSAGE,
 } from "@/lib/swiss-shell";
+import { inSwissRoundField, swissFirstRoundIn } from "@/lib/swiss-late-entry";
 import {
   type SwissPairingMode,
   storedSwissPairing,
@@ -1214,7 +1215,8 @@ function walkoverDepartedQualifiers(
   };
 }
 
-const DECIDED = new Set(["decided", "finalized", "forfeited"]);
+/** A board whose result is in (W3 T9 reads it too: a late player's "current round" is the one with a board not in it). */
+export const DECIDED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
 
 /** The slot label stamped on a bye's PHANTOM side — the seat the bracket pads
  *  out and nobody ever occupies. One authority, shared by the two generation
@@ -1251,7 +1253,7 @@ export type SwissExistingFixture = {
   schedule_locked: boolean;
 };
 
-type SwissGenResult = {
+export type SwissGenResult = {
   gen: GenFixture[];
   seatedCount: number;
   reshaped: SwissReshape;
@@ -1267,6 +1269,10 @@ type SwissGenResult = {
   seatedIds: string[];
   /** W3 T8 (X-SW-22): the stage's draw seed when this pass drew round 1 (an unseeded entrant in its field); else null. */
   drawSeed: number | null;
+  /** W3 T9 (T8 review n1): round 1's drawn order — every entrant of its field, seeds first, then the draw — when this pass
+   *  drew round 1; else null. It rides on the round's ledger row (`draw_order`) and every later round ranks a tie by it
+   *  (`swissRoundOneDrawOrder`), so a seed edit after Start or a late player seated in round 1 never reshuffles it. */
+  drawOrder: string[] | null;
   /** W3 T8 (BG-SW-1): the colour board 1's upper player took when this pass coloured round 1 by lot (chess on); else
    *  null. */
   colourLot: "white" | "black" | null;
@@ -1278,7 +1284,20 @@ type SwissGenResult = {
  * a Pair of round 3, nor by its re-Pair after an Undo. The order is kept: it is the seeding order the standings rank by.
  */
 export function swissFieldForRound(entrants: ActiveEntrant[], target: number): ActiveEntrant[] {
-  return entrants.filter((e) => (e.swiss_first_round ?? 1) <= target);
+  return entrants.filter((e) => inSwissRoundField(e.swiss_first_round, target));
+}
+
+/**
+ * W3 T9 (V485; carry from T6): the division's active entrants as a Swiss stage reads them — `generateStageFixturesTx`'s
+ * active select, with each first round scoped to `stageId` (`swissFirstRoundIn`: a stamp written by another Swiss stage
+ * counts as from round 1 here). Late entry (`swiss-late-entry.ts`) re-pairs a round over the same list.
+ */
+export async function swissActiveEntrants(tx: Tx, divisionId: string, stageId: string): Promise<ActiveEntrant[]> {
+  const rows = await tx<{ id: string; seed: number | null; swiss_first_round: number | null; swiss_first_round_stage_id: string | null }[]>`
+    select id, seed, swiss_first_round, swiss_first_round_stage_id from entrants
+    where division_id = ${divisionId} and status in ('registered', 'confirmed')
+    order by seed nulls last, created_at, id`;
+  return rows.map((e) => ({ id: e.id, seed: e.seed, swiss_first_round: swissFirstRoundIn(e, stageId) }));
 }
 
 /** Review m4: a Swiss round's field (`swissFieldForRound`) under 2 is refused exactly as generateStageFixturesTx refuses a
@@ -1412,22 +1431,18 @@ export function buildSwissHistory(
   return { score, played, colours, byes };
 }
 
-// Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
-// every round the organiser declared in `config.rounds`; Pair next (a later
-// Generate when shells already exist) seats one round at a time onto those
-// shells. The organiser-set round budget is the only authority — nothing here
-// derives or persists `rounds` from field size.
-//
-// W3 T6 (spec §4, ruling 251): `entrants` is the whole active list; each round
-// is paired, sized and scored over its own field (`swissFieldForRound`), so a
-// latecomer whose first round is later is not seated before it.
-/** Review m7: round 1's drawn order, re-derived for a later round — the stage's seed over round 1's field, read the way
- *  round 1's Pair read it (the active select's `seed nulls last, created_at, id`). Round 1's field is the entrants round 1
- *  SEATED, not today's active list: a withdrawal since would shrink the shuffle and reorder everyone. Null when round 1
- *  drew nobody (every entrant seeded) or seats no one — and (ruling, fix round 1b) when round 1 was NOT paired by the
- *  draw: a stage live at deploy paired its round 1 in registration order, so its later rounds keep that order. The
- *  marker is round 1's newest Pair row on the ledger carrying `draw_seed` (never a date): every Pair of a drawn round 1
- *  since T8 records it, a Redo's step row included, and no Pair before T8 did. */
+/** Review m7: round 1's drawn order for a later round. Round 1's field is the entrants round 1 SEATED, not today's active
+ *  list: a withdrawal since would shrink the shuffle and reorder everyone. Null when round 1 drew nobody (every entrant
+ *  seeded) or seats no one — and (ruling, fix round 1b) when round 1 was NOT paired by the draw: a stage live at deploy
+ *  paired its round 1 in registration order, so its later rounds keep that order.
+ *
+ *  The source is round 1's newest pairing row on the ledger: its Pair (`fixtures_generated`, round 1; a Redo's step row
+ *  included) or an "Add late player" that re-paired round 1 (`swiss_late_entry`, case (a), round 1 — it re-draws the
+ *  field with the newcomer in it). W3 T9 (T8 review n1): that row records the drawn order itself (`draw_order`), which
+ *  is read as written — a seed edited after Start, or a late player the bye seated in round 1 (case (b), never drawn),
+ *  cannot reshuffle it. A row from before T9 carries only the marker `draw_seed` (never a date: every Pair of a drawn
+ *  round 1 since T8 records it, and no Pair before T8 did); for it the order is re-derived as round 1's Pair drew it —
+ *  the stage's seed over round 1's seated field, in the active select's `seed nulls last, created_at, id`. */
 async function swissRoundOneDrawOrder(
   tx: Tx,
   stageId: string,
@@ -1441,18 +1456,29 @@ async function swissRoundOneDrawOrder(
       .filter((id): id is string => id !== null),
   );
   if (seated.size === 0) return null;
-  const [roundOnePair] = await tx<{ drawn: boolean }[]>`
-    select payload ? 'draw_seed' as drawn from division_events
-     where division_id = ${divisionId} and type = 'fixtures_generated'
-       and payload->>'stage_id' = ${stageId} and payload->>'round' = '1'
+  const [roundOnePair] = await tx<{ drawn: boolean; order: unknown }[]>`
+    select payload ? 'draw_seed' as drawn, payload->'draw_order' as order from division_events
+     where division_id = ${divisionId} and payload->>'stage_id' = ${stageId} and payload->>'round' = '1'
+       and (type = 'fixtures_generated' or (type = 'swiss_late_entry' and payload->>'case' = 'a'))
      order by seq desc limit 1`;
+  const stored = roundOnePair?.order;
+  if (Array.isArray(stored) && stored.length > 0 && stored.every((id) => typeof id === "string")) return stored as string[];
   if (roundOnePair?.drawn !== true) return null;
   const roundOne = await tx<{ id: string; seed: number | null }[]>`
     select id, seed from entrants where id in ${tx([...seated])} order by seed nulls last, created_at, id`;
   return roundOne.some((e) => e.seed === null) ? swissRoundOneOrder(swissDrawSeed(stageId), roundOne) : null;
 }
 
-async function swissGen(
+// Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
+// every round the organiser declared in `config.rounds`; Pair next (a later
+// Generate when shells already exist) seats one round at a time onto those
+// shells. The organiser-set round budget is the only authority — nothing here
+// derives or persists `rounds` from field size.
+//
+// W3 T6 (spec §4, ruling 251): `entrants` is the whole active list; each round
+// is paired, sized and scored over its own field (`swissFieldForRound`), so a
+// latecomer whose first round is later is not seated before it.
+export async function swissGen(
   tx: Tx,
   stageId: string,
   divisionId: string,
@@ -1492,6 +1518,7 @@ async function swissGen(
       round: null,
       seatedIds: [],
       drawSeed: null,
+      drawOrder: null,
       colourLot: null,
     };
   }
@@ -1510,6 +1537,7 @@ async function swissGen(
       round: null,
       seatedIds: [],
       drawSeed: null,
+      drawOrder: null,
       colourLot: null,
     };
   }
@@ -1770,7 +1798,18 @@ async function swissGen(
     seatedCount++;
   }
 
-  return { gen: [], seatedCount, reshaped, pairing, defaultPairing, round: target, seatedIds, drawSeed, colourLot };
+  return {
+    gen: [],
+    seatedCount,
+    reshaped,
+    pairing,
+    defaultPairing,
+    round: target,
+    seatedIds,
+    drawSeed,
+    drawOrder: target === 1 ? drawOrder : null,
+    colourLot,
+  };
 }
 
 /**
@@ -1796,7 +1835,7 @@ const DIVISION_STARTED_STATUSES: ReadonlySet<string> = new Set(["active", "compl
  * A missing row reads as STARTED — the narrower, lazier write — rather than
  * unlocking the wider one on an absence.
  */
-async function divisionHasStarted(tx: Tx, divisionId: string): Promise<boolean> {
+export async function divisionHasStarted(tx: Tx, divisionId: string): Promise<boolean> {
   const [division] = await tx<{ status: string }[]>`
     select status from divisions where id = ${divisionId}`;
   return division === undefined || DIVISION_STARTED_STATUSES.has(division.status);
@@ -1928,7 +1967,7 @@ interface SwissRoundReconcile {
  * `onBlocked` decides what a tripped guard MEANS, and it is the caller's call
  * because it depends on whose round this is — see `SwissReconcileBlockedPolicy`.
  */
-async function reconcileSwissRoundShells(
+export async function reconcileSwissRoundShells(
   tx: Tx,
   stageId: string,
   divisionId: string,
@@ -2985,10 +3024,7 @@ export async function generateStageFixturesTx(
   if (!stage) throw new HttpError(404, "stage not found");
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
 
-  const active = await tx<ActiveEntrant[]>`
-    select id, seed, swiss_first_round from entrants
-    where division_id = ${stage.division_id} and status in ('registered', 'confirmed')
-    order by seed nulls last, created_at, id`;
+  const active = await swissActiveEntrants(tx, stage.division_id, stageId);
 
   // A seeded stage (qualification resolved at the previous stage's completion,
   // stored as config.qualified) draws from that ordered list — its order IS
@@ -3101,6 +3137,8 @@ export async function generateStageFixturesTx(
             // W3 T8: round 1's draw seed (X-SW-22) and colour lot (BG-SW-1), each only when this pass used one, so the
             // round can be replayed from the ledger.
             ...(swiss.drawSeed !== null ? { draw_seed: swiss.drawSeed } : {}),
+            // W3 T9 (T8 review n1): and its drawn order, which later rounds read instead of re-deriving it.
+            ...(swiss.drawOrder !== null ? { draw_order: swiss.drawOrder } : {}),
             ...(swiss.colourLot !== null ? { colour_lot: swiss.colourLot } : {}),
           }
         : undefined;

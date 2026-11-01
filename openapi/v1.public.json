@@ -7581,6 +7581,30 @@
                           },
                           "created_at": {
                             "type": "string"
+                          },
+                          "swiss_first_round": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "swiss_first_round_stage_id": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -7591,7 +7615,9 @@
                           "display_name",
                           "seed",
                           "status",
-                          "created_at"
+                          "created_at",
+                          "swiss_first_round",
+                          "swiss_first_round_stage_id"
                         ],
                         "additionalProperties": false
                       }
@@ -7613,7 +7639,9 @@
                       "display_name": "example",
                       "seed": -9007199254740991,
                       "status": "registered",
-                      "created_at": "example"
+                      "created_at": "example",
+                      "swiss_first_round": 1,
+                      "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -7764,7 +7792,7 @@
         ]
       },
       "post": {
-        "summary": "Register entrant(s) — object or bulk array. A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division",
+        "summary": "Register entrant(s) — object or bulk array. After Start a division whose Swiss is running takes a late player (W3, ruling 250): the reply's late_entry says whether the unstarted round was re-paired (a), the newcomer plays the round's bye holder (b), or joins the next round (c); with the last round started it is 409 SWISS_NO_ROUND_LEFT (details.canAddRound), and a finished Swiss is 422 SWISS_OVER. A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division",
         "tags": [
           "entrants"
         ],
@@ -8362,6 +8390,105 @@
                             },
                             "created_at": {
                               "type": "string"
+                            },
+                            "swiss_first_round": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "swiss_first_round_stage_id": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "late_entry": {
+                              "type": "object",
+                              "properties": {
+                                "entrant_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "stage_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "case": {
+                                  "type": "string",
+                                  "enum": [
+                                    "a",
+                                    "b",
+                                    "c"
+                                  ]
+                                },
+                                "round": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "repaired": {
+                                  "type": "object",
+                                  "properties": {
+                                    "changed_entrant_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "changed_entrant_ids"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "new_board": {
+                                  "type": "object",
+                                  "properties": {
+                                    "fixture_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "scheduled": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "fixture_id",
+                                    "scheduled"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "bye_holder_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                }
+                              },
+                              "required": [
+                                "entrant_id",
+                                "stage_id",
+                                "case",
+                                "round"
+                              ],
+                              "additionalProperties": false
                             }
                           },
                           "required": [
@@ -8372,7 +8499,9 @@
                             "display_name",
                             "seed",
                             "status",
-                            "created_at"
+                            "created_at",
+                            "swiss_first_round",
+                            "swiss_first_round_stage_id"
                           ],
                           "additionalProperties": false
                         },
@@ -8437,6 +8566,105 @@
                               },
                               "created_at": {
                                 "type": "string"
+                              },
+                              "swiss_first_round": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "swiss_first_round_stage_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "late_entry": {
+                                "type": "object",
+                                "properties": {
+                                  "entrant_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "stage_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "case": {
+                                    "type": "string",
+                                    "enum": [
+                                      "a",
+                                      "b",
+                                      "c"
+                                    ]
+                                  },
+                                  "round": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "repaired": {
+                                    "type": "object",
+                                    "properties": {
+                                      "changed_entrant_ids": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "changed_entrant_ids"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "new_board": {
+                                    "type": "object",
+                                    "properties": {
+                                      "fixture_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "scheduled": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "fixture_id",
+                                      "scheduled"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "bye_holder_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  }
+                                },
+                                "required": [
+                                  "entrant_id",
+                                  "stage_id",
+                                  "case",
+                                  "round"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -8447,7 +8675,9 @@
                               "display_name",
                               "seed",
                               "status",
-                              "created_at"
+                              "created_at",
+                              "swiss_first_round",
+                              "swiss_first_round_stage_id"
                             ],
                             "additionalProperties": false
                           }
@@ -8470,7 +8700,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -8567,6 +8799,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -8757,6 +9033,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -8767,7 +9067,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -8787,7 +9089,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -9161,6 +9465,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -9171,7 +9499,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -9191,7 +9521,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -10024,6 +10356,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -10034,7 +10390,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -10054,7 +10412,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -12288,6 +12648,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -12298,7 +12682,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -12318,7 +12704,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -12647,6 +13035,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -12657,7 +13069,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -12677,7 +13091,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

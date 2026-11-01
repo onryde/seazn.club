@@ -753,7 +753,29 @@ export const Entrant = z.object({
   seed: z.number().int().nullable(),
   status: EntrantStatus,
   created_at: z.string(),
+  /** W3 T9 (ruling C4): the first Swiss round a late player is in the field for, in the Swiss stage
+   *  `swiss_first_round_stage_id` names (V484/V485); null = from round 1 (everyone enrolled before Start). */
+  swiss_first_round: z.number().int().min(1).nullable(),
+  swiss_first_round_stage_id: Uuid.nullable(),
 });
+
+/** W3 T9 (ruling 250, X-SW-12/13/14): what "Add late player" did with an entrant added to a division whose Swiss is
+ *  running. (a) re-paired the unstarted round with the newcomer (`repaired`: the players whose opponent changed; a
+ *  board the odd→even field needed is `new_board`); (b) seated the newcomer against the round's bye holder
+ *  (`bye_holder_id`, ruling C3) on a new board (`new_board`); (c) the newcomer joins round `round`'s Pair. */
+export const LateEntryResult = z.object({
+  entrant_id: Uuid,
+  stage_id: Uuid,
+  case: z.enum(["a", "b", "c"]),
+  round: z.number().int().min(1),
+  repaired: z.object({ changed_entrant_ids: z.array(Uuid) }).optional(),
+  new_board: z.object({ fixture_id: Uuid, scheduled: z.boolean() }).optional(),
+  bye_holder_id: Uuid.optional(),
+});
+export type LateEntryResult = z.infer<typeof LateEntryResult>;
+
+/** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss. */
+export const CreatedEntrant = Entrant.extend({ late_entry: LateEntryResult.optional() });
 
 // ---------------------------------------------------------------------------
 // Persons & profiles

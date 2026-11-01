@@ -19,6 +19,7 @@ import {
 } from "@/lib/swiss-pairing";
 import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { swissActiveFieldSize } from "@/lib/swiss-legend";
+import { inSwissRoundField, swissFirstRoundIn } from "@/lib/swiss-late-entry";
 
 /** What the split button's menu needs; `null` when there is no menu. */
 export type SwissPairingMenu = {
@@ -63,6 +64,10 @@ export type SwissPairingT = (key: SwissPairingMessageKey, vars?: Record<string, 
 export const SWISS_PAIRING_HINT_PAIRS = 3;
 
 type EntrantSeeds = Readonly<Record<string, number | null | undefined>>;
+/** W3 T9 (T8 review m8): each entrant's stored first Swiss round and the stage it belongs to (V484/V485), by id. */
+export type EntrantSwissFirstRounds = Readonly<
+  Record<string, { swiss_first_round?: number | null; swiss_first_round_stage_id?: string | null } | undefined>
+>;
 
 /**
  * R1 — may the hint print seed numbers? `roundOnePairs` returns seed
@@ -131,12 +136,21 @@ export function swissPairingMenuFor(args: {
   fixtures: Parameters<typeof nextUnseatedSwissRound>[0];
   activeEntrantIds: readonly string[] | undefined;
   entrantSeeds: EntrantSeeds | undefined;
+  /** W3 T9 (T8 review m8): the stage this menu is for and each entrant's stored first round. The round's field is the
+   *  server's — `swissFieldForRound` (usecases/stages.ts) over the same two predicates (`swissFirstRoundIn`,
+   *  `inSwissRoundField`) — so a late player whose first round is still ahead neither draws round 1 here nor counts in
+   *  it. Absent: everyone plays from round 1, as before any late entry. */
+  stageId?: string;
+  entrantFirstRounds?: EntrantSwissFirstRounds;
 }): SwissPairingMenu | null {
   if (args.kind !== "swiss" || args.fixtures.length === 0) return null;
   const round = nextUnseatedSwissRound(args.fixtures);
   if (round === null) return null;
   const stored = storedSwissPairing(args.config);
-  const unseededDrawn = round === 1 && swissFieldDrawn(args.config, args.activeEntrantIds, args.entrantSeeds);
+  const firstRoundOf = (id: string): number | null =>
+    args.stageId === undefined ? null : swissFirstRoundIn(args.entrantFirstRounds?.[id] ?? {}, args.stageId);
+  const field = args.activeEntrantIds?.filter((id) => inSwissRoundField(firstRoundOf(id), round));
+  const unseededDrawn = round === 1 && swissFieldDrawn(args.config, field, args.entrantSeeds);
   return {
     round,
     choosable: round === 1,
@@ -144,14 +158,14 @@ export function swissPairingMenuFor(args: {
     stored,
     // An unknown roster (a caller that passed none) is 0 here, and the hint
     // below goes generic rather than print numbers for a field it cannot see.
-    fieldSize: swissActiveFieldSize(args.config, args.activeEntrantIds ?? []),
-    seedsNumbered: swissFieldSeedsNumbered(args.config, args.activeEntrantIds, args.entrantSeeds),
+    fieldSize: swissActiveFieldSize(args.config, field ?? []),
+    seedsNumbered: swissFieldSeedsNumbered(args.config, field, args.entrantSeeds),
     unseededDrawn,
-    seededAheadOfDraw: unseededDrawn && (args.activeEntrantIds ?? []).some((id) => (args.entrantSeeds?.[id] ?? null) !== null),
+    seededAheadOfDraw: unseededDrawn && (field ?? []).some((id) => (args.entrantSeeds?.[id] ?? null) !== null),
   };
 }
 
-/** X-SW-22 — the round-1 line under the options when the field is drawn: "Unseeded players are drawn at random."
+/** X-SW-22 — the round-1 line under the options when the field is drawn: "Unseeded entrants are drawn at random."
  *  `null` otherwise, and never in a read-only later round. */
 export function swissPairingDrawNote(
   menu: Pick<SwissPairingMenu, "choosable" | "unseededDrawn">,

@@ -41,6 +41,7 @@ import {
   type EligibilityIssue,
   type EligibilityRosterPlayer,
 } from "./registration-eligibility";
+import { admitSwissLateEntrant } from "./swiss-late-entry";
 
 type Tx = postgres.TransactionSql;
 
@@ -690,6 +691,8 @@ async function executePlan(tx: Tx, auth: AuthCtx, ops: ImportOp[]): Promise<stri
           returning id`;
         ids.set(op.ref, row!.id);
         divisionIds.add(op.divisionId);
+        // W3 T9 (X-SW-13): into a running Swiss an import is an automatic arrival — case (c), never a refusal.
+        await admitSwissLateEntrant(tx, auth, op.divisionId, row!.id, "import");
         break;
       }
       case "squad.add": {

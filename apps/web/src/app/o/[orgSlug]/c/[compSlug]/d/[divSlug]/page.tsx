@@ -357,6 +357,11 @@ export default async function DivisionPage({
   // NUMBERS only when the field's seeds really are 1..N in pairing order, so
   // it needs each entrant's seed. `listEntrants` already selects `seed`.
   const entrantSeeds = Object.fromEntries(entrants.map((e) => [e.id, e.seed]));
+  // W3 T9 (T8 review m8): each entrant's first Swiss round and its stage, so the pairing menu reads the round's field
+  // exactly as the server pairs it (`listEntrants` selects both since T9).
+  const entrantSwissFirstRounds = Object.fromEntries(
+    entrants.map((e) => [e.id, { swiss_first_round: e.swiss_first_round, swiss_first_round_stage_id: e.swiss_first_round_stage_id }]),
+  );
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
   // P6/D4b task B — the proposal panel, one per propose/confirm-at-setup
@@ -916,6 +921,7 @@ export default async function DivisionPage({
               entrantNames={entrantNames}
               activeEntrantIds={activeEntrantIds}
               entrantSeeds={entrantSeeds}
+              entrantSwissFirstRounds={entrantSwissFirstRounds}
               venues={panelVenues}
               rosterDrift={rosterDrift}
               canEdit={editable}
