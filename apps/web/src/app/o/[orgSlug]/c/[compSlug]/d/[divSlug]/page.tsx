@@ -27,6 +27,7 @@ import { divisionLockedFields } from "@/server/usecases/rule-locks";
 import { isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
+import { bracketPlacement } from "@/lib/bracket-view";
 import { listEntrants, listLichessLinkGaps, DEPARTED_STATUSES } from "@/server/usecases/entrants";
 import { summariseLinkGaps } from "@/lib/online-link-gaps";
 import { log } from "@/server/logger";
@@ -888,11 +889,13 @@ export default async function DivisionPage({
 
         {tab === "fixtures" && (
           <>
-            {/* PROMPT-62: two-sided tree for each knockout stage, above the
-                flat list (which keeps scheduling + Documents). Renders nothing
-                until the bracket is generated or for non-single-elim shapes. */}
+            {/* PROMPT-62: the bracket tree for each knockout stage, above the flat list. Match Day E1 item 3 (owner 2026-11-01): a
+                single-elimination tree (and a page playoff) is no longer drawn here - it opens INSIDE its stage's card, from the
+                header's Bracket button, so the page does not draw it a second time. What stays here is what a card does not
+                draw: the double-elimination layout and the stepladder's rung list. `bracketPlacement` is the one predicate both
+                sides read, so a stage is drawn in exactly one place or none (it also draws nothing until the bracket exists). */}
             {stages
-              .filter((st) => BRACKET_STAGE_KINDS.has(st.kind))
+              .filter((st) => bracketPlacement(st.kind, fixtures.filter((f) => f.stage_id === st.id)) === "page")
               .map((st) => (
                 <div key={st.id} className="mb-6">
                   <BracketPanel
@@ -971,6 +974,10 @@ export default async function DivisionPage({
               stages={stages}
               fixtures={fixtures}
               entrantNames={entrantNames}
+              // Match Day E1 item 3: the crests and scoreline headlines the card's bracket tree draws with (the same maps the
+              // page-level tree was handed before it moved into the card).
+              entrantBadges={entrantLogos}
+              headlines={headlines}
               activeEntrantIds={activeEntrantIds}
               entrantSeeds={entrantSeeds}
               venues={panelVenues}

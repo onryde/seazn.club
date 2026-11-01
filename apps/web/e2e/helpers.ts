@@ -2654,7 +2654,9 @@ export async function setDateTime(scope: Page | Locator, value: string): Promise
 // the sheet first - gated on the header button being VISIBLE, never on a width literal (AGENTS.md rule 22) - and waits on
 // `toBeAttached` for the hidden twin, not `toBeVisible`. A viewer has no sheet: their header buttons stay on screen at every width.
 // ---------------------------------------------------------------------------------------------------------------------
-export type StagePanel = "format" | "points" | "tiebreaks";
+// Match Day E1 item 3: the knockout stage's BRACKET tree opens the same way (`stage-tool-bracket` in the header, `stage-sheet-tool-bracket`
+// in the phone sheet), so it is one more panel here.
+export type StagePanel = "format" | "points" | "tiebreaks" | "bracket";
 
 /** The stage's card (`<section class="card" data-stage-id>`). */
 export const stageCardOf = (scope: Page | Locator, stageId: string): Locator => scope.locator(`section[data-stage-id="${stageId}"]`);
@@ -2687,6 +2689,18 @@ async function pressStageTool(card: Locator, panel: StagePanel, wantOpen: boolea
 /** Open one panel of one stage card, and wait until it says it is open. A no-op when it is already open (a second call is safe). */
 export async function openStagePanel(card: Locator, panel: StagePanel): Promise<void> {
   await pressStageTool(card, panel, true);
+}
+
+/** Match Day E1 item 3: open the bracket tree of a single-elimination knockout stage (the bracket no longer sits above the cards; it
+ *  opens inside its stage's card, closed by default) and return the tree. With no `stageId` it takes the one card that has a Bracket
+ *  button, so a division with a double-elimination stage (whose tree stays on the page) is not confused with it. */
+export async function openBracket(page: Page, stageId?: string): Promise<Locator> {
+  const card =
+    stageId === undefined
+      ? page.locator("section[data-stage-id]").filter({ has: page.getByTestId("stage-tool-bracket") }).first()
+      : stageCardOf(page, stageId);
+  await openStagePanel(card, "bracket");
+  return card.getByTestId("bracket-panel");
 }
 
 /** Close one panel through its own button (the toggle), and wait until it says it is closed. A no-op when it is already closed. */

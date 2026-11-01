@@ -29,6 +29,7 @@ import {
   matchRoomPathBySql,
   enclosingStageCard,
   openStagePanel,
+  openBracket,
   stageCardOf,
 } from "./helpers";
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
@@ -3521,7 +3522,9 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   // other, which reads as broken rather than merely uninformative. Asserting
   // each surface on its own is what let them drift, so this asserts they
   // agree about the SAME match.
-  const tree = page.getByTestId("bracket-panel");
+  // Match Day E1 item 3: the tree is no longer "directly above this list" - it opens INSIDE the knockout stage's card from its Bracket
+  // button (header, or the phone sheet's row), closed on every load. The pair is the same one: both surfaces on one tab.
+  const tree = await openBracket(page);
   await expect(tree).toBeVisible({ timeout: 20_000 });
   await expect(tree.getByText(EN_R1_1, { exact: false }).first()).toBeVisible();
   await expect(tree.getByText(EN_R1_2, { exact: false }).first()).toBeVisible();
@@ -3545,6 +3548,7 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   await expect(tree).not.toContainText(EN_R1_1);
   await expectNoHorizontalScroll(page);
 });
+  await openBracket(page); // a reload closes the card's tree again
 
 // ---------------------------------------------------------------------------
 // P6 (D4b task B) — the organiser-facing proposal panel: full browser flow

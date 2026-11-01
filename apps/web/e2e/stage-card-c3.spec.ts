@@ -313,3 +313,70 @@ test("E1: a started Swiss stage groups its rows under a bar per round, with the 
   await expect(card.locator("[data-run-sheet-round-span]")).toHaveCount(0);
   await expectNoHorizontalScroll(page);
 });
+
+// Match Day E1 item 3 (owner 2026-11-01): the bracket tree opens INSIDE its knockout stage's card from a "Bracket" header button (closed by
+// default), not above the cards. Double elimination keeps its page view and gets no button. Driven through the real page: the page-level
+// mount, the card's button, the phone sheet's row and the card's own scroller all have to agree.
+async function seedKnockoutDivision(request: Parameters<typeof apiJson>[0], kind: "knockout" | "double_elim", entrants: number): Promise<{ divisionId: string; stageId: string }> {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `E1 bracket ${kind} ${TAG}`, visibility: "private" });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Cup",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  await addEntrantsViaApi(request, div.data!.id, Array.from({ length: entrants }, (_, i) => `K${i + 1} ${TAG}`));
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind, name: kind === "knockout" ? "Knockout" : "Double elim" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  const gen = await apiJson<{ created: number }>(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
+  expect(gen.data!.created, "premise: a bracket was drawn").toBeGreaterThan(0);
+  return { divisionId: div.data!.id, stageId: stage.data!.id };
+}
+
+test("E1: a single-elimination knockout card has a Bracket button; the tree is closed by default, opens inside the card, and scrolls sideways there", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const { divisionId, stageId } = await seedKnockoutDivision(request, "knockout", 8);
+  const card = await openCard(page, request, divisionId, stageId);
+
+  const tool = card.getByTestId("stage-tool-bracket");
+  await expect(tool, "the knockout card has a Bracket button").toBeAttached();
+  await expect(tool).toHaveAttribute("aria-expanded", "false");
+  await expect(tool).toHaveAttribute("aria-controls", `stage-panel-${stageId}-bracket`);
+  // Closed by default - and nothing draws the tree anywhere else on the page (the page-level mount is retired for this kind).
+  await expect(page.getByTestId("bracket-panel"), "closed: no tree anywhere on the page").toHaveCount(0);
+
+  await openStagePanel(card, "bracket");
+  const tree = card.getByTestId("bracket-panel");
+  await expect(tree, "the tree opened inside the card").toBeVisible();
+  await expect(page.getByTestId("bracket-panel"), "and it is the only tree on the page").toHaveCount(1);
+  await expect(tree.locator('a[href*="/f/"]').first(), "the tree draws the stage's matches").toBeVisible();
+  // The tree sits BELOW the header and inside the same card as the fixtures it draws.
+  const headerBox = (await tool.isVisible() ? await tool.boundingBox() : await card.getByTestId("stage-rail-trigger").boundingBox())!;
+  const treeBox = (await tree.boundingBox())!;
+  expect(treeBox.y, "the tree opens beneath the card's header").toBeGreaterThan(headerBox.y);
+  // The scroller is the tree's own: reachable overflow (auto), and the PAGE does not scroll sideways with it open.
+  const scroller = tree.locator("div.overflow-x-auto").first();
+  expect(await scroller.evaluate((el) => getComputedStyle(el).overflowX), "the tree scrolls horizontally inside the card").toBe("auto");
+  await expectNoHorizontalScroll(page);
+
+  // Toggling the same control closes it again (the sequence, not one tap), and a reload starts closed.
+  await closeStagePanel(card, "bracket");
+  await expect(page.getByTestId("bracket-panel")).toHaveCount(0);
+  await page.reload({ waitUntil: "load" });
+  await expect(stageCardOf(page, stageId).getByTestId("stage-tool-bracket")).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("bracket-panel"), "a reload closes it").toHaveCount(0);
+});
+
+test("E1: a double-elimination stage has NO Bracket button and keeps its two-lane tree on the page", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const { divisionId, stageId } = await seedKnockoutDivision(request, "double_elim", 4);
+  const card = await openCard(page, request, divisionId, stageId);
+  await expect(card.getByTestId("stage-tool-bracket"), "no button on a double-elimination card").toHaveCount(0);
+  await expect(card.getByTestId("stage-sheet-tool-bracket"), "nor a phone row").toHaveCount(0);
+  await expect(page.getByTestId("bracket-panel-de"), "its tree stays on the page, outside the card").toBeVisible({ timeout: STEP_MS });
+  await expect(card.getByTestId("bracket-panel-de"), "...not inside the card").toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});

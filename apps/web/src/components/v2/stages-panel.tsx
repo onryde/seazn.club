@@ -65,6 +65,8 @@ import { stageCounts, unitLabelKey } from "@/lib/stage-card/summaries";
 import { pointsDiffer, stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { TiebreaksEditor, stageLikeOf } from "@/components/v2/rules/tiebreaks-editor";
 import { DivisionRulesStrip, TOGGLE_OFF, TOGGLE_ON, type DivisionRulesStripProps, type RulesPanel } from "@/components/v2/rules/division-rules-strip";
+import { BracketPanel } from "@/components/v2/bracket-panel";
+import { bracketPlacement } from "@/lib/bracket-view";
 import { inheritedOrder as inheritedOrderOf, stagePooled, takesBestNthFrom, tiebreaksDiffer } from "@/components/v2/stage-rules/stage-tiebreaks-model";
 import type { StageTableRules } from "@/server/api-v1/schemas";
 import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment } from "@/components/v2/stage-rules/stage-row-model";
@@ -147,6 +149,9 @@ interface StageRow {
   progression: Record<string, unknown> | null;
   status: string;
 }
+/** The panels a stage card opens inline from its header: the three rules panels and (E1 item 3) the bracket tree. */
+type StagePanelKey = RulesPanel | "bracket";
+
 interface FixtureRow {
   id: string;
   stage_id: string;
@@ -355,7 +360,12 @@ interface Props {
   stageTableRules?: Record<string, StageTableRules>;
   /** Match Day C3: the settings panels every stage card opens with (a test hook, like `DivisionRulesStrip`'s `initialOpen`; the page
    *  never sets it - the cards open closed). */
-  initialOpenPanels?: readonly RulesPanel[];
+  initialOpenPanels?: readonly StagePanelKey[];
+  /** Match Day E1 item 3: entrant id -> resolved crest URL, for the bracket tree a knockout card opens (the page's own
+   *  `entrantLogos`, the same map it hands every other panel). Optional: absent, the tree draws no crests. */
+  entrantBadges?: Record<string, string | null>;
+  /** Match Day E1 item 3: fixture id -> its scoreline headline, for the same tree (`listFixtureHeadlines`, the page's own map). */
+  headlines?: Record<string, string>;
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
   /** The GOVERNING venue clock (`settings.orgTz`, #448), resolved server-side.
@@ -530,7 +540,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -639,8 +649,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   const [openPanels, setOpenPanels] = useState<ReadonlySet<string>>(
     () => new Set(stages.flatMap((st) => (initialOpenPanels ?? []).map((panel) => `${st.id}:${panel}`))),
   );
-  const panelOpen = (stageId: string, panel: RulesPanel): boolean => openPanels.has(`${stageId}:${panel}`);
-  const togglePanel = (stageId: string, panel: RulesPanel) =>
+  const panelOpen = (stageId: string, panel: StagePanelKey): boolean => openPanels.has(`${stageId}:${panel}`);
+  const togglePanel = (stageId: string, panel: StagePanelKey) =>
     setOpenPanels((prev) => {
       const next = new Set(prev);
       const key = `${stageId}:${panel}`;
@@ -1065,16 +1075,22 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // The stage's three settings buttons, built ONCE: the header row (from `md`) and the "Stage tools" sheet's top rows (below `md`,
         // an editor only) are the same list. Points and Tie-breaks only on a table stage whose rules read.
         const takesPoints = stageTakesPoints(stage.kind);
-        const settingsTools: { panel: RulesPanel; label: string }[] =
-          sportKey === undefined
+        // Match Day E1 item 3: a single-elimination knockout's tree opens from here too - LAST in the group, for everyone who can read the
+        // card (the page used to draw it above the cards for every viewer). `bracketPlacement` is the one predicate for who draws what:
+        // a double-elimination layout or a stepladder is not a card's to draw and keeps its place on the page.
+        const bracketInCard = bracketPlacement(stage.kind, stageFixtures) === "card";
+        const settingsTools: { panel: StagePanelKey; label: string }[] = [
+          ...(sportKey === undefined
             ? []
             : [
-                { panel: "format", label: msg("rulesStrip.format") },
+                { panel: "format" as const, label: msg("rulesStrip.format") },
                 ...(takesPoints ? [{ panel: "points" as const, label: msg("stagePoints.title") }] : []),
                 ...(takesPoints && stageTableRules[stage.id] !== undefined
                   ? [{ panel: "tiebreaks" as const, label: msg("stageTiebreaks.title") }]
                   : []),
-              ];
+              ]),
+          ...(bracketInCard ? [{ panel: "bracket" as const, label: msg("bracket.title") }] : []),
+        ];
         // Held keeps Complete locked but is not "in play": it waits for the organiser, and the card says so in its own clause.
         const stageHeld = stageFixtures.filter(
           (f) => (f.status === "needs_decision" || awaitingIds.has(f.id)) && !isBye(toRunSheetFixture(f)),
@@ -1447,6 +1463,26 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     tiebreaksOpen={panelOpen(stage.id, "tiebreaks")}
                     onClose={(panel) => closePanel(stage.id, panel)}
                   />
+                )}
+
+                {/* Match Day E1 item 3 (owner 2026-11-01): the bracket tree, INSIDE the knockout stage's card, closed until the header's
+                    Bracket button (or the phone sheet's row) opens it. The existing panel, unchanged: it keeps its own horizontal
+                    scroller, and `min-w-0` here is what lets that scroller shrink to the card instead of widening the page. The
+                    `fixtures` it draws from are this stage's; `divisionFixtures` is the whole division's, for the feeder labels. */}
+                {bracketInCard && panelOpen(stage.id, "bracket") && (
+                  <div id={`stage-panel-${stage.id}-bracket`} data-testid="stage-bracket" className="min-w-0 border-b border-slate-100 px-4 py-3">
+                    <BracketPanel
+                      kind={stage.kind}
+                      fixtures={stageFixtures}
+                      divisionFixtures={fixtures}
+                      entrantNames={entrantNames}
+                      {...(entrantBadges === undefined ? {} : { entrantBadges })}
+                      {...(headlines === undefined ? {} : { headlines })}
+                      orgSlug={orgSlug}
+                      compSlug={compSlug}
+                      divSlug={divSlug}
+                    />
+                  </div>
                 )}
 
                 {/* Owner-approved redesign, "Option A" — the body's fixtures-

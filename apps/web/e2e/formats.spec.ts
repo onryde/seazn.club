@@ -6,6 +6,7 @@ import {
   divisionPath,
   addEntrantsViaApi,
   expectNoHorizontalScroll,
+  openBracket,
   stageCardOf,
 } from "./helpers";
 
@@ -379,7 +380,8 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
 
   // ── the shape, IN THE BROWSER ──
   await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-  const bracket = page.getByTestId("bracket-panel");
+  // Match Day E1 item 3: the tree opens inside the Knockout stage's card from its Bracket button (closed by default).
+  const bracket = await openBracket(page, koId);
   await expect(bracket.getByText("Cy", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
   await expect(bracket.getByText("Bo", { exact: true }).first()).toBeVisible();
   // Two knockout round groups on the run sheet and no third: a Top 3 pads to
@@ -390,7 +392,8 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   // repeats it ("Knockout - Semi-finals" is now "2. Knockout" over "Semi-finals"). The same fact is asserted scoped to the
   // Knockout card: the card is the one the knockout stage's id names, its header says Knockout, and the two round headers sit in it.
   const koCard = stageCardOf(page, koId);
-  await expect(koCard.getByRole("heading", { level: 3 }), "the card is the Knockout stage's").toContainText("Knockout");
+  // `.first()`: the open tree carries its own "Bracket" h3 inside the card; the stage's header is the first heading in it.
+  await expect(koCard.getByRole("heading", { level: 3 }).first(), "the card is the Knockout stage's").toContainText("Knockout");
   const koRounds = koCard.getByRole("heading", { level: 4 });
   await expect(koRounds.filter({ hasText: "Semi-finals" }), "the Knockout card has a Semi-finals round").toBeVisible();
   // Match Day E1 item 1: the round header is a bar - the round's name, then its "N of M played" fact in the same heading - so the name

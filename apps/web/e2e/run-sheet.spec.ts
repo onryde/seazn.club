@@ -12,6 +12,7 @@ import {
   expectNoHorizontalScroll,
   addEntrantsViaApi,
   seedVenueWithCourts,
+  openBracket,
 } from "./helpers";
 // The repo's one cookie-banner dismissal — idempotent no-op under the authed
 // `page` fixture (consent is already pre-dismissed into AUTH_STATE), but
@@ -2646,8 +2647,9 @@ test("at 1280 the tree and the draw list under it name the same feeder for the s
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
 
   const sheet = page.getByTestId("run-sheet");
-  const tree = page.getByTestId("bracket-panel");
   await expect(sheet, "the draw list never rendered").toBeVisible({ timeout: 20_000 });
+  // Match Day E1 item 3: the tree opens inside the Cup's card from its Bracket button (closed by default).
+  const tree = await openBracket(page, koId);
   await expect(tree, "the bracket tree never rendered").toBeVisible({ timeout: 20_000 });
 
   const R1_1 = feederEn(1, 1);

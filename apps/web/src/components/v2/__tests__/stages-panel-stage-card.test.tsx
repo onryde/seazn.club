@@ -18,6 +18,7 @@ import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { unitLabelKey } from "@/lib/stage-card/summaries";
+import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder, type GeneratedBracket } from "@seazn/engine/scheduling";
 import { tableRulesOf } from "../stage-rules/__tests__/_table-rules-fixture";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
@@ -131,6 +132,157 @@ describe("E1 item 2: the stage card says Match rules, in every locale", () => {
       locales++;
     }
     expect(locales, "all four locales").toBe(4);
+  });
+});
+
+// Match Day E1 item 3 (owner 2026-11-01): the bracket tree moved from above the cards INTO the knockout stage's card, behind a "Bracket"
+// header button (closed by default), a "Bracket" row in the phone's Stage tools sheet, and the tree scrolling sideways inside the card.
+// The fixtures are the ENGINE'S OWN generator output, numbered the way the stage writer numbers persisted rows; which kinds draw in the
+// card is the owner's ruling (single-elimination shapes yes; double-elimination and stepladder keep the page), typed here on purpose.
+const BR = "22222222-2222-4222-8222-222222222222";
+function bracketRows(stageId: string, gen: GeneratedBracket, deLanes = false) {
+  const counters = new Map<string, number>();
+  return gen.fixtures.map((f) => {
+    const lane = f.bracket ?? "WB";
+    const offset = !deLanes ? 0 : lane === "LB" ? gen.rounds : lane === "GF" ? 2 * gen.rounds : 0;
+    const round_no = offset + f.round + 1;
+    const key = `${lane}:${round_no}`;
+    const seq = (counters.get(key) ?? 0) + 1;
+    counters.set(key, seq);
+    return { ...fixture(stageId, counters.size * 10 + seq), id: f.id, round_no, seq_in_round: seq, fixture_no: counters.size * 10 + seq, home_entrant_id: f.home ?? null, away_entrant_id: f.away ?? null };
+  });
+}
+const T4 = ["T1", "T2", "T3", "T4"];
+const names = (ids: string[]) => Object.fromEntries(ids.map((id) => [id, `Team ${id}`]));
+const bracketPanelProps = (stageKind: string, rows: ReturnType<typeof bracketRows>, over: Record<string, unknown> = {}) => ({
+  stages: [stageRow({ id: BR, kind: stageKind, name: "Knockout" })],
+  fixtures: rows,
+  entrantNames: names(T4),
+  stageTableRules: {},
+  ...over,
+});
+
+describe("E1 item 3: the bracket opens from the knockout stage's card", () => {
+  const rows = bracketRows(BR, generateSingleElim({ entrants: T4 }));
+
+  it("a single-elimination knockout card has a Bracket button in its header, closed, and the tree is not drawn until it opens", () => {
+    expect(rows.length, "premise: the generator produced a bracket").toBeGreaterThan(0);
+    for (const canEdit of [true, false]) {
+      const html = panel(bracketPanelProps("knockout", rows, { canEdit }));
+      const at = html.indexOf('data-testid="stage-tool-bracket"');
+      expect(at, `canEdit=${canEdit}: the header button`).toBeGreaterThan(-1);
+      expect(text(html.slice(at, html.indexOf("</button>", at))), "named by the existing bracket title, in the en words").toContain(UI["bracket.title"]);
+      expect(tag(html, "stage-tool-bracket"), "a disclosure, closed").toMatch(/aria-expanded="false"/);
+      expect(count(html, "stage-bracket"), "closed: no tree container").toBe(0);
+      expect(count(html, "bracket-panel"), "closed: no tree").toBe(0);
+    }
+  });
+
+  it("open, the tree is drawn INSIDE the card (the real BracketPanel), after the header and before the rows, and the button reads open", () => {
+    const html = panel(bracketPanelProps("knockout", rows, { initialOpenPanels: ["bracket"] }));
+    expect(tag(html, "stage-tool-bracket")).toMatch(/aria-expanded="true"/);
+    expect(count(html, "stage-bracket")).toBe(1);
+    expect(count(html, "bracket-panel"), "the existing panel, drawn once").toBe(1);
+    const card = html.slice(html.indexOf('data-stage-id="'), html.lastIndexOf("</section>"));
+    const inCard = (id: string) => card.indexOf(`data-testid="${id}"`);
+    expect(inCard("bracket-panel"), "inside the stage's card").toBeGreaterThan(-1);
+    expect(inCard("stage-tool-bracket"), "after the header's button").toBeLessThan(inCard("bracket-panel"));
+    expect(inCard("bracket-panel"), "before the rows").toBeLessThan(inCard("stage-run-sheet"));
+    // The control names the container it opens.
+    const controls = /data-testid="stage-tool-bracket"[^>]*aria-controls="([^"]+)"/.exec(html)?.[1];
+    expect(controls, "aria-controls").toBe(`stage-panel-${BR}-bracket`);
+    expect(html, "the container carries that id").toContain(`id="${controls}"`);
+  });
+
+  it("the tree scrolls sideways inside the card: the panel's own scroller is kept, and the card clips nothing else", () => {
+    const html = panel(bracketPanelProps("knockout", rows, { initialOpenPanels: ["bracket"] }));
+    const panelAt = html.indexOf('data-testid="bracket-panel"');
+    const scroller = html.indexOf("overflow-x-auto", panelAt);
+    expect(scroller, "BracketPanel's overflow-x-auto scroller is inside its own section").toBeGreaterThan(panelAt);
+    // The container the card wraps it in must be able to shrink (`min-w-0`), or the tree's fixed width pushes the page sideways.
+    const wrapper = tag(html, "stage-bracket") ?? "";
+    expect(wrapper, "min-w-0 so the wide tree scrolls in the card rather than widening the page").toMatch(/min-w-0/);
+  });
+
+  it("a phone's Stage tools sheet has a Bracket row too (an editor), toggling the same panel", () => {
+    const html = panel(bracketPanelProps("knockout", rows));
+    const at = html.indexOf('data-testid="stage-sheet-tool-bracket"');
+    expect(at, "the sheet row").toBeGreaterThan(-1);
+    expect(text(html.slice(at, html.indexOf("</button>", at)))).toContain(UI["bracket.title"]);
+    expect(tag(html, "stage-sheet-tool-bracket")).toMatch(/aria-controls="stage-panel-[^"]+-bracket"/);
+    // A viewer has no sheet; theirs is the header button above.
+    expect(count(panel(bracketPanelProps("knockout", rows, { canEdit: false })), "stage-sheet-tool-bracket")).toBe(0);
+  });
+
+  it("the Bracket button comes last in the settings group, after Match rules / Points / Tie-breaks", () => {
+    const html = panel(bracketPanelProps("knockout", rows, { sportKey: "badminton" }));
+    const order = ["stage-tool-format", "stage-tool-bracket"].map((id) => html.indexOf(`data-testid="${id}"`));
+    expect(order.every((i) => i >= 0), `both are present: ${order}`).toBe(true);
+    expect(order[0]!).toBeLessThan(order[1]!);
+  });
+
+  it("every locale names the button with its own bracket word (counted)", () => {
+    let checked = 0;
+    for (const [loc, dict] of DICTS) {
+      const html = panel(bracketPanelProps("knockout", rows), loc, dict);
+      const at = html.indexOf('data-testid="stage-tool-bracket"');
+      expect(at, loc).toBeGreaterThan(-1);
+      expect(text(html.slice(at, html.indexOf("</button>", at))), loc).toContain((dict as Record<string, string>)["bracket.title"]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  // The tree labels an empty seat from the feed edge INTO it. A cross-stage edge (a league's winner seated into the knockout) has its
+  // source in ANOTHER stage's rows, so the card must hand the tree the WHOLE division's fixtures to build that map from, not only
+  // this stage's: with the stage's own rows the seat would read "TBD" (BracketPanel's `divisionFixtures` note).
+  it("the tree names an empty seat from a feed edge whose source sits in another stage (the whole division's rows are handed over)", () => {
+    const LG = "44444444-4444-4444-8444-444444444444";
+    const ko = bracketRows(BR, generateSingleElim({ entrants: T4 }));
+    const target = ko.find((f) => f.round_no === 1 && f.seq_in_round === 1)!;
+    const seat = { ...target, home_entrant_id: null as string | null };
+    const source = { ...fixture(LG, 1), id: "lg-source", round_no: 3, seq_in_round: 2, winner_to_fixture: target.id, winner_to_slot: 1 };
+    const html = panel({
+      stages: [stageRow({ id: LG, seq: 1, name: "League" }), stageRow({ id: BR, seq: 2, kind: "knockout", name: "Knockout" })],
+      fixtures: [source, ...ko.map((f) => (f.id === target.id ? seat : f))],
+      entrantNames: names(T4),
+      stageTableRules: {},
+      initialOpenPanels: ["bracket"],
+    });
+    const treeAt = html.indexOf('data-testid="bracket-panel"');
+    expect(treeAt, "premise: the tree is open").toBeGreaterThan(-1);
+    const tree = html.slice(treeAt, html.indexOf("</section>", treeAt));
+    const winnerOf = UI["slot.winner_match"]!.split("{ext}")[0]!;
+    expect(winnerOf.length, "premise: the en copy has a lead-in").toBeGreaterThan(2);
+    expect(tree, "the seat reads as the winner of the other stage's match").toContain(`${winnerOf}R3\u00b72`);
+  });
+
+  it("a page playoff is a tree and gets the button; double-elimination, stepladder, a league and a knockout with no bracket yet do not", () => {
+    const cases: { name: string; kind: string; rows: ReturnType<typeof bracketRows>; button: boolean }[] = [
+      { name: "page playoff", kind: "page_playoff", rows: bracketRows(BR, generatePagePlayoff({ entrants: T4 })), button: true },
+      { name: "double elimination", kind: "double_elim", rows: bracketRows(BR, generateDoubleElim({ entrants: T4 }), true), button: false },
+      { name: "stepladder", kind: "stepladder", rows: bracketRows(BR, generateStepladder({ entrants: T4 })), button: false },
+      { name: "league (tree-shaped rows or not)", kind: "league", rows: rows, button: false },
+      { name: "knockout with no bracket yet", kind: "knockout", rows: [], button: false },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      expect(c.kind === "knockout" && c.rows.length === 0 ? true : c.rows.length > 0, `${c.name}: premise, rows exist`).toBe(true);
+      const html = panel(bracketPanelProps(c.kind, c.rows, { initialOpenPanels: ["bracket"] }));
+      expect(count(html, "stage-tool-bracket") > 0, `${c.name}: the header button`).toBe(c.button);
+      expect(count(html, "stage-sheet-tool-bracket") > 0, `${c.name}: the sheet row`).toBe(c.button);
+      expect(count(html, "stage-bracket") > 0, `${c.name}: asked open, the tree container`).toBe(c.button);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // The kind sets are the engine's own: every kind that is NOT a bracket stage gets no button, whatever it holds (swept).
+    let nonBracket = 0;
+    for (const kind of StageKind.options.filter((k) => !BRACKET_KINDS.has(k))) {
+      const html = panel(bracketPanelProps(kind, rows));
+      expect(count(html, "stage-tool-bracket"), kind).toBe(0);
+      nonBracket++;
+    }
+    expect(nonBracket, "anti-vacuity: non-bracket kinds swept").toBeGreaterThan(2);
   });
 });
 
