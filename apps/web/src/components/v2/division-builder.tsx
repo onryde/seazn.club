@@ -37,7 +37,7 @@ import { pickVariant } from "@/lib/preferred-variant";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
 import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
 import { LegsChoice } from "@/components/v2/legs-choice";
-import { FORMAT_BOUNDS } from "@/lib/format-bounds";
+import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/format-bounds";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { CourtMultiPicker } from "@/components/v2/shared/court-multi-picker";
 // P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
@@ -376,6 +376,28 @@ export function DivisionBuilder({
     template === "groups_ko" ||
     template === "group_stepladder" ||
     template === "swiss_knockout";
+  // The Format tab's other bounded number knobs, shown per template. The JSX and formatBoundProblem read these same two,
+  // so a knob is judged exactly when it is on screen.
+  const showPools = template === "groups_ko";
+  const showRounds = template === "swiss" || template === "swiss_playoff" || template === "swiss_knockout";
+
+  /** The first VISIBLE format knob outside FORMAT_BOUNDS, as a sentence naming it, or null (fix round 1, M1). Whole
+   *  numbers only: a cleared box (Number("") === 0), 40 and 3.5 are all refused here, before any POST, rather than
+   *  clamped into a value the organiser did not type or sent to fail after the division exists. A knob the template does
+   *  not show is not judged: buildStages does not read it (the Top N) or the template ignores it. */
+  function formatBoundProblem(): string | null {
+    const shown: [FormatBoundKey, number, MessageKey][] = [];
+    if (showPools) shown.push(["pools", poolCount, "wizard.pools"]);
+    if (showRounds) shown.push(["swissRounds", swissRounds, "wizard.rounds"]);
+    if (hasSecondStage) shown.push(["qualify", qualified, "wizard.qualify"]);
+    for (const [field, value, label] of shown) {
+      if (!withinFormatBounds(field, value)) {
+        const { min, max } = FORMAT_BOUNDS[field];
+        return msg("wizard.err.formatBound", { field: msg(label), min, max });
+      }
+    }
+    return null;
+  }
 
   function buildStages(): StageDraft[] {
     // B (round-4 review): poolCount and qualified are free number inputs bounded by FORMAT_BOUNDS — HTML `min` doesn't
@@ -406,6 +428,13 @@ export function DivisionBuilder({
     const ruleProblem = ruleProblemText();
     if (ruleProblem !== null) {
       setError(ruleProblem);
+      return;
+    }
+    // So is the Format tab: going back to Basics is free and Basics -> Scheduling checks Basics only, so a Top N of 3.5
+    // could otherwise reach the stages POST - which refuses it after the division itself was created, leaving it empty.
+    const formatProblem = formatBoundProblem();
+    if (formatProblem !== null) {
+      setError(formatProblem);
       return;
     }
 
@@ -571,6 +600,10 @@ export function DivisionBuilder({
       const n = Number(maxAge);
       if (!Number.isInteger(n) || n <= 0) return msg("wizard.err.maxAge");
     }
+    if (t === "format") {
+      const formatProblem = formatBoundProblem();
+      if (formatProblem !== null) return formatProblem;
+    }
     if (t === "scheduling") {
       if (!(matchMinutes >= 1)) return msg("wizard.err.matchLength");
       // No "must pick at least one court" gate any more (P9 scope item 5):
@@ -605,6 +638,12 @@ export function DivisionBuilder({
 
   async function runPreview() {
     setPreviewError(null);
+    // The example draws the stages Create would send, so a knob Create refuses draws nothing either.
+    const formatProblem = formatBoundProblem();
+    if (formatProblem !== null) {
+      setPreviewError(formatProblem);
+      return;
+    }
     setPreviewBusy(true);
     const drawnFor = knobs;
     try {
@@ -882,7 +921,7 @@ export function DivisionBuilder({
               <LegsChoice legend={msg("wizard.legs")} legendClassName="label" value={legs} onChange={setLegs} />
             </div>
           )}
-          {template === "groups_ko" && (
+          {showPools && (
             <label className="block">
               <span className="label">{msg("wizard.pools")}</span>
               <input
@@ -896,7 +935,7 @@ export function DivisionBuilder({
               />
             </label>
           )}
-          {["swiss", "swiss_playoff", "swiss_knockout"].includes(template) && (
+          {showRounds && (
             <label className="block">
               <span className="label">{msg("wizard.rounds")}</span>
               <input

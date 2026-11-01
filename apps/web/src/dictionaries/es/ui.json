@@ -3280,6 +3280,7 @@
   "wizard.err.variant": "Elige una variante.",
   "wizard.err.maxAge": "La edad máxima debe ser un número entero mayor que 0.",
   "wizard.err.matchLength": "La duración del partido debe ser de al menos 1 minuto.",
+  "wizard.err.formatBound": "{field}: elige un número entero entre {min} y {max}.",
   "wizard.err.addVenue": "Añade al menos un {venue}.",
   "wizard.previewError": "No se pudo crear el ejemplo",
   "wizard.tab.basics": "Conceptos básicos",

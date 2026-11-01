@@ -8875,6 +8875,7 @@ export type DictionaryKey =
   | "wizard.divisionNamePlaceholder"
   | "wizard.endDateHint"
   | "wizard.err.addVenue"
+  | "wizard.err.formatBound"
   | "wizard.err.matchLength"
   | "wizard.err.maxAge"
   | "wizard.err.name"

@@ -3280,6 +3280,7 @@
   "wizard.err.variant": "Kies een variant.",
   "wizard.err.maxAge": "Maximale leeftijd moet een geheel getal boven 0 zijn.",
   "wizard.err.matchLength": "Wedstrijdduur moet minstens 1 minuut zijn.",
+  "wizard.err.formatBound": "{field}: kies een heel getal van {min} tot en met {max}.",
   "wizard.err.addVenue": "Voeg minstens één {venue} toe.",
   "wizard.previewError": "Kon voorbeeld niet maken",
   "wizard.tab.basics": "Basis",

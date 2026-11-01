@@ -392,6 +392,122 @@ describe("a Top N the builder does not show never sizes a stage (fix round 1, I1
   });
 });
 
+describe("the builder refuses a format knob outside its bounds before any POST (fix round 1, M1)", () => {
+  // Top N is a whole number from 2 to 32 (the brief's literal). A cleared field reads Number("") === 0, which the clamp
+  // used to send as 2; 40 went out as 32; 3.5 passed the clamp, failed the stages POST and left an empty division.
+  const REFUSED = ["", "40", "3.5", "1"];
+  const ACCEPTED = ["2", "32"];
+  const topNRefusal = uiEn["wizard.err.formatBound"]
+    ?.replace("{field}", uiEn["wizard.qualify"])
+    .replace("{min}", "2")
+    .replace("{max}", "32");
+
+  function type(h: Island, bound: string, value: string): void {
+    const input = h.tree().find((e) => propsOf(e)["data-format-bound"] === bound);
+    if (!input) throw new Error(`no ${bound} control on screen`);
+    (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+  }
+  /** A builder on its Format tab (Basics passed with a name), on `template`. */
+  function onFormat(template: string): Island {
+    const h = mountBuilder();
+    const name = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-name");
+    (propsOf(name!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Open" } });
+    press(h, uiEn["wizard.tab.format"]);
+    pickBuilderTemplate(h, template);
+    return h;
+  }
+  const errorText = (h: Island) => {
+    const p = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-error");
+    return p ? textOf(p) : null;
+  };
+  const onLastTab = (h: Island) => h.tree().some((e) => propsOf(e)["data-testid"] === "division-builder-create");
+  const calls = (path: RegExp) => apiV1Mock.mock.calls.filter(([url]) => path.test(String(url))).length;
+
+  it("premise: the refusal copy exists and names the field and the brief's range", () => {
+    expect(topNRefusal).toBe("Qualify to finals: choose a whole number from 2 to 32.");
+  });
+
+  it("Next: empty, 40, 3.5 and 1 are refused on the Format tab with the sentence; 2 and 32 go on to Scheduling (counts)", () => {
+    let refused = 0;
+    let accepted = 0;
+    for (const value of [...REFUSED, ...ACCEPTED]) {
+      const h = onFormat("league_ko");
+      type(h, "qualify", value);
+      press(h, uiEn["wizard.next"]);
+      if (REFUSED.includes(value)) {
+        expect(errorText(h), JSON.stringify(value)).toBe(topNRefusal);
+        expect(onLastTab(h), JSON.stringify(value)).toBe(false);
+        refused++;
+      } else {
+        expect(errorText(h), value).toBeNull();
+        expect(onLastTab(h), value).toBe(true);
+        accepted++;
+      }
+    }
+    expect([refused, accepted]).toEqual([4, 2]);
+  });
+
+  it("Show example: a refused Top N says so and draws nothing; an accepted one draws the knockout it names", async () => {
+    let checked = 0;
+    for (const value of [...REFUSED, ...ACCEPTED]) {
+      apiV1Mock.mockClear();
+      const h = onFormat("league_ko");
+      type(h, "qualify", value);
+      press(h, uiEn["wizard.showExample"]);
+      await flush();
+      if (REFUSED.includes(value)) {
+        expect(calls(/format-preview/), JSON.stringify(value)).toBe(0);
+        expect(h.tree().some((e) => e.type === "p" && textOf(e) === topNRefusal), JSON.stringify(value)).toBe(true);
+      } else {
+        expect(calls(/format-preview/), value).toBe(1);
+        const ko = postedStages(/format-preview/).find((s) => s.kind === "knockout");
+        expect(ko?.progression, value).toMatchObject({ sources: [{ take: [{ kind: "rankRange", from: 1, to: Number(value) }] }] });
+      }
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("Create, reached by jumping back to Basics and on to Scheduling: 3.5 creates no division at all", async () => {
+    apiV1Mock.mockClear();
+    const h = onFormat("league_ko");
+    type(h, "qualify", "3.5");
+    press(h, uiEn["wizard.tab.basics"]); // going back is free
+    press(h, uiEn["wizard.tab.scheduling"]); // forward from Basics checks Basics only
+    expect(onLastTab(h), "premise: the jump reaches Create").toBe(true);
+    const create = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-create");
+    (propsOf(create!).onClick as () => void)();
+    await flush();
+    expect(calls(/\/divisions$/)).toBe(0);
+    expect(calls(/\/stages$/)).toBe(0);
+    expect(errorText(h)).toBe(topNRefusal);
+  });
+
+  it("only VISIBLE knobs are judged: pools 9 on groups_ko and rounds 0 on swiss are refused, and the same values left behind a template that hides them are not", () => {
+    const pools = uiEn["wizard.err.formatBound"]?.replace("{field}", uiEn["wizard.pools"]).replace("{min}", "2").replace("{max}", "8");
+    const rounds = uiEn["wizard.err.formatBound"]?.replace("{field}", uiEn["wizard.rounds"]).replace("{min}", "1").replace("{max}", "15");
+    let checked = 0;
+    for (const [template, bound, value, sentence] of [
+      ["groups_ko", "pools", "9", pools],
+      ["swiss", "swissRounds", "0", rounds],
+    ] as const) {
+      const shown = onFormat(template);
+      type(shown, bound, value);
+      press(shown, uiEn["wizard.next"]);
+      expect(errorText(shown), `${template} ${bound} ${value}`).toBe(sentence);
+
+      const hidden = onFormat(template);
+      type(hidden, bound, value);
+      pickBuilderTemplate(hidden, "league");
+      press(hidden, uiEn["wizard.next"]);
+      expect(errorText(hidden), `league, ${bound} ${value} hidden`).toBeNull();
+      expect(onLastTab(hidden)).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
 describe("Settings never clamps a stored legs value silently", () => {
   const leagueKo = (legs: number): StageProp[] =>
     buildTemplateStages("league_ko", { qualified: 4, swissRounds: 5, poolCount: 2, legs }).map((d) => ({

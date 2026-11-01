@@ -270,6 +270,12 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
     return qualify.evaluate((e) => (e as HTMLInputElement).checkValidity());
   };
   expect([await valid(1), await valid(2), await valid(32), await valid(33)]).toEqual([false, true, true, false]);
+  // Fix round 1 (M1): a value past either end is refused before any POST, by
+  // a sentence naming the field, never clamped into one the organiser did not
+  // type. 33 is still in the box from the check above.
+  await page.getByRole("button", { name: "Scheduling", exact: true }).click();
+  await expect(page.getByTestId("division-builder-error")).toHaveText("Qualify to finals: choose a whole number from 2 to 32.");
+  await expect(page.getByTestId("division-builder-create")).toHaveCount(0);
   // A reachability check would pass on any value, so drive the case a
   // power-of-two list cannot express: a generic bracket makes 3 a real shape.
   await qualify.fill("3");

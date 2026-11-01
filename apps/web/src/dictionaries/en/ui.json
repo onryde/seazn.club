@@ -3333,6 +3333,7 @@
   "wizard.err.variant": "Choose a variant.",
   "wizard.err.maxAge": "Max age must be a whole number above 0.",
   "wizard.err.matchLength": "Match length must be at least 1 minute.",
+  "wizard.err.formatBound": "{field}: choose a whole number from {min} to {max}.",
   "wizard.err.addVenue": "Add at least one {venue}.",
   "wizard.previewError": "Couldn't build example",
   "wizard.tab.basics": "Basics",
