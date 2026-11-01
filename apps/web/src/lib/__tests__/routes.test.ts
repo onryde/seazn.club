@@ -79,3 +79,10 @@ describe("routes", () => {
     );
   });
 });
+
+describe("routes.orgSponsors (R4 S11: the Sponsors hub is top-level, not a Settings tab)", () => {
+  it("builds /o/<slug>/sponsors, with an optional ?tab=", () => {
+    expect(routes.orgSponsors("acme")).toBe("/o/acme/sponsors");
+    expect(routes.orgSponsors("acme", "on_stream")).toBe("/o/acme/sponsors?tab=on_stream");
+  });
+});

@@ -5,6 +5,7 @@ import {
   seedSettingsOrg,
   releaseSettingsOrg,
   settingsUrl,
+  sponsorsUrl,
   type SeededOrg,
 } from "../settings-support";
 import { apiJson, TAG } from "../helpers";
@@ -461,12 +462,14 @@ test("sponsors tab: add three, reorder, edit tier and scope, delete only one", a
   const C = `Charlie Cycles ${TAG}`;
   const B2 = `Bravo Bakery & Co ${TAG}`;
 
-  await page.goto(settingsUrl(org.slug, "sponsors"));
+  // The Sponsors hub (R4 sponsors-on-stream S11): the tab left Settings. This is the hub's Sponsors tab, which mounts
+  // OrgSponsors alone - SponsorPackages is its own "Packages and orders" tab now.
+  await page.goto(sponsorsUrl(org.slug, "sponsors"));
 
   // DOM order on this tab is: OrgSponsors' add form, then its rows (each of
-  // which becomes an edit form in place), then SponsorPackages. So `.first()`
-  // on a field is always the add form — including while a row is being edited,
-  // where the edit form is the SECOND match and the packages form the third.
+  // which becomes an edit form in place). So `.first()` on a field is always
+  // the add form — including while a row is being edited, where the edit form
+  // is the SECOND match.
   const addName = field(page, L.sponsorName).first();
   const addLink = field(page, L.sponsorLink).first();
   // The tier select is the one offering "gold"; the scope select is the one

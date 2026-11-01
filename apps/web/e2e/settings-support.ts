@@ -12,6 +12,9 @@ import {
 // anything from settings-nav.tsx is not possible from this process — verified
 // empirically, see the comment on `TABS` below.
 import type { SettingsTab } from "../src/app/o/[orgSlug]/settings/_components/settings-nav";
+// The hub's URL builder is dependency-free (it imports only the console route builders), so unlike settings-nav it IS
+// importable as a value from this process.
+import { sponsorsHref, type SponsorsTab } from "../src/lib/sponsors-hub";
 
 /**
  * Support for the W2 settings walkthrough specs.
@@ -34,6 +37,16 @@ export interface SeededOrg {
 /** `/o/{slug}/settings?tab=…` — one place, so a route change moves every spec. */
 export function settingsUrl(slug: string, tab: string): string {
   return `/o/${slug}/settings?tab=${tab}`;
+}
+
+/**
+ * `/o/{slug}/sponsors?tab=…` — the Sponsors hub (R4 sponsors-on-stream S11). Settings no longer has a Sponsors tab: its
+ * two bodies moved here, `OrgSponsors` to `?tab=sponsors` and `SponsorPackages` (the sell console and the orders) to
+ * `?tab=packages`. `settingsUrl(slug, "sponsors")` still WORKS - it redirects - but a spec that means the hub goes there
+ * directly, so it does not depend on the redirect to reach the page it is about.
+ */
+export function sponsorsUrl(slug: string, tab: SponsorsTab): string {
+  return sponsorsHref(slug, tab);
 }
 
 async function activeOrgCookie(request: APIRequestContext): Promise<string | null> {
@@ -233,7 +246,7 @@ export async function expectGate(opts: {
 }
 
 /**
- * The seven `?tab=` keys, typed directly against the app's own `SettingsTab`
+ * The six `?tab=` keys (the seventh, `sponsors`, moved to the Sponsors hub - `sponsorsUrl` above), typed directly against the app's own `SettingsTab`
  * union (`settings-nav.tsx`) so a renamed or removed key reds `tsc` here.
  *
  * NOT a runtime import of `SETTINGS_TABS` itself — verified infeasible from
@@ -261,7 +274,6 @@ export async function expectGate(opts: {
 export const TABS: readonly SettingsTab[] = [
   "organization",
   "news",
-  "sponsors",
   "team",
   "api",
   "preferences",

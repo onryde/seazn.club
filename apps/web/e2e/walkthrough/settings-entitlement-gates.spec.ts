@@ -6,6 +6,7 @@ import {
   releaseSettingsOrg,
   seedMemberIdentity,
   settingsUrl,
+  sponsorsUrl,
 } from "../settings-support";
 import { apiJson, TAG, setBoolEntitlementOverrideSql, splitOrgIntoOwnGroupSql, setOrgPlanBySql } from "../helpers";
 
@@ -343,8 +344,8 @@ test("Case 9: switching the active org into one lacking sponsors.tiers enforces 
     expect(switchRes.status, "POST /api/orgs/active with a snake_case body").toBe(200);
 
     // Upsell half: org2's OWN sponsors tab reflects ITS OWN gap, not any
-    // state left over from org1 (Pro) having been active a moment ago.
-    await page.goto(settingsUrl(org2.slug, "sponsors"));
+    // state left over from org1 (Pro) having been active a moment ago. (The Sponsors hub, R4 S11 - the tab left Settings.)
+    await page.goto(sponsorsUrl(org2.slug, "sponsors"));
     await expect(
       page.getByText(ui("sponsors.tiersUpsell")),
       "OBSERVED: org2's sponsors tab must show the tiers upsell after the switch",

@@ -9,7 +9,7 @@
 // One exception survives, and it is not cosmetic: a PAYER who is not a member
 // of this org reaches Billing/Credits/Add-ons from their bill (v17 gap #333).
 // Every link in the sidebar points at a member-gated route, so showing it to
-// them would be a menu of eleven 404s. Both directions are asserted — a fix
+// them would be a menu of ten 404s. Both directions are asserted — a fix
 // that shows the nav to everyone would pass a "nav is present" test.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prerender } from "react-dom/static";

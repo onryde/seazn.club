@@ -233,7 +233,10 @@ describe("Event Pass grants are resolved with a competition in scope", () => {
 
     // The real call site's layer. An affordance may ask the org-wide question;
     // if this ever starts flagging, the settings tab goes red for no reason.
+    // (The sponsors tabs moved from Settings to the Sponsors hub, R4 sponsors-on-stream S11: that page is now the
+    // call site of `hasFeatureOnAnyPass("sponsors.tiers" | "sponsors.monetize")`. Settings keeps the news gate.)
     expect(scanSource("src/app/o/[orgSlug]/settings/page.tsx", src, new Set())).toEqual([]);
+    expect(scanSource("src/app/o/[orgSlug]/sponsors/page.tsx", src, new Set())).toEqual([]);
     expect(scanSource("src/components/sponsor-form.tsx", src, new Set())).toEqual([]);
   });
 });

@@ -10,6 +10,33 @@ const names = {
 };
 const base = { orgName: "Acme Sports", names };
 
+describe("buildCrumbs - the Sponsors hub (R4 S11, a new top-level console route)", () => {
+  it("gets its own crumb under the org - and the back chevron's parent is the org home - on every tab", () => {
+    let checked = 0;
+    for (const pathname of ["/o/acme/sponsors"]) {
+      expect(buildCrumbs({ ...base, pathname })).toEqual([
+        { label: "Acme Sports", href: "/o/acme" },
+        { label: "Sponsors", href: "/o/acme/sponsors" },
+      ]);
+      checked++;
+    }
+    // The query string is not part of a pathname, so `?tab=` pages share the one crumb (the crumb points at the landing tab).
+    expect(checked).toBe(1);
+  });
+
+  it("the crumb is translated through the same catalog as Settings' (the label is the hub's own title)", () => {
+    const tr: BreadcrumbT = (key) => `<${key}>`;
+    expect(buildCrumbs({ ...base, pathname: "/o/acme/sponsors", t: tr })[1]).toEqual({
+      label: "<sponsors.title>",
+      href: "/o/acme/sponsors",
+    });
+  });
+
+  it("does not swallow other org-level paths: an unknown segment still stops at the org", () => {
+    expect(buildCrumbs({ ...base, pathname: "/o/acme/sponsorship" })).toEqual([{ label: "Acme Sports", href: "/o/acme" }]);
+  });
+});
+
 describe("buildCrumbs", () => {
   it("derives the full org › comp › div › page chain", () => {
     expect(

@@ -135,14 +135,14 @@ test("expectGate asserts the route's own exact status, not just 'some kind of re
 test("TABS mirrors the app's own SETTINGS_TABS, not a retyped copy", () => {
   // A change to the app's tab set (add, remove, rename) must move this
   // constant with it — see settings-support.ts for how TABS is derived.
+  // `sponsors` is not in the list any more: it moved to the Sponsors hub (R4 sponsors-on-stream S11, `sponsorsUrl`).
   expect(TABS).toEqual([
     "organization",
     "news",
-    "sponsors",
     "team",
     "api",
     "preferences",
     "account",
   ]);
-  expect(TABS.length).toBe(7);
+  expect(TABS.length).toBe(6);
 });

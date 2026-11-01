@@ -1,5 +1,5 @@
 import Link from "@/components/ui/console-link";
-import { CircleUserRound, LayoutDashboard, Radio, Settings, Users } from "lucide-react";
+import { CircleUserRound, Handshake, LayoutDashboard, Radio, Settings, Users } from "lucide-react";
 import { HelpMenu } from "@/components/help-menu";
 import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { pickActiveOrg } from "@/lib/active-org";
@@ -115,8 +115,32 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   // in en/es/fr/nl (72px visible at the tightest, fr 768, and 114px in en). Nothing else moves: labels, type, link height, the display
   // name and Sign out are as they were. The dual-role nav is icon-only until `lg`, has the room, and keeps its 12px - a 4px pad on a
   // bare 16px icon would be a 24px target.
-  const navLabelClass = isPlayer ? "hidden lg:inline" : "hidden md:inline";
-  const navLinkClass = `flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3${isPlayer ? "" : " md:px-1 lg:px-3"}`;
+  //
+  // R4 sponsors-on-stream S11 (OWNER RULING 2026-10-31, "a") added a Sponsors link, `hidden min-[350px]:flex` (the Player-home
+  // precedent), and made the label rung follow the LINK COUNT instead of `isPlayer` alone - the owner's own rule from the
+  // "tighten" ruling above, "md for four links, lg for five", applied to the count the bar now really has. At >= 350 a bar has
+  // Dashboard, Directory, Sponsors and Settings, plus Streaming and Player home where they apply: 4, 5 or 6 links.
+  // Measured (Geist metrics, every locale, the B3 formula that reproduced 113 and 72px at 768): a streaming org's FIVE labelled
+  // links at `md` leave the chip 20/35/0/15px at 768 (en/es/fr/nl) against the 8 characters (61px) B3 exists to keep, and fr
+  // overflows by 6px - so five wait for `lg`. Six labelled links at `lg` overflow 1024-1100 in es/fr/nl (fr by 93px at 1024), so
+  // six wait for `xl` (1280: Sign out inside by 35px in fr, the tightest cell). Icons-together or labels-together, never a
+  // mismatched partial collapse: all links of a bar take the same rung.
+  //
+  // Phones, same ruling: Sign out's right edge is at 28N + 204 for N icon links (the 4-link nav's 4px at 320 and the 5-link
+  // nav's 6px at 350, as measured above), so the worst case - Streaming + a claimed player - needs 372px for six links and
+  // overflows 350 (by 22px) and 360 (by 12px). Player home folds first: for a streaming org it is `hidden min-[390px]:flex`
+  // (five of the six links are shown 350-389 with 6/16/31px to spare at 350/360/375, all six from 390 with 18px), and it keeps the 350 precedent for an
+  // org without Streaming, whose five links already fit (6px at 350). 320 shows four whatever the org (Sponsors is hidden below
+  // 350). That is the whole fold order: nothing else moves.
+  const navLinkCount = 4 + (streamingOffered ? 1 : 0) + (isPlayer ? 1 : 0);
+  const labelRung = navLinkCount <= 4 ? "md" : navLinkCount === 5 ? "lg" : "xl";
+  // Written out in full: Tailwind only emits classes it can read as whole strings.
+  const navLabelClass = { md: "hidden md:inline", lg: "hidden lg:inline", xl: "hidden xl:inline" }[labelRung];
+  const navLinkLook = `items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3${labelRung === "md" ? " md:px-1 lg:px-3" : ""}`;
+  const navLinkClass = `flex ${navLinkLook}`;
+  // `hidden` + `min-[Npx]:flex` and never a bare `flex` beside them: two display utilities fight by CSS order.
+  const sponsorsLinkClass = `hidden min-[350px]:flex ${navLinkLook}`;
+  const playerHomeLinkClass = streamingOffered ? `hidden min-[390px]:flex ${navLinkLook}` : `hidden min-[350px]:flex ${navLinkLook}`;
   // Tour targets editor flows (rename org, create competition) — viewers skip it.
   const canTour =
     !!user && !!activeOrg && (EDITOR_ROLES as readonly string[]).includes(activeOrg.role);
@@ -255,6 +279,20 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                   <span className={navLabelClass}>{t(dict, "nav.streaming")}</span>
                 </Link>
               )}
+              {/* Sponsors (R4 S11, owner ruling 2026-10-31 "a"): the top-level hub, an icon under 350 hidden entirely - the org
+                  Dashboard carries a Sponsors entry at every width. See the budget note above `navLinkCount`. Shown to every
+                  role: the hub itself decides what a non-editor sees (read-only Overview and Sponsors, as Settings gave). */}
+              {activeOrg && (
+                <Link
+                  href={routes.orgSponsors(activeOrg.slug)}
+                  aria-label={t(dict, "nav.sponsors")}
+                  data-testid="nav-sponsors"
+                  className={sponsorsLinkClass}
+                >
+                  <Handshake className="h-4 w-4" strokeWidth={1.75} />
+                  <span className={navLabelClass}>{t(dict, "nav.sponsors")}</span>
+                </Link>
+              )}
               <Link
                 href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.settings")}
@@ -273,12 +311,12 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                   either side). `hidden min-[350px]:flex` is scoped to THIS
                   link only — Dashboard/Directory/Settings are unaffected at
                   every width, and this link still degrades icons-only up to
-                  `lg` same as the rest (navLabelClass above). */}
+                  its label rung same as the rest (navLabelClass above). */}
               {isPlayer && (
                 <Link
                   href={routes.me()}
                   aria-label={t(dict, "nav.playerHome")}
-                  className="hidden min-[350px]:flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                  className={playerHomeLinkClass}
                 >
                   <CircleUserRound className="h-4 w-4" strokeWidth={1.75} />
                   <span className={navLabelClass}>{t(dict, "nav.playerHome")}</span>

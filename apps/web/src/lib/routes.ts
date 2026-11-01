@@ -11,6 +11,10 @@ export const routes = {
   orgHome: (org: Slug) => `/o/${org}`,
   orgSettings: (org: Slug, tab?: string) =>
     tab ? `/o/${org}/settings?tab=${tab}` : `/o/${org}/settings`,
+  /** The Sponsors hub (R4 sponsors-on-stream S11) - top-level, no longer a Settings tab. `tab` is one of `SPONSORS_TABS`
+   *  (lib/sponsors-hub.ts, which owns the tab list and the redirect from the old Settings URL). */
+  orgSponsors: (org: Slug, tab?: string) =>
+    tab ? `/o/${org}/sponsors?tab=${tab}` : `/o/${org}/sponsors`,
   billing: (org: Slug) => `/o/${org}/settings/billing`,
   /** AI-credit wallet home — its own Settings tab (moved off the billing page). */
   credits: (org: Slug) => `/o/${org}/settings/credits`,

@@ -115,6 +115,39 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
       ),
   );
 
+  // --- R4 S11: the top-level Sponsors hub. Settings -> Sponsors moved here; the old URL forwards (307, query kept).
+  const hubOverview = await html(admin, `/o/${proOrgSlug}/sponsors`);
+  check(
+    "sp hub answers 200 for an editor and opens on Overview",
+    hubOverview.status === 200 && hubOverview.body.includes('data-testid="sponsors-tab-overview"'),
+  );
+  const hubSponsors = await html(admin, `/o/${proOrgSlug}/sponsors?tab=sponsors`);
+  check(
+    "sp hub Sponsors tab renders for an editor (the moved tiered manager, not Overview)",
+    hubSponsors.status === 200 &&
+      hubSponsors.body.includes('data-testid="sponsors-tab-sponsors"') &&
+      !hubSponsors.body.includes('data-testid="sponsors-tab-overview"'),
+  );
+  const hubPackages = await html(admin, `/o/${proOrgSlug}/sponsors?tab=packages`);
+  check(
+    "sp hub Packages tab renders the sell console for an editor",
+    hubPackages.status === 200 &&
+      hubPackages.body.includes('data-testid="sponsors-tab-packages"') &&
+      hubPackages.body.includes('data-testid="sponsor-packages"'),
+  );
+  const legacyTab = await pageRedirect(admin, `/o/${proOrgSlug}/settings?tab=sponsors&x=1`);
+  check(
+    "sp legacy settings?tab=sponsors redirects to the hub's Sponsors tab (second param kept)",
+    legacyTab.status === 307 && (legacyTab.location ?? "").endsWith(`/o/${proOrgSlug}/sponsors?tab=sponsors&x=1`),
+  );
+  const settingsOrg = await pageRedirect(admin, `/o/${proOrgSlug}/settings?tab=organization`);
+  check("sp settings?tab=organization does NOT redirect (only the retired tab does)", settingsOrg.status === 200);
+  const hubSignedOut = await pageRedirect(newSession(), `/o/${proOrgSlug}/sponsors`);
+  check(
+    "sp hub is not served to a signed-out visitor",
+    hubSignedOut.status >= 300 && hubSignedOut.status < 400 && (hubSignedOut.location ?? "").includes("/login"),
+  );
+
   // --- Free path: flat partner strip stays free; tiers + packages are 402.
   const free = newSession();
   const freeVer = await signIn(free, `delivered+sponsor_free_${tag}@resend.dev`);
@@ -153,4 +186,10 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
     tier: "partner",
   });
   check("sp free packages gated (402)", freePkg.status === 402);
+  // The hub is not itself gated: a free-plan owner reaches it, and its Packages tab (the upsell) renders rather than 402/404.
+  const freeHub = await html(free, `/o/${freeOrg.slug}/sponsors?tab=packages`);
+  check(
+    "sp hub Packages tab answers 200 on a free org (the gate is the feature, not the page)",
+    freeHub.status === 200 && freeHub.body.includes('data-testid="sponsors-tab-packages"'),
+  );
 }

@@ -1,13 +1,17 @@
-// Phase 2 pass-scoping sweep — the sponsors tab's two Event Pass keys.
+// Phase 2 pass-scoping sweep — the Sponsors hub's two Event Pass keys.
+//
+// (Moved from settings/__tests__ with the Sponsors tab itself, R4 sponsors-on-stream S11: `sponsors.tiers` is now read
+// by the hub's Sponsors tab and `sponsors.monetize` by its Packages and orders tab - one tab each where Settings had
+// both on one. Same org-wide question, same pass overlay, same expectations.)
 //
 // `sponsors.tiers` and `sponsors.monetize` are lifted by the Event Pass
-// (community=false, event_pass=true), but the settings page resolved both
+// (community=false, event_pass=true), but the page resolved both
 // ORG-WIDE. lib/entitlements.ts only consults competition_passes when a
 // competition is in scope, so a community org that bought a pass was shown the
 // upsell for two features it had already paid for — the tier picker and the
 // package composer never appeared, on any competition.
 //
-// This tab is genuinely ORG-LEVEL: the competition list beside it is a PICKER,
+// These tabs are genuinely ORG-LEVEL: the competition list beside them is a PICKER,
 // not a scope, so there is no single competition to thread. The right question
 // for an affordance is therefore "is this reachable ANYWHERE?" — answered by
 // `hasFeatureOnAnyPass`. Enforcement stays per-competition in
@@ -23,19 +27,12 @@ import { randomUUID } from "node:crypto";
 // cannot await those. Same reason as brand-gate-split.test.tsx.
 import { prerender } from "react-dom/static";
 
-const { requireOrgPage, getUserOrgs, resolveLocale } = vi.hoisted(() => ({
+const { requireOrgPage, resolveLocale } = vi.hoisted(() => ({
   requireOrgPage: vi.fn(),
-  getUserOrgs: vi.fn(),
   resolveLocale: vi.fn(),
 }));
 
 vi.mock("@/server/page-auth", () => ({ requireOrgPage }));
-// Spread the original: the page's module graph pulls other helpers out of
-// lib/auth, and a bare replacement would strand them.
-vi.mock("@/lib/auth", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/auth")>()),
-  getUserOrgs,
-}));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale }));
 
 // The two client islands are stubbed to markers carrying the gate's answer, so
@@ -55,7 +52,8 @@ vi.mock("@/components/sponsor-packages", () => ({
 
 import { sql } from "@/lib/db";
 import { hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
-import SettingsPage from "../page";
+import SponsorsHubPage from "../page";
+import type { SponsorsTab } from "@/lib/sponsors-hub";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
@@ -100,7 +98,7 @@ async function seedOrg(opts: { withPass: boolean }): Promise<Rig> {
   return { orgId, orgSlug, passedId, plainId };
 }
 
-async function renderSponsorsTab(rig: Rig): Promise<string> {
+async function renderSponsorsTab(rig: Rig, tab: SponsorsTab): Promise<string> {
   const org = { id: rig.orgId, name: "Spon Org", slug: rig.orgSlug, role: "owner",
     logo_url: null, logo_storage_path: null, branding: {}, timezone: "Europe/London" };
   requireOrgPage.mockResolvedValue({
@@ -109,12 +107,11 @@ async function renderSponsorsTab(rig: Rig): Promise<string> {
     canEdit: true,
     auth: { orgId: rig.orgId, via: "session", userId: "u1", role: "owner", keyId: null },
   });
-  getUserOrgs.mockResolvedValue([org]);
   resolveLocale.mockResolvedValue("en");
 
-  const element = await SettingsPage({
+  const element = await SponsorsHubPage({
     params: Promise.resolve({ orgSlug: rig.orgSlug }),
-    searchParams: Promise.resolve({ tab: "sponsors" }),
+    searchParams: Promise.resolve({ tab }),
   });
   const { prelude } = await prerender(element);
   const reader = (prelude as ReadableStream<Uint8Array>).getReader();
@@ -140,17 +137,17 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe.skipIf(!HAS_DB)("settings → sponsors sees an Event Pass held on any competition", () => {
+describe.skipIf(!HAS_DB)("the Sponsors hub sees an Event Pass held on any competition", () => {
   it("turns the tier picker on for a pass holder, and keeps it off without one", async () => {
     const withPass = await seedOrg({ withPass: true });
     // RED before the fix: the gate resolved org-wide, so a community org's
     // pass was invisible and this rendered the upsell instead.
-    expect(await renderSponsorsTab(withPass)).toContain("sponsor-tiers-true");
+    expect(await renderSponsorsTab(withPass, "sponsors")).toContain("sponsor-tiers-true");
 
     // The control arm. Without it the assertion above would still pass if the
     // helper simply answered true for everyone.
     const noPass = await seedOrg({ withPass: false });
-    expect(await renderSponsorsTab(noPass)).toContain("sponsor-tiers-false");
+    expect(await renderSponsorsTab(noPass, "sponsors")).toContain("sponsor-tiers-false");
 
     // …and widening the AFFORDANCE must not widen ENFORCEMENT: the write path
     // in usecases/sponsors.ts is competition-scoped, so the unpassed sibling
@@ -161,10 +158,10 @@ describe.skipIf(!HAS_DB)("settings → sponsors sees an Event Pass held on any c
 
   it("turns the package composer on for a pass holder, and keeps it off without one", async () => {
     const withPass = await seedOrg({ withPass: true });
-    expect(await renderSponsorsTab(withPass)).toContain("sponsor-monetize-true");
+    expect(await renderSponsorsTab(withPass, "packages")).toContain("sponsor-monetize-true");
 
     const noPass = await seedOrg({ withPass: false });
-    expect(await renderSponsorsTab(noPass)).toContain("sponsor-monetize-false");
+    expect(await renderSponsorsTab(noPass, "packages")).toContain("sponsor-monetize-false");
 
     expect(await hasFeature(withPass.orgId, "sponsors.monetize", withPass.passedId)).toBe(true);
     expect(await hasFeature(withPass.orgId, "sponsors.monetize", withPass.plainId)).toBe(false);

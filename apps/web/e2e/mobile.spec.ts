@@ -31,6 +31,7 @@ import {
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import { builtinModules } from "@seazn/engine/sports";
+import { SPONSORS_TABS, sponsorsHref } from "../src/lib/sponsors-hub";
 import { RULEBOOK_SPLITS } from "../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -659,7 +660,11 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     { path: await divisionPath(request, divisionId, "/import") },
     { path: "/settings?tab=organization" },
     { path: "/settings?tab=news" },
-    { path: "/settings?tab=sponsors" },
+    // The Sponsors hub (R4 sponsors-on-stream S11): Settings -> Sponsors moved to its own top-level route, and Settings' own
+    // `?tab=sponsors` now redirects there. EVERY tab of the hub, derived from the declaration (SPONSORS_TABS), so a tab added later
+    // is swept by name instead of silently missing from the seven width projects. The profile here is the org's owner, so the
+    // editor-only tabs (On stream, Packages and orders) render their bodies rather than falling back to Overview.
+    ...SPONSORS_TABS.map((tab) => ({ path: sponsorsHref(orgSlug, tab) })),
     { path: "/settings?tab=team" },
     { path: "/settings?tab=api" },
     { path: "/settings?tab=preferences" },

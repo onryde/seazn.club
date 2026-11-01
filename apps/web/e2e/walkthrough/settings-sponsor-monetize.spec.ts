@@ -7,7 +7,7 @@ import { TAG, apiJson, setBoolEntitlementOverrideSql } from "../helpers";
 import {
   seedSettingsOrg,
   releaseSettingsOrg,
-  settingsUrl,
+  sponsorsUrl,
   type SeededOrg,
 } from "../settings-support";
 import {
@@ -96,11 +96,13 @@ import {
  *     Both are gated below with named skip reasons rather than discovered as a
  *     500 four minutes in.
  *
- *  5. `settingsUrl(slug, "sponsors")` IS right — the one place in W4 where it
- *     is. `sponsors` is a real `SettingsTab` (`settings-nav.tsx:15-22`), unlike
- *     `connect`/`credits`/`add-ons`/`billing`, which are `SettingsNavKey`s with
- *     their own routes and which silently fell back to the organisation panel
- *     for Tasks 1-3. Verified rather than inherited.
+ *  5. The console lives on the Sponsors hub's "Packages and orders" tab:
+ *     `sponsorsUrl(slug, "packages")`. It WAS `settingsUrl(slug, "sponsors")` - the one place in W4 where a
+ *     Settings `?tab=` was right, `sponsors` being a real `SettingsTab` unlike `connect`/`credits`/`add-ons`/
+ *     `billing` (`SettingsNavKey`s with their own routes, which silently fell back to the organisation panel
+ *     for Tasks 1-3). R4 sponsors-on-stream S11 moved the tab out of Settings: `?tab=sponsors` there now
+ *     redirects to the hub's Sponsors tab (OrgSponsors only), and `SponsorPackages` is its own tab, so this
+ *     spec goes to `packages` directly rather than through a redirect that would land on the wrong body.
  *
  * SELECTORS. One `data-testid` was added with this file —
  * `sponsor-packages` on the console's root. It is not convenience: `OrgSponsors`
@@ -419,7 +421,7 @@ test("sell: the sponsors tab creates a priced package, at the values its own con
   request: APIRequestContext;
 }) => {
   test.setTimeout(budget(1, 0));
-  await page.goto(settingsUrl(org.slug, "sponsors"));
+  await page.goto(sponsorsUrl(org.slug, "packages"));
 
   const panel = page.getByTestId("sponsor-packages");
   await expect(
@@ -500,7 +502,7 @@ test("invoice: Send invoice mints a REAL Stripe Checkout Session on the connecte
   // Two nav-sized waits: the page, and the outbox poll (READ_MS) below.
   test.setTimeout(budget(2, 1));
   expect(packageId, "leg 1 must have sold a package").not.toBe("");
-  await page.goto(settingsUrl(org.slug, "sponsors"));
+  await page.goto(sponsorsUrl(org.slug, "packages"));
 
   const panel = page.getByTestId("sponsor-packages");
   await expect(panel).toBeVisible({ timeout: READ_MS });
@@ -727,7 +729,7 @@ test("paid: a real destination charge, delivered as a signed event, activates th
   expect(placement!.status, "a paid placement goes live").toBe("active");
 
   // The console agrees, and NOW offers the refund it refused in leg 2.
-  await page.goto(settingsUrl(org.slug, "sponsors"));
+  await page.goto(sponsorsUrl(org.slug, "packages"));
   const panel = page.getByTestId("sponsor-packages");
   await expect(panel).toBeVisible({ timeout: READ_MS });
   await expect(panel.getByText(ui("sponsors.order.status.paid"))).toBeVisible();
@@ -751,7 +753,7 @@ test("refund: the console reverses the charge, and the placement comes off the p
   // Three nav-sized waits: two pages, and the outbox poll (READ_MS) below.
   test.setTimeout(budget(3, 3));
   expect(paymentIntentId, "leg 3 must have paid the order").not.toBe("");
-  await page.goto(settingsUrl(org.slug, "sponsors"));
+  await page.goto(sponsorsUrl(org.slug, "packages"));
 
   const panel = page.getByTestId("sponsor-packages");
   await expect(panel).toBeVisible({ timeout: READ_MS });
@@ -827,7 +829,7 @@ test("refund: the console reverses the charge, and the placement comes off the p
   expect(charge.amount_refunded, "the whole charge must be refunded").toBe(PRICE_CENTS);
 
   // The console settles on it: the refund control is spent, the badge moves.
-  await page.goto(settingsUrl(org.slug, "sponsors"));
+  await page.goto(sponsorsUrl(org.slug, "packages"));
   const settled = page.getByTestId("sponsor-packages");
   await expect(settled).toBeVisible({ timeout: READ_MS });
   await expect(settled.getByText(ui("sponsors.order.status.refunded"))).toBeVisible();

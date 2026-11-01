@@ -3,12 +3,13 @@ import Link from "@/components/ui/console-link";
 import {
   Building2, Users,
   Pencil, Image as ImageIcon, Palette,
-  User, Mail, Download, ShieldOff, Compass, BookOpen, Cookie, Handshake, KeyRound, Banknote,
+  User, Mail, Download, ShieldOff, Compass, BookOpen, Cookie, KeyRound,
   Clock, Newspaper, SlidersHorizontal, Languages, Coins, CalendarClock, Globe, Receipt,
   type LucideIcon,
 } from "lucide-react";
 import { getUserOrgs } from "@/lib/auth";
 import { requireOrgPage } from "@/server/page-auth";
+import { redirect } from "next/navigation";
 import { routes } from "@/lib/routes";
 import { sql } from "@/lib/db";
 import { hasFeature, hasFeatureOnAnyPass } from "@/lib/entitlements";
@@ -20,9 +21,6 @@ import { OrgLogo } from "@/components/org-logo";
 import { OrgBrandColor } from "@/components/org-brand-color";
 import { OrgAbout } from "@/components/org-about";
 import { OrgTimezone } from "@/components/org-timezone";
-import { OrgSponsors } from "@/components/org-sponsors";
-import { SponsorPackages } from "@/components/sponsor-packages";
-import { listSponsorRows } from "@/server/usecases/sponsors";
 import { listPosts, type OrgPost } from "@/server/usecases/org-posts";
 import { NewsTab } from "@/components/news/news-tab";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -54,6 +52,7 @@ import { OrgPublicLanguage } from "@/components/org-public-language";
 import { OrgRegistrationCurrency } from "@/components/org-registration-currency";
 import { asCurrency } from "@/lib/currency";
 import { toLocale } from "@/lib/i18n-constants";
+import { legacySettingsSponsorsTarget } from "@/lib/sponsors-hub";
 
 function SectionHeader({ icon: Icon, children, action }: {
   icon: LucideIcon;
@@ -111,16 +110,26 @@ export default async function SettingsPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string }>;
-  searchParams: Promise<{ tab?: string; email_change?: string; lichess?: string }>;
+  // The index signature is for the Sponsors redirect below, which forwards every param it was given.
+  searchParams: Promise<{ tab?: string; email_change?: string; lichess?: string; [param: string]: string | string[] | undefined }>;
 }) {
   const { orgSlug } = await params;
   const page = await requireOrgPage(orgSlug, { tail: "/settings" });
+
+  // The Sponsors tab left Settings for the top-level Sponsors hub (R4 sponsors-on-stream S11). Old links - bookmarks,
+  // the sidebar entry minted before the move - land here and forward with their query intact. This reads the RAW tab
+  // and must stay ABOVE the SETTINGS_TABS fallback below: "sponsors" is no longer in SETTINGS_TABS, so after the
+  // fallback it would read as "organization" and the redirect would never fire. It stays BELOW `requireOrgPage`, so a
+  // non-member is refused here exactly as before. 307, not 308: nothing says this shim is forever.
+  const rawParams = await searchParams;
+  if (rawParams.tab === "sponsors") redirect(legacySettingsSponsorsTarget(orgSlug, rawParams));
+
   const { user, org: active, canEdit, auth } = page;
   const orgs = await getUserOrgs(user.id);
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
 
-  const { tab: rawTab, email_change, lichess } = await searchParams;
+  const { tab: rawTab, email_change, lichess } = rawParams;
   const tab: Tab = (SETTINGS_TABS.includes(rawTab as SettingsTab) ? rawTab : "organization") as Tab;
 
   // Per-tab lazy data loading.
@@ -156,31 +165,6 @@ export default async function SettingsPage({
     const [row] = await sql<{ about: string | null }[]>`
       select about from organizations where id = ${active.id}`;
     orgAbout = row?.about ?? null;
-  }
-
-  // Sponsors tab (v10 PROMPT-56): table rows, not the branding blob. The
-  // basic partner strip is free; tiers/per-competition scoping are Pro.
-  //
-  // ORG-LEVEL, so `hasFeatureOnAnyPass` and not `hasFeature` (Phase 2 sweep).
-  // `sponsorCompetitions` below is the composer's PICKER, not this tab's scope
-  // — there is no one competition to thread. Resolving org-wide made an Event
-  // Pass invisible and left a paying org staring at the upsell for something it
-  // owned; picking an arbitrary id off the list would have been a fabrication.
-  // These two flags are AFFORDANCES only: usecases/sponsors.ts still resolves
-  // the competition actually being written, so a pass on one competition opens
-  // the UI without opening the org.
-  let sponsorRows: Awaited<ReturnType<typeof listSponsorRows>> = [];
-  let hasSponsorTiers = false;
-  let hasSponsorMonetize = false;
-  let sponsorCompetitions: { id: string; name: string }[] = [];
-  if (tab === "sponsors") {
-    sponsorRows = await listSponsorRows(active.id);
-    hasSponsorTiers = await hasFeatureOnAnyPass(active.id, "sponsors.tiers");
-    hasSponsorMonetize = await hasFeatureOnAnyPass(active.id, "sponsors.monetize");
-    sponsorCompetitions = await sql<{ id: string; name: string }[]>`
-      select id, name from competitions
-      where org_id = ${active.id}
-      order by created_at desc limit 100`;
   }
 
   // News tab (SPEC-2): the org's posts (drafts + published) + the competition
@@ -446,32 +430,6 @@ export default async function SettingsPage({
                   canEdit={canEdit}
                   hasNewsAuto={hasNewsAuto}
                 />
-              </section>
-            )}
-
-            {/* ── SPONSORS ── */}
-            {tab === "sponsors" && (
-              <section className="card p-6">
-                <SectionHeader icon={Handshake}>{t(dict, "sponsors.title")}</SectionHeader>
-                <OrgSponsors
-                  orgId={active.id}
-                  initialSponsors={sponsorRows}
-                  competitions={sponsorCompetitions}
-                  hasTiers={hasSponsorTiers}
-                  billingHref={routes.billing(orgSlug)}
-                  canEdit={canEdit}
-                />
-                {canEdit && (
-                  <div className="mt-6 border-t border-slate-100 pt-5">
-                    <SubSection icon={Banknote} label={t(dict, "sponsors.sell.title")} />
-                    <SponsorPackages
-                      orgId={active.id}
-                      competitions={sponsorCompetitions}
-                      hasMonetize={hasSponsorMonetize}
-                      billingHref={routes.billing(orgSlug)}
-                    />
-                  </div>
-                )}
               </section>
             )}
 
