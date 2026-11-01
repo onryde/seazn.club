@@ -34,6 +34,9 @@ import {
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import { builtinModules } from "@seazn/engine/sports";
+import { stageDefaultsFor } from "@seazn/engine/sport";
+import { expectStageToolsSheet } from "./helpers/stage-tools-sheet";
+import { moduleOf, summaryFormatText } from "./helpers/stage-summary";
 import { RULEBOOK_SPLITS } from "../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -6223,37 +6226,54 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await dismissCookieBanner(page);
   const row = page.getByTestId(`stage-format-row-${fb.stageId}`);
   await expect(row).toBeVisible({ timeout: 20_000 });
-  // Match Day C3: closed, the card is a one-line summary under a header of three buttons; below `md` the three ride in ONE
-  // "Stage settings" menu. Gate the open on the TRIGGER being visible (it is `md:hidden`), never on a width literal.
+  // Match Day C3: closed, the card is a one-line summary under a header of three buttons; below `md` an editor's header buttons are
+  // hidden and the same three are the TOP rows of the card's one "Stage tools" sheet (review round 1). Gate the open on the TRIGGER
+  // being visible, never on a width literal (AGENTS.md rule 22); the hidden twin is waited on with `toBeAttached`.
   const card = enclosingStageCard(row);
-  const settings = card.getByTestId("stage-settings-trigger");
-  const folded = await settings.isVisible();
-  const toolFormat = card.getByTestId("stage-tool-format");
-  if (folded) {
-    await assertTapFloor(settings, "Stage settings");
-    await settings.click();
-    await expect(settings).toHaveAttribute("aria-expanded", "true");
-  }
+  const railTrigger = card.getByTestId("stage-rail-trigger");
+  const sheetFormat = card.getByTestId("stage-sheet-tool-format");
+  const folded = await railTrigger.isVisible();
+  await expect(card.getByTestId("stage-settings-trigger"), "the retired second phone trigger is gone").toHaveCount(0);
   // A knockout stage has no table to rank: the one button it carries is Match format (Points and Tie-breaks are table stages'
-  // buttons) - present at every width (one DOM), tappable once the menu is open; the other two are absent, not hidden.
+  // buttons) - present once in the header and once as a sheet row (one DOM); the other two are absent, not hidden.
   await expect(card.getByTestId("stage-tool-format")).toBeAttached();
-  await assertTapFloor(card.getByTestId("stage-tool-format"), "stage-tool-format");
-  await expect(card.getByTestId("stage-tool-points"), "a bracket has no Points button").toHaveCount(0);
-  await expect(card.getByTestId("stage-tool-tiebreaks"), "a bracket has no Tie-breaks button").toHaveCount(0);
+  await expect(sheetFormat).toBeAttached();
+  for (const id of ["points", "tiebreaks"]) {
+    await expect(card.getByTestId(`stage-tool-${id}`), `a bracket has no ${id} button`).toHaveCount(0);
+    await expect(card.getByTestId(`stage-sheet-tool-${id}`), `a bracket has no ${id} row`).toHaveCount(0);
+  }
+  if (folded) {
+    await assertTapFloor(railTrigger, "Stage tools");
+    await expect(card.getByTestId("stage-tool-format"), "below md the header button is hidden").toBeHidden();
+    await railTrigger.click();
+    await expect(railTrigger).toHaveAttribute("aria-expanded", "true");
+    await assertTapFloor(sheetFormat, "Match format row in the Stage tools sheet");
+    // The open sheet is a modal dialog over the trigger: Escape puts it away (a second click would land on the sheet).
+    await page.keyboard.press("Escape");
+    await expect(railTrigger).toHaveAttribute("aria-expanded", "false");
+  } else {
+    await assertTapFloor(card.getByTestId("stage-tool-format"), "stage-tool-format");
+    await expect(sheetFormat, "the sheet's row is the phone's twin: not shown here").toBeHidden();
+  }
   await expectNoHorizontalScroll(page);
   // The collapsed row says the stage's format in ONE line (Match Day C3: the chips became the summary), it wraps inside the row, and
-  // nothing is clipped.
+  // nothing is clipped. Its words are the declared copy (review m6): the public line's clauses for the cfg this stage plays under -
+  // the division's, with the engine's own knockout preset laid over it.
   const summary = row.getByTestId("stage-format-summary");
   await expect(summary, `the summary is on the collapsed row at ${projectWidth}`).toBeVisible();
-  expect((await summary.innerText()).length, "the summary says something").toBeGreaterThan(10);
+  const football = moduleOf("football");
+  const divisionRead = await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${fb.divisionId}`);
+  expect(divisionRead.status, "GET division").toBe(200);
+  const playedCfg = football.configSchema.parse({ ...divisionRead.data!.config, ...stageDefaultsFor(football, "knockout", null) });
+  await expect(summary, `the summary says the knockout's format at ${projectWidth}`).toHaveText(summaryFormatText("football", "knockout", playedCfg));
   const collapsedClip = await overflowingIn(page, `[data-testid="stage-format-row-${fb.stageId}"]`, "*", "the stage rules row is missing");
   expect(collapsedClip.clipped, `nothing in the collapsed row is clipped at ${projectWidth}`).toEqual([]);
   if (shots) await row.screenshot({ path: `${shots}/collapsed-${projectWidth}.png` });
-  await toolFormat.click();
+  await openStagePanel(card, "format");
   const editor = row.getByTestId("stage-format-editor");
   await expect(editor).toBeVisible();
   // M-3: while editing, Cancel is the one way out and the Match format button reads as pressed.
-  await expect(toolFormat).toHaveAttribute("aria-expanded", "true");
+  await expect(card.getByTestId("stage-tool-format")).toHaveAttribute("aria-expanded", "true");
   await assertTapFloor(row.getByTestId("stage-format-cancel"), "football Cancel");
   const interactive = editor.locator("select, input, button");
   const n = await interactive.count();
@@ -6345,6 +6365,41 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await assertTapFloor(page.getByTestId("stage-rule-sequence-tiebreakRungs-reset"), "division use default order");
   await expectNoHorizontalScroll(page);
   if (shots) await dlist.screenshot({ path: `${shots}/division-sequence-${projectWidth}.png` });
+});
+
+// Match Day C3 (review round 1, phone ruling): ONE phone trigger per stage card. The Match format / Points / Tie-breaks buttons are the
+// header's from `md` up and the TOP rows of the "Stage tools" sheet below it - the same three, one DOM. The branch only a phone reaches
+// (header hidden, sheet rows, Escape, choose-a-row-closes-the-sheet, a second look) runs here at every width; the shared driver is
+// `helpers/stage-tools-sheet.ts` (also run at 1280 from `stage-card-c3.spec.ts`).
+test("Stage tools sheet at every width: the three settings buttons are its top rows below md and the header's from md up, one trigger, 44px floor, no scroll", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(150_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `C3 tools sheet ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Singles",
+    sport_key: "badminton",
+    variant_key: "bwf",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  await addEntrantsViaApi(request, div.data!.id, ["Ana", "Ben", "Cy"].map((n) => `${n} ${TAG}`));
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  const gen = await apiJson(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");
+  expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const card = stageCardOf(page, stage.data!.id);
+  await expect(card, "the stage card is on the Fixtures tab").toBeVisible({ timeout: 20_000 });
+  const branch = await expectStageToolsSheet(page, card, stage.data!.id);
+  // The width decides the branch, and the branch is the one the product's own breakpoint says: md (768) is the first width with the header.
+  expect(branch, `${page.viewportSize()!.width}px takes the ${branch} branch`).toBe(page.viewportSize()!.width < 768 ? "sheet" : "header");
 });
 
 test("W2c stage points section at every width: the sentence, More, the walkover row, the bonus menu and Save hold the 44px floor, nothing clips or scrolls, the visible control set matches 1280, and the refusal card fits", async ({
@@ -6565,7 +6620,9 @@ test("W2d stage Tie-breaks section at every width: the fold opens, the arrows, r
   await openStagePanel(stageCardOf(page, stageId), "tiebreaks");
   const locked = page.getByTestId(`stage-tiebreaks-${stageId}`);
   await expect(locked).toHaveAttribute("data-state", "locked", { timeout: 20_000 });
-  await expect(locked.getByTestId("stage-tiebreaks-locked")).toBeVisible();
+  // Review I3: the card's one lock line is the summary's (visible at this width); the opened section repeats nothing.
+  await expect(stageCardOf(page, stageId).getByTestId("stage-locked")).toBeVisible();
+  await expect(locked.getByTestId("stage-tiebreaks-locked")).toHaveCount(0);
   await openFold(locked);
   await expect(locked.getByTestId("stage-tiebreaks-list")).toBeVisible();
   expect(await visibleControls(locked), "locked: no control").toEqual([]);

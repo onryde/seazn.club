@@ -265,7 +265,9 @@ test("generic: once a match has started the rule fields lock with their own sent
   const card = page.getByTestId(`stage-points-${rig.stageId}`);
   await expect(card, "a match has started: the card reads").toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
   await expect(card).toHaveAttribute("data-stage-points-basis", "pin");
-  await expect(card.getByTestId("stage-points-locked")).toContainText(L["stageCard.locked"]!);
+  // Review I3: the stage card's ONE lock line is the summary's; the opened points section reads, locked, and repeats nothing.
+  await expect(stageCardOf(page, rig.stageId).getByTestId("stage-locked")).toContainText(L["stageCard.locked"]!);
+  await expect(card.getByTestId("stage-points-locked")).toHaveCount(0);
   await expect(card.getByTestId("stage-points-source"), "a pin says no source line").toHaveCount(0);
   await expect(card.getByTestId("stage-points-preview")).toHaveText(sentence(pinned));
   await expect(card.getByText(L["stagePoints.divisionPoints"]!), "never 'the division's points'").toHaveCount(0);

@@ -2649,9 +2649,10 @@ export async function setDateTime(scope: Page | Locator, value: string): Promise
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Match Day C3 - the stage card's three settings panels (Match format / Points / Tie-breaks) open from buttons in the card's
-// header; closed, the card is a one-line summary. On a phone the three buttons ride inside ONE "Stage settings" menu
-// (`max-md:hidden` while closed), so a test that needs a panel opens the menu first - gated on the trigger being VISIBLE
-// (it is `md:hidden`), never on a width literal (AGENTS.md rule 22) - and waits on `toBeAttached`, not `toBeVisible`.
+// header; closed, the card is a one-line summary. Below `md` an editor's header buttons are `max-md:hidden` and the same three are
+// the TOP rows of the card's one "Stage tools" sheet (`stage-sheet-tool-<panel>`, `md:hidden`), so a test that needs a panel opens
+// the sheet first - gated on the header button being VISIBLE, never on a width literal (AGENTS.md rule 22) - and waits on
+// `toBeAttached` for the hidden twin, not `toBeVisible`. A viewer has no sheet: their header buttons stay on screen at every width.
 // ---------------------------------------------------------------------------------------------------------------------
 export type StagePanel = "format" | "points" | "tiebreaks";
 
@@ -2661,24 +2662,34 @@ export const stageCardOf = (scope: Page | Locator, stageId: string): Locator => 
 /** The card a locator sits inside (a row, a section, a rail button). */
 export const enclosingStageCard = (inside: Locator): Locator => inside.locator("xpath=ancestor-or-self::section[@data-stage-id][1]");
 
-/** Open one panel of one stage card, and wait until it says it is open. A no-op when it is already open (a second call is safe). */
-export async function openStagePanel(card: Locator, panel: StagePanel): Promise<void> {
-  const tool = card.getByTestId(`stage-tool-${panel}`);
-  await expect(tool, `the card has a ${panel} button`).toBeAttached();
-  if ((await tool.getAttribute("aria-expanded")) === "true") return;
-  const trigger = card.getByTestId("stage-settings-trigger");
-  if ((await trigger.isVisible()) && (await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
-  await tool.click();
-  await expect(tool, `the ${panel} panel did not open`).toHaveAttribute("aria-expanded", "true");
+/** Press one panel's button (the header's, or - on a phone - the sheet's row) until the panel reads open / closed. A click before
+ *  hydration is a no-op, so the press is retried against what the header button says, and never doubled. */
+async function pressStageTool(card: Locator, panel: StagePanel, wantOpen: boolean): Promise<void> {
+  const header = card.getByTestId(`stage-tool-${panel}`);
+  await expect(header, `the card has a ${panel} button`).toBeAttached();
+  const reads = async (): Promise<boolean> => (await header.getAttribute("aria-expanded")) === "true";
+  await expect(async () => {
+    if ((await reads()) === wantOpen) return;
+    if (await header.isVisible()) {
+      await header.click();
+    } else {
+      const trigger = card.getByTestId("stage-rail-trigger");
+      await expect(trigger, "below md the card's one phone trigger is how the settings buttons are reached").toBeVisible({ timeout: 2_000 });
+      if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+      const row = card.getByTestId(`stage-sheet-tool-${panel}`);
+      await expect(row, `the ${panel} row is on the open sheet`).toBeVisible({ timeout: 2_000 });
+      await row.click();
+    }
+    await expect(header, `the ${panel} panel did not ${wantOpen ? "open" : "close"}`).toHaveAttribute("aria-expanded", wantOpen ? "true" : "false", { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
 }
 
-/** Close one panel through its own header button (the toggle), and wait until it says it is closed. */
+/** Open one panel of one stage card, and wait until it says it is open. A no-op when it is already open (a second call is safe). */
+export async function openStagePanel(card: Locator, panel: StagePanel): Promise<void> {
+  await pressStageTool(card, panel, true);
+}
+
+/** Close one panel through its own button (the toggle), and wait until it says it is closed. A no-op when it is already closed. */
 export async function closeStagePanel(card: Locator, panel: StagePanel): Promise<void> {
-  const tool = card.getByTestId(`stage-tool-${panel}`);
-  await expect(tool, `the card has a ${panel} button`).toBeAttached();
-  if ((await tool.getAttribute("aria-expanded")) !== "true") return;
-  const trigger = card.getByTestId("stage-settings-trigger");
-  if ((await trigger.isVisible()) && (await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
-  await tool.click();
-  await expect(tool, `the ${panel} panel did not close`).toHaveAttribute("aria-expanded", "false");
+  await pressStageTool(card, panel, false);
 }

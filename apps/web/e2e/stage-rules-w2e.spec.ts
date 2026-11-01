@@ -264,8 +264,10 @@ for (const c of CASES) {
     const row = await openRow(page, request, seeded.divisionId, stageId);
     await expect(row.getByTestId("stage-locked"), "closed, the summary says the stage has started").toBeVisible();
     await openStagePanel(enclosingStageCard(row), "format");
-    await expect(row.getByTestId("stage-format-locked"), "the panel says the stage has started").toBeVisible();
-    await expect(row.getByTestId("stage-format-locked")).toContainText(L["stageCard.locked"]!);
+    // Review I3: the card says it ONCE (the summary's line); the opened panel is locked and repeats nothing.
+    await expect(row.getByTestId("stage-locked")).toContainText(L["stageCard.locked"]!);
+    await expect(row.getByTestId("stage-format-locked"), "the opened panel repeats no lock line").toHaveCount(0);
+    await expect(row.getByTestId("stage-format-editor"), "and it is the read-only kind").toHaveAttribute("data-mode", "locked");
     await expect(row.getByTestId("stage-format-chips"), "the format is still read, as chips").toBeVisible();
     await expect(row.getByTestId("stage-format-save"), "no way to change it: no Save").toHaveCount(0);
     await expect(blockOf(row, c), `${c.key} has no control on a started stage`).toHaveCount(0);

@@ -39,6 +39,14 @@ import { openPanels } from "./helpers/rules-strip";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
 
+/** How many lock lines a stage card says: the summary's `stage-locked` plus any section's own (Match format, Points, Tie-breaks).
+ *  Match Day C3 review I3: exactly one, whatever panels are open. */
+async function lockLinesOn(card: Locator): Promise<number> {
+  let n = 0;
+  for (const id of ["stage-locked", "stage-format-locked", "stage-points-locked", "stage-tiebreaks-locked"]) n += await card.getByTestId(id).count();
+  return n;
+}
+
 /** The PUBLIC dictionary: the stage row's chips are worded from its `format.rules.*` clauses, the public rules line's own. */
 const PUB = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/public.json", import.meta.url)), "utf8")) as Record<string, string>;
 const chipText = (key: string, params?: Record<string, string | number>): string => rulesChipText(PUB, { key, params });
@@ -366,9 +374,11 @@ test("a stage whose first match is scored: the lock line, the format read-only a
   await expect(row.getByTestId("stage-locked"), "the summary says it before anyone tries").toBeVisible();
   // The Match format button opens a READ-ONLY panel on a started stage.
   await openStagePanel(enclosingStageCard(row), "format");
-  const line = row.getByTestId("stage-format-locked");
+  // Review I3: the ONE lock line on the card is the summary's; the opened panel is the read-only kind and repeats nothing.
+  const line = row.getByTestId("stage-locked");
   await expect(line).toBeVisible();
   await expect(line).toContainText(L["stageCard.locked"]!);
+  await expect(row.getByTestId("stage-format-locked"), "the opened panel repeats no lock line").toHaveCount(0);
   await expect(row.getByTestId("stage-format-save"), "no way to start an edit").toHaveCount(0);
   await expect(row.getByTestId("stage-format-clear")).toHaveCount(0);
   // Read-only: the format is said as chips, and the row holds no control and no editor - nothing to change, no Save.
@@ -406,6 +416,7 @@ test("a stage whose first match is scored: the lock line, the format read-only a
   const row2 = await openRow(page, request, fresh.divisionId, fresh.stageId);
   await expect(row2.getByTestId("stage-format-locked")).toHaveCount(0);
   await expect(row2.getByTestId("stage-locked")).toHaveCount(0);
+  expect(await lockLinesOn(enclosingStageCard(row2)), "an unlocked stage's card says no lock line, panel open or not").toBe(0);
   await openEditor(row2);
   await expect(row2.getByTestId("stage-format-save"), "an unstarted stage opens an editor with a Save").toBeVisible();
   await expect(row2.getByTestId("stage-format-editor"), "and its panel is an editor, not the read-only view").toHaveAttribute("data-mode", "edit");
@@ -492,7 +503,18 @@ test("a locked stage says it is locked once; an open editor has one Cancel and f
   for (const text of await row.getByTestId("stage-format-summary").allInnerTexts()) expect(text, "the summary carries the format alone").not.toMatch(/locked/i);
   await openStagePanel(enclosingStageCard(row), "format");
   await expect(row.getByTestId("stage-format-chips"), "a locked stage still reads its format as chips").toBeVisible();
-  expect(await row.getByTestId("stage-format-locked").count(), "the opened Match format panel states the lock once").toBe(1);
+  // Review I3 (controller ruling): exactly ONE lock line on the card, panels closed AND with every panel open.
+  const card = enclosingStageCard(row);
+  expect(await lockLinesOn(card), "all panels closed: one lock line on the card").toBe(1);
+  let opened = 0;
+  for (const panel of ["format", "points", "tiebreaks"] as const) {
+    if ((await card.getByTestId(`stage-tool-${panel}`).count()) === 0) continue;
+    await openStagePanel(card, panel);
+    opened++;
+  }
+  expect(opened, "anti-vacuity: at least Match format and one more panel were opened").toBeGreaterThanOrEqual(2);
+  expect(await lockLinesOn(card), "every panel open: still exactly one lock line on the card").toBe(1);
+  expect((await row.innerText()).split(sentence).length - 1, "and the sentence is said once with the panels open").toBe(1);
 
   // An editable stage: closed, the card offers the Match format button and no Cancel; open, the button is the toggle (pressed)
   // and Cancel is the one way out.
@@ -512,7 +534,10 @@ test("a locked stage says it is locked once; an open editor has one Cancel and f
   await row2.getByTestId("stage-format-cancel").click();
   await expect(row2.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
   await expect.soft(tool, "closed again: the toggle says so").toHaveAttribute("aria-expanded", "false");
-  await expect.soft(tool, "focus returns to the button that opened the panel").toBeFocused();
+  // Focus goes back to the control that opened the panel: the header's button, or - below md, where an editor's header buttons are
+  // hidden and the three live in the "Stage tools" sheet - that sheet's one trigger.
+  const opener = (await tool.isVisible()) ? tool : card2.getByTestId("stage-rail-trigger");
+  await expect.soft(opener, "focus returns to the control that opened the panel").toBeFocused();
   expect(await storedRules(request, fresh.divisionId, fresh.stageId), "Cancel saved nothing").toBeNull();
 });
 
@@ -840,7 +865,9 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   const locked = await openedPointsSection(page, rig.stageId);
   await expect(locked).toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
   await expect(locked.locator("input, select, button:not([data-role='phone-disclosure-toggle'])")).toHaveCount(0);
-  await expect(locked.getByTestId("stage-points-locked")).toContainText(L["stageCard.locked"]!);
+  // Review I3: the lock is said ONCE, on the card's summary line - the opened panel repeats nothing.
+  await expect(stageCardOf(page, rig.stageId).getByTestId("stage-locked")).toContainText(L["stageCard.locked"]!);
+  await expect(locked.getByTestId("stage-points-locked"), "the opened panel repeats no lock line").toHaveCount(0);
   await expect(locked.getByTestId("stage-points-source")).toHaveText(L["stagePoints.ownPoints"]!);
   await expect(locked.getByTestId("stage-points-preview")).toHaveText(words2);
   const refused = await apiJson(request, `/api/v1/stages/${rig.stageId}/rules`, "PUT", { points: null });

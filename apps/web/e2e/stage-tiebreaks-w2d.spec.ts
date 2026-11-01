@@ -244,7 +244,9 @@ test("football league: the order is inherited, overridden (a move, an added step
   await page.reload({ waitUntil: "load" });
   await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await expect(section).toHaveAttribute("data-state", "locked", { timeout: STEP_MS });
-  await expect(section.getByTestId("stage-tiebreaks-locked")).toContainText(L["stageCard.locked"]!);
+  // Review I3: the card's one lock line is the summary's; the opened section is locked and repeats nothing.
+  await expect(stageCardOf(page, rig.stageId).getByTestId("stage-locked")).toContainText(L["stageCard.locked"]!);
+  await expect(section.getByTestId("stage-tiebreaks-locked")).toHaveCount(0);
   await openFold(section);
   // Read-only, every real criterion in its order; the engine's one repeatable rung (the two-way head-to-head, `h2h_two`:
   // the `duplicate` refusal exempts exactly it) is said once as a sentence instead of numbered.

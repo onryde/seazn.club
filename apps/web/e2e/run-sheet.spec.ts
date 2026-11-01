@@ -2422,8 +2422,9 @@ test("Review m1 (C3): the NOW rule that ends a stage's sheet stays square while 
 
   // Match Day C3: the sheet is one stage's rows INSIDE that stage's card, and an editor's card carries the stage rail UNDER the
   // sheet - so a NOW rule that ends the sheet is mid-card, and (as with a NOW rule that ends a day block with later days to come)
-  // it must stay SQUARE: a rounded lime bar in the middle of a card is the defect. A viewer's card has no rail, the sheet ends
-  // the card, and the rule takes the card's radius (`endsCard`; the unit suite pins that half - a viewer is not this spec's user).
+  // it must stay SQUARE: a rounded lime bar in the middle of a card is the defect. A viewer's card has no rail either, but the
+  // read-only court-tags line follows the sheet there, so nothing in a stage card ends on the sheet (`endsCard` is false for the
+  // panel's embedded sheets, review m3); the prop's `true` half is the division-wide sheet's, pinned by the unit suite.
   const stageSheet = page.getByTestId("run-sheet").getByTestId("stage-run-sheet");
   const now = stageSheet.getByTestId("run-sheet-now");
   await expect(now, "no NOW rule rendered — nothing was measured").toHaveCount(1);
@@ -2454,8 +2455,17 @@ test("Review m1 (C3): the NOW rule that ends a stage's sheet stays square while 
   console.log("m1 NOW-rule corner radii:", JSON.stringify(radii));
   // The card has corners to protect (read live, never a literal) - and the rule, mid-card, takes none of them.
   expect(parseFloat(radii.cardLeft), "the stage card has no rounded corners - the differential below proves nothing").toBeGreaterThan(0);
-  expect(parseFloat(radii.ruleLeft), "a mid-card NOW rule is rounded at the bottom-left").toBe(0);
-  expect(parseFloat(radii.ruleRight), "a mid-card NOW rule is rounded at the bottom-right").toBe(0);
+  expect(parseFloat(radii.ruleLeft), "a mid-card NOW rule must not be rounded at the bottom-left").toBe(0);
+  expect(parseFloat(radii.ruleRight), "a mid-card NOW rule must not be rounded at the bottom-right").toBe(0);
+
+  // The DIFFERENTIAL half (review m6; restored from the base test): a row in the middle of the same list stays SQUARE too. Without
+  // it the zero radii above would also pass on "nothing is ever rounded" (the `.rounded-b-2xl` rule deleted outright, or never
+  // applied), which says nothing about the scoped rule this case exists for. (Rounding is scoped to the last block of a sheet that
+  // ENDS its card - the unit suite pins that half, `run-sheet-spacing.test.tsx`.)
+  const midRadius = await stageSheet.locator("li[data-fixture-no]").first().evaluate((el) => getComputedStyle(el).borderBottomLeftRadius);
+  console.log("m1 mid-list row radius:", midRadius);
+  expect(parseFloat(midRadius), "a mid-list row must stay square - the rounding is scoped to the last block of a sheet that ends the card").toBe(0);
+  expect(await stageSheet.locator("li[data-fixture-no]").count(), "anti-vacuity: the sheet has fixture rows beside the rule").toBeGreaterThanOrEqual(2);
 });
 
 // Competition desk W4, review finding m2 — the bracket round header's sticky
