@@ -19,10 +19,15 @@ import { pointsRows } from "@/components/v2/stage-rules/stage-points-model";
 import {
   foldTiebreaks,
   stageActions,
+  stageCounts,
   summarisePoints,
   unitLabelKey,
+  type StageAction,
   type StageActionInput,
+  type StageButton,
 } from "@/lib/stage-card/summaries";
+import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { Fixture } from "@/server/api-v1/schemas";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -354,14 +359,95 @@ describe("the dictionary lines the stage card prints", () => {
   });
 });
 
+describe("stageCounts", () => {
+  // The three buckets are read off the fixture-status declarations the rest of the app already holds (`lib/fixture-status.ts`,
+  // held to the V432 CHECK by its own migration test) and the owner/controller ruling for this card: OPEN is scheduled,
+  // in_play and the held needs_decision; SETTLED is decided, finalized, forfeited, abandoned and cancelled.
+  const OPEN = ["scheduled", "in_play", "needs_decision"] as const;
+  const SETTLED = ["decided", "finalized", "forfeited", "abandoned", "cancelled"] as const;
+
+  it("empty -> all zero", () => {
+    expect(stageCounts([])).toEqual({ played: 0, inPlay: 0, unplayed: 0 });
+  });
+
+  it("accumulates a mixed list, leaves its input alone, and answers the same twice", () => {
+    const fixtures = [
+      { status: "decided" },
+      { status: "decided" },
+      { status: "forfeited" },
+      { status: "in_play" },
+      { status: "scheduled" },
+      { status: "scheduled" },
+      { status: "scheduled" },
+      { status: "needs_decision" },
+    ];
+    const copy = fixtures.map((f) => ({ ...f }));
+    const first = stageCounts(fixtures);
+    expect(first).toEqual({ played: 3, inPlay: 2, unplayed: 3 });
+    expect(fixtures).toEqual(copy);
+    expect(stageCounts(fixtures)).toEqual(first);
+  });
+
+  // Anti-vacuity: the schema's own status list (the Zod enum the run-sheet tests sweep) is the population, and it is held to
+  // the lib list first, so a status added to the schema fails HERE rather than going uncounted.
+  it("sweeps every fixtures.status: each lands in exactly one bucket, the one its class says", () => {
+    const statuses: readonly string[] = Fixture.shape.status.options;
+    expect([...statuses].sort(), "premise: the schema and lib/fixture-status.ts agree").toEqual([...FIXTURE_STATUSES].sort());
+    expect([...OPEN, ...SETTLED].sort(), "premise: this test classifies every status once").toEqual([...statuses].sort());
+    // And the settled set is the app's own two declarations, not a second spelling of it.
+    expect([...SETTLED].sort()).toEqual([...SETTLED_FIXTURE_STATUSES, ...LOCKED_FIXTURE_STATUSES].sort());
+    let checked = 0;
+    for (const status of statuses) {
+      const got = stageCounts([{ status }]);
+      expect(got.played + got.inPlay + got.unplayed, `${status}: exactly one bucket`).toBe(1);
+      if ((SETTLED as readonly string[]).includes(status)) expect(got, status).toEqual({ played: 1, inPlay: 0, unplayed: 0 });
+      else expect(got.played, `${status} is open, never played`).toBe(0);
+      if (status === "scheduled") expect(got.unplayed, status).toBe(1);
+      if (status === "in_play" || status === "needs_decision") expect(got.inPlay, status).toBe(1);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: statuses swept").toBe(statuses.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("refuses a status it does not know, including an Object.prototype name (a guard, not a comment)", () => {
+    expect(() => stageCounts([{ status: "paused" }])).toThrow(/unknown fixture status "paused"/);
+    expect(() => stageCounts([{ status: "constructor" }])).toThrow(/unknown fixture status/);
+    expect(() => stageCounts([{ status: "" }])).toThrow(/unknown fixture status/);
+  });
+
+  // The seam, driven through its real consumer: one fixture of each status on an active stage. Settled ones leave nothing open
+  // so Complete leads, enabled; an open one holds Complete back, disabled, whatever its flavour.
+  it("feeds stageActions: Complete leads on a settled status and is held back, disabled, on an open one", () => {
+    let checked = 0;
+    for (const status of Fixture.shape.status.options) {
+      const got = stageActions({
+        status: "active", ...stageCounts([{ status }]), hasFixtures: true, adhoc: false, pairNext: false, canUnpair: false,
+      });
+      if ((SETTLED as readonly string[]).includes(status)) {
+        expect(got, status).toEqual({ primary: { action: "complete", enabled: true }, secondary: [] });
+      } else {
+        expect(got, status).toEqual({ primary: null, secondary: [{ action: "complete", enabled: false }] });
+      }
+      checked++;
+    }
+    expect(checked).toBe(OPEN.length + SETTLED.length);
+  });
+});
+
 describe("stageActions", () => {
-  const base: StageActionInput = { status: "active", played: 0, inPlay: 0, unplayed: 0, hasFixtures: true, adhoc: true };
+  const base: StageActionInput = {
+    status: "active", played: 0, inPlay: 0, unplayed: 0, hasFixtures: true, adhoc: true, pairNext: false, canUnpair: false,
+  };
   const of = (over: Partial<StageActionInput>) => stageActions({ ...base, ...over });
-  const all = (a: ReturnType<typeof stageActions>) => [a.primary, ...a.secondary];
+  const on = (action: StageAction): StageButton => ({ action, enabled: true });
+  const off = (action: StageAction): StageButton => ({ action, enabled: false });
+  const named = (a: ReturnType<typeof stageActions>): StageAction[] =>
+    [a.primary, ...a.secondary].filter((b): b is StageButton => b !== null).map((b) => b.action);
 
   // The empty case first: a stage with no fixtures has nothing to complete and nothing to add a match to.
   it("a pending stage with no fixtures offers Generate, and nothing else", () => {
-    expect(of({ status: "pending", hasFixtures: false })).toEqual({ primary: "generate", secondary: [] });
+    expect(of({ status: "pending", hasFixtures: false })).toEqual({ primary: on("generate"), secondary: [] });
   });
 
   it("an active stage with no fixtures at all offers nothing (nothing to complete, nowhere to add a match)", () => {
@@ -369,25 +455,29 @@ describe("stageActions", () => {
   });
 
   it("not started with fixtures: Generate leads, Add match is there for a stage that takes ad-hoc matches, Complete is not", () => {
-    const got = of({ status: "pending", unplayed: 3 });
-    expect(got.primary).toBe("generate");
-    expect(all(got)).not.toContain("complete");
-    expect(got.secondary).toContain("add_match");
+    expect(of({ status: "pending", unplayed: 3 })).toEqual({ primary: on("generate"), secondary: [on("add_match")] });
   });
 
   // The owner's screenshot: active, one match in play, two still to schedule.
-  it("the screenshot case (1 in play, 2 unplayed): Complete is not primary, Generate is gone", () => {
-    const got = of({ status: "active", inPlay: 1, unplayed: 2 });
-    expect(got.primary).not.toBe("complete");
-    expect(got.primary).toBeNull();
-    expect(all(got)).not.toContain("generate");
-    // Complete stays reachable from the stage-actions menu: it is just never the lead while matches are open.
-    expect(got.secondary).toEqual(["add_match", "complete"]);
+  it("the screenshot case (1 in play, 2 unplayed): no lead, Generate gone, Complete present but DISABLED", () => {
+    expect(of({ status: "active", inPlay: 1, unplayed: 2 })).toEqual({
+      primary: null,
+      secondary: [on("add_match"), off("complete")],
+    });
   });
 
-  it("all played: Complete leads, Generate stays gone, Add match remains", () => {
-    const got = of({ status: "active", played: 3 });
-    expect(got).toEqual({ primary: "complete", secondary: ["add_match"] });
+  // Any single open match disables Complete - in play and not yet begun alike (a check on `unplayed` alone, or `inPlay` alone,
+  // would leave Complete enabled over the other).
+  it("Complete is disabled while ANY match is open and enabled, as the lead, once none is", () => {
+    expect(of({ inPlay: 1 }).secondary).toContainEqual(off("complete"));
+    expect(of({ unplayed: 1 }).secondary).toContainEqual(off("complete"));
+    expect(of({ played: 5, inPlay: 1 }).secondary).toContainEqual(off("complete"));
+    expect(of({ played: 5, unplayed: 1 }).secondary).toContainEqual(off("complete"));
+    expect(of({ played: 5 })).toEqual({ primary: on("complete"), secondary: [on("add_match")] });
+  });
+
+  it("all played: Complete leads, enabled; Generate stays gone; Add match remains", () => {
+    expect(of({ status: "active", played: 3 })).toEqual({ primary: on("complete"), secondary: [on("add_match")] });
   });
 
   it("a stage kind that takes no ad-hoc match never offers Add match", () => {
@@ -396,58 +486,149 @@ describe("stageActions", () => {
       of({ status: "active", adhoc: false, inPlay: 1 }),
       of({ status: "active", adhoc: false, played: 3 }),
     ]) {
-      expect(all(s)).not.toContain("add_match");
+      expect(named(s)).not.toContain("add_match");
     }
   });
 
-  it("a completed stage offers nothing", () => {
+  it("a completed stage offers nothing - not even Unpair or Pair next", () => {
     expect(of({ status: "complete", played: 3 })).toEqual({ primary: null, secondary: [] });
+    expect(of({ status: "complete", played: 3, canUnpair: true, pairNext: true })).toEqual({ primary: null, secondary: [] });
   });
 
-  // Complete is never the lead while anything is open, and Generate never survives the start - swept over the lifecycle
-  // (status x counts x the two flags) rather than three hand-picked states.
-  it("sweeps the lifecycle: Complete leads only when nothing is open, Generate only before the start", () => {
+  // I1 (stage-rail.tsx): a Swiss stage becomes active once round 1 is paired, and "Pair next round" is a generate on that
+  // ACTIVE stage. The rail's own comment records the defect where Complete led over it (2026-09-20).
+  describe("Swiss", () => {
+    it("round 1 all played, rounds still to pair: Pair next leads and Complete does not (counts that leave the unseated shells out)", () => {
+      const got = of({ status: "active", played: 4, pairNext: true });
+      expect(got.primary).toEqual(on("pair_next"));
+      expect(got.secondary).toEqual([on("add_match"), on("complete")]);
+      expect(named(got)).not.toContain("generate");
+    });
+
+    it("the same stage with its unseated shells counted as unplayed: Pair next leads and Complete is disabled", () => {
+      const got = of({ status: "active", played: 4, unplayed: 4, pairNext: true });
+      expect(got.primary).toEqual(on("pair_next"));
+      expect(got.secondary).toEqual([on("add_match"), off("complete")]);
+    });
+
+    it("shells minted, nothing paired yet (still pending): Pair next leads; no Generate, no Complete", () => {
+      const got = of({ status: "pending", unplayed: 4, pairNext: true });
+      expect(got).toEqual({ primary: on("pair_next"), secondary: [on("add_match")] });
+    });
+
+    // The rail's label gate is `fixtureCount > 0 && swissHasUnseated`; with no fixtures it says Generate fixtures.
+    it("a round to pair but no fixtures at all is still Generate (the rail's own gate), not Pair next", () => {
+      expect(of({ status: "pending", hasFixtures: false, pairNext: true })).toEqual({ primary: on("generate"), secondary: [] });
+    });
+
+    it("every round paired and played: Complete leads again", () => {
+      expect(of({ status: "active", played: 12, pairNext: false })).toEqual({ primary: on("complete"), secondary: [on("add_match")] });
+    });
+
+    it("Unpair is offered when the panel says the latest round can be unpaired, and not otherwise", () => {
+      const seated = of({ status: "active", unplayed: 4, canUnpair: true });
+      expect(seated).toEqual({ primary: null, secondary: [on("add_match"), on("unpair"), off("complete")] });
+      expect(named(of({ status: "active", unplayed: 4, canUnpair: false }))).not.toContain("unpair");
+    });
+
+    it("Unpair sits beside Pair next while later rounds wait (the rail shows both)", () => {
+      const got = of({ status: "active", unplayed: 4, pairNext: true, canUnpair: true });
+      expect(got.primary).toEqual(on("pair_next"));
+      expect(got.secondary).toContainEqual(on("unpair"));
+    });
+  });
+
+  // M1: "started" is stated here as a RULE, not copied from the code. Spec §12 item 8 hides Generate once the stage has
+  // started; `generateStageFixtures` (server/usecases/stages.ts) is what moves a stage pending -> active, so a stage has
+  // started exactly when its status is no longer pending - and a match with a result or under way is proof of it whatever the
+  // status says (contradictory input is read as started, so Generate never offers to rebuild under a result). Hand-written
+  // truth table of whether Generate is offered (no round to pair, so Pair next cannot stand in for it).
+  const STARTED_STATUSES = new Set(["active", "complete"]);
+  const startedByRule = (status: string, played: number, inPlay: number): boolean => STARTED_STATUSES.has(status) || played > 0 || inPlay > 0;
+
+  it("Generate is offered exactly on a stage that has not started (hand-written truth table)", () => {
+    const table: [string, number, number, boolean][] = [
+      // status,    played, inPlay, Generate offered
+      ["pending", 0, 0, true],
+      ["pending", 1, 0, false],
+      ["pending", 0, 1, false],
+      ["pending", 3, 2, false],
+      ["active", 0, 0, false],
+      ["active", 2, 0, false],
+      ["active", 0, 1, false],
+      ["complete", 0, 0, false],
+      ["complete", 6, 0, false],
+    ];
+    for (const [status, played, inPlay, offered] of table) {
+      const got = of({ status, played, inPlay, unplayed: 0, hasFixtures: true });
+      expect(named(got).includes("generate"), `${status} played=${played} inPlay=${inPlay}`).toBe(offered);
+      expect(startedByRule(status, played, inPlay), `rule: ${status} played=${played} inPlay=${inPlay}`).toBe(!offered);
+    }
+    expect(table.length).toBeGreaterThan(0);
+  });
+
+  // The lifecycle swept (status x counts x the five flags), each property stated from the owner's rulings and the rail's gates
+  // rather than recomputed from the function's own branches.
+  it("sweeps the lifecycle: every button's presence, lead and enabled flag follow the stated rules", () => {
     let checked = 0;
-    let completeLed = 0;
-    let generateLed = 0;
+    const seen = { completeLed: 0, generateLed: 0, pairNextLed: 0, completeDisabled: 0, unpair: 0 };
     for (const status of ["pending", "active", "complete"]) {
       for (const played of [0, 2]) {
         for (const inPlay of [0, 1]) {
           for (const unplayed of [0, 3]) {
             for (const hasFixtures of [false, true]) {
               for (const adhoc of [false, true]) {
-                const s: StageActionInput = { status, played, inPlay, unplayed, hasFixtures, adhoc };
-                const got = stageActions(s);
-                const open = inPlay + unplayed;
-                const started = status !== "pending" || played + inPlay > 0;
-                if (got.primary === "complete") {
-                  expect(open, JSON.stringify(s)).toBe(0);
-                  expect(status, JSON.stringify(s)).not.toBe("complete");
-                  expect(hasFixtures, JSON.stringify(s)).toBe(true);
-                  completeLed++;
+                for (const pairNext of [false, true]) {
+                  for (const canUnpair of [false, true]) {
+                    const s: StageActionInput = { status, played, inPlay, unplayed, hasFixtures, adhoc, pairNext, canUnpair };
+                    const got = stageActions(s);
+                    const at = JSON.stringify(s);
+                    const actions = named(got);
+                    const open = inPlay + unplayed;
+                    const live = status !== "complete";
+                    const started = startedByRule(status, played, inPlay);
+                    const pairing = pairNext && hasFixtures;
+                    // Nothing is offered on a complete stage.
+                    if (!live) expect(actions, at).toEqual([]);
+                    // A lead is always pressable; a button never appears twice.
+                    if (got.primary !== null) expect(got.primary.enabled, at).toBe(true);
+                    expect(new Set(actions).size, `${at}: no action twice`).toBe(actions.length);
+                    // Generate: only before the start, and not in place of a round to pair.
+                    expect(actions.includes("generate"), at).toBe(live && !started && !pairing);
+                    // Pair next: whenever a round waits and the stage has fixtures; it leads.
+                    expect(actions.includes("pair_next"), at).toBe(live && pairing);
+                    if (live && pairing) expect(got.primary?.action, at).toBe("pair_next");
+                    // Unpair: the panel's flag, on any live stage.
+                    expect(actions.includes("unpair"), at).toBe(live && canUnpair);
+                    // Add match: a kind that takes one, with fixtures.
+                    expect(actions.includes("add_match"), at).toBe(live && adhoc && hasFixtures);
+                    // Complete: present once started with fixtures; enabled exactly when nothing is open; leads only then,
+                    // and never over a round to pair.
+                    const complete = [got.primary, ...got.secondary].find((b) => b?.action === "complete") ?? null;
+                    expect(complete !== null, at).toBe(live && started && hasFixtures);
+                    if (complete !== null) {
+                      expect(complete.enabled, at).toBe(open === 0);
+                      if (!complete.enabled) seen.completeDisabled++;
+                    }
+                    if (got.primary?.action === "complete") {
+                      expect(open, at).toBe(0);
+                      expect(pairing, at).toBe(false);
+                      seen.completeLed++;
+                    }
+                    if (got.primary?.action === "generate") seen.generateLed++;
+                    if (got.primary?.action === "pair_next") seen.pairNextLed++;
+                    if (actions.includes("unpair")) seen.unpair++;
+                    checked++;
+                  }
                 }
-                if (got.primary === "generate") generateLed++;
-                if (started) expect(all(got), JSON.stringify(s)).not.toContain("generate");
-                if (status === "complete") expect(all(got), JSON.stringify(s)).toEqual([null]);
-                expect(new Set(got.secondary).size, `${JSON.stringify(s)}: no action twice`).toBe(got.secondary.length);
-                expect(got.secondary, JSON.stringify(s)).not.toContain(got.primary);
-                checked++;
               }
             }
           }
         }
       }
     }
-    expect(checked, "anti-vacuity: every combination ran").toBe(3 * 2 * 2 * 2 * 2 * 2);
-    expect(completeLed, "some state leads with Complete").toBeGreaterThan(0);
-    expect(generateLed, "some state leads with Generate").toBeGreaterThan(0);
-  });
-
-  // A pending stage that nonetheless holds a played match is contradictory input; it counts as started, so Generate - the
-  // action that would rebuild under a result - is never offered over it.
-  it("a stage with a result or a match in play is started whatever its status says", () => {
-    expect(all(of({ status: "pending", played: 1, unplayed: 2 }))).not.toContain("generate");
-    expect(all(of({ status: "pending", inPlay: 1 }))).not.toContain("generate");
+    expect(checked, "anti-vacuity: every combination ran").toBe(3 * 2 * 2 * 2 * 2 * 2 * 2 * 2);
+    for (const [what, n] of Object.entries(seen)) expect(n, `some state: ${what}`).toBeGreaterThan(0);
   });
 
   it("refuses a status it does not know and counts that are no counts (a guard, not a comment)", () => {

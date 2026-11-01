@@ -1,7 +1,7 @@
 // Match Day Phase C, Task C1 (spec 2026-10-31-match-day-design.md §12, Phase C items 5-8) - the stage card's pure summaries.
 // What the Points panel says in one line, which tie-break steps the Tie-breaks panel numbers, the sport's own word for a
-// "set", and which buttons the card offers for the stage's state. The editors (C2) and the card layout (C3) render what
-// these answer and decide none of it themselves.
+// "set", the stage's match counts, and which buttons the card offers for the stage's state (each with its enabled flag).
+// The editors (C2) and the card layout (C3) render what these answer and decide none of it themselves.
 //
 // CLIENT-SAFE: no "use client", no JSX, no `@/server` import. It reads the engine's `/competition` and `/sports` subpaths
 // the way `lib/rule-scope.ts` and `lib/match-rules/set-target-floor.ts` already do in client code, and takes only the
@@ -9,6 +9,7 @@
 import { RATIO_LEDGERS } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
+import type { FixtureStatusValue } from "@/lib/fixture-status";
 import type { MessageKey } from "@/lib/messages";
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -127,15 +128,70 @@ export function unitLabelKey(rule: string, sportKey: string): MessageKey {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Stage counts: the one reading of fixtures.status the card's buttons and summary line share.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** What the stage card counts a match as: finished, under way, or still to come. */
+type Bucket = "played" | "inPlay" | "unplayed";
+
+/**
+ * Every value of fixtures.status (V214 + V432; `lib/fixture-status.ts`) and the bucket it counts in - a total map, so a new
+ * status is a compile error here rather than a match the card silently does not count.
+ *
+ * - OPEN (a stage is not finished while one remains): `scheduled` -> unplayed; `in_play` -> inPlay; `needs_decision` -> inPlay.
+ *   A held match was played (only the organiser's verdict waits), so it is not "still to come" - and Complete stays refused
+ *   while one is held (W2b X-AB-5), which only an open bucket expresses.
+ * - SETTLED (nothing left to play): `decided`, `finalized`, `forfeited`, `abandoned`, `cancelled` -> played. These are exactly
+ *   `SETTLED_FIXTURE_STATUSES` plus `LOCKED_FIXTURE_STATUSES` (held to that by the test), the two declarations the rest of the
+ *   app already reads, so "settled" has no second spelling.
+ */
+const BUCKET_OF: Record<FixtureStatusValue, Bucket> = {
+  scheduled: "unplayed",
+  in_play: "inPlay",
+  needs_decision: "inPlay",
+  decided: "played",
+  finalized: "played",
+  forfeited: "played",
+  abandoned: "played",
+  cancelled: "played",
+};
+
+/**
+ * The counts `stageActions` takes, read off a stage's fixtures. `played` is every settled match (a walkover, an abandonment
+ * and a cancellation are settled: the stage is waiting for none of them); `inPlay` and `unplayed` together are the OPEN
+ * ones. A status the schema does not have is refused by name: counting it nowhere would let Complete lead over a match the
+ * card cannot see, and counting it somewhere would be a guess. Own-key lookup, so "constructor" is refused like any other.
+ */
+export function stageCounts(fixtures: readonly { status: string }[]): { played: number; inPlay: number; unplayed: number } {
+  const counts: Record<Bucket, number> = { played: 0, inPlay: 0, unplayed: 0 };
+  for (const f of fixtures) {
+    if (!Object.hasOwn(BUCKET_OF, f.status)) throw new Error(`stageCounts: unknown fixture status "${f.status}"`);
+    counts[BUCKET_OF[f.status as FixtureStatusValue]]++;
+  }
+  return counts;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Stage actions (item 8): the buttons follow the stage's state.
 // ---------------------------------------------------------------------------------------------------------------------
 
-export type StageAction = "generate" | "complete" | "add_match";
+export type StageAction = "generate" | "pair_next" | "unpair" | "complete" | "add_match";
 
-/** The stage as the buttons see it. `played` counts finished matches, `inPlay` matches being scored, `unplayed` matches not
- *  begun; `hasFixtures` is whether the stage holds any. `adhoc` is whether the stage's KIND takes a loose match (league,
- *  group, swiss - `ADHOC_STAGE_KINDS`; a bracket has no slot for one): a required field, not a default, so a caller cannot
- *  omit it and silently lose (or wrongly gain) Add match. */
+/** One button: the action, and whether it can be pressed now. Both slots (`primary`, `secondary`) hold this one shape, so
+ *  the card renders them with one component and never re-derives a flag. */
+export interface StageButton {
+  readonly action: StageAction;
+  readonly enabled: boolean;
+}
+
+/** The stage as the buttons see it. `played` / `inPlay` / `unplayed` are `stageCounts` of its fixtures; `hasFixtures` is
+ *  whether it holds any. The three flags that depend on the stage's KIND are required, not defaulted, so a caller cannot
+ *  omit one and silently lose (or wrongly gain) a button:
+ *  - `adhoc`: the kind takes a loose match (league, group, swiss - `ADHOC_STAGE_KINDS`; a bracket has no slot for one).
+ *  - `pairNext`: a Swiss stage with a round still waiting to be paired - the panel's `swissHasUnseated`
+ *    (`nextUnseatedSwissRound(...) !== null`, already false for every other kind).
+ *  - `canUnpair`: a Swiss stage whose latest round has a seat and no played result - the panel's `canUnpairSwiss`
+ *    (the predicate the server's `unpairSwissRound` uses, already false for every other kind). */
 export interface StageActionInput {
   readonly status: string;
   readonly played: number;
@@ -143,6 +199,8 @@ export interface StageActionInput {
   readonly unplayed: number;
   readonly hasFixtures: boolean;
   readonly adhoc: boolean;
+  readonly pairNext: boolean;
+  readonly canUnpair: boolean;
 }
 
 /** The stage's lifecycle (`stages.status`: pending -> active when its fixtures are generated -> complete). */
@@ -151,31 +209,46 @@ const STAGE_STATUSES: ReadonlySet<string> = new Set(["pending", "active", "compl
 const isCount = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
 
 /**
- * Which buttons a stage offers: one lead (`primary`, or none) and the rest (`secondary`, the stage-actions menu).
+ * Which buttons a stage offers: one lead (`primary`, or none) and the rest (`secondary`, the stage-actions menu), each with
+ * its enabled flag. Gates mirror `desk/stage-rail.tsx`'s, except where the owner's Phase C rulings replace them.
  *
- * - **Generate** leads a stage that has not started and is offered on no other: once the stage has started - it left
- *   `pending`, or a match is already played or being scored (contradictory input counts as started, so Generate, which
- *   builds fixtures, is never offered over a result) - it is gone.
- * - **Complete** leads only when the stage has fixtures and none is open (`inPlay + unplayed === 0`). While any match is
- *   open it is never the lead, but stays in `secondary`: it is the organiser's call to end a stage early, which the server
- *   still accepts (the card shows what it is waiting on).
+ * - **Pair next round** (`pair_next`) leads whenever a Swiss round waits to be paired and the stage has fixtures (the rail's
+ *   label gate: `fixtureCount > 0 && swissHasUnseated`). It is the Swiss form of Generate, so Generate is not also offered;
+ *   Complete is then never the lead (the rail's 2026-09-20 defect: Complete led over Pair next).
+ * - **Generate** leads a stage that has not started and has no round to pair, and is offered on no other: once the stage has
+ *   started - it left `pending`, or a match is already played or being scored (contradictory input counts as started, so
+ *   Generate, which builds fixtures, is never offered over a result) - it is gone.
+ * - **Complete** is offered once the stage has started and has fixtures, always in the menu or as the lead, and ENABLED only
+ *   when no match is open (`inPlay + unplayed === 0`): "Complete stage unlocks when all N matches are played". It leads only
+ *   then, and only when no round waits to be paired. While any match is open it is present but disabled, so the card shows
+ *   what it is waiting on without re-deriving it.
+ * - **Unpair** is offered whenever the panel says the latest Swiss round can be unpaired (the rail's gate, which does not ask
+ *   whether the stage has started).
  * - **Add match** is secondary, for a stage kind that takes one, once the stage has fixtures.
  * - A complete stage offers nothing; a started stage with no fixtures has nothing to complete or add to.
  *
  * A status the stage lifecycle does not have, and a count that is not a whole number, are refused by name: a card that
  * quietly offered nothing - or a button on a guess - would look right and be wrong.
  */
-export function stageActions(s: StageActionInput): { primary: StageAction | null; secondary: StageAction[] } {
+export function stageActions(s: StageActionInput): { primary: StageButton | null; secondary: StageButton[] } {
   if (!STAGE_STATUSES.has(s.status)) throw new Error(`stageActions: unknown stage status "${s.status}"`);
   for (const [name, n] of [["played", s.played], ["inPlay", s.inPlay], ["unplayed", s.unplayed]] as const) {
     if (!isCount(n)) throw new Error(`stageActions: ${name} is not a count (${String(n)})`);
   }
   if (s.status === "complete") return { primary: null, secondary: [] };
   const started = s.status !== "pending" || s.played + s.inPlay > 0;
-  const open = s.inPlay + s.unplayed;
-  const addMatch: StageAction[] = s.adhoc && s.hasFixtures ? ["add_match"] : [];
-  if (!started) return { primary: "generate", secondary: addMatch };
-  if (!s.hasFixtures) return { primary: null, secondary: [] };
-  if (open === 0) return { primary: "complete", secondary: addMatch };
-  return { primary: null, secondary: [...addMatch, "complete"] };
+  const nothingOpen = s.inPlay + s.unplayed === 0;
+  const pairing = s.pairNext && s.hasFixtures;
+  const on = (action: StageAction): StageButton => ({ action, enabled: true });
+
+  let primary: StageButton | null = null;
+  if (pairing) primary = on("pair_next");
+  else if (!started) primary = on("generate");
+  else if (s.hasFixtures && nothingOpen) primary = on("complete");
+
+  const secondary: StageButton[] = [];
+  if (s.adhoc && s.hasFixtures) secondary.push(on("add_match"));
+  if (s.canUnpair) secondary.push(on("unpair"));
+  if (started && s.hasFixtures && primary?.action !== "complete") secondary.push({ action: "complete", enabled: nothingOpen });
+  return { primary, secondary };
 }
