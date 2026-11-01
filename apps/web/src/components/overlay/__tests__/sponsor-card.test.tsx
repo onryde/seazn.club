@@ -1,5 +1,6 @@
 // R4 sponsors on stream, S7 — the sponsor card's face and the scene carousel's timer (spec 2026-10-27 §3.4, §3.5;
-// owner ruling R7: the card prints `seazn.club/s/<code>` from the card's short code, and nothing link-like without one).
+// owner ruling R7: the card prints `<host>/s/<code>` from the card's short code - the host is `sponsorLinkHost()`, the app's
+// public base url - and nothing link-like without one).
 //
 // Where the expected values come from: the short-code alphabet and pattern (`lib/sponsor-short-code.ts`, the one
 // authority the V483 CHECK mirrors), the showing length `SCENE_CAROUSEL_MS` (spec §3.4), the line forms (spec §3.6),
@@ -11,6 +12,7 @@ import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { declaredValue, parseCss, readGlobalsCss } from "@/components/v2/scorepad/v3/__tests__/_globals-css";
 import { SCENE_CAROUSEL_MS, type SponsorCard } from "@/lib/sponsor-plan";
 import { SPONSOR_SHORT_CODE_ALPHABET, SPONSOR_SHORT_CODE_MAX_LENGTH } from "@/lib/sponsor-short-code";
+import { sponsorLinkHost } from "@/lib/sponsor-clicks";
 import { OVERLAY_TEMPLATES } from "../template-registry";
 import { SponsorCardView, SponsorCarousel, carouselMemoryStore, carouselMomentId } from "../sponsor-card";
 import { GALLERY_SPONSOR_CARDS, GALLERY_SPONSOR_WITNESS_ID } from "../gallery-matrix";
@@ -43,10 +45,10 @@ describe("SponsorCardView — the face", () => {
     expect(html).toContain('data-phase="hold"');
   });
 
-  it("R7: a valid short code prints seazn.club/s/<code>", () => {
+  it("R7: a valid short code prints <host>/s/<code>, the host the app's public base url's (sponsorLinkHost)", () => {
     const code = SPONSOR_SHORT_CODE_ALPHABET.slice(0, 4);
     const html = renderToStaticMarkup(<SponsorCardView card={card({ shortCode: code })} style="banner" phase="hold" />);
-    expect(html).toContain(`>seazn.club/s/${code}<`);
+    expect(html).toContain(`>${sponsorLinkHost()}/s/${code}<`);
     expect(html).toContain('data-testid="ovl-sponsor-link"');
   });
 

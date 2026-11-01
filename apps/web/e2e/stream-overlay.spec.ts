@@ -2229,12 +2229,15 @@ test.describe("R4 sponsors: the break card on OBS", () => {
       expect(await fakeNow(), "and no page time passed: the fold is the data's doing, not the hold running out").toBe(cutAt);
       // Final review S15 m2: the fold out is STEPPED like every phase above (one jump of a whole fold could pass the
       // fold's deadline before React re-armed its timer), until the card is gone: never before its fold, and within a
-      // fold plus two steps (the step the deadline lands in, and one for the render to land).
+      // fold plus two steps (the step the deadline lands in, and one for the render to land). Re-review N3: the loop is
+      // capped at that many steps, so a card that never leaves fails HERE, on its own count, not on the step budget.
+      const FOLD_STEPS_MAX = Math.ceil(OVERLAY_MOMENT_FOLD_MS / STEP_MS) + 2;
       let folding = 0;
-      while ((await card.count()) > 0) {
+      while (folding < FOLD_STEPS_MAX && (await card.count()) > 0) {
         folding += 1;
         await step();
       }
+      await expect(card, `gone within ${FOLD_STEPS_MAX} steps of the cut`).toHaveCount(0, { timeout: 2_000 });
       expect(folding, "anti-vacuity: the fold took steps").toBeGreaterThan(0);
       const goneAfter = (await fakeNow()) - cutAt;
       expect(goneAfter, "the card stayed for its whole fold").toBeGreaterThanOrEqual(OVERLAY_MOMENT_FOLD_MS);

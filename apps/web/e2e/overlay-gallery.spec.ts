@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { signInStaff } from "./overlay-kit";
+import { sponsorLinkHost } from "../src/lib/sponsor-clicks";
 
 // THE STAFF OVERLAY GALLERY (R2007; spec 2026-10-15 §4.5 and §4.8). Every template × sport × scene × state, every
 // moment sample and every Result-card variant, drawn through the shared preview render — and this spec reads the
@@ -625,7 +626,8 @@ test.describe("the staff overlay gallery (R2007)", () => {
     const badCut = probes.filter((p) => !p.nameCutOk).map((p) => p.key);
     const lowerCut = slotCells.filter((p) => p.slot === "lower_third" && p.nameCut).length;
     const lowerThirds = slotCells.filter((p) => p.slot === "lower_third").length;
-    // The face each cell pins (`data-sponsor-face`): full = a logo and `seazn.club/s/<code>` (R7); plain = the
+    // The face each cell pins (`data-sponsor-face`): full = a logo and `<host>/s/<code>` (R7; the host is `sponsorLinkHost()`,
+    // the app's public base url - re-review N2); plain = the
     // monogram and nothing link-like (fix round 1, m3); witness = a full face whose name is the longest a sponsor can
     // have (80 characters) — too wide for any slot by the font's own metrics (sponsor-card.test.tsx), so it is the
     // ellipsis's and the clamp's witness (fix round 2). The 43-character name FITS every slot whole (758 px in an
@@ -634,7 +636,8 @@ test.describe("the staff overlay gallery (R2007)", () => {
     const plainFaces = slotCells.filter((p) => p.face === "plain");
     const witnessFaces = slotCells.filter((p) => p.face === "witness");
     const linked = [...fullFaces, ...witnessFaces];
-    const linkless = linked.filter((p) => !/^seazn\.club\/s\/[A-Z0-9]+$/.test(p.link ?? "") || !p.logo || p.mono).map((p) => `${p.key}: ${p.link}`);
+    const shortLink = new RegExp(`^${sponsorLinkHost().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/s/[A-Z0-9]+$`);
+    const linkless = linked.filter((p) => !shortLink.test(p.link ?? "") || !p.logo || p.mono).map((p) => `${p.key}: ${p.link}`);
     const plainWrong = plainFaces.filter((p) => p.link !== null || p.logo || !p.mono).map((p) => `${p.key}: link ${p.link}, logo ${p.logo}`);
     expect(fullFaces.length + plainFaces.length + witnessFaces.length, "every sponsor-slot cell names its face").toBe(slotCells.length);
     expect(plainFaces.length, "anti-vacuity: the plain face is drawn").toBeGreaterThan(0);
