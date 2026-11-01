@@ -6,7 +6,8 @@
 // (`/s/<sponsorId>?f=<fixtureId>&src=match|site`, anything else `unknown`; a `stream` claim on a link is `unknown` too —
 // owner ruling R7 "a", 2026-10-31: stream clicks come only through `/s/<code>`), and the short-code pattern from
 // `lib/sponsor-short-code.ts` (owner ruling R7).
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -24,12 +25,18 @@ import {
   SPONSOR_SHORT_CODE_MIN_LENGTH,
 } from "../sponsor-short-code";
 
+/** The R4 delta, whatever V it takes. */
+const SPONSOR_ROTATION_DELTA = /^V\d+__sponsor_rotation\.sql$/;
 const SPONSOR = "6f1c2b9e-1d2a-4c3b-9e8f-7a6b5c4d3e2f";
 const FIXTURE = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
 describe("CLICK_SOURCES", () => {
   it("is exactly the V483 CHECK's set on sponsor_clicks.source", () => {
-    const sql = readFileSync(fileURLToPath(new URL("../../../../../db/migration/deltas/V483__sponsor_rotation.sql", import.meta.url)), "utf8");
+    // Found by suffix, never by number (final review m1): a renumber before merge is then a pure `git mv`.
+    const deltas = fileURLToPath(new URL("../../../../../db/migration/deltas/", import.meta.url));
+    const named = readdirSync(deltas).filter((f) => SPONSOR_ROTATION_DELTA.test(f));
+    expect(named, "exactly one sponsor_rotation delta").toHaveLength(1);
+    const sql = readFileSync(join(deltas, named[0]!), "utf8");
     const check = /sponsor_clicks_source_check check \(source in \(([^)]*)\)\)/.exec(sql);
     expect(check, "the CHECK is found in the migration").not.toBeNull();
     const declared = [...check![1]!.matchAll(/'([^']+)'/g)].map((m) => m[1]);

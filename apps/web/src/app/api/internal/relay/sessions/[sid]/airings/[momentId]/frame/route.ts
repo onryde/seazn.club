@@ -1,8 +1,9 @@
+import { NextResponse } from "next/server";
 import { HttpError } from "@/lib/errors";
 import { handler } from "@/lib/http";
 import { bearerOf } from "@/server/relay/bearer";
 import { readCapped } from "@/server/relay/record-body";
-import { AIRING_FRAME_MAX_BYTES, storeAiringFrame } from "@/server/sponsors/airings";
+import { AIRING_FRAME_MAX_BYTES, FrameStorageFailed, storeAiringFrame } from "@/server/sponsors/airings";
 
 type Ctx = { params: Promise<{ sid: string; momentId: string }> };
 
@@ -29,12 +30,22 @@ async function frameBody(req: Request): Promise<Uint8Array | null> {
  *  `momentId` is used AS GIVEN: SC2 percent-encodes it as one path segment (`12:sponsor.over_end` arrives as
  *  `12%3Asponsor.over_end`), and Next decodes each dynamic segment exactly once before the handler sees it
  *  (next/dist/shared/lib/router/utils/route-matcher.js, `getRouteMatcher` → decodeURIComponent). Decoding it again here
- *  would read a literal `%` id as another id, or throw on a lone `%`. */
+ *  would read a literal `%` id as another id, or throw on a lone `%`.
+ *
+ *  A storage failure (`FrameStorageFailed`) is answered HERE, in the handler's own envelope: the usecase has already
+ *  reported it with its org and session (S9 carry), and the handler would capture it a second time with neither. */
 export async function POST(req: Request, { params }: Ctx) {
   return handler(async () => {
     const { sid, momentId } = await params;
     const token = bearerOf(req);
-    await storeAiringFrame(sid, token, momentId, await frameBody(req));
+    try {
+      await storeAiringFrame(sid, token, momentId, await frameBody(req));
+    } catch (err) {
+      if (err instanceof FrameStorageFailed) {
+        return NextResponse.json({ ok: false, error: err.message, code: err.code }, { status: err.status });
+      }
+      throw err;
+    }
     return new Response(null, { status: 204 });
   });
 }

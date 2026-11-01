@@ -1,7 +1,11 @@
 -- V483 — Sponsors on stream (R4, spec docs/superpowers/specs/2026-10-27-sponsors-on-stream-design.md §4): the
--- rotation's settings and assignments, the proof-of-display log and its frames, tracked clicks, the sponsor report's
--- links, and the on-screen short codes (owner ruling R7). Greenfield: no backfill. Every existing sponsor starts OFF
--- the stream (on_stream = false); the first tick (S12) turns the org's settings row on itself (ruling R12).
+-- rotation's settings and assignments, the proof-of-display log and its frames, the tombstones of frame objects whose
+-- rows went (S9), tracked clicks, the sponsor report's links, and the on-screen short codes (owner ruling R7).
+-- Greenfield: no backfill. Every existing sponsor starts OFF the stream (on_stream = false); the first tick (S12) turns
+-- the org's settings row on itself (ruling R12).
+--
+-- Tests find this file by its SUFFIX (`__sponsor_rotation.sql`), never its number: a renumber before merge is a pure
+-- `git mv`.
 --
 -- File name: deliberately not "...stream...". The relay's fold (server/relay/__tests__/_stream-migration.ts) takes
 -- every delta whose NAME says stream|capture|youtube and requires it to carry no policy and no grant (the sealed
@@ -15,6 +19,13 @@
 --     sponsor_assignments, sponsor_airings, sponsor_airing_frames, sponsor_clicks, sponsor_short_codes. app_user
 --     READS them (the hub, the report) and writes none. Deleting a sponsor under withTenant still reaches them:
 --     foreign-key actions run as the table owner.
+--   * SEALED (no org, no policy, no grant, like V410's): sponsor_frame_tombstones. Only the privileged relay client
+--     (the frame upload, the daily sweep's step 7d drain) and the frames table's security-definer trigger touch it.
+--
+-- Forensic-only columns (final review m7): sponsor_airings.cut_short, ended_estimated and style are written (the
+-- heartbeat, the session-end close) and read by no screen. They are kept for a support investigation of one airing
+-- ("was it cut by a score? closed by the session end? which card shape?") and must not be shown in the UI as they
+-- stand: cut_short and ended_estimated describe how a showing ENDED, not whether it counts.
 --
 -- Deletes never take proof of display with them (ruling R16): an airing outlives its sponsor, fixture and session
 -- (all set null; the report reads sponsor_name). Every foreign key to a parent the app deletes (a sponsor, a fixture,
@@ -117,6 +128,9 @@ grant select on sponsor_airings to app_user;
 -- A still of the card on air (plan P4). Keyed like the airing but NOT a foreign key to it: the frame is posted 1.5 s
 -- after `start` and the airing row only lands on the next 5 s beat, so the frame often arrives first. The report
 -- left-joins it. A frame dies with its session (its airing then has no session to join on anyway).
+-- One object, one row: the writer's key is `<orgId>/<sessionId>/<base64url(momentId)>.jpg` (airingFramePath), a function
+-- of the row's own key, so no two rows ever name one object, and the unique index says so. It is also the index the
+-- sweep's drain probes ("does a row still name this tombstoned path?").
 create table sponsor_airing_frames (
   session_id uuid not null references fixture_stream_sessions(id) on delete cascade,
   moment_id  text not null,
@@ -125,6 +139,7 @@ create table sponsor_airing_frames (
   created_at timestamptz not null default now(),
   constraint sponsor_airing_frames_pkey primary key (session_id, moment_id)
 );
+create unique index sponsor_airing_frames_path_key on sponsor_airing_frames (path);
 
 alter table sponsor_airing_frames enable row level security;
 alter table sponsor_airing_frames force  row level security;
@@ -135,8 +150,9 @@ grant select on sponsor_airing_frames to app_user;
 -- S9 polish (review m8): the storage object a frame row named outlives the row unless something removes it, and a row
 -- goes in more ways than the orphan purge — its session's or org's delete cascades, a replace moves it to another key.
 -- Every such departure leaves the path here, in the same transaction, and the daily relay sweep (step 7d) removes the
--- object, then the tombstone. The drain skips the object of a path a row still names, so no object a row names is
--- removed. The frame upload writes one too when its row write fails after the object was stored.
+-- object, then the tombstone - the one it READ, matched on (path, deleted_at), so a path that departs again while the
+-- drain runs keeps its fresh tombstone for the next pass. The drain skips the object of a path a row still names, so no
+-- object a row names is removed. The frame upload writes one too when its row write fails after the object was stored.
 -- No org_id and no foreign key: a tombstone outlives its org. SEALED, like V410's tables: RLS enabled and forced, no
 -- policy, no grant — only the privileged relay client reads or writes it, and the trigger runs as its definer.
 create table sponsor_frame_tombstones (
