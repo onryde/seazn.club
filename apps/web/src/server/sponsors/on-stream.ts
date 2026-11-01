@@ -5,7 +5,7 @@ import "server-only";
 //     statement), plus whether the scope has a row of its own (so the tab can say "uses the organisation's setting");
 //   - the sports the scope plays (its divisions' `sport_key`), and for each the sport's declared break kinds
 //     (`naturalBreaks.kinds`, the engine's declaration) - the static line the tab shows when there is no match to count over;
-//   - for each sport that declares breaks, the breaks of the org's most recent FINISHED fixture of that sport (ruling R11): the
+//   - for each sport that declares breaks, the breaks of the scope's most recent FINISHED fixture of that sport (ruling R11): the
 //     REAL ledger, folded through the REAL engine (`loadFoldInputs` / `foldFrom` / `replayDerived` - the overlay's own replay,
 //     so `naturalBreaks.opensAt` and `breakSizeOf` decide what a break is). No sample table, no testkit.
 //
@@ -40,28 +40,35 @@ const kindsOf = (sportKey: string): readonly BreakDecl[] | null =>
   builtinModules.find((m) => m.key === sportKey)?.naturalBreaks?.kinds.map((k) => ({ kind: k.kind, size: k.size })) ?? null;
 
 /**
- * The breaks of the scope's most recent finished fixture of `sportKey`. "Finished" here is a match played to a result
- * (`decided` or `finalized`) with a ledger: an abandoned match is cut short, and a forfeit or a cancellation has no play to
- * count, so none of them says how many breaks a match of this sport has. A candidate whose fold refuses, whose replay stops
- * part-way (`breaksComplete` false - a missing break would be unproven, not absent) or that opened no break is skipped for the
- * next most recent, up to `PREVIEW_CANDIDATES`.
+ * The breaks of the scope's most recent finished fixture of `sportKey`, with the competition that fixture belongs to (the
+ * tab counts the cards that competition's overlay would draw on: the card source takes the org-wide sponsors plus the
+ * fixture's OWN competition's, never another's). "Finished" here is a match played to a result (`decided` or `finalized`)
+ * with a ledger: an abandoned match is cut short, and a forfeit or a cancellation has no play to count, so none of them says
+ * how many breaks a match of this sport has. A division that is archived does not count (it is out of the competition's
+ * life, and `listDivisions` hides it). A candidate whose fold the ENGINE refuses, whose replay stops part-way
+ * (`breaksComplete` false - a missing break would be unproven, not absent) or that opened no break is skipped for the next
+ * most recent, up to `PREVIEW_CANDIDATES`.
+ *
+ * Only an `EngineError` is a skip. Anything else - above all an SQL error, which has already aborted the one transaction
+ * this runs in - propagates: swallowing it would answer "no sample" from a dead transaction and fail the NEXT query with a
+ * message that names nothing.
  */
 export async function latestFinishedBreaks(
   tx: Tx,
   orgId: string,
   sportKey: string,
   competitionId: string | null,
-): Promise<BreakOpened[] | null> {
-  const candidates = await tx<{ id: string }[]>`
-    select f.id from fixtures f
+): Promise<{ breaks: BreakOpened[]; competitionId: string } | null> {
+  const candidates = await tx<{ id: string; competition_id: string }[]>`
+    select f.id, d.competition_id from fixtures f
       join divisions d on d.id = f.division_id
-     where d.org_id = ${orgId} and d.sport_key = ${sportKey}
+     where d.org_id = ${orgId} and d.sport_key = ${sportKey} and d.archived_at is null
        and (${competitionId}::uuid is null or d.competition_id = ${competitionId})
        and f.status in ('decided', 'finalized')
        and exists (select 1 from score_events e where e.fixture_id = f.id)
      order by f.finished_at desc nulls last, f.id desc
      limit ${PREVIEW_CANDIDATES}`;
-  for (const { id } of candidates) {
+  for (const { id, competition_id: fixtureCompetition } of candidates) {
     try {
       const inputs = await loadFoldInputs(tx, id);
       if (inputs === null) continue;
@@ -73,12 +80,12 @@ export async function latestFinishedBreaks(
         lineups: inputs.lineups,
         active: folded.active,
       });
-      if (replay.breaksComplete && replay.breaks.length > 0) return replay.breaks;
+      if (replay.breaksComplete && replay.breaks.length > 0) return { breaks: replay.breaks, competitionId: fixtureCompetition };
     } catch (err) {
-      // A fold that refuses (an entrant deleted after scoring, a module version this build no longer ships) costs the preview
-      // that one candidate, never the page. Anything that is not the engine's own refusal is a bug and is logged as one.
-      if (EngineError.is(err)) log.warn({ fixtureId: id, code: err.code }, "sponsors on stream: preview fixture skipped");
-      else log.error({ err, fixtureId: id }, "sponsors on stream: preview fixture failed");
+      // A fold the engine refuses (an entrant deleted after scoring, a module version this build no longer ships) costs the
+      // preview that one candidate, never the page.
+      if (!EngineError.is(err)) throw err;
+      log.warn({ fixtureId: id, code: err.code }, "sponsors on stream: preview fixture skipped");
     }
   }
   return null;
@@ -97,16 +104,14 @@ export async function loadOnStreamScope(orgId: string, competitionId: string | n
        where org_id = ${orgId} and competition_id is not distinct from ${competitionId}`;
     const sportRows = await tx<{ sport_key: string }[]>`
       select distinct sport_key from divisions
-       where org_id = ${orgId} and (${competitionId}::uuid is null or competition_id = ${competitionId})
+       where org_id = ${orgId} and archived_at is null
+         and (${competitionId}::uuid is null or competition_id = ${competitionId})
        order by sport_key`;
     const sports: SportPreviewSource[] = [];
     for (const { sport_key: sportKey } of sportRows) {
       const kinds = kindsOf(sportKey);
-      sports.push({
-        sportKey,
-        kinds,
-        sample: kinds === null ? null : await latestFinishedBreaks(tx, orgId, sportKey, competitionId),
-      });
+      const found = kinds === null ? null : await latestFinishedBreaks(tx, orgId, sportKey, competitionId);
+      sports.push({ sportKey, kinds, sample: found?.breaks ?? null, sampleCompetitionId: found?.competitionId ?? null });
     }
     return { settings, ownRow: (own?.n ?? 0) > 0, sports };
   });

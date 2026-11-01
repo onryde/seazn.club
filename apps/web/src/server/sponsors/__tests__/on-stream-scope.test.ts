@@ -7,7 +7,8 @@
 // it checked (TEST-STRATEGY: zero is a failure).
 //
 // Sequence (rule 1): no finished fixture (static line) -> one (sample) -> a newer one (it replaces the older) ; an unfinished,
-// abandoned, forfeited or foreign-org fixture is never the sample ; a fold that refuses costs that candidate only. Sports: cricket,
+// abandoned, forfeited, archived-division or foreign-org fixture is never the sample ; a fold the ENGINE refuses costs that
+// candidate only, anything else (an SQL error in the one transaction) propagates. Sports: cricket,
 // football and badminton fold; generic (and chess) declare no breaks and have nothing to count. The seam to the planner is last.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -68,6 +69,7 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
       expect(got, `${sportKey}: the org plays it`).toBeDefined();
       expect(got!.kinds, `${sportKey}: the engine's declaration`).toEqual(moduleOf(sportKey).naturalBreaks!.kinds.map((k) => ({ kind: k.kind, size: k.size })));
       expect(got!.sample, `${sportKey}: the ledger's breaks`).toEqual(sampleOf(walk));
+      expect(got!.sampleCompetitionId, `${sportKey}: the sample fixture's own competition (the overlay draws ITS cards)`).toBe(o.competitionId);
       expect(walk.breaks.some((b) => b.size === "major") && walk.breaks.some((b) => b.size === "minor"), `${sportKey}: premise - both sizes`).toBe(true);
       sports++;
       breaksChecked += got!.sample!.length;
@@ -107,7 +109,7 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     await sql`update fixtures set status = 'decided' where id = ${g.fixtureId}`;
     await sql`insert into score_events (fixture_id, org_id, seq, type, payload) values (${g.fixtureId}, ${o.orgId}, 1, 'core.start', '{}')`;
     const scope = await loadOnStreamScope(o.orgId, null);
-    expect(scope.sports).toEqual([{ sportKey: "generic", kinds: null, sample: null }]);
+    expect(scope.sports).toEqual([{ sportKey: "generic", kinds: null, sample: null, sampleCompetitionId: null }]);
     expect(moduleOf("generic").naturalBreaks, "premise: generic declares none (spec §3.1)").toBeUndefined();
   });
 
@@ -117,6 +119,7 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     const none = (await loadOnStreamScope(o.orgId, null)).sports;
     expect(none).toHaveLength(1);
     expect(none[0]!.sample, "no match played").toBeNull();
+    expect(none[0]!.sampleCompetitionId, "no sample, no competition").toBeNull();
     expect(none[0]!.kinds!.length, "the static line has kinds to name").toBeGreaterThan(0);
 
     const older = chooseWalk("football", a.cfg);
@@ -175,6 +178,43 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     expect(PREVIEW_CANDIDATES, "the bound on how far back the loader looks").toBeGreaterThan(1);
   });
 
+  it("only an EngineError is a skip: any other failure while folding a candidate propagates (an SQL error aborts the one transaction and must not read as 'no sample'), and the next call is whole again", async () => {
+    const o = await org();
+    const rig = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football div");
+    const walk = chooseWalk("football", rig.cfg);
+    await finishWith(o.orgId, rig, walk, daysAgo(1));
+    vi.mocked(replayDerived).mockImplementationOnce(() => {
+      throw Object.assign(new Error("current transaction is aborted, commands ignored until end of transaction block"), { code: "25P02" });
+    });
+    await expect(loadOnStreamScope(o.orgId, null), "a non-engine failure is not swallowed").rejects.toMatchObject({ code: "25P02" });
+    // The positive pair: with the failure gone the same fixture is the sample again (nothing was left half-done).
+    expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample).toEqual(sampleOf(walk));
+  });
+
+  it("an archived division is out: its sport gets no strip, and its fixture is never the sample - while the live division's match still is (the denied/granted pair)", async () => {
+    const o = await org();
+    const live = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football live");
+    const gone = await seedDivision(o.auth, o.competitionId, "cricket", VARIANT.cricket!, "cricket archived");
+    const liveWalk = chooseWalk("football", live.cfg);
+    await finishWith(o.orgId, live, liveWalk, daysAgo(3));
+    await finishWith(o.orgId, gone, chooseWalk("cricket", gone.cfg), daysAgo(1));
+    expect((await loadOnStreamScope(o.orgId, null)).sports.map((s) => s.sportKey), "premise: both sports are listed while live").toEqual(["cricket", "football"]);
+
+    await sql`update divisions set archived_at = now() where id = ${gone.divisionId}`;
+    for (const scope of [null, o.competitionId]) {
+      expect((await loadOnStreamScope(o.orgId, scope)).sports.map((s) => s.sportKey), `scope ${String(scope)}: the archived division's sport is gone`).toEqual(["football"]);
+    }
+
+    // The same sport in two divisions: the NEWER fixture is in the archived one, so the older live one is the sample.
+    const older = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football archived newer");
+    const olderWalk = chooseWalk("football", older.cfg, 1);
+    expect(sampleOf(olderWalk), "premise: the two matches differ").not.toEqual(sampleOf(liveWalk));
+    await finishWith(o.orgId, older, olderWalk, daysAgo(0));
+    expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample, "live: the newest of the two").toEqual(sampleOf(olderWalk));
+    await sql`update divisions set archived_at = now() where id = ${older.divisionId}`;
+    expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample, "archived: its newer fixture is not the sample").toEqual(sampleOf(liveWalk));
+  });
+
   it("a competition scope previews its OWN sports and fixtures: another competition's sport is not listed, its match is not the sample", async () => {
     const o = await org();
     const other = await createCompetition(o.auth, { ends_on: "2030-12-31", name: "Autumn Cup", visibility: "public", branding: {} });
@@ -206,9 +246,14 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     await finishWith(o.orgId, b, autumn, daysAgo(1));
 
     const sampleIn = async (scope: string | null) => (await loadOnStreamScope(o.orgId, scope)).sports[0]!.sample;
+    const competitionIn = async (scope: string | null) => (await loadOnStreamScope(o.orgId, scope)).sports[0]!.sampleCompetitionId;
     expect(await sampleIn(null), "the whole org: the newest of all").toEqual(sampleOf(autumn));
     expect(await sampleIn(o.competitionId), "Spring: its own, though Autumn's is newer").toEqual(sampleOf(spring));
     expect(await sampleIn(other.id), "Autumn: its own").toEqual(sampleOf(autumn));
+    // ...and each sample says WHICH competition's fixture it is, so the tab counts that competition's sponsors (m2).
+    expect(await competitionIn(null), "the whole org: the newest fixture is Autumn's").toBe(other.id);
+    expect(await competitionIn(o.competitionId)).toBe(o.competitionId);
+    expect(await competitionIn(other.id)).toBe(other.id);
   });
 
   it("a replay that stops part-way proves nothing about breaks: that fixture is skipped, not counted as a match with fewer breaks (and the same fixture counts once the replay runs to the end)", async () => {

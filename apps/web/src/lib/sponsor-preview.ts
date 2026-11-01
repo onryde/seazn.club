@@ -24,6 +24,9 @@ export interface SportPreviewSource {
   /** The breaks of the org's most recent finished fixture of this sport, ascending seq; null when there is no such fixture,
    *  its replay did not run to the end, or it opened no break. Always null when `kinds` is. */
   sample: BreakOpened[] | null;
+  /** The competition the sample's fixture belongs to; null exactly when `sample` is. The overlay draws a fixture's cards from
+   *  the org-wide sponsors plus its OWN competition's, so the preview counts the same and not another competition's. */
+  sampleCompetitionId: string | null;
 }
 
 export interface SponsorPreview {

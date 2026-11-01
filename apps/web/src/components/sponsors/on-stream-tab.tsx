@@ -21,7 +21,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import Link from "@/components/ui/console-link";
-import { TIER_BADGE, TIER_MSG } from "@/components/org-sponsors";
+import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import { sportLabel } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
 import { SPONSOR_FREQUENCIES, SPONSOR_STYLE_BY_SIZE, sponsorMomentId, type SponsorCard, type SponsorFrequency } from "@/lib/sponsor-plan";
@@ -124,10 +124,8 @@ export function OnStreamTab(props: OnStreamTabProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const inScope = useMemo(
-    () => sponsorsInScope(sponsors, scope).map((s) => ({ ...s, on_stream: ticks[s.id] ?? s.on_stream })),
-    [sponsors, scope, ticks],
-  );
+  const withTicks = useMemo(() => sponsors.map((s) => ({ ...s, on_stream: ticks[s.id] ?? s.on_stream })), [sponsors, ticks]);
+  const inScope = useMemo(() => sponsorsInScope(withTicks, scope), [withTicks, scope]);
   const frequency = dial ?? settings?.frequency ?? DEFAULT_FREQUENCY;
   const on = enabled ?? settings?.enabled ?? false;
   const cards = useMemo(() => previewCards(inScope, hasTiers), [inScope, hasTiers]);
@@ -233,7 +231,11 @@ export function OnStreamTab(props: OnStreamTabProps) {
         </div>
         {!on && (
           <p className="text-xs text-slate-500" data-testid="on-stream-off-note">
-            {settings === null ? msg("sponsors.onStream.offNoRow") : msg("sponsors.onStream.offPaused")}
+            {settings !== null
+              ? msg("sponsors.onStream.offPaused")
+              : scope === null
+                ? msg("sponsors.onStream.offNoRow")
+                : msg("sponsors.onStream.offNoRowCompetition")}
           </p>
         )}
 
@@ -285,7 +287,10 @@ export function OnStreamTab(props: OnStreamTabProps) {
           </p>
         ) : (
           <>
-            <p className="text-xs text-slate-500">{msg("sponsors.onStream.checklistHelp")}</p>
+            <p className="text-xs text-slate-500" data-testid="on-stream-checklist-help">
+              {msg("sponsors.onStream.checklistHelp")}
+              {hasTiers && ` ${msg("sponsors.onStream.checklistTiersNote")}`}
+            </p>
             <ul className="grid min-w-0 divide-y divide-slate-100 rounded-xl border border-slate-200">
               {inScope.map((s) => {
                 const parked = s.status !== "active";
@@ -342,7 +347,17 @@ export function OnStreamTab(props: OnStreamTabProps) {
           <>
             <p className="text-xs text-slate-500">{msg("sponsors.onStream.previewLegend")}</p>
             <ul className="grid min-w-0 gap-3">
-              {sports.map((src) => renderSportPreview({ src, frequency, cards, msg, msgPlural }))}
+              {sports.map((src) =>
+                // The cards the OVERLAY would draw on for the sample's fixture: the org-wide sponsors plus that fixture's own
+                // competition's (card-source.ts) - never another competition's, whatever the picker shows.
+                renderSportPreview({
+                  src,
+                  frequency,
+                  cards: previewCards(sponsorsInScope(withTicks, src.sampleCompetitionId ?? scope), hasTiers),
+                  msg,
+                  msgPlural,
+                }),
+              )}
             </ul>
           </>
         )}
