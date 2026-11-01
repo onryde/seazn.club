@@ -1213,6 +1213,11 @@ export async function handleSponsorDispute(
 const escHtml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/** The evidence pack's delivery-proof click line (S13, S10 review m5). `sponsors.click_count` is bumped by every sponsor link
+ *  tap S10 records - board and sponsor-page links AND on-stream short codes - and also holds the clicks counted before click
+ *  rows existed, so it is labelled as exactly that: never "logo" clicks, never visitors or people. */
+export const SPONSOR_EVIDENCE_CLICKS_LABEL = "Sponsor link clicks recorded (boards and on-stream codes)";
+
 function evRow(label: string, value: string): string {
   return `<tr><td style="padding:6px 14px 6px 0;color:#6b7280;white-space:nowrap;vertical-align:top">${escHtml(label)}</td><td style="padding:6px 0;font-weight:600">${escHtml(value)}</td></tr>`;
 }
@@ -1320,7 +1325,7 @@ export async function buildSponsorDisputeEvidence(
     ${evRow("Live from", when(order.paid_at))}
     ${evRow("Current state", placement.status === "pending" ? "parked by this dispute" : placement.status)}
     ${evRow("Public page", publicUrl ?? "—")}
-    ${evRow("Logo clicks recorded", String(placement.click_count))}
+    ${evRow(SPONSOR_EVIDENCE_CLICKS_LABEL, String(placement.click_count))}
   </table>`
       : `<p style="color:#6b7280;font-size:13px;margin:0">No placement row (payment did not activate one).</p>`
   }
