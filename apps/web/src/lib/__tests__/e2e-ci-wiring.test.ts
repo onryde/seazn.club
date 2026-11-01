@@ -254,6 +254,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // skips loudly without those exported. Listed here because the inventory's
   // job is to notice a DELETED spec, whatever the run state of the leg.
   "settings-sponsor-monetize.spec.ts",
+  // R4 sponsors on stream (S15): the owner's visual sign-off capture — the match board, the hub's four tabs, the Share
+  // report panel and the public report at 320/768/1280. SKIPS unless SPONSOR_CAPTURE_DIR is set, which only e2e.yml's
+  // opt-in `sponsor_captures` dispatch does (its step and upload sit beside the overlay gallery's).
+  "sponsors-capture.spec.ts",
 
   // Settings W5 — competition settings (`/o/{org}/c/{comp}/settings`), the
   // surface the suite never navigated to before this wave: general/branding
