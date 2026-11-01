@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { SWISS_ABANDONED_BOARDS_REASON } from "@/lib/swiss-abandoned-refusal";
-import { applyRoundOneColourLot, swissColourLot, swissDrawSeed, swissRoundOneOrder } from "@/lib/swiss-draw";
+import { applyRoundOneColourLot, swissColourLot, swissDrawSeed, swissDrawnFieldOrder, swissRoundOneOrder } from "@/lib/swiss-draw";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { HttpError } from "@/lib/errors";
 import { assertStageKindsAllowed, chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
@@ -1421,6 +1421,23 @@ export function buildSwissHistory(
 // W3 T6 (spec §4, ruling 251): `entrants` is the whole active list; each round
 // is paired, sized and scored over its own field (`swissFieldForRound`), so a
 // latecomer whose first round is later is not seated before it.
+/** Review m7: round 1's drawn order, re-derived for a later round — the stage's seed over round 1's field, read the way
+ *  round 1's Pair read it (the active select's `seed nulls last, created_at, id`). Round 1's field is the entrants round 1
+ *  SEATED, not today's active list: a withdrawal since would shrink the shuffle and reorder everyone. Null when round 1
+ *  drew nobody (every entrant seeded) or seats no one. */
+async function swissRoundOneDrawOrder(tx: Tx, stageId: string, existing: readonly SwissExistingFixture[]): Promise<string[] | null> {
+  const seated = new Set(
+    existing
+      .filter((f) => f.round_no === 1)
+      .flatMap((f) => [f.home_entrant_id, f.away_entrant_id])
+      .filter((id): id is string => id !== null),
+  );
+  if (seated.size === 0) return null;
+  const roundOne = await tx<{ id: string; seed: number | null }[]>`
+    select id, seed from entrants where id in ${tx([...seated])} order by seed nulls last, created_at, id`;
+  return roundOne.some((e) => e.seed === null) ? swissRoundOneOrder(swissDrawSeed(stageId), roundOne) : null;
+}
+
 async function swissGen(
   tx: Tx,
   stageId: string,
@@ -1558,17 +1575,22 @@ async function swissGen(
       cascadeRank.set(row.entrantId, row.rank ?? i + 1);
     }
   }
-  // W3 T8 (X-SW-22; SW-L6, REC RB3-16): round 1 ranks an unseeded entrant by the stage's seeded random draw, not by
-  // registration order (the active select's `created_at, id`, an accident of who signed up when). Seeded entrants keep
-  // their seed order ahead of it. The seed is the stage's own id, so every Pair of round 1 — Unpair then Pair, an Undo
-  // then Redo through the step path — draws the same order, and it rides on the ledger row (`draw_seed`). A field with
-  // nobody unseeded is not drawn. Later rounds keep the field's own order (the brief scopes the draw to round 1).
-  const drawSeed = target === 1 && field.some((e) => e.seed === null) ? swissDrawSeed(stageId) : null;
-  let ranked = field;
-  if (drawSeed !== null) {
-    const byId = new Map(field.map((e) => [e.id, e]));
-    ranked = swissRoundOneOrder(drawSeed, field).map((id) => byId.get(id)!);
-  }
+  // W3 T8 (X-SW-22; SW-L6, REC RB3-16): an unseeded entrant's pairing number is its place in the stage's seeded random
+  // draw, not registration order (the active select's `created_at, id`, an accident of who signed up when). Seeded
+  // entrants keep their seed order ahead of it (`seedRank`). The seed is the stage's own id, so every Pair of round 1 —
+  // Unpair then Pair, an Undo then Redo through the step path — draws the same order, and it rides on the ledger row
+  // (`draw_seed`). A field with nobody unseeded is not drawn.
+  // Review m7 (ruling: persist the drawn order): FIDE fixes pairing numbers from the initial ranking, so every LATER
+  // round ranks a tie inside a score group by round 1's draw too, re-derived each Pair from the seed and round 1's field
+  // (`swissRoundOneDrawOrder`; no column). A latecomer was never drawn and follows the drawn field in arrival order.
+  const drawOrder =
+    target === 1
+      ? field.some((e) => e.seed === null)
+        ? swissRoundOneOrder(swissDrawSeed(stageId), field)
+        : null
+      : await swissRoundOneDrawOrder(tx, stageId, existing);
+  const drawSeed = target === 1 && drawOrder !== null ? swissDrawSeed(stageId) : null;
+  const ranked = drawOrder === null ? field : swissDrawnFieldOrder(drawOrder, field);
   const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
   const standings: SwissStanding[] = ranked.map((e, i) => ({
     entrantId: e.id,
@@ -1585,7 +1607,8 @@ async function swissGen(
   // 1's upper player takes the lot's colour and the boards alternate. Swapped HERE, before the seats are written, so the
   // stored fixtures carry it (home = White) and round 2's colour history reads it. The read stays `cfg.chess === true`:
   // the boardgame default is stamped at creation only, so a stage stored before it keeps today's colours (ruling m5).
-  // A round 1 always holds a board: generateStageFixturesTx refuses a field under two (STAGE_NOT_READY) before this runs.
+  // A round 1 always holds a board: `refuseSwissFieldUnderTwo` (above) refuses THIS round's field — the T6-narrowed one,
+  // not the roster — under two (STAGE_NOT_READY) before this runs, and two or more with no history always pair.
   const colourLot = target === 1 && chess ? swissColourLot(swissDrawSeed(stageId)) : null;
   if (colourLot !== null) {
     // The lot's premise: the engine hands round 1 over with the upper player at home (scheduling/swiss.ts: neutral

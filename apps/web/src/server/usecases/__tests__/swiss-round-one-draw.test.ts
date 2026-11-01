@@ -348,7 +348,14 @@ describe.runIf(HAS_DB)("X-SW-22 / BG-SW-1 sequences", () => {
     await redoDivision(r.auth, r.divisionId);
     expect(seats(await boards(r.stageId, 1)), "Redo re-pairs through the step path: the same seats").toEqual(first);
     const audits = await pairAudits(r.divisionId, r.stageId, 1);
-    expect(audits.length, "three Pairs of round 1 on the ledger").toBeGreaterThanOrEqual(2);
+    // Review m4 — exactly three, one per Pair: the first Pair and the Pair after Unpair each append their own row
+    // (`ledger: "record"`); Unpair and the Undo append rows of other types; the Redo appends no fresh row but re-pairs on
+    // the step's own `fixtures_generated` row (history.ts, batch-1 I1: `ledger: "step"`), which carries the audit spread.
+    // Two would mean the step path dropped its audit; four would mean the Redo appended a fresh Pair as well.
+    expect(
+      audits.map((a) => a.seated_fixture_ids !== undefined),
+      "three Pairs of round 1 on the ledger, each naming its seats",
+    ).toEqual([true, true, true]);
     for (const a of audits) {
       expect(a.draw_seed).toBe(swissDrawSeed(r.stageId));
       expect(a.colour_lot).toBe(swissColourLot(swissDrawSeed(r.stageId)));
@@ -422,6 +429,152 @@ describe.runIf(HAS_DB)("X-SW-22 / BG-SW-1 sequences", () => {
 // The create door itself, every sport x every variant x every stage kind (DB-free: `validatedStageConfig` is the one
 // door every stage-creating path calls — createStages, replaceStages and the template door). RB3-10's default is a
 // SWISS default on a CHESS division, and nothing else: a boardgame league or knockout stores no `chess`.
+// ---------------------------------------------------------------------------------------------------------------------
+// Review m7 (ruling: persist the drawn order). FIDE fixes pairing numbers from the initial ranking, so the draw that
+// stood in for it in round 1 is the tie-break inside a score group for every later round — not registration order.
+// Expected seats are hand-derived from round 1's own SEATS: round 1 folds the draw d1..d8 upper-at-home (board k is
+// d_k v d_k+4), the upper half wins, so round 2's score groups are {d1..d4} and {d5..d8}, each folded by pairing number:
+// d1 v d3, d2 v d4, d5 v d7, d6 v d8. The rig re-mints its stage until registration order would fold a group differently
+// (each stage id is a fresh draw), so registration order cannot pass. Chess colours are OFF here (explicit
+// `chess: false` on the boardgame): a colour preference may transpose a fold, and this witness is the fold's order.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** A decisive result through the real append path: chess by resignation, badminton by two 21-10 games. */
+async function win(sport: Sport, auth: AuthCtx, b: Board, winner: string): Promise<void> {
+  if (sport === "boardgame") return chessWin(auth, b, winner);
+  await scoreEvent(auth, b.id, { expected_seq: 0, type: "core.start", payload: {} });
+  for (const seq of [1, 2]) {
+    await scoreEvent(auth, b.id, {
+      expected_seq: seq,
+      type: "badminton.game.summary",
+      payload: b.home === winner ? { home: 21, away: 10 } : { home: 10, away: 21 },
+    });
+  }
+}
+
+/** A score group's fold over the order given, as unordered pairs: top half v bottom half. */
+const foldPairs = (group: readonly string[]) => {
+  const half = group.length / 2;
+  return group
+    .slice(0, half)
+    .map((a, i) => [a, group[i + half]!].sort().join("+"))
+    .sort();
+};
+/** `group` re-ordered by `order`. */
+const inOrder = (group: readonly string[], order: readonly string[]) => [...group].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+
+const NO_CHESS: Record<Sport, Record<string, unknown>> = { boardgame: { rounds: 3, chess: false }, badminton: { rounds: 3 } };
+
+/** Re-mint the rig's stage (before Start: a new stage, a new id, a new draw) until `premise` holds of its draw over the
+ *  active field. Each try is a fresh draw, so a few suffice; the count rides on the assertion. */
+async function restageUntil(r: Rig, config: Record<string, unknown>, premise: (draw: string[], reg: string[]) => boolean) {
+  const field = await activeOrder(r.divisionId);
+  const reg = field.map((e) => e.id);
+  const input = { seq: 1, kind: "swiss" as const, name: "Swiss", config, progression: null };
+  let tries = 1;
+  while (!premise(swissRoundOneOrder(swissDrawSeed(r.stageId), field), reg) && tries < 40) {
+    r.stageId = (await replaceStages(r.auth, r.divisionId, [input]))[0]!.id;
+    tries++;
+  }
+  expect(premise(swissRoundOneOrder(swissDrawSeed(r.stageId), field), reg), `rig premise (${tries} tries)`).toBe(true);
+}
+
+/** Started, round 1 paired over the draw d1..d8 and decided for the upper half; returns d from round 1's seats. */
+async function roundOneDecided(r: Rig, sport: Sport): Promise<string[]> {
+  await startDivision(r.auth, r.divisionId);
+  await generateStageFixtures(r.auth, r.stageId);
+  const r1 = await boards(r.stageId, 1);
+  expect(r1, "eight entrants, four boards").toHaveLength(4);
+  const d = [...r1.map((b) => b.home), ...r1.map((b) => b.away)];
+  for (const b of r1) await win(sport, r.auth, b, b.home);
+  return d;
+}
+
+/** Round 2 by pairing number d1..d8, hand-derived (see the header). */
+const roundTwoByDraw = (d: readonly string[]) => [
+  { home: d[0]!, away: d[2]! },
+  { home: d[1]!, away: d[3]! },
+  { home: d[4]!, away: d[6]! },
+  { home: d[5]!, away: d[7]! },
+];
+
+describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 breaks a score-group tie by it", () => {
+  it.each(["badminton", "boardgame"] as const)(
+    "m7 a round-2 tie inside a score group is ordered by the draw, not registration (%s)",
+    async (sport) => {
+      const r = await rig({ sport, n: 8, seeded: false, door: "createStages", config: NO_CHESS[sport] });
+      // Premise: registration order folds a round-2 group differently from the draw.
+      await restageUntil(r, NO_CHESS[sport], (draw, reg) =>
+        [draw.slice(0, 4), draw.slice(4)].some((g) => foldPairs(inOrder(g, reg)).join() !== foldPairs(g).join()),
+      );
+      const d = await roundOneDecided(r, sport);
+      expect(d, "premise: round 1 seated the stage's draw").toEqual(swissRoundOneOrder(swissDrawSeed(r.stageId), await activeOrder(r.divisionId)));
+      await generateStageFixtures(r.auth, r.stageId); // Pair round 2
+      expect(seats(await boards(r.stageId, 2))).toEqual(roundTwoByDraw(d));
+    },
+    120_000,
+  );
+
+  it("m7 a second Pair of round 2 is identical: Unpair then Pair, and Undo then Redo", async () => {
+    const r = await rig({ sport: "badminton", n: 8, seeded: false, door: "createStages", config: NO_CHESS.badminton });
+    const d = await roundOneDecided(r, "badminton");
+    await generateStageFixtures(r.auth, r.stageId);
+    const first = seats(await boards(r.stageId, 2));
+    expect(first, "premise: round 2 by the draw").toEqual(roundTwoByDraw(d));
+    await unpairSwissRound(r.auth, r.stageId);
+    expect(await boards(r.stageId, 2), "Unpair cleared round 2").toHaveLength(0);
+    await generateStageFixtures(r.auth, r.stageId);
+    expect(seats(await boards(r.stageId, 2)), "Pair again").toEqual(first);
+    await undoDivision(r.auth, r.divisionId);
+    expect(await boards(r.stageId, 2), "Undo cleared round 2").toHaveLength(0);
+    await redoDivision(r.auth, r.divisionId);
+    expect(seats(await boards(r.stageId, 2)), "Redo, through the step path").toEqual(first);
+  }, 120_000);
+
+  it("m7 a withdrawal after round 1 does not reshuffle the pairing numbers (round 1's SEATS are the drawn field)", async () => {
+    // The guard: the order is re-derived from the entrants round 1 seated, withdrawn ones included. Re-drawn over the
+    // entrants still active, the shuffle runs over seven and orders the winners differently — the rig makes sure it would.
+    const r = await rig({ sport: "badminton", n: 8, seeded: false, door: "createStages", config: NO_CHESS.badminton });
+    await restageUntil(r, NO_CHESS.badminton, (draw, reg) => {
+      const gone = draw[7]!; // d8: round 1's last pairing number, a loser below
+      // The shuffle reads its field in the active select's order: registration order, less the one who left.
+      const left = reg.filter((id) => id !== gone).map((id) => ({ id, seed: null }));
+      const redrawn = swissRoundOneOrder(swissDrawSeed(r.stageId), left);
+      return foldPairs(inOrder(draw.slice(0, 4), redrawn)).join() !== foldPairs(draw.slice(0, 4)).join();
+    });
+    const d = await roundOneDecided(r, "badminton");
+    await withdrawEntrantCascade(r.auth, d[7]!);
+    const active = await activeOrder(r.divisionId);
+    expect(active.map((e) => e.id), "premise: d8 left the field").not.toContain(d[7]);
+    const redrawn = swissRoundOneOrder(swissDrawSeed(r.stageId), active);
+    const winnersNow = foldPairs(inOrder(d.slice(0, 4), redrawn)).join();
+    await generateStageFixtures(r.auth, r.stageId); // Pair round 2
+    const r2 = seats(await boards(r.stageId, 2));
+    expect(r2.slice(0, 2), "the winners' group folds by round 1's pairing numbers").toEqual(roundTwoByDraw(d).slice(0, 2));
+    expect(r2.flatMap((b) => [b.home, b.away]), "the withdrawn entrant is not seated").not.toContain(d[7]);
+    expect(winnersNow, "witness: a re-draw over the active field would have folded the winners otherwise").not.toBe(
+      foldPairs(d.slice(0, 4)).join(),
+    );
+  }, 120_000);
+
+  it("m7 a fully seeded field is unchanged: round 2 folds each score group by seed, and no draw is recorded", async () => {
+    const r = await rig({ sport: "badminton", n: 8, seeded: true, door: "createStages", config: NO_CHESS.badminton });
+    const d = await roundOneDecided(r, "badminton");
+    const P = (n: number) => r.ids[n - 1]!; // P1..P8 seeded 1..8
+    expect(d, "round 1 folds by seed: P1..P4 at home v P5..P8").toEqual([1, 2, 3, 4, 5, 6, 7, 8].map(P));
+    await generateStageFixtures(r.auth, r.stageId);
+    expect(seats(await boards(r.stageId, 2))).toEqual([
+      { home: P(1), away: P(3) },
+      { home: P(2), away: P(4) },
+      { home: P(5), away: P(7) },
+      { home: P(6), away: P(8) },
+    ]);
+    const [audit] = await pairAudits(r.divisionId, r.stageId, 2);
+    expect(audit, "anti-vacuity: round 2's Pair row").toBeDefined();
+    expect(audit, "no draw on a seeded field").not.toHaveProperty("draw_seed");
+  }, 120_000);
+});
+
 describe("BG-SW-1 the create-time default is the boardgame Swiss's alone", () => {
   it("BG-SW-1 every sport x variant x kind: chess: true is stored exactly on a boardgame Swiss (counted)", () => {
     let checked = 0;

@@ -187,16 +187,23 @@ describe("swissPairingMenuFor — when the menu exists, and what it carries", ()
       fieldSize: 10,
       seedsNumbered: true,
       unseededDrawn: false,
+      seededAheadOfDraw: false,
     });
   });
 
   it("X-SW-22 round 1 over a field with an unseeded entrant ⇒ the menu carries the draw; round 2 never does", () => {
     const seeds = { ...seeded(10), e7: null };
     const r1 = swissPairingMenuFor({ ...base, entrantSeeds: seeds, fixtures: shells(3, 10) });
-    expect(r1).toMatchObject({ round: 1, choosable: true, seedsNumbered: false, unseededDrawn: true });
+    expect(r1).toMatchObject({ round: 1, choosable: true, seedsNumbered: false, unseededDrawn: true, seededAheadOfDraw: true });
+    // Nobody seeded: drawn, and no seed goes first.
+    const none = seedsOf(ids(10).map((id) => [id, null]));
+    expect(swissPairingMenuFor({ ...base, entrantSeeds: none, fixtures: shells(3, 10) })).toMatchObject({
+      unseededDrawn: true,
+      seededAheadOfDraw: false,
+    });
     // The draw is round 1's alone (later rounds rank by score, then the field's order).
     const r2 = swissPairingMenuFor({ ...base, entrantSeeds: seeds, fixtures: seatRound(shells(3, 10), 1) });
-    expect(r2).toMatchObject({ round: 2, unseededDrawn: false });
+    expect(r2).toMatchObject({ round: 2, unseededDrawn: false, seededAheadOfDraw: false });
   });
 
   it("round 2 waiting ⇒ read-only, default is the stored mode", () => {
@@ -234,7 +241,9 @@ describe("swissPairingMenuFor — when the menu exists, and what it carries", ()
 });
 
 describe("swissPairingHint — the line under each option", () => {
-  const numbered = { fieldSize: 10, seedsNumbered: true };
+  /** A round 1 nobody draws (every entrant seeded). */
+  const undrawn = { unseededDrawn: false, seededAheadOfDraw: false };
+  const numbered = { fieldSize: 10, seedsNumbered: true, ...undrawn };
 
   it("numbers come from the engine's own pairing, first three, then an ellipsis", () => {
     const fold = roundOnePairs(10, "fold").slice(0, 3).map(([a, b]) => `${a}v${b}`).join(", ");
@@ -244,19 +253,59 @@ describe("swissPairingHint — the line under each option", () => {
   });
 
   it("no ellipsis when every pair is shown", () => {
-    expect(swissPairingHint("fold", { fieldSize: 4, seedsNumbered: true }, t)).toBe("1v3, 2v4");
-    expect(swissPairingHint("fold", { fieldSize: 6, seedsNumbered: true }, t)).toBe("1v4, 2v5, 3v6");
+    expect(swissPairingHint("fold", { fieldSize: 4, seedsNumbered: true, ...undrawn }, t)).toBe("1v3, 2v4");
+    expect(swissPairingHint("fold", { fieldSize: 6, seedsNumbered: true, ...undrawn }, t)).toBe("1v4, 2v5, 3v6");
   });
 
   it("R1: seeds that are not exactly 1..N get the generic line, never numbers", () => {
-    const loose = { fieldSize: 10, seedsNumbered: false };
+    const loose = { fieldSize: 10, seedsNumbered: false, ...undrawn };
     expect(swissPairingHint("fold", loose, t)).toBe(en["schedule.pairing.hintFoldGeneric"]);
     expect(swissPairingHint("rank_adjacent", loose, t)).toBe(en["schedule.pairing.hintAdjacentGeneric"]);
     expect(swissPairingHint("fold", loose, t)).not.toMatch(/\d+v\d+/);
   });
 
   it("a field too small to pair gets the generic line rather than an empty one", () => {
-    expect(swissPairingHint("fold", { fieldSize: 1, seedsNumbered: true }, t)).toBe(en["schedule.pairing.hintFoldGeneric"]);
+    expect(swissPairingHint("fold", { fieldSize: 1, seedsNumbered: true, ...undrawn }, t)).toBe(en["schedule.pairing.hintFoldGeneric"]);
+  });
+
+  // Review m1 (copy truth): a drawn round 1 is not "by seed". A wholly unseeded field has no seed at all — its halves are
+  // the draw's; a partly seeded field puts its seeds first, then the draw. "by seed" alone is true only undrawn.
+  it("m1 a wholly unseeded round 1 never says 'by seed': its halves and neighbours are the draw's", () => {
+    const drawn = { fieldSize: 8, seedsNumbered: false, unseededDrawn: true, seededAheadOfDraw: false };
+    expect(swissPairingHint("fold", drawn, t)).toBe(en["schedule.pairing.hintFoldDrawn"]);
+    expect(swissPairingHint("rank_adjacent", drawn, t)).toBe(en["schedule.pairing.hintAdjacentDrawn"]);
+    expect(en["schedule.pairing.hintFoldDrawn"]).toBe("top half v bottom half of the draw");
+    expect(en["schedule.pairing.hintAdjacentDrawn"]).toBe("1st v 2nd, 3rd v 4th in draw order");
+    for (const mode of SWISS_PAIRINGS) expect(swissPairingHint(mode, drawn, t), mode).not.toMatch(/by seed/);
+  });
+
+  it("m1 a partly seeded round 1 says the seeds come first, then the draw", () => {
+    const partly = { fieldSize: 8, seedsNumbered: false, unseededDrawn: true, seededAheadOfDraw: true };
+    expect(swissPairingHint("fold", partly, t)).toBe(en["schedule.pairing.hintFoldSeededDrawn"]);
+    expect(swissPairingHint("rank_adjacent", partly, t)).toBe(en["schedule.pairing.hintAdjacentSeededDrawn"]);
+    expect(en["schedule.pairing.hintFoldSeededDrawn"]).toBe("top half v bottom half by seed, then the draw");
+    expect(en["schedule.pairing.hintAdjacentSeededDrawn"]).toBe("1st v 2nd, 3rd v 4th by seed, then the draw");
+  });
+
+  it("m1 every locale has the four drawn hints in its own words", () => {
+    let checked = 0;
+    const keys = [
+      "schedule.pairing.hintFoldDrawn",
+      "schedule.pairing.hintAdjacentDrawn",
+      "schedule.pairing.hintFoldSeededDrawn",
+      "schedule.pairing.hintAdjacentSeededDrawn",
+    ] as const;
+    for (const locale of ["es", "fr", "nl"] as const) {
+      for (const key of keys) {
+        const line = tFor(locale)(key);
+        // A missing key comes back as the key itself — truthy and unlike English — so pin both away.
+        expect(en[key], `en ${key} exists`).toBeTruthy();
+        expect(line, `${locale} ${key}: a string, not the key`).not.toBe(key);
+        expect(line, `${locale} ${key}: not English`).not.toBe(en[key]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(12);
   });
 
   it("the pair template is the locale's own ('c' in French, 't' in Dutch)", () => {
@@ -275,7 +324,8 @@ describe("swissPairingDrawNote — the round-1 line when the field is drawn (X-S
 
   it("a drawn round 1 ⇒ the catalog's own line", () => {
     expect(swissPairingDrawNote(menu, t)).toBe(en["schedule.pairing.drawnAtRandom"]);
-    expect(en["schedule.pairing.drawnAtRandom"]).toBe("Unseeded players are drawn at random.");
+    // Review m9: the desk's noun for a field is "entrants" (a team Swiss is drawn too), never "players".
+    expect(en["schedule.pairing.drawnAtRandom"]).toBe("Unseeded entrants are drawn at random.");
   });
 
   it("every locale says it in its own words, never the English fallback", () => {
@@ -284,6 +334,7 @@ describe("swissPairingDrawNote — the round-1 line when the field is drawn (X-S
       const line = swissPairingDrawNote(menu, tFor(locale));
       expect(line, locale).toBeTruthy();
       expect(line, `${locale}: not English`).not.toBe(en["schedule.pairing.drawnAtRandom"]);
+      expect(line, `${locale}: the desk's noun, not "players"`).not.toMatch(/jugador|joueur|speler/i);
       checked++;
     }
     expect(checked).toBe(3);
@@ -308,6 +359,7 @@ describe("swissPairingOverride — what Pair next sends", () => {
     fieldSize: 8,
     seedsNumbered: true,
     unseededDrawn: false,
+    seededAheadOfDraw: false,
   };
 
   // Empty case FIRST.

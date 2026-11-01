@@ -26,6 +26,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import type { SwissRefusalCode } from "@/lib/swiss-refusals";
+import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { fixtureHasResultSql, playedFixtureIds, swissByeShellSql } from "./fixture-results-sql";
 import { refuseOwnFormatLoss } from "./fixture-override-guards";
 import { getLimit, requireFeature } from "@/lib/entitlements";
@@ -142,6 +143,25 @@ function pairRowClearedBy(ledger: readonly LedgerEvent[], direction: "undo" | "r
   if (direction === "undo") return target;
   const of = target?.payload.__undo_of;
   return typeof of === "number" ? ledger.find((e) => e.seq === of) : undefined;
+}
+
+/** W3 T8 review P1. The Pair a re-pairing step puts back — the mirror of `pairRowClearedBy`. A Redo copies that row (the
+ *  row `__redo_of` names); an Undo walking back through a Pair's own Undo inverts that Undo (a `fixtures_cleared`), whose
+ *  `__undo_of` names the Pair. Either row may itself be an earlier step's: those record the same audit
+ *  (`ledgerPayload`), override included. */
+function pairRowRestoredBy(ledger: readonly LedgerEvent[], direction: "undo" | "redo", targetSeq: number): LedgerEvent | undefined {
+  const target = ledger.find((e) => e.seq === targetSeq);
+  if (direction === "redo") return target;
+  const of = target?.payload.__undo_of;
+  return typeof of === "number" ? ledger.find((e) => e.seq === of) : undefined;
+}
+
+/** The round-1 pairing override a Pair row recorded (`override: true` with its `pairing`), or undefined: the round's own
+ *  mode. Only a recognised mode is handed on — anything else is a row this code never wrote. */
+export function recordedPairingOverride(e: LedgerEvent | undefined): SwissPairingMode | undefined {
+  if (e?.type !== "fixtures_generated" || e.payload.override !== true) return undefined;
+  const mode = e.payload.pairing;
+  return SWISS_PAIRINGS.find((m) => m === mode);
 }
 
 function pairNextSeatedIds(e: LedgerEvent | undefined): string[] {
@@ -860,7 +880,10 @@ async function stepWrite(
     if (regenStageId !== undefined && namesNoRows) {
       const [stage] = await tx<{ kind: string }[]>`select kind from stages where id = ${regenStageId}`;
       if (stage?.kind === "swiss") {
-        const write = await generateStageFixturesTx(tx, auth, regenStageId, {}, "step");
+        // P1: the Pair this step puts back is re-paired with the round-1 override its own row recorded (Neighbours is
+        // never stored on the stage); without it the round came back as the default fold.
+        const pairing = recordedPairingOverride(pairRowRestoredBy(ledger, direction, targetSeq));
+        const write = await generateStageFixturesTx(tx, auth, regenStageId, pairing === undefined ? {} : { pairing }, "step");
         result.event.payload = { ...result.event.payload, seated_fixture_ids: [], ...write.ledgerPayload };
         repaired = { stageId: regenStageId, write };
       }

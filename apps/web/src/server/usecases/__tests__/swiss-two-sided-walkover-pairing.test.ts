@@ -45,7 +45,7 @@ import { createEntrants } from "../entrants";
 import { getFixtureState } from "../fixtures";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -89,8 +89,9 @@ interface Rig {
 }
 
 /** `count` individuals seeded S1..S<count> in a 3-round swiss, started,
- *  round 1 paired. */
-async function pairedRoundOne(config: Record<string, unknown>, count = 6): Promise<Rig> {
+ *  round 1 paired. With `lot` (chess only), the stage is re-minted until its own colour lot is that one (review m2:
+ *  a random stage id ran ONE lot branch per CI run; each try is a fair coin, so a few tries suffice). */
+async function pairedRoundOne(config: Record<string, unknown>, count = 6, lot?: "white" | "black"): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -115,13 +116,14 @@ async function pairedRoundOne(config: Record<string, unknown>, count = 6): Promi
       members: [],
     })),
   );
-  const [stage] = await createStages(auth, division.id, {
-    seq: 1,
-    kind: "swiss",
-    name: "Swiss",
-    config: { rounds: 3, ...config },
-    progression: null,
-  });
+  const input = { seq: 1, kind: "swiss" as const, name: "Swiss", config: { rounds: 3, ...config }, progression: null };
+  let [stage] = await createStages(auth, division.id, input);
+  let tries = 1;
+  while (lot !== undefined && swissColourLot(swissDrawSeed(stage!.id)) !== lot && tries < 40) {
+    [stage] = await replaceStages(auth, division.id, [input]); // before Start: a new stage, a new id, a new lot
+    tries++;
+  }
+  if (lot !== undefined) expect(swissColourLot(swissDrawSeed(stage!.id)), `rig: a stage drawing ${lot} (${tries} tries)`).toBe(lot);
   await startDivision(auth, division.id); // mints the shells
   await generateStageFixtures(auth, stage!.id); // Pair round 1
   const byName = new Map(entrants.map((e) => [e.display_name, e.id]));
@@ -244,8 +246,9 @@ describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a board, not
     expect(shape(rig, r2)).toEqual(["S1 v S2", "S3 v S4", "S5 v S6"]);
   });
 
-  it("fold + chess: H is A's first candidate and the walkover is not a meeting (P-A2), so A meets H again; the forfeit gives neither side a colour", async () => {
-    const rig = await pairedRoundOne({ chess: true });
+  it.each(["white", "black"] as const)("fold + chess (lot %s): H is A's first candidate and the walkover is not a meeting (P-A2), so A meets H again; the forfeit gives neither side a colour", async (lot) => {
+    const rig = await pairedRoundOne({ chess: true }, 6, lot);
+    expect(rig.lot, "premise: the requested lot").toBe(lot);
     // Seed 3 no-shows against seed 6, so the no-show H sits at the TOP of the
     // 0 group — the first candidate for A when A floats down.
     const { A, H } = await playRoundOne(rig, "S3");

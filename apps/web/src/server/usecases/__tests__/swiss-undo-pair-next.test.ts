@@ -971,3 +971,73 @@ describe.runIf(HAS_DB)("W3 T5 Undo and Redo never put a slot on a Swiss bye shel
     expect(await slotOf(bye1), "nor through a legacy court").toEqual(NONE);
   }, 120_000);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W3 T8 review P1 (pre-existing on the batch-1 step path): a history step that puts a Pair back re-pairs it in the step
+// (`generateStageFixturesTx(..., "step")`). It passed no options, so a round 1 paired with the Neighbours override
+// (`rank_adjacent`, round 1 only, never stored on the stage) came back as the round's default fold. The override rides on
+// the Pair's own ledger row (`pairing`, `override`); the step re-applies it from the row it puts back — a Redo copies that
+// row, an Undo walking back through the Pair's own Undo reaches it through that Undo's `__undo_of`.
+// Expected seats are the rulebook's Neighbours over seeds P1..P8 (1v2, 3v4, 5v6, 7v8), unordered: a chess round 1 takes
+// its colours by lot. The default fold (1v5, 2v6, ...) shares no pair with it, so a dropped override cannot pass.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const NEIGHBOURS = ["P1-P2", "P3-P4", "P5-P6", "P7-P8"];
+/** A round's boards as unordered name pairs, sorted. */
+const pairsOf = (rig: Rig, rows: readonly Row[]) =>
+  rows
+    .filter((f) => !isBye(f))
+    .map((f) => [rig.name(f.home_entrant_id), rig.name(f.away_entrant_id)].sort().join("-"))
+    .sort();
+const lastLedgerRow = async (divisionId: string) =>
+  (
+    await sql<{ type: string; payload: Record<string, unknown> }[]>`
+      select type, payload from division_events where division_id = ${divisionId} order by seq desc limit 1`
+  )[0]!;
+
+for (const s of SPORTS) {
+  describe.runIf(HAS_DB)(`W3 T8 P1: a step that puts a Pair back keeps its round-1 override (${s.sport})`, () => {
+    it(`Pair with Neighbours, Undo, Redo: the same seats, and the Redo's row records the override (${s.sport})`, async () => {
+      const rig = await swissRig(s, 8, 3, true);
+      await generateStageFixtures(rig.auth, rig.stageId, { pairing: "rank_adjacent" });
+      const paired = roundOf(await rowsOf(rig.stageId), 1);
+      expect(pairsOf(rig, paired), "premise: the override paired neighbours").toEqual(NEIGHBOURS);
+      const pairRow = await lastLedgerRow(rig.divisionId);
+      expect(pairRow.payload, "premise: the Pair's row records the override").toMatchObject({ pairing: "rank_adjacent", override: true });
+
+      await undoDivision(rig.auth, rig.divisionId);
+      expect(await round1State(rig), "premise: the Undo cleared round 1").toBe("cleared");
+      await redoDivision(rig.auth, rig.divisionId);
+
+      const redone = roundOf(await rowsOf(rig.stageId), 1);
+      expect(pairsOf(rig, redone), "the Redo re-paired neighbours, not the default fold").toEqual(NEIGHBOURS);
+      expect(seatState(redone), "the identical seats, colours included").toEqual(seatState(paired));
+      const row = await lastLedgerRow(rig.divisionId);
+      expect(row.type).toBe("fixtures_generated");
+      expect(row.payload, "the Redo's own row records the override it re-applied").toMatchObject({
+        round: 1,
+        pairing: "rank_adjacent",
+        override: true,
+      });
+    }, 120_000);
+
+    it(`an Undo walking back through the Pair's own Undo brings the Neighbours seats back, not the fold (${s.sport})`, async () => {
+      const rig = await swissRig(s, 8, 3, true);
+      await generateStageFixtures(rig.auth, rig.stageId, { pairing: "rank_adjacent" }); // Pair with the override
+      const paired = roundOf(await rowsOf(rig.stageId), 1);
+      expect(pairsOf(rig, paired), "premise: neighbours").toEqual(NEIGHBOURS);
+      await undoDivision(rig.auth, rig.divisionId);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair again, the default: a fresh edit
+      expect(pairsOf(rig, roundOf(await rowsOf(rig.stageId), 1)), "premise: the second Pair is the fold").not.toEqual(NEIGHBOURS);
+      // The second Pair goes, then the first Undo is walked back through: the FIRST Pair, with its override, comes back.
+      expect(await undoSteps(rig, 2)).toEqual(["cleared", "seated"]);
+      const back = roundOf(await rowsOf(rig.stageId), 1);
+      expect(pairsOf(rig, back), "the first Pair's neighbours").toEqual(NEIGHBOURS);
+      expect(seatState(back), "its identical seats").toEqual(seatState(paired));
+      expect((await lastLedgerRow(rig.divisionId)).payload, "the step's row records the override").toMatchObject({
+        pairing: "rank_adjacent",
+        override: true,
+      });
+    }, 120_000);
+  });
+}

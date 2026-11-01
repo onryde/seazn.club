@@ -38,6 +38,9 @@ export type SwissPairingMenu = {
   /** X-SW-22 (W3 T8) — round 1 seats an unseeded entrant by the stage's seeded random draw (`swissFieldDrawn`); false
    *  in every later round. */
   unseededDrawn: boolean;
+  /** Review m1 — a drawn round 1 whose field also holds a seeded entrant: the seeds go first, then the draw. False
+   *  whenever `unseededDrawn` is. */
+  seededAheadOfDraw: boolean;
 };
 
 /** The keys this module reads — the whole surface in one place, typed as a
@@ -46,6 +49,10 @@ export type SwissPairingMessageKey =
   | "schedule.pairing.pair"
   | "schedule.pairing.hintFoldGeneric"
   | "schedule.pairing.hintAdjacentGeneric"
+  | "schedule.pairing.hintFoldDrawn"
+  | "schedule.pairing.hintAdjacentDrawn"
+  | "schedule.pairing.hintFoldSeededDrawn"
+  | "schedule.pairing.hintAdjacentSeededDrawn"
   | "schedule.pairing.fold"
   | "schedule.pairing.adjacent"
   | "schedule.pairing.default"
@@ -129,6 +136,7 @@ export function swissPairingMenuFor(args: {
   const round = nextUnseatedSwissRound(args.fixtures);
   if (round === null) return null;
   const stored = storedSwissPairing(args.config);
+  const unseededDrawn = round === 1 && swissFieldDrawn(args.config, args.activeEntrantIds, args.entrantSeeds);
   return {
     round,
     choosable: round === 1,
@@ -138,7 +146,8 @@ export function swissPairingMenuFor(args: {
     // below goes generic rather than print numbers for a field it cannot see.
     fieldSize: swissActiveFieldSize(args.config, args.activeEntrantIds ?? []),
     seedsNumbered: swissFieldSeedsNumbered(args.config, args.activeEntrantIds, args.entrantSeeds),
-    unseededDrawn: round === 1 && swissFieldDrawn(args.config, args.activeEntrantIds, args.entrantSeeds),
+    unseededDrawn,
+    seededAheadOfDraw: unseededDrawn && (args.activeEntrantIds ?? []).some((id) => (args.entrantSeeds?.[id] ?? null) !== null),
   };
 }
 
@@ -152,15 +161,21 @@ export function swissPairingDrawNote(
 }
 
 /** The hint under one option: "1v6, 2v7, 3v8…" when R1 allows numbers,
- *  otherwise the generic line for that mode. */
+ *  otherwise the generic line for that mode — "by seed" only when round 1 is not drawn (review m1): a wholly unseeded
+ *  field's halves are the draw's, and a partly seeded one puts its seeds first, then the draw. */
 export function swissPairingHint(
   mode: SwissPairingMode,
-  menu: Pick<SwissPairingMenu, "fieldSize" | "seedsNumbered">,
+  menu: Pick<SwissPairingMenu, "fieldSize" | "seedsNumbered" | "unseededDrawn" | "seededAheadOfDraw">,
   t: SwissPairingT,
 ): string {
   const pairs = menu.seedsNumbered ? roundOnePairs(menu.fieldSize, mode) : [];
   if (pairs.length === 0) {
-    return t(mode === "fold" ? "schedule.pairing.hintFoldGeneric" : "schedule.pairing.hintAdjacentGeneric");
+    const fold = mode === "fold";
+    if (!menu.unseededDrawn) return t(fold ? "schedule.pairing.hintFoldGeneric" : "schedule.pairing.hintAdjacentGeneric");
+    if (menu.seededAheadOfDraw) {
+      return t(fold ? "schedule.pairing.hintFoldSeededDrawn" : "schedule.pairing.hintAdjacentSeededDrawn");
+    }
+    return t(fold ? "schedule.pairing.hintFoldDrawn" : "schedule.pairing.hintAdjacentDrawn");
   }
   const shown = pairs
     .slice(0, SWISS_PAIRING_HINT_PAIRS)

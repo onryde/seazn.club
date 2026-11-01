@@ -313,7 +313,7 @@ describe("StageRail — which action holds the filled primary", () => {
 describe("StageRail — the Pair next split button", () => {
   const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", config: {} } as never;
   const ROUND_ONE: SwissPairingMenu = {
-    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false,
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false,
   };
   const rail = (over: Record<string, unknown>) =>
     renderToStaticMarkup(
@@ -377,7 +377,7 @@ describe("StageRail — the Pair next split button", () => {
 
 describe("SwissPairingMenuPanel — the open menu", () => {
   const ROUND_ONE: SwissPairingMenu = {
-    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false,
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false,
   };
   const panel = (menu: SwissPairingMenu, pick: "fold" | "rank_adjacent" | null = null) =>
     renderToStaticMarkup(
@@ -436,7 +436,7 @@ describe("SwissPairingMenuPanel — the open menu", () => {
 
   describe("round 2+ opens read-only (spec ruling 3)", () => {
     const LATER: SwissPairingMenu = {
-      round: 2, choosable: false, defaultPairing: "rank_adjacent", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false,
+      round: 2, choosable: false, defaultPairing: "rank_adjacent", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false,
     };
 
     it("the group is aria-disabled and named for the round", () => {
@@ -487,7 +487,7 @@ describe("SwissPairingMenuPanel — the open menu", () => {
 describe("StageRail — a press that does not land keeps the pick (review M2)", () => {
   const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", config: {} } as never;
   const ROUND_ONE: SwissPairingMenu = {
-    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false,
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false,
   };
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 

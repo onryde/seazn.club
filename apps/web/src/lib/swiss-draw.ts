@@ -26,7 +26,10 @@ export function mulberry32(seed: number): () => number {
 }
 
 /** X-SW-22 — a stage's draw seed: the 32-bit FNV-1a hash of its id. Stable for the stage's life, so its round-1 draw
- *  and colour lot replay exactly; recorded on the Pair's `fixtures_generated` row as `draw_seed`. */
+ *  and colour lot replay exactly; recorded on the Pair's `fixtures_generated` row as `draw_seed`.
+ *  Not `config.rngSeed` (T8 review): that key is absent on stages created before W2d, caller-settable at create, and
+ *  already the standings fold's lots seed — reusing it would need a stage-id fallback anyway and would couple two
+ *  unrelated draws. The id is always present, immutable and server-minted. Do not consolidate the two. */
 export function swissDrawSeed(stageId: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < stageId.length; i++) {
@@ -51,6 +54,22 @@ export function swissRoundOneOrder(seed: number, entrants: readonly { id: string
     [drawn[i], drawn[j]] = [drawn[j]!, drawn[i]!];
   }
   return [...seeded.map((e) => e.id), ...drawn];
+}
+
+/**
+ * Review m7 (ruling: persist the drawn order) — a later round's field in pairing-number order. FIDE fixes pairing
+ * numbers from the initial ranking; round 1's draw stands in for it (`swissRoundOneOrder`), so every later round ranks a
+ * tie inside a score group by it, not by registration. `drawOrder` is round 1's drawn order; an entrant it never saw
+ * (a latecomer, T6 `swiss_first_round` > 1) follows the drawn field in the order the field lists it (arrival order),
+ * and one it saw who has since left is skipped. Returns the field's own objects; the input is not reordered.
+ */
+export function swissDrawnFieldOrder<E extends { id: string }>(drawOrder: readonly string[], field: readonly E[]): E[] {
+  const at = new Map(drawOrder.map((id, i) => [id, i]));
+  const place = (e: E, i: number) => at.get(e.id) ?? drawOrder.length + i;
+  return field
+    .map((e, i) => ({ e, p: place(e, i) }))
+    .sort((a, b) => a.p - b.p)
+    .map((x) => x.e);
 }
 
 /** Salt for the colour lot's own stream, so the lot is not the draw's first number. */

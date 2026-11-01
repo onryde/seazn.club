@@ -165,7 +165,10 @@ describe("StagesPanel — the round-1 menu says an unseeded field is drawn at ra
     const menu = menuOf({ ...props.entrantSeeds, e5: null });
     expect(menu).toMatchObject({ round: 1, choosable: true, unseededDrawn: true });
     const html = panelHtml(menu);
-    expect(html).toContain(`${NOTE}>Unseeded players are drawn at random.</p>`);
+    expect(html).toContain(`${NOTE}>Unseeded entrants are drawn at random.</p>`);
+    // Review m1: the option hints above it no longer say "by seed" alone — seeds first, then the draw (e5 unseeded).
+    expect(html).not.toContain(">top half v bottom half by seed<");
+    expect(html).toContain("top half v bottom half by seed, then the draw");
     expect(html).toContain('aria-describedby="pairing-draw-note-s1"');
     expect(html).toContain('id="pairing-draw-note-s1"');
     expect(html.indexOf(NOTE), "under both options").toBeGreaterThan(html.indexOf('data-testid="stage-pairing-rank_adjacent"'));

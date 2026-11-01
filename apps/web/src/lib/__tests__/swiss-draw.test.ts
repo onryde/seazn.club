@@ -13,6 +13,7 @@ import {
   mulberry32,
   swissColourLot,
   swissDrawSeed,
+  swissDrawnFieldOrder,
   swissRoundOneOrder,
 } from "@/lib/swiss-draw";
 
@@ -140,6 +141,73 @@ describe("BG-SW-1 the round-1 colour lot", () => {
     expect(visited, "anti-vacuity").toBeGreaterThan(0);
     expect(on, "the registry carries boardgame").toBe(1);
     expect(visited - on, "and some sport that is not chess").toBeGreaterThan(0);
+  });
+});
+
+// Review m3 — fixed vectors. Every test above pins a PROPERTY; the DB suites compute their expectation with these same
+// functions. So a refactor of the FNV constants, the shuffle loop or LOT_SALT would stay green everywhere while
+// silently re-drawing every stage. These two pins are what goes red instead.
+describe("the replay contract: fixed vectors", () => {
+  it("swissDrawSeed is the published FNV-1a 32-bit hash (the FNV spec's own test vectors)", () => {
+    // From the FNV specification's test vectors (offset basis for the empty string), not from this code.
+    expect(swissDrawSeed("")).toBe(0x811c9dc5);
+    expect(swissDrawSeed("a")).toBe(0xe40c292c);
+  });
+
+  // THE REPLAY CONTRACT. Captured once from this implementation (W3 T8, 2026-11-01) and frozen: the draw seed, round-1
+  // order and colour lot of one fixed stage id over an 8-entrant unseeded field. Every stage re-derives its draw from its
+  // id on each Pair — a re-Pair of round 1 (Unpair then Pair, Undo then Redo) and every later round's pairing-number
+  // tie-break. CHANGING THIS LITERAL CHANGES EVERY EXISTING STAGE'S RE-PAIR: never update it to make a refactor pass.
+  const REPLAY_CONTRACT = {
+    stageId: "8f0c5f8e-3c1a-4b8e-9a51-6a2c0d7e4b19",
+    drawSeed: 0x02eb8bf5,
+    order: ["e3", "e4", "e2", "e6", "e8", "e7", "e5", "e1"],
+    lot: "black",
+  } as const;
+
+  it("one stage's seed, drawn order and lot are the frozen contract", () => {
+    const seed = swissDrawSeed(REPLAY_CONTRACT.stageId);
+    expect(seed).toBe(REPLAY_CONTRACT.drawSeed);
+    expect(swissRoundOneOrder(seed, registered(8))).toEqual(REPLAY_CONTRACT.order);
+    expect(swissColourLot(seed)).toBe(REPLAY_CONTRACT.lot);
+  });
+});
+
+// Review m7 (ruling: persist the drawn order) — the draw is the stage's pairing numbers for every round, not round 1's
+// alone: a later round's field is ranked by it, and a latecomer (T6, first round > 1) was never drawn, so it follows.
+describe("swissDrawnFieldOrder — a later round's field in pairing-number order", () => {
+  const ids = (xs: readonly { id: string }[]) => xs.map((x) => x.id);
+
+  it("the empty case: no field is no order; an empty draw keeps the field as given", () => {
+    expect(swissDrawnFieldOrder(["a", "b"], [])).toEqual([]);
+    const field = registered(3);
+    expect(ids(swissDrawnFieldOrder([], field))).toEqual(["e1", "e2", "e3"]);
+  });
+
+  it("the drawn entrants take the draw's order, whatever order the field arrives in", () => {
+    const field = registered(4); // e1..e4, registration order
+    expect(ids(swissDrawnFieldOrder(["e3", "e1", "e4", "e2"], field))).toEqual(["e3", "e1", "e4", "e2"]);
+  });
+
+  it("a latecomer the draw never saw follows the drawn field, latecomers in arrival (field) order", () => {
+    // e5 and e6 arrived after round 1 was drawn; the field lists them in arrival order, e6 before e5 here on purpose.
+    const field = [...registered(4), { id: "e6", seed: null }, { id: "e5", seed: null }];
+    expect(ids(swissDrawnFieldOrder(["e2", "e4", "e1", "e3"], field))).toEqual(["e2", "e4", "e1", "e3", "e6", "e5"]);
+    // ...even when a latecomer arrives in the middle of the field.
+    const mixed = [{ id: "e9", seed: null }, ...registered(2)];
+    expect(ids(swissDrawnFieldOrder(["e2", "e1"], mixed))).toEqual(["e2", "e1", "e9"]);
+  });
+
+  it("an entrant the draw saw but who has left (withdrew since round 1) leaves no gap and moves no one", () => {
+    const field = registered(4).filter((e) => e.id !== "e4");
+    expect(ids(swissDrawnFieldOrder(["e4", "e2", "e3", "e1"], field))).toEqual(["e2", "e3", "e1"]);
+  });
+
+  it("hands back the field's own entrant objects (same references), and leaves the input's order alone", () => {
+    const field = registered(3);
+    const out = swissDrawnFieldOrder(["e3", "e2", "e1"], field);
+    expect(out[0]).toBe(field[2]);
+    expect(field.map((e) => e.id), "the input is not reordered in place").toEqual(["e1", "e2", "e3"]);
   });
 });
 
