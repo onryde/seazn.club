@@ -9,13 +9,17 @@
 //   3. A viewer (a non-editor) gets the same read-only view Settings gave: the Sponsors tab renders, with no add form; the editor-only
 //      tabs are not offered, and `?tab=packages` falls back to Overview instead of refusing.
 //   4. The Dashboard's Sponsors entry - the way in at EVERY width, the top-bar icon being hidden under 350px - works from 320.
+//   5. On stream (S12): the tab, driven as an editor drives it - the first tick turns the rotation on at Normal (R12) and the page shows
+//      it; the dial and a competition's own scope persist across a reload; the preview names a sport's breaks when it has no finished
+//      match; and a viewer is refused the settings write (R19). Default viewport only (R17).
 // Width checks for the hub live in mobile.spec.ts (ruling R17: only that file runs in the seven width projects); this file holds its own
 // default viewport, plus the 320 pass the Dashboard entry exists for.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { expectNoHorizontalScroll } from "./helpers";
-import { releaseSettingsOrg, seedMemberIdentity, seedSettingsOrg, settingsUrl, sponsorsUrl, type SeededOrg } from "./settings-support";
+import { apiJson } from "./helpers";
+import { releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, settingsUrl, sponsorsUrl, type SeededOrg } from "./settings-support";
 import { SPONSORS_TABS, sponsorsTabsFor, type SponsorsTab } from "../src/lib/sponsors-hub";
 
 /** Copy read from the dictionary the page renders from, never retyped (this folder's idiom: settings-org-tabs.spec.ts). */
@@ -151,4 +155,83 @@ test("the Dashboard's Sponsors entry opens the hub at 320, where the top-bar ico
   await page.setViewportSize({ width: 350, height: 800 });
   await expect(page.getByTestId("nav-sponsors")).toBeVisible();
   await expect(page.getByTestId("nav-sponsors")).toHaveAttribute("href", `/o/${org.slug}/sponsors`);
+});
+
+test("on stream: the first tick turns the rotation on at Normal, the dial and a competition's own scope persist, and the preview names the sport's breaks", async ({ page, request }) => {
+  const seeded = await seedSettingsOrg(request, { plan: "pro", label: "sponsors-on-stream" });
+  try {
+    const comp = await seedCompetition(request, seeded.orgId, { name: "Spring Cup" });
+    const division = await apiJson(request, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "T20", sport_key: "cricket", variant_key: "t20", config: {} });
+    expect(division.status, JSON.stringify(division.error)).toBe(201);
+    const mk = async (name: string, tier: "title" | "gold") => {
+      const res = await apiJson<{ id: string }>(request, `/api/v1/orgs/${seeded.orgId}/sponsors`, "POST", { name, tier, url: `https://example.com/${tier}` });
+      expect(res.status, JSON.stringify(res.error)).toBe(201);
+      return res.data!.id;
+    };
+    const harbour = await mk("Harbour Bank", "title");
+    const ridge = await mk("Ridge Cycles", "gold");
+
+    // A fresh org has no settings row: the rotation is OFF, the dial reads Normal (D12), nobody is ticked, and the sport has no
+    // finished match - so the preview lists cricket's breaks by size and counts nothing.
+    await page.goto(sponsorsUrl(seeded.slug, "on_stream"));
+    await expect(page.getByTestId("sponsors-tab-on_stream")).toBeVisible();
+    await expect(page.getByTestId("on-stream-switch"), "no row: off").toHaveAttribute("aria-checked", "false");
+    await expect(page.getByTestId("on-stream-dial-normal"), "no row: the dial opens at Normal").toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId(`on-stream-tick-${harbour}`)).not.toBeChecked();
+    await expect(page.getByTestId(`on-stream-tick-${ridge}`)).not.toBeChecked();
+    const kinds = page.getByTestId("on-stream-preview-kinds-cricket");
+    await expect(kinds).toContainText(UI["sponsors.onStream.break.over_end"] ?? "");
+    await expect(kinds).toContainText(UI["sponsors.onStream.break.innings_break"] ?? "");
+    await expect(kinds, "nothing was counted: no numbers").not.toContainText(/\d/);
+    await expect(page.getByTestId("on-stream-strip-cricket")).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    // R12: ticking the FIRST sponsor switches the rotation on at Normal - the page shows it once the write lands.
+    await page.getByTestId(`on-stream-tick-${harbour}`).check();
+    await expect(page.getByTestId("on-stream-switch"), "the first tick created the org row, enabled").toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("on-stream-dial-normal")).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId(`on-stream-tick-${harbour}`)).toBeChecked();
+
+    // The dial persists: Busy, then a reload reads it back from the server.
+    await page.getByTestId("on-stream-dial-busy").click();
+    await expect(page.getByTestId("on-stream-dial-busy")).toHaveAttribute("aria-checked", "true");
+    await page.reload();
+    await expect(page.getByTestId("on-stream-dial-busy"), "persisted").toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("on-stream-switch")).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId(`on-stream-tick-${harbour}`), "the tick persisted").toBeChecked();
+    await expect(page.getByTestId("on-stream-where"), "where it shows: lower third and banner, with their seconds").toContainText(/lower third for \d+ seconds/);
+
+    // A competition's own scope: it starts from the org's setting (and says so), then keeps its own after a change.
+    await page.getByTestId("on-stream-scope").selectOption(comp.id);
+    await expect(page).toHaveURL(new RegExp(`/sponsors\\?tab=on_stream&scope=${comp.id}$`));
+    await expect(page.getByTestId("on-stream-inherited")).toBeVisible();
+    await expect(page.getByTestId("on-stream-dial-busy"), "inherited from the org").toHaveAttribute("aria-checked", "true");
+    await page.getByTestId("on-stream-dial-light").click();
+    await expect(page.getByTestId("on-stream-inherited"), "its own row now").toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId("on-stream-dial-light"), "the competition keeps Light").toHaveAttribute("aria-checked", "true");
+    await page.getByTestId("on-stream-scope").selectOption("");
+    await expect(page.getByTestId("on-stream-dial-busy"), "the organisation is still Busy").toHaveAttribute("aria-checked", "true");
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await releaseSettingsOrg(request, seeded);
+  }
+});
+
+test("on stream: a viewer cannot write the settings (R19) - the route refuses with 403 and nothing changes", async ({ browser, request }) => {
+  const seeded = await seedSettingsOrg(request, { label: "sponsors-on-stream-viewer" });
+  const member = await seedMemberIdentity(browser, request, seeded.orgId, "viewer");
+  try {
+    const res = await member.ctx.request.put(`/api/v1/orgs/${seeded.orgId}/sponsor-stream-settings`, {
+      data: { competitionId: null, enabled: true, frequency: "busy" },
+    });
+    expect(res.status(), "a viewer is not an editor").toBe(403);
+    const page = await member.ctx.newPage();
+    await page.goto(sponsorsUrl(seeded.slug, "on_stream"));
+    await expect(page.getByTestId("sponsors-tab-overview"), "and the tab itself falls back").toBeVisible();
+    await expect(page.getByTestId("on-stream-tab")).toHaveCount(0);
+  } finally {
+    await member.release();
+    await releaseSettingsOrg(request, seeded);
+  }
 });

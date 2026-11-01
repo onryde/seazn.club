@@ -58,6 +58,35 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   }
   check("sp click_count incremented", clicked);
 
+  // --- R4 S12: the On stream tab's two writes, read back off the page that shows them. There is no GET for the settings (the
+  // tab reads them server-side), so the round trip is PUT -> the tab's own markup: the dial and switch are `role=radio` /
+  // `role=switch` buttons whose `aria-checked` is the server's stored value.
+  const streamUrl = `/api/v1/orgs/${proOrgId}/sponsor-stream-settings`;
+  const tabTag = (body: string, testid: string): string => new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(body)?.[0] ?? "";
+  const dialOf = (body: string): string[] => ["light", "normal", "busy"].filter((f) => /aria-checked="true"/.test(tabTag(body, `on-stream-dial-${f}`)));
+  const switchOn = (body: string): boolean => /aria-checked="true"/.test(tabTag(body, "on-stream-switch"));
+  const put = async (competitionId: string | null, enabled: boolean, frequency: string) =>
+    v1(admin, streamUrl, "PUT", { competitionId, enabled, frequency });
+
+  const tickRes = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${goldId}`, "PATCH", { on_stream: true });
+  check("sponsors: tick PATCH on_stream answers 200 and the row carries it", tickRes.status === 200 && v1data<{ on_stream: boolean }>(tickRes).on_stream === true);
+  const afterTick = await html(admin, `/o/${proOrgSlug}/sponsors?tab=on_stream`);
+  check(
+    "sponsors: the first tick turned the rotation on at Normal (R12), read off the tab",
+    afterTick.status === 200 && switchOn(afterTick.body) && dialOf(afterTick.body).join() === "normal",
+  );
+  const light = await put(null, true, "light");
+  check("sponsors: settings PUT answers 200 with the saved setting", light.status === 200 && v1data<{ frequency: string }>(light).frequency === "light");
+  const readLight = await html(admin, `/o/${proOrgSlug}/sponsors?tab=on_stream`);
+  check("sponsors: settings PUT round-trips (org scope, Light)", dialOf(readLight.body).join() === "light" && switchOn(readLight.body));
+  check("sponsors: a second PUT replaces it (Busy, switched off)", (await put(null, false, "busy")).status === 200);
+  const readBusy = await html(admin, `/o/${proOrgSlug}/sponsors?tab=on_stream`);
+  check("sponsors: settings PUT round-trips again (org scope, Busy, off)", dialOf(readBusy.body).join() === "busy" && !switchOn(readBusy.body));
+  check("sponsors: a competition scope PUT answers 200", (await put(comp.id, true, "normal")).status === 200);
+  const readComp = await html(admin, `/o/${proOrgSlug}/sponsors?tab=on_stream&scope=${comp.id}`);
+  check("sponsors: the competition keeps its own row (Normal, on) while the org stays Busy, off", dialOf(readComp.body).join() === "normal" && switchOn(readComp.body) && dialOf(readBusy.body).join() === "busy");
+  check("sponsors: an unknown frequency is refused (400)", (await put(null, true, "loud")).status === 400);
+
   // --- Monetization: package + order-first Connect checkout.
   const pkgRes = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-packages`, "POST", {
     name: `Gold Package ${tag}`,
