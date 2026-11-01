@@ -62,7 +62,8 @@ import type { StageDraft } from "@/lib/format-templates";
 import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
-import { entrantListLocked } from "@/lib/open-entry-stages";
+import { divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
+import { roundOpensOfDivisions } from "@/server/external-play/round-open";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
@@ -613,6 +614,18 @@ export default async function DivisionPage({
     onlineDesk ? listRunSheetOnlinePlay(auth, id) : {},
     arbiterOffered ? listOpenRounds(auth, id) : [],
   ]);
+  // W3 T10: on the Entrants tab of a started division with a running root Swiss, an add is a LATE add — the form says
+  // so and reads the add's `late_entry` back. A bye taken in a round already opened for online play owes the pair an
+  // invite, so a chess division's opened rounds ride along (keys `${stageId}:${round}`, `roundKey`).
+  const swissLateEntry =
+    tab === "entrants" && editable && divisionTakesSwissLateEntry(division.status, stages)
+      ? {
+          openOnlineRounds:
+            division.sport_key === "boardgame"
+              ? [...(await withTenant(auth.orgId, (tx) => roundOpensOfDivisions(tx, [id]))).keys()]
+              : [],
+        }
+      : null;
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
   // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
@@ -745,9 +758,9 @@ export default async function DivisionPage({
               fixtures={fixtures}
               entrantNames={entrantNames}
               // Whether starting really closes the entrant list — open-format
-              // stages (ladder/americano) keep it open, so the confirmation
-              // must not claim otherwise. Already loaded above.
-              stageKinds={stages.map((s) => s.kind)}
+              // stages (ladder/americano) and a root Swiss keep it open, so the
+              // confirmation must not claim otherwise. Already loaded above.
+              stages={stages}
               // Whether starting also moves the PARENT competition published
               // → live. `startDivision` guards that on the competition's
               // current status, so the confirmation needs it to know whether
@@ -828,9 +841,10 @@ export default async function DivisionPage({
             }}
             entrantModel={entrantModel}
             suspensions={entrantSuspensions}
-            rosterLocked={entrantListLocked(division.status, stages.map((s) => s.kind))}
+            rosterLocked={entrantListLocked(division.status, stages)}
             viewerPlan={viewerPlan}
             divisionStatus={division.status}
+            swissLateEntry={swissLateEntry}
           />
         )}
 
@@ -949,6 +963,7 @@ export default async function DivisionPage({
               onlinePlay={runSheetOnlinePlay}
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
+              divisionStatus={division.status}
             />
           </>
         )}

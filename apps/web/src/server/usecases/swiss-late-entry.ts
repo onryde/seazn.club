@@ -26,6 +26,7 @@ import { EngineError } from "@seazn/engine/core";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { ScheduleConfig, type LateEntryResult } from "@/server/api-v1/schemas";
 import { decideSwissLateEntry, type LateEntryBoard } from "@/lib/swiss-late-entry";
+import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { isSwissByeShellExtKey, mintSwissBoardExtKeys } from "@/lib/swiss-shell";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { resolveModule } from "@/server/engine-db";
@@ -54,22 +55,30 @@ export type { LateEntryResult };
  *  may re-pair or take the bye); every other source is an automatic arrival and takes case (c). */
 export type LateEntrySource = "organiser" | "registration" | "waitlist" | "import" | "reinstate";
 
-/** The stage this file admits into: a ROOT Swiss stage (no progression source; it draws from the live roster, which is
- *  what a late player joins). A Swiss fed by an earlier stage has a fixed qualified field, so nobody joins it late. */
-const rootSwissSql = (tx: Tx, divisionId: string) =>
-  tx`division_id = ${divisionId} and kind = 'swiss' and progression is null and not (config ? 'qualified')`;
-
-/** Whether the division holds a Swiss stage a late player can join — the Start lock's exemption (`createEntrants`). */
-export async function hasRootSwissStage(tx: Tx, divisionId: string): Promise<boolean> {
-  const [row] = await tx`select 1 from stages where ${rootSwissSql(tx, divisionId)} limit 1`;
-  return row !== undefined;
-}
-
 interface SwissStage {
   id: string;
   seq: number;
   status: string;
+  kind: string;
+  progression: unknown;
   config: Record<string, unknown>;
+}
+
+/** The stages this file admits into: ROOT Swiss stages (`isRootSwissStage`, lib/open-entry-stages.ts — the one
+ *  predicate the Start lock, this admission and the desk's client mirror all read). A Swiss fed by an earlier stage
+ *  has a fixed qualified field, so nobody joins it late. The first one still running comes first (else the first,
+ *  which is over). */
+async function rootSwissStages(tx: Tx, divisionId: string): Promise<SwissStage[]> {
+  const rows = await tx<SwissStage[]>`
+    select id, seq, status, kind, progression, config from stages
+    where division_id = ${divisionId} and kind = 'swiss'
+    order by (status = 'complete'), seq`;
+  return rows.filter(isRootSwissStage);
+}
+
+/** Whether the division holds a Swiss stage a late player can join — the Start lock's exemption (`createEntrants`). */
+export async function hasRootSwissStage(tx: Tx, divisionId: string): Promise<boolean> {
+  return (await rootSwissStages(tx, divisionId)).length > 0;
 }
 
 type StageRow = SwissExistingFixture & { started?: boolean };
@@ -231,9 +240,7 @@ export async function admitSwissLateEntrant(
   if (!(await hasRootSwissStage(tx, divisionId)) || !(await divisionHasStarted(tx, divisionId))) return null;
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
   // A division holding two root Swiss stages admits into the first one still running (else the first, which is over).
-  const [stage] = await tx<SwissStage[]>`
-    select id, seq, status, config from stages where ${rootSwissSql(tx, divisionId)}
-    order by (status = 'complete'), seq limit 1`;
+  const [stage] = await rootSwissStages(tx, divisionId);
   if (!stage) return null;
   const automatic = source !== "organiser";
   const actorId = auth?.userId ?? null;

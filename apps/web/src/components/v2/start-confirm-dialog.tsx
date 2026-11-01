@@ -25,15 +25,18 @@
 import Link from "@/components/ui/console-link";
 import { ConfirmDialog } from "@/components/v2/confirm-dialog";
 import { useMsg } from "@/components/i18n/dict-provider";
+import type { StartEntrantsLine } from "@/lib/open-entry-stages";
 
 export function StartConfirmDialog({
   open,
-  /** Does starting close the entrant list? FALSE for a division with any
-   *  open-format stage — `lib/open-entry-stages.ts` mirrors the server's own
-   *  exemption. The line is omitted entirely rather than softened, because for
-   *  those divisions it is simply untrue, and a dialog that lies once is not
-   *  read again. */
-  entrantsLock,
+  /** What starting does to the entrant list (`startEntrantsLine`,
+   *  `lib/open-entry-stages.ts`, which mirrors the server's own exemption):
+   *  `"closes"`; `"swiss_late"` — a running root Swiss still takes late
+   *  entrants (W3 T9), so the closing line would be false and is REPLACED by
+   *  what stays open; or `null` for an open-format division, where the line is
+   *  omitted entirely rather than softened, because for those divisions it is
+   *  simply untrue, and a dialog that lies once is not read again. */
+  entrantsLine,
   /** Does starting also move the PARENT competition published → live? TRUE
    *  only for a competition that is currently `published` —
    *  `lib/start-promotes-competition.ts` mirrors the server's own `where`.
@@ -63,7 +66,7 @@ export function StartConfirmDialog({
   onCancel,
 }: {
   open: boolean;
-  entrantsLock: boolean;
+  entrantsLine: StartEntrantsLine;
   competitionPromotes: boolean;
   formatLocked: boolean;
   unlistedDraft: boolean;
@@ -91,8 +94,11 @@ export function StartConfirmDialog({
     >
       <p>{msg("launch.confirm.lead")}</p>
       <ul className="list-disc space-y-1 pl-5" data-testid="start-confirm-consequences">
-        {entrantsLock && (
+        {entrantsLine === "closes" && (
           <li data-testid="start-confirm-entrants">{msg("launch.confirm.entrants")}</li>
+        )}
+        {entrantsLine === "swiss_late" && (
+          <li data-testid="start-confirm-entrants-swiss">{msg("launch.confirm.entrantsSwiss")}</li>
         )}
         {/* Grouped with the entrants line because both are things that CHANGE;
             the two below are clarifications about what does not lock. The

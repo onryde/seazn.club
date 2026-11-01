@@ -562,3 +562,97 @@ describe("StageRail — a press that does not land keeps the pick (review M2)", 
     expect(propsOf(rail.menu()!).pick).toBe("rank_adjacent");
   });
 });
+
+// W3 T10 (X-SW-12; owner pick: option A, the rail's "More" menu). "Add late player" is offered on a ROOT Swiss stage
+// once round 1 is paired, in a started division, until the stage is finished (controller ruling 2). It stays at the last
+// round: the add is refused there by name (SWISS_NO_ROUND_LEFT), which is the organiser's answer, not a missing button.
+// Before Start the ordinary add applies, so it is hidden there. The gate is the rail's own (`swissLateEntryOffered`),
+// fed the facts the panel holds; the expected answers are the ruling's, typed here, never read back from the gate.
+describe("StageRail — Add late player in the More menu (W3 T10)", () => {
+  const HREF = "/o/acme/c/champs/d/open?tab=entrants#add-entrant";
+  type Row = {
+    name: string;
+    stage: Record<string, unknown>;
+    divisionStatus: string;
+    roundSeated: boolean;
+    offered: boolean;
+  };
+  const swiss = (over: Record<string, unknown> = {}) => ({
+    id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", progression: null, config: { rounds: 5 }, ...over,
+  });
+  const ROWS: Row[] = [
+    { name: "a started Swiss stage, round 1 paired", stage: swiss(), divisionStatus: "active", roundSeated: true, offered: true },
+    { name: "a started Swiss at its last round (the add is refused there by name)", stage: swiss({ config: { rounds: 1 } }), divisionStatus: "active", roundSeated: true, offered: true },
+    { name: "a setup Swiss stage, nothing paired", stage: swiss({ status: "pending" }), divisionStatus: "setup", roundSeated: false, offered: false },
+    { name: "a Swiss paired before Start (the ordinary add applies)", stage: swiss({ status: "pending" }), divisionStatus: "scheduled", roundSeated: true, offered: false },
+    { name: "a started Swiss with round 1 not yet paired", stage: swiss(), divisionStatus: "active", roundSeated: false, offered: false },
+    { name: "a finished Swiss stage", stage: swiss({ status: "complete" }), divisionStatus: "active", roundSeated: true, offered: false },
+    { name: "a Swiss fed by an earlier stage", stage: swiss({ progression: { from: "s0", top: 8 } }), divisionStatus: "active", roundSeated: true, offered: false },
+    { name: "a league stage", stage: swiss({ kind: "league", name: "League" }), divisionStatus: "active", roundSeated: true, offered: false },
+  ];
+  const render = (r: Row) =>
+    renderToStaticMarkup(
+      <StageRail stage={r.stage as never} canEdit busy={null} fixtureCount={10} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL}
+        lateEntry={{ divisionStatus: r.divisionStatus, roundSeated: r.roundSeated, href: HREF }} />,
+    );
+
+  it("a started Swiss stage renders add-late-player; a setup stage and a league stage do not", () => {
+    let checked = 0;
+    for (const r of ROWS) {
+      const html = render(r);
+      // Positive pair first: the rail rendered at all (its phone trigger renders in every state, a finished stage too),
+      // so an absence below is the gate's, not an empty rail.
+      expect(html, `${r.name}: the rail rendered nothing`).toContain('data-testid="stage-rail-trigger"');
+      if (r.offered) {
+        expect(html, r.name).toContain('data-testid="stage-more"');
+        expect(html, r.name).toContain('data-testid="stage-more-menu"');
+        expect(html, r.name).toContain('data-testid="stage-add-late-player"');
+        expect(html, `${r.name}: it goes to the Entrants tab's add form`).toContain(`href="${HREF}"`);
+        expect(html, r.name).toContain(en["stage.more.addLatePlayer"]);
+      } else {
+        expect(html, r.name).not.toContain('data-testid="stage-more"');
+        expect(html, r.name).not.toContain("stage-add-late-player");
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row rendered").toBe(ROWS.length);
+    expect(ROWS.filter((r) => r.offered).length, "both answers are in the table").toBeGreaterThan(0);
+    expect(ROWS.filter((r) => !r.offered).length).toBeGreaterThan(0);
+  });
+
+  it("is absent with no lateEntry facts at all (every other caller of the rail)", () => {
+    const html = renderToStaticMarkup(
+      <StageRail stage={swiss() as never} canEdit busy={null} fixtureCount={10} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
+    );
+    expect(html).toContain('data-testid="stage-generate"');
+    expect(html).not.toContain('data-testid="stage-more"');
+  });
+
+  it("opens folded: the menu is in the DOM but hidden, and More says it is collapsed; one press opens it, a second closes it", () => {
+    const html = render(ROWS[0]!);
+    expect(html).toMatch(/data-testid="stage-more"[^>]*aria-expanded="false"|aria-expanded="false"[^>]*data-testid="stage-more"/);
+    expect(html).toMatch(/<div[^>]*data-testid="stage-more-menu"[^>]*hidden=""|<div[^>]*hidden=""[^>]*data-testid="stage-more-menu"/);
+
+    const island = renderIsland(StageRail, {
+      stage: swiss() as never, canEdit: true, busy: null, fixtureCount: 10, deletable: false,
+      onAct: async () => true, onDelete: () => {}, addingTo: null, onToggleAddMatch: () => {}, adhoc: false, courtTagsSlot: null,
+      ...NEUTRAL, lateEntry: { divisionStatus: "active", roundSeated: true, href: HREF },
+    });
+    const byTestid = (testid: string) => {
+      const el = island.tree().find((e) => propsOf(e)["data-testid"] === testid);
+      if (!el) throw new Error(`no ${testid} in the rail`);
+      return el;
+    };
+    expect(propsOf(byTestid("stage-more")).hidden ?? false).toBe(false);
+    expect(propsOf(byTestid("stage-more-menu")).hidden).toBe(true);
+    (propsOf(byTestid("stage-more")).onClick as () => void)();
+    expect(propsOf(byTestid("stage-more"))["aria-expanded"]).toBe(true);
+    expect(propsOf(byTestid("stage-more-menu")).hidden).toBe(false);
+    (propsOf(byTestid("stage-more")).onClick as () => void)();
+    expect(propsOf(byTestid("stage-more-menu")).hidden).toBe(true);
+  });
+});

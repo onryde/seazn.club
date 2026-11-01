@@ -90,6 +90,7 @@ import {
 // that module's header for why the match count is taken from the FIELD and
 // never from a count of the fixture rows.
 import { swissLegendRound, swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
+import { lateEntryNoticeText, swissLatecomerCounts, swissLatecomerLines } from "@/lib/swiss-late-entry-notice";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
 // `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
@@ -398,6 +399,9 @@ interface Props {
    *  behind a board it would clear (409 ONLINE_GAME_EXISTS) - null ⇒ the notice alone. Phase 2: it also decides whether the run
    *  sheet's online chips are links into the panel at all (null ⇒ plain text, never a link to a 404). */
   arbiterHref?: string | null;
+  /** W3 T10 — the division's own status (`divisions.status`), for the rail's "Add late player" gate
+   *  (`swissLateEntryOffered`: offered only once the division has started). Optional: absent ⇒ never offered. */
+  divisionStatus?: string;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -515,7 +519,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, divisionStatus }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1097,6 +1101,20 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           stageId: stage.id,
           entrantFirstRounds: entrantSwissFirstRounds,
         });
+        // W3 T10 (X-SW-14 UI half) — the pending-latecomer count: entrants stamped for the round the next Pair seats,
+        // and any who arrived after the last round had started. A desk notice, so organisers only.
+        const swissLatecomers =
+          stage.kind === "swiss" && canEdit
+            ? swissLatecomerLines(
+                swissLatecomerCounts({
+                  stageId: stage.id,
+                  rounds: stage.config.rounds,
+                  fixtures: swissShellFixtures,
+                  activeEntrantIds,
+                  entrantFirstRounds: entrantSwissFirstRounds,
+                }),
+              )
+            : [];
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1169,6 +1187,18 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       {swissLegendText(swissLegend, { t: msg, plural: msgPlural })}
                     </p>
                   )}
+                  {/* W3 T10 — under the legend, in the header (never inside the
+                      rail's phone fold): a count that changes what the
+                      organiser does next. Same quiet line as the legend. */}
+                  {swissLatecomers.map((line) => (
+                    <p
+                      key={"plural" in line ? line.plural : line.key}
+                      data-testid="stage-swiss-latecomer"
+                      className="w-full min-w-0 text-xs text-slate-500"
+                    >
+                      {lateEntryNoticeText(line, { t: msg, plural: msgPlural })}
+                    </p>
+                  ))}
                 </header>
 
                 {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
@@ -1514,6 +1544,15 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   swissHasUnseated={swissHasUnseated}
                   canUnpairSwiss={canUnpairSwiss}
                   swissPairingMenu={swissPairingMenu}
+                  lateEntry={
+                    divisionStatus === undefined
+                      ? undefined
+                      : {
+                          divisionStatus,
+                          roundSeated: latestSwissRoundWithAnySeat(swissShellFixtures) !== null,
+                          href: `${routes.division(orgSlug, compSlug, divSlug, "entrants")}#add-entrant`,
+                        }
+                  }
                   // #622 — court tags editor moves onto the rail (Task 3). Stays
                   // constructed HERE, not inside StageRail: it reads
                   // `courtTagSuggestions` off this panel's own `venues` prop, and

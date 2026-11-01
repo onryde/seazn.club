@@ -86,6 +86,8 @@ import {
 // component's bottom-sheet CSS; review finding M4 was that it cribbed ONLY the
 // CSS, so the behaviour comes from the same place the look did.
 import { FOCUSABLE_SELECTOR, nextTrapFocus } from "@/components/modal";
+import Link from "@/components/ui/console-link";
+import { swissLateEntryOffered } from "@/lib/open-entry-stages";
 
 interface StageRow {
   id: string;
@@ -170,6 +172,12 @@ export interface StageRailProps {
    *  not specific to this button) — only this component's OWN use of it
    *  is gone. */
   unscheduledBadgeSlot: React.ReactNode;
+  /** W3 T10 — the facts the "More" menu's "Add late player" is gated on
+   *  (`swissLateEntryOffered`, lib/open-entry-stages.ts), held by the panel:
+   *  the division's status, whether a round of this stage has a seat, and
+   *  where the item goes (the Entrants tab's own add form — reused, never a
+   *  second form). Absent ⇒ no More menu. */
+  lateEntry?: { divisionStatus: string; roundSeated: boolean; href: string };
 }
 
 export function StageRail({
@@ -190,8 +198,16 @@ export function StageRail({
   swissHasUnseated,
   canUnpairSwiss,
   swissPairingMenu,
+  lateEntry,
 }: StageRailProps) {
   const msg = useMsg();
+  // W3 T10 — the "More" menu (owner pick: option A). Its open state is local
+  // and per-stage, like the split button's below. T12's "Add a round" and
+  // T13's "Finish now" join this same panel.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const lateEntryOffered =
+    lateEntry !== undefined &&
+    swissLateEntryOffered({ stage, divisionStatus: lateEntry.divisionStatus, roundSeated: lateEntry.roundSeated });
   // Derived, not `useId()`: `stage.id` is already unique and already a prop
   // — see this file's own header for why this component gains no hook
   // beyond `useMsg`.
@@ -626,6 +642,43 @@ export function StageRail({
             >
               {msg("schedule.delete")}
             </button>
+          )}
+          {lateEntry && lateEntryOffered && (
+            <>
+              {/* W3 T10 — More: an inline disclosure after the row's buttons,
+                  like the pairing menu (never a floating popover, so nothing
+                  overflows at 320). `hidden` rather than unmounted, as
+                  `desk-tools-more.tsx` does: the item stays in the DOM, so a
+                  test can tell "folded" from "never rendered". */}
+              <button
+                type="button"
+                aria-expanded={moreOpen}
+                aria-controls={`stage-more-menu-${stage.id}`}
+                onClick={() => setMoreOpen((v) => !v)}
+                data-testid="stage-more"
+                className="btn btn-ghost min-h-11 justify-between gap-1.5 px-3 py-1.5 text-xs"
+              >
+                {msg("desk.tools.more")}
+                <span aria-hidden="true">{moreOpen ? "▴" : "▾"}</span>
+              </button>
+              <div
+                id={`stage-more-menu-${stage.id}`}
+                hidden={!moreOpen}
+                data-testid="stage-more-menu"
+                className="min-w-0 md:basis-full"
+              >
+                <div className="flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white md:max-w-md">
+                  <Link
+                    href={lateEntry.href}
+                    data-testid="stage-add-late-player"
+                    className="flex min-h-11 flex-col justify-center border-b border-purple-100 px-4 py-2 last:border-b-0 hover:bg-purple-50"
+                  >
+                    <span className="text-sm font-medium text-purple-700">{msg("stage.more.addLatePlayer")}</span>
+                    <span className="text-xs text-slate-500">{msg("stage.more.addLatePlayer.hint")}</span>
+                  </Link>
+                </div>
+              </div>
+            </>
           )}
           {stage.status !== "complete" && fixtureCount > 0 && stage.kind === "swiss" && (
             // W3 RB3-15 A (X-SW-21, ruling 252): no Add match on a Swiss stage,

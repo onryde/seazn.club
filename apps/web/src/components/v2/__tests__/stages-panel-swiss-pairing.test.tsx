@@ -5,6 +5,7 @@ import { StagesPanel } from "@/components/v2/stages-panel";
 import { StageRail, SwissPairingMenuPanel } from "@/components/v2/desk/stage-rail";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import es from "@/dictionaries/es/ui.json";
+import enDict from "@/dictionaries/en/ui.json";
 import { ApiV1Error } from "@/lib/client-v1";
 import { SWISS_PAIRING_ROUND_ONE_ONLY_CODE } from "@/lib/swiss-pairing";
 
@@ -262,5 +263,74 @@ describe("StagesPanel — tells the rail whether a press landed (review M2)", ()
     generateAnswers(() => Promise.reject(failure()));
     await expect(railOnAct()("s1", "generate", { pairing: "rank_adjacent" })).resolves.toBe(false);
     expect(generateBodies()).toEqual([{ pairing: "rank_adjacent" }]);
+  });
+});
+
+// W3 T10 (X-SW-12, X-SW-14 UI half): the seam between the panel and the rail's More menu, and the pending-latecomer
+// line. `stage-rail.test` pins the rail's gate given its facts; this pins that the panel really hands it the facts
+// (the division's status, whether a round is seated, the Entrants tab's add form) and that the count line is in the
+// CARD HEADER under the legend (coordinator ruling: a count that changes what the organiser does next must not hide
+// behind the phone's Stage tools fold). Expected copy is the en dictionary's, with the count put in.
+describe("StagesPanel — Add late player and the pending-latecomer line (W3 T10)", () => {
+  const EN = enDict as unknown as Record<string, string>;
+  const line = (key: string, count: number) => EN[key]!.replace("{count}", String(count));
+  const HREF = "/o/org/c/comp/d/div?tab=entrants#add-entrant";
+  const render = (over: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1])} {...over} />,
+    );
+
+  it("a started division with round 1 paired: the item goes to the Entrants tab's add form", () => {
+    const html = render({ divisionStatus: "active" });
+    expect(html).toContain('data-testid="stage-add-late-player"');
+    expect(html).toContain(`href="${HREF}"`);
+  });
+
+  it("before Start, or with no status passed, there is no More menu", () => {
+    for (const over of [{ divisionStatus: "scheduled" }, { divisionStatus: "setup" }, {}]) {
+      const html = render(over);
+      expect(html, JSON.stringify(over)).toContain('data-testid="stage-generate"');
+      expect(html, JSON.stringify(over)).not.toContain('data-testid="stage-more"');
+    }
+    // Started, but nothing seated yet: the ordinary add seats them in round 1.
+    const unpaired = renderToStaticMarkup(
+      <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([])} divisionStatus="active" />,
+    );
+    expect(unpaired).toContain('data-testid="stage-generate"');
+    expect(unpaired).not.toContain('data-testid="stage-more"');
+  });
+
+  it("counts the latecomers waiting for the next Pair and those after the last round, in the card header under the legend", () => {
+    // e9 was stamped for round 2 (the round the next Pair seats); e10 arrived after round 2, the last, had started.
+    const html = render({
+      divisionStatus: "active",
+      activeEntrantIds: [...ids, "e9", "e10"],
+      entrantSwissFirstRounds: {
+        e9: { swiss_first_round: 2, swiss_first_round_stage_id: "s1" },
+        e10: { swiss_first_round: 3, swiss_first_round_stage_id: "s1" },
+      },
+    });
+    const lines = [...html.matchAll(/<p[^>]*data-testid="stage-swiss-latecomer"[^>]*>([^<]*)<\/p>/g)].map((m) => m[1]);
+    expect(lines).toEqual([line("swiss.lateEntry.joinNextRound.one", 1), line("swiss.lateEntry.joinedAfterLast.one", 1)]);
+    const legendAt = html.indexOf('data-testid="stage-swiss-legend"');
+    const lineAt = html.indexOf('data-testid="stage-swiss-latecomer"');
+    const railAt = html.indexOf('data-testid="stage-rail"');
+    expect(legendAt, "premise: the legend renders").toBeGreaterThan(-1);
+    expect(lineAt, "under the legend").toBeGreaterThan(legendAt);
+    expect(lineAt, "in the header, not inside the rail's fold").toBeLessThan(railAt);
+    expect(html.slice(lineAt, html.indexOf("</header>", lineAt)).length, "before the header closes").toBeGreaterThan(0);
+    expect(html.indexOf("</header>", legendAt)).toBeGreaterThan(lineAt);
+  });
+
+  it("says nothing with no latecomer, or to a viewer who cannot edit", () => {
+    expect(render({ divisionStatus: "active" })).not.toContain("stage-swiss-latecomer");
+    const viewer = render({
+      canEdit: false,
+      divisionStatus: "active",
+      activeEntrantIds: [...ids, "e9"],
+      entrantSwissFirstRounds: { e9: { swiss_first_round: 2, swiss_first_round_stage_id: "s1" } },
+    });
+    expect(viewer, "premise: the viewer's card renders the legend").toContain('data-testid="stage-swiss-legend"');
+    expect(viewer).not.toContain("stage-swiss-latecomer");
   });
 });

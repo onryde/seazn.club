@@ -15,7 +15,7 @@ import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
-import { startClosesEntrantList } from "@/lib/open-entry-stages";
+import { startEntrantsLine, type EntryStage } from "@/lib/open-entry-stages";
 import { startPromotesCompetition } from "@/lib/start-promotes-competition";
 import { publishWouldList } from "@/lib/competition-listing";
 import { formatAlreadyLocked } from "@/lib/format-already-locked";
@@ -36,18 +36,19 @@ interface Props {
    *  worth a second query on every division page load. */
   fixtures: BoardFixture[];
   entrantNames: Record<string, string>;
-  /** The `kind` of every stage in this division, and nothing else — the
+  /** Every stage in this division (kind, progression, config) — the
    *  confirmation has to know whether starting really closes the entrant list
    *  before it says so. `enrollEntrants` exempts the WHOLE division when ANY
-   *  stage is an open format, so this cannot be answered from one stage.
+   *  stage is an open format or a root Swiss (`isRootSwissStage`, which reads
+   *  progression and config), so this cannot be answered from one stage.
    *  The page already holds the stages, so it costs no extra read. */
-  stageKinds: string[];
+  stages: readonly EntryStage[];
   /** The PARENT competition's status, raw. `startDivision` promotes it
    *  published → live from `published` ONLY, so the confirmation cannot say
    *  the promotion happens without knowing which status the competition is in.
    *  The page already reads the competition (COLS carries `status`), so it
    *  costs no extra query — and the derivation lives here, beside
-   *  `startClosesEntrantList`, so a unit test can drive all five statuses
+   *  `startEntrantsLine`, so a unit test can drive all five statuses
    *  through it. */
   competitionStatus: string;
   /** The PARENT competition's visibility, raw — with its status, whether it is
@@ -66,7 +67,7 @@ export function LaunchActions({
   canEdit,
   fixtures,
   entrantNames,
-  stageKinds,
+  stages,
   competitionStatus,
   competitionVisibility,
   viewerPlan,
@@ -162,7 +163,7 @@ export function LaunchActions({
           sheets open at once is not a state this surface has. */}
       <StartConfirmDialog
         open={confirming}
-        entrantsLock={startClosesEntrantList(stageKinds)}
+        entrantsLine={startEntrantsLine(stages)}
         competitionPromotes={startPromotesCompetition(competitionStatus)}
         // The page already holds this division's fixtures for the gate sheet, so
         // the predicate costs no extra read — see `fixtures` above.

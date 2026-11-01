@@ -818,6 +818,43 @@ describe.runIf(HAS_DB)("W3 T9 the Start lock's other formats (badminton)", () =>
     });
   });
 
+  // W3 T10: the exemption is `isRootSwissStage` (lib/open-entry-stages.ts), the one predicate the desk's mirror reads too.
+  // A Swiss fed by an earlier stage, or one holding a qualified field, has a fixed field: no exemption. The positive pair
+  // is the same division once the Swiss is a root one again, so the refusal is the predicate's, not the setup's.
+  it("a Swiss fed by an earlier stage, or holding a qualified field, keeps the list locked; a root Swiss opens it", async () => {
+    let checked = 0;
+    for (const shape of ["fed", "qualified"] as const) {
+      const { auth } = await seedOrg("pro");
+      const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Lock " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+      const division = await createDivision(auth, comp.id, {
+        name: "Open",
+        slug: "open-" + randomUUID().slice(0, 6),
+        sport_key: "badminton",
+        variant_key: "bwf",
+        config: {},
+      });
+      await createEntrants(auth, division.id, Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `P${i + 1}`, seed: i + 1, members: [] })));
+      await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {}, progression: null });
+      const [swiss] = await createStages(auth, division.id, { seq: 2, kind: "swiss", name: "Swiss", config: { rounds: 3 }, progression: null });
+      if (shape === "fed") await sql`update stages set progression = '{"sources": [{"from_seq": 1, "top": 4}], "placement": "snake", "timing": "on_complete"}'::jsonb where id = ${swiss!.id}`;
+      else await sql`update stages set config = config || '{"qualified": []}'::jsonb where id = ${swiss!.id}`;
+      await sql`update divisions set status = 'active' where id = ${division.id}`;
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${division.id}`;
+      await expect(createEntrants(auth, division.id, [{ kind: "individual", display_name: "Late", members: [] }]), shape).rejects.toMatchObject({
+        status: 422,
+        message: LOCKED_SENTENCE,
+      });
+      const [{ n: after }] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${division.id}`;
+      expect(after, `${shape}: nothing written`).toBe(n);
+
+      await sql`update stages set progression = null, config = config - 'qualified' where id = ${swiss!.id}`;
+      const [row] = await createEntrants(auth, division.id, [{ kind: "individual", display_name: "Late", members: [] }]);
+      expect(row!.display_name, `${shape}: a root Swiss takes the late player`).toBe("Late");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("a ladder/americano division still accepts", async () => {
     const { auth, divisionId } = await startedWith("ladder");
     const [row] = await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "Late", members: [] }]);

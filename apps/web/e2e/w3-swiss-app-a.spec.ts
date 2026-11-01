@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, activeOrgIdFromRequest, competitionPath, divisionPath, seedVenueWithCourts, withDb } from "./helpers";
-import { seedOnlineRound, uiEn } from "./match-room-kit";
+import { TAG, apiJson, activeOrgIdFromRequest, competitionPath, divisionPath, fixturePath, seedVenueWithCourts, withDb } from "./helpers";
+import { fill, seedOnlineRound, uiEn } from "./match-room-kit";
+import type { Page } from "@playwright/test";
 import { swissColourLot, swissDrawSeed, swissRoundOneOrder } from "../src/lib/swiss-draw";
 
 // W3 Swiss app-A (spec 2026-10-31-format-matrix-w3-swiss-design.md). One
@@ -661,3 +662,446 @@ test.describe("X-SW-22 / BG-SW-1", () => {
     expect((await round1()).map((f) => ({ home: f.home_entrant_id, away: f.away_entrant_id })), "the stage's draw").toEqual(expected);
   });
 });
+
+
+// W3 T10 (X-SW-12, X-SW-13, X-SW-14 UI half; ruling 250; owner pick: option A). "Add late player" sits in the Swiss
+// stage rail's More menu and opens the Entrants tab's EXISTING add form (controller ruling 1). Each case is set up by
+// the rulebook's own conditions, then driven through the desk, and read back where the organiser reads it: the notice
+// under the form, and the run sheet.
+//   (a) nothing of the round has started            → the round is re-paired with the newcomer;
+//   (b) a board has started, the field was odd      → the newcomer plays the round's bye holder;
+//   (c) a board has started, the field was even     → the newcomer joins from the next round;
+//   the last round has started                      → refused by name (SWISS_NO_ROUND_LEFT), nothing written.
+// The notice's expected lines are the ruling's copy table (en dictionary, values filled here) applied to the server's own
+// answer (`late_entry` on the POST the form sent) — never the desk's notice builder, which is the code under test.
+// Two sports, the same body: badminton and chess (boardgame, colours on).
+type LateSport = {
+  key: "badminton" | "boardgame";
+  variant: string;
+  config: Record<string, unknown>;
+  /** A PLAYED win for `winner`, through the scorer's events. */
+  win(request: APIRequestContext, f: Seated, winner: string): Promise<void>;
+};
+type Seated = Fx & { home_entrant_id: string | null; away_entrant_id: string | null };
+type LateEntryAnswer = {
+  entrant_id: string;
+  stage_id: string;
+  case: "a" | "b" | "c";
+  round: number;
+  repaired?: { changed_entrant_ids: string[] };
+  new_board?: { fixture_id: string; scheduled: boolean };
+  bye_holder_id?: string;
+};
+
+async function scoreAt(request: APIRequestContext, fixtureId: string, type: string, payload: Record<string, unknown> = {}) {
+  const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${fixtureId}/state`);
+  expect(state.status, JSON.stringify(state.error)).toBe(200);
+  const res = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
+    expected_seq: state.data!.last_seq,
+    type,
+    payload,
+  });
+  expect(res.status, `${type}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+}
+
+const LATE_SPORTS: LateSport[] = [
+  {
+    key: "badminton",
+    variant: "bwf",
+    config: {},
+    async win(request, f, winner) {
+      const homeWins = winner === f.home_entrant_id;
+      await scoreAt(request, f.id, "core.start");
+      for (let g = 0; g < 2; g++) {
+        await scoreAt(request, f.id, "badminton.game.summary", homeWins ? { home: 21, away: 10 } : { home: 10, away: 21 });
+      }
+    },
+  },
+  {
+    key: "boardgame",
+    variant: "classical",
+    config: { chess: true },
+    async win(request, f, winner) {
+      await scoreAt(request, f.id, "core.start");
+      await scoreAt(request, f.id, "boardgame.result", { winner, method: "resign" });
+    },
+  },
+];
+
+const isByeRow = (f: Fx) => /^sw-r\d+-bye$/.test(f.ext_key ?? "");
+
+/** A started Swiss with round 1 paired: `n` entrants seeded 1..n, `rounds` rounds. Start mints the shells; one Pair. */
+async function startedSwiss(request: APIRequestContext, sport: LateSport, n: number, rounds: number, label: string) {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `${label} ${sport.key} ${TAG}`,
+    visibility: "private",
+  });
+  expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Open",
+    sport_key: sport.key,
+    variant_key: sport.variant,
+    config: sport.config,
+  });
+  expect(div.status, JSON.stringify(div.error)).toBe(201);
+  const divisionId = div.data!.id;
+  const names = Array.from({ length: n }, (_, i) => `${label} S${i + 1} ${TAG}`);
+  const added = await apiJson<{ id: string; display_name: string }[]>(
+    request,
+    `/api/v1/divisions/${divisionId}/entrants`,
+    "POST",
+    names.map((display_name, i) => ({ kind: "individual", display_name, seed: i + 1, members: [] })),
+  );
+  expect(added.status, JSON.stringify(added.error)).toBe(201);
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+    seq: 1,
+    kind: "swiss",
+    name: "Swiss",
+    config: { rounds },
+  });
+  expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+  const stageId = stage.data!.id;
+  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.status, `start → ${JSON.stringify(started.error)}`).toBe(200);
+  const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
+  expect(paired.status, `pair round 1 → ${JSON.stringify(paired.error)}`).toBe(200);
+  const nameOf = new Map(added.data!.map((e) => [e.id, e.display_name]));
+  const idOf = (name: string) => [...nameOf].find(([, v]) => v === name)![0];
+  const round = async (r: number) =>
+    ((await stageFixtures(request, divisionId, stageId)) as Seated[])
+      .filter((f) => f.round_no === r)
+      .sort((a, b) => a.seq_in_round - b.seq_in_round);
+  const boards = async (r: number) => (await round(r)).filter((f) => !isByeRow(f) && f.home_entrant_id !== null && f.away_entrant_id !== null);
+  expect((await boards(1)).length, "premise: round 1 is paired").toBe(Math.floor(n / 2));
+  return { divisionId, stageId, names, nameOf, idOf, round, boards };
+}
+
+/** The organiser's path: the fixtures tab's rail → More → Add late player → the Entrants tab's add form, a name, Add.
+ *  Answers the POST the form sent (status and body), read off the wire. */
+async function addLatePlayer(
+  page: Page,
+  request: APIRequestContext,
+  divisionId: string,
+  name: string,
+  /** Owner ruling 2026-11-01: a late arrival not yet in Players is created through the form's own New player. */
+  opts: { viaNewPlayer?: boolean } = {},
+) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+  const more = page.getByTestId("stage-more");
+  await expect(more, "a started, paired Swiss offers More").toBeVisible({ timeout: 20_000 });
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+  await more.click();
+  await expect(page.getByTestId("stage-more-menu")).toBeVisible();
+  await page.getByTestId("stage-add-late-player").click();
+  await expect(page).toHaveURL(/[?&]tab=entrants/, { timeout: 20_000 });
+  const form = page.locator("#add-entrant");
+  await expect(form.getByTestId("entrants-swiss-late-note")).toHaveText(uiEn["entrants.swissLate.note"]!);
+  // Landing on the anchor leaves the note readable: not under the sticky app header (hit-test, not box size).
+  await expect
+    .poll(() =>
+      form.getByTestId("entrants-swiss-late-note").evaluate((note) => {
+        const box = note.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + 4, box.top + 4);
+        return hit !== null && note.contains(hit);
+      }),
+    )
+    .toBe(true);
+  if (opts.viaNewPlayer) {
+    const createdPerson = page.waitForResponse((r) => r.url().endsWith("/api/v1/persons") && r.request().method() === "POST");
+    await form.getByTestId("new-player-name").fill(name);
+    await form.getByTestId("new-player-add").click();
+    expect((await createdPerson).status(), "New player creates the person").toBe(201);
+    await expect(form.getByTestId("new-player-note")).toHaveText(fill("entrants.add.newPlayer.created", { name }));
+    // Picked through the form's own pick path: the chip is pressed and the entrant's Name follows the person.
+    await expect(form.getByRole("button", { name, exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(form.getByLabel(uiEn["entrants.add.name"]!, { exact: true })).toHaveValue(name);
+  } else {
+    await form.getByLabel(uiEn["entrants.add.name"]!, { exact: true }).fill(name);
+  }
+  const answered = page.waitForResponse(
+    (r) => r.url().endsWith(`/api/v1/divisions/${divisionId}/entrants`) && r.request().method() === "POST",
+  );
+  await form.getByRole("button", { name: uiEn["entrants.add.submit"]! }).click();
+  const res = await answered;
+  const body = (await res.json()) as { data?: { id: string; late_entry?: LateEntryAnswer }; error?: { code?: string } };
+  return { status: res.status(), body };
+}
+
+/** The ruling's copy table over the server's answer (see the describe's header): the lines the notice owes, in order. */
+function owedLines(le: LateEntryAnswer, nameOf: (id: string) => string): { tone: "done" | "todo"; text: string }[] {
+  const name = nameOf(le.entrant_id);
+  const out: { tone: "done" | "todo"; text: string }[] = [];
+  const unscheduled = () => {
+    if (le.new_board && !le.new_board.scheduled) out.push({ tone: "todo", text: fill("swiss.lateEntry.newMatchUnscheduled") });
+  };
+  if (le.case === "a") {
+    const changed = le.repaired!.changed_entrant_ids;
+    if (changed.length === 0) out.push({ tone: "done", text: fill("swiss.lateEntry.repairedNoChange", { round: le.round, name }) });
+    else {
+      const key = changed.length === 1 ? "swiss.lateEntry.repaired.one" : "swiss.lateEntry.repaired.other";
+      out.push({ tone: "done", text: fill(key, { round: le.round, name, count: changed.length }) });
+      const names = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(
+        changed.map(nameOf).sort((x, y) => x.localeCompare(y, "en")),
+      );
+      out.push({ tone: "todo", text: fill("swiss.lateEntry.tellChanged", { names }) });
+    }
+    if (changed.length > 0 || le.new_board) out.push({ tone: "todo", text: fill("swiss.lateEntry.reprintSheets", { round: le.round }) });
+    unscheduled();
+  } else if (le.case === "b") {
+    out.push({ tone: "done", text: fill("swiss.lateEntry.tookBye", { name, holder: nameOf(le.bye_holder_id!), round: le.round }) });
+    unscheduled();
+  } else {
+    out.push({ tone: "done", text: fill("swiss.lateEntry.nextRound", { name, round: le.round }) });
+  }
+  return out;
+}
+
+async function noticeLines(page: Page) {
+  const lines = page.getByTestId("entrants-late-entry-line");
+  await expect(lines.first()).toBeVisible({ timeout: 20_000 });
+  return lines.evaluateAll((els) => els.map((e) => ({ tone: e.getAttribute("data-tone"), text: (e.textContent ?? "").trim() })));
+}
+
+for (const sport of LATE_SPORTS) {
+  test.describe(`X-SW-12 add a late player in each case (${sport.key})`, () => {
+    test(`(a) before any board starts: the round is re-paired with the newcomer (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const r = await startedSwiss(request, sport, 6, 3, "LateA");
+      const late = `LateA Zoe ${TAG}`;
+      const { status, body } = await addLatePlayer(page, request, r.divisionId, late);
+      expect(status, JSON.stringify(body.error)).toBe(201);
+      const le = body.data!.late_entry!;
+      expect(le, "a late add answers its case").toBeDefined();
+      expect([le.case, le.round], "nothing started: round 1 is re-paired").toEqual(["a", 1]);
+      const nameOf = (id: string) => (id === body.data!.id ? late : r.nameOf.get(id)!);
+      expect(await noticeLines(page)).toEqual(owedLines(le, nameOf));
+
+      // The run sheet: round 1 now seats the newcomer (seven entrants: three boards and a bye).
+      const seated = (await r.round(1)).find((f) => f.home_entrant_id === body.data!.id || f.away_entrant_id === body.data!.id);
+      expect(seated, "the newcomer is seated in round 1").toBeDefined();
+      expect((await r.boards(1)).length).toBe(3);
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      if (isByeRow(seated!)) await expect(page.getByTestId("run-sheet-bye")).toContainText(late, { timeout: 20_000 });
+      else await expect(page.locator(`li[data-fixture-no="${seated!.fixture_no}"]`)).toContainText(late, { timeout: 20_000 });
+    });
+
+    test(`(b) after one board starts on an odd field: the newcomer plays the bye holder (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const r = await startedSwiss(request, sport, 5, 3, "LateB");
+      const round1 = await r.round(1);
+      const bye = round1.find(isByeRow);
+      expect(bye?.home_entrant_id, "premise: five entrants leave a seated bye").toBeTruthy();
+      const holder = r.nameOf.get(bye!.home_entrant_id!)!;
+      await scoreAt(request, (await r.boards(1))[0]!.id, "core.start");
+
+      const late = `LateB Zoe ${TAG}`;
+      const { status, body } = await addLatePlayer(page, request, r.divisionId, late);
+      expect(status, JSON.stringify(body.error)).toBe(201);
+      const le = body.data!.late_entry!;
+      expect([le.case, le.round, le.bye_holder_id], "a started round with a bye: the newcomer takes it").toEqual(["b", 1, bye!.home_entrant_id]);
+      const nameOf = (id: string) => (id === body.data!.id ? late : r.nameOf.get(id)!);
+      expect(await noticeLines(page)).toEqual(owedLines(le, nameOf));
+
+      // The run sheet: the new board names both, and no bye is left in round 1.
+      const board = (await r.round(1)).find((f) => f.id === le.new_board?.fixture_id);
+      expect(board, "the new board is round 1's").toBeDefined();
+      expect([board!.home_entrant_id, board!.away_entrant_id].sort()).toEqual([body.data!.id, bye!.home_entrant_id].sort());
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      const row = page.locator(`li[data-fixture-no="${board!.fixture_no}"]`);
+      await expect(row).toContainText(late, { timeout: 20_000 });
+      await expect(row).toContainText(holder);
+      await expect(page.getByTestId("run-sheet-bye")).toHaveCount(0);
+    });
+
+    test(`(c) after one board starts on an even field: the newcomer joins from round 2 (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const r = await startedSwiss(request, sport, 6, 3, "LateC");
+      await scoreAt(request, (await r.boards(1))[0]!.id, "core.start");
+      const before = (await r.round(1)).map((f) => [f.id, f.home_entrant_id, f.away_entrant_id]);
+
+      const late = `LateC Zoe ${TAG}`;
+      const { status, body } = await addLatePlayer(page, request, r.divisionId, late);
+      expect(status, JSON.stringify(body.error)).toBe(201);
+      const le = body.data!.late_entry!;
+      expect([le.case, le.round], "no bye to take: the next round").toEqual(["c", 2]);
+      const nameOf = (id: string) => (id === body.data!.id ? late : r.nameOf.get(id)!);
+      expect(await noticeLines(page)).toEqual(owedLines(le, nameOf));
+
+      // Round 1 is untouched, and the rail counts the latecomer the next Pair seats.
+      expect((await r.round(1)).map((f) => [f.id, f.home_entrant_id, f.away_entrant_id]), "round 1 stands").toEqual(before);
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      await expect(page.getByTestId("stage-swiss-latecomer")).toHaveText(fill("swiss.lateEntry.joinNextRound.one", { count: 1 }), {
+        timeout: 20_000,
+      });
+      await expect(page.getByText(late)).toHaveCount(0);
+    });
+
+    // Owner ruling 2026-11-01: a late arrival who is NOT in Players yet. New player creates the person in the form,
+    // the entrant carries that person, and the case decides the seat exactly as it does for a name-only add.
+    const personIdsNamed = (full: string) =>
+      withDb(async (sql) => (await sql<{ id: string }[]>`select id from persons where full_name = ${full} and merged_into is null`).map((r) => r.id));
+    const membersOf = (entrantId: string) =>
+      withDb(async (sql) => (await sql<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${entrantId}`).map((r) => r.person_id));
+
+    test(`New player (a): someone not in Players is created, picked, and seated in round 1 (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const r = await startedSwiss(request, sport, 6, 3, "LateNA");
+      const late = `LateNA Yara ${TAG}`;
+      expect(await personIdsNamed(late), "premise: not in Players").toEqual([]);
+      const { status, body } = await addLatePlayer(page, request, r.divisionId, late, { viaNewPlayer: true });
+      expect(status, JSON.stringify(body.error)).toBe(201);
+      const people = await personIdsNamed(late);
+      expect(people, "exactly one person created").toHaveLength(1);
+      expect(await membersOf(body.data!.id), "the entrant is that person").toEqual(people);
+      const le = body.data!.late_entry!;
+      expect([le.case, le.round]).toEqual(["a", 1]);
+      const nameOf = (id: string) => (id === body.data!.id ? late : r.nameOf.get(id)!);
+      expect(await noticeLines(page)).toEqual(owedLines(le, nameOf));
+      const seated = (await r.round(1)).find((f) => f.home_entrant_id === body.data!.id || f.away_entrant_id === body.data!.id);
+      expect(seated, "seated in round 1").toBeDefined();
+    });
+
+    test(`New player (c): someone not in Players is created and queued for round 2 (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const r = await startedSwiss(request, sport, 6, 3, "LateNC");
+      await scoreAt(request, (await r.boards(1))[0]!.id, "core.start");
+      const late = `LateNC Yara ${TAG}`;
+      const { status, body } = await addLatePlayer(page, request, r.divisionId, late, { viaNewPlayer: true });
+      expect(status, JSON.stringify(body.error)).toBe(201);
+      const people = await personIdsNamed(late);
+      expect(people).toHaveLength(1);
+      expect(await membersOf(body.data!.id)).toEqual(people);
+      const le = body.data!.late_entry!;
+      expect([le.case, le.round], "queued for the next round").toEqual(["c", 2]);
+      expect(
+        (await r.round(1)).some((f) => f.home_entrant_id === body.data!.id || f.away_entrant_id === body.data!.id),
+        "not seated in the started round",
+      ).toBe(false);
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      await expect(page.getByTestId("stage-swiss-latecomer")).toHaveText(fill("swiss.lateEntry.joinNextRound.one", { count: 1 }), {
+        timeout: 20_000,
+      });
+
+      // A second late arrival with the SAME name, typed in another case: New player selects the existing person, no duplicate.
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=entrants"));
+      const form = page.locator("#add-entrant");
+      await form.getByTestId("new-player-name").fill(`  ${late.toUpperCase()}  `);
+      await form.getByTestId("new-player-add").click();
+      await expect(form.getByTestId("new-player-note")).toHaveText(uiEn["entrants.add.newPlayer.existing"]!);
+      expect(await personIdsNamed(late), "no duplicate person").toHaveLength(1);
+    });
+
+    test(`the last round started: refused by name, nothing written, and More is still offered (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const r = await startedSwiss(request, sport, 6, 1, "LateR");
+      await scoreAt(request, (await r.boards(1))[0]!.id, "core.start");
+      const count = async () => (await apiJson<unknown[]>(request, `/api/v1/divisions/${r.divisionId}/entrants`)).data!.length;
+      const n = await count();
+
+      const { status, body } = await addLatePlayer(page, request, r.divisionId, `LateR Zoe ${TAG}`);
+      expect([status, body.error?.code]).toEqual([409, "SWISS_NO_ROUND_LEFT"]);
+      await expect(page.getByTestId("entrants-error")).toHaveText(uiEn["swiss.refusal.SWISS_NO_ROUND_LEFT"]!);
+      await expect(page.getByTestId("entrants-late-entry-line")).toHaveCount(0);
+      expect(await count(), "nothing written").toBe(n);
+
+      // At the last round the action stays: the refusal is the organiser's answer, not a missing button.
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      await expect(page.getByTestId("stage-more")).toBeVisible({ timeout: 20_000 });
+    });
+
+    // X-SW-8 (Task 6's UI path): a latecomer who missed two rounds scores 0 for them, so round 3 never pairs them with
+    // a two-win entrant. Six entrants play rounds 1 and 2 (the home side wins every board); one board of round 2 has
+    // started, so the newcomer joins from round 3 (c). Round 3 is paired through the desk's own Pair next.
+    test(`X-SW-8 a latecomer who missed two rounds is paired as 0, never with a two-win entrant (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(240_000);
+      const r = await startedSwiss(request, sport, 6, 3, "LateS");
+      const wins = new Map<string, number>(r.names.map((n) => [r.idOf(n), 0]));
+      for (const f of await r.boards(1)) {
+        await sport.win(request, f, f.home_entrant_id!);
+        wins.set(f.home_entrant_id!, wins.get(f.home_entrant_id!)! + 1);
+      }
+      const pair2 = await apiJson(request, `/api/v1/stages/${r.stageId}/generate`, "POST");
+      expect(pair2.status, JSON.stringify(pair2.error)).toBe(200);
+      const round2 = await r.boards(2);
+      expect(round2.length, "premise: round 2 is paired").toBe(3);
+      await scoreAt(request, round2[0]!.id, "core.start");
+
+      const late = `LateS Zoe ${TAG}`;
+      const { status, body } = await addLatePlayer(page, request, r.divisionId, late);
+      expect(status, JSON.stringify(body.error)).toBe(201);
+      expect([body.data!.late_entry!.case, body.data!.late_entry!.round]).toEqual(["c", 3]);
+      const lateId = body.data!.id;
+
+      for (const f of round2) {
+        // The started board is played on from its Start; the others from scratch.
+        if (f.id === round2[0]!.id) {
+          if (sport.key === "boardgame") await scoreAt(request, f.id, "boardgame.result", { winner: f.home_entrant_id, method: "resign" });
+          else for (let g = 0; g < 2; g++) await scoreAt(request, f.id, "badminton.game.summary", { home: 21, away: 10 });
+        } else await sport.win(request, f, f.home_entrant_id!);
+        wins.set(f.home_entrant_id!, wins.get(f.home_entrant_id!)! + 1);
+      }
+      const twoWins = [...wins].filter(([, w]) => w === 2).map(([id]) => id);
+      expect(twoWins.length, "anti-vacuity: someone has two wins for the latecomer to be wrongly paired with").toBeGreaterThan(0);
+
+      // Pair round 3 on the desk.
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      await page.getByTestId("stage-generate").click();
+      await expect.poll(async () => (await r.round(3)).filter((f) => f.home_entrant_id !== null).length, { timeout: 30_000 }).toBe(4);
+      const mine = (await r.round(3)).find((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId);
+      expect(mine, "the latecomer is seated in round 3").toBeDefined();
+      const opponent = mine!.home_entrant_id === lateId ? mine!.away_entrant_id : mine!.home_entrant_id;
+      expect(opponent === null || !twoWins.includes(opponent), "never paired with a two-win entrant (0, not +2)").toBe(true);
+      if (opponent === null) await expect(page.getByTestId("run-sheet-bye")).toContainText(late, { timeout: 20_000 });
+      else await expect(page.locator(`li[data-fixture-no="${mine!.fixture_no}"]`)).toContainText(late, { timeout: 20_000 });
+    });
+
+    // X-SW-15 (Task 7's UI path): a pair whose match was not played has not met. Four entrants, three rounds. Round 1 is
+    // the fold; S1 and S4 win, so round 2 pairs {S1, S4} and {S2, S3}. Both round-2 boards end as double walkovers
+    // through the console's Forfeit dialog (Neither → walkover). Round 3, paired on the desk, re-seats both pairs:
+    // played, they would have met, and round 3 would be S1-S2 and S3-S4.
+    test(`X-SW-15 a double walkover pair may meet again (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(240_000);
+      const r = await startedSwiss(request, sport, 4, 3, "Unplayed");
+      const [s1, s2, s3, s4] = r.names.map(r.idOf);
+      for (const f of await r.boards(1)) {
+        const winner = [f.home_entrant_id, f.away_entrant_id].find((id) => id === s1 || id === s4);
+        expect(winner, "premise: the fold puts S1 and S4 on different boards").toBeTruthy();
+        await sport.win(request, f, winner!);
+      }
+      const pair2 = await apiJson(request, `/api/v1/stages/${r.stageId}/generate`, "POST");
+      expect(pair2.status, JSON.stringify(pair2.error)).toBe(200);
+      const pairsOf = async (round: number) =>
+        (await r.boards(round)).map((f) => [r.nameOf.get(f.home_entrant_id!)!, r.nameOf.get(f.away_entrant_id!)!].sort().join(" | ")).sort();
+      const REMATCH = [[s1, s4], [s2, s3]].map((p) => p.map((id) => r.nameOf.get(id!)!).sort().join(" | ")).sort();
+      expect(await pairsOf(2), "premise: round 2 pairs the score groups").toEqual(REMATCH);
+
+      for (const f of await r.boards(2)) {
+        await page.goto(await fixturePath(request, f.id));
+        await page.getByTestId("score-forfeit").click({ timeout: 20_000 });
+        const d = page.getByTestId("forfeit-dialog");
+        await expect(d).toBeVisible({ timeout: 10_000 });
+        await d.getByTestId("forfeit-who-both").click();
+        await expect(d.getByTestId("forfeit-why-walkover")).toBeChecked();
+        await expect(d.getByTestId("forfeit-confirm")).toHaveText(uiEn["forfeitDialog.confirm.doubleWalkover"]!);
+        await d.getByTestId("forfeit-confirm").click();
+        await expect
+          .poll(async () => (await apiJson<{ outcome: { kind?: string } | null }>(request, `/api/v1/fixtures/${f.id}/state`)).data?.outcome?.kind, {
+            timeout: 20_000,
+          })
+          .toBe("double_walkover");
+      }
+
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      await page.getByTestId("stage-generate").click();
+      await expect.poll(async () => (await r.boards(3)).length, { timeout: 30_000 }).toBe(2);
+      expect(await pairsOf(3), "round 3 re-seats both unplayed pairs").toEqual(REMATCH);
+      for (const f of await r.boards(3)) {
+        const row = page.locator(`li[data-fixture-no="${f.fixture_no}"]`);
+        await expect(row).toContainText(r.nameOf.get(f.home_entrant_id!)!, { timeout: 20_000 });
+        await expect(row).toContainText(r.nameOf.get(f.away_entrant_id!)!);
+      }
+    });
+  });
+}
