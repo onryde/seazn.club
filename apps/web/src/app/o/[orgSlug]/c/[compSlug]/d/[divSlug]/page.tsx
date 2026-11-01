@@ -590,9 +590,19 @@ export default async function DivisionPage({
   // hint (T20: "start the division" only makes sense where a round could be opened), which is wanted before there are fixtures, so
   // the ask is made when either the card or the hint needs the answer.
   const awaitsStart = editable && divisionScoringClosed(division.status);
+  // ONE answer per render, however many parts of the tab read it: the panel's predicate (here) and the Division rules strip's Online
+  // play select (`onlineChessOn`, below). A second `await onlineChessOffered(auth)` would be hidden by the helper's 60 s PostHog
+  // cache, so only the arbiter-entry-link and online-start-hint-wiring suites, which spy on the helper itself, can see it.
+  let chessFlag: Promise<boolean> | undefined;
+  const clubOffersOnlineChess = () => (chessFlag ??= onlineChessOffered(auth));
   const clubOffered =
     tab === "fixtures" &&
-    (await arbiterPanelOffered(auth, { canEdit, sport_key: division.sport_key, config: division.config }, () => fixtures.length > 0 || awaitsStart));
+    (await arbiterPanelOffered(
+      auth,
+      { canEdit, sport_key: division.sport_key, config: division.config },
+      () => fixtures.length > 0 || awaitsStart,
+      clubOffersOnlineChess,
+    ));
   const arbiterOffered = clubOffered && fixtures.length > 0;
   // The division plays online and has not been started, so no round can be opened yet (`listOpenRounds` answers none until it
   // starts): the first stage card says to start it. The Start button is on this tab, so the hint stays here.
@@ -619,7 +629,7 @@ export default async function DivisionPage({
   // Match Day C2: the Online play select moved with the match format into the Division rules strip (the fixtures tab); the
   // camera policy it gates stays in Settings - so both tabs ask.
   const onlineChessOn =
-    division.sport_key === "boardgame" && ((tab === "settings" && canEdit) || (tab === "fixtures" && editable)) ? await onlineChessOffered(auth) : false;
+    division.sport_key === "boardgame" && ((tab === "settings" && canEdit) || (tab === "fixtures" && editable)) ? await clubOffersOnlineChess() : false;
   // The warning under the Online play select (owner ruling 2026-10-25: switching to online with players who cannot be paired
   // WARNS, it never blocks) names whoever in the field holds no Lichess link, and, in a sentence of its own, whoever holds one
   // that cannot play and must be reconnected. Read wherever that select renders - the SAME gate as `onlineChessOn`, so a club

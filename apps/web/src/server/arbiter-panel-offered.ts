@@ -21,10 +21,19 @@ import { onlineChessOffered } from "@/server/usecases/external-play";
 export type ArbiterPanelSubject = { canEdit: boolean; sport_key: string; config: unknown };
 
 /** `beforeFlag` is the caller's own cheap condition(s), checked after the static parts and BEFORE the flag is asked (the tab's
- *  "this division has fixtures, or has not started so the start hint is wanted"). It is never a way to skip a static part. */
-export async function arbiterPanelOffered(auth: AuthCtx, d: ArbiterPanelSubject, beforeFlag: () => boolean = () => true): Promise<boolean> {
+ *  "this division has fixtures, or has not started so the start hint is wanted"). It is never a way to skip a static part.
+ *
+ *  `flag` is how the club's answer is read. It defaults to asking the helper for `auth`; a caller whose render has OTHER readers of
+ *  the same answer (the division page's Division rules strip) passes ONE memoised reader so the whole render asks once - the 60 s
+ *  PostHog cache inside the helper would hide a second ask, but the second ask is still a second ask. */
+export async function arbiterPanelOffered(
+  auth: AuthCtx,
+  d: ArbiterPanelSubject,
+  beforeFlag: () => boolean = () => true,
+  flag: () => Promise<boolean> = () => onlineChessOffered(auth),
+): Promise<boolean> {
   if (!d.canEdit) return false;
   if (!divisionPlaysOnline(d)) return false;
   if (!beforeFlag()) return false;
-  return onlineChessOffered(auth);
+  return flag();
 }
