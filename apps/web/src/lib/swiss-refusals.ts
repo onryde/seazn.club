@@ -25,6 +25,7 @@ export type SwissRefusalCode =
   | "SWISS_OVER"
   | "SWISS_ROUNDS_ABOVE_MAX"
   | "SWISS_ROUNDS_LOCKED"
+  | "SWISS_CHESS_LOCKED"
   | "SWISS_ROUNDS_BELOW_SEATED"
   | "SWISS_FINISH_ROUND_UNDECIDED"
   | "SWISS_FINISH_NOTHING_PLAYED"
@@ -107,6 +108,14 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     status: 409,
     message: "A match has started, so the number of rounds is fixed. Finish the Swiss now or add a round.",
     key: "swiss.refusal.SWISS_ROUNDS_LOCKED",
+  },
+  // W3 T12 Phase 2 (BG-SW-1; controller ruling): the chess colours switch after the first match started. Its OWN code, so
+  // the desk never says the rounds sentence — whose recoveries (Finish now, Add a round) do nothing for a colour change.
+  // 422 by the rule above: a started stage never un-starts, so the same switch re-sent can never succeed.
+  SWISS_CHESS_LOCKED: {
+    status: 422,
+    message: "Chess colours are fixed once play starts.",
+    key: "swiss.refusal.SWISS_CHESS_LOCKED",
   },
   // W3 T12 (RB3-5): a round count below a round already paired. 409 by the rule above (batch-1 review): a state of the
   // stage the organiser resolves another way — Unpair the paired round, then the lower count goes through.

@@ -16,6 +16,9 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * pair has not met, so the next Pair may seat it again. T8 (X-SW-22, SW-L6, RB3-16): an unseeded round 1 is the stage's
  * seeded random draw, not registration order. T11 (X-SW-16; SW-H2, RB3-3): a Swiss whose rounds exceed its field's hard
  * maximum (4 entrants × 5 rounds; hard max 3) is refused 422 SWISS_ROUNDS_ABOVE_MAX at Generate and writes nothing.
+ * T12 (X-SW-17; SW-M10, #838): the round count is edited on the stage until its first start (shells deleted and minted,
+ * an undo barrier); after it the count is 409 SWISS_ROUNDS_LOCKED, the chess colours 422 SWISS_CHESS_LOCKED, and Add a
+ * round mints the next round within the field's hard maximum.
  * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
@@ -32,8 +35,10 @@ export async function w3SwissASuite(): Promise<void> {
   // T6: 1 (an entrant with a first Swiss round is on no round below it) + T7: 1 (a double-walkover pair meets again) +
   // T8: 1 (an unseeded round 1 seats the stage's draw, not registration order) + T9: 4 (a late player's case (a), (b)
   // and (c) through the organiser's Add, and one automatic arrival — a public registration — taking (c)) + T11: 1 (a
-  // Swiss above its field's hard maximum is refused at Generate and writes nothing).
-  const EXPECTED_CHECKS = 15;
+  // Swiss above its field's hard maximum is refused at Generate and writes nothing) + T12: 2 (the round count edited
+  // before play, an undo barrier; after the first start the count and the chess colours are locked by their own codes,
+  // and Add a round mints the next round within the hard maximum).
+  const EXPECTED_CHECKS = 17;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -249,7 +254,9 @@ export async function w3SwissASuite(): Promise<void> {
   // Check 15 (T11, X-SW-16; rulebook-W3-swiss.md §3.1/§3.2) — a field of 4 pairs at most 3 rounds (hard maximum n − 1 for
   // an even field), so a Swiss of 5 rounds over it is refused at Generate: 422 SWISS_ROUNDS_ABOVE_MAX naming the rounds,
   // the field and the hard maximum, and the stage holds no fixture. A second ROOT Swiss in check 4's division (its four
-  // entrants are the field), since no competition here has a division to spare.
+  // entrants are the field), since no competition here has a division to spare. Its stage, refused and never minted,
+  // is checks 16-17's (`swissFiveStageId`).
+  let swissFiveStageId: string | undefined;
   {
     const stageRes = await v1(owner, `/api/v1/divisions/${fourFieldDivId}/stages`, "POST", {
       seq: 2,
@@ -258,6 +265,7 @@ export async function w3SwissASuite(): Promise<void> {
       config: { rounds: 5 },
     });
     const stageId = v1data<{ id: string } | undefined>(stageRes)?.id;
+    swissFiveStageId = stageId;
     const res = await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
     const minted = (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${fourFieldDivId}/fixtures`)) ?? []).filter(
       (f) => f.stage_id === stageId,
@@ -719,6 +727,78 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-13: a registration confirmed during an unstarted round takes (c) — first round 2, round 1's seats unmoved" +
           (ok ? "" : ` — ${sw.setup}, settings ${settings}, org slug ${orgSlug || "none"}, submit ${submitted.status} ${JSON.stringify(submitted.json).slice(0, 200)}, arrival ${arrival ? `first round ${arrival.swiss_first_round} stage ${arrival.swiss_first_round_stage_id}` : "missing"}, unmoved ${unmoved}`),
+        ok,
+      );
+    }
+
+    // Checks 16-17 (T12, X-SW-17; SW-M10, #838, RB3-5) reuse check 15's stage: a second root Swiss of 5 rounds over check
+    // 4's four entrants, refused at Generate and never minted (every competition of this owner is at the community plan's
+    // division cap). The rulebook's numbers (§3.1): a field of 4 has hard max 3 (n − 1), and a round of 4 holds 2 boards.
+    const fiveRows = async () =>
+      (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${fourFieldDivId}/fixtures`)) ?? []).filter((f) => f.stage_id === swissFiveStageId);
+    const roundsOf = (rs: Seat[]) => [...new Set(rs.map((f) => f.round_no))].sort((a, b) => a - b).join(",");
+    const boardsIn = (rs: Seat[], r: number) => rs.filter((f) => f.round_no === r && !isBye(f)).length;
+    type Patched = { rounds?: number; shells?: { added: number; removed: number; slots_freed: number } };
+
+    // Check 16: before any board starts the count moves on the stage itself. 5 → 2 with no shell yet only stores the count
+    // (a count above the field's hard maximum may be lowered before Start — c2 — which is what lets check 4's division,
+    // still in setup, Start at all); Start and Pair then hold 2 rounds with round 1 seated; 2 → 3 mints round 3 (2 boards)
+    // and 3 → 2 deletes it (2 shells); the change is an undo barrier (Undo refuses it by name, 422).
+    {
+      const lower = await v1(owner, `/api/v1/stages/${swissFiveStageId}`, "PATCH", { rounds: 2 });
+      const start = await v1(owner, `/api/v1/divisions/${fourFieldDivId}/start`, "POST");
+      // Start generates the division's first stage only (check 4's, minted already); this second root stage's first
+      // Generate mints its shells and the next one pairs round 1.
+      const mint = await v1(owner, `/api/v1/stages/${swissFiveStageId}/generate`, "POST");
+      const pair = await v1(owner, `/api/v1/stages/${swissFiveStageId}/generate`, "POST");
+      const afterPair = await fiveRows();
+      const up = await v1(owner, `/api/v1/stages/${swissFiveStageId}`, "PATCH", { rounds: 3 });
+      const afterUp = await fiveRows();
+      const down = await v1(owner, `/api/v1/stages/${swissFiveStageId}`, "PATCH", { rounds: 2 });
+      const afterDown = await fiveRows();
+      const undo = await v1(owner, `/api/v1/divisions/${fourFieldDivId}/undo`, "POST", {});
+      const l = v1data<Patched | undefined>(lower);
+      const u = v1data<Patched | undefined>(up);
+      const d = v1data<Patched | undefined>(down);
+      const seated1 = afterPair.filter((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null).length;
+      const ok =
+        swissFiveStageId !== undefined && lower.status === 200 && l?.rounds === 2 && l.shells?.added === 0 && l.shells.removed === 0 &&
+        start.status < 300 && mint.status === 200 && pair.status === 200 && roundsOf(afterPair) === "1,2" && seated1 === 2 &&
+        up.status === 200 && u?.rounds === 3 && u.shells?.added === 2 && roundsOf(afterUp) === "1,2,3" && boardsIn(afterUp, 3) === 2 &&
+        down.status === 200 && d?.rounds === 2 && d.shells?.removed === 2 && roundsOf(afterDown) === "1,2" &&
+        undo.status === 422 && undo.json.error?.code === "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE";
+      w3Check(
+        "w3a X-SW-17: before play the round count is edited on the stage — 5 → 2 stored, Start + Pair hold 2 rounds, 2 → 3 mints 2 boards, 3 → 2 deletes them, Undo refuses by name" +
+          (ok ? "" : ` — stage ${swissFiveStageId ?? "none"}, lower ${lower.status} ${JSON.stringify(lower.json).slice(0, 160)}, start ${start.status} ${JSON.stringify(start.json).slice(0, 160)}, mint ${mint.status}, pair ${pair.status} ${JSON.stringify(pair.json).slice(0, 160)} rounds ${roundsOf(afterPair)} seated ${seated1}, up ${up.status} ${JSON.stringify(up.json).slice(0, 120)} rounds ${roundsOf(afterUp)}, down ${down.status} ${JSON.stringify(down.json).slice(0, 120)} rounds ${roundsOf(afterDown)}, undo ${undo.status} ${JSON.stringify(undo.json).slice(0, 120)}`),
+        ok,
+      );
+    }
+
+    // Check 17: once a board has started the count is fixed (409 SWISS_ROUNDS_LOCKED, canAddRound true: 3 is within the
+    // hard max) and so are the chess colours, by their own code (422 SWISS_CHESS_LOCKED); Add a round mints round 3 (2
+    // boards), and a fourth is above the hard max (422 SWISS_ROUNDS_ABOVE_MAX, hardMax 3) and writes nothing.
+    {
+      const first = (await fiveRows()).find((f) => f.round_no === 1 && !isBye(f) && f.home_entrant_id !== null);
+      const begun = first ? (await appendScoreEvent(owner, first.id, "core.start", {})).status : 0;
+      const lockedRounds = await v1(owner, `/api/v1/stages/${swissFiveStageId}`, "PATCH", { rounds: 3 });
+      const lockedChess = await v1(owner, `/api/v1/stages/${swissFiveStageId}`, "PATCH", { chess: false });
+      const added = await v1(owner, `/api/v1/stages/${swissFiveStageId}/swiss/add-round`, "POST");
+      const afterAdd = await fiveRows();
+      const over = await v1(owner, `/api/v1/stages/${swissFiveStageId}/swiss/add-round`, "POST");
+      const afterOver = await fiveRows();
+      const a = v1data<{ rounds?: number; shells_added?: number } | undefined>(added);
+      const lockedErr: { code?: string; canAddRound?: boolean } | undefined = lockedRounds.json.error;
+      const overErr: { code?: string; hardMax?: number } | undefined = over.json.error;
+      const ok =
+        first !== undefined && begun < 300 &&
+        lockedRounds.status === 409 && lockedErr?.code === "SWISS_ROUNDS_LOCKED" && lockedErr.canAddRound === true &&
+        lockedChess.status === 422 && lockedChess.json.error?.code === "SWISS_CHESS_LOCKED" &&
+        added.status === 200 && a?.rounds === 3 && a.shells_added === 2 && roundsOf(afterAdd) === "1,2,3" && boardsIn(afterAdd, 3) === 2 &&
+        over.status === 422 && overErr?.code === "SWISS_ROUNDS_ABOVE_MAX" && overErr.hardMax === 3 &&
+        afterOver.length === afterAdd.length;
+      w3Check(
+        "w3a X-SW-17: after the first start rounds are 409 SWISS_ROUNDS_LOCKED, chess 422 SWISS_CHESS_LOCKED; Add a round mints round 3, a 4th is 422 above the hard max" +
+          (ok ? "" : ` — start ${begun}, rounds ${lockedRounds.status} ${JSON.stringify(lockedRounds.json).slice(0, 160)}, chess ${lockedChess.status} ${JSON.stringify(lockedChess.json).slice(0, 120)}, add ${added.status} ${JSON.stringify(added.json).slice(0, 160)} rounds ${roundsOf(afterAdd)}, over ${over.status} ${JSON.stringify(over.json).slice(0, 160)}, rows ${afterAdd.length} -> ${afterOver.length}`),
         ok,
       );
     }

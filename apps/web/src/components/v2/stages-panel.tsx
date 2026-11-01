@@ -115,6 +115,9 @@ import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notic
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
 import { StageRail } from "@/components/v2/desk/stage-rail";
+import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
+import { isChessSport } from "@/lib/chess-individual-only-rule";
+import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 type MsgPlural = (key: string, count: number, vars?: Record<string, string | number>) => string;
@@ -404,6 +407,11 @@ interface Props {
   /** W3 T10 — the division's own status (`divisions.status`), for the rail's "Add late player" gate
    *  (`swissLateEntryOffered`: offered only once the division has started). Optional: absent ⇒ never offered. */
   divisionStatus?: string;
+  /** W3 T12 Phase 2 (X-SW-17, BG-SW-1) — each Swiss stage's round count, chess switch and "Add a round" state as the
+   *  server judges them (`listSwissRoundControls`, read by the division page for an organiser on this tab). Drives the
+   *  rail's "Rounds: N · Edit" chip and More menu item, and the chess switch on a boardgame Swiss card. Optional: absent
+   *  ⇒ none of the three (a viewer; the pre-existing panel tests). */
+  swissRoundControls?: Record<string, SwissRoundControl>;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -521,7 +529,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, divisionStatus }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, divisionStatus, swissRoundControls }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -671,6 +679,73 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       setError(undoRefusalMessage(err, msg));
     }
   }
+
+  // W3 T12 Phase 2 (X-SW-17, BG-SW-1) — the Swiss stage writes outside `act`: the rounds dialog's Save, "Add a round"
+  // (the rail's More item, and the recovery a SWISS_ROUNDS_LOCKED refusal offers in the dialog) and the chess switch.
+  // Each resolves null when it landed (said in the notice channel, the page refreshed), else the refusal; `report` says
+  // it in this panel's own error line too — false when the dialog says it inside itself.
+  async function swissStageWrite(
+    stageId: string,
+    write: () => Promise<string>,
+    report: boolean,
+  ): Promise<SwissRoundsRefusal | null> {
+    setError(null);
+    setPaywallFeature(null);
+    setNotice(null);
+    setWarning(null);
+    setBusy(stageId);
+    try {
+      setNotice(await write());
+      router.refresh();
+      return null;
+    } catch (err) {
+      const refusal: SwissRoundsRefusal =
+        err instanceof ApiV1Error
+          ? { code: err.code, extra: err.extra, message: err.message }
+          : { code: "", extra: {}, message: err instanceof Error ? err.message : "Failed" };
+      if (report) {
+        setError(isSwissRefusalCode(refusal.code) ? swissRefusalText(refusal.code, refusal.extra, msg, msgPlural) : refusal.message);
+      }
+      return refusal;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const saveSwissRounds = (stageId: string, rounds: number) =>
+    swissStageWrite(
+      stageId,
+      async () => {
+        const out = await apiV1<{ rounds: number; swiss_rounds: SwissRoundsNotice | null }>(`/api/v1/stages/${stageId}`, {
+          method: "PATCH",
+          json: { rounds },
+        });
+        // Above the safe maximum: the same amber caution a Generate's answer carries (T11).
+        setWarning(out.swiss_rounds ? swissRoundsWarnNotice(out.swiss_rounds, msgPlural) : null);
+        return msgPlural("schedule.notice.roundsSaved", out.rounds);
+      },
+      false,
+    );
+
+  const addSwissRoundTo = (stageId: string, from: "more" | "dialog") =>
+    swissStageWrite(
+      stageId,
+      async () => {
+        const out = await apiV1<{ rounds: number }>(`/api/v1/stages/${stageId}/swiss/add-round`, { method: "POST", json: {} });
+        return msg("schedule.notice.roundAdded", { round: out.rounds });
+      },
+      from === "more",
+    );
+
+  const setSwissChess = (stageId: string, chess: boolean) =>
+    swissStageWrite(
+      stageId,
+      async () => {
+        await apiV1(`/api/v1/stages/${stageId}`, { method: "PATCH", json: { chess } });
+        return msg(chess ? "schedule.notice.chessOn" : "schedule.notice.chessOff");
+      },
+      true,
+    );
 
   async function act(
     stageId: string,
@@ -1190,6 +1265,51 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       {lateEntryNoticeText(line, { t: msg, plural: msgPlural })}
                     </p>
                   ))}
+                  {/* W3 T12 Phase 2 (BG-SW-1, RB3-10 "can be switched off"): the chess colours switch on a boardgame
+                      Swiss, for an organiser. Fixed once a match of the stage has started — said with its OWN sentence
+                      (SWISS_CHESS_LOCKED), never the rounds one. Inline, not a child component, for the same reason as
+                      the legend above (the panel's `renderIsland` tests walk this tree). */}
+                  {canEdit && stage.kind === "swiss" && isChessSport(sportKey) && swissRoundControls?.[stage.id] && (() => {
+                    const control = swissRoundControls[stage.id]!;
+                    const titleId = `stage-chess-title-${stage.id}`;
+                    const hintId = `stage-chess-hint-${stage.id}`;
+                    return (
+                      <div data-testid="stage-chess" className="w-full min-w-0">
+                        <button
+                          type="button"
+                          role="switch"
+                          data-testid="stage-chess-switch"
+                          aria-checked={control.chess}
+                          aria-labelledby={titleId}
+                          aria-describedby={hintId}
+                          disabled={busy !== null || control.started}
+                          onClick={() => void setSwissChess(stage.id, !control.chess)}
+                          className="flex min-h-11 w-full max-w-xl items-start gap-3 rounded-lg py-1 text-left disabled:cursor-not-allowed"
+                        >
+                          <span
+                            aria-hidden
+                            className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors motion-reduce:transition-none ${
+                              control.chess ? (control.started ? "bg-purple-300" : "bg-purple-600") : "bg-slate-300"
+                            }`}
+                          >
+                            <span
+                              className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-[left] motion-reduce:transition-none ${
+                                control.chess ? "left-[22px]" : "left-0.5"
+                              }`}
+                            />
+                          </span>
+                          <span className="min-w-0">
+                            <span id={titleId} className="block text-sm font-medium text-slate-800">
+                              {msg("stage.chess.label")}
+                            </span>
+                            <span id={hintId} data-testid="stage-chess-hint" className="mt-0.5 block text-xs leading-snug text-slate-500">
+                              {control.started ? msg(swissRefusalKey("SWISS_CHESS_LOCKED")) : msg("stage.chess.hint")}
+                            </span>
+                          </span>
+                        </button>
+                      </div>
+                    );
+                  })()}
                 </header>
 
                 {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
@@ -1543,6 +1663,16 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                           roundSeated: latestSwissRoundWithAnySeat(swissShellFixtures) !== null,
                           href: `${routes.division(orgSlug, compSlug, divSlug, "entrants")}#add-entrant`,
                         }
+                  }
+                  swissRounds={
+                    stage.kind === "swiss" && swissRoundControls?.[stage.id]
+                      ? {
+                          control: swissRoundControls[stage.id]!,
+                          fixtures: swissShellFixtures,
+                          onSave: saveSwissRounds,
+                          onAddRound: addSwissRoundTo,
+                        }
+                      : undefined
                   }
                   // #622 — court tags editor moves onto the rail (Task 3). Stays
                   // constructed HERE, not inside StageRail: it reads

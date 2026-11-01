@@ -88,6 +88,9 @@ import {
 import { FOCUSABLE_SELECTOR, nextTrapFocus } from "@/components/modal";
 import Link from "@/components/ui/console-link";
 import { swissLateEntryOffered } from "@/lib/open-entry-stages";
+// W3 T12 Phase 2: the rounds chip (with its edit dialog) and the More menu's "Add a round" — their own file, so this
+// rail only mounts them.
+import { SwissAddRoundMenuItem, SwissRoundsChip, type SwissRoundsRail } from "./swiss-rounds-dialog";
 
 interface StageRow {
   id: string;
@@ -178,6 +181,10 @@ export interface StageRailProps {
    *  where the item goes (the Entrants tab's own add form — reused, never a
    *  second form). Absent ⇒ no More menu. */
   lateEntry?: { divisionStatus: string; roundSeated: boolean; href: string };
+  /** W3 T12 Phase 2 (X-SW-17; owner pick B) — a Swiss stage's round count as the desk reads it
+   *  (`listSwissRoundControls`), its rows and the two writes, held by the panel: the "Rounds: N · Edit" chip and the
+   *  More menu's "Add a round" (swiss-rounds-dialog.tsx). Absent ⇒ neither (any other kind of stage). */
+  swissRounds?: SwissRoundsRail;
 }
 
 export function StageRail({
@@ -199,6 +206,7 @@ export function StageRail({
   canUnpairSwiss,
   swissPairingMenu,
   lateEntry,
+  swissRounds,
 }: StageRailProps) {
   const msg = useMsg();
   // W3 T10 — the "More" menu (owner pick: option A). Its open state is local
@@ -491,6 +499,11 @@ export function StageRail({
             put anything back under 44px, it just means the two button kinds
             are not pixel-identical in height above the floor. */}
         <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:px-4">
+          {swissRounds && (
+            // W3 T12 Phase 2: the round count, first on the row. Opening its dialog closes the phone sheet first, so the
+            // two modal layers never trap focus against each other.
+            <SwissRoundsChip stageId={stage.id} busy={busy} rail={swissRounds} onOpen={() => open && onToggleOpen(stage.id)} />
+          )}
           {stage.status !== "complete" && (
             <>
               {/* Swiss round-1 pairing — the split button (spec
@@ -676,6 +689,7 @@ export function StageRail({
                     <span className="text-sm font-medium text-purple-700">{msg("stage.more.addLatePlayer")}</span>
                     <span className="text-xs text-slate-500">{msg("stage.more.addLatePlayer.hint")}</span>
                   </Link>
+                  {swissRounds && <SwissAddRoundMenuItem stageId={stage.id} busy={busy} rail={swissRounds} />}
                 </div>
               </div>
             </>

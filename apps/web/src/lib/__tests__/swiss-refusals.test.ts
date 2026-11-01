@@ -25,6 +25,8 @@ const PLAN_CODES = [
   "SWISS_OVER",
   "SWISS_ROUNDS_ABOVE_MAX",
   "SWISS_ROUNDS_LOCKED",
+  // T12 Phase 2 (controller ruling: chess colours lock at the first start with their OWN copy, never the rounds sentence).
+  "SWISS_CHESS_LOCKED",
   "SWISS_ROUNDS_BELOW_SEATED",
   "SWISS_FINISH_ROUND_UNDECIDED",
   "SWISS_FINISH_NOTHING_PLAYED",
@@ -59,7 +61,7 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       // One English sentence, not two: the desk's English is the server's English.
       expect(en[row.key as keyof typeof en], `${code}: en/ui.json says what the server says`).toBe(row.message);
     }
-    // Anti-vacuity: 13 codes × 4 locales. Zero checked is a failure, not a pass.
+    // Anti-vacuity: 14 codes × 4 locales. Zero checked is a failure, not a pass.
     expect(checked, "anti-vacuity: (code, locale) pairs checked").toBe(PLAN_CODES.length * 4);
     expect(checked).toBeGreaterThan(0);
   });
@@ -73,7 +75,7 @@ describe("SWISS_REFUSALS (W3 app-A)", () => {
       expect(isSwissRefusalCode(code), code).toBe(true);
       yes++;
     }
-    expect(yes, "anti-vacuity: every plan code judged").toBe(13);
+    expect(yes, "anti-vacuity: every plan code judged").toBe(14);
     const others = ["SEQ_CONFLICT", "SCHEDULE_LOCKED", "FORMAT_LOCKED", "swiss_undo_round_started", "", "toString", "__proto__", "constructor", undefined, null, 409];
     for (const other of others) expect(isSwissRefusalCode(other), String(other)).toBe(false);
     expect(others.length).toBe(11);

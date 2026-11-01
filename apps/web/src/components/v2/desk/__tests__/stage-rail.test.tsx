@@ -656,3 +656,56 @@ describe("StageRail — Add late player in the More menu (W3 T10)", () => {
     expect(propsOf(byTestid("stage-more-menu")).hidden).toBe(true);
   });
 });
+
+// W3 T12 Phase 2 (X-SW-17; owner pick B) — where the rail MOUNTS the rounds chip and "Add a round" (their own behaviour is
+// pinned in swiss-rounds-dialog.test.tsx): the chip first on the action row, before Pair next; "Add a round" inside the
+// More menu, after Add late player; neither without the panel's `swissRounds` (every other kind of stage).
+describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () => {
+  const HREF = "/o/acme/c/champs/d/open?tab=entrants#add-entrant";
+  const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", progression: null, config: { rounds: 3 } };
+  const rounds = (started: boolean) => ({
+    control: {
+      started,
+      rounds: 3,
+      chess: false,
+      field: 6,
+      addRound: { canAddRound: true, refusal: null, field: 6, hardMax: 5 },
+    },
+    fixtures: [],
+    onSave: async () => null,
+    onAddRound: async () => null,
+  });
+  const render = (swissRounds: ReturnType<typeof rounds> | undefined) =>
+    renderToStaticMarkup(
+      <StageRail stage={swiss as never} canEdit busy={null} fixtureCount={9} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated
+        lateEntry={{ divisionStatus: "active", roundSeated: true, href: HREF }}
+        {...(swissRounds ? { swissRounds } : {})} />,
+    );
+
+  it("the chip opens the action row, before Pair next; absent without the panel's swissRounds", () => {
+    const html = render(rounds(false));
+    const chip = html.indexOf('data-testid="stage-rounds"');
+    const generate = html.indexOf('data-testid="stage-generate"');
+    expect(chip, "the chip rendered").toBeGreaterThan(-1);
+    expect(generate, "Pair next rendered").toBeGreaterThan(-1);
+    expect(chip, "first on the row").toBeLessThan(generate);
+    expect(html).toContain(en["stage.rounds.chip"].replace("{n}", "3"));
+    expect(render(undefined), "no swissRounds, no chip").not.toContain('data-testid="stage-rounds"');
+    expect(render(undefined)).toContain('data-testid="stage-generate"');
+  });
+
+  it("Add a round sits in the More menu after Add late player once the stage has started; not before", () => {
+    const html = render(rounds(true));
+    const menu = html.indexOf('data-testid="stage-more-menu"');
+    const late = html.indexOf('data-testid="stage-add-late-player"');
+    const add = html.indexOf('data-testid="stage-add-round"');
+    expect(menu).toBeGreaterThan(-1);
+    expect(late, "Add late player is in the menu").toBeGreaterThan(menu);
+    expect(add, "Add a round follows it").toBeGreaterThan(late);
+    expect(html).toContain(en["stage.more.addRound"]);
+    expect(render(rounds(false)), "before the first start the dialog edits the count").not.toContain("stage-add-round");
+    expect(render(rounds(false))).toContain('data-testid="stage-add-late-player"');
+  });
+});

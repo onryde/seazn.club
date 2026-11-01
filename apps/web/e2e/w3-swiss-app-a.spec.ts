@@ -1288,3 +1288,118 @@ for (const sport of LATE_SPORTS) {
     });
   });
 }
+
+// X-SW-17 (W3 T12, SW-M10, #838, RB3-5; owner pick B, "the edit dialog") and BG-SW-1's switch. Before the stage's first
+// start the rail's "Rounds: N · Edit" opens a dialog that names exactly which unplayed rounds a new count removes, and
+// Save writes it once; after the first start the count is a fixed chip, a PATCH is refused (409 SWISS_ROUNDS_LOCKED,
+// and the chess colours by their OWN code, 422 SWISS_CHESS_LOCKED), and the More menu's "Add a round" mints round N + 1.
+// The expected numbers are the rulebook's (§3.1: a field of 6 has hard max 5, safe max 3, 3 boards a round), never read
+// off the code. Every sport in LATE_SPORTS (a racket sport and chess); the chess switch shows on the chess Swiss only.
+test.describe("X-SW-17 edit rounds, then add a round after play", () => {
+  for (const sport of LATE_SPORTS) {
+    test(`5 → 3 in the dialog before play; after the first start the count is fixed and Add a round mints round 4 (${sport.key})`, async ({
+      page,
+      request,
+    }) => {
+      test.setTimeout(240_000);
+      const r = await startedSwiss(request, sport, 6, 5, "Rounds");
+      const roundsIn = async () => [...new Set((await stageFixtures(request, r.divisionId, r.stageId)).map((f) => f.round_no))].sort((a, b) => a - b);
+      expect(await roundsIn(), "premise: Start minted five rounds").toEqual([1, 2, 3, 4, 5]);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      const chip = page.getByTestId("stage-rounds");
+      await expect(chip).toHaveAttribute("data-state", "editable", { timeout: 20_000 });
+      await expect(chip).toContainText(fill("stage.rounds.chip", { n: 5 }));
+
+      // The chess colours switch: on the chess Swiss only, on by default (BG-SW-1), switchable before the first start.
+      const chess = page.getByTestId("stage-chess-switch");
+      if (sport.key === "boardgame") {
+        await expect(chess).toHaveAttribute("aria-checked", "true");
+        const switched = page.waitForResponse((res) => res.url().endsWith(`/api/v1/stages/${r.stageId}`) && res.request().method() === "PATCH");
+        await chess.click();
+        expect((await switched).status(), "the switch writes").toBe(200);
+        await expect(chess).toHaveAttribute("aria-checked", "false", { timeout: 20_000 });
+      } else {
+        await expect(chess).toHaveCount(0);
+      }
+
+      // The dialog: the field's guidance, then 5 → 3 names rounds 4 to 5 and their 6 unplayed matches before Save.
+      await chip.click();
+      const dialog = page.getByTestId("stage-rounds-dialog");
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByTestId("stage-rounds-guidance")).toHaveText(fill("swiss.rounds.guidance.other", { n: 6, count: 3, hardMax: 5 }));
+      await expect(dialog.getByTestId("stage-rounds-more"), "5 is the hard max for 6").toBeDisabled();
+      await dialog.getByTestId("stage-rounds-fewer").click();
+      await dialog.getByTestId("stage-rounds-fewer").click();
+      await expect(dialog.getByTestId("stage-rounds-value")).toHaveText("3");
+      await expect(dialog.getByTestId("stage-rounds-removed")).toHaveText(fill("stage.rounds.preview.removeMany.other", { from: 4, to: 5, count: 6 }));
+      expect(await roundsIn(), "nothing written before Save").toEqual([1, 2, 3, 4, 5]);
+      const saved = page.waitForResponse((res) => res.url().endsWith(`/api/v1/stages/${r.stageId}`) && res.request().method() === "PATCH");
+      await dialog.getByTestId("stage-rounds-save").click();
+      expect((await saved).status(), "Save writes once").toBe(200);
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText(fill("schedule.notice.roundsSaved.other", { count: 3 }))).toBeVisible({ timeout: 20_000 });
+      expect(await roundsIn(), "rounds 4 and 5 are gone").toEqual([1, 2, 3]);
+      await expect(chip).toContainText(fill("stage.rounds.chip", { n: 3 }), { timeout: 20_000 });
+
+      // Play starts: one board of round 1.
+      await sport.win(request, (await r.boards(1))[0]!, (await r.boards(1))[0]!.home_entrant_id!);
+      await page.reload();
+      await expect(chip).toHaveAttribute("data-state", "fixed", { timeout: 20_000 });
+      await expect(chip).toContainText(fill("stage.rounds.chip", { n: 3 }));
+      if (sport.key === "boardgame") {
+        await expect(chess).toBeDisabled();
+        await expect(page.getByTestId("stage-chess-hint")).toHaveText(uiEn["swiss.refusal.SWISS_CHESS_LOCKED"]!);
+      }
+      const lockedRounds = await apiJson(request, `/api/v1/stages/${r.stageId}`, "PATCH", { rounds: 2 });
+      expect([lockedRounds.status, (lockedRounds.error as { code?: string } | undefined)?.code]).toEqual([409, "SWISS_ROUNDS_LOCKED"]);
+      expect(lockedRounds.error).toMatchObject({ canFinish: false, canAddRound: true });
+      const lockedChess = await apiJson(request, `/api/v1/stages/${r.stageId}`, "PATCH", { chess: true });
+      expect([lockedChess.status, (lockedChess.error as { code?: string } | undefined)?.code]).toEqual([422, "SWISS_CHESS_LOCKED"]);
+
+      // Add a round, from the More menu: round 4 for the 6 entrants, 3 boards.
+      await page.getByTestId("stage-more").click();
+      const add = page.getByTestId("stage-add-round");
+      await expect(add).toBeEnabled();
+      await expect(add).toContainText(fill("stage.more.addRound.hint.other", { round: 4, count: 6 }));
+      const added = page.waitForResponse((res) => res.url().endsWith(`/api/v1/stages/${r.stageId}/swiss/add-round`) && res.request().method() === "POST");
+      await add.click();
+      expect((await added).status()).toBe(200);
+      await expect(page.getByText(fill("schedule.notice.roundAdded", { round: 4 }))).toBeVisible({ timeout: 20_000 });
+      expect(await roundsIn()).toEqual([1, 2, 3, 4]);
+      expect((await r.round(4)).filter((f) => !isByeRow(f)), "round 4: ⌊6/2⌋ boards").toHaveLength(3);
+
+      // An undo barrier: Undo across it is refused by name.
+      const undo = await apiJson(request, `/api/v1/divisions/${r.divisionId}/undo`, "POST", {});
+      expect((undo.error as { code?: string } | undefined)?.code).toBe("SWISS_ROUNDS_CHANGE_NOT_UNDOABLE");
+    });
+
+    test(`a late player refused at the last round: Add a round from the refusal, then the player joins it (${sport.key})`, async ({ page, request }) => {
+      test.setTimeout(180_000);
+      const r = await startedSwiss(request, sport, 6, 1, "RoundsLate");
+      await scoreAt(request, (await r.boards(1))[0]!.id, "core.start");
+      const late = `RoundsLate Zoe ${TAG}`;
+      const refused = await addLatePlayer(page, request, r.divisionId, late);
+      expect([refused.status, refused.body.error?.code]).toEqual([409, "SWISS_NO_ROUND_LEFT"]);
+      await expect(page.getByTestId("entrants-error")).toHaveText(uiEn["swiss.refusal.SWISS_NO_ROUND_LEFT"]!);
+      const recover = page.getByTestId("entrants-add-round");
+      await expect(recover, "the recovery the sentence names").toHaveText(uiEn["stage.more.addRound"]!);
+      const added = page.waitForResponse((res) => res.url().endsWith(`/api/v1/stages/${r.stageId}/swiss/add-round`) && res.request().method() === "POST");
+      await recover.click();
+      expect((await added).status()).toBe(200);
+      await expect(page.getByTestId("entrants-round-added")).toHaveText(fill("entrants.lateEntry.roundAdded", { round: 2 }));
+      await expect(page.getByTestId("entrants-error")).toHaveCount(0);
+
+      // Added again, the player joins round 2 (case c).
+      const form = page.locator("#add-entrant");
+      await form.getByLabel(uiEn["entrants.add.name"]!, { exact: true }).fill(late);
+      const answered = page.waitForResponse((res) => res.url().endsWith(`/api/v1/divisions/${r.divisionId}/entrants`) && res.request().method() === "POST");
+      await form.getByRole("button", { name: uiEn["entrants.add.submit"]! }).click();
+      const res = await answered;
+      expect(res.status()).toBe(201);
+      const body = (await res.json()) as { data?: { late_entry?: { case: string; round: number } } };
+      expect(body.data?.late_entry).toMatchObject({ case: "c", round: 2 });
+    });
+  }
+});

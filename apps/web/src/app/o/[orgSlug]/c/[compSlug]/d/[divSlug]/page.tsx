@@ -19,6 +19,7 @@ import { listPinnedStagePoints, listStageQualificationMeta, type StageQualMetaRo
 import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
+import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
@@ -447,6 +448,11 @@ export default async function DivisionPage({
   // row is not shown at all: another tab, or a viewer who cannot edit).
   const formatLockedStages =
     tab === "fixtures" && editable ? await formatLockedStageIds(auth, id) : [];
+  // W3 T12 Phase 2 (X-SW-17, BG-SW-1): each Swiss stage's round count, chess switch and "Add a round" state as the writes
+  // judge them, for the rail's "Rounds: N · Edit" chip, its More menu and the chess switch — an organiser's controls, so
+  // read on this tab only, and only when the division holds a Swiss.
+  const swissRoundControls =
+    tab === "fixtures" && editable && stages.some((s) => s.kind === "swiss") ? await listSwissRoundControls(auth, id) : {};
   // W2d final review I1: the points each PINNED table stage pays - its pin's, which a division points save after generate
   // never reaches (`rule-locks.ts` lets that save through). The stage points card says these, never `division.config`.
   // Read for the stages the card is mounted on (`stageTakesPoints`), for an organiser and a viewer alike (both see it).
@@ -965,6 +971,7 @@ export default async function DivisionPage({
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
               divisionStatus={division.status}
+              swissRoundControls={swissRoundControls}
             />
           </>
         )}

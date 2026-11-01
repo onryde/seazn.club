@@ -32,6 +32,7 @@ import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { carrySlots } from "@/lib/rebuild-slots";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { judgeSwissRounds, type SwissRoundsJudgement } from "@/lib/swiss-rounds";
+import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 import {
   isSwissBoardSeated,
   latestSwissRoundWithAnySeat,
@@ -190,6 +191,17 @@ export async function swissAddRoundState(
   return { over: false, rounds, field, hardMax: judgement.hardMax, refusal: null, canAddRound: true };
 }
 
+/** The field the stage's next Pair seats — the one a round count is judged against (T11's Start check reads the same
+ *  round): round 1 before any shell, else the lowest round with an unseated board, else the round after the last. Null
+ *  for a fed Swiss before its draw (no field yet). */
+async function nextPairField(tx: Tx, stage: SwissStageRow, rows: readonly SwissExistingFixture[]): Promise<number | null> {
+  const entrants = await swissStageEntrants(tx, stage);
+  if (entrants === null) return null;
+  const maxRound = rows.reduce((m, f) => Math.max(m, f.round_no), 0);
+  const target = rows.length === 0 ? 1 : (nextUnseatedSwissRound(rows) ?? maxRound + 1);
+  return swissFieldForRound(entrants, target).length;
+}
+
 async function stageRows(tx: Tx, stageId: string): Promise<SwissExistingFixture[]> {
   return tx<SwissExistingFixture[]>`
     select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
@@ -302,18 +314,16 @@ export async function patchSwissStage(auth: AuthCtx, stageId: string, body: Patc
     const seatedIds = rows.filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null).map((f) => f.id);
     await lockSwissBoardAppends(tx, [...new Set([...seatedIds, ...removed.map((f) => f.id)])]);
     if (await stageHasStarted(tx, stageId)) {
+      // Phase 2 (controller ruling): a colour change alone is refused with its OWN code — the rounds sentence offers
+      // Finish now and Add a round, which do nothing for the colours. A body naming the count is a rounds change.
+      if (body.rounds === undefined) throw swissRefusal("SWISS_CHESS_LOCKED");
       const add = await swissAddRoundState(tx, stage);
       throw swissRefusal("SWISS_ROUNDS_LOCKED", { canFinish: !add.over && swissHasCompleteRound(rows), canAddRound: add.canAddRound });
     }
 
     let judgement: PatchSwissStageResult["swiss_rounds"] = null;
     if (body.rounds !== undefined) {
-      // The field its next Pair seats (T11's Start check reads the same round): round 1 before any shell, else the lowest
-      // round with an unseated board, else the round after the last.
-      const entrants = await swissStageEntrants(tx, stage);
-      const maxRound = rows.reduce((m, f) => Math.max(m, f.round_no), 0);
-      const target = rows.length === 0 ? 1 : (nextUnseatedSwissRound(rows) ?? maxRound + 1);
-      const field = entrants === null ? 0 : swissFieldForRound(entrants, target).length;
+      const field = (await nextPairField(tx, stage, rows)) ?? 0;
       // Nothing is played before the first start, so nothing can be finished: a count above the hard max is 422 as sent.
       if (field >= 2) judgement = judgeSwissRoundsAt(to, field, false) as PatchSwissStageResult["swiss_rounds"];
 
@@ -421,3 +431,33 @@ export async function addSwissRound(auth: AuthCtx, stageId: string): Promise<{ r
   return { rounds: write.rounds, shells_added: write.added };
 }
 
+
+/**
+ * The desk's read of every Swiss stage of a division (T12 Phase 2): the rail's "Rounds: N · Edit" (editable until
+ * `started`), its More menu's "Add a round" (`addRound`, the predicate `addSwissRound` judges by — ruling C11) and the
+ * chess switch, each from THE predicate its write refuses by, so what the desk offers is what goes through. A display
+ * read: no locks — every write re-judges under its own. Another organisation's division reads as none (RLS). A stage
+ * with no valid stored count is left out (no control is offered on a stage its own Generate refuses, CONFIG_INVALID).
+ */
+export async function listSwissRoundControls(auth: AuthCtx, divisionId: string): Promise<Record<string, SwissRoundControl>> {
+  return withTenant(auth.orgId, async (tx) => {
+    const stages = await tx<SwissStageRow[]>`
+      select id, division_id, seq, status, kind, progression, config from stages
+      where division_id = ${divisionId} and kind = 'swiss' order by seq`;
+    const out: Record<string, SwissRoundControl> = {};
+    for (const stage of stages) {
+      const rounds = stage.config.rounds;
+      if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) continue;
+      const rows = await stageRows(tx, stage.id);
+      const add = await swissAddRoundState(tx, stage);
+      out[stage.id] = {
+        started: await stageHasStarted(tx, stage.id),
+        rounds,
+        chess: stage.config.chess === true,
+        field: await nextPairField(tx, stage, rows),
+        addRound: { canAddRound: add.canAddRound, refusal: add.refusal, field: add.field, hardMax: add.hardMax },
+      };
+    }
+    return out;
+  });
+}

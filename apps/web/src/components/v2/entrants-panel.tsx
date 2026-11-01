@@ -240,6 +240,10 @@ export function EntrantsPanel({
   const [busy, setBusy] = useState(false);
   // W3 T10 — the late-entry notice for the LAST add (replaced by the next one, cleared by a refusal).
   const [lateNotice, setLateNotice] = useState<LateEntryNoticeLine[]>([]);
+  // W3 T12 Phase 2 — the recovery on a SWISS_NO_ROUND_LEFT refusal: the Swiss its details name, while the server says
+  // "Add a round" goes through there (`canAddRound`, ruling C11); and the round it added, said until the next add.
+  const [addRoundFor, setAddRoundFor] = useState<string | null>(null);
+  const [roundAdded, setRoundAdded] = useState<number | null>(null);
   // Club facet (Jul3/01 §8): filter entrants by parent club. Hidden when the
   // org has no clubs (or the clubs list is not readable on this plan).
   const [clubs, setClubs] = useState<{ id: string; name: string }[]>([]);
@@ -321,12 +325,21 @@ export function EntrantsPanel({
 
   const fail = useCallback(
     (err: unknown) => {
+      // W3 T12 Phase 2: every refusal decides the recovery afresh, so a later, different one never keeps a stale button.
+      setAddRoundFor(
+        err instanceof ApiV1Error &&
+          err.code === "SWISS_NO_ROUND_LEFT" &&
+          err.extra.canAddRound === true &&
+          typeof err.extra.stageId === "string"
+          ? err.extra.stageId
+          : null,
+      );
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
         return;
       }
       // W3 T10 — a late add refused (no round left, the Swiss is over): said by its code in the organiser's language.
-      // SWISS_NO_ROUND_LEFT's copy names the recovery, "Add a round" (a button once Task 12 lands).
+      // SWISS_NO_ROUND_LEFT's copy names the recovery, "Add a round" — the button under the error (T12 Phase 2).
       if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
         setError(msg(swissRefusalKey(err.code)));
         return;
@@ -447,6 +460,7 @@ export function EntrantsPanel({
    *  `late_entry` results become the new one. Every add, late or not: an ordinary add simply answers none. */
   async function addEntrants<T>(fn: (override?: { reason: string }) => Promise<T>): Promise<T | undefined> {
     setLateNotice([]);
+    setRoundAdded(null);
     const res = await runGated(fn);
     if (res === undefined) return res;
     const { results, names } = lateEntryResultsOf(res);
@@ -637,6 +651,33 @@ export function EntrantsPanel({
       {error && (
         <p data-testid="entrants-error" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
           {error}
+        </p>
+      )}
+      {/* W3 T12 Phase 2 — "Add a round", the recovery SWISS_NO_ROUND_LEFT's own sentence names, offered only while the
+          server says it goes through. After it lands the organiser adds the player again (the refused add wrote
+          nothing), and the line says so. */}
+      {error && addRoundFor && (
+        <button
+          type="button"
+          data-testid="entrants-add-round"
+          disabled={busy}
+          onClick={() =>
+            void run(() =>
+              apiV1<{ rounds: number }>(`/api/v1/stages/${addRoundFor}/swiss/add-round`, { method: "POST", json: {} }),
+            ).then((out) => {
+              if (!out) return;
+              setAddRoundFor(null);
+              setRoundAdded(out.rounds);
+            })
+          }
+          className="btn btn-ghost min-h-11 px-3 py-1.5 text-sm"
+        >
+          {msg("stage.more.addRound")}
+        </button>
+      )}
+      {roundAdded !== null && (
+        <p role="status" data-testid="entrants-round-added" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {msg("entrants.lateEntry.roundAdded", { round: roundAdded })}
         </p>
       )}
 

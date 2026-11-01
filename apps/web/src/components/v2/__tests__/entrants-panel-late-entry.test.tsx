@@ -29,6 +29,9 @@ vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));
 const api = vi.hoisted(() => ({
   next: null as null | (() => unknown),
   personsPage: null as null | (() => unknown),
+  // W3 T12 Phase 2: the answer to "Add a round" (POST /stages/{id}/swiss/add-round), and the URLs it was sent to.
+  addRound: null as null | (() => unknown),
+  addRoundUrls: [] as string[],
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -39,6 +42,11 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         const answer = api.next;
         if (!answer) throw new Error("no POST answer queued");
         return answer();
+      }
+      if (url.endsWith("/swiss/add-round") && options?.method === "POST") {
+        api.addRoundUrls.push(url);
+        if (!api.addRound) throw new Error("no add-round answer queued");
+        return api.addRound();
       }
       if (url.startsWith("/api/v1/persons?"))
         return api.personsPage ? api.personsPage() : { items: [], nextCursor: null };
@@ -354,5 +362,83 @@ describe("EntrantsPanel — Players fails to load (review m1)", () => {
     } finally {
       api.personsPage = null;
     }
+  });
+});
+
+// W3 T12 Phase 2 — SWISS_NO_ROUND_LEFT's own sentence names the recovery, "Add a round"; the button stands under the
+// error only while the server says it goes through (`canAddRound`, ruling C11) and names the Swiss to add it to
+// (`stageId`). After it lands, the line says the round was added and to add the player again (the refused add wrote
+// nothing). Single-sport by nature: the panel reads a code and two details; no sport reaches it.
+describe("EntrantsPanel — Add a round on SWISS_NO_ROUND_LEFT (W3 T12 Phase 2)", () => {
+  const noRoundLeft = (extra: Record<string, unknown>) => () => {
+    throw new ApiV1Error("English from the server", 409, "SWISS_NO_ROUND_LEFT", extra);
+  };
+  const button = (p: ReturnType<typeof mount>) =>
+    p.island.tree().find((e) => propsOf(e)["data-testid"] === "entrants-add-round");
+  const added = (p: ReturnType<typeof mount>) => {
+    const el = p.island.tree().find((e) => propsOf(e)["data-testid"] === "entrants-round-added");
+    return el ? textOf([el]) : null;
+  };
+
+  it("offered when the server says Add a round goes through; it posts to the Swiss the refusal names, then says the round", async () => {
+    api.addRoundUrls = [];
+    const p = mount();
+    await p.submit(noRoundLeft({ canAddRound: true, stageId: "s1" }));
+    expect(p.error()).toBe(EN["swiss.refusal.SWISS_NO_ROUND_LEFT"]);
+    expect(button(p), "the recovery the sentence names").toBeDefined();
+    expect(textOf([button(p)!])).toBe(EN["stage.more.addRound"]);
+    api.addRound = () => ({ rounds: 4, shells_added: 3 });
+    (propsOf(button(p)!).onClick as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.addRoundUrls).toEqual(["/api/v1/stages/s1/swiss/add-round"]);
+    expect(p.error(), "the refusal is answered").toBeNull();
+    expect(button(p), "and its button gone").toBeUndefined();
+    expect(added(p)).toBe(fill("entrants.lateEntry.roundAdded", { round: 4 }));
+    // The next add clears the line.
+    await p.submit(created());
+    expect(added(p)).toBeNull();
+  });
+
+  it("not offered when it would only be refused, nor without the Swiss it names, nor for another refusal", async () => {
+    let checked = 0;
+    for (const [name, answer] of [
+      ["canAddRound false", noRoundLeft({ canAddRound: false, stageId: "s1" })],
+      ["no stageId", noRoundLeft({ canAddRound: true })],
+      [
+        "SWISS_OVER",
+        () => {
+          throw new ApiV1Error("English", 422, "SWISS_OVER", { canAddRound: true, stageId: "s1" });
+        },
+      ],
+    ] as const) {
+      const p = mount();
+      await p.submit(answer);
+      expect(p.error(), `${name}: the refusal is said`).not.toBeNull();
+      expect(button(p), name).toBeUndefined();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: cases").toBe(3);
+  });
+
+  it("the button leaves with its refusal: a later add that lands clears the error, and the recovery with it", async () => {
+    const p = mount();
+    await p.submit(noRoundLeft({ canAddRound: true, stageId: "s1" }));
+    expect(button(p), "premise: offered").toBeDefined();
+    await p.submit(created());
+    expect(p.error()).toBeNull();
+    expect(button(p), "no Add a round beside no refusal").toBeUndefined();
+  });
+
+  it("a refused Add a round (the field changed meanwhile) says that refusal, and the button goes with the old one", async () => {
+    const p = mount();
+    await p.submit(noRoundLeft({ canAddRound: true, stageId: "s1" }));
+    api.addRound = () => {
+      throw new ApiV1Error("English", 422, "SWISS_ROUNDS_ABOVE_MAX", { rounds: 4, field: 4, hardMax: 3, canFinish: false });
+    };
+    (propsOf(button(p)!).onClick as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(p.error()).toBe(EN["swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"]);
+    expect(button(p)).toBeUndefined();
+    expect(added(p)).toBeNull();
   });
 });

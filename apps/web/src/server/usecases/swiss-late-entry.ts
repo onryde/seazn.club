@@ -351,7 +351,8 @@ export async function admitSwissLateEntrant(
     case "noop":
       return null;
     case "refused":
-      if (!automatic) throw swissRefusal(decision.code, { canAddRound: addRound.canAddRound });
+      // T12 Phase 2: the stage rides along, so the entrants panel's "Add a round" recovery knows where to post.
+      if (!automatic) throw swissRefusal(decision.code, { canAddRound: addRound.canAddRound, stageId: stage.id });
       // X-SW-13 / Review Focus 4: the arrival stands, recorded as joining after the last round (the desk lists it so;
       // an added round seats it).
       return recordC(rounds + 1);

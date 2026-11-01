@@ -29,7 +29,7 @@ import { confirmRegistration } from "../registrations";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { completeStage, createStages, generateStageFixtures, replaceStages } from "../stages";
-import { addSwissRound, patchSwissStage } from "../swiss-rounds-admin";
+import { addSwissRound, listSwissRoundControls, patchSwissStage } from "../swiss-rounds-admin";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedRegistration } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
@@ -323,8 +323,18 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
       expect(await rowsOf(rig.stageId), "nothing written").toEqual(rows);
       expect(await ledgerState(rig.divisionId)).toEqual(ledger);
       expect(await storedConfig(rig.stageId)).toEqual(config);
-      // The chess colours are fixed with it (only before the first start can the toggle move).
-      await expect(patchSwissStage(rig.auth, rig.stageId, { chess: true })).rejects.toMatchObject(refusal("SWISS_ROUNDS_LOCKED"));
+      // The chess colours are fixed with it (only before the first start can the toggle move) — refused with their OWN
+      // code (controller ruling, Phase 2: never the rounds sentence, which offers recoveries a colour change has not).
+      await expect(patchSwissStage(rig.auth, rig.stageId, { chess: true })).rejects.toMatchObject(refusal("SWISS_CHESS_LOCKED"));
+      await expect(patchSwissStage(rig.auth, rig.stageId, { chess: false })).rejects.toMatchObject(refusal("SWISS_CHESS_LOCKED"));
+      // A body naming the count as well is a rounds change: the rounds refusal, with its recoveries.
+      await expect(patchSwissStage(rig.auth, rig.stageId, { rounds: 4, chess: false })).rejects.toMatchObject({
+        ...refusal("SWISS_ROUNDS_LOCKED"),
+        extra: { canFinish: false, canAddRound: true },
+      });
+      expect(await rowsOf(rig.stageId), "nothing written by the colour refusals").toEqual(rows);
+      expect(await ledgerState(rig.divisionId)).toEqual(ledger);
+      expect(await storedConfig(rig.stageId)).toEqual(config);
 
       // The SEQUENCE: round 1 decided → the Swiss can be finished after it.
       await playRound(rig, 1);
@@ -668,7 +678,8 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
     await startBoard(four, boardsOf(await rowsOf(four.stageId), 3)[0]!);
     await expect(createEntrants(four.auth, four.divisionId, [entrantInput(four.kind, "Late")])).rejects.toMatchObject({
       ...refusal("SWISS_NO_ROUND_LEFT"),
-      extra: { canAddRound: false },
+      // Phase 2: the stage it names is where the entrants panel's "Add a round" recovery posts.
+      extra: { canAddRound: false, stageId: four.stageId },
     });
     await expect(addSwissRound(four.auth, four.stageId), "and indeed it refuses").rejects.toMatchObject({ code: "SWISS_ROUNDS_ABOVE_MAX" });
 
@@ -684,7 +695,7 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
     await startBoard(six, boardsOf(await rowsOf(six.stageId), 3)[0]!);
     await expect(createEntrants(six.auth, six.divisionId, [entrantInput(six.kind, "Late")])).rejects.toMatchObject({
       ...refusal("SWISS_NO_ROUND_LEFT"),
-      extra: { canAddRound: true },
+      extra: { canAddRound: true, stageId: six.stageId },
     });
     expect(await addSwissRound(six.auth, six.stageId)).toEqual({ rounds: 4, shells_added: 3 });
     const [late] = await createEntrants(six.auth, six.divisionId, [entrantInput(six.kind, "Late")]);
@@ -784,4 +795,109 @@ describe.runIf(HAS_DB)("X-SW-17 edit rounds, Pair, Undo", () => {
       expect(roundsIn(rows), "the edited count's shells stand").toEqual([1, 2, 3]);
     }, 120_000);
   }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The desk's read (Phase 2): the rail's "Rounds: N · Edit", its More menu's "Add a round" and the chess switch are drawn
+// from `listSwissRoundControls` — the SAME predicates the writes judge by, so what the desk offers is what goes through.
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe.runIf(HAS_DB)("listSwissRoundControls (the desk's view of the rounds lock and Add a round)", () => {
+  it("the empty case: a division with no Swiss stage has no controls; a league stage beside a Swiss is not listed", async () => {
+    const rig = await swissRig(SPORTS[0], 4, 3);
+    const [league] = await createStages(rig.auth, rig.divisionId, { seq: 2, kind: "league", name: "L", config: {}, progression: null });
+    const controls = await listSwissRoundControls(rig.auth, rig.divisionId);
+    expect(Object.keys(controls), "the Swiss only").toEqual([rig.stageId]);
+    expect(controls).not.toHaveProperty(league!.id);
+    const none = await swissRig(SPORTS[0], 4, 3);
+    await sql`delete from stages where id = ${none.stageId}`;
+    expect(await listSwissRoundControls(none.auth, none.divisionId)).toEqual({});
+  });
+
+  for (const s of SPORTS) {
+    it(`before the first start: editable, the next Pair's field, and chess as stored; after it: started (${s.sport})`, async () => {
+      // A field of 5 on 3 rounds: hard max 5 (rulebook §3.1), so a 4th round fits.
+      const rig = await swissRig(s, 5, 3);
+      const before = (await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!;
+      expect(before).toEqual({
+        started: false,
+        rounds: 3,
+        // T8: a boardgame Swiss is created with chess on; any other sport stores none (off).
+        chess: s.sport === "boardgame",
+        field: 5,
+        addRound: { canAddRound: true, refusal: null, field: 5, hardMax: HARD_MAX(5) },
+      });
+      await startDivision(rig.auth, rig.divisionId);
+      await pair(rig);
+      // A bye alone is no start (Task 3): the round-1 bye is awarded at Pair.
+      expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "the bye alone").toBe(false);
+      await startBoard(rig, boardsOf(await rowsOf(rig.stageId), 1)[0]!);
+      const after = (await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!;
+      expect(after.started, "one core.start").toBe(true);
+      // The read and the write agree: started ⇒ the PATCH is locked.
+      await expect(patchSwissStage(rig.auth, rig.stageId, { rounds: 3 })).rejects.toMatchObject(refusal("SWISS_ROUNDS_LOCKED"));
+    }, 120_000);
+  }
+
+  it("canAddRound is exactly whether Add a round goes through (n = 3..6, at and one below the hard max, then over; badminton — arithmetic on the field)", async () => {
+    const { auth } = await seedOrg("pro");
+    let checked = 0;
+    let offered = 0;
+    for (const n of [3, 4, 5, 6]) {
+      for (const rounds of [HARD_MAX(n) - 1, HARD_MAX(n)]) {
+        const rig = await swissRig(SPORTS[0], n, rounds, auth);
+        await startDivision(rig.auth, rig.divisionId);
+        await pair(rig);
+        await startBoard(rig, boardsOf(await rowsOf(rig.stageId), 1)[0]!);
+        const control = (await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!;
+        // The rulebook's answer: one more round fits iff rounds + 1 ≤ hard max.
+        expect(control.addRound.canAddRound, `n=${n} rounds=${rounds}`).toBe(rounds + 1 <= HARD_MAX(n));
+        if (control.addRound.canAddRound) {
+          await expect(addSwissRound(rig.auth, rig.stageId), `n=${n} rounds=${rounds}: offered → it adds`).resolves.toMatchObject({ rounds: rounds + 1 });
+          offered++;
+        } else {
+          expect(control.addRound, `n=${n} rounds=${rounds}: the reason the desk shows`).toEqual({
+            canAddRound: false,
+            refusal: "above_max",
+            field: n,
+            hardMax: HARD_MAX(n),
+          });
+          await expect(addSwissRound(rig.auth, rig.stageId), `n=${n} rounds=${rounds}: not offered`).rejects.toMatchObject({
+            code: "SWISS_ROUNDS_ABOVE_MAX",
+          });
+        }
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: (n, rounds) cells").toBe(8);
+    expect(offered, "both answers reached").toBe(4);
+
+    // Over: a complete Swiss offers nothing, and the write agrees.
+    const done = await swissRig(SPORTS[0], 4, 1, auth);
+    await startDivision(done.auth, done.divisionId);
+    await pair(done);
+    await playRound(done, 1);
+    await completeStage(done.auth, done.stageId);
+    expect((await listSwissRoundControls(done.auth, done.divisionId))[done.stageId]!.addRound).toEqual({
+      canAddRound: false,
+      refusal: "over",
+      field: null,
+      hardMax: null,
+    });
+    await expect(addSwissRound(done.auth, done.stageId)).rejects.toMatchObject(refusal("SWISS_OVER"));
+  }, 300_000);
+
+  it("a Swiss stored without a valid round count offers no control (its own Generate refuses it, CONFIG_INVALID); the others stay", async () => {
+    const rig = await swissRig(SPORTS[0], 4, 3);
+    const [second] = await createStages(rig.auth, rig.divisionId, { seq: 2, kind: "swiss", name: "S2", config: { rounds: 2 }, progression: null });
+    expect(Object.keys(await listSwissRoundControls(rig.auth, rig.divisionId)).sort(), "premise: both listed").toEqual([rig.stageId, second!.id].sort());
+    await sql`update stages set config = config - 'rounds' where id = ${second!.id}`;
+    expect(Object.keys(await listSwissRoundControls(rig.auth, rig.divisionId))).toEqual([rig.stageId]);
+  });
+
+  it("another organisation's division reads as no controls (RLS), never another club's stages", async () => {
+    const rig = await swissRig(SPORTS[0], 4, 3);
+    const other = await seedOrg("pro");
+    expect(await listSwissRoundControls(other.auth, rig.divisionId)).toEqual({});
+  });
 });
