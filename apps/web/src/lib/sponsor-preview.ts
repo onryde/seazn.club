@@ -8,11 +8,23 @@
 import {
   eligibleBreaks,
   planSponsors,
+  type BreakDecl,
   type BreakOpened,
   type SponsorAssignment,
   type SponsorCard,
   type SponsorFrequency,
 } from "@/lib/sponsor-plan";
+
+/** What the server reads for one sport the scope plays (`loadOnStreamScope`), and all the tab needs to draw its strip. */
+export interface SportPreviewSource {
+  sportKey: string;
+  /** The sport's declared break kinds with their sizes (`naturalBreaks.kinds`); null when it declares none (generic, chess,
+   *  carrom): sponsors then appear on scene screens only. */
+  kinds: readonly BreakDecl[] | null;
+  /** The breaks of the org's most recent finished fixture of this sport, ascending seq; null when there is no such fixture,
+   *  its replay did not run to the end, or it opened no break. Always null when `kinds` is. */
+  sample: BreakOpened[] | null;
+}
 
 export interface SponsorPreview {
   /** The breaks the dial lets through (`eligibleBreaks`): Light = the majors, Normal = majors + every 3rd minor, Busy = all. */
@@ -20,6 +32,9 @@ export interface SponsorPreview {
   /** The cards the planner would have handed out over the match: the eligible breaks, less the minors the 90 s cooldown thins.
    *  0 with no ticked sponsor. */
   cards: number;
+  /** The moment id (`sponsorMomentId(seq, kind)`) of each break that drew a card, in match order - what the strip fills in.
+   *  Not the bare seq: one event can open two breaks. `aired.length === cards`. */
+  aired: readonly string[];
 }
 
 /**
@@ -50,5 +65,5 @@ export function previewForSport(
     });
     assigned.push(...newAssignments);
   }
-  return { breaks: eligible, cards: assigned.length };
+  return { breaks: eligible, cards: assigned.length, aired: assigned.map((a) => a.momentId) };
 }

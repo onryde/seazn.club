@@ -20,7 +20,7 @@ export const SPONSOR_TIERS = ["title", "gold", "silver", "partner"] as const;
 export type SponsorTier = (typeof SPONSOR_TIERS)[number];
 
 // Typed key map — the i18n house rule bans dynamic `msg()` keys.
-const TIER_MSG: Record<SponsorTier, MessageKey> = {
+export const TIER_MSG: Record<SponsorTier, MessageKey> = {
   title: "sponsors.tier.titleTier",
   gold: "sponsors.tier.gold",
   silver: "sponsors.tier.silver",
@@ -44,7 +44,7 @@ export interface SponsorItem {
   paid_order_id?: string | null;
 }
 
-const TIER_BADGE: Record<SponsorTier, string> = {
+export const TIER_BADGE: Record<SponsorTier, string> = {
   title: "bg-amber-100 text-amber-800",
   gold: "bg-yellow-50 text-yellow-700",
   silver: "bg-slate-200 text-slate-600",

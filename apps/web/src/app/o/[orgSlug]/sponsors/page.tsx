@@ -4,7 +4,8 @@ export const dynamic = "force-dynamic";
 //
 //   Sponsors            <OrgSponsors>      (was Settings -> Sponsors, the list and the form)
 //   Packages and orders <SponsorPackages>  (was the block under it, editors only)
-//   Overview, On stream placeholders - S13 and S12 drop their bodies in; nothing here claims a feature yet.
+//   On stream          <OnStreamTab>       (S12: the rotation's switch and dial, the tick list, a preview per sport; editors only)
+//   Overview placeholder - S13 drops its body in; nothing here claims a feature yet.
 //
 // Role: the existing Settings guard, reused (R19). Settings never refused a non-editor - it rendered a READ-ONLY view
 // (`OrgSponsors canEdit={false}`, no packages) - so the hub does not either: every member reaches Overview and
@@ -17,12 +18,14 @@ import { requireOrgPage } from "@/server/page-auth";
 import { sql } from "@/lib/db";
 import { hasFeatureOnAnyPass } from "@/lib/entitlements";
 import { listSponsorRows } from "@/server/usecases/sponsors";
+import { loadOnStreamScope } from "@/server/sponsors/on-stream";
 import { OrgSponsors } from "@/components/org-sponsors";
+import { OnStreamTab } from "@/components/sponsors/on-stream-tab";
 import { SponsorPackages } from "@/components/sponsor-packages";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
-import { resolveSponsorsTab, sponsorsTabsFor } from "@/lib/sponsors-hub";
+import { resolveOnStreamScope, resolveSponsorsTab, sponsorsTabsFor } from "@/lib/sponsors-hub";
 import { HubPanel, SponsorsHubTabs } from "./_components/hub-chrome";
 
 /** The org's competitions, newest first: the composer's and the package form's scope PICKER (not a scope - there is no
@@ -39,7 +42,7 @@ export default async function SponsorsHubPage({
   searchParams,
 }: {
   params: Promise<{ orgSlug: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; scope?: string | string[] }>;
 }) {
   const { orgSlug } = await params;
   const page = await requireOrgPage(orgSlug, { tail: "/sponsors" });
@@ -47,7 +50,7 @@ export default async function SponsorsHubPage({
   const locale = await resolveLocale();
   const dict = await getDictionary(locale, "ui");
 
-  const { tab: rawTab } = await searchParams;
+  const { tab: rawTab, scope: rawScope } = await searchParams;
   const tab = resolveSponsorsTab(rawTab, canEdit);
 
   // ORG-LEVEL, so `hasFeatureOnAnyPass` and not `hasFeature` - the Settings tab's own reasoning, unchanged: the
@@ -89,7 +92,38 @@ export default async function SponsorsHubPage({
       </HubPanel>
     );
   } else if (tab === "on_stream") {
-    body = <HubPanel tab="on_stream" icon={Radio} dict={dict} />;
+    // Editors only (R19): `resolveSponsorsTab` already sent anyone else to Overview, so nothing below runs for them. The
+    // scope is the picker's choice, kept only if it is one of THIS org's competitions; the loader is never asked about
+    // another id. Tiers are the org-level question for the same reason as on the Sponsors tab.
+    const [sponsorRows, hasTiers, competitions] = await Promise.all([
+      listSponsorRows(active.id),
+      hasFeatureOnAnyPass(active.id, "sponsors.tiers"),
+      orgCompetitions(active.id),
+    ]);
+    const scope = resolveOnStreamScope(rawScope, competitions);
+    const data = await loadOnStreamScope(active.id, scope);
+    body = (
+      <HubPanel tab="on_stream" icon={Radio} dict={dict}>
+        <OnStreamTab
+          orgId={active.id}
+          orgSlug={orgSlug}
+          sponsors={sponsorRows.map((s) => ({
+            id: s.id,
+            name: s.name,
+            tier: s.tier,
+            status: s.status,
+            competition_id: s.competition_id,
+            on_stream: s.on_stream,
+          }))}
+          competitions={competitions}
+          scope={scope}
+          hasTiers={hasTiers}
+          settings={data.settings}
+          ownRow={data.ownRow}
+          sports={data.sports}
+        />
+      </HubPanel>
+    );
   } else {
     body = <HubPanel tab="overview" icon={LayoutGrid} dict={dict} />;
   }

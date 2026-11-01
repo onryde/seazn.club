@@ -84,11 +84,12 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
       const got = previewForSport(f, sample, [CARD]);
       expect(got.breaks, `${f}: breaks`).toBe(want[f]);
       expect(got.cards, `${f}: cards (two minutes apart: no cooldown thinning)`).toBe(want[f]);
+      expect(got.aired.length, `${f}: one seq per card`).toBe(got.cards);
       cells++;
     }
     expect(cells).toBe(3);
     // Nothing ticked: the same breaks, no card.
-    expect(previewForSport("light", sample, [])).toEqual({ breaks: majors, cards: 0 });
+    expect(previewForSport("light", sample, [])).toEqual({ breaks: majors, cards: 0, aired: [] });
   });
 
   it("generic (and chess) declare no breaks: kinds null and no sample, even with a finished match; the sports are listed by key", async () => {
