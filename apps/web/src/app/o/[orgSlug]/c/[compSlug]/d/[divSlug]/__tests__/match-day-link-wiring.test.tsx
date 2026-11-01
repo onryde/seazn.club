@@ -19,7 +19,7 @@ const division = vi.hoisted(() => ({
 }));
 const comp = vi.hoisted(() => ({ frozen: false }));
 const fx = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }));
-const today = vi.hoisted(() => ({ count: vi.fn() }));
+const today = vi.hoisted(() => ({ count: vi.fn(), findCourt: vi.fn() }));
 const flags = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn() }));
 // The helper itself, counted: its 60s PostHog cache hides a duplicated `await onlineChessOffered(...)` one layer down.
 const asked = vi.hoisted(() => ({ offered: vi.fn() }));
@@ -128,7 +128,10 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 });
 
 
-vi.mock("@/server/usecases/match-day", () => ({ competitionFixturesToday: today.count }));
+vi.mock("@/server/usecases/match-day", () => ({
+  competitionFixturesToday: today.count,
+  findCourtForDivision: today.findCourt,
+}));
 
 import DivisionPage from "../page";
 import { StagesPanel } from "@/components/v2/stages-panel";
@@ -170,6 +173,8 @@ beforeEach(() => {
   comp.frozen = false;
   fx.rows = [];
   today.count.mockReset().mockResolvedValue(0);
+  // Match Day's own "Find a court" for the division (B4 fix round 1, R2): a ready match, no usable court free - the page itself.
+  today.findCourt.mockReset().mockResolvedValue({ court_id: null, noun: "court" });
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
   queue.listOpenRounds.mockReset().mockResolvedValue([]);
   queue.listNeedsOrganiserExternalPlay.mockReset().mockResolvedValue([]);
@@ -208,6 +213,7 @@ describe("division page: the run sheet is told where Match Day is, only on a mat
     pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
     expect(await panelHref()).toBeNull();
     expect(today.count).not.toHaveBeenCalled();
+    expect(today.findCourt).not.toHaveBeenCalled();
   });
 
   it("a billing-frozen competition is read-only, as Set time beside the link is: nothing to hand down", async () => {
@@ -224,6 +230,22 @@ describe("division page: the run sheet is told where Match Day is, only on a mat
     expect(await panelHref()).toBe(MATCH_DAY);
     today.count.mockResolvedValue(0);
     expect(await panelHref()).toBeNull();
+  });
+
+  it("B4 fix round 1 (R2): the link is Match Day's own Find a court for THIS division — that court (?court=) when one it can use is free, the page when none is, and no link when it has no ready match on no court", async () => {
+    today.count.mockResolvedValue(3);
+    today.findCourt.mockResolvedValue({ court_id: "court-7", noun: "court" });
+    expect(await panelHref()).toBe(`${MATCH_DAY}?court=court-7`);
+    expect(today.findCourt.mock.calls[0]!.slice(1, 3), "asked for this competition and this division").toEqual(["comp-1", "div-1"]);
+    today.findCourt.mockResolvedValue({ court_id: null, noun: "court" });
+    expect(await panelHref()).toBe(MATCH_DAY);
+    today.findCourt.mockResolvedValue(null);
+    expect(await panelHref()).toBeNull();
+    // Not a match day: the helper is never asked.
+    today.count.mockResolvedValue(0);
+    today.findCourt.mockClear();
+    expect(await panelHref()).toBeNull();
+    expect(today.findCourt).not.toHaveBeenCalled();
   });
 
   it("no other tab draws the run sheet, so none asks the day", async () => {

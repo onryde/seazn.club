@@ -11,12 +11,15 @@
  *  - NOT_CALLABLE `{ status }`: the match is not unstarted (`status` is its fixture status), or a side is still to be decided
  *                 (`status` is `"tbd_entrant"`);
  *  - NOT_CALLED   no details: Undo call on a match that is not called, or whose call no longer holds (the board has moved
- *                 it since). */
+ *                 it since);
+ *  - NOT_CANDIDATE_COURT `{ court_name }`: the target court is not one the match's division may play on — the scheduler's
+ *                 own candidate set (court-candidates.ts; B4 fix round 1, R1). */
 export const CALL_REFUSAL = {
   PLAYER_BUSY: "PLAYER_BUSY",
   COURT_BUSY: "COURT_BUSY",
   NOT_CALLABLE: "NOT_CALLABLE",
   NOT_CALLED: "NOT_CALLED",
+  NOT_CANDIDATE_COURT: "NOT_CANDIDATE_COURT",
 } as const;
 export type CallRefusalCode = (typeof CALL_REFUSAL)[keyof typeof CALL_REFUSAL];
 

@@ -2833,7 +2833,7 @@
     },
     "/api/v1/competitions/{id}/match-day": {
       "get": {
-        "summary": "Match Day: the competition's courts today. The courts are every division's candidate courts and every court holding one of its matches today (each match on its own division's day: the venue zone, else the organisation's; `date`, the header's label, is the organisation's day in `tz`). Archived divisions are left out. Each court's `state` comes from its matches' status, from any competition of the organisation: `playing` (this competition's match in play: `current`), `called` (called and not started: `current`), `in_use_elsewhere` (another competition's match playing or called: `in_use_by`), else `free` (`free_since`). `queue`: this competition's unstarted matches planned on the court today, in planned order, `estimated_at` = the later of `planned_at` and the end of the match before (another competition's planned matches on the court count; planned times are never written). `playing_no_court`: this competition's matches in play with no court (an untimed bracket match, an online board), in live divisions, in kick-off order (no recorded kick-off last), each carrying what a playing court's `current` carries. `needs_you`: the competition desk's Needs-you rows, in the reader's language; `results_owed`: matches past their time with no result; `fixtures_today`: this competition's matches today, plus any in play",
+        "summary": "Match Day: the competition's courts today. The courts are every division's candidate courts and every court holding one of its matches today (each match on its own division's day: the venue zone, else the organisation's; `date`, the header's label, is the organisation's day in `tz`). Archived divisions are left out. Each court's `state` comes from its matches' status, from any competition of the organisation: `playing` (this competition's match in play: `current`), `called` (called and not started: `current`), `in_use_elsewhere` (another competition's match playing or called: `in_use_by`), else `free` (`free_since`). `queue`: this competition's unstarted matches planned on the court today, in planned order, `estimated_at` = the later of `planned_at` and the end of the match before (another competition's planned matches on the court count; planned times are never written). `playing_no_court`: this competition's matches in play with no court (an untimed bracket match, an online board), in live divisions, in kick-off order (no recorded kick-off last), each carrying what a playing court's `current` carries. `needs_you`: the competition desk's Needs-you rows, in the reader's language — an unscheduled row of a division with a ready match and no court also carries `alt` (Find a court): the first free court one of those matches may be called onto (`court_id`), or null for the page's list; `results_owed`: matches past their time with no result; `fixtures_today`: this competition's matches today, plus any in play",
         "tags": [
           "competitions"
         ],
@@ -3722,6 +3722,35 @@
                                   "href"
                                 ],
                                 "additionalProperties": false
+                              },
+                              "alt": {
+                                "type": "object",
+                                "properties": {
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "href": {
+                                    "type": "string"
+                                  },
+                                  "court_id": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "label",
+                                  "href",
+                                  "court_id"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -4044,7 +4073,7 @@
     },
     "/api/v1/competitions/{id}/match-day/candidates": {
       "get": {
-        "summary": "Match Day: the matches that could start on a free court now, best first: the court's own next match, other courts' next matches (and a called match not yet started) by `behind_minutes` then `waiting_minutes`, then ready matches with no court in active stages; a TBD side is never one. `blocked` (`player_busy`: `person_name`, `court_name`, null when that match has no court) when a player — a doubles partner counts; for a side with no roster, the side — is in a match playing or called elsewhere; blocked ones come last. 400 without a valid `court_id`; 404 when the court is not the organisation's or is archived",
+        "summary": "Match Day: the matches that could start on a free court now, best first: the court's own next match, other courts' next matches (and a called match not yet started) by `behind_minutes` then `waiting_minutes`, then ready matches with no court in active stages; a TBD side is never one, and neither is a match whose division may not play on the court (its candidate courts, as a call is refused NOT_CANDIDATE_COURT). `blocked` (`player_busy`: `person_name`, `court_name`, null when that match has no court) when a player — a doubles partner counts; for a side with no roster, the side — is in a match playing or called elsewhere; blocked ones come last. 400 without a valid `court_id`; 404 when the court is not the organisation's or is archived",
         "tags": [
           "competitions"
         ],
@@ -36352,7 +36381,7 @@
     },
     "/api/v1/fixtures/{id}/call": {
       "post": {
-        "summary": "Match Day: call the match onto a free court NOW. Writes only this match's court, venue (the court's) and time, recorded on the division's history like a board move (the division's seq moves on; its schedule freeze does not apply); every other match keeps its planned time, so a planned, not-started match on the court does not block the call. The slot it held before is kept for Undo call; calling a called match to another court moves it and keeps that first slot. 409 PLAYER_BUSY (`person_name`, `court_name`): a player of the match — a doubles partner counts — is in a match playing, or called, on another court; for a side with no roster, the side itself, named by `person_name`. 409 COURT_BUSY (`court_name`, `competition_name`): the court has a match playing or called, from any competition of the organisation. 409 NOT_CALLABLE (`status`): the match is not unstarted (its status), or a side is still to be decided (`tbd_entrant`). 404 when the court is not the organisation's or is archived",
+        "summary": "Match Day: call the match onto a free court NOW. Writes only this match's court, venue (the court's) and time, recorded on the division's history like a board move (the division's seq moves on; its schedule freeze does not apply); every other match keeps its planned time, so a planned, not-started match on the court does not block the call. The slot it held before is kept for Undo call; calling a called match to another court moves it and keeps that first slot. 409 PLAYER_BUSY (`person_name`, `court_name`): a player of the match — a doubles partner counts — is in a match playing, or called, on another court; for a side with no roster, the side itself, named by `person_name`. 409 COURT_BUSY (`court_name`, `competition_name`): the court has a match playing or called, from any competition of the organisation. 409 NOT_CALLABLE (`status`): the match is not unstarted (its status), or a side is still to be decided (`tbd_entrant`). 409 NOT_CANDIDATE_COURT (`court_name`): the court is not one the match's division may play on (the scheduler's own candidate courts: the division's configured courts, every court when none is configured, narrowed by required tags). 404 when the court is not the organisation's or is archived",
         "tags": [
           "fixtures"
         ],

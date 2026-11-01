@@ -755,3 +755,82 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
     expect(await previewCall(day.auth, f.id, day.courts.c1, at(31))).toEqual({ shifts: [], warnings: [] });
   });
 });
+
+// B4 fix round 1, R1 (controller ruling; spec §7 "Which courts"): a match is called only onto a court its division may play on —
+// the scheduler's own candidate set (court-candidates.ts's `resolveCandidateCourts`, per match through
+// `candidateCourtsByFixture`). Anything else is 409 NOT_CANDIDATE_COURT {court_name}, from the call and its preview alike: one
+// tap must not put a match on another sport's venue. The expected sets below are the resolver's declared rule (its doc comment:
+// a configured list is the division's courts; an EMPTY list is every court of the organisation; required tags narrow either),
+// never what the code under test returns.
+describe.skipIf(!HAS_DB)("R1: a call respects the division's candidate courts", () => {
+  /** Two divisions of ONE competition on disjoint courts: Court 1 is "Doubles"'s only court, Court 2 is "Mixed"'s. Court 3 is
+   *  neither's. Their own people, so no PLAYER_BUSY crosses them. */
+  async function disjoint(day: Day) {
+    const p: Awaited<ReturnType<typeof person>>[] = [];
+    for (const n of ["Ivy Ives", "Jon Joy", "Kim Kerr", "Lou Lane", "Max Moss", "Ned Nash", "Ola Orr", "Pia Pratt"]) {
+      p.push(await person(day.orgId, n));
+    }
+    const a = await seedCompetition(day.auth, "Split Day", [[p[0]!, p[1]!], [p[2]!, p[3]!]], { courts: [day.courts.c1] });
+    const b = await seedCompetition(day.auth, "Split Day", [[p[4]!, p[5]!], [p[6]!, p[7]!]], {
+      courts: [day.courts.c2],
+      competitionId: a.id,
+      division: "Mixed",
+    });
+    return { a: a.fixtures[0]!, b: b.fixtures[0]! };
+  }
+
+  it("refuses NOT_CANDIDATE_COURT on a court the match's division does not play on — call and preview, either way across — and writes nothing; its own court takes it", async () => {
+    const day = await seedDay();
+    const { a, b } = await disjoint(day);
+    const crossings: [string, string][] = [
+      [a.id, day.courts.c2],
+      [b.id, day.courts.c1],
+      [a.id, day.courts.c3],
+      [b.id, day.courts.c3],
+    ];
+    let refused = 0;
+    for (const [fixtureId, courtId] of crossings) {
+      for (const attempt of [callFixtureToCourt, previewCall]) {
+        const err = await refusal(attempt(day.auth, fixtureId, courtId, at(31)));
+        expect(err.status, `${attempt.name} onto ${day.courtName[courtId]}`).toBe(409);
+        expect(err.code).toBe("NOT_CANDIDATE_COURT");
+        expect(err.extra).toEqual({ court_name: day.courtName[courtId] });
+        refused++;
+      }
+      expect(await callRows(fixtureId), "nothing written").toEqual([]);
+      expect(await slotOf(fixtureId)).toMatchObject({ court_id: null, scheduled_at: null });
+    }
+    expect(refused).toBe(crossings.length * 2);
+
+    // The positive pair: each match goes onto its own division's court.
+    await previewCall(day.auth, a.id, day.courts.c1, at(31));
+    await callFixtureToCourt(day.auth, a.id, day.courts.c1, at(31));
+    await callFixtureToCourt(day.auth, b.id, day.courts.c2, at(31));
+    expect(await slotOf(a.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(31) });
+    expect(await slotOf(b.id)).toMatchObject({ court_id: day.courts.c2, scheduled_at: iso(31) });
+  });
+
+  it("a division with NO courts configured plays on every court of the organisation (the resolver's empty-list rule); its required tags still narrow that", async () => {
+    const day = await seedDay();
+    const [q1, q2, q3, q4] = await Promise.all(["Quin Quay", "Rae Ross", "Sol Stone", "Tia Tran"].map((n) => person(day.orgId, n)));
+    const open = await seedCompetition(day.auth, "Open Night", [[q1!, q2!], [q3!, q4!]], { courts: [] });
+    const f = open.fixtures[0]!;
+    const every = [day.courts.c1, day.courts.c2, day.courts.c3];
+    for (const courtId of every) {
+      expect(await previewCall(day.auth, f.id, courtId, at(31)), day.courtName[courtId]).toEqual({ shifts: [], warnings: [] });
+    }
+
+    // Court 3 alone carries "show"; the division asks for it: Courts 1 and 2 drop out, Court 3 stays.
+    await sql`update courts set tags = ${"{show}"}::text[] where id = ${day.courts.c3}`;
+    await sql`update divisions set required_court_tags = ${"{show}"}::text[] where id = ${open.divisionId}`;
+    const narrowed: string[] = [];
+    for (const courtId of [day.courts.c1, day.courts.c2]) {
+      const err = await refusal(previewCall(day.auth, f.id, courtId, at(31)));
+      expect(err.code).toBe("NOT_CANDIDATE_COURT");
+      narrowed.push(day.courtName[courtId]!);
+    }
+    expect(narrowed).toEqual(["Court 1", "Court 2"]);
+    await callFixtureToCourt(day.auth, f.id, day.courts.c3, at(31));
+    expect(await slotOf(f.id)).toMatchObject({ court_id: day.courts.c3 });
+  });
+});

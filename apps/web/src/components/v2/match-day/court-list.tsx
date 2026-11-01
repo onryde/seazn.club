@@ -16,7 +16,7 @@ import Link from "@/components/ui/console-link";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
-import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
+import type { MatchDayCourt, MatchDayFixture, VenueNoun } from "@/lib/match-day/types";
 import { compactScore, courtScorerAttention, matchLabel, scoreLine } from "@/lib/match-day/view";
 import { ScorerMark } from "./scorer-mark";
 
@@ -108,9 +108,11 @@ function LiveBadge({ dict }: { dict: Dict }) {
   );
 }
 
-/** "Playing, no court" (B4): the matches in play on no court, under the courts. Nothing when there is none. */
+/** "Playing, no court" (B4): the matches in play on no court, under the courts — titled in their sports' word (fix round 1, R3:
+ *  "Playing, no board" on an online chess day). Nothing when there is none. */
 export function NoCourtList({
   fixtures,
+  noun,
   selectedId,
   dict,
   hrefOf,
@@ -118,6 +120,8 @@ export function NoCourtList({
   onSelect,
 }: {
   fixtures: readonly MatchDayFixture[];
+  /** The group's noun (`noCourtNoun`). */
+  noun: VenueNoun;
   /** The match whose panel is open, when it is one of these. */
   selectedId: string | null;
   dict: Dict;
@@ -132,7 +136,7 @@ export function NoCourtList({
   return (
     <section data-testid="md-no-court" aria-labelledby={headingId} className="min-w-0">
       <h2 id={headingId} className="mb-2 px-1 text-xs font-semibold text-slate-600">
-        {t(dict, "matchDay.noCourt.title")}
+        {t(dict, `matchDay.noCourt.title.${noun}`)}
       </h2>
       <ul className="card divide-y divide-purple-50 overflow-hidden">
         {fixtures.map((f) => {
@@ -157,8 +161,12 @@ export function NoCourtList({
               >
                 <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full bg-emerald-500" />
                 <span className="min-w-0">
-                  <span className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 truncate text-sm font-semibold">{matchLabel(dict, f)}</span>
+                  {/* Fix round 1, R4: the match is the row's whole name, so it WRAPS (as MatchLine does) rather than cutting the
+                      away side at 320; a court row's name is a court's, short, and stays one line. */}
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span data-md-match className="min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">
+                      {matchLabel(dict, f)}
+                    </span>
                     {f.stream === "live" && <LiveBadge dict={dict} />}
                   </span>
                   <span className="block truncate text-xs text-slate-600">

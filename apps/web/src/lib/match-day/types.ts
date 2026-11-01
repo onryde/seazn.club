@@ -118,6 +118,15 @@ export interface MatchDayCandidate {
   blocked: null | { kind: "player_busy"; person_name: string; court_name: string | null };
 }
 
+/** Needs you's "Find a court" for one division (B4 fix round 1, R2): present only when the division has a ready match with no
+ *  court yet (Match Day's own "no court yet" rule: unstarted, both sides seated, an active stage); `court_id` is the first free
+ *  court on the list that one of those matches may be called onto (`callableCourtsByFixture`), or null when none is free; `noun`
+ *  is the division's sport's word for it. */
+export interface MatchDayFindCourt {
+  court_id: string | null;
+  noun: VenueNoun;
+}
+
 /** GET /api/v1/competitions/{id}/match-day. */
 export interface MatchDayView {
   competition_id: string;

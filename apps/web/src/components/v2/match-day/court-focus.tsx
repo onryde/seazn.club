@@ -33,6 +33,7 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
 import { courtScorerAttention, matchLabel, streamPreviewOf } from "@/lib/match-day/view";
+import { venueNoun } from "@/lib/venue";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { FreeCourt } from "./candidate-list";
 import { failureMessage } from "./call-sheet";
@@ -219,18 +220,20 @@ export function NoCourtFocus({
   const match = matchLabel(dict, f);
   const preview = streamPreviewOf(f);
   const streamHref = `${fixtureHref(ctx, f)}?stream=open`;
+  // Fix round 1, R3: its own sport's word ("Playing, no board" for an online chess match).
+  const title = t(dict, `matchDay.noCourt.title.${venueNoun(f.sport_key)}`);
   return (
     <section
       data-testid="md-focus"
       data-state="playing"
       data-no-court="true"
       data-fixture-id={f.id}
-      aria-label={t(dict, "matchDay.noCourt.title")}
+      aria-label={title}
       className={`grid min-w-0 content-start gap-4${hiddenOnPhone ? " max-md:hidden" : ""}`}
     >
       <BackButton label={backLabel} onBack={onBack} />
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <h2 className="min-w-0 truncate text-xl font-semibold text-purple-950">{t(dict, "matchDay.noCourt.title")}</h2>
+        <h2 className="min-w-0 truncate text-xl font-semibold text-purple-950">{title}</h2>
         <OpenPadLink ctx={ctx} fixture={f} />
       </header>
       <MatchLine ctx={ctx} fixture={f} />

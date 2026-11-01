@@ -19,7 +19,7 @@ import { plural, t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import { VENUE_NOUNS, venueNoun } from "@/lib/venue";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview } from "@/lib/match-day/call";
-import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDaySummary, MatchDayView } from "@/lib/match-day/types";
+import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDaySummary, MatchDayView, VenueNoun } from "@/lib/match-day/types";
 import {
   callableCount,
   compactScore,
@@ -27,10 +27,11 @@ import {
   filterCandidates,
   filterCourts,
   filterNoCourt,
-  firstFreeCourt,
   headerCountParts,
   scoreLine,
   withFindCourt,
+  findCourtHref,
+  noCourtNoun,
   isCandidateList,
   isLive,
   isMatchDayView,
@@ -980,6 +981,7 @@ describe("refusals in organiser words, every locale", () => {
     COURT_BUSY: { court_name: "Court 5", competition_name: "Winter Open" },
     NOT_CALLABLE: { status: "in_play" },
     NOT_CALLED: {},
+    NOT_CANDIDATE_COURT: { court_name: "Court 2" },
     SEQ_CONFLICT: {},
   };
 
@@ -996,7 +998,7 @@ describe("refusals in organiser words, every locale", () => {
       }
     }
     expect(checked).toBe(REFUSAL_CODES.length * 4);
-    expect(REFUSAL_CODES.length).toBe(5);
+    expect(REFUSAL_CODES.length).toBe(6);
   });
 
   it("the variants: a busy person with no court, a side still to be decided, and an unknown code", () => {
@@ -1405,6 +1407,7 @@ const noCourtList = (fixtures: MatchDayFixture[], openLabel = t(dict, "matchDay.
   renderToStaticMarkup(
     <NoCourtList
       fixtures={fixtures}
+      noun={noCourtNoun(fixtures)}
       selectedId={selectedId}
       dict={dict}
       hrefOf={(f) => routes.fixture(ctx.orgSlug, ctx.compSlug, f.division_slug, f.fixture_no)}
@@ -1435,7 +1438,7 @@ describe("B4 — 'Playing, no court': the group under the courts", () => {
     expect(noCourtList([])).toBe("");
     const html = shellWith(view([court()]));
     expect(html).not.toContain('data-testid="md-no-court"');
-    expect(html).not.toContain(`>${t(dict, "matchDay.noCourt.title")}<`);
+    expect(html).not.toContain(`>${t(dict, "matchDay.noCourt.title.court")}<`);
   });
 
   it("each row: the match, its division and stage, its score in the court rows' own form, Live only while its stream is, the scorer mark, and 'Open pad' to its console", () => {
@@ -1444,9 +1447,17 @@ describe("B4 — 'Playing, no court': the group under the courts", () => {
       fx({ id: "nc-2", home: "Isha Rao", away: "Lily Chen", fixture_no: 12, summary: null, headline: null, stream: "waiting" }),
     ];
     const html = noCourtList(rows);
-    expect(html).toContain(`>${t(dict, "matchDay.noCourt.title")}<`);
+    expect(html).toContain(`>${t(dict, "matchDay.noCourt.title.court")}<`);
     const [first, second] = rowsOf(html, "md-no-court-row");
     expect(rowsOf(html, "md-no-court-row")).toHaveLength(2);
+    // Fix round 1, R4: the match is the row's whole name — it wraps (MatchLine's own rule), never cut to an ellipsis at 320
+    // (the browser half: e2e/match-day.spec.ts measures it).
+    const names = html.match(/<span data-md-match="?[^"]*"? class="([^"]*)"/g) ?? [];
+    expect(names).toHaveLength(2);
+    for (const n of names) {
+      expect(n).toContain("[overflow-wrap:anywhere]");
+      expect(n).not.toMatch(/[\s"]truncate[\s"]/);
+    }
     expect(first).toContain(`>${esc(t(dict, "matchDay.match", { home: HOME.name, away: AWAY.name }))}<`);
     expect(first).toContain(`>${esc("Girls U14")} · ${esc("Swiss round 3")}<`);
     // The court rows' own score form (`compactScore` of the engine's structure), not a headline typed here.
@@ -1477,7 +1488,7 @@ describe("B4 — 'Playing, no court': the group under the courts", () => {
     const f = goldenMatch("badminton", BADMINTON!, { started_at: "2026-10-31T11:20:00.000Z" });
     const html = noCourtFocus(f);
     expect(tagWith(html, "md-focus")).toContain('data-no-court="true"');
-    expect(html).toContain(`>${t(dict, "matchDay.noCourt.title")}<`);
+    expect(html).toContain(`>${t(dict, "matchDay.noCourt.title.court")}<`);
     expect(html).toContain(`aria-label="${esc(t(dict, "matchDay.noCourt.scoreboard", { match: t(dict, "matchDay.match", { home: HOME.name, away: AWAY.name }) }))}"`);
     expect(scoreboardOf(html)).not.toBe("");
     expect(tagWith(html, "md-scorer")).toContain('data-folded="true"');
@@ -1541,13 +1552,14 @@ describe("B4 — 'Playing, no court': the group under the courts", () => {
 
 describe("B4 — the header's counts", () => {
   it("EMPTY CASE FIRST: no courts and nothing playing on no court — '0 courts', and nothing else", () => {
-    expect(headerCountParts(dict, "en", "court", [], 0)).toEqual([plural(dict, "matchDay.header.places.court", 0, "en")]);
+    expect(headerCountParts(dict, "en", "court", [], [])).toEqual([plural(dict, "matchDay.header.places.court", 0, "en")]);
   });
 
   it("no courts, matches on no court: the no-court count alone (never '0 playing · 0 free')", () => {
-    expect(headerCountParts(dict, "en", "court", [], 2)).toEqual([plural(dict, "matchDay.header.noCourt", 2, "en")]);
-    expect(headerCountParts(dict, "en", "court", [], 1)).toEqual([plural(dict, "matchDay.header.noCourt", 1, "en")]);
-    expect(plural(dict, "matchDay.header.noCourt", 1, "en")).not.toBe(plural(dict, "matchDay.header.noCourt", 2, "en").replace("2", "1"));
+    const two = [fx({ id: "nc-1" }), fx({ id: "nc-2" })];
+    expect(headerCountParts(dict, "en", "court", [], two)).toEqual([plural(dict, "matchDay.header.noCourt.court", 2, "en")]);
+    expect(headerCountParts(dict, "en", "court", [], [two[0]!])).toEqual([plural(dict, "matchDay.header.noCourt.court", 1, "en")]);
+    expect(plural(dict, "matchDay.header.noCourt.court", 1, "en")).not.toBe(plural(dict, "matchDay.header.noCourt.court", 2, "en").replace("2", "1"));
   });
 
   it("courts: courts · playing · free, then the no-court count only when there is one", () => {
@@ -1557,29 +1569,62 @@ describe("B4 — the header's counts", () => {
       t(dict, "matchDay.header.playing", { count: 1 }),
       t(dict, "matchDay.header.free", { count: 1 }),
     ];
-    expect(headerCountParts(dict, "en", "court", courts, 0)).toEqual(base);
-    expect(headerCountParts(dict, "en", "court", courts, 3)).toEqual([...base, plural(dict, "matchDay.header.noCourt", 3, "en")]);
+    expect(headerCountParts(dict, "en", "court", courts, [])).toEqual(base);
+    const three = ["nc-1", "nc-2", "nc-3"].map((id) => fx({ id }));
+    expect(headerCountParts(dict, "en", "court", courts, three)).toEqual([...base, plural(dict, "matchDay.header.noCourt.court", 3, "en")]);
+  });
+
+  it("R3: the no-court words are the matches' own sport's — 'board' for chess, 'pitch' for football — and 'court' when they mix", () => {
+    const chess = [fx({ id: "nc-1", sport_key: "chess" }), fx({ id: "nc-2", sport_key: "chess" })];
+    expect(noCourtNoun(chess)).toBe("board");
+    expect(headerCountParts(dict, "en", "court", [], chess)).toEqual([plural(dict, "matchDay.header.noCourt.board", 2, "en")]);
+    expect(noCourtNoun([fx({ id: "nc-1", sport_key: "football" })])).toBe("pitch");
+    expect(noCourtNoun([...chess, fx({ id: "nc-3", sport_key: "football" })])).toBe("court");
+    expect(noCourtNoun([])).toBe("court");
+    // The group's heading and the match's own panel say it too.
+    expect(noCourtList(chess)).toContain(`>${t(dict, "matchDay.noCourt.title.board")}<`);
+    expect(noCourtFocus(chess[0]!)).toContain(`>${t(dict, "matchDay.noCourt.title.board")}<`);
+    expect(t(dict, "matchDay.noCourt.title.board")).not.toBe(t(dict, "matchDay.noCourt.title.court"));
+  });
+
+  it("R3: every noun has its own whole string in all four locales — the group's title, the header's count (one and other) and Find a court (count reported)", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS)) {
+      for (const noun of VENUE_NOUNS) {
+        for (const key of [
+          `matchDay.noCourt.title.${noun}`,
+          `matchDay.header.noCourt.${noun}.one`,
+          `matchDay.header.noCourt.${noun}.other`,
+          `matchDay.needsYou.findCourt.${noun}`,
+        ]) {
+          expect(typeof d[key] === "string" && d[key] !== "", `${locale} ${key}`).toBe(true);
+          checked++;
+        }
+      }
+      // The one-size keys are retired.
+      for (const gone of ["matchDay.noCourt.title", "matchDay.header.noCourt.one", "matchDay.header.noCourt.other", "matchDay.needsYou.findCourt"]) {
+        expect(d[gone], `${locale}: ${gone} is retired`).toBeUndefined();
+      }
+    }
+    expect(checked).toBe(Object.keys(DICTS).length * VENUE_NOUNS.length * 4);
   });
 
   it("the words exist in all four locales, singular and plural (count reported)", () => {
     let checked = 0;
     for (const [locale, d] of Object.entries(DICTS)) {
       for (const key of [
-        "matchDay.header.noCourt.one",
-        "matchDay.header.noCourt.other",
-        "matchDay.noCourt.title",
         "matchDay.noCourt.scoreboard",
         "matchDay.noCourt.preview",
         "matchDay.focus.openMatch",
         "matchDay.back.list",
         "matchDay.readOnly",
-        "matchDay.needsYou.findCourt",
+        "matchDay.refusal.NOT_CANDIDATE_COURT",
       ]) {
         expect(typeof d[key], `${locale} ${key}`).toBe("string");
         checked++;
       }
     }
-    expect(checked).toBe(4 * 9);
+    expect(checked).toBe(4 * 6);
   });
 });
 
@@ -1601,7 +1646,8 @@ describe("B4 — Q1(c): a day with no courts", () => {
     expect(html).toContain('data-testid="md-no-court"');
     expect(html).not.toContain(`aria-label="${esc(t(dict, "matchDay.list.label"))}"`);
     expect(tagWith(html, "md-focus")).toContain('data-fixture-id="nc-1"');
-    expect(html).toContain(`>${plural(dict, "matchDay.header.noCourt", 1, "en")}<`);
+    expect(html).toContain(`>${plural(dict, "matchDay.header.noCourt.board", 1, "en")}<`);
+    expect(html).toContain(`>${t(dict, "matchDay.noCourt.title.board")}<`);
     expect(html).toContain(`>${t(dict, "matchDay.back.list")}<`);
   });
 
@@ -1673,46 +1719,62 @@ describe("B4 — Q1(b): a view-only member sees the day and nothing that writes"
   });
 });
 
-describe("B4 — §9 carried: Needs you's unscheduled row finds a court", () => {
+describe("B4 — §9 carried (fix round 1, R2/R3): Needs you's unscheduled row finds a court its division can use", () => {
   const BASE = routes.competitionMatchDay("acme", "safe-badminton");
+  /** The server's answer for the rows' division ("d-u14"): match-day.ts `findCourtsOf`. */
+  const found = (court_id: string | null, noun: VenueNoun = "court") => new Map([["d-u14", { court_id, noun }]]);
 
-  it("EMPTY CASE FIRST: no rows in, no rows out; a row of any other kind is the desk's, untouched (count reported)", () => {
-    expect(withFindCourt(dict, [], [court({ state: "free", current: null })], BASE)).toEqual([]);
+  it("EMPTY CASE FIRST: no rows in, no rows out; a division with no ready match on no court (absent) keeps the schedule board alone; another division's answer never reaches it; other kinds are the desk's, untouched (count reported)", () => {
+    expect(withFindCourt(dict, [], found("c-4"), BASE)).toEqual([]);
+    const [row] = deskRows([ONE_OF_EACH.unscheduled]);
+    expect(withFindCourt(dict, [row!], new Map(), BASE)).toEqual([row]);
+    expect(withFindCourt(dict, [row!], new Map([["d-other", { court_id: "c-4", noun: "court" as const }]]), BASE)).toEqual([row]);
     const others = deskRows(KINDS.filter((k) => k !== "unscheduled").map((k) => ONE_OF_EACH[k]));
-    const out = withFindCourt(dict, others, [court({ state: "free", current: null })], BASE);
+    const out = withFindCourt(dict, others, found("c-4"), BASE);
     expect(out).toEqual(others);
     expect(out.filter((r) => r.alt !== undefined)).toEqual([]);
     console.info(`[B4] Needs-you rows of other kinds left untouched: ${out.length} (${new Set(out.map((r) => r.kind)).size} kinds)`);
     expect(new Set(out.map((r) => r.kind)).size, "every other kind checked").toBe(KINDS.length - 1);
   });
 
-  it("a free court: 'Find a court' opens the FIRST free court's candidates (?court=); the schedule board stays the row's action", () => {
+  it("a usable court free: 'Find a court' opens THAT court's candidates (?court=), carrying its id; the schedule board stays the row's action", () => {
     const [row] = deskRows([ONE_OF_EACH.unscheduled]);
-    const courts = [court({ court_id: "c-1" }), court({ court_id: "c-4", state: "free", current: null }), court({ court_id: "c-6", state: "free", current: null })];
-    expect(firstFreeCourt(courts)?.court_id).toBe("c-4");
-    const [out] = withFindCourt(dict, [row!], courts, BASE);
-    expect(out!.alt).toEqual({ label: t(dict, "matchDay.needsYou.findCourt"), href: `${BASE}?court=c-4` });
+    const [out] = withFindCourt(dict, [row!], found("c-4"), BASE);
+    expect(out!.alt).toEqual({ label: t(dict, "matchDay.needsYou.findCourt.court"), href: `${BASE}?court=c-4`, court_id: "c-4" });
     expect(out!.action).toEqual(row!.action);
     expect(out!.action.href).toBe(routes.divisionSchedule("acme", "safe-badminton", "girls-u14"));
   });
 
-  it("no court free: 'Find a court' is the page itself (the list), never a court that cannot take the match", () => {
+  it("no usable court free: the page itself (the list), with no court to open", () => {
     const [row] = deskRows([ONE_OF_EACH.unscheduled]);
-    expect(firstFreeCourt([court(), court({ court_id: "c-2", state: "called" })])).toBeNull();
-    expect(firstFreeCourt([])).toBeNull();
-    const [out] = withFindCourt(dict, [row!], [court(), court({ court_id: "c-2", state: "in_use_elsewhere", current: null })], BASE);
-    expect(out!.alt!.href).toBe(BASE);
+    const [out] = withFindCourt(dict, [row!], found(null), BASE);
+    expect(out!.alt).toEqual({ label: t(dict, "matchDay.needsYou.findCourt.court"), href: BASE, court_id: null });
+    expect(findCourtHref(BASE, null)).toBe(BASE);
+    expect(findCourtHref(BASE, "a b")).toBe(`${BASE}?court=a%20b`);
+  });
+
+  it("R3: it asks in the division's sport's word, in every locale (sweep over VENUE_NOUNS, count reported)", () => {
+    let checked = 0;
+    for (const d of Object.values(DICTS)) {
+      for (const noun of VENUE_NOUNS) {
+        const [out] = withFindCourt(d, deskRows([ONE_OF_EACH.unscheduled], d), found(null, noun), BASE);
+        expect(out!.alt!.label).toBe(d[`matchDay.needsYou.findCourt.${noun}`]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(Object.keys(DICTS).length * VENUE_NOUNS.length);
+    expect(new Set(VENUE_NOUNS.map((n) => t(dict, `matchDay.needsYou.findCourt.${n}`))).size, "five English words, not one").toBe(VENUE_NOUNS.length);
   });
 
   it("the list draws it as a second, quieter link beside the action — and the competition page's rows (no alt) draw none", () => {
-    const rows = withFindCourt(dict, deskRows([ONE_OF_EACH.unscheduled, ONE_OF_EACH.no_scorer]), [court({ court_id: "c-4", state: "free", current: null })], BASE);
+    const rows = withFindCourt(dict, deskRows([ONE_OF_EACH.unscheduled, ONE_OF_EACH.no_scorer]), found("c-4", "pitch"), BASE);
     const html = renderToStaticMarkup(<NeedsYou dict={dict} items={rows} />);
     const alts = html.match(/<a [^>]*data-needs-you-alt[^>]*>[^<]*<\/a>/g) ?? [];
     // One row with it, drawn once per layout (phone and md), each to the same court.
     expect(alts).toHaveLength(2);
     for (const a of alts) {
       expect(a).toContain(`href="${BASE}?court=c-4"`);
-      expect(a).toContain(`>${t(dict, "matchDay.needsYou.findCourt")}<`);
+      expect(a).toContain(`>${t(dict, "matchDay.needsYou.findCourt.pitch")}<`);
       expect(a).not.toMatch(/\sbtn-primary[\s"]/);
     }
     expect(renderToStaticMarkup(<NeedsYou dict={dict} items={deskRows([ONE_OF_EACH.unscheduled])} />)).not.toContain("data-needs-you-alt");

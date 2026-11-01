@@ -506,11 +506,11 @@ const UI_EN = JSON.parse(
 ) as Record<string, string>;
 
 test.describe("Match Day — Find a court on the division's run sheet (B2)", () => {
-  // Spec §9: "Unscheduled fixtures link to the free-court candidate list". Match Day has no deep link into one court's
-  // candidate list (that list is the focused court's own panel), so the link is to Match Day itself. The seed is a match day (three
+  // Spec §9: "Unscheduled fixtures link to the free-court candidate list". Since B4 fix round 1 (R2) the link is Match Day's own
+  // Find a court: `?court=` the first free court the division plays on (the page itself when none is free). The seed is a match day (three
   // matches dated today, one in play) in a league of four whose other three matches have no time and no court: those are the rows
   // that offer it. The NOT-a-match-day half is in competition-desk.spec.ts, which owns the rig with nothing dated today.
-  test("on a match day each unscheduled match links to Match Day; the dated ones do not; at 1280, 768 and 320", async ({ page, request }) => {
+  test("on a match day each unscheduled match links to Match Day's free court for it; the dated ones do not; at 1280, 768 and 320", async ({ page, request }) => {
     const seed = await seedMatchDay(request, "FindCourt");
     const compPath = await competitionPath(request, seed.competitionId);
     const slug = await withDb(async (sql) => {
@@ -525,6 +525,17 @@ test.describe("Match Day — Find a court on the division's run sheet (B2)", () 
       return rows[0]!.n;
     });
     expect(unscheduled, "the seed leaves matches with no time and no court").toBeGreaterThanOrEqual(1);
+    // B4 fix round 1 (R2): the link is Match Day's own "Find a court" for the division — the first court on the list it plays
+    // on with nothing on it. Court 1 has Ana v Ben in play; Court 2 has only a later match planned, so it is free.
+    const findCourtHref = `${compPath}/match-day?court=${seed.court2Id}`;
+    // Shared, not parallel: Match Day's Needs you says the same thing for this division's unscheduled row.
+    const md = await apiJson<{ needs_you: { kind: string; key: string; alt?: { href: string; court_id: string | null } }[] }>(
+      request,
+      `/api/v1/competitions/${seed.competitionId}/match-day`,
+    );
+    expect(md.status, JSON.stringify(md.error)).toBe(200);
+    const row = md.data!.needs_you.find((i) => i.kind === "unscheduled" && i.key.startsWith(`${seed.divisionId}:`));
+    expect(row?.alt, "Match Day's own row offers it").toEqual({ label: UI_EN["matchDay.needsYou.findCourt.court"], href: findCourtHref, court_id: seed.court2Id });
 
     for (const width of [1280, 768, 320]) {
       await page.setViewportSize({ width, height: 900 });
@@ -538,7 +549,7 @@ test.describe("Match Day — Find a court on the division's run sheet (B2)", () 
       const findCourt = sheet.getByTestId("run-sheet-find-court");
       await expect(findCourt, `width ${width}`).toHaveCount(unscheduled);
       for (const link of await findCourt.all()) {
-        await expect(link).toHaveAttribute("href", `${compPath}/match-day`);
+        await expect(link).toHaveAttribute("href", findCourtHref);
         // generic/score plays on a court (the default noun); football's pitch and chess's board are the unit suites' (the seed is one sport).
         await expect(link).toHaveText(UI_EN["runsheet.action.findCourt.court"]!);
         await expect(link).toBeVisible();
@@ -557,11 +568,22 @@ test.describe("Match Day — Find a court on the division's run sheet (B2)", () 
     await expect(page.getByTestId("run-sheet").locator("li[data-fixture-no]").first()).toBeVisible();
     await expect(page.getByTestId("run-sheet-find-court")).toHaveCount(0);
 
-    // Following it lands on Match Day, which is where the free court's candidates are.
+    // Following it lands on Match Day with that court open, its candidates listing the division's unscheduled matches.
     await page.getByTestId("run-sheet").locator('[data-filter="unscheduled"]').click();
     await page.getByTestId("run-sheet-find-court").first().click();
-    await expect(page).toHaveURL(/\/match-day$/);
+    await expect(page).toHaveURL(new RegExp(`/match-day\\?court=${seed.court2Id}$`));
     await expect(page.getByTestId("md-header").getByRole("heading", { level: 1 })).toContainText("Match Day");
+    await expect(page.getByTestId("md-focus")).toContainText(seed.court2);
+    const ids = await withDb(async (sql) =>
+      (
+        await sql<{ id: string }[]>`
+          select id from fixtures where division_id = ${seed.divisionId} and status = 'scheduled' and court_id is null and scheduled_at is null`
+      ).map((r) => r.id),
+    );
+    expect(ids).toHaveLength(unscheduled);
+    for (const id of ids) {
+      await expect(page.getByTestId("md-focus").locator(`[data-testid="md-candidate"][data-fixture-id="${id}"]`), id).toHaveCount(1);
+    }
   });
 });
 
@@ -905,7 +927,8 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
 
     const group = page.getByTestId("md-no-court");
     await expect(group).toBeVisible();
-    await expect(group.getByRole("heading")).toHaveText(UI_EN["matchDay.noCourt.title"]!);
+    // A generic sport's word is "court" (lib/venue.ts's default): the court form of the per-noun title (fix round 1, R3).
+    await expect(group.getByRole("heading")).toHaveText(UI_EN["matchDay.noCourt.title.court"]!);
     await expect(page.getByTestId("md-counts")).toContainText("2 courts");
     await expect(page.getByTestId("md-counts")).toContainText("1 match with no court");
     const ncRow = page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${nc.fixtureId}"]`);
@@ -948,6 +971,18 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
     await expect(list).toBeVisible();
     await expect(page.getByTestId("md-focus")).toBeHidden();
     await expectNoHorizontalScroll(page);
+    // Fix round 1, R4: the row's match is its whole name, so at 320 it wraps — the away side is never cut to an ellipsis.
+    const name = page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${nc.fixtureId}"] [data-md-match]`);
+    await expect(name).toHaveText(`${nc.home} v ${nc.away}`);
+    const fit = await name.evaluate((e) => ({
+      sw: e.scrollWidth,
+      cw: e.clientWidth,
+      overflow: getComputedStyle(e).textOverflow,
+      lines: Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight)),
+    }));
+    expect(fit.overflow, "no ellipsis").not.toBe("ellipsis");
+    expect(fit.sw, `the name fits its box (${fit.sw} in ${fit.cw})`).toBeLessThanOrEqual(fit.cw);
+    expect(fit.lines, "a 30-odd character match wraps at 320 rather than running on one cut line").toBeGreaterThan(1);
     await page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${nc.fixtureId}"]`).click();
     await expect(page.getByTestId("md-focus")).toBeVisible();
     await expect(list).toBeHidden();
@@ -1050,7 +1085,9 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
         ["scorer link", await apiJson(vp.request, `/api/v1/fixtures/${seed.anaBen}/device-links`, "POST", {})],
       ] as const;
       for (const [label, r] of refusals) expect(r.status, `${label}: ${JSON.stringify(r.error)}`).toBe(403);
-      expect(refusals).toHaveLength(3);
+      // Which doors refused, read off the RESPONSES (their status and the door's own sentence), not the list typed above.
+      const refusedBy = refusals.filter(([, r]) => r.status === 403 && r.error?.message === "Insufficient permissions").map(([label]) => label);
+      expect(refusedBy).toEqual(["call", "undo", "scorer link"]);
       const after = await withDb(async (sql) => ({
         calls: (await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id in ${sql([seed.calDee, seed.anaCal])}`)[0]!.n,
         links: (await sql<{ n: number }[]>`select count(*)::int as n from device_links where fixture_id = ${seed.anaBen}`)[0]!.n,
@@ -1083,13 +1120,27 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
     // The board stays the row's action; Find a court is the second, quieter way in.
     await expect(unscheduled.getByRole("link", { name: UI_EN["desk.needsYou.unscheduled.action"]! }).locator("visible=true")).toBeVisible();
     const find = unscheduled.locator("[data-needs-you-alt]").locator("visible=true");
-    await expect(find).toHaveText(UI_EN["matchDay.needsYou.findCourt"]!);
+    await expect(find).toHaveText(UI_EN["matchDay.needsYou.findCourt.court"]!);
     const href = await find.getAttribute("href");
     expect(href, "Find a court names a court").toMatch(new RegExp(`/match-day\\?court=${seed.court2Id}$`));
     const url = page.url();
     await find.click();
     await expect(page.getByTestId("md-focus")).toContainText(`${seed.court2} is free`);
     await expect(page.getByTestId("md-focus").getByTestId("md-candidate").first()).toBeVisible();
+    // The link's promise (fix round 1, R5): the court it opened lists the division's unscheduled matches themselves — every
+    // ready one with no court and no time, read from the rows, not from the page.
+    const unscheduledIds = await withDb(async (sql) =>
+      (
+        await sql<{ id: string }[]>`
+          select id from fixtures
+           where division_id = ${seed.divisionId} and status = 'scheduled' and court_id is null and scheduled_at is null
+             and home_entrant_id is not null and away_entrant_id is not null`
+      ).map((r) => r.id),
+    );
+    expect(unscheduledIds.length, "premise: the division has unscheduled matches").toBeGreaterThan(0);
+    for (const id of unscheduledIds) {
+      await expect(page.getByTestId("md-focus").locator(`[data-testid="md-candidate"][data-fixture-id="${id}"]`), id).toHaveCount(1);
+    }
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
     expect(page.url(), "opened in place, no navigation").toBe(url);

@@ -1698,6 +1698,9 @@ export const MatchDayView = z.object({
       title: z.string(),
       sub: z.string(),
       action: z.object({ label: z.string(), href: z.string() }),
+      // B4: Match Day's "Find a court" on an unscheduled row — only when the division has a ready match with no court; the
+      // court it opens (the first free one that match may use), or null for the page's list.
+      alt: z.object({ label: z.string(), href: z.string(), court_id: Uuid.nullable() }).optional(),
     }),
   ),
   results_owed: z.number().int().nonnegative(),

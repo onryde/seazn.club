@@ -268,6 +268,22 @@ describe("B4 — a match on no court, opened, ended; Needs you's Find a court; a
     expect(tree.find((e) => propsOf(e)["data-testid"] === "md-empty")).toBeDefined();
   });
 
+  it("R3 (fix round 1): the group is titled in its matches' own word — 'court' for a generic sport, 'board' once they are all chess, 'court' again when they mix — on every poll", async () => {
+    const chess = (id: string): MatchDayFixture => ({ ...match(id, "Kim", "Lee"), sport_key: "chess" });
+    const island = renderIsland(MatchDayShell, props(view([C1], "2026-10-31T11:00:00.000Z", [M1])));
+    const nounOf = () => noCourtParts(island.tree()).list!.noun;
+    expect(nounOf()).toBe("court");
+    net.next = view([C1], "2026-10-31T11:00:30.000Z", [chess("m-3"), chess("m-4")]);
+    poll.tick!();
+    await settle();
+    expect(nounOf()).toBe("board");
+    net.next = view([C1], "2026-10-31T11:01:00.000Z", [chess("m-3"), M1]);
+    poll.tick!();
+    await settle();
+    expect(nounOf()).toBe("court");
+    expect(net.calls, "two polls after the first view, each drawn").toHaveLength(2);
+  });
+
   it("tapped on a phone, the match opens full-screen; it ENDS on the next poll — lost, by its match, the phone back on the list; a new match arriving is not jumped into", async () => {
     const island = renderIsland(MatchDayShell, props(view([C1], "2026-10-31T11:00:00.000Z", [M1, M2])));
     let p = noCourtParts(island.tree());
@@ -315,29 +331,35 @@ describe("B4 — a match on no court, opened, ended; Needs you's Find a court; a
     return propsOf(island.tree().find((e) => e.type === NeedsYou)!);
   };
 
-  it("Find a court: the row carries it to the FIRST free court; tapped, that court opens (full-screen on a phone) and the list closes", () => {
-    const C3 = court("c-3", "Court 3", { state: "called" });
-    const island = renderIsland(MatchDayShell, props({ ...view([C3, C1, C2], "2026-10-31T11:00:00.000Z"), needs_you: [unscheduled] }));
+  it("Find a court (fix round 1, R2): the shell opens the court the SERVER chose for the division — not the first free one on its own list — full-screen on a phone, and the list closes", () => {
+    // Both courts free; the server said Court 2 (the one the division's ready match may use).
+    const withAlt: NeedsYouItem = {
+      ...unscheduled,
+      alt: { label: "Find a court", href: "/o/acme/c/westway-open/match-day?court=c-2", court_id: "c-2" },
+    };
+    const island = renderIsland(MatchDayShell, props({ ...view([C1, C2], "2026-10-31T11:00:00.000Z"), needs_you: [withAlt] }));
+    expect(parts(island.tree()).focus!.court, "premise: Court 1 opens first").toMatchObject({ court_id: "c-1" });
     const list = openList(island);
-    const [item] = list.items as NeedsYouItem[];
-    expect(item!.alt).toEqual({ label: "Find a court", href: "/o/acme/c/westway-open/match-day?court=c-1" });
-    (list.onAlt as (i: NeedsYouItem) => void)(item!);
+    expect(list.items, "the rows as the server sent them").toEqual([withAlt]);
+    (list.onAlt as (i: NeedsYouItem) => void)(withAlt);
     const tree = island.tree();
     const p = parts(tree);
-    expect(p.focus!.court).toMatchObject({ court_id: "c-1" });
+    expect(p.focus!.court).toMatchObject({ court_id: "c-2" });
     expect(p.focus!.hiddenOnPhone).toBe(false);
     expect(tree.find((e) => e.type === NeedsYou), "the list closed").toBeUndefined();
   });
 
-  it("Find a court with no court free: the page itself; tapped, the list closes and a phone is on the court list", () => {
+  it("Find a court with no usable court free (court_id null): the list closes and a phone is on the court list; a row the server gave none keeps none", () => {
     const busy = [court("c-1", "Court 1", { state: "called" }), court("c-2", "Court 2", { state: "in_use_elsewhere" })];
-    const island = renderIsland(MatchDayShell, props({ ...view(busy, "2026-10-31T11:00:00.000Z"), needs_you: [unscheduled] }));
+    const toList: NeedsYouItem = { ...unscheduled, alt: { label: "Find a court", href: "/o/acme/c/westway-open/match-day", court_id: null } };
+    const bare: NeedsYouItem = { ...unscheduled, key: "d-2:unscheduled" };
+    const island = renderIsland(MatchDayShell, props({ ...view(busy, "2026-10-31T11:00:00.000Z"), needs_you: [toList, bare] }));
     (parts(island.tree()).list.onSelect as (id: string) => void)("c-2");
     expect(parts(island.tree()).listHiddenOnPhone).toBe(true);
     const list = openList(island);
-    const [item] = list.items as NeedsYouItem[];
-    expect(item!.alt!.href).toBe("/o/acme/c/westway-open/match-day");
-    (list.onAlt as (i: NeedsYouItem) => void)(item!);
+    const items = list.items as NeedsYouItem[];
+    expect(items.map((i) => (i.alt === undefined ? "none" : i.alt.court_id))).toEqual([null, "none"]);
+    (list.onAlt as (i: NeedsYouItem) => void)(toList);
     const tree = island.tree();
     expect(parts(tree).listHiddenOnPhone).toBe(false);
     expect(tree.find((e) => e.type === NeedsYou)).toBeUndefined();

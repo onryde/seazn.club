@@ -42,7 +42,8 @@ import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
 import { divisionScoringClosed, fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes, listFixturesAwaitingSettle } from "@/server/usecases/competition-desk";
-import { competitionFixturesToday } from "@/server/usecases/match-day";
+import { competitionFixturesToday, findCourtForDivision } from "@/server/usecases/match-day";
+import { findCourtHref } from "@/lib/match-day/view";
 import { needsYouHome } from "@/components/v2/desk/needs-you";
 import { comparePools } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
@@ -639,10 +640,14 @@ export default async function DivisionPage({
   // is the one rule the competition page's Open Match Day asks (`needsYouHome` of the day's fixture count), and the link goes
   // to the same organiser-only page, so it is read for the organiser - `editable`, the gate Set time beside it already has -
   // and on the one tab that draws the run sheet. Anyone else reads nothing: no query, no link.
-  const matchDayHref =
+  // B4 fix round 1 (R2): where it leads is Match Day's own "Find a court" for this division (`findCourtForDivision`, the helper
+  // its Needs you reads): the first free court one of the division's ready no-court matches may be called onto (`?court=`), or
+  // the page itself when none is free — and no link at all when the division has no such match.
+  const findCourt =
     tab === "fixtures" && editable && needsYouHome(await competitionFixturesToday(auth, competition.id)) === "match_day"
-      ? routes.competitionMatchDay(orgSlug, compSlug)
+      ? await findCourtForDivision(auth, competition.id, division.id)
       : null;
+  const matchDayHref = findCourt === null ? null : findCourtHref(routes.competitionMatchDay(orgSlug, compSlug), findCourt.court_id);
   const arbiterEntryLine = arbiterOffered
     ? entryLine(entryStatus(openViews, attentionCount(needsOrganiserExternalPlay, flaggedExternalPlay.boards), new Date().getTime()))
     : null;

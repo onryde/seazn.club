@@ -23,10 +23,13 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEFAULT_LOCALE, getDictionary, type Locale } from "@/lib/i18n";
 import { estimateQueue, rankCandidates } from "@/lib/match-day/estimate";
+import { withFindCourt } from "@/lib/match-day/view";
+import { routes } from "@/lib/routes";
 import type {
   MatchDayCandidate,
   MatchDayCourt,
   MatchDayCourtState,
+  MatchDayFindCourt,
   MatchDayFixture,
   MatchDayQueued,
   MatchDaySummary,
@@ -39,7 +42,16 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { defaultMatchMinutes, getCompetitionDesk } from "./competition-desk";
 import { resolveCandidateCourts } from "./court-candidates";
 import { listDivisions } from "./divisions";
-import { dayTable, divisionDays, IN_PLAY, liveCallSql, targetCourt, todayIn, whoIsBusy } from "./match-day-call";
+import {
+  callableCourtsByFixture,
+  dayTable,
+  divisionDays,
+  IN_PLAY,
+  liveCallSql,
+  targetCourt,
+  todayIn,
+  whoIsBusy,
+} from "./match-day-call";
 import { courtNamesById, loadSettings, MOVABLE_STATUS } from "./schedule";
 import { openStreamStates } from "./stream-sessions";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
@@ -391,6 +403,51 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
   return { comp, tz, day, courts, noCourt, playingNoCourt: playingNoCourtOf(rows, liveDivisions), courtNames };
 }
 
+/**
+ * "Find a court", per division (B4 fix round 1, R2; spec §9): for each division with at least one ready match with NO court yet
+ * (`board.noCourt`, Match Day's own rule: unstarted, both sides seated, an active stage, planned no later than today), the FIRST
+ * free court on the board's list that one of those matches may be called onto — the scheduler's own candidate set,
+ * `callableCourtsByFixture`, the set its call would be judged by — or null when no such court is free. A division with no such
+ * match is absent: a TBD-only knockout has nothing a court could take, and the link would promise a list it is not on. Shared by
+ * Match Day's Needs you and the division run sheet's link (`findCourtForDivision`).
+ */
+async function findCourtsOf(tx: Tx, board: Pick<Board, "courts" | "noCourt">): Promise<Map<string, MatchDayFindCourt>> {
+  const out = new Map<string, MatchDayFindCourt>();
+  if (board.noCourt.length === 0) return out;
+  const allowed = await callableCourtsByFixture(tx, board.noCourt);
+  const usable = new Map<string, { courts: Set<string>; noun: MatchDayFindCourt["noun"] }>();
+  for (const r of board.noCourt) {
+    let entry = usable.get(r.division_id);
+    if (entry === undefined) {
+      entry = { courts: new Set(), noun: venueNoun(r.sport_key) };
+      usable.set(r.division_id, entry);
+    }
+    for (const courtId of allowed.get(r.id) ?? []) entry.courts.add(courtId);
+  }
+  for (const [divisionId, { courts, noun }] of usable) {
+    const free = board.courts.find((c) => c.state === "free" && courts.has(c.court_id));
+    out.set(divisionId, { court_id: free?.court_id ?? null, noun });
+  }
+  return out;
+}
+
+/**
+ * One division's "Find a court" (`findCourtsOf`), read in a tenant transaction of its own: for the division page's run sheet
+ * (B2), whose link on an unscheduled match leads where Match Day's Needs you does. Null when the division has no ready match
+ * with no court.
+ */
+export async function findCourtForDivision(
+  auth: AuthCtx,
+  competitionId: string,
+  divisionId: string,
+  now: Date = new Date(),
+): Promise<MatchDayFindCourt | null> {
+  return withTenant(auth.orgId, async (tx) => {
+    const board = await readBoard(tx, competitionId, now, { noCourt: true });
+    return (await findCourtsOf(tx, board)).get(divisionId) ?? null;
+  });
+}
+
 /** What only a playing court's match carries: who serves (S1), the desk's scorer attention, and its live stream's video (A4). */
 interface PlayingExtras {
   serving: Serving;
@@ -453,8 +510,10 @@ export async function getMatchDay(
   now: Date = new Date(),
   opts: { locale?: Locale } = {},
 ): Promise<MatchDayView> {
-  const { board, serving } = await withTenant(auth.orgId, async (tx) => {
-    const board = await readBoard(tx, competitionId, now, { noCourt: false });
+  const { board, serving, findCourts } = await withTenant(auth.orgId, async (tx) => {
+    // The "no court yet" arm too: Needs you's "Find a court" is offered only for a division with such a match (R2).
+    const board = await readBoard(tx, competitionId, now, { noCourt: true });
+    const findCourts = await findCourtsOf(tx, board);
     // Who serves, on this competition's playing matches only — on a court, or on none (B4: the same scoreboard either way) —
     // for a sport whose engine reads a serve (S1). One match whose fold throws (a side whose entrant went: `loadFoldInputs`'
     // WRONG_PHASE) says nothing about who serves — `null`, logged — and never takes the rest of the board down with it (A3
@@ -476,7 +535,7 @@ export async function getMatchDay(
         serving.set(fixtureId, null);
       }
     }
-    return { board, serving };
+    return { board, serving, findCourts };
   });
   const locale = opts.locale ?? DEFAULT_LOCALE;
   // Each reads through its own connection: none may run inside the tenant transaction above (pool nesting).
@@ -534,7 +593,7 @@ export async function getMatchDay(
     now: now.toISOString(),
     courts: board.courts.map((c) => courtView(c, streams, extras)),
     playing_no_court: board.playingNoCourt.map((r) => fixtureView(r, streams, extras(r.id))),
-    needs_you: atHome,
+    needs_you: withFindCourt(dict, atHome, findCourts, routes.competitionMatchDay(board.comp.org_slug, board.comp.slug)),
     results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,
   };
@@ -548,7 +607,9 @@ const ready = (r: FixtureRow): boolean => r.home_entrant_id !== null && r.away_e
  *  - other_court: every other court's next ready match, and a match called onto another court and not yet started ("it can
  *    also be called to a different free court");
  *  - no_court: ready matches of active stages with no court, planned for no later day than today.
- * A side still to be decided is never a candidate. Each carries how long it would wait where it is and how far behind its plan
+ * A side still to be decided is never a candidate, and neither is a match whose division may not play on `courtId` (B4 fix round
+ * 1, R1: the scheduler's own candidate set, `callableCourtsByFixture` — the set a call refuses NOT_CANDIDATE_COURT by), whichever
+ * arm it came by. Each carries how long it would wait where it is and how far behind its plan
  * that is, and a hard stop when a player — a doubles partner counts; for a side with no roster, the side — is in a match playing
  * or called elsewhere (A1's `whoIsBusy`, the judge a call refuses by). 404 for a court that is not the org's, or is archived.
  */
@@ -593,8 +654,10 @@ export async function matchDayCandidates(
         behind: r.scheduled_at === null ? 0 : wholeMinutes(nowMs - new Date(r.scheduled_at).getTime()),
       });
     }
-    const busy = await whoIsBusy(tx, picked.map((p) => p.row));
-    return { picked, busy, courtNames: board.courtNames };
+    const allowed = await callableCourtsByFixture(tx, picked.map((p) => p.row));
+    const usable = picked.filter((p) => allowed.get(p.row.id)?.has(courtId) === true);
+    const busy = await whoIsBusy(tx, usable.map((p) => p.row));
+    return { picked: usable, busy, courtNames: board.courtNames };
   });
   const streams = await openStreamStates(auth, picked.map((p) => p.row.id));
   return rankCandidates(

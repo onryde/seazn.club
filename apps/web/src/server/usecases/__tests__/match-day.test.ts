@@ -39,6 +39,7 @@ import uiFr from "@/dictionaries/fr/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { venueNoun } from "@/lib/venue";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
+import { routes } from "@/lib/routes";
 
 // A4 fix round 1, m3: the serve fold runs in a SAVEPOINT so a statement that fails inside it cannot abort the board's
 // transaction. A JS throw (the S1 guard test below) never aborts a transaction, so it cannot witness the savepoint; this
@@ -70,7 +71,7 @@ import { createDivision, listDivisions } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
-import { countFixturesToday, getMatchDay, matchDayCandidates } from "../match-day";
+import { countFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
 import { putScheduleSettings } from "../schedule";
 import { createCourt } from "../venues";
 import {
@@ -717,10 +718,19 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     expect(en.map((i) => i.kind)).toEqual(expect.arrayContaining(["result_missing", "unscheduled"]));
     expect(fr.map((i) => i.title)).not.toEqual(en.map((i) => i.title));
 
+    // B4 fix round 1 (R2): the unscheduled row of a division with ready matches on no court also says "Find a court" — Court 1,
+    // the first free court on the list its division plays on (every court here is free: the two planned matches never started).
+    const matchDay = routes.competitionMatchDay(slugs!.org, slugs!.comp);
+    const findCourt = (items: typeof en, label: string) =>
+      items.map((i) =>
+        i.kind === "unscheduled" ? { ...i, alt: { label, href: `${matchDay}?court=${day.courts.c1}`, court_id: day.courts.c1 } } : i,
+      );
     const view = await getMatchDay(day.auth, day.comp.id, now);
-    expect(view.needs_you).toEqual(en);
+    expect(view.needs_you).toEqual(findCourt(en, uiEn["matchDay.needsYou.findCourt.court"]));
     expect(view.results_owed).toBe(2);
-    expect((await getMatchDay(day.auth, day.comp.id, now, { locale: "fr" })).needs_you).toEqual(fr);
+    expect((await getMatchDay(day.auth, day.comp.id, now, { locale: "fr" })).needs_you).toEqual(
+      findCourt(fr, uiFr["matchDay.needsYou.findCourt.court"]),
+    );
   });
 
   it("the court noun follows the sport: a football division's court is a pitch, a chess division's a board", async () => {
@@ -1148,5 +1158,138 @@ describe.skipIf(!HAS_DB)("matchDayCandidates", () => {
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// B4 fix round 1 (controller rulings R1, R2; spec §7 "Which courts", §9). A free court's candidates are only matches its division
+// may play on — the scheduler's own per-match candidate set (court-candidates.ts) — by every arm (its own queue, another court's
+// next or called match, no court yet). The expected sets are the divisions' configured courts (the INPUT), and the resolver's
+// declared empty-list rule (every court of the organisation), never what the code under test returns.
+async function splitDay(day: Day) {
+  const ps: Person[] = [];
+  for (const n of ["Ivy Ives", "Jon Joy", "Kim Kerr", "Lou Lane", "Max Moss", "Ned Nash", "Ola Orr", "Pia Pratt", "Quin Quay", "Rae Ross", "Sol Stone", "Tia Tran"]) {
+    ps.push(await person(day.orgId, n));
+  }
+  const pair = (i: number): Person[] => [ps[i]!, ps[i + 1]!];
+  // "Doubles" plays on Court 1 only; "Mixed" on Court 2 only; "Open" has no courts configured.
+  const a = await seedCompetition(day.auth, "Split Day", [pair(0), pair(2)], { courts: [day.courts.c1] });
+  const b = await seedCompetition(day.auth, "Split Day", [pair(4), pair(6), pair(8)], {
+    courts: [day.courts.c2],
+    competitionId: a.id,
+    division: "Mixed",
+  });
+  const open = await seedCompetition(day.auth, "Split Day", [pair(10), [ps[0]!, ps[5]!]], {
+    courts: [],
+    competitionId: a.id,
+    division: "Open",
+  });
+  return { competitionId: a.id, a, b, open };
+}
+
+describe.skipIf(!HAS_DB)("R1 — candidates respect the division's candidate courts", () => {
+  it("two divisions on disjoint courts: neither's match is offered on the other's court by any arm; a division with no courts configured is offered on every court", async () => {
+    const day = await seedDay();
+    const { competitionId, a, b, open } = await splitDay(day);
+    const [b0, b1, b2] = b.fixtures;
+    // Mixed's first match is Court 2's queue (this_court there; the other_court arm for any other court).
+    await place(day, b0!.id, 60, day.courts.c2);
+    const ids = async (courtId: string) =>
+      (await matchDayCandidates(day.auth, competitionId, courtId, at(20))).map((c) => c.fixture.id).sort();
+    const sorted = (xs: string[]) => [...xs].sort();
+    const offered = {
+      c1: await ids(day.courts.c1),
+      c2: await ids(day.courts.c2),
+      c3: await ids(day.courts.c3),
+    };
+    expect(offered).toEqual({
+      c1: sorted([a.fixtures[0]!.id, open.fixtures[0]!.id]),
+      c2: sorted([b0!.id, b1!.id, b2!.id, open.fixtures[0]!.id]),
+      c3: [open.fixtures[0]!.id],
+    });
+    // Anti-vacuity: every division's match was offered somewhere.
+    expect(new Set(Object.values(offered).flat()).size).toBe(a.fixtures.length + b.fixtures.length + open.fixtures.length);
+  });
+
+  it("a match CALLED onto its own court is offered on another court of its division, and on no court it may not use", async () => {
+    const day = await seedDay();
+    const { competitionId, b } = await splitDay(day);
+    const extra = await createCourt(day.auth, day.venues.hallA, { name: "Court 4", sort: 9, tags: [] });
+    await putScheduleSettings(day.auth, b.divisionId, {
+      config: { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [day.courts.c2, extra.id], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
+    });
+    const called = b.fixtures[0]!;
+    await callFixtureToCourt(day.auth, called.id, day.courts.c2, at(10));
+    const on = async (courtId: string) =>
+      (await matchDayCandidates(day.auth, competitionId, courtId, at(20))).find((c) => c.fixture.id === called.id)?.source ?? null;
+    expect({ court4: await on(extra.id), court1: await on(day.courts.c1), court3: await on(day.courts.c3) }).toEqual({
+      court4: "other_court",
+      court1: null,
+      court3: null,
+    });
+  });
+});
+
+describe.skipIf(!HAS_DB)("R2 — Find a court opens a court the division can use", () => {
+  it("disjoint divisions: each division's link names ITS court; a division with no courts configured, the first free court of all; once none it can use is free, the page itself", async () => {
+    const day = await seedDay();
+    const { competitionId, a, b, open } = await splitDay(day);
+    const courtOf = async (divisionId: string) => (await findCourtForDivision(day.auth, competitionId, divisionId, at(20)))?.court_id;
+    // Every court free: Doubles plays on Court 1 only, Mixed on Court 2 only, Open on all three (list order: Court 1 first).
+    expect({ a: await courtOf(a.divisionId), b: await courtOf(b.divisionId), open: await courtOf(open.divisionId) }).toEqual({
+      a: day.courts.c1,
+      b: day.courts.c2,
+      open: day.courts.c1,
+    });
+    // Court 1 taken (another competition's match in play): Doubles has no usable court free — the page (null); Open moves on.
+    const other = await seedCompetition(
+      day.auth,
+      "Club Night",
+      [
+        [await person(day.orgId, "Uma Uhl"), await person(day.orgId, "Vic Vale")],
+        [await person(day.orgId, "Wyn West"), await person(day.orgId, "Xen Xu")],
+      ],
+      { courts: [day.courts.c1] },
+    );
+    await place(day, other.fixtures[0]!.id, 0, day.courts.c1);
+    await setStatus(other.fixtures[0]!.id, "in_play");
+    expect({ a: await courtOf(a.divisionId), b: await courtOf(b.divisionId), open: await courtOf(open.divisionId) }).toEqual({
+      a: null,
+      b: day.courts.c2,
+      open: day.courts.c2,
+    });
+    expect(await findCourtForDivision(day.auth, competitionId, a.divisionId, at(20))).toEqual({ court_id: null, noun: "court" });
+  });
+
+  it("a TBD-only knockout: no ready match on no court, so no link at all (null) — its unscheduled row keeps the schedule board alone; a football division asks for a pitch", async () => {
+    const day = await seedDay();
+    const { competitionId, a } = await splitDay(day);
+    // Doubles' one match loses a side: nothing of it can be called anywhere.
+    await sql`update fixtures set away_entrant_id = null where division_id = ${a.divisionId}`;
+    expect(await findCourtForDivision(day.auth, competitionId, a.divisionId, at(20))).toBeNull();
+
+    const football = await seedCompetition(day.auth, "Split Day", [], {
+      courts: [day.courts.c3],
+      teams: ["Rovers", "United"],
+      competitionId,
+    });
+    expect(await findCourtForDivision(day.auth, competitionId, football.divisionId, at(20))).toEqual({
+      court_id: day.courts.c3,
+      noun: "pitch",
+    });
+
+    // On the day (a match planned today), Match Day's Needs you: Doubles' unscheduled row has no Find a court; Football's has
+    // one, in its word, to Court 3.
+    const today = await seedCompetition(day.auth, "Split Day", [[await person(day.orgId, "Yva Yu"), await person(day.orgId, "Zia Zorn")], [await person(day.orgId, "Abe Ash"), await person(day.orgId, "Bea Bly")]], {
+      courts: [day.courts.c2],
+      competitionId,
+      division: "Today",
+    });
+    await place(day, today.fixtures[0]!.id, 30, day.courts.c2);
+    const view = await getMatchDay(day.auth, competitionId, at(20));
+    const unscheduled = view.needs_you.filter((i) => i.kind === "unscheduled");
+    const alts = Object.fromEntries(unscheduled.map((i) => [i.title.split(" · ")[0], i.alt ?? null]));
+    expect(Object.keys(alts).sort(), "premise: both divisions owe an unscheduled row").toEqual(expect.arrayContaining(["Doubles", "Teams"]));
+    expect(alts.Doubles).toBeNull();
+    expect(alts.Teams).toMatchObject({ label: uiEn["matchDay.needsYou.findCourt.pitch"], court_id: day.courts.c3 });
   });
 });

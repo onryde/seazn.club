@@ -64,22 +64,33 @@ export async function person(orgId: string, fullName: string): Promise<Person> {
 
 /** A competition with one generic doubles division: one pair per roster, a round robin between them, the given schedule
  *  settings. `matchMinutes` and `minRest` are the division's own (`schedule_settings.config`). With `teams`, a FOOTBALL
- *  division instead, of name-only teams with NO roster (members are optional): one per name, `rosters` ignored. */
+ *  division instead, of name-only teams with NO roster (members are optional): one per name, `rosters` ignored. With
+ *  `competitionId`, the division is added to that competition instead of a new one (named `division`, default "Doubles"). */
 export async function seedCompetition(
   auth: AuthCtx,
   label: string,
   rosters: Person[][],
-  opts: { courts: string[]; matchMinutes?: number; minRest?: number; teams?: string[] },
+  opts: {
+    courts: string[];
+    matchMinutes?: number;
+    minRest?: number;
+    teams?: string[];
+    competitionId?: string;
+    division?: string;
+  },
 ): Promise<Comp> {
   const name = `${label} ${randomUUID().slice(0, 6)}`;
-  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name, visibility: "public", branding: {} });
+  const comp =
+    opts.competitionId !== undefined
+      ? { id: opts.competitionId }
+      : await createCompetition(auth, { ends_on: "2030-12-31", name, visibility: "public", branding: {} });
   const division = await createDivision(
     auth,
     comp.id,
     opts.teams !== undefined
       ? { name: "Teams", sport_key: "football", variant_key: "11-a-side", config: {} }
       : {
-          name: "Doubles",
+          name: opts.division ?? "Doubles",
           sport_key: "generic",
           variant_key: "score",
           config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },

@@ -37,7 +37,6 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
   filterCourts,
   filterNoCourt,
-  firstFreeCourt,
   headerCountParts,
   isLive,
   isMatchDayView,
@@ -45,9 +44,9 @@ import {
   needsYouButtonParts,
   needsYouOrder,
   needsYouTone,
+  noCourtNoun,
   resolveFocus,
   sharedNoun,
-  withFindCourt,
   type Opened,
 } from "@/lib/match-day/view";
 import { browserBandPollDeps, startBandPolling } from "@/components/v2/desk/band-poll";
@@ -135,7 +134,6 @@ export function MatchDayShell({
   const noun = sharedNoun(courts.length > 0 ? courts : view.courts);
   const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly };
   const needsTone = needsYouTone(needsYou);
-  const matchDayHref = routes.competitionMatchDay(orgSlug, compSlug);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
 
   const toTop = () => {
@@ -153,11 +151,11 @@ export function MatchDayShell({
     setPhoneOpen(true);
     toTop();
   };
-  /** Needs you's "Find a court", in place: the first free court opened (its candidates), or the list when none is free. */
-  const findCourt = () => {
+  /** Needs you's "Find a court", in place (R2): the court the server chose — the first free one the division's ready match may
+   *  be called onto — opened on its candidates, or the list when none is free. */
+  const findCourt = (courtId: string | null) => {
     setNeedsOpen(false);
-    const free = firstFreeCourt(courts);
-    if (free !== null) open(free.court_id);
+    if (courtId !== null) open(courtId);
     else {
       setPhoneOpen(false);
       toTop();
@@ -191,7 +189,7 @@ export function MatchDayShell({
             <DotLine
               testId="md-counts"
               className="mt-0.5 text-sm text-slate-600"
-              parts={headerCountParts(dict, locale, noun, courts, noCourt.length)}
+              parts={headerCountParts(dict, locale, noun, courts, noCourt)}
             />
             {readOnly && (
               <p data-testid="md-read-only" className="mt-2 text-xs text-slate-600">
@@ -229,8 +227,8 @@ export function MatchDayShell({
             {needsOpen && (
               <NeedsYou
                 dict={dict}
-                items={withFindCourt(dict, needsYouOrder(needsYou), view.courts, matchDayHref)}
-                onAlt={findCourt}
+                items={needsYouOrder(needsYou)}
+                onAlt={(it) => findCourt(it.alt?.court_id ?? null)}
               />
             )}
           </div>
@@ -285,6 +283,7 @@ export function MatchDayShell({
             {courts.length > 0 && <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} onSelect={open} />}
             <NoCourtList
               fixtures={noCourt}
+              noun={noCourtNoun(noCourt)}
               selectedId={focusedMatch?.id ?? null}
               dict={dict}
               hrefOf={(f) => fixtureHref(ctx, f)}

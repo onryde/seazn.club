@@ -11,6 +11,8 @@ import "server-only";
 // What a call DOES refuse (§7.2 hard stops), each a 409 named in lib/match-day/call.ts:
 //  - the match is not unstarted, or a side is still to be decided (NOT_CALLABLE);
 //  - the target court has a match playing, or a live call, from ANY competition: courts are org-level (COURT_BUSY);
+//  - the target court is not one the match's division may play on: the scheduler's own candidate set for the match
+//    (`callableCourtsByFixture`, below: court-candidates.ts's resolver, per match) (NOT_CANDIDATE_COURT; B4 fix round 1, R1);
 //  - a PERSON of the match is in a match playing, or called, on another court. Person-level, so a doubles partner counts,
 //    and resolved through the scheduler's own `peopleByEntrant` + `peopleOf` (PLAYER_BUSY). And, for a side with no roster
 //    (a name-only team or player: members are optional), the ENTRANT itself in such a match (PLAYER_BUSY, the entrant's name).
@@ -40,7 +42,7 @@ import {
 } from "@/lib/match-day/call";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { dayKeyInTz, usableWindows, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling";
-import { resolveCourtCalendars } from "./court-candidates";
+import { candidateCourtsByFixture, requiredCourtTagsByFixture, resolveCourtCalendars } from "./court-candidates";
 import {
   afterScheduleWrite,
   courtNamesById,
@@ -203,11 +205,49 @@ function assertUnstarted(f: CallTarget): void {
   }
 }
 
+/**
+ * The courts each match may be called onto (B4 fix round 1, R1; spec §7 "Which courts"): the SCHEDULER's own candidate set for
+ * it — the division's configured courts (an empty list is every court of the organisation), narrowed by the tags its division,
+ * stage and round require, archived courts out — through `requiredCourtTagsByFixture` + `candidateCourtsByFixture`, the pair the
+ * build, the validate and the AI pack resolve through (court-candidates.ts), so a call and the board never disagree about where
+ * a match may play. Match Day's candidate lists and its "Find a court" ask the same question here. A match the resolver gives
+ * no set reads as no court at all: it fails closed.
+ */
+export async function callableCourtsByFixture(
+  tx: Tx,
+  rows: readonly { id: string; division_id: string }[],
+): Promise<Map<string, ReadonlySet<string>>> {
+  const byDivision = new Map<string, string[]>();
+  for (const r of rows) {
+    const ids = byDivision.get(r.division_id);
+    if (ids === undefined) byDivision.set(r.division_id, [r.id]);
+    else ids.push(r.id);
+  }
+  const out = new Map<string, ReadonlySet<string>>();
+  for (const [divisionId, ids] of byDivision) {
+    const [division] = await tx<{ required_court_tags: string[] | null }[]>`
+      select required_court_tags from divisions where id = ${divisionId}`;
+    const settings = await loadSettings(tx, divisionId);
+    const tags = await requiredCourtTagsByFixture(tx, divisionId, division?.required_court_tags ?? []);
+    const allowed = await candidateCourtsByFixture(tx, divisionId, settings.config.courts, tags);
+    for (const id of ids) out.set(id, new Set(allowed.get(id) ?? []));
+  }
+  return out;
+}
+
 /** §7.2's hard stops, in the order a person reads them: the match itself, the court, then its players. */
 async function assertCallable(tx: Tx, f: CallTarget, courtId: string, courtNames: ReadonlyMap<string, string>): Promise<void> {
   assertUnstarted(f);
   if (f.home_entrant_id === null || f.away_entrant_id === null) {
     refuse(CALL_REFUSAL.NOT_CALLABLE, "a side of this match is still to be decided", { status: TBD_ENTRANT });
+  }
+
+  // The court, first: may this match's division play on it at all (R1)? One tap must not put a match on another sport's venue.
+  if (!(await callableCourtsByFixture(tx, [f])).get(f.id)?.has(courtId)) {
+    const courtName = courtNames.get(courtId) ?? null;
+    refuse(CALL_REFUSAL.NOT_CANDIDATE_COURT, `${courtName ?? "this court"} is not one of this division's courts`, {
+      court_name: courtName,
+    });
   }
 
   // The court: a match playing on it, or a live call onto it, from any competition of the org (RLS scopes to the org).

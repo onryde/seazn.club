@@ -9,7 +9,7 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { FixtureCallPreview, FixtureCallUndone, FixtureCalled } from "@/server/api-v1/schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
-import { between, callRows, place, slotOf, type Day, seedDay } from "@/server/usecases/__tests__/_match-day-seed";
+import { between, callRows, person, place, seedCompetition, slotOf, type Day, seedDay } from "@/server/usecases/__tests__/_match-day-seed";
 import { DELETE as undoRoute, POST as callRoute } from "@/app/api/v1/fixtures/[id]/call/route";
 import { POST as previewRoute } from "@/app/api/v1/fixtures/[id]/call/preview/route";
 
@@ -110,6 +110,36 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/call", () => {
     );
     expect(started.status).toBe(409);
     expect(started.body.error).toEqual({ code: "NOT_CALLABLE", message: expect.any(String), status: "in_play" });
+  });
+
+  it("NOT_CANDIDATE_COURT (B4 fix round 1, R1) reaches the wire with the court's name, from call and preview alike, and writes nothing", async () => {
+    // A division that plays on Court 1 only, in the same organisation.
+    const own = await seedCompetition(
+      day.auth,
+      "Court One Cup",
+      [
+        [await person(day.orgId, "Gus Grey"), await person(day.orgId, "Hal Hart")],
+        [await person(day.orgId, "Ivy Iles"), await person(day.orgId, "Jon Jay")],
+      ],
+      { courts: [day.courts.c1] },
+    );
+    const f = own.fixtures[0]!;
+    let checked = 0;
+    for (const [label, route] of [
+      ["call", callRoute],
+      ["preview", previewRoute],
+    ] as const) {
+      const path = label === "call" ? `/fixtures/${f.id}/call` : `/fixtures/${f.id}/call/preview`;
+      const res = await read(await route(req("POST", path, { court_id: day.courts.c3 }), ctx(f.id)));
+      expect(res.status, label).toBe(409);
+      expect(res.body.error, label).toEqual({ code: "NOT_CANDIDATE_COURT", message: expect.any(String), court_name: "Court 3" });
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(await callRows(f.id)).toEqual([]);
+    // Its own court takes it.
+    const ok = await read(await callRoute(req("POST", `/fixtures/${f.id}/call`, { court_id: day.courts.c1 }), ctx(f.id)));
+    expect(ok.status, JSON.stringify(ok.body.error)).toBe(200);
   });
 
   it("a body without a court id, or with a key the schema does not know, is a 400 and writes nothing", async () => {

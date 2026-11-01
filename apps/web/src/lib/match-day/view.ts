@@ -4,12 +4,21 @@
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import { fmtPublicTime } from "@/lib/format";
-import type { VenueNoun } from "@/lib/venue";
+import { venueNoun, type VenueNoun } from "@/lib/venue";
 import { scoreLevels, type ScoreLevels } from "@/lib/score/levels";
 import type { Attention, Severity } from "@/lib/division-phase";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
+import { needsYouKey } from "@/components/v2/desk/needs-you";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallWarning } from "./call";
-import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView, NeedsYouItem, ScorerAttention } from "./types";
+import type {
+  MatchDayCandidate,
+  MatchDayCourt,
+  MatchDayFindCourt,
+  MatchDayFixture,
+  MatchDayView,
+  NeedsYouItem,
+  ScorerAttention,
+} from "./types";
 
 /**
  * A playing match's score as Match Day shows it (spec §6.2 "games or sets won in large type, current points beside them";
@@ -72,18 +81,28 @@ export function isLive(view: Pick<MatchDayView, "courts" | "playing_no_court">):
   return view.playing_no_court.length > 0 || view.courts.some((c) => c.state === "playing" || c.state === "called");
 }
 
+/** The noun for the matches playing on NO court as a group (B4 fix round 1, R3): their sports' word when they share one (an
+ *  online chess day: "board"), else "court" — `venueNoun`'s default, as `sharedNoun` reads the courts. */
+export function noCourtNoun(fixtures: readonly Pick<MatchDayFixture, "sport_key">[]): VenueNoun {
+  const nouns = fixtures.map((f) => venueNoun(f.sport_key));
+  const first = nouns[0];
+  if (first === undefined) return "court";
+  return nouns.every((n) => n === first) ? first : "court";
+}
+
 /** The header's counts line (§6.3, B4): "N courts · N playing · N free", then the matches playing on no court when there are
- *  any ("1 match with no court"). With no courts at all the court words say nothing — "0 playing · 0 free" — so the line is the
- *  no-court count alone, or "0 courts" when there is nothing either (the empty page). */
+ *  any ("1 match with no court", in their sports' word: `noCourtNoun`). With no courts at all the court words say nothing —
+ *  "0 playing · 0 free" — so the line is the no-court count alone, or "0 courts" when there is nothing either (the empty page). */
 export function headerCountParts(
   dict: Dict,
   locale: Locale,
   noun: VenueNoun,
   courts: readonly Pick<MatchDayCourt, "state">[],
-  noCourt: number,
+  noCourt: readonly Pick<MatchDayFixture, "sport_key">[],
 ): string[] {
   const counts = courtCounts(courts);
-  const noCourtPart = noCourt > 0 ? [plural(dict, "matchDay.header.noCourt", noCourt, locale)] : [];
+  const noCourtPart =
+    noCourt.length > 0 ? [plural(dict, `matchDay.header.noCourt.${noCourtNoun(noCourt)}`, noCourt.length, locale)] : [];
   if (counts.courts === 0) return noCourtPart.length > 0 ? noCourtPart : [plural(dict, `matchDay.header.places.${noun}`, 0, locale)];
   return [
     plural(dict, `matchDay.header.places.${noun}`, counts.courts, locale),
@@ -143,27 +162,32 @@ export function resolveFocus(
   return court === undefined ? { kind: "lost", name: opened.name } : { kind: "court", court };
 }
 
-/** Needs you's "Find a court" (B4, spec §9 carried): the free court whose candidates an unscheduled match is likely among —
- *  the first free court on the list — or null when none is free. */
-export function firstFreeCourt<C extends Pick<MatchDayCourt, "court_id" | "state">>(courts: readonly C[]): C | null {
-  return courts.find((c) => c.state === "free") ?? null;
+/** Where "Find a court" leads (B4 fix round 1, R2): Match Day opened on that court (`?court=`, the page's focus param), or the
+ *  page itself when no usable court is free. One spelling for Needs you's link and the division run sheet's (B2). */
+export function findCourtHref(matchDayHref: string, courtId: string | null): string {
+  return courtId === null ? matchDayHref : `${matchDayHref}?court=${encodeURIComponent(courtId)}`;
 }
 
-/** Match Day's own Needs-you rows (B4, spec §9 carried): an `unscheduled` row opens the schedule board, as on the competition
- *  page, AND — here, on the day — "Find a court": the first free court's candidate list (`?court=`), where an unscheduled match
- *  ready to play is listed under "No court yet"; with no court free, the page itself (the list of courts). Every other row is
- *  the desk's, unchanged. */
+/** Match Day's own Needs-you rows (B4, spec §9 carried; fix round 1, R2/R3): an `unscheduled` row opens the schedule board, as
+ *  on the competition page, AND — only when its division has a ready match with no court (`findCourts`, read by the server:
+ *  match-day.ts `findCourtsOf`) — "Find a court/pitch/table/board/rink" in its sport's word: the first free court one of those
+ *  matches may be called onto, its candidates listing it, or the page itself when none is free. A division with no such match
+ *  keeps the schedule board alone. Every other row is the desk's, unchanged. */
 export function withFindCourt(
   dict: Dict,
   items: readonly NeedsYouItem[],
-  courts: readonly Pick<MatchDayCourt, "court_id" | "state">[],
+  findCourts: ReadonlyMap<string, MatchDayFindCourt>,
   matchDayHref: string,
 ): NeedsYouItem[] {
-  const free = firstFreeCourt(courts);
-  const href = free === null ? matchDayHref : `${matchDayHref}?court=${encodeURIComponent(free.court_id)}`;
-  return items.map((it) =>
-    it.kind === "unscheduled" ? { ...it, alt: { label: t(dict, "matchDay.needsYou.findCourt"), href } } : it,
-  );
+  const byKey = new Map([...findCourts].map(([divisionId, fc]) => [needsYouKey(divisionId, "unscheduled"), fc] as const));
+  return items.map((it) => {
+    const fc = it.kind === "unscheduled" ? byKey.get(it.key) : undefined;
+    if (fc === undefined) return it;
+    return {
+      ...it,
+      alt: { label: t(dict, `matchDay.needsYou.findCourt.${fc.noun}`), href: findCourtHref(matchDayHref, fc.court_id), court_id: fc.court_id },
+    };
+  });
 }
 
 /** How many candidates could start here NOW (§7, review I2): a blocked one cannot, so it is not counted. */
@@ -262,6 +286,8 @@ export function refusalMessage(dict: Dict, code: string, extra: Record<string, u
         : t(dict, "matchDay.refusal.NOT_CALLABLE");
     case CALL_REFUSAL.NOT_CALLED:
       return t(dict, "matchDay.refusal.NOT_CALLED");
+    case CALL_REFUSAL.NOT_CANDIDATE_COURT:
+      return t(dict, "matchDay.refusal.NOT_CANDIDATE_COURT", { court: str("court_name") });
     case SEQ_CONFLICT:
       return t(dict, "matchDay.refusal.SEQ_CONFLICT");
     default:

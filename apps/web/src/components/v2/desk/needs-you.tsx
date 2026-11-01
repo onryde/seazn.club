@@ -17,8 +17,15 @@ export interface NeedsYouItem {
   sub: string;
   action: { label: string; href: string };
   /** A second, quieter way in, beside `action` (task B4): Match Day's "Find a court" on an unscheduled row (`withFindCourt`,
-   *  lib/match-day/view.ts). The desk never sets one, so the competition page's rows are unchanged. */
-  alt?: { label: string; href: string };
+   *  lib/match-day/view.ts, set by the server). `court_id` is the court it opens (null: the page's list). The desk never sets
+   *  one, so the competition page's rows are unchanged. */
+  alt?: { label: string; href: string; court_id: string | null };
+}
+
+/** A Needs-you row's key: one row per division and kind. The ONE spelling, so a reader that adds to a division's row (Match Day's
+ *  "Find a court", `withFindCourt`) finds it by the same function that named it, never by parsing the key. */
+export function needsYouKey(divisionId: string, kind: Attention["kind"]): string {
+  return `${divisionId}:${kind}`;
 }
 
 /**
@@ -92,7 +99,7 @@ export function needsYouItems(
           break;
         case "unscheduled":
           items.push({
-            key: `${d.id}:unscheduled`, severity: sev, kind: a.kind,
+            key: needsYouKey(d.id, "unscheduled"), severity: sev, kind: a.kind,
             // C2 fix (review round 3): was a bare `{n} fixtures unscheduled`
             // — "1 fixtures unscheduled" on the common end-of-scheduling
             // case. `plural()` picks the `.one`/`.other` form.

@@ -213,9 +213,10 @@ export function RunSheetRow({
   arbiterHref?: string;
   /** Match Day B2 (spec 2026-10-31 §9: "Unscheduled fixtures link to the free-court candidate list"). Present ONLY on a match
    *  day, for an organiser (the division page decides both: it is the same `needsYouHome` rule that puts Open Match Day on the
-   *  competition page, read for `editable`), and then it is where the "Find a court" link on an unscheduled match leads.
-   *  Match Day has no deep link into one court's candidate list (that list is the focused court's own panel), so it is the
-   *  page itself. Absent = not a match day: the row is exactly what it was. */
+   *  competition page, read for `editable`), and then it is where the "Find a court" link on an unscheduled match leads:
+   *  Match Day opened on the first free court the division's ready matches may use (`?court=`), or the page itself when none
+   *  is free (B4 fix round 1, R2: `findCourtForDivision`, the helper Match Day's Needs you reads). Absent = not a match day,
+   *  or the division has no ready match with no court: the row is exactly what it was. */
   matchDayHref?: string;
   /** Match Day B2, fix round 1 (I1): the sport's playing-area noun (`lib/venue.ts`'s `venueNoun`; the stage panel knows the
    *  division's sport and chooses it), so the link asks for a "pitch" in football and a "board" in chess rather than a court
