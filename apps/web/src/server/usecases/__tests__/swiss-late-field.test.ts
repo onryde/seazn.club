@@ -29,6 +29,7 @@ import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { isSwissBoardSeated, latestSeatedSwissRound } from "@/lib/swiss-shell";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { pairKey, type Colour, type SwissHistory, type SwissStanding } from "@seazn/engine/scheduling";
+import { EngineError } from "@seazn/engine/core";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -127,6 +128,27 @@ describe("W3 T6 buildSwissHistory: an implicit bye is credited only for a round 
     });
     expect(strip(historyOf(3))).toEqual(strip(historyOf(null)));
     expect(strip(historyOf(null)).played.length, "anti-vacuity: four pairs met").toBe(4);
+  });
+  it("review m1: round order is the function's own invariant — shuffled rows give the same history", () => {
+    const field = [...others, ent("L", null)];
+    const inOrder = buildSwissHistory(rows, field, new Map());
+    // The expected colours read off the rows (the home seat takes White): B is away in round 1 and home in round 2, C the
+    // reverse. Each reads differently backwards, so a history built in any other row order would show it.
+    expect(inOrder.colours.get("B"), "premise: B's colours in round order").toEqual(["B", "W"]);
+    expect(inOrder.colours.get("C"), "premise: C's colours in round order").toEqual(["W", "B"]);
+    const shuffles = [[...rows].reverse(), [rows[2]!, rows[0]!, rows[3]!, rows[1]!], [rows[1]!, rows[3]!, rows[0]!, rows[2]!]];
+    let compared = 0;
+    for (const shuffled of shuffles) {
+      expect(shuffled.map((f) => f.id), "premise: the rows really are out of round order").not.toEqual(rows.map((f) => f.id));
+      expect(flat(buildSwissHistory(shuffled, field, new Map())), `rows ${shuffled.map((f) => f.id).join(",")}`).toEqual(flat(inOrder));
+      compared++;
+    }
+    expect(compared, "anti-vacuity: three shuffles compared").toBe(3);
+    // A copy is sorted, never the caller's array.
+    const callers = [...rows].reverse();
+    const before = callers.map((f) => f.id);
+    buildSwissHistory(callers, field, new Map());
+    expect(callers.map((f) => f.id), "the caller's rows are left in their order").toEqual(before);
   });
 });
 
@@ -260,15 +282,23 @@ async function seeds(divisionId: string): Promise<Map<string, number>> {
   return new Map(rows.map((r) => [r.id, r.seed ?? Number.POSITIVE_INFINITY]));
 }
 
-/** Decide every two-seated, still-open board of `round`: the better seed wins (or draws, where `draws` names the seq). */
-async function decideRound(r: Rig, round: number, draws: ReadonlySet<number> = new Set()): Promise<number> {
+/** Decide every two-seated, still-open board of `round`: the better seed wins (or draws, where `draws` names the seq; or
+ *  loses, where `upsets` does). */
+async function decideRound(
+  r: Rig,
+  round: number,
+  draws: ReadonlySet<number> = new Set(),
+  upsets: ReadonlySet<number> = new Set(),
+): Promise<number> {
   const seedOf = await seeds(r.divisionId);
   let decided = 0;
   for (const b of await boardsOf(r.stageId, round)) {
     if (b.home_entrant_id === null || b.away_entrant_id === null || b.status !== "scheduled") continue;
-    const better = seedOf.get(b.home_entrant_id)! < seedOf.get(b.away_entrant_id)! ? b.home_entrant_id : b.away_entrant_id;
+    const homeBetter = seedOf.get(b.home_entrant_id)! < seedOf.get(b.away_entrant_id)!;
+    const better = homeBetter ? b.home_entrant_id : b.away_entrant_id;
+    const worse = homeBetter ? b.away_entrant_id : b.home_entrant_id;
     if (draws.has(b.seq_in_round)) await r.sport.draw(r.auth, b, better);
-    else await r.sport.win(r.auth, b, better);
+    else await r.sport.win(r.auth, b, upsets.has(b.seq_in_round) ? worse : better);
     decided++;
   }
   return decided;
@@ -338,30 +368,54 @@ async function recordedScores(stageId: string): Promise<Map<string, number>> {
 const seatOf = (rows: Board[], round: number, id: string) =>
   rows.find((f) => f.round_no === round && (f.home_entrant_id === id || f.away_entrant_id === id));
 
+/**
+ * Can `ids` be split into boards with no rematch — and, in chess, a colour each side may take? Read from the RECORDED
+ * rows and the declared hard rules (spec 05 §2.2, scheduling/swiss.ts `canTake`: |W−B| ≤ 2 after the round, never three
+ * in a row of one colour; the home seat took White), never from the history under test. A brute-force search: a score
+ * group here is a handful of players.
+ */
+function pairsWithin(ids: readonly string[], rows: readonly Board[], chess: boolean): boolean {
+  const met = new Set<string>();
+  const colours = new Map<string, Colour[]>();
+  for (const f of [...rows].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round)) {
+    if (f.home_entrant_id === null || f.away_entrant_id === null) continue;
+    met.add(pairKey(f.home_entrant_id, f.away_entrant_id));
+    if (f.outcome?.kind === "award" || f.outcome?.kind === "double_walkover") continue;
+    colours.set(f.home_entrant_id, [...(colours.get(f.home_entrant_id) ?? []), "W"]);
+    colours.set(f.away_entrant_id, [...(colours.get(f.away_entrant_id) ?? []), "B"]);
+  }
+  const canTake = (id: string, c: Colour): boolean => {
+    const seq = [...(colours.get(id) ?? []), c];
+    const diff = seq.filter((x) => x === "W").length - seq.filter((x) => x === "B").length;
+    return Math.abs(diff) <= 2 && !(seq.length >= 3 && seq.slice(-3).every((x) => x === c));
+  };
+  const legal = (a: string, b: string) =>
+    !met.has(pairKey(a, b)) && (!chess || (canTake(a, "W") && canTake(b, "B")) || (canTake(a, "B") && canTake(b, "W")));
+  const search = (left: readonly string[]): boolean => {
+    if (left.length === 0) return true;
+    const [a, ...rest] = left;
+    return rest.some((b) => legal(a!, b) && search(rest.filter((x) => x !== b)));
+  };
+  return ids.length % 2 === 0 && search(ids);
+}
+
 for (const sport of SPORTS) {
   describe.runIf(HAS_DB)(`W3 T6 X-SW-8 a Swiss latecomer's missed rounds score 0 (${sport.key})`, () => {
     it(`X-SW-8 an entrant created after round 2 was seated scores 0, not +2, in round 3's score groups (${sport.key})`, async () => {
       const r = await twoRoundsPlayed(sport);
-      const before = await recordedScores(r.stageId);
-      const twoPoint = [...before].filter(([, s]) => s === 2).map(([id]) => id);
-      expect(twoPoint.length, "witness: round 3 has a 2-point group to be wrongly paired into").toBeGreaterThan(0);
+      // The defect's answer differs from the rule's: today's inference credits one point per bye-less round sat out.
+      const rows = await allRows(r.stageId);
+      const implicit = [1, 2].filter((round) => !rows.some((f) => f.round_no === round && isOneSidedAwardBye(f))).length;
+      expect(implicit, "witness: the defect would credit 2, one per bye-less round missed").toBe(2);
       const late = await arrive(r, "Late", 3);
 
       const { standings } = await pairSpied(r);
       const mine = standings.find((s) => s.entrantId === late);
       expect(mine, "the latecomer is in round 3's field").toBeDefined();
-      // Rulebook §4 late-entry row / FIDE C.04.2 2.4: 0 for each missed round.
+      // Rulebook §4 late-entry row / FIDE C.04.2 2.4: 0 for each missed round. This is the whole of this case: on this
+      // odd field the latecomer always takes round 3's bye (the next case pins that), so WHERE a latecomer is paired
+      // within the score groups is the even-field case's to show.
       expect(mine!.score, "the latecomer enters round 3 on 0 points").toBe(0);
-
-      const seat = seatOf(await allRows(r.stageId), 3, late);
-      expect(seat, "the latecomer is seated in round 3").toBeDefined();
-      const opponent = seat!.home_entrant_id === late ? seat!.away_entrant_id : seat!.home_entrant_id;
-      if (opponent !== null) {
-        expect(twoPoint, `the latecomer never meets the 2-point group (met ${r.nameOf(opponent)})`).not.toContain(opponent);
-        expect(before.get(opponent), `the latecomer is paired inside the 0-point group (met ${r.nameOf(opponent)})`).toBe(0);
-      } else {
-        expect(isOneSidedAwardBye(seat!), "or the latecomer's seat is round 3's bye").toBe(true);
-      }
     }, 120_000);
 
     it(`X-SW-8 a missed round is not a bye: the latecomer is still bye-eligible (${sport.key})`, async () => {
@@ -403,6 +457,50 @@ for (const sport of SPORTS) {
         expect(opponent !== null && twoPoint.has(opponent), `${r.nameOf(id)} never meets the 2-point group`).toBe(false);
       }
       expect(twoPoint.size, "witness: there is a 2-point group").toBeGreaterThan(0);
+    }, 120_000);
+
+    it(`X-SW-8 an even field: the latecomer is paired, inside the 0-point score group, never with a 2-pointer (${sport.key})`, async () => {
+      // Review m2. On an odd field the latecomer always takes the bye, so their place in the score groups is seen only
+      // when the field is even: one withdrawal plus one latecomer leaves six. The expected opponent is derived from the
+      // score groups and the engine's DECLARED rule (scheduling/swiss.ts: score groups paired top-down, each internally,
+      // fewest floaters first). When every group is even and can pair within itself, nobody floats, so a latecomer on 0
+      // meets a 0-pointer. The rig makes that so: an upset on round 2's last board, then the withdrawal (searched from
+      // the bottom seed up) that leaves every score group pairable.
+      const r = await startedSwiss(sport);
+      await generateStageFixtures(r.auth, r.stageId);
+      expect(await decideRound(r, 1), "rig: round 1 seats and decides three boards").toBe(3);
+      await generateStageFixtures(r.auth, r.stageId);
+      const lastBoard = Math.max(...(await boardsOf(r.stageId, 2)).map((b) => b.seq_in_round));
+      expect(await decideRound(r, 2, new Set(), new Set([lastBoard])), "rig: round 2 decided, its last board an upset").toBe(3);
+
+      const rows = await allRows(r.stageId);
+      const before = await recordedScores(r.stageId);
+      const originals = ["S6", "S5", "S4", "S3", "S2", "S1"].map((n) => r.idOf.get(n)!);
+      const LATE = "the latecomer";
+      const groupsWithout = (out: string): string[][] => {
+        const scoreOf = (id: string) => (id === LATE ? 0 : before.get(id)!);
+        const field = [...originals.filter((id) => id !== out), LATE];
+        return [...new Set(field.map(scoreOf))].map((s) => field.filter((id) => scoreOf(id) === s));
+      };
+      const out = originals.find((id) => groupsWithout(id).every((g) => pairsWithin(g, rows, sport.config.chess === true)));
+      expect(out, "premise: some withdrawal leaves every score group even and pairable within itself").toBeDefined();
+      const twoPoint = new Set([...before].filter(([id, s]) => s === 2 && id !== out).map(([id]) => id));
+      expect(twoPoint.size, "witness: a 2-point group stays in the field").toBeGreaterThan(0);
+
+      await withdrawEntrantCascade(r.auth, out!);
+      const late = await arrive(r, "Late", 3);
+      const { standings } = await pairSpied(r);
+      expect(standings.length, "premise: six players, an even field — no bye").toBe(6);
+      expect(standings.find((s) => s.entrantId === late)?.score, "the latecomer enters round 3 on 0 points").toBe(0);
+
+      const round3 = await boardsOf(r.stageId, 3);
+      expect(round3.some((f) => isOneSidedAwardBye(f)), "no bye row in an even round").toBe(false);
+      const seat = seatOf(round3, 3, late);
+      expect(seat, "the latecomer is seated in round 3").toBeDefined();
+      const opponent = seat!.home_entrant_id === late ? seat!.away_entrant_id : seat!.home_entrant_id;
+      expect(opponent, "the latecomer is paired, not given a bye").not.toBeNull();
+      expect(twoPoint.has(opponent!), `the latecomer never meets a 2-pointer (met ${r.nameOf(opponent)})`).toBe(false);
+      expect(before.get(opponent!), `the latecomer meets a 0-pointer, inside the lowest score group (met ${r.nameOf(opponent)})`).toBe(0);
     }, 120_000);
 
     it(`entrants with swiss_first_round null behave exactly as today: the implicit byes are credited (${sport.key})`, async () => {
@@ -490,6 +588,80 @@ for (const sport of SPORTS) {
     }, 120_000);
   });
 
+  describe.runIf(HAS_DB)(`W3 T6 review m4: a round whose FIELD is under 2 is refused like a roster under 2 (${sport.key})`, () => {
+    /** A pre-Start division of `players` (name, seed, first Swiss round) with a 3-round Swiss stage. */
+    const division = async (auth: AuthCtx, players: { name: string; first: number | null }[]) => {
+      const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Swiss guard " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+      const div = await createDivision(auth, comp.id, {
+        name: "Open",
+        slug: "open-" + randomUUID().slice(0, 6),
+        sport_key: sport.key,
+        variant_key: sport.variant,
+        config: {},
+      });
+      const made = await createEntrants(
+        auth,
+        div.id,
+        players.map((p, i) => ({ kind: "individual" as const, display_name: p.name, seed: i + 1, members: [] })),
+      );
+      for (const [i, p] of players.entries()) {
+        if (p.first !== null) await sql`update entrants set swiss_first_round = ${p.first} where id = ${made[i]!.id}`;
+      }
+      const [stage] = await createStages(auth, div.id, { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3, ...sport.config }, progression: null });
+      return stage!.id;
+    };
+    const refusalOf = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+    /** TODAY's refusal for a roster under 2, read from the product (generateStageFixturesTx's own guard): the shape the
+     *  field guard must keep, so every reader of the one reads the other. */
+    const rosterRefusal = async (auth: AuthCtx) => {
+      const stageId = await division(auth, [{ name: "Alone", first: null }]);
+      const err = await refusalOf(generateStageFixtures(auth, stageId));
+      expect(EngineError.is(err, "STAGE_NOT_READY"), "premise: a roster of 1 is refused STAGE_NOT_READY").toBe(true);
+      const e = err as EngineError;
+      return { message: e.message, dataKeys: Object.keys(e.data as object).sort() };
+    };
+    const expectFieldRefusal = async (auth: AuthCtx, err: unknown, stageId: string, field: number) => {
+      expect(EngineError.is(err, "STAGE_NOT_READY"), `the Generate is refused STAGE_NOT_READY (got ${String(err)})`).toBe(true);
+      const e = err as EngineError;
+      const today = await rosterRefusal(auth);
+      expect({ message: e.message, dataKeys: Object.keys(e.data as object).sort() }, "today's refusal shape for under 2").toEqual(today);
+      expect(e.data, "naming the stage and the field it counted").toEqual({ stageId, entrants: field });
+    };
+
+    for (const kept of [1, 0]) {
+      it(`a Pair of round 2 whose field is ${kept} (the roster is 2) is refused, and round 2 keeps its unseated shells (${sport.key})`, async () => {
+        const r = await startedSwiss(sport);
+        await generateStageFixtures(r.auth, r.stageId);
+        expect(await decideRound(r, 1), "rig: round 1 decided").toBe(3);
+        // Every original but `kept` withdraws; latecomers whose first round is 3 bring the roster back to 2.
+        for (const name of ["S1", "S2", "S3", "S4", "S5", "S6"].slice(kept)) await withdrawEntrantCascade(r.auth, r.idOf.get(name)!);
+        for (let i = 0; i < 2 - kept; i++) await arrive(r, `Late${i + 1}`, 3);
+        const [{ n }] = await sql<{ n: number }[]>`
+          select count(*)::int as n from entrants where division_id = ${r.divisionId} and status in ('registered', 'confirmed')`;
+        expect(n, "premise: the roster is 2, so generateStageFixturesTx's own guard lets the Pair through").toBe(2);
+        const before = await boardsOf(r.stageId, 2);
+        expect(before.length, "premise: round 2 holds its minted shells").toBeGreaterThan(0);
+        expect(before.every((f) => f.home_entrant_id === null && f.away_entrant_id === null), "premise: all unseated").toBe(true);
+        const stageBefore = (await allRows(r.stageId)).map((f) => f.id).sort();
+
+        await expectFieldRefusal(r.auth, await refusalOf(generateStageFixtures(r.auth, r.stageId)), r.stageId, kept);
+        expect(await boardsOf(r.stageId, 2), "round 2's shells are untouched: none deleted, none seated").toEqual(before);
+        expect((await allRows(r.stageId)).map((f) => f.id).sort(), "and the stage holds the rows it held").toEqual(stageBefore);
+      }, 120_000);
+    }
+
+    it(`a mint whose round-1 field is 1 (the roster is 2) is refused, and mints nothing (${sport.key})`, async () => {
+      const { auth } = await seedOrg("pro");
+      const stageId = await division(auth, [
+        { name: "S1", first: null },
+        { name: "S2", first: 2 },
+      ]);
+      await expectFieldRefusal(auth, await refusalOf(generateStageFixtures(auth, stageId)), stageId, 1);
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${stageId}`;
+      expect(n, "no shell was minted").toBe(0);
+    }, 120_000);
+  });
+
   describe.runIf(HAS_DB)(`W3 T6 buildSwissHistory is the pre-T6 history loop, unchanged for a legacy stage (${sport.key})`, () => {
     it(`over real rows — walkover, double walkover, draws, implicit byes, a bye row, a withdrawal — the two agree (${sport.key})`, async () => {
       const r = await startedSwiss(sport);
@@ -536,6 +708,10 @@ for (const sport of SPORTS) {
       expect(a.played.size, "pairs met").toBeGreaterThan(0);
       expect(a.byes.has(r.idOf.get("Late")!), "the implicit bye was inferred, so that path was compared").toBe(true);
       expect([...a.colours.values()].flat().length, "colours recorded").toBeGreaterThan(0);
+      // Review m3: the comparison can see an ORDER only through a colour list that reads differently backwards — a
+      // reordering inside buildSwissHistory leaves a palindrome ([W, B, W]) unchanged.
+      const asymmetric = [...b.colours.values()].filter((c) => c.join("") !== [...c].reverse().join(""));
+      expect(asymmetric.length, `colour lists that are not palindromes after round 3: ${asymmetric.length}`).toBeGreaterThan(0);
       expect(b.byes.size, "byes: the walkover winner, the latecomer, round 3's bye").toBeGreaterThanOrEqual(3);
       const rows = await allRows(r.stageId);
       expect(rows.some((f) => f.outcome?.kind === "double_walkover"), "a double walkover was compared").toBe(true);

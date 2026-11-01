@@ -1272,6 +1272,15 @@ export function swissFieldForRound(entrants: ActiveEntrant[], target: number): A
   return entrants.filter((e) => (e.swiss_first_round ?? 1) <= target);
 }
 
+/** Review m4: a Swiss round's field (`swissFieldForRound`) under 2 is refused exactly as generateStageFixturesTx refuses a
+ *  roster under 2 — the same code, message and data, so every reader of that refusal reads this one too. Nothing is
+ *  written first: both callers in `swissGen` throw before any reconcile or mint. */
+function refuseSwissFieldUnderTwo(stageId: string, fieldSize: number): void {
+  if (fieldSize < 2) {
+    throw new EngineError("STAGE_NOT_READY", "need at least 2 active entrants to generate", { stageId, entrants: fieldSize });
+  }
+}
+
 /** The round history `pairRound` is handed (scheduling `SwissHistory`), in the shape `swissGen` builds it. */
 export interface SwissHistoryState {
   /** Each entrant's pairing score: 1 per win or bye, ½ per draw. */
@@ -1291,7 +1300,9 @@ export interface SwissHistoryState {
  * seeded rows against a verbatim copy of that loop (swiss-late-field.test.ts). `swissGen` calls it; Task 7 changes its
  * `played` rule; Task 9 reads it for case (b)'s colours.
  *
- * `existing` is the stage's rows in round order (generateStageFixturesTx's ORDER BY: the colours are a sequence).
+ * `existing` is the stage's rows in ANY order: the colours are a sequence, so the function sorts its own copy into round
+ * order (round_no, seq_in_round) rather than trusting its caller's ORDER BY. That precondition is enforced here, not stated
+ * (review m1; T3 found a physical-order read handing a later-updated round back after a later round).
  * `entrants` is the field being paired (`swissFieldForRound`). `playedFacts` (fixture id → was it played) is Task 7's
  * input; until then every caller passes an empty map and nothing reads it.
  */
@@ -1301,12 +1312,14 @@ export function buildSwissHistory(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Task 7's input (its `played` rule); it reads it, and drops this line
   playedFacts: ReadonlyMap<string, boolean>,
 ): SwissHistoryState {
+  // Round order is this function's own invariant (review m1): a copy, so the caller's array is untouched.
+  const rows = [...existing].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
   const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
   const played = new Set<string>();
   const colours = new Map<string, Colour[]>();
   const byes = new Set<string>();
   const inRound = new Map<number, Set<string>>();
-  for (const f of existing) {
+  for (const f of rows) {
     const o = f.outcome as { kind?: string; winner?: string } | null;
     // Only a system bye — one seat, won by the seated side — is a bye. Every
     // sport kernel ALSO emits `{kind: "award"}` for a real two-sided walkover
@@ -1347,9 +1360,9 @@ export function buildSwissHistory(
       score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
     }
   }
-  const latestSeated = latestSeatedSwissRound(existing);
+  const latestSeated = latestSeatedSwissRound(rows);
   for (let r = 1; r <= (latestSeated ?? 0); r++) {
-    const inRoundR = existing.filter((f) => f.round_no === r);
+    const inRoundR = rows.filter((f) => f.round_no === r);
     if (
       !inRoundR.every((f) =>
         isSwissBoardSeated({
@@ -1411,9 +1424,11 @@ async function swissGen(
     if (override !== undefined) {
       throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);
     }
+    // Minted at round 1's field; every later round is resized to its own field when its Pair reaches it.
+    const mintField = swissFieldForRound(entrants, 1);
+    refuseSwissFieldUnderTwo(stageId, mintField.length);
     return {
-      // Minted at round 1's field; every later round is resized to its own field when its Pair reaches it.
-      gen: planSwissShells(rounds, swissFieldForRound(entrants, 1).length).map((shell) => ({
+      gen: planSwissShells(rounds, mintField.length).map((shell) => ({
         extKey: shell.extKey,
         roundNo: shell.roundNo,
         seqInRound: shell.seqInRound,
@@ -1495,6 +1510,10 @@ async function swissGen(
   // W3 T6 (X-SW-12): this round's field — a latecomer whose first round is later is neither seated, sized for, nor
   // scored here. Everything below that reads the field reads THIS list.
   const field = swissFieldForRound(entrants, target);
+  // Review m4: the roster passed generateStageFixturesTx's `< 2` guard, but this round's field can be smaller (withdrawals
+  // plus latecomers whose first round is later). Refused here, before the reconcile below would size the round to 0 or 1
+  // and delete its unseated shells.
+  refuseSwissFieldUnderTwo(stageId, field.length);
   // Task 7 gives `playedFacts` its first reader (its `played` rule); until then the map is empty.
   const { score, played, colours, byes } = buildSwissHistory(existing, field, new Map());
 

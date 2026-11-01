@@ -1,5 +1,4 @@
--- V484 — W3 (format matrix: Swiss) app-A Task 6 (spec §4 "Scoring for the newcomer", ruling 251; rules X-SW-8, X-SW-12):
--- each entrant's first Swiss round. Spec docs/superpowers/specs/2026-10-31-format-matrix-w3-swiss-design.md §4 and §12.
+-- V484 — W3 (format matrix: Swiss) app-A Task 6 (ruling 251; rules X-SW-8, X-SW-12): each entrant's first Swiss round.
 -- Numbered V484 here (this branch's V483 is w3_bye_shells_off_court). feat/r4-sponsors also holds a V483 and
 -- feat/match-day a V484, so RENUMBER AT MERGE to the next free version above everything merged. Its test reads this file
 -- by glob, never by number (apps/web/src/server/__tests__/w3-migration.test.ts).
@@ -14,14 +13,24 @@
 -- is exactly today's behaviour.
 --
 -- ─── BACKFILL: OWED ONLY IF PROD'S COUNT 4 > 0 (LOUD) ──────────────────────────────────────────────────────────────────
--- An entrant created AFTER its division started (a payment confirmation, a waitlist promotion, a CSV import) is credited
--- +1 per round it missed by today's implicit-bye inference. This delta backfills NONE of them, on purpose:
---   * W3 Task 0's count 4 ("entrants created after the division started, in a division with a Swiss stage") was 0 on stg
---     (2026-10-31; .superpowers/sdd/2026-10-31-w3-swiss-app-a/preflight.md, "Count 4", with its query);
+-- An entrant created AFTER its Swiss division started (a payment confirmation, a waitlist promotion, a CSV import) is
+-- credited +1 per round it missed by the old implicit-bye inference. This delta backfills NONE of them, on purpose:
+--   * count 4 below was 0 on stg (2026-10-31, all 17 Swiss divisions);
 --   * prod's count 4 has NOT been read yet (asked of the owner, 2026-11-01).
--- If prod's count 4 is > 0, a backfill is owed BEFORE this ships: a `-- DATA CHANGE (LOUD)` UPDATE that sets exactly those
--- entrants' first round (idempotent, run pre-deploy, listed in the PR body's "Data changes"). If it is 0, nothing is owed.
--- No value is guessed here.
+-- Count 4, read-only. "Started" = the first Pair (a `fixtures_generated` event that seated fixtures), else the first
+-- `fixtures_generated` of any kind for a division that has never seated one:
+--   with st as (
+--     select de.division_id,
+--            coalesce(min(de.created_at) filter (where de.payload ? 'seated_fixture_ids'), min(de.created_at)) as started_at
+--     from seazn_club.division_events de
+--     where de.type = 'fixtures_generated'
+--       and de.division_id in (select s.division_id from seazn_club.stages s where s.kind = 'swiss')
+--     group by de.division_id)
+--   select count(*) from seazn_club.entrants e join st on st.division_id = e.division_id where e.created_at > st.started_at;
+-- If prod's count 4 is > 0, a backfill is owed BEFORE this ships: a SEPARATE, later `-- DATA CHANGE (LOUD)` delta (an
+-- idempotent UPDATE setting exactly those entrants' first round, run pre-deploy, listed in the PR body's "Data
+-- changes"). It cannot go in this file: w3-migration.test.ts pins this delta to one ADD COLUMN and no UPDATE. If prod's
+-- count 4 is 0, nothing is owed. No value is guessed here.
 --
 -- Idempotent: `if not exists` makes a second run a no-op, the check included (it is part of the column's definition).
 alter table entrants add column if not exists swiss_first_round int
