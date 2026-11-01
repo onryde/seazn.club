@@ -74,16 +74,17 @@ describe("Nav › Streaming item", () => {
     expect(at('href="/directory"')).toBeGreaterThan(-1);
     expect(at('href="/directory"'), "after Directory").toBeLessThan(at('data-testid="nav-streaming"'));
     expect(at('data-testid="nav-streaming"'), "before Settings").toBeLessThan(at('href="/o/riverside/settings"'));
-    // The label collapses to the icon below `md`, exactly like Dashboard / Directory / Settings (the 4-link dual-role case uses `lg`).
+    // The label collapses to the icon exactly like Dashboard / Directory / Settings. With the Sponsors link (R4 S11) a streaming org has FIVE
+    // links, and five wait for `lg` (owner: md for four links, lg for five; at md the chip kept 20-35px of the 61 B3 needs, nav.tsx).
     const label = html.slice(at('data-testid="nav-streaming"')).match(/<span class="([^"]*)">Streaming<\/span>/);
-    expect(label?.[1]).toBe("hidden md:inline");
+    expect(label?.[1]).toBe("hidden lg:inline");
   });
 
-  it("the label follows the dual-role rule too: a claimed player keeps `lg`, as every other label does", async () => {
+  it("the label follows the link count too: a claimed player makes it SIX links (Sponsors included), which wait for `xl` like every other label does", async () => {
     m.hasClaimedProfile.mockResolvedValue(true);
     const html = await render();
     const label = html.slice(html.indexOf('data-testid="nav-streaming"')).match(/<span class="([^"]*)">Streaming<\/span>/);
-    expect(label?.[1]).toBe("hidden lg:inline");
+    expect(label?.[1]).toBe("hidden xl:inline");
   });
 
   it("asks the predicate for the org the chrome is SHOWING (both streaming keys, org-wide), not some other org", async () => {
@@ -279,13 +280,26 @@ describe("Nav › the width budget", () => {
     expect(names.has(""), "none missing").toBe(false);
   });
 
-  it("phones: every nav link takes 6px of side padding (px-1.5) until sm, and the links touch (gap-0) until sm — the 4-link org nav and the 5-link dual-role nav (nine links checked)", async () => {
+  /** The org shapes the bar takes: Streaming offered or not x a claimed player or not (the Sponsors link, R4 S11, is in all of them). */
+  const SHAPES = [
+    { streaming: false, claimed: false, links: 4 },
+    { streaming: true, claimed: false, links: 5 },
+    { streaming: false, claimed: true, links: 5 },
+    { streaming: true, claimed: true, links: 6 },
+  ] as const;
+  async function renderShape(shape: { streaming: boolean; claimed: boolean }): Promise<string> {
+    m.hasFeature.mockReset().mockResolvedValue(true);
+    setRelayDriversForTest(shape.streaming ? { ingest: new FakeIngest(), runner: new FakeRunner() } : disabledRelayDrivers());
+    m.hasClaimedProfile.mockResolvedValue(shape.claimed);
+    return render();
+  }
+
+  it("phones: every nav link takes 6px of side padding (px-1.5) until sm, and the links touch (gap-0) until sm — all four org shapes, 4 + 5 + 5 + 6 = twenty links checked", async () => {
     let checked = 0;
-    for (const claimed of [false, true]) {
-      m.hasClaimedProfile.mockResolvedValue(claimed);
-      const html = await render();
+    for (const shape of SHAPES) {
+      const html = await renderShape(shape);
       const links = linkClasses(html);
-      expect(links.length, `claimed=${claimed}: 4 links, or 5 with Player home`).toBe(claimed ? 5 : 4);
+      expect(links.length, `${JSON.stringify(shape)}: Dashboard, Directory, Sponsors, Settings + Streaming / Player home where they apply`).toBe(shape.links);
       for (const l of links) {
         expect(l, "tightened on phones").toContain("px-1.5");
         expect(l, "not the old 8px").not.toContain("px-2");
@@ -297,46 +311,51 @@ describe("Nav › the width budget", () => {
       expect(navTokens, "the old 2px gap returns at sm").toContain("sm:gap-0.5");
       expect(navTokens, "the bare old gap is gone").not.toContain("gap-0.5");
     }
-    expect(checked, "anti-vacuity: nine links looked at").toBe(9);
+    expect(checked, "anti-vacuity: twenty links looked at").toBe(20);
   });
 
-  it("md..lg: where the labels are ON (the 4-link org nav) the links take 4px of side padding (md:px-1) and get 12px back at lg (lg:px-3), so the org chip keeps room for the club name; the icon-only dual-role links keep their 12px with no md override", async () => {
+  it("md..lg: where the labels are ON (only the 4-link org nav) the links take 4px of side padding (md:px-1) and get 12px back at lg (lg:px-3), so the org chip keeps room for the club name; every other bar is icon-only at md, keeps its 12px and has no md override", async () => {
     // B3 (CI e2e: the chip showed 37px of a 38-character club name at 768, 8 characters needing 64). Measured in a browser: 8px and 6px
     // leave fr/nl at 768 short of 8 characters, 4px clears every width x locale cell (the report's table).
     let checked = 0;
-    for (const claimed of [false, true]) {
-      m.hasClaimedProfile.mockResolvedValue(claimed);
-      const html = await render();
+    let labelsOnAtMd = 0;
+    for (const shape of SHAPES) {
+      const html = await renderShape(shape);
       const links = linkClasses(html);
       const labels = labelClasses(html);
-      expect(links.length, `claimed=${claimed}`).toBe(labels.length);
+      expect(links.length, JSON.stringify(shape)).toBe(labels.length);
       for (let i = 0; i < links.length; i++) {
-        const labelsOnAtMd = labels[i]!.includes("md:inline");
         const l = links[i]!;
-        if (labelsOnAtMd) {
+        if (labels[i]!.includes("md:inline")) {
+          labelsOnAtMd++;
           expect(l, `link ${i}: labels on at md, so tight padding there`).toContain("md:px-1");
           expect(l, `link ${i}: 12px returns at lg`).toContain("lg:px-3");
           // Not the 8px / 6px that measurement showed too wide for fr and nl at 768.
           expect(l, `link ${i}: not md:px-2`).not.toContain("md:px-2");
           expect(l, `link ${i}: not md:px-1.5`).not.toContain("md:px-1.5");
         } else {
-          expect(l.filter((t) => /^md:px-/.test(t)), `link ${i}: icon-only at md, no padding override`).toEqual([]);
+          expect(l.filter((t) => /^md:px-/.test(t)), `${JSON.stringify(shape)} link ${i}: icon-only at md, no padding override`).toEqual([]);
           expect(l, `link ${i}: keeps sm:px-3`).toContain("sm:px-3");
         }
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: nine links looked at").toBe(9);
+    expect(checked, "anti-vacuity: twenty links looked at").toBe(20);
+    expect(labelsOnAtMd, "anti-vacuity: the md branch ran - the 4 links of the one 4-link shape").toBe(4);
   });
 
-  it("tablets KEEP their labels: md..lg shows every label in the org nav (4), and the dual-role nav's five wait for lg (owner: no label dropped)", async () => {
-    m.hasClaimedProfile.mockResolvedValue(false);
-    const org = labelClasses(await render());
-    expect(org.length).toBe(4);
-    for (const l of org) expect(l).toEqual(["hidden", "md:inline"]);
-    m.hasClaimedProfile.mockResolvedValue(true);
-    const dual = labelClasses(await render());
-    expect(dual.length).toBe(5);
-    for (const l of dual) expect(l).toEqual(["hidden", "lg:inline"]);
+  it("tablets keep their labels where they fit (owner: md for four links, lg for five), and six wait for xl - nothing is dropped, every label is just revealed at the rung its bar can hold", async () => {
+    // With the Sponsors link (R4 S11) a streaming org or a claimed player has FIVE links and waits for lg; both together have six and wait
+    // for xl. Measured, not reasoned (nav.tsx): five labelled links at md leave the chip 20-35px at 768 against the 61 B3 needs (fr overflows);
+    // six at lg overflow 1024-1100 in es/fr/nl.
+    const rung = (links: number) => (links <= 4 ? "md" : links === 5 ? "lg" : "xl");
+    let checked = 0;
+    for (const shape of SHAPES) {
+      const labels = labelClasses(await renderShape(shape));
+      expect(labels.length, JSON.stringify(shape)).toBe(shape.links);
+      for (const l of labels) expect(l, JSON.stringify(shape)).toEqual(["hidden", `${rung(shape.links)}:inline`]);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

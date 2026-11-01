@@ -23,8 +23,16 @@ test.use({ storageState: { cookies: [], origins: [] } });
 const SHOTS = process.env.YOUTUBE_SHOTS_DIR ?? resolve(process.cwd(), "../../.superpowers/sdd/shots/youtube-streaming");
 const WIDTHS = [1280, 768, 320] as const;
 /** The nav budget is measured here: the phone floor and the width just above it (335 was 3px over), the dual-role link's own threshold (350),
- *  the widths around `md`/`lg` where the labels appear (768-836 is where fr/nl Sign-out was pushed out), and desktop. Every one must FIT. */
-const NAV_WIDTHS = [320, 335, 350, 360, 390, 640, 700, 768, 800, 836, 1023, 1024, 1280] as const;
+ *  the widths around `md`/`lg`/`xl` where the labels appear (768-836 is where fr/nl Sign-out was pushed out; 1024-1100 is where six labelled
+ *  links would not fit, so the six-link bar waits for xl), and desktop. Every one must FIT.
+ *
+ *  R4 sponsors-on-stream S11 (owner ruling 2026-10-31 "a") added the Sponsors link, which makes the worst case SIX links (Streaming + a claimed
+ *  player): 349/350 bracket the Sponsors link's own threshold, 360/375/389/390/430 are the phone widths the six-link bar was measured at (390 is
+ *  where Player home returns), and 1100/1279 are the last widths before the six-link bar gains its labels at xl (1280). */
+const NAV_WIDTHS = [320, 335, 349, 350, 360, 375, 389, 390, 430, 640, 700, 768, 800, 836, 1023, 1024, 1100, 1279, 1280] as const;
+/** The gantry's phone thresholds (nav.tsx): the Sponsors link shows from 350; Player home, on a bar that also has Streaming, from 390. */
+const SPONSORS_FROM_PX = 350;
+const PLAYER_HOME_STREAMING_FROM_PX = 390;
 
 const BANNER_WAIT_MS = 5_000;
 const asked = new WeakSet<Page>();
@@ -132,7 +140,7 @@ async function expectReadsBefore(first: Locator, second: Locator, label: string)
 
 /** The top gantry fits: every link in its <nav> shares one row (no wrap) and ends inside the viewport (nothing clipped or pushed), the
  *  Sign-out button (the control that used to be pushed out) ends inside it too, and each link's centre hit-tests to the link itself. */
-async function expectGantryFits(page: Page, where: string): Promise<void> {
+async function expectGantryFits(page: Page, where: string, opts: { playerHome?: boolean } = {}): Promise<void> {
   const seen = await page.evaluate(() => {
     const links = Array.from(document.querySelectorAll("header.app-gantry nav a")).filter((a) => {
       const r = a.getBoundingClientRect();
@@ -157,10 +165,21 @@ async function expectGantryFits(page: Page, where: string): Promise<void> {
       headerScrollW: document.querySelector("header.app-gantry")!.scrollWidth,
       headerH: Math.round(header.height),
       testids: links.map((a) => (a as HTMLElement).dataset.testid ?? ""),
+      hrefs: links.map((a) => a.getAttribute("href") ?? ""),
     };
   });
   expect(seen.n, `${where}: the gantry has links to measure`).toBeGreaterThanOrEqual(3);
   expect(seen.testids, `${where}: the Streaming item is among them`).toContain("nav-streaming");
+  // The Sponsors link (R4 S11): `hidden min-[350px]:flex` - there from 350, gone below it (the Dashboard's own entry covers 320).
+  expect(seen.testids.includes("nav-sponsors"), `${where}: Sponsors is ${seen.vw >= SPONSORS_FROM_PX ? "shown" : "hidden"} at ${seen.vw}px`).toBe(
+    seen.vw >= SPONSORS_FROM_PX,
+  );
+  // Player home folds first (owner ruling): on this bar (Streaming offered) it returns only from 390. Checked where the org has one.
+  if (opts.playerHome) {
+    expect(seen.hrefs.includes("/me"), `${where}: Player home is ${seen.vw >= PLAYER_HOME_STREAMING_FROM_PX ? "shown" : "folded"} at ${seen.vw}px`).toBe(
+      seen.vw >= PLAYER_HOME_STREAMING_FROM_PX,
+    );
+  }
   expect(new Set(seen.tops).size, `${where}: the nav links wrap onto ${new Set(seen.tops).size} rows (tops ${seen.tops.join(",")})`).toBe(1);
   expect(seen.maxRight, `${where}: the last nav link ends at ${Math.round(seen.maxRight)}px of ${seen.vw}px`).toBeLessThanOrEqual(seen.vw + 1);
   expect(seen.headerScrollW, `${where}: the gantry scrolls sideways (${seen.headerScrollW} > ${seen.vw})`).toBeLessThanOrEqual(seen.vw + 1);
@@ -277,14 +296,15 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   await expect(link, "the Streaming nav item").toBeVisible();
   await expect(link).toHaveAttribute("href", "/streaming");
   await expect(link).toHaveAttribute("aria-label", dictOf("console")["nav.streaming"] ?? "");
-  // Order: Directory, Streaming, Settings.
+  // Order: Directory, Streaming, Sponsors (R4 S11), Settings.
   const order = await page.evaluate(() =>
     Array.from(document.querySelectorAll("header.app-gantry nav a")).map((a) => a.getAttribute("href") ?? ""),
   );
   const at = (needle: string) => order.findIndex((h) => h.startsWith(needle));
   expect(at("/directory"), "Directory is in the nav").toBeGreaterThan(-1);
   expect(at("/directory")).toBeLessThan(at("/streaming"));
-  expect(at("/streaming")).toBeLessThan(at(`/o/${orgSlug}/settings`));
+  expect(at("/streaming")).toBeLessThan(at(`/o/${orgSlug}/sponsors`));
+  expect(at(`/o/${orgSlug}/sponsors`), "Sponsors sits between Streaming and Settings").toBeLessThan(at(`/o/${orgSlug}/settings`));
   await shot(page, "nav-1280");
 
   // The page the item leads to is the Streaming one (the nav marks no current item, so the heading is the proof).
@@ -310,8 +330,8 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   }
 });
 
-test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (five links, labels from lg) fits at every width in all four locales", async ({ page }) => {
-  test.setTimeout(budget({ navs: 4 + 2, acts: 12 }));
+test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (six links with Sponsors, Player home folding first, labels from xl) fits at every width in all four locales", async ({ page }) => {
+  test.setTimeout(budget({ navs: 4 + 2, acts: 12 })); // navs = page OPENS (one per locale); the width loop only resizes
   const { email } = await rig(page, "navdual");
   // The dual-role seam (nav.tsx isPlayer): a claimed player profile adds the Player home link. Own throwaway account, never a shared identity.
   await claimProfileBySql(email);
@@ -327,11 +347,11 @@ test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (
       `${locale}: Sign out is named in ${locale}`,
     ).toBeVisible();
     const links = await page.locator("header.app-gantry nav a").count();
-    expect(links, `${locale}: Dashboard, Directory, Streaming, Settings and Player home`).toBe(5);
+    expect(links, `${locale}: Dashboard, Directory, Streaming, Sponsors, Settings and Player home`).toBe(6);
     for (const w of NAV_WIDTHS) {
       await page.setViewportSize({ width: w, height: 800 });
       await page.waitForTimeout(150);
-      await expectGantryFits(page, `dual-role ${locale} at ${w}`);
+      await expectGantryFits(page, `dual-role ${locale} at ${w}`, { playerHome: true });
     }
   }
 });
