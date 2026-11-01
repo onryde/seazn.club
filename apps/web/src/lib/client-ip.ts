@@ -5,11 +5,15 @@
 //     many visitors; the visitor is Cloudflare's `CF-Connecting-IP`.
 //   - the `*.fly.dev` origins answer directly, so a client can reach Fly without Cloudflare and write `CF-Connecting-IP` (and
 //     the first X-Forwarded-For hop - Fly appends to XFF, it never replaces it) itself.
-// So `CF-Connecting-IP` is believed only when Fly's peer is inside Cloudflare's published ranges; any other Fly peer is the
-// client. With no Fly header at all (local dev, CI) the first X-Forwarded-For hop, then X-Real-IP, else "unknown". A CF header
-// with no Fly peer to vouch for it is ignored.
+// So `CF-Connecting-IP` is believed only when Fly's peer is inside Cloudflare's published ranges, the request is not a Worker
+// subrequest, and the value is an address; otherwise Fly's peer is the client. With no Fly header at all (local dev, CI) the
+// first X-Forwarded-For hop, then X-Real-IP, else "unknown". A CF header with no Fly peer to vouch for it is ignored.
 //
-// A forged value can only ever move the forger's OWN requests to another bucket; it can never refuse someone else's.
+// This is a PARTIAL guard. A Cloudflare Worker's fetch() to the fly.dev origin leaves from Cloudflare's own ranges and may set
+// `CF-Connecting-IP` to anything (developers.cloudflare.com/fundamentals/reference/http-headers); Cloudflare marks every
+// Worker subrequest with `cf-worker`, which is what is detected here. The full close is a zone Transform Rule that stamps a
+// secret header the origin checks - an owner ops step this code does not take. Until then a forged value can move requests
+// into ANOTHER client's bucket, so a per-IP limit is a brake, never an authorisation.
 import { BlockList, isIP } from "node:net";
 
 /** Cloudflare's published edge ranges: https://www.cloudflare.com/ips-v4 and https://www.cloudflare.com/ips-v6, fetched
@@ -45,7 +49,8 @@ export function clientIp(headers: Headers): string {
   const fly = first(headers.get("fly-client-ip"));
   if (fly !== undefined) {
     const cf = first(headers.get("cf-connecting-ip"));
-    return cf !== undefined && isCloudflarePeer(fly) ? cf : fly;
+    const believed = cf !== undefined && isIP(cf) !== 0 && !headers.has("cf-worker") && isCloudflarePeer(fly);
+    return believed ? cf : fly;
   }
   return first(headers.get("x-forwarded-for")?.split(",")[0]) ?? first(headers.get("x-real-ip")) ?? "unknown";
 }

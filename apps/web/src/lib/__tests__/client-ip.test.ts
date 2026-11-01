@@ -118,6 +118,27 @@ describe("clientIp", () => {
     expect(checked).toBe(cases.length);
   });
 
+  // Security re-review: a Cloudflare Worker's fetch() to the fly.dev origin leaves from Cloudflare's own ranges and can set
+  // CF-Connecting-IP to anything; Cloudflare marks every Worker subrequest with `cf-worker`. And a CF value that is not an
+  // address never becomes a bucket key.
+  it("2b. a Cloudflare peer whose CF-Connecting-IP cannot be believed - a Worker subrequest (cf-worker, any value) or not an address: Fly's peer (count reported)", () => {
+    const cases: Array<[Record<string, string>, string]> = [
+      [{ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR, "cf-worker": "attacker.example" }, CF_EDGE],
+      [{ "fly-client-ip": CF_EDGE6, "cf-connecting-ip": VISITOR6, "cf-worker": "" }, CF_EDGE6],
+      [{ "fly-client-ip": CF_EDGE, "cf-connecting-ip": "evil" }, CF_EDGE],
+      [{ "fly-client-ip": CF_EDGE, "cf-connecting-ip": "1.2.3.4, 5.6.7.8" }, CF_EDGE],
+      [{ "fly-client-ip": CF_EDGE, "cf-connecting-ip": "203.0.113.50/32" }, CF_EDGE],
+    ];
+    let checked = 0;
+    for (const [headers, want] of cases) {
+      expect(clientIp(h(headers)), JSON.stringify(headers)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // The positive pair: the same edge, an address, no cf-worker - the visitor.
+    expect(clientIp(h({ "fly-client-ip": CF_EDGE, "cf-connecting-ip": VISITOR }))).toBe(VISITOR);
+  });
+
   it("3. no Fly header (local, CI): the first X-Forwarded-For hop, then X-Real-IP; a CF header with no Fly peer to vouch for it is ignored (count reported)", () => {
     const cases: Array<[Record<string, string>, string]> = [
       [{ "x-forwarded-for": ` ${XFF_FIRST} ,10.0.0.1`, "x-real-ip": REAL }, XFF_FIRST],
