@@ -300,6 +300,20 @@ export function airingFramePath(orgId: string, sessionId: string, momentId: stri
 /** The moment id a refusal logs, at most: the wire's bound and some (S9 review m4). */
 export const FRAME_MOMENT_LOG_CHARS = 120;
 
+/** The Sentry route tag a frame's storage failure is reported under (with its org as a tag and its session attached). */
+export const FRAME_STORAGE_ROUTE = "relay.sponsor_frame.storage";
+/** The Sentry route tag of a drain pass whose storage remove failed (once per pass: the pass stops there). */
+export const FRAME_REMOVE_ROUTE = "relay.sweep.sponsor_frames_remove";
+
+/** The frame upload's storage failure: a 502 the usecase has ALREADY reported, with its org and session. The route answers
+ *  it itself, so the generic handler (which captures every 5xx it sees, context-free) never reports it a second time. */
+export class FrameStorageFailed extends HttpError {
+  constructor(cause: unknown) {
+    super(502, "the frame could not be stored", "FRAME_STORAGE_FAILED");
+    this.cause = cause;
+  }
+}
+
 const tombstoneFrame = (path: string) => sql`
   insert into sponsor_frame_tombstones (path) values (${path}) on conflict (path) do update set deleted_at = excluded.deleted_at`;
 
@@ -316,8 +330,10 @@ const isJpeg = (bytes: Uint8Array): boolean => JPEG_SOI.every((b, i) => bytes[i]
  *   413  past the bound (inclusive); 415 no JPEG SOI.
  * Then the object is written (replacing an earlier frame of the moment) and the row upserted: one row per (session,
  * moment), its path this frame's. The id is stored VERBATIM — the route hands it over decoded once — so it joins
- * sponsor_airings.moment_id. A storage failure is a 502 and writes no row (SC2 retries a 5xx once); it is reported ONCE,
- * by the route's `handler` (every 5xx HttpError is captured there), with the provider's error as its `cause`. A row write
+ * sponsor_airings.moment_id. A storage failure is a 502 (`FrameStorageFailed`) and writes no row (SC2 retries a 5xx
+ * once); it is reported ONCE, HERE, tagged with the session's org and FRAME_STORAGE_ROUTE and carrying the session id
+ * (S9 carry: the route's `handler` captures a bare 5xx with none of them), with the provider's error as its `cause` — and
+ * the route answers that one 502 itself, so its handler does not report it a second time. A row write
  * that fails after the object was stored tombstones the path (V483), so the sweep removes the object no row names. The
  * token and the bytes are never logged. No lock: a frame racing the session's end is still a real frame of a real showing.
  */
@@ -344,7 +360,10 @@ export async function storeAiringFrame(sessionId: string, token: string, momentI
   try {
     await putStorageObject(path, bytes, "image/jpeg");
   } catch (err) {
-    throw Object.assign(new HttpError(502, "the frame could not be stored", "FRAME_STORAGE_FAILED"), { cause: err });
+    const failure = new FrameStorageFailed(err);
+    log.error({ sid: s.id, orgId: s.org_id, err: String(err) }, "sponsor frame: storage refused the frame — 502, the compositor retries once");
+    captureError(failure, { orgId: s.org_id, route: FRAME_STORAGE_ROUTE, extra: { sessionId: s.id } });
+    throw failure;
   }
   try {
     await sql`
@@ -373,8 +392,10 @@ export interface FramePurge { orphans: number; purged: number; failed: number }
  * airings) never shows it. Once its session has been over for longer than ORPHAN_FRAME_GRACE_MS no airing can still land
  * (the heartbeat answers 410), so its row goes; V483's trigger tombstones its path in the same statement. Then the
  * tombstones are drained — every object whose row went, by this purge or by a cascade (a session or org deleted) or a
- * moved key — storage first: the objects in one call per batch, then the tombstones. A remove that fails keeps the batch's
- * tombstones, counted, for the next pass, and stops the drain. A tombstoned path a frame row names again keeps its object.
+ * moved key — storage first: the objects in one call per batch, then the tombstones it READ, matched on (path,
+ * deleted_at): a path that departs again while the batch is in storage keeps its re-stamped tombstone for the next pass. A
+ * remove that fails keeps the batch's tombstones, counted, for the next pass, stops the drain, and is reported once
+ * (FRAME_REMOVE_ROUTE) — once per pass, so once per daily sweep. A tombstoned path a frame row names again keeps its object.
  * Each loop runs batches of `batchSize` until one comes back short, at most `maxBatches` (ORPHAN_PURGE_MAX_BATCHES).
  * "Over" is a terminal state with `ended_at` past the grace (both: the state is the authority, `ended_at` the clock).
  * `orgIds` is the sweep's TEST-ONLY scope — tombstones carry no org, so they are scoped by their key's first segment
@@ -413,8 +434,10 @@ export async function purgeOrphanFrames(
   }
   let purged = 0;
   for (let batch = 0; batch < maxBatches; batch++) {
-    const graves = await sql<{ path: string; named: boolean }[]>`
-      select t.path, exists (select 1 from sponsor_airing_frames f where f.path = t.path) as named
+    // deleted_at travels as TEXT both ways: a JS Date keeps milliseconds and the column microseconds, so a Date (or a
+    // timestamptz[] parameter, which the client serialises through a Date) could never match the row it was read from.
+    const graves = await sql<{ path: string; deleted_at: string; named: boolean }[]>`
+      select t.path, t.deleted_at::text as deleted_at, exists (select 1 from sponsor_airing_frames f where f.path = t.path) as named
         from sponsor_frame_tombstones t
        where true ${orgIds ? sql`and split_part(t.path, '/', 1) in ${sql(orgIds)}` : sql``}
        order by t.deleted_at, t.path
@@ -425,9 +448,14 @@ export async function purgeOrphanFrames(
       await removeStorageObjects(dead);
     } catch (err) {
       log.warn({ frames: dead.length, err }, "sponsor frames: removing frame objects from storage failed — their tombstones are kept for the next pass");
+      captureError(err, { route: FRAME_REMOVE_ROUTE, extra: { frames: dead.length } });
       return { orphans, purged, failed: dead.length };
     }
-    await sql`delete from sponsor_frame_tombstones where path in ${sql(graves.map((g) => g.path))}`;
+    await sql`
+      delete from sponsor_frame_tombstones t
+       using (select unnest(${graves.map((g) => g.path)}::text[]) as path,
+                     unnest(${graves.map((g) => g.deleted_at)}::text[])::timestamptz as deleted_at) g
+       where t.path = g.path and t.deleted_at = g.deleted_at`;
     purged += dead.length;
     if (graves.length < batchSize) break;
   }

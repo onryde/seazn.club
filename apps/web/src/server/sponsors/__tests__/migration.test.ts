@@ -10,10 +10,10 @@
 // Rows are written on the privileged `sql` client (the overlay read path, the relay heartbeat and the /s/ redirect all
 // write there); the tenant reads go through `withTenant`, which drops to app_user.
 import { randomBytes, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
 import {
   SPONSOR_SHORT_CODE_ALPHABET,
@@ -36,7 +36,11 @@ const NEW_TABLES = [
 ] as const;
 /** And its one SEALED table (S9 review m8): the frame objects whose rows went — no org, no policy, no grant. */
 const SEALED_TABLES = ["sponsor_frame_tombstones"] as const;
-const V483_FILE = resolve(__dirname, "../../../../../../db/migration/deltas/V483__sponsor_rotation.sql");
+/** The R4 delta, found by SUFFIX, never by number (final review m1): a renumber before merge is then a pure `git mv`. */
+const DELTAS_DIR = resolve(__dirname, "../../../../../../db/migration/deltas");
+const SPONSOR_ROTATION_DELTA = /^V\d+__sponsor_rotation\.sql$/;
+const V483_MATCHES = readdirSync(DELTAS_DIR).filter((f) => SPONSOR_ROTATION_DELTA.test(f));
+const V483_FILE = resolve(DELTAS_DIR, V483_MATCHES[0] ?? "the-sponsor-rotation-delta-is-missing.sql");
 /** Tables the console writes under withTenant (S12 settings PUT, S13 create/revoke a link). */
 const TENANT_WRITTEN = new Set<string>(["sponsor_stream_settings", "sponsor_report_links"]);
 const FREQUENCIES = ["light", "normal", "busy"];
@@ -122,8 +126,8 @@ async function airing(w: Pick<World, "orgId">, o: AiringOpts): Promise<string> {
   return row!.id;
 }
 
-function frame(w: Pick<World, "orgId">, session: string, moment: string) {
-  return sql`insert into sponsor_airing_frames (session_id, moment_id, org_id, path) values (${session}, ${moment}, ${w.orgId}, ${`frames/${uniq()}.jpg`})`;
+function frame(w: Pick<World, "orgId">, session: string, moment: string, path = `frames/${uniq()}.jpg`) {
+  return sql`insert into sponsor_airing_frames (session_id, moment_id, org_id, path) values (${session}, ${moment}, ${w.orgId}, ${path})`;
 }
 
 async function click(w: Pick<World, "orgId">, o: { sponsor: string; fixture: string | null; source?: string }): Promise<string> {
@@ -163,6 +167,24 @@ async function settings(w: Pick<World, "orgId">, competition: string | null, ext
 }
 
 const refusedBy = (code: string, constraint: string) => ({ code, constraint_name: constraint });
+
+/** Every FK the new tables declare, its parent, and whether some index LEADS with it and serves the parent delete's
+ *  `col = $1`: a whole-table index, or a partial one whose predicate is exactly that column's `is not null` (S3 carry: a
+ *  partial index with any other predicate - `where source = 'site'` - does not serve the delete, so it does not count). */
+function fkIndexes(tx: typeof sql | Tx) {
+  return tx<{ tbl: string; col: string; parent: string; cols: number; indexed: boolean }[]>`
+    select t.relname as tbl, a.attname as col, p.relname as parent, cardinality(c.conkey) as cols,
+           exists (select 1 from pg_index i
+                    where i.indrelid = c.conrelid and i.indkey[0] = c.conkey[1]
+                      and (i.indpred is null
+                           or pg_get_expr(i.indpred, i.indrelid) = '(' || quote_ident(a.attname) || ' IS NOT NULL)')) as indexed
+      from pg_constraint c
+      join pg_class t on t.oid = c.conrelid
+      join pg_namespace n on n.oid = t.relnamespace
+      join pg_class p on p.oid = c.confrelid
+      join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
+     where c.contype = 'f' and n.nspname = current_schema() and t.relname in ${tx(NEW_TABLES as unknown as string[])}`;
+}
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -372,6 +394,21 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
     await expect(frame(w, s, `m-${uniq()}`)).resolves.toBeTruthy();
   });
 
+  it("S9 carry: one storage object, one row - a path another (session, moment) already names is refused by name; the same row's own replace and a fresh path are not", async () => {
+    const w = await world();
+    const s = await w.session(w.fixtureIds[0]!);
+    const t = await w.session(w.fixtureIds[1]!);
+    const path = `frames/${uniq()}.jpg`;
+    await expect(frame(w, s, "m1", path)).resolves.toBeTruthy();
+    await expect(frame(w, s, "m2", path), "another moment").rejects.toMatchObject(refusedBy("23505", "sponsor_airing_frames_path_key"));
+    await expect(frame(w, t, "m1", path), "another session").rejects.toMatchObject(refusedBy("23505", "sponsor_airing_frames_path_key"));
+    // The positive pairs: the writer's replace (same row, same path) and a fresh path for the other moment.
+    await expect(sql`
+      insert into sponsor_airing_frames (session_id, moment_id, org_id, path) values (${s}, 'm1', ${w.orgId}, ${path})
+      on conflict (session_id, moment_id) do update set path = excluded.path, created_at = now()`).resolves.toBeTruthy();
+    await expect(frame(w, s, "m2")).resolves.toBeTruthy();
+  });
+
   // ---- R16: deletes never take the proof of display with them ------------------------------------------------------
   it("R16: deleting a session that has aired a card succeeds; the airing stays (session null, name kept) and its frame goes", async () => {
     const w = await world();
@@ -551,6 +588,11 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
   });
 
   // ---- tenancy ----------------------------------------------------------------------------------------------------
+  it("the R4 delta is found by its suffix: exactly one file matches, whatever its number", () => {
+    expect(V483_MATCHES, "exactly one sponsor_rotation delta").toHaveLength(1);
+    expect(V483_FILE.endsWith("__sponsor_rotation.sql")).toBe(true);
+  });
+
   it("V483 creates exactly the tenant tables and the sealed one this file classifies — a table added later is classified or this reds (count reported)", () => {
     const created = [...readFileSync(V483_FILE, "utf8").matchAll(/^create table (\w+)/gm)].map((m) => m[1]!);
     expect(created.length, "tables read from the file").toBeGreaterThan(0);
@@ -666,17 +708,7 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
   });
 
   it("every foreign key to a parent the app deletes has an index led by its column; org and user keys are the only unindexed ones (counts reported; MUTATE: drop sponsor_clicks_fixture_idx)", async () => {
-    // Read from the catalogue: every FK the new tables declare, its parent, and whether some index LEADS with it (a
-    // partial `where col is not null` index serves the delete's `col = $1` too).
-    const fks = await sql<{ tbl: string; col: string; parent: string; cols: number; indexed: boolean }[]>`
-      select t.relname as tbl, a.attname as col, p.relname as parent, cardinality(c.conkey) as cols,
-             exists (select 1 from pg_index i where i.indrelid = c.conrelid and i.indkey[0] = c.conkey[1]) as indexed
-        from pg_constraint c
-        join pg_class t on t.oid = c.conrelid
-        join pg_namespace n on n.oid = t.relnamespace
-        join pg_class p on p.oid = c.confrelid
-        join pg_attribute a on a.attrelid = c.conrelid and a.attnum = c.conkey[1]
-       where c.contype = 'f' and n.nspname = current_schema() and t.relname in ${sql(NEW_TABLES as unknown as string[])}`;
+    const fks = await fkIndexes(sql);
     expect(fks.every((k) => k.cols === 1), "every key is single-column").toBe(true);
     const unclassified = fks.filter((k) => !UNINDEXED_PARENTS.has(k.parent) && !WALKED_FKS.includes(`${k.tbl}.${k.col}`));
     expect(unclassified.map((k) => `${k.tbl}.${k.col} → ${k.parent}`), "an FK nobody classified").toEqual([]);
@@ -692,5 +724,28 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
     // The excluded side: one org key per table, plus settings.updated_by and report_links.created_by.
     const excluded = fks.filter((k) => UNINDEXED_PARENTS.has(k.parent)).map((k) => `${k.tbl}.${k.col}`).sort();
     expect(excluded).toEqual([...NEW_TABLES.map((t) => `${t}.org_id`), "sponsor_report_links.created_by", "sponsor_stream_settings.updated_by"].sort());
+  });
+
+  it("S3 carry: the sweep counts a PARTIAL index only when its predicate is the key's own `is not null` - a partial index with an unrelated predicate does not serve the delete and does not count (planted in a rolled-back transaction)", async () => {
+    const ROLLBACK = new Error("rolled back on purpose");
+    const key = "sponsor_clicks.fixture_id";
+    let planted: Awaited<ReturnType<typeof fkIndexes>> = [];
+    let kept: Awaited<ReturnType<typeof fkIndexes>> = [];
+    await expect(sql.begin(async (tx) => {
+      await tx`drop index sponsor_clicks_fixture_idx`;
+      await tx`create index sponsor_clicks_fixture_site_idx on sponsor_clicks (fixture_id) where source = 'site'`;
+      planted = await fkIndexes(tx);
+      await tx`drop index sponsor_clicks_fixture_site_idx`;
+      await tx`create index sponsor_clicks_fixture_nn_idx on sponsor_clicks (fixture_id) where fixture_id is not null`;
+      kept = await fkIndexes(tx);
+      throw ROLLBACK;
+    })).rejects.toBe(ROLLBACK);
+    const indexedIn = (rows: typeof planted) => rows.find((k) => `${k.tbl}.${k.col}` === key)?.indexed;
+    expect(planted.length, "premise: the sweep read the keys").toBe(kept.length);
+    expect(planted.length).toBeGreaterThan(0);
+    expect(indexedIn(planted), "an unrelated predicate: not served").toBe(false);
+    expect(indexedIn(kept), "the key's own `is not null`: served").toBe(true);
+    // ...and the rollback restored the real index.
+    expect(indexedIn(await fkIndexes(sql))).toBe(true);
   });
 });

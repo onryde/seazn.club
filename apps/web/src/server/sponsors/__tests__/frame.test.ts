@@ -26,6 +26,8 @@
 //   the row write failing after the object was stored (tombstoned) ........... "tombstones"
 //   orphans purged past session end + 24 h, in capped batches ................ "orphans"
 //   a session deleted: its objects removed on the next pass .................. "tombstones"
+//   a tombstone re-stamped while the drain runs survives it ................... "the drain deletes the tombstones it READ"
+//   a failed remove reported once for the pass ................................ "a storage remove that fails"
 // TWO SPORTS where a sport changes the id: cricket (a break card: `<seq>:sponsor.over_end`) and generic (no natural
 // breaks, so its sponsors air on the scene carousel: `scene:<scene>:<bucket>`). Everything else is single-sport on
 // purpose: the endpoint reads no sport, only the id the page minted.
@@ -40,8 +42,9 @@ const store = vi.hoisted(() => {
   const objects = new Map<string, Uint8Array>();
   const calls: { op: "upload" | "remove" | "sign"; bucket: string; paths: string[]; upsert?: boolean; contentType?: string }[] = [];
   const fail = { upload: 0, remove: 0 };
-  /** Runs after an upload has stored its object — a thing that happens WHILE a frame is in flight. */
-  const hooks = { afterUpload: null as null | (() => Promise<void>) };
+  /** `afterUpload` runs after an upload has stored its object — a thing that happens WHILE a frame is in flight;
+   *  `beforeRemove` runs inside a remove — a thing that happens WHILE the drain is between its read and its delete. */
+  const hooks = { afterUpload: null as null | (() => Promise<void>), beforeRemove: null as null | (() => Promise<void>) };
   return { objects, calls, fail, hooks };
 });
 vi.mock("@/lib/supabase-admin", () => ({
@@ -59,6 +62,7 @@ vi.mock("@/lib/supabase-admin", () => ({
         },
         async remove(paths: string[]) {
           store.calls.push({ op: "remove", bucket, paths: [...paths] });
+          if (store.hooks.beforeRemove) await store.hooks.beforeRemove();
           if (store.fail.remove > 0) { store.fail.remove--; return { data: null, error: { message: "storage is down" } }; }
           for (const p of paths) store.objects.delete(`${bucket}\n${p}`);
           return { data: paths.map((name) => ({ name })), error: null };
@@ -640,7 +644,7 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
     expect((await framesOf(p.sessionId)).map((f) => f.moment_id)).toEqual([colon]);
   });
 
-  it("storage failure: a failed put is a 502 (SC2 retries once), writes no row, and is reported ONCE — by the route's handler, with the provider's error as its cause (review m3) — without the token or the bytes; the retry lands", async () => {
+  it("storage failure: a failed put is a 502 (SC2 retries once), writes no row, and is reported ONCE — by the usecase, tagged with its org and route and carrying its session (S9 carry), never a second time by the route's handler — with the provider's error as its cause (review m3), without the token or the bytes; the retry lands", async () => {
     const p = await plainSession();
     const id = sponsorMomentId(2, OVER_END.kind);
     const error = vi.spyOn(log, "error");
@@ -653,14 +657,18 @@ describe.skipIf(!HAS_DB)("S9: POST …/airings/[momentId]/frame", () => {
       expect(res.status).toBe(502);
       expect(await json(res)).toMatchObject({ ok: false, code: "FRAME_STORAGE_FAILED" });
       expect(await framesOf(p.sessionId)).toEqual([]);
-      // One report: Sentry once (the handler's), no second capture by the usecase, and one error line.
-      const reports = vi.mocked(Sentry.captureException).mock.calls;
+      // One report: the usecase's, with the org, route and session it knows (the handler's bare capture had none of them),
+      // no second capture by the route's handler, and one error line.
+      const reports = vi.mocked(captureError).mock.calls;
       expect(reports, "reported once").toHaveLength(1);
       const reported = reports[0]![0] as Error & { code?: string; cause?: unknown };
       expect(reported.code).toBe("FRAME_STORAGE_FAILED");
       expect(reported.cause, "the provider's error rides as the cause").toBeInstanceOf(Error);
       expect((reported.cause as Error).message).toContain("storage is down");
-      expect(vi.mocked(captureError), "the usecase reports nothing itself").not.toHaveBeenCalled();
+      expect(reports[0]![1], "tagged with its org and route, its session attached").toEqual({
+        orgId: p.orgId, route: "relay.sponsor_frame.storage", extra: { sessionId: p.sessionId },
+      });
+      expect(vi.mocked(Sentry.captureException), "the route's handler does not report it a second time").not.toHaveBeenCalled();
       expect(error, "one error line").toHaveBeenCalledTimes(1);
       const said = JSON.stringify([error.mock.calls, warn.mock.calls, reports], (_k, v: unknown) =>
         (v instanceof Error ? { message: v.message, cause: (v as { cause?: unknown }).cause } : v));
@@ -845,23 +853,51 @@ describe.skipIf(!HAS_DB)("S9: orphan frames (no airing row) are purged past sess
     expect(refused).toBe(4);
   });
 
-  it("a storage remove that fails keeps every tombstone (tomorrow's pass retries it) and is counted; the objects stay until the next pass removes them", async () => {
+  it("a storage remove that fails keeps every tombstone (tomorrow's pass retries it), is counted, and is reported to Sentry ONCE for the pass (S9 carry); the objects stay until the next pass removes them", async () => {
     const now = new Date();
     const p = await plainSession();
     const a = await framed(p, 1);
     const b = await framed(p, 2);
     await endAt(p.sessionId, pastGrace(now));
     store.fail.remove = 1;
+    vi.mocked(captureError).mockClear();
     try {
       expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ orphans: 2, purged: 0, failed: 2 });
+      const reports = vi.mocked(captureError).mock.calls;
+      expect(reports, "reported once for the pass").toHaveLength(1);
+      expect(reports[0]![1]).toEqual({ route: "relay.sweep.sponsor_frames_remove", extra: { frames: 2 } });
     } finally {
       store.fail.remove = 0;
     }
     expect(await rowsFor([p.sessionId]), "the orphan rows are gone").toEqual([]);
     expect(await tombstonesOf([a.path, b.path]), "their tombstones stand").toEqual([a.path, b.path].sort());
     expect([storedAt(a.path), storedAt(b.path)].every((x) => x !== undefined), "and so do the objects").toBe(true);
-    expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 2, failed: 0 });
+    expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] }), "the next pass").toEqual({ orphans: 0, purged: 2, failed: 0 });
+    expect(vi.mocked(captureError), "a clean pass reports nothing").toHaveBeenCalledTimes(1);
     expect([storedAt(a.path), storedAt(b.path)]).toEqual([undefined, undefined]);
+    expect(await tombstonesOf([a.path, b.path])).toEqual([]);
+  });
+
+  it("S9 carry: the drain deletes the tombstones it READ, matched on (path, deleted_at) — a tombstone the same path earns again while the drain is removing objects (a new departure) survives for the next pass", async () => {
+    const now = new Date();
+    const p = await plainSession();
+    const a = await framed(p, 1);
+    const b = await framed(p, 2);
+    await sql`delete from fixture_stream_sessions where id = ${p.sessionId}`;
+    expect(await tombstonesOf([a.path, b.path]), "premise: both tombstoned").toEqual([a.path, b.path].sort());
+    // While storage removes the objects, `a`'s path departs again: its tombstone is re-stamped (the trigger's upsert).
+    store.hooks.beforeRemove = async () => {
+      await sql`update sponsor_frame_tombstones set deleted_at = deleted_at + interval '1 second' where path = ${a.path}`;
+    };
+    try {
+      expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 2, failed: 0 });
+    } finally {
+      store.hooks.beforeRemove = null;
+    }
+    expect([storedAt(a.path), storedAt(b.path)], "both objects removed").toEqual([undefined, undefined]);
+    expect(await tombstonesOf([a.path, b.path]), "the re-stamped tombstone stays; the one read and removed goes").toEqual([a.path]);
+    // The positive pair: the next pass drains it (its object is already gone; a remove of an absent key is a no-op).
+    expect(await purgeOrphanFrames(now, { orgIds: [p.orgId] })).toEqual({ orphans: 0, purged: 1, failed: 0 });
     expect(await tombstonesOf([a.path, b.path])).toEqual([]);
   });
 
