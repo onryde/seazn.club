@@ -29,7 +29,8 @@
 import { GAME_UNIT_SPORTS, disciplineLabel } from "@/lib/public-site";
 import type { OverlayMoment as W1OverlayMoment, OverlayMsg } from "@/lib/overlay-model";
 import type { RecentEvent } from "@/lib/overlay-recent-types";
-import { sponsorMomentId, type SponsorPlan, type SponsorStyle } from "@/lib/sponsor-plan";
+import type { SponsorPlan, SponsorStyle } from "@/lib/sponsor-plan";
+import { SPONSOR_MOMENT_KIND_PREFIX, isSponsorMomentId, sponsorMomentId, sponsorMomentKind } from "@/lib/sponsor-moment-id";
 
 /** R4 S6 (spec 2026-10-27 §3.4): the queue's one ordering rule. A score moment always outranks a sponsor moment. */
 export type MomentPriority = "score" | "sponsor";
@@ -61,14 +62,8 @@ export interface OverlayMoment extends W1OverlayMoment {
   sponsor?: { cardId: string; style: SponsorStyle; breakKind: string };
 }
 
-/** Every sponsor moment's kind starts with this, so its queue id is `${seq}:sponsor.<breakKind>` — S4's
- *  `sponsorMomentId`. No score rule emits a kind under it. */
-export const SPONSOR_MOMENT_KIND_PREFIX = "sponsor.";
-
-/** Is this queue id (`${seq}:${kind}`) a sponsor moment's? Read by the queue's `sync`, which holds only ids. */
-export function isSponsorMomentId(id: string): boolean {
-  return id.slice(id.indexOf(":") + 1).startsWith(SPONSOR_MOMENT_KIND_PREFIX);
-}
+/** The sponsor moment's kind prefix and queue-id test: the grammar's one authority is lib/sponsor-moment-id.ts. */
+export { SPONSOR_MOMENT_KIND_PREFIX, isSponsorMomentId };
 
 /**
  * R4 S6 (spec 2026-10-27 §3.4): the served sponsor plan's airings → moments for the SAME queue (scenario rule 1: "a
@@ -95,7 +90,7 @@ export function sponsorMoments(plan: SponsorPlan): OverlayMoment[] {
     if (a.momentId !== sponsorMomentId(a.seq, a.breakKind)) continue;
     out.push({
       seq: a.seq,
-      kind: `${SPONSOR_MOMENT_KIND_PREFIX}${a.breakKind}`,
+      kind: sponsorMomentKind(a.breakKind),
       graphic: "sponsor",
       priority: "sponsor",
       // The W1 shape requires a headline and a tone; the sponsor card (S7) renders its own face, so these are the

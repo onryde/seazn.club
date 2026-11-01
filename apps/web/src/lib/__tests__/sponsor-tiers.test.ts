@@ -3,10 +3,11 @@
 // under test — and every later test of the rotation derives from SPONSOR_TIER_WEIGHTS, so this file is the one place the
 // declaration is pinned to the ruling. The DB's tier CHECKs agreeing with this list is the DB-backed half
 // (server/sponsors/__tests__/migration.test.ts).
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SPONSOR_TIERS, SPONSOR_TIER_WEIGHTS } from "@/lib/sponsor-tiers";
+import { SPONSOR_TIERS as UI_TIERS } from "@/components/org-sponsors";
 
 /** Spec 2026-10-27 §1: the four V283 tiers, rank order (title highest). */
 const SPEC_TIERS = ["title", "gold", "silver", "partner"];
@@ -44,5 +45,32 @@ describe("lib/sponsor-tiers — the client-safe tier authority (F10)", () => {
     expect(src.length, "read the module").toBeGreaterThan(0);
     expect(src).not.toMatch(/^\s*import\b/m);
     expect(src).not.toMatch(/\brequire\(/);
+  });
+
+  it("final review m4: the console's tier list IS this one (the same array, not a copy)", () => {
+    expect(UI_TIERS).toBe(SPONSOR_TIERS);
+  });
+
+  it("final review m4: no other production file spells the four tiers as a list - SQL binds SPONSOR_TIERS instead (files scanned reported)", () => {
+    const SRC = join(import.meta.dirname, "../..");
+    // The API schema is the one exemption: openapi-gen cannot follow `@/` imports, so its enum stays a literal, and
+    // server/sponsors/__tests__/migration.test.ts pins it to SPONSOR_TIERS.
+    const EXEMPT = new Set(["lib/sponsor-tiers.ts", "server/api-v1/schemas.ts"]);
+    const LIST = /["']title["']\s*,\s*["']gold["']\s*,\s*["']silver["']\s*,\s*["']partner["']/;
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const p = join(dir, name);
+        if (statSync(p).isDirectory()) {
+          if (name !== "__tests__") walk(p);
+        } else if (/\.(ts|tsx)$/.test(name) && !/\.test\.tsx?$/.test(name)) files.push(p);
+      }
+    };
+    walk(SRC);
+    const offenders = files.map((f) => relative(SRC, f)).filter((rel) => !EXEMPT.has(rel) && LIST.test(readFileSync(join(SRC, rel), "utf8")));
+    expect(files.length, "production files scanned").toBeGreaterThan(500);
+    expect(offenders).toEqual([]);
+    // Not vacuous: the authority itself matches.
+    expect(LIST.test(readFileSync(join(SRC, "lib/sponsor-tiers.ts"), "utf8"))).toBe(true);
   });
 });

@@ -24,6 +24,7 @@ import {
 } from "@/lib/overlay-compositor";
 import { sponsorShortLinkText } from "@/lib/sponsor-clicks";
 import { SCENE_CAROUSEL_MS, type SponsorCard, type SponsorStyle } from "@/lib/sponsor-plan";
+import { sceneMomentId } from "@/lib/sponsor-moment-id";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
 import type { Phase } from "./moment-queue";
 
@@ -79,7 +80,7 @@ export function carouselOrder(cards: readonly SponsorCard[]): SponsorCard[] {
  *  memory (`CarouselMemory`) and every mount resumes from it — a fresh carousel at `next: 0, notBefore: null` would
  *  start again inside a bucket a cut showing had already used, under the same id and another card. */
 export function carouselMomentId(scene: string, startedAtMs: number): string {
-  return `scene:${scene}:${Math.floor(startedAtMs / SCENE_CAROUSEL_MS)}`;
+  return sceneMomentId(scene, Math.floor(startedAtMs / SCENE_CAROUSEL_MS));
 }
 
 export interface CarouselShowing {

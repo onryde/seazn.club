@@ -1082,10 +1082,14 @@ describe("lib/sponsor-plan is client-safe", () => {
     );
   };
 
-  it("imports only the two client-safe authorities - the tier list and the dial's positions (the console page and the hub preview read it too)", () => {
+  it("imports only the three client-safe authorities - the tier list, the dial's positions and the moment-id grammar (the console page and the hub preview read it too)", () => {
     const specifiers = importsOf("sponsor-plan.ts");
     expect(specifiers.length, "found the imports").toBeGreaterThan(0);
-    expect(new Set(specifiers)).toEqual(new Set(["@/lib/sponsor-tiers", "@/lib/sponsor-frequencies"]));
+    expect(new Set(specifiers)).toEqual(new Set(["@/lib/sponsor-tiers", "@/lib/sponsor-frequencies", "@/lib/sponsor-moment-id"]));
+  });
+
+  it("the moment-id grammar's file imports NOTHING (final review m3: the planner, the overlay and the server all read it)", () => {
+    expect(importsOf("sponsor-moment-id.ts")).toEqual([]);
   });
 
   it("the dial's positions file imports NOTHING (the OpenAPI generator loads schemas.ts under bare node, which cannot resolve `@/`)", () => {

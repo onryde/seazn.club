@@ -165,7 +165,7 @@ test("a stream click counts: the short code a viewer types redirects and records
   // Twice as printed (a query on a code is ignored: the code is the whole tag), then as a phone keyboard types it.
   const visits = [`/s/${code}?src=site`, `/s/${code}`, `/s/${code.toLowerCase()}`];
   for (const [i, path] of visits.entries()) {
-    const res = await page.request.get(path, { maxRedirects: 0, headers: { "cf-connecting-ip": `198.51.100.${10 + i}` } });
+    const res = await page.request.get(path, { maxRedirects: 0, headers: { "fly-client-ip": `198.51.100.${10 + i}` } });
     expect(res.status(), path).toBe(302);
     expect(res.headers()["location"], path).toBe(`https://${SPONSOR_HOST}/gold`);
   }

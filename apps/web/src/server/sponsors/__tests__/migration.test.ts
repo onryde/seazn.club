@@ -729,18 +729,19 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
   it("S3 carry: the sweep counts a PARTIAL index only when its predicate is the key's own `is not null` - a partial index with an unrelated predicate does not serve the delete and does not count (planted in a rolled-back transaction)", async () => {
     const ROLLBACK = new Error("rolled back on purpose");
     const key = "sponsor_clicks.fixture_id";
-    let planted: Awaited<ReturnType<typeof fkIndexes>> = [];
-    let kept: Awaited<ReturnType<typeof fkIndexes>> = [];
+    type Fk = { tbl: string; col: string; indexed: boolean };
+    let planted: Fk[] = [];
+    let kept: Fk[] = [];
     await expect(sql.begin(async (tx) => {
       await tx`drop index sponsor_clicks_fixture_idx`;
       await tx`create index sponsor_clicks_fixture_site_idx on sponsor_clicks (fixture_id) where source = 'site'`;
-      planted = await fkIndexes(tx);
+      planted = [...(await fkIndexes(tx))];
       await tx`drop index sponsor_clicks_fixture_site_idx`;
       await tx`create index sponsor_clicks_fixture_nn_idx on sponsor_clicks (fixture_id) where fixture_id is not null`;
-      kept = await fkIndexes(tx);
+      kept = [...(await fkIndexes(tx))];
       throw ROLLBACK;
     })).rejects.toBe(ROLLBACK);
-    const indexedIn = (rows: typeof planted) => rows.find((k) => `${k.tbl}.${k.col}` === key)?.indexed;
+    const indexedIn = (rows: readonly Fk[]) => rows.find((k) => `${k.tbl}.${k.col}` === key)?.indexed;
     expect(planted.length, "premise: the sweep read the keys").toBe(kept.length);
     expect(planted.length).toBeGreaterThan(0);
     expect(indexedIn(planted), "an unrelated predicate: not served").toBe(false);

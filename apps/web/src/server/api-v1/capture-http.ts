@@ -13,6 +13,7 @@ import { log } from "@/server/logger";
 import { CAPTURE_CODE_LIMIT, CAPTURE_FAIL_LIMIT, CAPTURE_RECORD_LIMIT, CAPTURE_START_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { normaliseCode } from "@/server/relay/domain/stream-code";
 import type { CaptureRecordRefusalCode, CaptureRefusalCode } from "./capture-schemas";
+import { clientIp } from "@/lib/client-ip";
 
 export class CaptureRefusalError extends Error {
   constructor(
@@ -100,16 +101,13 @@ function credentialKeyOf(req: Request): string {
 }
 
 /**
- * The client IP the failed-401 budget is keyed on. The repo has no shared client-IP helper (each per-IP limiter inlines
- * the first X-Forwarded-For hop, which a client can forge: review 2026-09-22 F-CF5), so this prefers the headers a
- * PROXY sets over the one a client can write: `CF-Connecting-IP` (Cloudflare, in front), then `Fly-Client-IP` (Fly's
- * proxy, when the origin is reached directly), then the first X-Forwarded-For hop, then X-Real-IP. A forged value only
- * moves the forger's OWN failures to another bucket: the budget never refuses a valid tok (B6 review I-1).
+ * The client IP the failed-401 budget is keyed on: the shared reader (`lib/client-ip.ts`, R4 final review S10 M1) -
+ * Fly-Client-IP, then the first X-Forwarded-For hop, then X-Real-IP; Cloudflare's header only behind its opt-in, so a
+ * forged `CF-Connecting-IP` no longer picks the bucket on a Fly-direct origin. A forged value only moves the forger's OWN
+ * failures to another bucket: the budget never refuses a valid tok (B6 review I-1).
  */
 export function clientIpOf(req: Request): string {
-  const h = req.headers;
-  return h.get("cf-connecting-ip")?.trim() || h.get("fly-client-ip")?.trim()
-    || h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip")?.trim() || "unknown";
+  return clientIp(req.headers);
 }
 
 /**

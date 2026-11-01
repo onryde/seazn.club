@@ -18,6 +18,7 @@
 //      applies only to breaks not yet assigned), through `assignedCards`.
 import { SPONSOR_FREQUENCIES, type SponsorFrequency } from "@/lib/sponsor-frequencies";
 import { SPONSOR_TIER_WEIGHTS, type SponsorTier } from "@/lib/sponsor-tiers";
+import { sponsorMomentId } from "@/lib/sponsor-moment-id";
 
 // The dial's positions live in a dependency-free file (the OpenAPI generator imports them); re-exported, never redeclared.
 export { SPONSOR_FREQUENCIES, type SponsorFrequency };
@@ -136,9 +137,8 @@ export class SponsorPlanInputError extends Error {
   override name = "SponsorPlanInputError";
 }
 
-export function sponsorMomentId(seq: number, breakKind: string): string {
-  return `${seq}:sponsor.${breakKind}`;
-}
+/** A break card's moment id (`<seq>:sponsor.<breakKind>`): the grammar's one authority is lib/sponsor-moment-id.ts. */
+export { sponsorMomentId };
 
 function timeOf(at: string, what: string): number {
   const ms = Date.parse(at);
