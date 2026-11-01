@@ -3,6 +3,7 @@ import { TAG, apiJson, activeOrgIdFromRequest, competitionPath, divisionPath, fi
 import { fill, seedOnlineRound, uiEn } from "./match-room-kit";
 import type { Page } from "@playwright/test";
 import { swissColourLot, swissDrawSeed, swissRoundOneOrder } from "../src/lib/swiss-draw";
+import { builtinModules } from "@seazn/engine/sports";
 
 // W3 Swiss app-A (spec 2026-10-31-format-matrix-w3-swiss-design.md). One
 // describe per rule, each driven through the real desk.
@@ -730,8 +731,21 @@ const LATE_SPORTS: LateSport[] = [
 
 const isByeRow = (f: Fx) => /^sw-r\d+-bye$/.test(f.ext_key ?? "");
 
+/** W3 T10c: does the sport's engine module declare a doubles pair (`entrantModel.kinds`)? Chess is individual-only, so the
+ *  pair step runs only where the engine says a pair exists — and at least one LATE_SPORTS sport must, or it would vanish. */
+const takesPairs = (key: string) => builtinModules.find((m) => m.key === key)?.entrantModel?.kinds.includes("pair") === true;
+if (!LATE_SPORTS.some((s) => takesPairs(s.key))) throw new Error("no LATE_SPORTS sport takes a pair: the doubles step would never run");
+
 /** A started Swiss with round 1 paired: `n` entrants seeded 1..n, `rounds` rounds. Start mints the shells; one Pair. */
-async function startedSwiss(request: APIRequestContext, sport: LateSport, n: number, rounds: number, label: string) {
+async function startedSwiss(
+  request: APIRequestContext,
+  sport: LateSport,
+  n: number,
+  rounds: number,
+  label: string,
+  /** W3 T10c: the field's entrant kind (a doubles field is pairs). */
+  kind: "individual" | "pair" = "individual",
+) {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `${label} ${sport.key} ${TAG}`,
@@ -751,7 +765,7 @@ async function startedSwiss(request: APIRequestContext, sport: LateSport, n: num
     request,
     `/api/v1/divisions/${divisionId}/entrants`,
     "POST",
-    names.map((display_name, i) => ({ kind: "individual", display_name, seed: i + 1, members: [] })),
+    names.map((display_name, i) => ({ kind, display_name, seed: i + 1, members: [] })),
   );
   expect(added.status, JSON.stringify(added.error)).toBe(201);
   const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
@@ -785,7 +799,11 @@ async function addLatePlayer(
   divisionId: string,
   name: string,
   /** Owner ruling 2026-11-01: a late arrival not yet in Players is created through the form's own New player. */
-  opts: { viaNewPlayer?: boolean } = {},
+  opts: {
+    viaNewPlayer?: boolean;
+    /** W3 T10c: a doubles PAIR — the Pair kind, one player picked from Players, the other created with New player. */
+    pair?: { existing: string; created: string };
+  } = {},
 ) {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
@@ -808,7 +826,30 @@ async function addLatePlayer(
       }),
     )
     .toBe(true);
-  if (opts.viaNewPlayer) {
+  if (opts.pair) {
+    const { existing, created } = opts.pair;
+    const pairChip = form.getByRole("group", { name: uiEn["entrants.add.kind"]! }).locator('[data-kind="pair"]');
+    await pairChip.click();
+    await expect(pairChip).toHaveAttribute("aria-pressed", "true");
+    // Players is the org's whole list: search it, then pick the chip.
+    await form.getByPlaceholder(uiEn["entrants.add.searchPlayers"]!).fill(existing);
+    const picked = form.getByRole("button", { name: existing, exact: true });
+    await picked.click();
+    await expect(picked).toHaveAttribute("aria-pressed", "true");
+    const createdPerson = page.waitForResponse((r) => r.url().endsWith("/api/v1/persons") && r.request().method() === "POST");
+    await form.getByTestId("new-player-name").fill(created);
+    await form.getByTestId("new-player-add").click();
+    expect((await createdPerson).status(), "New player creates the partner").toBe(201);
+    await expect(form.getByTestId("new-player-note")).toHaveText(fill("entrants.add.newPlayer.created", { name: created }));
+    await expect(form.getByRole("button", { name: created, exact: true })).toHaveAttribute("aria-pressed", "true");
+    // The pair's Name follows its two players.
+    await expect
+      .poll(async () => {
+        const v = await form.getByLabel(uiEn["entrants.add.name"]!, { exact: true }).inputValue();
+        return v.includes(existing) && v.includes(created);
+      })
+      .toBe(true);
+  } else if (opts.viaNewPlayer) {
     const createdPerson = page.waitForResponse((r) => r.url().endsWith("/api/v1/persons") && r.request().method() === "POST");
     await form.getByTestId("new-player-name").fill(name);
     await form.getByTestId("new-player-add").click();
@@ -825,7 +866,10 @@ async function addLatePlayer(
   );
   await form.getByRole("button", { name: uiEn["entrants.add.submit"]! }).click();
   const res = await answered;
-  const body = (await res.json()) as { data?: { id: string; late_entry?: LateEntryAnswer }; error?: { code?: string } };
+  const body = (await res.json()) as {
+    data?: { id: string; kind: string; display_name: string; late_entry?: LateEntryAnswer };
+    error?: { code?: string };
+  };
   return { status: res.status(), body };
 }
 
@@ -937,6 +981,41 @@ for (const sport of LATE_SPORTS) {
       });
       await expect(page.getByText(late)).toHaveCount(0);
     });
+
+    // W3 T10c (owner 2026-11-01, "support all entrant kind"): a doubles PAIR is the late entrant (spec §4 "Doubles"). A
+    // field of six pairs, round 1 paired and nothing started — (a). The pair is built in the form: the Pair kind, one
+    // player picked from Players, the partner created with New player. Only where the engine declares a pair.
+    if (takesPairs(sport.key)) {
+      test(`a late doubles PAIR through the form, one player picked and one created: (a) seats it in round 1 (${sport.key})`, async ({ page, request }) => {
+        test.setTimeout(180_000);
+        const r = await startedSwiss(request, sport, 6, 3, "LateP", "pair");
+        const existing = `LateP Ann ${TAG}`;
+        const created = `LateP Bea ${TAG}`;
+        const person = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST", { full_name: existing });
+        expect(person.status, JSON.stringify(person.error)).toBe(201);
+        const { status, body } = await addLatePlayer(page, request, r.divisionId, created, { pair: { existing, created } });
+        expect(status, JSON.stringify(body.error)).toBe(201);
+        const entrant = body.data!;
+        expect(entrant.kind, "a pair entrant").toBe("pair");
+        const members = await withDb(async (sql) =>
+          (await sql<{ full_name: string }[]>`
+            select p.full_name from entrant_members m join persons p on p.id = m.person_id where m.entrant_id = ${entrant.id}`).map((m) => m.full_name),
+        );
+        expect(members.sort(), "the pair is the two players").toEqual([existing, created].sort());
+        const le = entrant.late_entry!;
+        expect([le.case, le.round], "nothing started: round 1 is re-paired with the pair").toEqual(["a", 1]);
+        const nameOf = (id: string) => (id === entrant.id ? entrant.display_name : r.nameOf.get(id)!);
+        expect(await noticeLines(page)).toEqual(owedLines(le, nameOf));
+
+        // The run sheet: round 1 seats the pair (seven pairs: three boards and a bye).
+        const seated = (await r.round(1)).find((f) => f.home_entrant_id === entrant.id || f.away_entrant_id === entrant.id);
+        expect(seated, "the pair is seated in round 1").toBeDefined();
+        expect((await r.boards(1)).length).toBe(3);
+        await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+        if (isByeRow(seated!)) await expect(page.getByTestId("run-sheet-bye")).toContainText(entrant.display_name, { timeout: 20_000 });
+        else await expect(page.locator(`li[data-fixture-no="${seated!.fixture_no}"]`)).toContainText(entrant.display_name, { timeout: 20_000 });
+      });
+    }
 
     // Owner ruling 2026-11-01: a late arrival who is NOT in Players yet. New player creates the person in the form,
     // the entrant carries that person, and the case decides the seat exactly as it does for a name-only add.
