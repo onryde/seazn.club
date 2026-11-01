@@ -22,6 +22,7 @@ import { expandWithHooks, propsOf, renderIsland, textOf, walk } from "@/componen
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { LegsChoice, legsChoices } from "@/components/v2/legs-choice";
+import { AddStageForm } from "@/components/v2/stages-panel";
 import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/format-bounds";
 import { STAGE_TEMPLATES, buildTemplateStages, templatesForSport } from "@/lib/format-templates";
 import { CreateStage, StageConfig } from "@/server/api-v1/schemas";
@@ -502,6 +503,46 @@ describe("the builder refuses a format knob outside its bounds before any POST (
       press(hidden, uiEn["wizard.next"]);
       expect(errorText(hidden), `league, ${bound} ${value} hidden`).toBeNull();
       expect(onLastTab(hidden)).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe("the Add-stage form's Top N offers FORMAT_BOUNDS.qualify (fix round 1, M4)", () => {
+  // Was a fixed [2, 3, 4, 6, 8]: a Top 5 or a Top 16 finals stage could not be added. Kept a select (31 options read fine
+  // in a native picker, and a select cannot hold a value outside its options, so it needs no refusal).
+  function mountAddStage() {
+    const h = renderIsland(AddStageForm, { divisionId: "d1", nextSeq: 2, onDone: vi.fn(), onError: vi.fn(), onPaywall: vi.fn() });
+    press(h, uiEn["schedule.addStage"]);
+    return h;
+  }
+  const topN = (h: ReturnType<typeof mountAddStage>) => {
+    const select = h.tree().find((e) => propsOf(e)["data-format-bound"] === "qualify");
+    if (!select) throw new Error("no Top N control in the Add-stage form");
+    return select;
+  };
+
+  it("offers every whole number from 2 to 32 (the brief's literal), no gap, opening at 4 (counts)", () => {
+    const h = mountAddStage();
+    const got = offered(topN(h));
+    expect(got.values).toEqual(range(2, 32));
+    expect(got.values).toHaveLength(31);
+    expect(Number(propsOf(topN(h)).value)).toBe(4);
+  });
+
+  it("each end reaches the stage it adds: Top 32, then (a second add) Top 2", async () => {
+    let checked = 0;
+    for (const n of [32, 2]) {
+      apiV1Mock.mockClear();
+      const h = mountAddStage();
+      (propsOf(topN(h)).onChange as (e: { target: { value: string } }) => void)({ target: { value: String(n) } });
+      press(h, uiEn["schedule.addStageBtn"]);
+      await flush();
+      const post = apiV1Mock.mock.calls.find(([url]) => /\/divisions\/d1\/stages$/.test(String(url)));
+      expect((post?.[1] as { json: { progression: unknown } }).json.progression, String(n)).toMatchObject({
+        sources: [{ take: [{ kind: "rankRange", from: 1, to: n }] }],
+      });
       checked++;
     }
     expect(checked).toBe(2);

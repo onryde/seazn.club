@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { routes } from "@/lib/routes";
+import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { ruleRefusalText } from "@/lib/rule-errors";
 import { SWISS_ABANDONED_BOARDS_REASON, abandonedBoardsOf } from "@/lib/swiss-abandoned-refusal";
@@ -1704,6 +1705,12 @@ export function progressionWaitSource<S extends { seq: number; status: string }>
   return previous;
 }
 
+/** The Add-stage form's Top N choices: every whole number in FORMAT_BOUNDS.qualify. */
+const ADD_STAGE_TOP_N: readonly number[] = Array.from(
+  { length: FORMAT_BOUNDS.qualify.max - FORMAT_BOUNDS.qualify.min + 1 },
+  (_, i) => FORMAT_BOUNDS.qualify.min + i,
+);
+
 export function AddStageForm({
   divisionId,
   nextSeq,
@@ -1797,8 +1804,10 @@ export function AddStageForm({
       </label>
       <label className="block">
         <span className="label">{msg("schedule.field.qualifyFrom")}</span>
-        <select value={topN} onChange={(e) => setTopN(Number(e.target.value))} className="select">
-          {[2, 3, 4, 6, 8].map((n) => (
+        {/* Match Day D1 fix round 1 (M4): every Top N the builder and Settings take (FORMAT_BOUNDS.qualify, 2-32), was a
+            fixed [2, 3, 4, 6, 8]. A select, not a number box: it cannot hold a value outside its options. */}
+        <select data-format-bound="qualify" value={topN} onChange={(e) => setTopN(Number(e.target.value))} className="select">
+          {ADD_STAGE_TOP_N.map((n) => (
             <option key={n} value={n}>
               {msg("schedule.topN", { n })}
             </option>
