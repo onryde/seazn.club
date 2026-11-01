@@ -1069,7 +1069,8 @@ test("competition desk: the tool row is a phone composition below md, not the de
       .map((i) => i.text);
   };
 
-  // Not a match day: no way into Match Day is offered.
+  // Not a match day: no filled Open Match Day BUTTON. (C5: the door is still offered, as the first item of the Open menu on a
+  // desktop and of the More fold on a phone - asserted below - so the day's button and the off-day item are never both.)
   await expect(page.getByTestId("desk-ledger-row").filter({ hasText: "Tools Cup" }).first()).toBeVisible();
   await expect(page.getByTestId("desk-tool-match-day")).toHaveCount(0);
 
@@ -1126,6 +1127,11 @@ test("competition desk: the tool row is a phone composition below md, not the de
     expect(phoneSet.join(" | "), "a phone needs a labelled More control").toMatch(/More/);
     expect(phoneSet.join(" | "), "the inline Settings tile must not survive into the phone row").not.toMatch(/Settings/);
     expect(phoneSet.join(" | "), "the inline Slideshow tile must not survive into the phone row").not.toMatch(/Slideshow/);
+    // C5: the "Open" menu (Slideshow / View Public Page / QR behind one button) is the DESKTOP row's. A phone already folds the
+    // same destinations into More, and a second drop-down listing the same links beside it would be the duplication that fold
+    // exists to avoid.
+    expect(phoneSet, "the Open menu is not on a phone").not.toContain("Open");
+    await expect(page.getByTestId("desk-open-menu-toggle"), "present in the DOM, hidden below md").toBeHidden();
 
     // 4. The rest are FOLDED — attached, so a test can tell "behind the fold"
     //    from "never rendered", but not visible until the disclosure opens.
@@ -1165,14 +1171,75 @@ test("competition desk: the tool row is a phone composition below md, not the de
     const openedSet = await rowControlSet();
     expect(openedSet.join(" | "), "the fold restores the tools the row dropped").toMatch(/Settings/);
     expect(openedSet.join(" | ")).toMatch(/Slideshow/);
+    // C5 (owner addition): off a match day the fold LEADS with the Match Day door — same tab, no ↗ — since the filled Open Match
+    // Day button only exists on the day and the Open menu (which carries this item on a desktop) is not on a phone.
+    const doorRow = folded.first();
+    await expect(doorRow, "the first folded row is Match Day").toHaveText(/^\s*Match Day\s*$/);
+    await expect(doorRow).toHaveAttribute("href", /\/match-day$/);
+    expect(await doorRow.getAttribute("target"), "same tab").toBeNull();
   } else {
-    // 768 and up is UNCHANGED: the labelled row, and no disclosure at all.
+    // 768 and up: the labelled row, and no More disclosure at all. C5 (owner request 2026-11-01): Slideshow, View Public Page and
+    // QR are no longer three buttons in it — they are behind ONE "Open" button, where Slideshow sat.
     await expect(more, "the phone disclosure must not appear at tablet width").toBeHidden();
     await expect(schedule).toBeVisible();
-    const tabletSet = (await rowControlSet()).join(" | ");
-    expect(tabletSet, "the labelled row is unchanged at 768 and up").toMatch(/Settings/);
-    expect(tabletSet).toMatch(/Slideshow/);
-    expect(tabletSet, "no disclosure at this width").not.toMatch(/More/);
+    const openToggle = page.getByTestId("desk-open-menu-toggle");
+    const closedSet = (await rowControlSet()).join(" | ");
+    expect(closedSet, "the labelled row keeps Settings").toMatch(/Settings/);
+    expect(closedSet, "a single Open button").toMatch(/(^| \| )Open( \||$)/);
+    expect(closedSet, "closed: the three tools are behind Open, not buttons in the row").not.toMatch(/Slideshow|View Public Page|QR/);
+    expect(closedSet, "no disclosure at this width").not.toMatch(/More/);
+    await expect(openToggle).toBeVisible();
+    await expect(openToggle).toHaveAttribute("aria-haspopup", "menu");
+    await expect(openToggle).toHaveAttribute("aria-expanded", "false");
+    // Open sits where Slideshow sat: left of the schedule board, on the same line.
+    const openBox = await openToggle.boundingBox();
+    const scheduleBox = await schedule.boundingBox();
+    expect(openBox && scheduleBox, "both controls have a box").toBeTruthy();
+    expect(Math.abs(openBox!.y - scheduleBox!.y), "Open and the schedule board share a line").toBeLessThan(20);
+    expect(openBox!.x, "Open leads the schedule board").toBeLessThan(scheduleBox!.x);
+
+    // Open it. Quiet day, public competition: Match Day first (same tab, no ↗), then the three tools (new tabs).
+    const openMenu = page.getByTestId("desk-open-menu");
+    const items = openMenu.getByRole("menuitem");
+    await expect(items, "folded away until it is opened").toHaveCount(0);
+    await openToggle.click();
+    await expect(openToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(items).toHaveCount(4);
+    await expect(items.nth(0)).toHaveText(/^\s*Match Day\s*$/);
+    await expect(items.nth(0)).toHaveAttribute("href", /\/match-day$/);
+    expect(await items.nth(0).getAttribute("target"), "Match Day opens in the same tab").toBeNull();
+    await expect(items.nth(1)).toHaveText("Slideshow ↗");
+    await expect(items.nth(2)).toHaveText("View Public Page ↗");
+    await expect(items.nth(3)).toHaveText("QR");
+    for (let i = 1; i < 4; i++) await expect(items.nth(i)).toHaveAttribute("target", "_blank");
+    for (let i = 0; i < 4; i++) {
+      const item = items.nth(i);
+      await expect(item).toBeVisible();
+      const box = await item.boundingBox();
+      expect(box, `menu item ${i} has a box`).not.toBeNull();
+      expect(box!.height, `menu item ${i} clears the 44px floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+      expect(box!.x + box!.width, `menu item ${i} stays on screen`).toBeLessThanOrEqual(width);
+      // Not clipped, not covered: the point at the middle of the row belongs to the row.
+      const reachable = await item.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return !!hit && el.contains(hit);
+      });
+      expect(reachable, `menu item ${i} is on top of everything behind it`).toBe(true);
+    }
+    expect((await rowControlSet()).join(" | "), "opened, the tools are back in the row's control set").toMatch(/Slideshow/);
+    await expectNoHorizontalScroll(page);
+    // Escape closes it and hands focus back to the button.
+    await page.keyboard.press("Escape");
+    await expect(openToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(items).toHaveCount(0);
+    await expect(openToggle, "focus returns to the Open button").toBeFocused();
+    // So does a press outside it.
+    await openToggle.click();
+    await expect(items).toHaveCount(4);
+    await page.getByRole("heading", { level: 1 }).first().click();
+    await expect(openToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(items).toHaveCount(0);
   }
   await expectNoHorizontalScroll(page);
 
@@ -1199,6 +1266,8 @@ test("competition desk: the tool row is a phone composition below md, not the de
   expect(bandSet, "at 700 the row keeps a labelled More control").toMatch(/More/);
   expect(bandSet, "at 700 the inline Settings tile must not be back — that is the desktop row").not.toMatch(/Settings/);
   expect(bandSet, "at 700 the inline Slideshow tile must not be back").not.toMatch(/Slideshow/);
+  expect(bandSet, "at 700 the desktop Open button must not be back either").not.toMatch(/(^| \| )Open( \||$)/);
+  await expect(page.getByTestId("desk-open-menu-toggle")).toBeHidden();
   await expectNoHorizontalScroll(page);
 
   // Match Day B1 (spec §9). A match in play makes it a match day: Open Match Day joins the row and LEADS it — on a phone the
@@ -1236,6 +1305,16 @@ test("competition desk: the tool row is a phone composition below md, not the de
     const daySet = (await rowControlSet()).join(" | ");
     expect(daySet, "Open Match Day joins the labelled row at 768 and up").toMatch(/Open Match Day/);
     expect(daySet, "and the row is otherwise unchanged").toMatch(/Settings/);
+    // C5: on the day the door is the filled button, so the Open menu loses its Match Day item (one door, never both).
+    const dayToggle = page.getByTestId("desk-open-menu-toggle");
+    await dayToggle.click();
+    await expect(dayToggle).toHaveAttribute("aria-expanded", "true");
+    const dayItems = page.getByTestId("desk-open-menu").getByRole("menuitem");
+    await expect(dayItems).toHaveCount(3);
+    await expect(dayItems.filter({ hasText: /^\s*Match Day\s*$/ })).toHaveCount(0);
+    await expect(dayItems.first()).toHaveText("Slideshow ↗");
+    await page.keyboard.press("Escape");
+    await expect(dayToggle).toHaveAttribute("aria-expanded", "false");
   }
   await expectNoHorizontalScroll(page);
 });
