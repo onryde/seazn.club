@@ -781,7 +781,10 @@ describe("planSponsors — the sequence", () => {
     }
     expect(earlierChecked).toBe(20);
     expect(run.assigned.filter((a) => a.seq <= 24 && a.sponsorId === SILVER.sponsorId).length, "silver had turns").toBeGreaterThan(0);
-    expect(final.cards.map((c) => c.id)).toContain(SILVER.id);
+    // Final review S4: the EXACT list, not a containment - the ticked cards as handed (gold re-tiered is the same card), then
+    // silver ONCE, unticked, though many of the window's airings reference it (a `toContain` passed a duplicate too).
+    expect(final.airings.filter((x) => x.cardId === SILVER.id).length, "premise: silver is referenced 2+ times").toBeGreaterThan(1);
+    expect(final.cards.map((c) => [c.id, c.onStream])).toEqual([[TITLE.id, true], [GOLD.id, true], [PARTNER.id, true], [SILVER.id, false]]);
   });
 
   it("a frozen assignment wins over the dial, hidden graphics and the cooldown, airs as stored, and anchors the next cooldown", () => {

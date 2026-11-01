@@ -20,6 +20,7 @@ import { captureError } from "@/lib/sentry";
 import { replayDerived } from "@/server/overlay/recent";
 import type { BreakDecl, BreakOpened } from "@/lib/sponsor-plan";
 import type { SportPreviewSource } from "@/lib/sponsor-preview";
+import { sponsorTiersOn } from "@/server/sponsors/card-source";
 import { resolveStreamSettings, type StreamSettings } from "./stream-settings";
 
 export type { SportPreviewSource };
@@ -125,7 +126,9 @@ export async function loadOnStreamScope(orgId: string, competitionId: string | n
     for (const { sport_key: sportKey } of sportRows) {
       const kinds = kindsOf(sportKey);
       const found = kinds === null ? null : await latestFinishedBreaks(tx, orgId, sportKey, competitionId);
-      sports.push({ sportKey, kinds, sample: found?.breaks ?? null, sampleCompetitionId: found?.competitionId ?? null });
+      // The overlay weights a fixture's cards by ITS competition's tiers (final review S12), so the preview asks the same.
+      const sampleTiered = found ? await sponsorTiersOn(orgId, found.competitionId) : null;
+      sports.push({ sportKey, kinds, sample: found?.breaks ?? null, sampleCompetitionId: found?.competitionId ?? null, sampleTiered });
     }
     return { settings, ownRow: (own?.n ?? 0) > 0, sports };
   });

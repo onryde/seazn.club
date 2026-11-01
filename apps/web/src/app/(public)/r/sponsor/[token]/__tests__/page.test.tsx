@@ -46,13 +46,15 @@ vi.mock("next/navigation", () => ({
 const signs = vi.hoisted(() => ({ calls: [] as { orgId: string; path: string; ttl: number }[] }));
 vi.mock("@/lib/supabase-storage", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/supabase-storage")>()),
-  signedReadUrl: vi.fn(async (orgId: string, path: string, ttl: number) => {
-    signs.calls.push({ orgId, path, ttl });
-    return `https://storage.test/signed/${signs.calls.length}?sig=${randomBytes(6).toString("hex")}`;
-  }),
+  signedReadUrls: vi.fn(async (orgId: string, paths: readonly string[], ttl: number) =>
+    paths.map((path) => {
+      signs.calls.push({ orgId, path, ttl });
+      return `https://storage.test/signed/${signs.calls.length}?sig=${randomBytes(6).toString("hex")}`;
+    })),
 }));
 
 import { sql, statementCount } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { getDictionary, t, plural } from "@/lib/i18n";
 import { fmtIsoDay, fmtOnScreen } from "@/lib/sponsor-report";
@@ -63,6 +65,7 @@ import { rigTarget, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { airingFramePath } from "@/server/sponsors/airings";
 import { createReportLink, revokeReportLink } from "@/server/sponsors/report";
 import SponsorReportPage, { generateMetadata } from "../page";
+import { matchLines } from "@/components/sponsors/report-view";
 import SponsorReportNotFound from "../not-found";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -124,6 +127,25 @@ describe("a throttled visit", () => {
     expect(html).toContain('data-testid="sponsor-report-throttled"');
     expect(html).not.toContain('data-testid="sponsor-report"');
     expect([...counted.keys()], "the bucket is the client's first forwarded address").toEqual([`rl:pubv1:${ctx.ip}`]);
+  });
+});
+
+// Final review S14 m4: only the limiter's 429 is the throttled screen. Any other failure of the limiter is a real error and
+// reaches Next's error boundary - never the throttled screen (that would hide an outage) and never the report (no limit run).
+describe("a limiter that fails", () => {
+  it("rethrows anything but its 429 - a plain Error and an HttpError of another status - spending no statement (count reported)", async () => {
+    const failures: Error[] = [new Error("limiter exploded"), new HttpError(503, "limiter unavailable")];
+    let checked = 0;
+    for (const failure of failures) {
+      __setRateLimitCounterForTests(async () => {
+        throw failure;
+      });
+      const before = statementCount();
+      await expect(render(randomBytes(32).toString("base64url")), failure.message).rejects.toBe(failure);
+      expect(statementCount() - before, "the lookup never ran").toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 
@@ -204,8 +226,17 @@ describe.skipIf(!HAS_DB)("the seam: S13's real link, the real page, the real rev
     const gone = await createReportLink(auth, auth.orgId, { sponsorId: sponsor!.id, competitionId: null, from: "2026-06-01", to: "2026-06-30" });
     await revokeReportLink(auth, auth.orgId, gone.id);
     let checked = 0;
-    for (const token of [randomBytes(32).toString("base64url"), "%E0%A4%A", "../../etc", "", gone.url.split("/").at(-1)!]) {
-      await notFoundOf(token);
+    // Final review S14 m8: a URL carrying a broken escape (`/r/sponsor/%E0%A4%A`) never reaches this page - Next answers 400
+    // first - so the case here is the LITERAL string with percent signs a token could still be handed, named as such.
+    const cases: Array<[string, string]> = [
+      ["unknown (well-formed, never minted)", randomBytes(32).toString("base64url")],
+      ["literal percent signs (not an escape: Next 400s a broken one before the page)", "%E0%A4%A"],
+      ["a path", "../../etc"],
+      ["empty", ""],
+      ["revoked", gone.url.split("/").at(-1)!],
+    ];
+    for (const [what, token] of cases) {
+      await expect(render(token), what).rejects.toThrow("NOT_FOUND");
       checked++;
     }
     expect(checked).toBe(5);
@@ -246,7 +277,7 @@ describe.skipIf(!HAS_DB)("the seam: S13's real link, the real page, the real rev
 });
 
 describe.skipIf(!HAS_DB)("long names", () => {
-  it("a 43-character side name truncates: min-w-0 on every box from the showing card to the name, and the name carries truncate", async () => {
+  it("a 43-character side name truncates: min-w-0 on every box from the showing card to EACH of the match's two lines, and each line carries truncate (final review S14 m2: the away side is its own line)", async () => {
     const { auth } = await seedOrg("pro");
     const rig = await divisionRig(auth, { entrants: 2 });
     await sql`update entrants set display_name = ${LONG} where division_id = ${rig.divisionId}`;
@@ -259,28 +290,34 @@ describe.skipIf(!HAS_DB)("long names", () => {
     const html = await render(link.url.split("/").at(-1)!);
     const card = html.slice(html.lastIndexOf("<li", html.indexOf('data-testid="report-showing"')));
     const name = t(fr, "sponsorReport.match.sides", { home: LONG, away: LONG });
-    // The name as TEXT (its `title` attribute holds it too, inside the tag).
-    const at = card.indexOf(`>${esc(name)}<`) + 1;
-    expect(at, "premise: the name is in the card").toBeGreaterThan(0);
-    // Every element still OPEN at the name, from the card down, must be min-w-0 (an `<img>` is void and closes itself).
-    const open: string[] = [];
-    for (const m of card.slice(0, at).matchAll(/<(\/?)([a-z]+)([^>]*)>/g)) {
-      if (m[2] === "img") continue;
-      if (m[1] === "/") open.pop();
-      else open.push(`<${m[2]}${m[3]}>`);
+    expect(card, "the full name is still there for a hover").toContain(`title="${esc(name)}"`);
+    let lines = 0;
+    for (const line of matchLines(fr, { home: LONG, away: LONG })!) {
+      // The line as TEXT.
+      const at = card.indexOf(`>${esc(line)}<`) + 1;
+      expect(at, `premise: the line is in the card: ${line}`).toBeGreaterThan(0);
+      // Every element still OPEN at the line, from the card down, must be min-w-0 (an `<img>` is void and closes itself)
+      // - the line's own box excepted, which is a block that truncates.
+      const open: string[] = [];
+      for (const m of card.slice(0, at).matchAll(/<(\/?)([a-z]+)([^>]*)>/g)) {
+        if (m[2] === "img") continue;
+        if (m[1] === "/") open.pop();
+        else open.push(`<${m[2]}${m[3]}>`);
+      }
+      expect(open.length, "the chain was walked").toBeGreaterThanOrEqual(4);
+      for (const tag of open.slice(0, -1)) expect(tag, "each box on the chain").toMatch(/class="[^"]*\bmin-w-0\b/);
+      expect(open.at(-1), "the line itself truncates").toMatch(/\btruncate\b/);
+      lines++;
     }
-    expect(open.length, "the chain was walked").toBeGreaterThanOrEqual(3);
-    for (const tag of open) expect(tag, "each box on the chain").toMatch(/class="[^"]*\bmin-w-0\b/);
-    expect(open.at(-1), "the name itself truncates").toMatch(/\btruncate\b/);
-    expect(open.at(-1), "and the full name is still there for a hover").toContain(`title="${esc(name)}"`);
+    expect(lines).toBe(2);
   });
 });
 
 describe("the 404", () => {
-  it("is the same markup whatever the token was (it takes no props and reads no token), in the reader's locale", async () => {
+  // Final review S14 m7: "the same whatever the token" is structural (the component takes no props); rendering it twice
+  // and comparing proved nothing, so what is pinned is the reader's-locale copy.
+  it("is the reader's-locale copy and nothing about the token", async () => {
     const one = renderToStaticMarkup(await SponsorReportNotFound());
-    const two = renderToStaticMarkup(await SponsorReportNotFound());
-    expect(one).toBe(two);
     expect(one).toContain(esc(t(fr, "sponsorReport.notFound.title")));
     expect(one).toContain(esc(t(fr, "sponsorReport.notFound.body")));
     expect(one).toContain('data-testid="sponsor-report-not-found"');

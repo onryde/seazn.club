@@ -17,7 +17,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { fmtOnScreen, type SponsorReport, type SponsorReportShowing } from "@/lib/sponsor-report";
 import { BREAK_FALLBACK_MSG, BREAK_MSG } from "../break-labels";
 import * as reportView from "../report-view";
-import { SponsorReportView, breakLabel, matchLabel } from "../report-view";
+import { SponsorReportView, breakLabel, matchLabel, matchLines } from "../report-view";
 
 const en = await getDictionary("en", "ui");
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
@@ -81,6 +81,34 @@ describe("the match line", () => {
     );
     expect(matchLabel(en, null)).toBe(t(en, "sponsorReport.match.gone"));
   });
+
+  // Final review S14 m2: one line truncated the AWAY side away at 320 (a long home name filled it), so the card draws two
+  // lines - the home side, then the dictionary's own join and the away side - each truncating on its own.
+  it("two lines in every locale: the home side, then the join and the away side - together the one-line label (count reported)", async () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const ui = await getDictionary(locale, "ui");
+      expect(String(ui["sponsorReport.match.sides"]).startsWith("{home}"), `${locale}: premise - the home side leads the label`).toBe(true);
+      const lines = matchLines(ui, { home: "Riverside", away: null });
+      expect(lines, locale).not.toBeNull();
+      expect(lines![0]).toBe("Riverside");
+      expect(lines![1].endsWith(t(ui, "sponsorReport.match.tbd")), `${locale}: the away line names the away side`).toBe(true);
+      expect(`${lines![0]} ${lines![1]}`, `${locale}: nothing lost`).toBe(matchLabel(ui, { home: "Riverside", away: null }));
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(matchLines(en, null), "a deleted fixture stays one line").toBeNull();
+  });
+
+  it("the card draws each line in its own truncating box, the full label kept for a hover", () => {
+    const home = "Harbourside Building Supplies and Timber Co";
+    const html = draw(report({ showings: [showing({ match: { home, away: "Kingsway" } })] }));
+    const [one, two] = matchLines(en, { home, away: "Kingsway" })!;
+    expect(html).toMatch(new RegExp(`<span class="[^"]*\\bblock\\b[^"]*\\btruncate\\b[^"]*">${esc(one)}</span> <span class="[^"]*\\bblock\\b[^"]*\\btruncate\\b[^"]*">${esc(two)}</span>`));
+    expect(html).toContain(`title="${esc(matchLabel(en, { home, away: "Kingsway" }))}"`);
+    // The text is the label's own words: the two lines joined by the space between them.
+    expect(`${one} ${two}`).toBe(matchLabel(en, { home, away: "Kingsway" }));
+  });
 });
 
 describe("the figures and the list", () => {
@@ -99,7 +127,8 @@ describe("the figures and the list", () => {
   it("says it lists the latest N of M only when it lists fewer than were shown", () => {
     const latest = (shown: number, total: number) => esc(t(en, "sponsorReport.showings.latest", { shown, total }));
     expect(draw(report({ timesShown: 50, showings: [showing(), showing()] }))).toContain(latest(2, 50));
-    expect(draw(report({ timesShown: 2, showings: [showing(), showing()] }))).not.toContain("showings, newest first");
+    // Final review S14 m7: the negative is built from the dictionary - the very sentence the guard would draw - never typed.
+    expect(draw(report({ timesShown: 2, showings: [showing(), showing()] }))).not.toContain(latest(2, 2));
   });
 
   it("the empty report: the empty sentence and no card; a frame-less showing the placeholder, a framed one its image", () => {
@@ -109,6 +138,9 @@ describe("the figures and the list", () => {
     const framed = draw(report({ timesShown: 2, showings: [showing({ frameUrl: "https://storage.test/signed/9?sig=x" }), showing()] }));
     expect(framed).toContain('src="https://storage.test/signed/9?sig=x"');
     expect((framed.match(/data-testid="report-frame-missing"/g) ?? []).length).toBe(1);
+    // Final review S14 m6: frames load eagerly, so a printed report (the browser prints what has loaded) carries every frame.
+    expect(framed).toMatch(/<img[^>]*loading="eager"/);
+    expect(framed).not.toMatch(/loading="lazy"/);
     expect(framed, "a signed url never leaves in a Referer").toMatch(/<img[^>]*referrerPolicy="no-referrer"|<img[^>]*referrerpolicy="no-referrer"/i);
   });
 

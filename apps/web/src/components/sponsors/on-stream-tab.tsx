@@ -29,7 +29,7 @@ import { sportLabel } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
 import { SPONSOR_FREQUENCIES, SPONSOR_STYLE_BY_SIZE, sponsorMomentId, type SponsorCard, type SponsorFrequency } from "@/lib/sponsor-plan";
 import { previewForSport, type SportPreviewSource } from "@/lib/sponsor-preview";
-import type { SponsorTier } from "@/lib/sponsor-tiers";
+import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
 import { onStreamHref, sponsorsHref } from "@/lib/sponsors-hub";
 
 /** The dial's default when a scope has no row (D12) - and the position a first tick switches the rotation on at (R12). */
@@ -77,11 +77,18 @@ export function sponsorsInScope(sponsors: readonly OnStreamSponsor[], scope: str
   return scope === null ? [...sponsors] : sponsors.filter((s) => s.competition_id === null || s.competition_id === scope);
 }
 
-/** The cards the rotation would draw on: ticked and ACTIVE (a parked or inactive sponsor never airs - card-source.ts). */
+/** The cards the rotation would draw on: ticked and ACTIVE (a parked or inactive sponsor never airs - card-source.ts), ONE
+ *  per name like the overlay's source (`resolveSponsors`, final review S12): the competition's own row before an org-wide one,
+ *  then the higher tier, then the list's own order. */
 export function previewCards(sponsors: readonly OnStreamSponsor[], hasTiers: boolean): SponsorCard[] {
+  const rank = (s: OnStreamSponsor) => (s.competition_id === null ? SPONSOR_TIERS.length : 0) + SPONSOR_TIERS.indexOf(s.tier);
+  const seen = new Set<string>();
   return sponsors
     .filter((s) => s.on_stream && s.status === "active")
-    .map((s) => ({ id: s.id, sponsorId: s.id, name: s.name, logoUrl: null, tier: hasTiers ? s.tier : "partner", onStream: true }));
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i)
+    .filter(({ s }) => !seen.has(s.name) && seen.add(s.name))
+    .map(({ s }) => ({ id: s.id, sponsorId: s.id, name: s.name, logoUrl: null, tier: hasTiers ? s.tier : "partner", onStream: true }));
 }
 
 /** One write through the v1 envelope: a refusal throws `ApiV1Error` with the envelope's code (shown via save-error.ts). */
@@ -338,7 +345,7 @@ export function OnStreamTab(props: OnStreamTabProps) {
                 renderSportPreview({
                   src,
                   frequency,
-                  cards: previewCards(sponsorsInScope(withTicks, src.sampleCompetitionId ?? scope), hasTiers),
+                  cards: previewCards(sponsorsInScope(withTicks, src.sampleCompetitionId ?? scope), src.sampleTiered ?? hasTiers),
                   msg,
                   msgPlural,
                 }),

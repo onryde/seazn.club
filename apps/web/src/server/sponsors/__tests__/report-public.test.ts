@@ -12,10 +12,15 @@
 //     is unknown (null) and adds nothing to the total;
 //   - "visits from the stream" = the sponsor's `sponsor_clicks` with `source = 'stream'` only - never the all-sources number;
 //   - each showing's frame is `sponsor_airings LEFT JOIN sponsor_airing_frames on (session_id, moment_id)`, read through
-//     `signedReadUrl(orgId, path, ttl <= 3600)`; the storage path itself is never in the answer;
+//     `signedReadUrls(orgId, paths, ttl <= 3600)` - ONE provider call per report; the storage path itself is never in the answer;
 //   - a deleted sponsor's links cascade with it (V483), so its report is gone (null);
 //   - entrant names are the PUBLIC names (`maskPublicEntrantNames`, the house authority the stream itself airs).
-// Storage is stubbed at the `signedReadUrl` boundary only (no Supabase locally); the database is real.
+// Storage is stubbed at the `signedReadUrls` boundary only (no Supabase locally); the database is real.
+//
+// What this file CANNOT witness (final review S14 m3): the report reads under `withTenant(orgId)`, so RLS already hides every
+// other org's row, and the explicit `org_id = ${orgId}` filters in `sponsorReport` are SHADOWED by it - deleting one leaves
+// every test here green. They are belt-and-braces for a reader moved off `withTenant`; the tenant boundary itself is pinned
+// by the RLS suites (rls-coverage), not by a cross-org case here.
 //
 // The transitions (TEST-STRATEGY rule 1) and where each is pinned:
 //   unknown / revoked / malformed token ............. "the opaque null"
@@ -45,20 +50,29 @@ import { randomBytes, randomUUID } from "node:crypto";
 // Storage has no real Supabase locally: the ONE stub is the signing boundary. Everything else in the module is real.
 const signs = vi.hoisted(() => ({
   calls: [] as { orgId: string; path: string; ttl: number }[],
+  /** Provider calls (final review S14 m5: one per report, however many frames). */
+  batches: 0,
+  /** The next `fail` objects come back unsigned (the provider's per-object error). */
   fail: 0,
+  /** The whole call fails. */
+  down: false,
 }));
 vi.mock("@/lib/supabase-storage", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/supabase-storage")>();
   return {
     ...actual,
-    signedReadUrl: vi.fn(async (orgId: string, path: string, ttl: number) => {
-      signs.calls.push({ orgId, path, ttl });
-      if (signs.fail > 0) {
-        signs.fail--;
-        throw new Error("storage sign failed: the provider is down");
-      }
-      // Opaque on purpose: a url that carries no part of the path, so "the path is nowhere in the answer" can be asserted.
-      return `https://storage.test/signed/${signs.calls.length}?sig=${randomBytes(6).toString("hex")}`;
+    signedReadUrls: vi.fn(async (orgId: string, paths: readonly string[], ttl: number) => {
+      signs.batches++;
+      if (signs.down) throw new Error("storage sign failed: the provider is down");
+      return paths.map((path) => {
+        signs.calls.push({ orgId, path, ttl });
+        if (signs.fail > 0) {
+          signs.fail--;
+          return null;
+        }
+        // Opaque on purpose: a url that carries no part of the path, so "the path is nowhere in the answer" can be asserted.
+        return `https://storage.test/signed/${signs.calls.length}?sig=${randomBytes(6).toString("hex")}`;
+      });
     }),
   };
 });
@@ -91,7 +105,9 @@ afterAll(async () => {
 
 beforeEach(() => {
   signs.calls = [];
+  signs.batches = 0;
   signs.fail = 0;
+  signs.down = false;
 });
 
 const at = (iso: string) => new Date(iso);
@@ -421,12 +437,21 @@ describe.skipIf(!HAS_DB)("S14: frames", () => {
       signs.fail = 1;
       const got = must(await sponsorReport(l.token, NOW));
       expect(signs.calls).toHaveLength(2);
+      expect(signs.batches, "both frames in ONE provider call").toBe(1);
       const urls = got.showings.map((s) => s.frameUrl);
       expect(urls.filter((u) => u === null), "the one that failed").toHaveLength(1);
       expect(urls.filter((u) => u !== null), "the one that signed").toHaveLength(1);
       expect(warn, "logged once").toHaveBeenCalledTimes(1);
       const logged = JSON.stringify(warn.mock.calls);
       for (const secret of [p1, p2, l.token]) expect(logged).not.toContain(secret);
+
+      // The whole call failing: every frame is the placeholder, the report still opens, one warning counts both.
+      warn.mockClear();
+      signs.down = true;
+      const down = must(await sponsorReport(l.token, NOW));
+      expect(down.showings.map((s) => s.frameUrl)).toEqual([null, null]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toMatchObject({ unsigned: 2 });
     } finally {
       warn.mockRestore();
     }

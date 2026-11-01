@@ -11,6 +11,8 @@ const sb = vi.hoisted(() => ({
   noData: false,
   bucket: { public: false } as { public: unknown },
   bucketsAsked: [] as string[],
+  /** Paths the provider answers with a per-object error in a batch sign. */
+  unsignable: new Set<string>(),
 }));
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: () => ({
@@ -29,6 +31,17 @@ vi.mock("@/lib/supabase-admin", () => ({
           upload: call("upload", { path: "p" }),
           remove: call("remove", []),
           createSignedUrl: call("createSignedUrl", { signedUrl: "https://project.supabase.co/storage/v1/object/sign/sponsor-frames/o/s/m.jpg?token=t" }),
+          // The batch answer is per object, in the order asked (storage-js `createSignedUrls`), REVERSED here so a reader
+          // that trusted the order rather than each row's `path` would pair a url with the wrong frame.
+          createSignedUrls: async (paths: string[], ttl: number) => {
+            sb.calls.push({ bucket, op: "createSignedUrls", args: [paths, ttl] });
+            if (sb.error) return { data: null, error: sb.error };
+            if (sb.noData) return { data: null, error: null };
+            const rows = paths.map((path) => sb.unsignable.has(path)
+              ? { path, signedUrl: null, error: "Object not found" }
+              : { path, signedUrl: `https://project.supabase.co/storage/v1/object/sign/sponsor-frames/${path}?token=t`, error: null });
+            return { data: rows.reverse(), error: null };
+          },
           getPublicUrl: call("getPublicUrl", { publicUrl: "never" }),
         };
       },
@@ -39,6 +52,7 @@ vi.mock("@/lib/supabase-admin", () => ({
 import { ASSETS_BUCKET } from "@/lib/storage-url";
 import {
   SIGNED_READ_MAX_TTL_SEC, SPONSOR_FRAMES_BUCKET, framesBucketIsPublic, putStorageObject, removeStorageObjects, signedReadUrl,
+  signedReadUrls,
 } from "@/lib/supabase-storage";
 
 const ORG = "6b65a1f0-1111-4c1a-9a51-6f1d2b3c4d5e";
@@ -51,6 +65,7 @@ beforeEach(() => {
   sb.noData = false;
   sb.bucket = { public: false };
   sb.bucketsAsked.length = 0;
+  sb.unsignable.clear();
 });
 
 describe("the private frames bucket (R4 S9)", () => {
@@ -113,6 +128,37 @@ describe("the private frames bucket (R4 S9)", () => {
     sb.error = null;
     sb.noData = true;
     await expect(signedReadUrl(ORG, KEY, 60)).rejects.toThrow(/no URL/);
+  });
+
+  // Final review S14 m5: the report signs its frames in ONE provider call, with signedReadUrl's own refusals.
+  it("signedReadUrls signs every path in ONE call to the private bucket, each url paired by its path; an object the provider cannot sign is null; an empty list asks nothing", async () => {
+    const keys = [1, 2, 3].map((n) => `${ORG}/0b5f6f1e-8c8e-4c1a-9a51-6f1d2b3c4d5e/m${n}.jpg`);
+    sb.unsignable.add(keys[1]!);
+    const urls = await signedReadUrls(ORG, keys, 60);
+    expect(sb.calls).toEqual([{ bucket: SPONSOR_FRAMES_BUCKET, op: "createSignedUrls", args: [keys, 60] }]);
+    expect(urls).toEqual([expect.stringContaining(`/${keys[0]}?`), null, expect.stringContaining(`/${keys[2]}?`)]);
+    sb.calls.length = 0;
+    expect(await signedReadUrls(ORG, [], 60)).toEqual([]);
+    expect(sb.calls, "an empty list asks nothing").toEqual([]);
+  });
+
+  it("signedReadUrls refuses the WHOLE batch, before asking the provider, when any one path is not the org's or the TTL is out of range; a failed call throws", async () => {
+    let checked = 0;
+    for (const [org, path] of [[OTHER_ORG, KEY], [ORG, `${ORG}x/s/m.jpg`], ["", KEY]] as const) {
+      await expect(signedReadUrls(org, [`${org}/s/ok.jpg`, path], 60), `${org} ${path}`).rejects.toThrow(/not one of the organisation's frames/);
+      checked++;
+    }
+    for (const ttl of [0, 1.5, SIGNED_READ_MAX_TTL_SEC + 1]) {
+      await expect(signedReadUrls(ORG, [KEY], ttl), `ttl ${ttl}`).rejects.toThrow(/ttlSec/);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(sb.calls, "the provider was never asked").toEqual([]);
+    sb.error = { message: "storage is down" };
+    await expect(signedReadUrls(ORG, [KEY], 60)).rejects.toThrow(/storage is down/);
+    sb.error = null;
+    sb.noData = true;
+    await expect(signedReadUrls(ORG, [KEY], 60)).rejects.toThrow(/no URLs/);
   });
 
   it("framesBucketIsPublic asks about the frames bucket and reads `public` strictly — only `true` is public; a storage error or no bucket throws", async () => {
