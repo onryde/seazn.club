@@ -77,8 +77,8 @@ interface Feedback {
   keptPinned: KeptPinnedStage[];
 }
 
-const TOGGLE_ON = "border-purple-200 bg-purple-50 text-purple-800";
-const TOGGLE_OFF = "border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
+export const TOGGLE_ON = "border-purple-200 bg-purple-50 text-purple-800";
+export const TOGGLE_OFF = "border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
 
 export function DivisionRulesStrip({
   divisionId,

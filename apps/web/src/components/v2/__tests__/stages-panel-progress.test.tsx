@@ -207,81 +207,15 @@ describe("stage card body — fixtures progress (owner-approved 'Option A')", ()
 
   it("does not render a 'Next: ...' line — the brief's own explicit exclusion", () => {
     const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
-    // Review m5: the positive half — the destination control the brief kept
-    // IS on the page, so an empty render cannot satisfy the exclusion below.
+    // Review m5: the positive half — the stage's own fixtures ARE on the page (Match Day C3 put them in the card), so an empty
+    // render cannot satisfy the exclusion below.
     expect(html, "the panel rendered no stage controls at all — nothing was measured").toContain(
-      'data-testid="stage-view-fixtures"',
+      'data-testid="stage-run-sheet"',
     );
     expect(html.toLowerCase()).not.toMatch(/\bnext:/);
   });
 });
 
-// Owner-approved "Option 2" (on top of Option B) — "why are we not showing
-// the fixtures in each stage?" answered with a destination control, not a
-// second copy of the rows: `stage-view-fixtures`, reading as "View N
-// fixtures" (`plural()`, this programme's own repeat "1 fixtures" offender),
-// using `stageFixtures.length` — the count the brief names explicitly,
-// never re-derived from `stagePlayed`/`stageInPlay`/`unscheduled`.
-function viewFixturesTag(html: string): string | null {
-  const m = /<button[^>]*data-testid="stage-view-fixtures"[^>]*>/.exec(html);
-  return m ? m[0] : null;
-}
-function viewFixturesText(html: string): string | null {
-  const m = /data-testid="stage-view-fixtures"[^>]*>([\s\S]*?)<\/button>/.exec(html);
-  if (m === null) return null;
-  // Strip tags AND the trailing decorative arrow (`aria-hidden`, not part
-  // of the translated copy this test actually pins).
-  return m[1]!.replace(/<[^>]*>/g, "").replace(/→$/, "").trim();
-}
-
-describe("stage card — 'View N fixtures' destination control (owner-approved 'Option 2')", () => {
-  it.each(DICTS)("%s: reads 'View N fixtures' with stageFixtures.length (6), real translations", (locale, dict) => {
-    const d = dict as unknown as Record<string, string>;
-    const html = renderToStaticMarkup(
-      <DictProvider dict={dict} locale={locale}>
-        <StagesPanel {...PROPS} />
-      </DictProvider>,
-    );
-    const text = viewFixturesText(html);
-    expect(text, `no stage-view-fixtures control rendered (${locale})`).not.toBeNull();
-    expect(text, `${locale} view-fixtures copy`).toBe(d["schedule.stage.viewFixtures.other"]!.replace("{count}", "6"));
-  });
-
-  it("the four locales are not the same English string copied four times", () => {
-    const rendered = DICTS.map(([locale, dict]) =>
-      viewFixturesText(
-        renderToStaticMarkup(
-          <DictProvider dict={dict} locale={locale}>
-            <StagesPanel {...PROPS} />
-          </DictProvider>,
-        ),
-      ),
-    );
-    expect(rendered.every((s) => s !== null)).toBe(true);
-    for (const s of rendered.slice(1)) {
-      expect(s).not.toBe(rendered[0]);
-    }
-  });
-
-  it("uses the singular form for exactly one fixture — never 'View 1 fixtures'", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={[MIXED_FIXTURES[0]!]} />);
-    expect(viewFixturesText(html)).toBe(en["schedule.stage.viewFixtures.one"]!);
-  });
-
-  it("is absent for a stage with zero fixtures — nothing to view", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} fixtures={[]} />);
-    expect(html).not.toContain('data-testid="stage-view-fixtures"');
-  });
-
-  it("stays >= 44px tall (min-h-11)", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
-    const tag = viewFixturesTag(html);
-    expect(tag, "stage-view-fixtures control not found").not.toBeNull();
-    expect(tag!).toContain("min-h-11");
-  });
-
-  it("renders for a non-editing viewer too — this is navigation, not an edit action gated behind StageRail", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} canEdit={false} />);
-    expect(html).toContain('data-testid="stage-view-fixtures"');
-  });
-});
+// Match Day C3 (spec §12 item 9) retired the "View N fixtures" destination control that stood here (owner-approved "Option 2",
+// 2026-09-xx): a stage's fixtures now render IN its card (`stage-run-sheet`), so there is nowhere to "view" them from. What replaces
+// its tests - the fixtures in the card, the absent control and its absent words - is `stages-panel-stage-card.test.tsx`.

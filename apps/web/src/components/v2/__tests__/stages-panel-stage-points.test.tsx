@@ -45,6 +45,8 @@ function panel(over: Record<string, unknown> = {}): string {
       orgTz="UTC"
       canExport={false}
       viewerPlan={{ plan: "pro", isStaff: false } as never}
+      // Match Day C3: the sections open from the header's buttons; these tests are about what the opened panel mounts.
+      initialOpenPanels={["format", "points", "tiebreaks"]}
       {...over}
     />,
   );

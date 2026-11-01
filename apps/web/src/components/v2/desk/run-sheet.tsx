@@ -128,6 +128,8 @@ export function RunSheet({
   arbiterHrefFor,
   matchDayHref,
   venueNoun,
+  embedded = false,
+  quietEmpty = false,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -206,6 +208,15 @@ export function RunSheet({
    *  bye from the sheet entirely). Deriving it from `blocks` would make a
    *  seat's label depend on whether its feeder happened to survive grouping. */
   feedLabels?: Record<string, FeedLabelPair>;
+  /** Match Day C3 (spec §12 Phase C item 9): this sheet is ONE STAGE's fixtures, mounted inside that stage's card (`stageId`
+   *  names the stage). It carries no card chrome of its own, no filter bar (the panel mounts ONE `RunSheetFilterBar` above the
+   *  stage cards, over the whole division) and no stage names (the card already names its stage). Its rows are the same
+   *  `RunSheetRow`s through the same `buildRunSheet` blocks and the same `runSheetKeeps`; only the frame differs. Absent = the
+   *  division-wide sheet, as before. */
+  embedded?: boolean;
+  /** Embedded only: the panel already says "nothing matches" once for the whole division (no stage has a row under the filter),
+   *  so this stage's sheet stays silent instead of repeating it. */
+  quietEmpty?: boolean;
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -283,7 +294,7 @@ export function RunSheet({
   // counter-argument ("show it only when the division has more than one
   // stage... single-stage divisions gain no noise").
   const stageNameFor = (f: RunSheetFixture): string | null =>
-    stages.length > 1 ? (stageById.get(f.stage_id)?.name ?? null) : null;
+    !embedded && stages.length > 1 ? (stageById.get(f.stage_id)?.name ?? null) : null;
 
   // The two counted filters are FACTS about a fixture, asked of the one
   // module that owns them (`division-phase.ts`, W1's ledger) rather than
@@ -303,10 +314,6 @@ export function RunSheet({
   // `fixtureRowAction` is still the ONE authority for what a ROW OFFERS; it
   // is simply not the authority for what a fixture IS. Each row asks it for
   // itself (`RunSheetRow`), and this component no longer restates it at all.
-  const isUnscheduled = (f: RunSheetFixture) =>
-    isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at });
-  const needsResult = (f: RunSheetFixture) => owesResult(f, { nowMs, matchMinutes, onlinePlay });
-
   // The row test lives at module scope (`runSheetKeeps`, above) — its filter semantics and ORDER are documented there.
   const keep = (f: RunSheetFixture): boolean =>
     runSheetKeeps(f, filter, { stageId, tz, today, nowMs, matchMinutes, streamStates, onlinePlay });
@@ -318,24 +325,6 @@ export function RunSheet({
   // result" while filtered to one stage should be that stage's own count,
   // matching what clicking it would actually show, not the whole
   // division's.
-  let needsResultCount = 0;
-  let unscheduledCount = 0;
-  for (const block of blocks) {
-    for (const f of fixturesOf(block)) {
-      if (stageId !== null && f.stage_id !== stageId) continue;
-      if (isBye(f)) continue;
-      if (needsResult(f)) needsResultCount++;
-      if (isUnscheduled(f)) unscheduledCount++;
-    }
-  }
-
-  const filters: { value: RunSheetFilter; label: string; count?: number }[] = [
-    { value: "today", label: msg("runsheet.filter.today") },
-    { value: "needs_result", label: msg("runsheet.filter.needsResult"), count: needsResultCount },
-    { value: "unscheduled", label: msg("runsheet.filter.unscheduled"), count: unscheduledCount },
-    { value: "all", label: msg("runsheet.filter.all") },
-  ];
-
   function renderBlock(block: RunSheetBlock): React.ReactElement | null {
     if (block.kind === "day") {
       const rows = block.fixtures.filter(keep);
@@ -418,7 +407,7 @@ export function RunSheet({
         // rounded top corner — moves onto that header directly, below
         // (`rounded-t-2xl`, first round only — every other round header
         // sits well inside the section's flat area and was never at risk).
-        <section key={block.stageId} data-run-sheet-block="bracket" className="card">
+        <section key={block.stageId} data-run-sheet-block="bracket" className={embedded ? undefined : "card"}>
           {roundsWithRows.map((r, i) => {
             // R34 — the round's calendar date, the one thing a bracket row's
             // `HH:mm`-only time cell cannot say. `null` on an untimed round, so
@@ -613,55 +602,26 @@ export function RunSheet({
     // render actually produces. See the bracket `<section>` below for the
     // one place that DID need a replacement (`rounded-t-2xl` on the first
     // round header specifically, not blanket clipping).
-    <div data-testid="run-sheet" className="card">
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
-        <div data-testid="run-sheet-filter" className="flex flex-wrap gap-1.5">
-          {filters.map((f) => (
-            <button
-              key={f.value}
-              type="button"
-              data-filter={f.value}
-              aria-pressed={filter === f.value}
-              onClick={() => onFilter(f.value)}
-              className={`min-h-11 rounded-full px-3 text-xs font-medium ${
-                filter === f.value ? "bg-purple-100 text-purple-800" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-              }`}
-            >
-              {f.label}
-              {f.count !== undefined && <span className="ml-1 text-slate-500">{f.count}</span>}
-            </button>
-          ))}
-          {/* Owner-approved "Option 2" — the stage filter's own clear
-              affordance, in the SAME chip row the four type filters live
-              in (owner ruling: "the existing chip row is where a person
-              will look to clear it, so make the active stage filter
-              legible there rather than hidden"). Mounted only while a
-              stage filter is active — never a permanent, mostly-inert chip.
-              Its own visible text carries the accessible name (stage name,
-              user-typed — never grammatically combined with a verb that
-              would need to agree with it, R13/W3's own standing rule); the
-              `sr-only` span appends "Clear filter" so a screen reader's
-              announcement reads as an action, not just a label. */}
-          {stageId !== null && (
-            <button
-              type="button"
-              data-testid="run-sheet-stage-filter"
-              onClick={() => onStageFilter(null)}
-              className="flex min-h-11 items-center gap-1.5 rounded-full bg-purple-100 px-3 text-xs font-medium text-purple-800 hover:bg-purple-200"
-            >
-              <span>
-                {msg("runsheet.stageFilter.label")}: {stageById.get(stageId)?.name ?? stageId}
-              </span>
-              <span aria-hidden="true">✕</span>
-              <span className="sr-only">{msg("runsheet.stageFilter.clearAria")}</span>
-            </button>
-          )}
-        </div>
-        <div className="flex-1" />
-        <p className="text-xs text-slate-500" data-testid="tz-caption">
-          {msg("schedule.tz.caption", { tz })}
-        </p>
-      </div>
+    <div
+      data-testid={embedded ? "stage-run-sheet" : "run-sheet"}
+      data-stage-id={embedded ? (stageId ?? undefined) : undefined}
+      className={embedded ? undefined : "card"}
+    >
+      {!embedded && (
+        <RunSheetFilterBar
+          blocks={blocks}
+          stages={stages}
+          tz={tz}
+          nowMs={nowMs}
+          matchMinutes={matchMinutes}
+          onlinePlay={onlinePlay}
+          filter={filter}
+          onFilter={onFilter}
+          stageId={stageId}
+          onStageFilter={onStageFilter}
+          className="border-b border-slate-100"
+        />
+      )}
 
       {renderedBlocks.length > 0 ? (
         // Owner request — the sheet's internal blocks (day groups, bracket
@@ -714,10 +674,21 @@ export function RunSheet({
         // above this function and never reaches here — that case renders
         // nothing at all, by spec ("the stage rail alone... no run sheet
         // header").
+        embedded ? (
+          quietEmpty ? null : (
+          // Match Day C3: one stage's sheet under the panel's filter. The panel owns the way back ("Show all", once, when NO stage
+          // has a row), so a stage with none under "Today" says so in a line and offers nothing.
+          <p data-testid="stage-run-sheet-empty" className="px-4 py-3 text-xs text-slate-500">
+            {msg("runsheet.emptyFilter.message", {
+              filter: filtersLabel(filter, msg),
+            })}
+          </p>
+          )
+        ) : (
         <div data-testid="run-sheet-empty" className="px-4 py-10 text-center">
           <p className="text-sm text-slate-500">
             {msg("runsheet.emptyFilter.message", {
-              filter: filters.find((f) => f.value === filter)?.label ?? filter,
+              filter: filtersLabel(filter, msg),
             })}
           </p>
           {/* Owner-approved "Option 2" — also clears the STAGE filter, not
@@ -742,7 +713,128 @@ export function RunSheet({
             </button>
           )}
         </div>
+        )
       )}
+    </div>
+  );
+}
+
+/** The filter chips' labels, by value - one table for the bar and the empty line. */
+export const RUN_SHEET_FILTER_LABEL = {
+  today: "runsheet.filter.today",
+  needs_result: "runsheet.filter.needsResult",
+  unscheduled: "runsheet.filter.unscheduled",
+  all: "runsheet.filter.all",
+} as const satisfies Record<RunSheetFilter, MessageKey>;
+const filtersLabel = (filter: RunSheetFilter, msg: Msg): string => msg(RUN_SHEET_FILTER_LABEL[filter]);
+
+/** The two counted filters' numbers, read over EVERY block's fixtures, unfiltered - a filter's own count must not shrink just
+ *  because it is the one currently selected. They DO narrow to `stageId` when a stage filter is active (the count on "Needs
+ *  result" while filtered to one stage is that stage's own, matching what clicking it would show). Byes are never counted
+ *  (ruling R7a). */
+export function runSheetCounts(
+  blocks: readonly RunSheetBlock[],
+  ctx: Pick<RunSheetKeepContext, "stageId" | "nowMs" | "matchMinutes" | "onlinePlay">,
+): { needsResult: number; unscheduled: number } {
+  let needsResult = 0;
+  let unscheduled = 0;
+  for (const block of blocks) {
+    for (const f of fixturesOf(block)) {
+      if (ctx.stageId !== null && f.stage_id !== ctx.stageId) continue;
+      if (isBye(f)) continue;
+      if (owesResult(f, ctx)) needsResult++;
+      if (isUnscheduledFixture({ status: f.status, scheduledAt: f.scheduled_at })) unscheduled++;
+    }
+  }
+  return { needsResult, unscheduled };
+}
+
+/** Does the filter leave ANY row, in any block? The panel asks it once to know whether to say "nothing matches" for the whole
+ *  division (the per-stage sheets each say it in a line, but only the panel offers the way back). */
+export function runSheetHasRows(blocks: readonly RunSheetBlock[], filter: RunSheetFilter, ctx: RunSheetKeepContext): boolean {
+  return blocks.some((b) => fixturesOf(b).some((f) => runSheetKeeps(f, filter, ctx)));
+}
+
+/**
+ * The division's fixture filter: the four chips (Today / Needs result / Unscheduled / All), the active stage filter's clear
+ * chip, and the time-zone caption. Match Day C3 took it out of `<RunSheet>` so the panel can mount it ONCE above the stage
+ * cards while each card carries its own stage's rows (`RunSheet embedded`); the division-wide `<RunSheet>` still mounts it
+ * itself. Same testids, same chips, same counts.
+ */
+export function RunSheetFilterBar({
+  blocks,
+  stages,
+  tz,
+  nowMs,
+  matchMinutes,
+  onlinePlay,
+  filter,
+  onFilter,
+  stageId,
+  onStageFilter,
+  className,
+}: {
+  blocks: readonly RunSheetBlock[];
+  stages: readonly RunSheetStageInfo[];
+  tz: string;
+  nowMs: number;
+  matchMinutes: number;
+  onlinePlay?: Record<string, RunSheetOnlinePlay>;
+  filter: RunSheetFilter;
+  onFilter: (filter: RunSheetFilter) => void;
+  stageId: string | null;
+  onStageFilter: (stageId: string | null) => void;
+  className?: string;
+}) {
+  const msg = useMsg();
+  const { needsResult, unscheduled } = runSheetCounts(blocks, { stageId, nowMs, matchMinutes, onlinePlay });
+  const filters: { value: RunSheetFilter; label: string; count?: number }[] = [
+    { value: "today", label: msg("runsheet.filter.today") },
+    { value: "needs_result", label: msg("runsheet.filter.needsResult"), count: needsResult },
+    { value: "unscheduled", label: msg("runsheet.filter.unscheduled"), count: unscheduled },
+    { value: "all", label: msg("runsheet.filter.all") },
+  ];
+  const stageName = stageId === null ? null : (stages.find((s) => s.id === stageId)?.name ?? stageId);
+  return (
+    <div className={`flex flex-wrap items-center gap-3 px-4 py-3 ${className ?? ""}`}>
+      <div data-testid="run-sheet-filter" className="flex flex-wrap gap-1.5">
+        {filters.map((f) => (
+          <button
+            key={f.value}
+            type="button"
+            data-filter={f.value}
+            aria-pressed={filter === f.value}
+            onClick={() => onFilter(f.value)}
+            className={`min-h-11 rounded-full px-3 text-xs font-medium ${
+              filter === f.value ? "bg-purple-100 text-purple-800" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+            }`}
+          >
+            {f.label}
+            {f.count !== undefined && <span className="ml-1 text-slate-500">{f.count}</span>}
+          </button>
+        ))}
+        {/* Owner-approved "Option 2" - the stage filter's own clear affordance, in the SAME chip row the four type filters
+            live in. Mounted only while a stage filter is active. Its visible text carries the accessible name (the stage's
+            name, user-typed); the sr-only span appends "Clear filter" so a screen reader reads an action. */}
+        {stageName !== null && (
+          <button
+            type="button"
+            data-testid="run-sheet-stage-filter"
+            onClick={() => onStageFilter(null)}
+            className="flex min-h-11 items-center gap-1.5 rounded-full bg-purple-100 px-3 text-xs font-medium text-purple-800 hover:bg-purple-200"
+          >
+            <span>
+              {msg("runsheet.stageFilter.label")}: {stageName}
+            </span>
+            <span aria-hidden="true">✕</span>
+            <span className="sr-only">{msg("runsheet.stageFilter.clearAria")}</span>
+          </button>
+        )}
+      </div>
+      <div className="flex-1" />
+      <p className="text-xs text-slate-500" data-testid="tz-caption">
+        {msg("schedule.tz.caption", { tz })}
+      </p>
     </div>
   );
 }

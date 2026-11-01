@@ -117,6 +117,13 @@ export function removeStep(keys: readonly TiebreakerKey[], index: number): Tiebr
   return keys.filter((_, i) => i !== index);
 }
 
+/** Match Day C3: the order a stage would rank by if it followed the division TODAY - the division's own order where it sets one
+ *  (`divisionTiebreakers`, null when it keeps none), else the sport's default for the stage's kind (the served
+ *  `sportDefault`). What `tiebreakBadge` and `tiebreaksDiffer` compare a pinned or live order with. */
+export function inheritedOrder(divisionTiebreakers: readonly TiebreakerKey[] | null, tableRules: StageTableRules): readonly TiebreakerKey[] {
+  return divisionTiebreakers ?? tableRules.tiebreakers.sportDefault;
+}
+
 const sameKeys = (a: readonly TiebreakerKey[], b: readonly TiebreakerKey[]): boolean => a.length === b.length && a.every((k, i) => k === b[i]);
 
 /** X-TB-1: Pinned at start once the stage is active (OC2: `pinnedAt`), with the layer it was pinned from; else Overridden

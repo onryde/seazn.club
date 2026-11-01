@@ -27,7 +27,11 @@ const stage = { id: "s1", name: "League", kind: "league", seq: 1, status: "activ
 // `stage-auto-schedule-blocked` element, ever. The two tests that existed
 // solely to probe that CTA's blocked-reason rendering are deleted below
 // (their whole subject no longer exists on this component), not weakened.
+// Match Day C3: the rail decides its buttons from `stageActions` over `counts`, so NEUTRAL carries a stage with four matches
+// still open (a started stage that cannot be completed yet) - the state most of these tests were written in.
 const NEUTRAL = {
+  counts: { played: 0, inPlay: 0, unplayed: 4 },
+  matchCount: 4,
   unscheduledBadgeSlot: null,
   open: false,
   onToggleOpen: () => {},
@@ -40,14 +44,79 @@ const NEUTRAL = {
 const BADGE = <p data-testid="stage-unscheduled-count">3</p>;
 
 describe("StageRail", () => {
-  it("renders the three header controls with their testids", () => {
+  it("a started stage with matches open: Complete is present but disabled with its reason; Generate is gone; Delete stays", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
     );
-    expect(html).toContain('data-testid="stage-generate"');
-    expect(html).toContain('data-testid="stage-complete"');
+    expect(html).not.toContain('data-testid="stage-generate"');
+    const complete = /<button[^>]*data-testid="stage-complete"[^>]*>/.exec(html)?.[0] ?? null;
+    expect(complete, "Complete is rendered, not hidden").not.toBeNull();
+    expect(complete).toMatch(/\sdisabled=""/);
+    expect(complete).toContain('aria-describedby="stage-complete-hint-s1"');
+    expect(html).toContain('id="stage-complete-hint-s1"');
+    expect(html).toContain("Complete stage unlocks when all 4 matches are played.");
+    expect(html).toContain('data-testid="stage-delete"');
+  });
+
+  it("a stage that has not started offers Generate (and no Complete) - and renders it enabled", () => {
+    const pending = { ...(stage as object), status: "pending" } as never;
+    const html = renderToStaticMarkup(
+      <StageRail stage={pending} canEdit busy={null} fixtureCount={0} deletable
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc courtTagsSlot={null} {...NEUTRAL} counts={{ played: 0, inPlay: 0, unplayed: 0 }} matchCount={0} />,
+    );
+    const generate = /<button[^>]*data-testid="stage-generate"[^>]*>/.exec(html)?.[0] ?? null;
+    expect(generate).not.toBeNull();
+    expect(generate).not.toMatch(/\sdisabled=""/);
+    expect(generate).toMatch(/\bbtn-primary\b/);
+    expect(html).not.toContain('data-testid="stage-complete"');
+    expect(html).not.toContain('data-testid="stage-add-match"');
+  });
+
+  it("the Complete hint counts the stage's matches in the locale's plural: one match reads singular", () => {
+    const html = renderToStaticMarkup(
+      <StageRail stage={stage} canEdit busy={null} fixtureCount={1} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} counts={{ played: 0, inPlay: 1, unplayed: 0 }} matchCount={1} />,
+    );
+    expect(html).toContain(en["stageCard.completeHint.one"]);
+    expect(html).not.toContain("all 1 matches");
+  });
+
+  it("a held match (in play) keeps Complete disabled too - it is open", () => {
+    const html = renderToStaticMarkup(
+      <StageRail stage={stage} canEdit busy={null} fixtureCount={3} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} counts={{ played: 2, inPlay: 1, unplayed: 0 }} matchCount={3} />,
+    );
+    expect(/<button[^>]*data-testid="stage-complete"[^>]*>/.exec(html)?.[0]).toMatch(/\sdisabled=""/);
+    expect(html).toContain("all 3 matches");
+  });
+
+  it("every match settled: Complete leads, enabled, with no hint", () => {
+    const html = renderToStaticMarkup(
+      <StageRail stage={stage} canEdit busy={null} fixtureCount={3} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} counts={{ played: 3, inPlay: 0, unplayed: 0 }} matchCount={3} />,
+    );
+    const complete = /<button[^>]*data-testid="stage-complete"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(complete).not.toMatch(/\sdisabled=""/);
+    expect(complete).toMatch(/\bbtn-primary\b/);
+    expect(html).not.toContain("stage-complete-hint");
+  });
+
+  it("a completed stage offers no action at all (Delete aside)", () => {
+    const done = { ...(stage as object), status: "complete" } as never;
+    const html = renderToStaticMarkup(
+      <StageRail stage={done} canEdit busy={null} fixtureCount={3} deletable
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc courtTagsSlot={null} {...NEUTRAL} counts={{ played: 3, inPlay: 0, unplayed: 0 }} matchCount={3} />,
+    );
+    for (const id of ["stage-generate", "stage-complete", "stage-add-match", "stage-unpair"]) {
+      expect(html, id).not.toContain(`data-testid="${id}"`);
+    }
     expect(html).toContain('data-testid="stage-delete"');
   });
 
@@ -71,7 +140,7 @@ describe("StageRail", () => {
   // nothing cannot satisfy the absence for the wrong reason.
   it("never renders the retired auto-schedule CTA, in any state that used to show it", () => {
     const pin = (label: string, html: string) => {
-      expect(html, `${label}: the rail rendered no controls at all`).toContain('data-testid="stage-generate"');
+      expect(html, `${label}: the rail rendered no controls at all`).toContain('data-testid="stage-complete"');
       // Bare substring, not `data-testid="..."`: this also catches the
       // `stage-auto-schedule-blocked` reason line that retired with it.
       expect(html, `${label}: the retired auto-schedule CTA is back`).not.toContain("stage-auto-schedule");
@@ -139,10 +208,11 @@ describe("StageRail", () => {
 
   it("Swiss with zero fixtures labels Generate; with unseated shells labels Pair next", () => {
     const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active" } as never;
+    const pendingSwiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "pending" } as never;
     const empty = renderToStaticMarkup(
-      <StageRail stage={swiss} canEdit busy={null} fixtureCount={0} deletable={false}
+      <StageRail stage={pendingSwiss} canEdit busy={null} fixtureCount={0} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} counts={{ played: 0, inPlay: 0, unplayed: 0 }} matchCount={0} />,
     );
     expect(empty).toContain("Generate fixtures");
     expect(empty).not.toContain("Pair next round");
@@ -219,44 +289,59 @@ describe("StageRail — which action holds the filled primary", () => {
         adhoc={false} courtTagsSlot={null} {...NEUTRAL} {...over} />,
     );
 
+  /** Is the button disabled (the attribute is on the tag itself)? */
+  const disabled = (html: string, testid: string) =>
+    /\sdisabled=""/.test(new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? "");
+
   it("premise: both buttons carry a variant class at all, so 'neither' is a real failure", () => {
     const v = variants(rail({ swissHasUnseated: true }));
     expect(v.generate).not.toBe("neither");
     expect(v.complete).not.toBe("neither");
   });
 
-  it("gives it to Pair next round while a Swiss stage still has rounds unseated", () => {
-    expect(variants(rail({ swissHasUnseated: true }))).toEqual({
-      generate: "primary",
-      complete: "ghost",
-    });
+  it("Swiss mid-round (some played, a round waiting): Pair next round leads and Complete is present but DISABLED", () => {
+    const html = rail({ swissHasUnseated: true, counts: { played: 2, inPlay: 0, unplayed: 4 } });
+    expect(variants(html)).toEqual({ generate: "primary", complete: "ghost" });
+    expect(html).toContain(">Pair next round</button>");
+    expect(disabled(html, "stage-complete"), "Complete waits for the matches").toBe(true);
+    expect(disabled(html, "stage-generate"), "Pair next is pressable").toBe(false);
+    expect(html).toContain("Complete stage unlocks when all 4 matches are played.");
   });
 
-  it("moves it to Complete stage once the Swiss board is fully seated", () => {
-    // Not "hide the primary" — with nothing left to pair, completing IS the
-    // next step, so exactly one filled button either way.
-    expect(variants(rail({ swissHasUnseated: false }))).toEqual({
-      generate: "ghost",
-      complete: "primary",
-    });
+  it("Swiss fully seated, every match played: Complete leads - exactly one filled button, no Generate", () => {
+    const html = rail({ swissHasUnseated: false, counts: { played: 6, inPlay: 0, unplayed: 0 }, matchCount: 6 });
+    expect(variants(html)).toEqual({ generate: null, complete: "primary" });
+    expect(disabled(html, "stage-complete")).toBe(false);
+    expect(html).not.toContain("stage-complete-hint");
   });
 
-  it("gives it to Generate on any stage with no fixtures yet", () => {
-    // `stage-complete` is not rendered at all without fixtures, so this row
-    // asserts the generate side and the absence together.
-    for (const stage of [swiss, league]) {
-      const v = variants(rail({ stage, fixtureCount: 0, swissHasUnseated: false }));
-      expect(v, (stage as { kind: string }).kind).toEqual({ generate: "primary", complete: null });
+  it("Swiss fully seated but a match is still open: Complete is present, ghost, disabled - never the lead", () => {
+    const html = rail({ swissHasUnseated: false, counts: { played: 5, inPlay: 1, unplayed: 0 }, matchCount: 6 });
+    expect(variants(html)).toEqual({ generate: null, complete: "ghost" });
+    expect(disabled(html, "stage-complete")).toBe(true);
+  });
+
+  it("gives the primary to Generate on any stage that has not started, with no Complete to press", () => {
+    const empty = { played: 0, inPlay: 0, unplayed: 0 };
+    let checked = 0;
+    for (const base of [swiss, league]) {
+      const stage = { ...(base as object), status: "pending" } as never;
+      const v = variants(rail({ stage, fixtureCount: 0, counts: empty, matchCount: 0, swissHasUnseated: false }));
+      expect(v, (base as { kind: string }).kind).toEqual({ generate: "primary", complete: null });
+      checked++;
     }
+    expect(checked).toBe(2);
   });
 
-  it("gives it to Complete on a non-Swiss stage that has its fixtures", () => {
-    // `swissHasUnseated` is meaningless off Swiss — a rule that read it
-    // unguarded would hand a league's primary to Generate (i.e. regenerate).
-    expect(variants(rail({ stage: league, swissHasUnseated: true }))).toEqual({
-      generate: "ghost",
-      complete: "primary",
-    });
+  it("a started stage with no fixtures offers neither Generate nor Complete (nothing to build, nothing to finish)", () => {
+    const v = variants(rail({ stage: league, fixtureCount: 0, counts: { played: 0, inPlay: 0, unplayed: 0 }, matchCount: 0 }));
+    expect(v).toEqual({ generate: null, complete: null });
+  });
+
+  it("off Swiss, a stray swissHasUnseated hands nobody 'Pair next round'; the league's Complete leads once played", () => {
+    const html = rail({ stage: league, swissHasUnseated: true, counts: { played: 6, inPlay: 0, unplayed: 0 }, matchCount: 6 });
+    expect(variants(html)).toEqual({ generate: null, complete: "primary" });
+    expect(html).not.toContain("Pair next round");
   });
 });
 

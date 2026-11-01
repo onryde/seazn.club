@@ -227,6 +227,48 @@ export function PointsSummary({
   );
 }
 
+/**
+ * Match Day C3 (spec §12 items 5 and 12): what a stage pays, in ONE phrase for the stage card's summary line. A set table that pays
+ * every reachable score the same is "Win 2 · Loss 0" (C1's `summarisePoints`, the numbers in the stage's own unit); any other
+ * rule is the first clause of the public points sentence (its base: "win 3, draw 1, loss 0"), capitalised - the walkover, the
+ * bonuses and the per-score table are the Points panel's to say. Reads the same rule the panel's read-only branch does (its own,
+ * else its pin's, else the live layers'). Null for a kind with no table, a cfg the sport refuses, and (outside a uniform set
+ * table) when the public dictionary is absent: no English is made up here.
+ */
+export function stagePointsHeadline(
+  a: {
+    module: AnySportModule;
+    kind: string;
+    stageConfig: unknown;
+    divisionConfig: Record<string, unknown>;
+    stored: unknown;
+    pinned?: unknown;
+    pointsDict: Dict | undefined;
+  },
+  msg: Msg,
+): string | null {
+  const stage = { kind: a.kind, config: a.stageConfig };
+  const ctx = stagePointsContext(a.module, a.divisionConfig, stage);
+  if (ctx === null) return null;
+  const pin = pinInForce(a.stored, a.pinned ?? null);
+  const playing = storedPointsRule(a.stored) ?? pin ?? ctx.rule;
+  const pts = (n: number) => pointsText(playing.unit === "half" ? n / 2 : n);
+  const map = playing.bySetScore;
+  if (map !== undefined) {
+    const rows = pointsRows(ctx.reachable, playing);
+    const payouts = rows.flatMap((r) => (r.pair === null ? [] : [{ score: setScore(r.key as `set:${number}-${number}`), winner: r.pair[0], loser: r.pair[1] }]));
+    const star = Object.hasOwn(map, "*") ? map["*"]! : null;
+    const summary = summarisePoints(payouts, star === null ? null : { winner: star[0], loser: star[1] });
+    if (summary.kind === "uniform") return msg("stageCard.points.uniform", { w: pts(summary.win), l: pts(summary.loss) });
+  }
+  if (a.pointsDict === undefined) return null;
+  const clauses = previewClauses(a.module, a.divisionConfig, draftFromStored(a.module, a.divisionConfig, a.stored, a.pinned ?? null, stage), pin, stage);
+  const head = clauses[0];
+  if (head === undefined) return null;
+  const text = rulesLineText(a.pointsDict, [head]);
+  return text === "" ? null : text;
+}
+
 interface Saved {
   /** The row's `stage.config.points` prop when the save landed: while the prop is still this value the page has not
    *  re-read the stage since, and `points` is newer than it (the stage rules row's `SavedStageRules` pattern). */

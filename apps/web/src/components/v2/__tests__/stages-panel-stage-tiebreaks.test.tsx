@@ -46,6 +46,8 @@ function panel(over: Record<string, unknown> = {}): string {
       orgTz="UTC"
       canExport={false}
       viewerPlan={{ plan: "pro", isStaff: false } as never}
+      // Match Day C3: the sections open from the header's buttons; these tests are about what the opened panel mounts.
+      initialOpenPanels={["points", "tiebreaks"]}
       {...over}
     />,
   );
@@ -116,7 +118,7 @@ describe("the cross-group line reads the panel's stage rows (§5.9)", () => {
     name: "Knockout",
     config: {},
     progression: { sources: [{ stage: "previous", take }] },
-    status: "setup",
+    status: "pending",
   });
 
   it("a group stage the next stage takes a best-Nth from shows it; a top-N take does not", () => {

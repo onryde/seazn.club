@@ -107,12 +107,15 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
     const html = renderToStaticMarkup(
       <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1, 2])} />,
     );
-    expect(html).toContain('data-testid="stage-generate"');
+    // Match Day C3: with every round seated Pair next is gone (nothing to pair); the rail still renders its buttons - Complete, here
+    // disabled while the seated matches are open - so the absence below is measured on a rail that is there.
+    expect(html).toContain('data-testid="stage-complete"');
+    expect(html).not.toContain('data-testid="stage-generate"');
     expect(html).not.toContain(TOGGLE);
   });
 
   it("no shells yet (first Generate) ⇒ no toggle — the server refuses a pick there", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={[]} />);
+    const html = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage({ rounds: 2 }, "pending")]} fixtures={[]} />);
     expect(html).toContain(">Generate fixtures</button>");
     expect(html).not.toContain(TOGGLE);
   });
@@ -120,7 +123,9 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
   it("a non-Swiss stage never gets one, even with unseated rows", () => {
     const league = { ...swissStage(), kind: "league", name: "League" };
     const html = renderToStaticMarkup(<StagesPanel {...props} stages={[league]} fixtures={fixtures()} />);
-    expect(html).toContain('data-testid="stage-generate"');
+    // A league never pairs: its rail offers Complete (disabled: its matches are open), never "Pair next round" or a toggle.
+    expect(html).toContain('data-testid="stage-complete"');
+    expect(html).not.toContain('data-testid="stage-generate"');
     expect(html).not.toContain(TOGGLE);
   });
 

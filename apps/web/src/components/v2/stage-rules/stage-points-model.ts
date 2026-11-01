@@ -362,6 +362,20 @@ export function pointsBasis(stored: unknown, pinned: unknown): PointsBasis {
   return pinInForce(stored, pinned) === null ? "division" : "pin";
 }
 
+/**
+ * Match Day C3 (spec §12 item 12, "a stage that differs says so"): does this stage pay something other than what the division's
+ * live layers would pay it? It plays its own rule, else its pin's (I1), else the live layers' (`pointsBasis`); it differs when
+ * that is not the rule a stage with neither would play (`StagePointsContext.rule`, the sport's own for the stage). An own rule
+ * that pays what the division pays does not differ. A kind with no table, and a cfg the sport refuses, say nothing.
+ */
+export function pointsDiffer(module: AnySportModule, divisionConfig: unknown, stage: StageShape, stored: unknown, pinned: unknown): boolean {
+  if (!stageTakesPoints(stage.kind)) return false;
+  const ctx = stagePointsContext(module, divisionConfig, stage);
+  if (ctx === null) return false;
+  const playing = storedPointsRule(stored) ?? pinInForce(stored, pinned) ?? ctx.rule;
+  return canonical(playing) !== canonical(ctx.rule);
+}
+
 /** Points ↔ the rule's stored unit. */
 const shownOf = (unit: PointsRule["unit"]) => (n: number): string => String(unit === "half" ? n / 2 : n);
 const storedOf = (unit: PointsRule["unit"], n: number): number => (unit === "half" ? n * 2 : n);

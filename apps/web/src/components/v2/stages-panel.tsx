@@ -47,13 +47,19 @@ import { moduleFor } from "@/lib/rule-scope";
 import { mergedStageRules } from "@/lib/stage-decider-off";
 import { sportLabel } from "@/lib/scoring-vocab";
 import type { StageKind } from "@seazn/engine/core";
+import type { TiebreakerKey } from "@seazn/engine/sport";
 import { DecidersNotice } from "@/components/v2/stage-rules/deciders-off-notice";
 import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
-import { PointsEditor } from "@/components/v2/rules/points-editor";
-import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
+import { PointsEditor, stagePointsHeadline } from "@/components/v2/rules/points-editor";
+import { LockLine } from "@/components/v2/rules/lock-line";
+import { describeDeciders, describeMatchRules } from "@/server/public-site/describe-rules";
+import { rulesLineText } from "@/lib/rules-line";
+import { showKindPill, tiesSummary } from "@/lib/stage-card/layout";
+import { stageCounts, unitLabelKey } from "@/lib/stage-card/summaries";
+import { pointsDiffer, stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { TiebreaksEditor, stageLikeOf } from "@/components/v2/rules/tiebreaks-editor";
-import { DivisionRulesStrip, type DivisionRulesStripProps } from "@/components/v2/rules/division-rules-strip";
-import { stagePooled, takesBestNthFrom } from "@/components/v2/stage-rules/stage-tiebreaks-model";
+import { DivisionRulesStrip, TOGGLE_OFF, TOGGLE_ON, type DivisionRulesStripProps, type RulesPanel } from "@/components/v2/rules/division-rules-strip";
+import { inheritedOrder as inheritedOrderOf, stagePooled, takesBestNthFrom, tiebreaksDiffer } from "@/components/v2/stage-rules/stage-tiebreaks-model";
 import type { StageTableRules } from "@/server/api-v1/schemas";
 import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment } from "@/components/v2/stage-rules/stage-row-model";
 import { Modal } from "@/components/modal";
@@ -103,7 +109,8 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
-import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
+import { RUN_SHEET_FILTER_LABEL, RunSheet, RunSheetFilterBar, runSheetHasRows, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
+import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { isOnlineGameExists } from "@/lib/open-round";
 import { venueNoun } from "@/lib/venue";
 import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
@@ -340,6 +347,9 @@ interface Props {
    *  ranks by, the layer it came from, its pin and the sport's default. The Tie-breaks section is mounted for a table stage
    *  that has one; absent (a stage whose rules do not read), it shows none rather than a guessed order (R3). */
   stageTableRules?: Record<string, StageTableRules>;
+  /** Match Day C3: the settings panels every stage card opens with (a test hook, like `DivisionRulesStrip`'s `initialOpen`; the page
+   *  never sets it - the cards open closed). */
+  initialOpenPanels?: readonly RulesPanel[];
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
   /** The GOVERNING venue clock (`settings.orgTz`, #448), resolved server-side.
@@ -514,7 +524,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -617,12 +627,38 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // checkout return lands on the fixture page now, so D2's return branch —
   // `initialRunSheetFilter` — is gone; this is its non-return branch.)
   const [filter, setFilter] = useState<RunSheetFilter>(phase === "match_day" ? "today" : "all");
-  // Owner-approved "Option 2" (on top of Option B) — which stage the run
-  // sheet below is filtered to, or `null` for every stage. A SECOND,
-  // orthogonal dimension from `filter` above, never folded into
-  // `RunSheetFilter` — see `<RunSheet>`'s own `stageId` prop doc for why.
-  // Set from a stage card's own "View N fixtures" control, below.
-  const [stageFilter, setStageFilter] = useState<string | null>(null);
+  // Match Day C3: which of each stage's three settings panels (Match format / Points / Tie-breaks) is open, as `${stageId}:${panel}`.
+  // Owned here, like `addingTo` and `openRailFor`, so the header's buttons (stateless inline JSX: the test harness never walks a
+  // nested component's render) and the panels they open share it. Several can be open at once.
+  const [openPanels, setOpenPanels] = useState<ReadonlySet<string>>(
+    () => new Set(stages.flatMap((st) => (initialOpenPanels ?? []).map((panel) => `${st.id}:${panel}`))),
+  );
+  const panelOpen = (stageId: string, panel: RulesPanel): boolean => openPanels.has(`${stageId}:${panel}`);
+  const togglePanel = (stageId: string, panel: RulesPanel) =>
+    setOpenPanels((prev) => {
+      const next = new Set(prev);
+      const key = `${stageId}:${panel}`;
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  const closePanel = (stageId: string, panel: RulesPanel) => {
+    setOpenPanels((prev) => {
+      const next = new Set(prev);
+      next.delete(`${stageId}:${panel}`);
+      return next;
+    });
+    // Save / Cancel / Use-division unmount the very button the keyboard was on. Hand focus back to the header button that opened the
+    // panel (review M-5 of the stage-rules row: focus follows the editor in AND out); on a phone that button sits in the closed
+    // "Stage settings" menu and is not rendered, so the menu's own trigger takes it.
+    requestAnimationFrame(() => {
+      const card = document.querySelector(`section[data-stage-id="${stageId}"]`);
+      const tool = card?.querySelector<HTMLElement>(`[data-testid="stage-tool-${panel}"]`);
+      const target = tool !== null && tool !== undefined && tool.offsetParent !== null ? tool : card?.querySelector<HTMLElement>('[data-testid="stage-settings-trigger"]');
+      target?.focus();
+    });
+  };
+  // The phone's one "Stage settings" menu: the stage whose menu is open, or null. Below `md` the three buttons live in it.
+  const [settingsMenuFor, setSettingsMenuFor] = useState<string | null>(null);
   // Competition Desk W2 (Task 4/C5) — the run sheet's NOW rule. Never at
   // module scope (that freezes at first import, so NOW would stick to deploy
   // time), and never a bare `Date.now()` in this body either: that only moved
@@ -630,28 +666,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // tick, so the NOW line and "result missing" advance on their own. Declared
   // above the empty-stages early return, as every hook must be.
   const nowMs = useNow(RUN_SHEET_NOW_TICK_MS);
-
-  /** Show one stage's fixtures in the run sheet: filter it to the stage, and scroll it into view. The stage card's "View
-   *  N fixtures" control and the rules row's lock line ("See the fixtures") are the same gesture. */
-  function showStageFixtures(stageId: string) {
-        setStageFilter(stageId);
-        // ...and clear the TYPE filter in the same gesture.
-        // The label counts `stageFixtures.length`, which is the
-        // whole stage — but `keep()` in run-sheet.tsx ANDs the
-        // stage dimension with the type ladder, and on match day
-        // `filter` initialises to "today". A knockout stage
-        // playing tomorrow therefore advertised "View 12
-        // fixtures" and delivered "No fixtures match Today":
-        // the control promised 12 and showed 0. Sending the
-        // organiser somewhere empty is worse than not offering
-        // the trip, so the control makes its own label true.
-        setFilter("all");
-        requestAnimationFrame(() => {
-          document
-            .querySelector('[data-testid="run-sheet"]')
-            ?.scrollIntoView({ block: "start", behavior: "smooth" });
-        });
-  }
 
   async function undoLast() {
     setError(null);
@@ -827,6 +841,57 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     );
   }
 
+  // Competition Desk W2 (Task 4) + Match Day C3: the division's run sheet, `buildRunSheet` over EVERY stage's fixtures (day groups
+  // merged across every non-bracket stage, one bracket block per bracket stage, one "Not yet scheduled" group last - owner rulings
+  // A2/3). C3 mounts it once PER STAGE (`RunSheet embedded`, narrowed to the stage, inside that stage's card) under ONE filter bar
+  // above the cards. `nowMs` is the panel's ticking `useNow` clock (C5), never a module-scope `Date.now()`.
+  const runSheetBlocks = buildRunSheet({ fixtures: fixtures.map(toRunSheetFixture), stages, tz, nowMs });
+  const runSheetProps = {
+    blocks: runSheetBlocks,
+    stages,
+    tz,
+    orgTz,
+    nowMs,
+    matchMinutes,
+    entrantNames,
+    courtNames: courtNamesById,
+    // R35 - the panel already holds these for `StageCourtTagsEditor` and the (retired) FixtureLine picker; they now reach each
+    // row's inline editor instead of a second venues fetch.
+    venues,
+    canEdit,
+    hrefFor: (f: { fixture_no: number }) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no),
+    filter,
+    onFilter: setFilter,
+    onStageFilter: () => undefined,
+    boardSlotOptions,
+    onRescheduled: () => {
+      setNotice(msg("schedule.rescheduled"));
+      setUndoable(true);
+    },
+    streamStates,
+    awaitingSettle,
+    onlinePlay,
+    arbiterHrefFor: arbiterHref === null ? undefined : (fixtureId: string) => routes.divisionArbiter(orgSlug, compSlug, divSlug, fixtureId),
+    matchDayHref: matchDayHref ?? undefined,
+    /* Fix round 1 (I1): "Find a pitch / table / board / rink", by the division's sport (an absent one is the court). */
+    venueNoun: venueNoun(sportKey),
+    /* An unfilled bracket seat is named by its FEEDER ("Winner of R1·3"), not "TBD" - the same `feedLabels()` builder the schedule
+       board renders these very fixtures with. Derived from the WHOLE division fixture list (never `blocks`, which is grouped and
+       filtered), and never a second query. */
+    feedLabels: runSheetFeedLabels,
+  };
+  // Does the filter leave ANY row in ANY stage? When none does, the panel says so once (with the way back) and the stage sheets stay
+  // quiet instead of each repeating it.
+  const anyRowsKept = runSheetHasRows(runSheetBlocks, filter, {
+    stageId: null,
+    tz,
+    today: dayKeyInTz(nowMs, tz),
+    nowMs,
+    matchMinutes,
+    streamStates,
+    onlinePlay,
+  });
+
   return (
     <div className="space-y-6">
       {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
@@ -893,6 +958,42 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           the old complete-sinks-last rule reshuffled a running division's own
           progression order, which fought the phase/attention model's stage
           identification (both key off `seq`). */}
+      {/* Match Day C3: the division's fixtures filter, then the stage cards, each holding its own stage's rows. The wrapper keeps the
+          `run-sheet` testid the desk's tests and page-level scans know (one per division, absent when there are no fixtures). */}
+      <div data-testid={runSheetBlocks.length > 0 ? "run-sheet" : undefined} className="space-y-6">
+        {runSheetBlocks.length > 0 && (
+          <div className="card">
+            <RunSheetFilterBar
+              blocks={runSheetBlocks}
+              stages={stages}
+              tz={tz}
+              nowMs={nowMs}
+              matchMinutes={matchMinutes}
+              onlinePlay={onlinePlay}
+              filter={filter}
+              onFilter={setFilter}
+              stageId={null}
+              onStageFilter={() => undefined}
+            />
+          </div>
+        )}
+        {runSheetBlocks.length > 0 && !anyRowsKept && (
+          <div data-testid="run-sheet-empty" className="card px-4 py-10 text-center">
+            <p className="text-sm text-slate-500">
+              {msg("runsheet.emptyFilter.message", { filter: msg(RUN_SHEET_FILTER_LABEL[filter]) })}
+            </p>
+            {filter !== "all" && (
+              <button
+                type="button"
+                data-testid="run-sheet-empty-show-all"
+                onClick={() => setFilter("all")}
+                className="btn btn-ghost mt-3 min-h-11 px-3 text-xs"
+              >
+                {msg("runsheet.filter.all")}
+              </button>
+            )}
+          </div>
+        )}
       {[...stages]
         .sort((a, b) => a.seq - b.seq)
         .map((stage) => {
@@ -953,6 +1054,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const stageNonByeCount = stageFixtures.filter((f) => !isBye(toRunSheetFixture(f))).length;
         // D12 (T16): online boards whose round nobody has opened — not invited, not playable, owing nothing yet.
         const stageNotOpened = stageFixtures.filter((f) => onlinePlay?.[f.id]?.unopened === true);
+        // Match Day C3: the buttons follow the stage's state. `stageCounts` over ALL the stage's fixtures - Swiss unseated shells and
+        // byes included - and never behind a fallback: a count that quietly read zero would unlock Complete over matches the card
+        // cannot see. (It throws on a status the schema does not have, which is the loud failure we want.) The Complete hint's N is the
+        // stage's matches, byes out.
+        const counts = stageCounts(stageFixtures);
+        // A held match (`needs_decision`) is open (it keeps Complete locked) but is not "in play": it waits for the organiser.
+        const stageHeld = stageFixtures.filter((f) => f.status === "needs_decision" && !isBye(toRunSheetFixture(f)));
         // Fix round 2 (Ruling T4-B, CRITICAL finding): built ONCE per stage
         // — same rule the comment on `courtTagsEditor` below states for
         // itself — then placed in exactly one of two mutually exclusive
@@ -1072,7 +1180,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         );
         return (
           <div key={stage.id} className="space-y-6">
-          <section className="card overflow-hidden" data-stage-id={stage.id}>
+          <section className="card" data-stage-id={stage.id}>
             {/* Competition Desk W3 Task 5 introduced a two-column desktop
                 layout here — `stage-sheet` beside a 280px `stage-rail`
                 column — RETIRED by "Option B" (controller measurement,
@@ -1091,12 +1199,73 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 is now content height; there is no column, therefore no
                 void. */}
               <div data-testid="stage-sheet" className="min-w-0">
-                <header className="flex flex-wrap items-center gap-3 border-b border-slate-100 px-4 py-3">
-                  <h3 className="text-sm font-semibold text-slate-800">
+                <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-100 px-4 py-3">
+                  <h3 className="min-w-0 text-sm font-semibold text-slate-800">
                     {stage.seq}. {stage.name}
                   </h3>
-                  <span className="chip">{stage.kind.replace(/_/g, " ")}</span>
+                  {/* Item 1: the kind pill only when the name does not already say the kind ("1. League" next to a "league"
+                      pill said the word twice). */}
+                  {showKindPill(stage.name, stage.kind) && <span className="chip">{stage.kind.replace(/_/g, " ")}</span>}
                   <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
+                  {/* Match Day C3 (owner-approved mock, option 2): the stage's three settings open from here, inline under the
+                      header. ONE DOM at every width: at >= md the buttons sit in the header's row; below md the SAME buttons are
+                      the items of one "Stage settings" menu (the trigger is `md:hidden`, the list `max-md:hidden` until it is
+                      opened), never a second set. Inline JSX, not a child component: the harness walks this panel without
+                      invoking nested renders. Points and Tie-breaks only for a table stage; a viewer gets the same buttons and
+                      reads each panel. */}
+                  {sportKey !== undefined && (() => {
+                    const takesPoints = stageTakesPoints(stage.kind);
+                    const tools: { panel: RulesPanel; label: string }[] = [
+                      { panel: "format", label: msg("rulesStrip.format") },
+                      ...(takesPoints ? [{ panel: "points" as const, label: msg("stagePoints.title") }] : []),
+                      ...(takesPoints && stageTableRules[stage.id] !== undefined
+                        ? [{ panel: "tiebreaks" as const, label: msg("stageTiebreaks.title") }]
+                        : []),
+                    ];
+                    const menuOpen = settingsMenuFor === stage.id;
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          data-testid="stage-settings-trigger"
+                          aria-expanded={menuOpen}
+                          aria-controls={`stage-settings-menu-${stage.id}`}
+                          onClick={() => setSettingsMenuFor(menuOpen ? null : stage.id)}
+                          className="ml-auto flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 md:hidden"
+                        >
+                          {msg("stageCard.settings")}
+                          <span aria-hidden="true">{menuOpen ? "▴" : "▾"}</span>
+                        </button>
+                        <div
+                          id={`stage-settings-menu-${stage.id}`}
+                          role="group"
+                          aria-label={msg("stageCard.settings")}
+                          data-testid="stage-settings-menu"
+                          className={`min-w-0 ${menuOpen ? "flex w-full flex-col gap-2" : "max-md:hidden"} md:ml-auto md:flex md:w-auto md:flex-row md:flex-wrap md:items-center md:gap-2`}
+                        >
+                          {tools.map((tool) => {
+                            const on = panelOpen(stage.id, tool.panel);
+                            return (
+                              <button
+                                key={tool.panel}
+                                type="button"
+                                data-testid={`stage-tool-${tool.panel}`}
+                                aria-expanded={on}
+                                aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
+                                onClick={() => {
+                                  togglePanel(stage.id, tool.panel);
+                                  setSettingsMenuFor(null);
+                                }}
+                                className={`inline-flex min-h-11 items-center rounded-lg border px-3 text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 max-md:w-full ${on ? TOGGLE_ON : TOGGLE_OFF}`}
+                              >
+                                {tool.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    );
+                  })()}
                   {/* The swiss shape legend. `w-full` inside the header's own
                       `flex-wrap`, so it takes the SECOND line under the title
                       and chips at every width rather than adding a row of
@@ -1246,21 +1415,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     just below. */}
                 {!canEdit && unscheduledBadge}
 
-                {/* Per-stage rules (design 2026-09-17 §T5, owner ruling D7 "Option A",
-                    2026-09-18; W2c Task 17 extends the row to every sport, owner
-                    pick A on mockup S1): one collapsed line in the card body, Edit
-                    expands the grouped fields in place on the `AddMatchForm`
-                    precedent above. Deliberately NOT on StageRail — that rail is a
-                    list of irreversible stage actions (Generate / Complete /
-                    Delete) and the rules are a reversible setting the API refuses
-                    outright once the stage has started. One DOM at every width:
-                    the field sections are plain blocks and each section's grid
-                    stacks on a phone, so this card keeps its property of having no
-                    phone branch at all. (Spelling the class names out here would
-                    feed the Tailwind scanner, which reads comments and emits junk
-                    CSS for anything class-shaped.) */}
+                {/* Per-stage rules (design 2026-09-17 §T5; W2c Task 17 extends them to every sport; Match Day C3 makes the card
+                    read as a summary line with the three settings opening inline from the header's buttons). Deliberately NOT on
+                    StageRail - that rail is the stage's actions and the rules are a reversible setting the API refuses outright
+                    once the stage has started. (Spelling the class names out here would feed the Tailwind scanner, which reads
+                    comments and emits junk CSS for anything class-shaped.) */}
                 {sportKey !== undefined && (
-                  <StageFormatRow
+                  <StageRulesArea
                     msg={msg}
                     stageId={stage.id}
                     sportKey={sportKey}
@@ -1277,8 +1438,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         ? null
                         : stageLikeOf(stage, stageTableRules[stage.id]!, stagePooled(stage), takesBestNthFrom(stage, stages))
                     }
+                    inheritedOrder={
+                      stageTableRules[stage.id] === undefined || rulesStrip === undefined
+                        ? undefined
+                        : inheritedOrderOf(rulesStrip.divisionTiebreakers, stageTableRules[stage.id]!)
+                    }
                     canEdit={canEdit}
                     onSaved={() => router.refresh()}
+                    formatOpen={panelOpen(stage.id, "format")}
+                    pointsOpen={panelOpen(stage.id, "points")}
+                    tiebreaksOpen={panelOpen(stage.id, "tiebreaks")}
+                    onClose={(panel) => closePanel(stage.id, panel)}
                   />
                 )}
 
@@ -1313,6 +1483,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       const clauses = [
                         stagePlayed.length > 0 ? msgPlural("schedule.progress.played", stagePlayed.length) : null,
                         stageInPlay.length > 0 ? msgPlural("schedule.progress.inPlay", stageInPlay.length) : null,
+                        stageHeld.length > 0 ? msgPlural("schedule.progress.held", stageHeld.length) : null,
                         unscheduled.length > 0 ? msgPlural("schedule.progress.toSchedule", unscheduled.length) : null,
                         stageNotOpened.length > 0 ? msgPlural("schedule.progress.notOpened", stageNotOpened.length) : null,
                       ].filter((s): s is string => s !== null);
@@ -1338,49 +1509,19 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   </p>
                 )}
 
-                {/* Owner-approved "Option 2" (on top of Option B) — "why are
-                    we not showing the fixtures in each stage?" answered as
-                    NAVIGATION, not a second copy: the run sheet stays the
-                    ONE list (Task 4 ruling, restated below), and this is a
-                    destination control that filters it to this stage. Copy
-                    reads as a destination ("View N fixtures"), never a bare
-                    statistic — `plural()` (`msgPlural`) throughout, this
-                    programme's own repeat offender ("1 fixtures", five
-                    times). `stageFixtures.length` — the count already in
-                    hand here, never re-derived. Gated on `> 0` alone (not
-                    `stageNonByeCount`, unlike the progress bar above): a
-                    bye is still a real row the run sheet renders, so a
-                    stage whose only fixture is a bye still has something to
-                    view.
-
-                    Click sets `stageFilter` (this component's own state,
-                    threaded to `<RunSheet>` as `stageId`) and scrolls the
-                    sheet into view — `requestAnimationFrame` + a
-                    `document.querySelector` on `run-sheet`'s own stable
-                    testid, the SAME "jump to" idiom `schedule-board.tsx`'s
-                    `jumpTo` already uses, rather than inventing a second
-                    one. The sheet may be several stage cards below the
-                    fold, especially on a division with many stages — a
-                    state change with no scroll would leave the organiser
-                    looking at an unchanged screen. */}
+                {/* Match Day C3 (spec §12 item 9): the stage's own fixtures sit IN the card, under the summary and the panels -
+                    no "View N fixtures" trip to a separate list. The rows are the run sheet's own (`RunSheet embedded`: the same
+                    `buildRunSheet` blocks, the same rows, the same filter), narrowed to this stage; the filter itself is the one
+                    bar above the cards. */}
                 {stageFixtures.length > 0 && (
-                  <button
-                    type="button"
-                    data-testid="stage-view-fixtures"
-                    onClick={() => showStageFixtures(stage.id)}
-                    className="flex min-h-11 w-full items-center gap-1 px-4 py-2 text-left text-xs font-semibold text-purple-700 hover:text-purple-800"
-                  >
-                    {msgPlural("schedule.stage.viewFixtures", stageFixtures.length)}
-                    <span aria-hidden="true">→</span>
-                  </button>
+                  <RunSheet
+                    {...runSheetProps}
+                    embedded
+                    quietEmpty={!anyRowsKept}
+                    stageId={stage.id}
+                  />
                 )}
 
-                {/* Every fixture list that used to render here — the round-
-                    grouped non-bracket list AND the bracket stage's own
-                    round-sectioned sibling sections — is gone. Both now render
-                    ONCE, division-wide, in the `<RunSheet>` mounted below the
-                    stage loop (Competition Desk W2, Task 4, steps 5+6). This
-                    card keeps only the "no fixtures generated yet" message. */}
                 {/* An `on_complete` progression stage (what "Add stage"
                     creates) gets no fixtures until the stage before it
                     completes, so "generate them when entrants are
@@ -1443,6 +1584,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   canEdit={canEdit}
                   busy={busy}
                   fixtureCount={stageFixtures.length}
+                  counts={counts}
+                  matchCount={stageNonByeCount}
                   deletable={deletable}
                   onAct={(stageId, action, opts) => act(stageId, action, opts)}
                   onDelete={(s) => {
@@ -1481,54 +1624,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         );
       })}
 
-      {/* Competition Desk W2 (Task 4) — the run sheet, mounted ONCE, outside
-          the stage loop above: a division-wide list on a time spine, fed by
-          `buildRunSheet` over EVERY stage's fixtures (day groups merged
-          across every non-bracket stage, one bracket block per bracket
-          stage, one "Not yet scheduled" group last — owner rulings A2/3).
-          `nowMs` is the panel's ticking `useNow` clock (C5), never a
-          module-scope `Date.now()` — that freezes at first import and the
-          NOW rule would stick to deploy time. */}
-      <RunSheet
-        blocks={buildRunSheet({ fixtures: fixtures.map(toRunSheetFixture), stages, tz, nowMs })}
-        stages={stages}
-        tz={tz}
-        orgTz={orgTz}
-        nowMs={nowMs}
-        matchMinutes={matchMinutes}
-        entrantNames={entrantNames}
-        courtNames={courtNamesById}
-        // R35 — the panel already holds these for `StageCourtTagsEditor` and
-        // the (retired) FixtureLine picker; they now reach each row's inline
-        // editor instead of a second venues fetch.
-        venues={venues}
-        canEdit={canEdit}
-        hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}
-        filter={filter}
-        onFilter={setFilter}
-        stageId={stageFilter}
-        onStageFilter={setStageFilter}
-        boardSlotOptions={boardSlotOptions}
-        onRescheduled={() => {
-          setNotice(msg("schedule.rescheduled"));
-          setUndoable(true);
-        }}
-        streamStates={streamStates}
-        awaitingSettle={awaitingSettle}
-        onlinePlay={onlinePlay}
-        arbiterHrefFor={arbiterHref === null ? undefined : (fixtureId) => routes.divisionArbiter(orgSlug, compSlug, divSlug, fixtureId)}
-        matchDayHref={matchDayHref ?? undefined}
-        /* Fix round 1 (I1): "Find a pitch / table / board / rink", by the division's sport (an absent one is the court). */
-        venueNoun={venueNoun(sportKey)}
-        /* An unfilled bracket seat is named by its FEEDER ("Winner of R1·3"),
-           not "TBD" — the same `feedLabels()` builder and the same
-           `slot.winner_match`/`slot.loser_match` vocabulary the schedule board
-           already renders these very fixtures with. Derived from the WHOLE
-           division fixture list (never `blocks`, which is grouped and
-           filtered), and never a second query: the four feed columns ride
-           `listDivisionFixtures`'s existing select. */
-        feedLabels={runSheetFeedLabels}
-      />
+      </div>
 
       {canEdit && (
         <AddStageForm
@@ -2243,7 +2339,7 @@ function AddMatchForm({
  *
  * What a Save sends is only what the organiser CHANGED, and the endpoint merges it (`stageFormatSaveFragment`).
  */
-function StageFormatRow({
+function StageRulesArea({
   msg,
   stageId,
   sportKey,
@@ -2256,8 +2352,13 @@ function StageFormatRow({
   locked,
   pinnedPoints,
   tiebreaks,
+  inheritedOrder,
   canEdit,
   onSaved,
+  formatOpen,
+  pointsOpen,
+  tiebreaksOpen,
+  onClose,
 }: {
   msg: Msg;
   stageId: string;
@@ -2273,15 +2374,27 @@ function StageFormatRow({
   pinnedPoints: PointsRule | null;
   /** W2d Task 15: the stage as the Tie-breaks section reads it, null where its table rules do not read. */
   tiebreaks: ReturnType<typeof stageLikeOf> | null;
+  /** Match Day C3: the order this stage would rank by if it followed the division today (`inheritedOrder`), or undefined where
+   *  the page gave no division order to compare with (then only a stage's OWN order is said to differ). */
+  inheritedOrder: readonly TiebreakerKey[] | undefined;
   canEdit: boolean;
   onSaved: () => void;
+  /** Which of the card's three settings panels are open (the header's buttons own the state, as `openRailFor` does). */
+  formatOpen: boolean;
+  pointsOpen: boolean;
+  tiebreaksOpen: boolean;
+  onClose: (panel: RulesPanel) => void;
 }) {
   const sportModule = useMemo(() => moduleFor(sportKey), [sportKey]);
-  const [open, setOpen] = useState(false);
-  const [values, setValues] = useState<Record<string, string>>({});
-  /** What the editor was opened with — the save path diffs against this so
-   *  "the organiser touched nothing" can never be mistaken for a clear. */
-  const [opened, setOpened] = useState<Record<string, string>>({});
+  const readOnly = locked || !canEdit;
+  /** The fragment a stage opens its editor with - the fragment IN FORCE (see the header), never the merge. */
+  const hydrateFrom = (inForce: Record<string, unknown>) => stageFormatEditorValues(sportKey, { ...stageConfig, rules: inForce }, divisionConfig);
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    formatOpen && !readOnly ? hydrateFrom(stageRulesInForce(null, stageConfig.rules)) : {},
+  );
+  /** What the editor was opened with - the save path diffs against this so "the organiser touched nothing" can never be
+   *  mistaken for a clear. */
+  const [opened, setOpened] = useState<Record<string, string>>(values);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** What the last Save/Clear answered (the PUT's own `rules`), kept until the page's props move on. `onSaved` is
@@ -2297,49 +2410,80 @@ function StageFormatRow({
 
   const rules = useMemo(() => stageRulesInForce(saved, stageConfig.rules), [saved, stageConfig.rules]);
   const overridden = Object.keys(rules).length > 0;
-  // SUMMARY — effective config. See the header.
+
+  // The Match format panel opening hydrates the editor from the fragment in force (the render-phase transition: no effect sets
+  // state). Closing it discards the draft, so a reopened panel always starts from what is stored.
+  const [wasOpen, setWasOpen] = useState(formatOpen);
+  if (formatOpen !== wasOpen) {
+    setWasOpen(formatOpen);
+    if (formatOpen && !readOnly) {
+      const hydrated = hydrateFrom(rules);
+      setValues(hydrated);
+      setOpened(hydrated);
+      setError(null);
+    }
+  }
+
+  // Review M-5: focus follows the editor IN - the panel an organiser just opened takes focus, so the keyboard lands on the fields
+  // (a read-only panel is only read, and keeps focus where it was).
+  const editorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (formatOpen && !readOnly) editorRef.current?.focus();
+  }, [formatOpen, readOnly]);
+
+  // SUMMARY - effective config. See the header.
   const effective = useMemo(() => ({ ...divisionConfig, ...rules }), [divisionConfig, rules]);
-  const headline = stageFormatHeadline(sportKey, effective, msg);
   // The rules this stage would store if Save were pressed now, for the notice while the editor is open: the stored
   // rules with the fragment a Save would send merged in (the endpoint's own merge, `mergedStageRules`).
   const noticeRules = useMemo(
-    () => (open ? (mergedStageRules(rules, stageFormatSaveFragment(sportKey, rules, opened, values, divisionConfig)) ?? {}) : rules),
-    [open, rules, sportKey, opened, values, divisionConfig],
+    () => (formatOpen ? (mergedStageRules(rules, stageFormatSaveFragment(sportKey, rules, opened, values, divisionConfig)) ?? {}) : rules),
+    [formatOpen, rules, sportKey, opened, values, divisionConfig],
   );
   const resolved = useMemo(
     () => (sportModule === null ? null : resolvedStageCfg(sportModule, divisionConfig, kind, noticeRules)),
     [sportModule, divisionConfig, kind, noticeRules],
   );
-  // Focus follows the editor: it lands on the editor when it opens (the Edit button it came from is gone while editing)
-  // and returns to the Edit button when it closes.
-  const editorRef = useRef<HTMLDivElement>(null);
-  const editRef = useRef<HTMLButtonElement>(null);
-  const wasOpen = useRef(false);
-  useEffect(() => {
-    if (open) editorRef.current?.focus();
-    else if (wasOpen.current) editRef.current?.focus();
-    wasOpen.current = open;
-  }, [open]);
+  // The stage as it is SAVED (not the draft): what the summary line states.
+  const resolvedSaved = useMemo(
+    () => (sportModule === null ? null : resolvedStageCfg(sportModule, divisionConfig, kind, rules)),
+    [sportModule, divisionConfig, kind, rules],
+  );
 
   if (sportModule === null) return null;
 
-  const readOnly = locked || !canEdit;
   const mode = readOnly ? "locked" : "edit";
   const state = locked ? "locked" : overridden ? "overridden" : "inherited";
-  // A locked stage states it ONCE, in the lock line below (S4): the header then carries the format alone.
-  const clause = locked ? null : msg(overridden ? "schedule.stageFormat.overridden" : "schedule.stageFormat.inherited");
-  const summary = headline === null ? clause : clause === null ? headline : `${headline} · ${clause}`;
   const preset = overridden && isStagePreset(sportModule, kind, variantKey, rules);
+  const takesPoints = stageTakesPoints(kind);
 
-  function openEditor() {
-    // FRAGMENT, never `effective`. See the header. The fragment IN FORCE: what the last save answered while the props
-    // still predate it, else the props' own.
-    const hydrated = stageFormatEditorValues(sportKey, { ...stageConfig, rules }, divisionConfig);
-    setValues(hydrated);
-    setOpened(hydrated);
-    setError(null);
-    setOpen(true);
-  }
+  // THE ONE-LINE SUMMARY (spec §12 items 5, 6, 12): format · points · ties, each said once, in the words of the public line and
+  // the sport's own unit ("game", not "set", for badminton). The panels below say the rest.
+  // The format's clauses, and how a level match ends where the kind has a way to (a knockout's extra time and penalties ARE its
+  // format; a league has none, so its line stays short). The abandon policy is the panel's to say, not the line's.
+  const formatClauses =
+    ruleDict === undefined || resolvedSaved === null
+      ? null
+      : [...(describeMatchRules(sportKey, sportModule, resolvedSaved) ?? []), ...describeDeciders(sportModule, kind, resolvedSaved)];
+  const formatText =
+    formatClauses !== null && formatClauses.length > 0 && ruleDict !== undefined
+      ? rulesLineText(ruleDict, formatClauses)
+      : stageFormatHeadline(sportKey, effective, msg);
+  const pointsText = takesPoints
+    ? stagePointsHeadline({ module: sportModule, kind, stageConfig, divisionConfig, stored: stageConfig.points, pinned: pinnedPoints, pointsDict }, msg)
+    : null;
+  const tiesSteps =
+    takesPoints && tiebreaks !== null
+      ? tiesSummary(tiebreaks.tableRules.tiebreakers.keys, (k) => msg(unitLabelKey(k, sportKey)), msg("stageCard.summary.then"))
+      : null;
+  const parts = [formatText, pointsText, tiesSteps === null ? null : msg("stageCard.summary.ties", { steps: tiesSteps })].filter(
+    (x): x is string => x !== null && x !== "",
+  );
+  // "A stage that differs says so" (item 12): which of the three sections no longer follow the division.
+  const differs = [
+    overridden ? msg("rulesStrip.format") : null,
+    takesPoints && pointsDiffer(sportModule, divisionConfig, { kind, config: stageConfig }, stageConfig.points, pinnedPoints) ? msg("stagePoints.title") : null,
+    takesPoints && tiebreaks !== null && tiebreaksDiffer(tiebreaks.tableRules, inheritedOrder) ? msg("stageTiebreaks.title") : null,
+  ].filter((x): x is string => x !== null);
 
   async function save() {
     setSaving(true);
@@ -2353,7 +2497,7 @@ function StageFormatRow({
         json: { rules: stageFormatSaveFragment(sportKey, rules, opened, values, divisionConfig) },
       });
       setSaved({ against: propRules.current, rules: out.rules ?? {} });
-      setOpen(false);
+      onClose("format");
       onSaved();
     } catch (err) {
       // W2c P-5: a refused fragment names its problem (CONFIG_INVALID `issues`), localized where this app owns it.
@@ -2372,7 +2516,7 @@ function StageFormatRow({
         json: { rules: null },
       });
       setSaved({ against: propRules.current, rules: out.rules ?? {} });
-      setOpen(false);
+      onClose("format");
       onSaved();
     } catch (err) {
       // W2c Task 19: the same reader as Save - a rule-lock refusal in the reader's language, never the wire's English.
@@ -2383,88 +2527,44 @@ function StageFormatRow({
   }
 
   return (
-    <>
-    <div data-testid={`stage-format-row-${stageId}`}>
-      <div
-        className="border-b border-slate-100 px-4 py-3"
-        data-testid="stage-format"
-        data-stage-format-state={state}
-      >
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <span className="text-xs font-semibold text-slate-800">
-            {msg("schedule.stageFormat.heading")}
-          </span>
-          {summary !== null && (
-            <span className="min-w-0 text-xs text-slate-600" data-testid="stage-format-summary">
-              {summary}
-            </span>
-          )}
-          {preset && (
-            <span
-              className="rounded-full border border-teal-700/30 bg-teal-50 px-2 py-0.5 text-[11px] text-teal-900"
-              data-testid="stage-format-preset"
-            >
-              {msg("stageRules.preset.knockout", { sport: sportLabel(sportKey, msg) })}
-            </span>
-          )}
-          {/* Hidden while editing: the editor's own Cancel (beside Save) is the one way out, so the row never offers two. */}
-          {!locked && canEdit && !open && (
-            <button
-              ref={editRef}
-              type="button"
-              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
-              data-testid="stage-format-edit"
-              onClick={openEditor}
-            >
-              {msg("schedule.stageFormat.edit")}
-            </button>
-          )}
-          {canEdit && !locked && overridden && !open && (
-            <button
-              type="button"
-              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
-              data-testid="stage-format-clear"
-              disabled={saving}
-              onClick={() => void clear()}
-            >
-              {msg("schedule.stageFormat.useDivision")}
-            </button>
-          )}
-        </div>
-        {/* What the stage plays, read-only (C1's words: the format said once, one lock line when it has started). While the
-            editor is open the chips preview what Save will store - the SAME `resolved` as the notice and the held fields. */}
-        <div className="mt-2">
-          <MatchFormatEditor
-            scope="stage"
-            mode="locked"
-            started={locked}
-            sportKey={sportKey}
-            module={sportModule}
-            kind={kind}
-            variant={variantKey}
-            values={values}
-            onChange={setValues}
-            divisionConfig={divisionConfig}
-            resolved={resolved}
-            ruleDict={ruleDict}
-          />
-        </div>
-        {error !== null && !open && <p className="mt-1 text-xs text-red-600">{error}</p>}
-        {!open && (
-          <div className="mt-2">
-            <DecidersNotice module={sportModule} kind={kind} resolved={resolved} />
-          </div>
+    <div data-testid={`stage-format-row-${stageId}`} className="min-w-0">
+      {/* The summary: always on the card, the panels below only when their header button is on. */}
+      <div className="space-y-1 border-b border-slate-100 px-4 py-3" data-testid="stage-format" data-stage-format-state={state}>
+        {parts.length > 0 && (
+          <p className="min-w-0 text-xs text-slate-700" data-testid="stage-format-summary">
+            {parts.join(" · ")}
+          </p>
         )}
+        {preset && (
+          <span
+            className="inline-block rounded-full border border-teal-700/30 bg-teal-50 px-2 py-0.5 text-[11px] text-teal-900"
+            data-testid="stage-format-preset"
+          >
+            {msg("stageRules.preset.knockout", { sport: sportLabel(sportKey, msg) })}
+          </span>
+        )}
+        {locked && <LockLine testId="stage-locked" />}
+        {differs.length > 0 && (
+          <p className="min-w-0 text-xs font-medium text-purple-800" data-testid="stage-differs">
+            {msg("stageCard.summary.differs", { parts: differs.join(", ") })}
+          </p>
+        )}
+        {error !== null && !formatOpen && <p className="text-xs text-red-600">{error}</p>}
+        {/* Closed, the card still says a stage that holds level matches (every decider off) does so - the notice is the panel's
+            while it is open (live to the draft) and the summary's otherwise, never both. */}
+        {!formatOpen && <DecidersNotice module={sportModule} kind={kind} resolved={resolved} />}
       </div>
 
-      {open && (
+      {formatOpen && (
         <div
+          id={`stage-panel-${stageId}-format`}
+          role="region"
+          aria-label={msg("rulesStrip.format")}
+          className="space-y-3 border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3 outline-none"
+          data-testid="stage-format-editor"
+          data-mode={mode}
           ref={editorRef}
           tabIndex={-1}
-          role="group"
-          aria-label={msg("schedule.stageFormat.heading")}
-          className="space-y-3 border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3 focus:outline-none"
-          data-testid="stage-format-editor"
         >
           {/* `inherited`: the fragment's blanks fall back to the DIVISION, so a stage that names no best-of but
               inherits best of 1 still gets the single "Points to win" field (owner ruling 2026-09-25). */}
@@ -2500,51 +2600,65 @@ function StageFormatRow({
                 className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
                 data-testid="stage-format-cancel"
                 disabled={saving}
-                onClick={() => setOpen(false)}
+                onClick={() => onClose("format")}
               >
                 {msg("schedule.cancel")}
               </button>
+              {overridden && (
+                <button
+                  type="button"
+                  className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                  data-testid="stage-format-clear"
+                  disabled={saving}
+                  onClick={() => void clear()}
+                >
+                  {msg("schedule.stageFormat.useDivision")}
+                </button>
+              )}
             </div>
           )}
           {!readOnly && <p className="text-xs text-slate-500">{msg("schedule.stageFormat.hint")}</p>}
           {error !== null && <p className="text-xs text-red-600">{error}</p>}
         </div>
       )}
+      {/* W2c Task 18 (S3): the stage's own points, a table stage only (a bracket has no table to rank). Its own PUT arm and
+          its own lock: the same `readOnly` the format panel uses (a started stage, or a viewer). */}
+      {pointsOpen && takesPoints && (
+        <div id={`stage-panel-${stageId}-points`} className="min-w-0">
+          <PointsEditor
+            scope="stage"
+            mode={mode}
+            started={locked}
+            stageId={stageId}
+            module={sportModule}
+            kind={kind}
+            stageConfig={stageConfig}
+            divisionConfig={divisionConfig}
+            stored={stageConfig.points}
+            pointsDict={pointsDict}
+            pinned={pinnedPoints}
+            onSaved={onSaved}
+          />
+        </div>
+      )}
+      {/* W2d Task 15 (spec §9): the stage's tie-break order, on a table stage whose rules read. Its lock is the server's own
+          (`formatLockedStageIds`): editable from generate until the first score (OC2). */}
+      {tiebreaksOpen && takesPoints && tiebreaks !== null && (
+        <div id={`stage-panel-${stageId}-tiebreaks`} className="min-w-0">
+          <TiebreaksEditor
+            scope="stage"
+            mode={mode}
+            started={locked}
+            stage={tiebreaks}
+            module={sportModule}
+            divisionConfig={divisionConfig}
+            stageConfig={stageConfig}
+            inheritedOrder={inheritedOrder}
+            onSaved={onSaved}
+          />
+        </div>
+      )}
     </div>
-    {/* W2c Task 18 (S3): the stage's own points, a table stage only (a bracket has no table to rank). Its own PUT arm and
-        its own lock: the same `readOnly` the format row uses (a started stage, or a viewer). A sibling of the format row,
-        not inside it, so the row's controls and its tests are untouched. */}
-    {stageTakesPoints(kind) && (
-      <PointsEditor
-        scope="stage"
-        mode={mode}
-        started={locked}
-        stageId={stageId}
-        module={sportModule}
-        kind={kind}
-        stageConfig={stageConfig}
-        divisionConfig={divisionConfig}
-        stored={stageConfig.points}
-        pointsDict={pointsDict}
-        pinned={pinnedPoints}
-        onSaved={onSaved}
-      />
-    )}
-    {/* W2d Task 15 (spec §9): the stage's tie-break order, after the Points section, on a table stage whose rules read. Its
-        lock is the server's own (`formatLockedStageIds`): editable from generate until the first score (OC2). */}
-    {stageTakesPoints(kind) && tiebreaks !== null && (
-      <TiebreaksEditor
-        scope="stage"
-        mode={mode}
-        started={locked}
-        stage={tiebreaks}
-        module={sportModule}
-        divisionConfig={divisionConfig}
-        stageConfig={stageConfig}
-        onSaved={onSaved}
-      />
-    )}
-    </>
   );
 }
 
