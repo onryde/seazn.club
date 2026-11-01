@@ -738,12 +738,14 @@ describe("B3 — Match Day reads the score's levels from the engine's structure"
     expect(levelText(strip, "live")).toBe(want.live);
   });
 
-  it("every in-play moment of every set sport's golden streams: panel and row say exactly the engine's levels (count reported)", () => {
-    let moments = 0;
-    const perSport: Record<string, number> = {};
-    let withMid = 0;
-    let withLive = 0;
-    for (const key of SPORTS) {
+  // One test per set sport rather than one for all four: each renders the whole focus panel per moment (~2200 in all), and a single
+  // test spanning them is a budget that a loaded runner (CI runs every file at once) can blow while each sport alone is quick.
+  it.each(["badminton", "tabletennis", "volleyball", "tennis"])(
+    "every in-play moment of %s's golden streams: panel and row say exactly the engine's levels (count reported)",
+    (key) => {
+      let moments = 0;
+      let withMid = 0;
+      let withLive = 0;
       for (const m of goldenMoments(key)) {
         if (m.decided || !isSetSport(m.summary)) continue;
         const court = goldenCourt(key, m.summary);
@@ -755,16 +757,17 @@ describe("B3 — Match Day reads the score's levels from the engine's structure"
         expect(levelText(big, "live"), where).toBe(want.live);
         expect(rowScore(court), where).toBe([wonDash(m.summary), want.mid, want.live].filter((x) => x !== null).join(" · "));
         moments++;
-        perSport[key] = (perSport[key] ?? 0) + 1;
         if (want.mid !== null) withMid++;
         if (want.live !== null) withLive++;
       }
-    }
-    console.info(`[B3 sweep] set-sport in-play moments: ${moments} ${JSON.stringify(perSport)}; with a middle level ${withMid}; with live points ${withLive}`);
-    for (const key of ["badminton", "tabletennis", "volleyball", "tennis"]) expect(perSport[key], `${key} moments`).toBeGreaterThan(20);
-    expect(withMid, "tennis moments with a games level").toBeGreaterThan(100);
-    expect(withLive).toBeGreaterThan(500);
-  });
+      console.info(`[B3 sweep] ${key} in-play moments: ${moments}; with a middle level ${withMid}; with live points ${withLive}`);
+      expect(moments, `${key} moments`).toBeGreaterThan(20);
+      expect(withLive, `${key} moments with live points`).toBeGreaterThan(20);
+      // Only tennis has a games level.
+      if (key === "tennis") expect(withMid, "tennis moments with a games level").toBeGreaterThan(100);
+      else expect(withMid, `${key} has no middle level`).toBe(0);
+    },
+  );
 });
 
 describe("every sport: the court noun and the scoreboard follow the sport (G5)", () => {

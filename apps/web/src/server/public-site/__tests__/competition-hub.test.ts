@@ -103,6 +103,7 @@ import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { t } from "@/lib/i18n-runtime";
 import { resolveSlotLabel, type SlotLabel as SlotLabelT } from "@/lib/slot-label";
 import { teamShortOf } from "@/lib/public-site";
+import { courtSubLinesOracle, goldenMoments } from "@/lib/score/__tests__/_golden";
 import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
@@ -507,6 +508,8 @@ describe("hubHeader — all eleven fields, from the summary alone", () => {
       id: "f1",
       status: "in_play",
       summary: {
+        headline: "1 — 0 · 21–15 (14–11)",
+        perSide: [{ entrantId: "e1", line: "1" }, { entrantId: "e2", line: "0" }],
         detail: {
           sets: [
             { home: 21, away: 15, closed: true },
@@ -525,10 +528,51 @@ describe("hubHeader — all eleven fields, from the summary alone", () => {
     const closed = F({
       id: "f1",
       status: "decided",
-      summary: { detail: { sets: [{ home: 21, away: 15, closed: true }] } },
+      // Well-formed (it has its two sides' counts), so the null below is "no set open" and not "unreadable shape".
+      summary: {
+        headline: "1 — 0 · 21–15",
+        perSide: [{ entrantId: "e1", line: "1" }, { entrantId: "e2", line: "0" }],
+        detail: { sets: [{ home: 21, away: 15, closed: true }] },
+      },
     });
     expect(hubHeader(closed, SIDES(), "badminton", "T").subLines).toEqual([null, null]);
     expect(hubHeader(F({ id: "f2" }), SIDES(), "football", "T").subLines).toEqual([null, null]);
+  });
+
+  // Task B3: the card's per-side figures are the structured score reader's (`@/lib/score/levels`, the one Match Day's panel
+  // reads), here over the ENGINE's own folds of every recorded stream of every set sport — never a hand-typed summary.
+  it("subLines over the engine's recorded streams: a set sport's open set, tennis's games then points while in play, games only once stopped", () => {
+    const seen = { inPlay: 0, stopped: 0, withPoints: 0, nothing: 0 };
+    for (const key of ["badminton", "tabletennis", "volleyball", "tennis"]) {
+      for (const m of goldenMoments(key)) {
+        const inPlay = !m.decided;
+        const fixture = F({ id: "f1", status: inPlay ? "in_play" : "decided", summary: m.summary as unknown as PublicFixture["summary"] });
+        const got = hubHeader(fixture, SIDES(), key, "T").subLines;
+        expect(got, `${key} stream ${m.stream} @${m.events}`).toEqual(courtSubLinesOracle(m, inPlay));
+        if (got[0] === null) seen.nothing++;
+        else {
+          seen[inPlay ? "inPlay" : "stopped"]++;
+          if (key === "tennis" && /^\(\d+\) \S+$/.test(got[0])) seen.withPoints++;
+        }
+      }
+    }
+    expect(seen.inPlay, "moments in play with a set open").toBeGreaterThan(600);
+    expect(seen.withPoints, "tennis moments reading `(games) points`").toBeGreaterThan(400);
+    expect(seen.stopped, "a tennis match stopped mid-set").toBeGreaterThan(0);
+    expect(seen.nothing, "moments with no set in progress").toBeGreaterThan(20);
+  });
+
+  it("a double walkover credits nobody: no subLines either, even from a summary that holds an open set", () => {
+    const m = goldenMoments("badminton").find((x) => !x.decided && courtSubLinesOracle(x, true)[0] !== null)!;
+    const fixture = F({
+      id: "f1",
+      status: "decided",
+      summary: m.summary as unknown as PublicFixture["summary"],
+      outcome: { kind: "double_walkover" } as unknown as PublicFixture["outcome"],
+    });
+    expect(hubHeader(fixture, SIDES(), "badminton", "T").subLines).toEqual([null, null]);
+    // The same summary on an ordinary fixture is read, so the line above is the walkover and not an unreadable summary.
+    expect(hubHeader({ ...fixture, outcome: null, status: "in_play" }, SIDES(), "badminton", "T").subLines).not.toEqual([null, null]);
   });
 
   it("cricket in play: battingIndex is the side of the innings still open", () => {

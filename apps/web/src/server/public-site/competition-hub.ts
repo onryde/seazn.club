@@ -34,7 +34,8 @@ import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t, type TKey } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
-import { disambiguatedShorts, matchPhase, matchStrength, setBreakdown } from "@/lib/public-site";
+import { disambiguatedShorts, matchPhase, matchStrength } from "@/lib/public-site";
+import { courtSubLines, scoreLevels } from "@/lib/score/levels";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import { renderProse } from "@/lib/prose";
@@ -349,31 +350,21 @@ export function hubByeSides(
 // ------------------------------------------------------------------ header
 
 /**
- * The open set's points, as the header's `subLines`.
+ * The figures beside the score, as the header's `subLines`: the open set's points, and for tennis the set's games and the
+ * game's points while the match is in play.
  *
- * `match-centre.ts`'s `liveSubLines` does exactly this from the `SetsView` the
- * timeline builder derives; that builder needs the ledger, this does not — the
- * same per-set numbers are already in `summary.detail.sets`, read through the
- * SHARED `setBreakdown` (`lib/public-site.ts`) that `live-score.tsx` uses. The
- * open set is the FIRST entry with `closed: false`, the engine's own record of
- * which column is in progress — never "the last one", which is a sport rule
- * this function has no business assuming (the exact note W1's own comment
- * carries after a re-review caught it doing that).
+ * `match-centre.ts`'s `liveSubLines` does exactly this for the match page; both read the SHARED structured score reader
+ * (`@/lib/score/levels`, task B3) that Match Day's panel uses, from the summary alone (this builder never reads the ledger).
+ * The open set is the entry the engine marks `closed: false`, never "the last one".
  *
- * `[null, null]` for cricket (no `sets` array), for the period sports (a
- * period breakdown has no single "current set"), and for any match whose sets
- * are all closed — which is every decided match, so no gate on liveness is
- * needed or wanted.
+ * `[null, null]` for cricket (no `sets` array), for the period sports (a period breakdown has no single "current set"), and for
+ * any match with no set in progress, which is every decided match that was not stopped mid-set.
  */
 function openSetSubLines(
   summary: PublicFixture["summary"],
-  sportKey: string,
+  inPlay: boolean,
 ): [string | null, string | null] {
-  const breakdown = setBreakdown(summary, sportKey);
-  if (breakdown === null) return [null, null];
-  const open = breakdown.sets.find((s) => !s.closed);
-  if (open === undefined) return [null, null];
-  return [`(${open.home})`, `(${open.away})`];
+  return courtSubLines(scoreLevels(summary), inPlay);
 }
 
 /**
@@ -448,7 +439,8 @@ export function hubHeader(
     status,
     sides,
     scoreLines: [lineOf(sides[0].entrantId), lineOf(sides[1].entrantId)],
-    subLines: openSetSubLines(fixture.summary, sportKey),
+    // Credits nobody for a double walkover, as `scoreLines` above.
+    subLines: openSetSubLines(creditsNobody ? null : fixture.summary, status === "in_play"),
     battingIndex: live ? cricketBattingIndex(fixture.summary, sides) : null,
     statusLine:
       status === "other"

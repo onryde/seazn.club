@@ -5,8 +5,8 @@
 // sets, tennis's games are `detail.games` and its live line is `detail.game`.
 import { describe, expect, it } from "vitest";
 import { stripLiveSetPoints } from "@/lib/public-site";
-import { scoreLevels } from "@/lib/score/levels";
-import { CORPORA, SPORTS, goldenMoments, tennisMatchTiebreak, type GoldenMoment } from "./_golden";
+import { courtSubLines, scoreLevels } from "@/lib/score/levels";
+import { CORPORA, SPORTS, courtSubLinesOracle, goldenMoments, liveSidesOf, tennisMatchTiebreak, type GoldenMoment } from "./_golden";
 
 type SetEntry = { home: number; away: number; closed: boolean; tb?: unknown; mtb?: unknown };
 const detailOf = (m: GoldenMoment): Record<string, unknown> => (m.summary.detail ?? {}) as Record<string, unknown>;
@@ -96,7 +96,7 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
         const where = `${key} stream ${m.stream} @${m.events}`;
         expect(levels.mid, where).toBeNull();
         if (sets.some((s) => !s.closed)) {
-          expect(levels.live, where).toEqual({ label: `${liveHome}–${liveAway}` });
+          expect(levels.live, where).toEqual({ label: `${liveHome}–${liveAway}`, sides: liveSidesOf(m), kind: "set" });
           // The open set has points on the board, else the equality above would hold of a 0–0 for any reading.
           expect(liveHome + liveAway, where).toBeGreaterThan(0);
           counts[m.decided ? "stopped" : "live"]++;
@@ -156,7 +156,11 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
       } else {
         expect(levels.mid, where).toEqual([games.home, games.away]);
       }
-      expect(levels.live, where).toEqual({ label: game });
+      expect(levels.live, where).toEqual({
+        label: game,
+        sides: liveSidesOf(m),
+        kind: d.gameKind === "standard" ? "game" : d.gameKind,
+      });
       checked++;
       // A moment where the three levels differ from each other, or a swap of two of them could not be seen.
       if (levels.mid !== null && levels.live!.label !== `${levels.mid[0]}–${levels.mid[1]}` && levels.won[0] !== levels.mid[0]) distinct++;
@@ -176,6 +180,9 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
       expect(levels.mid, where).toEqual([games.home, games.away]);
       expect(levels.live!.label, where).toMatch(/^TB \d+–\d+$/);
       expect(levels.live!.label, where).toBe(detailOf(m).game);
+      // Each side's own tie-break points, from the engine's folded state, not split off the label.
+      expect(levels.live!.sides, where).toEqual(liveSidesOf(m));
+      expect(levels.live!.kind, where).toBe("tiebreak");
     }
   });
 
@@ -209,7 +216,9 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
     const levels = scoreLevels(played.summary)!;
     expect(levels.won, "a set each").toEqual([1, 1]);
     expect(levels.mid).toBeNull();
-    expect(levels.live).toEqual({ label: "MTB 3–2" });
+    // Home won three of the five points, away two — the script's own count.
+    expect(levels.live).toEqual({ label: "MTB 3–2", sides: ["3", "2"], kind: "matchTiebreak" });
+    expect(levels.live!.sides).toEqual(liveSidesOf(played));
     // The closed sets' scores (7–6 with its tie-break, 1–6) are not the live level, nor part of it.
     expect(levels.live!.label).not.toContain("7");
     expect(levels.live!.label).not.toContain("6");
@@ -223,7 +232,7 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
       if (!m.decided || sets === null) continue;
       const levels = scoreLevels(m.summary)!;
       if (sets.some((s) => !s.closed)) {
-        expect(levels.live, `stopped: stream ${m.stream} @${m.events}`).toEqual({ label: detailOf(m).game });
+        expect(levels.live, `stopped: stream ${m.stream} @${m.events}`).toMatchObject({ label: detailOf(m).game, sides: liveSidesOf(m) });
         stopped++;
       } else {
         expect(levels.live, `finished: stream ${m.stream} @${m.events}`).toBeNull();
@@ -252,7 +261,7 @@ describe("scoreLevels — shapes it refuses (a refusal reads the caller's own he
   });
 
   it("the well-formed set-based shape is read (so each refusal below is the one change that matters)", () => {
-    expect(scoreLevels(summary())).toEqual({ won: [1, 0], mid: null, live: { label: "14–11" } });
+    expect(scoreLevels(summary())).toEqual({ won: [1, 0], mid: null, live: { label: "14–11", sides: ["14", "11"], kind: "set" } });
   });
 
   it.each([
@@ -269,6 +278,12 @@ describe("scoreLevels — shapes it refuses (a refusal reads the caller's own he
     ["a side line that is a half-point", summary({ perSide: [{ entrantId: "H", line: "½" }, { entrantId: "A", line: "½" }] })],
     ["a nested kernel with a game kind it does not know", summary({ detail: { sets, game: "40–30", gameKind: "superTiebreak" } })],
     ["a nested kernel with no game kind", summary({ detail: { sets, game: "40–30" } })],
+    // A game line the engine's own formats do not produce cannot be split per side: refused, not guessed at.
+    ["a standard game whose line is a tie-break's", summary({ detail: { sets, game: "TB 3–2", gameKind: "standard" } })],
+    ["a tie-break whose line is a standard game's", summary({ detail: { sets, game: "40–30", gameKind: "tiebreak" } })],
+    ["a standard game with a call that is not 0, 15, 30, 40 or Ad", summary({ detail: { sets, game: "40–45", gameKind: "standard" } })],
+    ["a standard game line that is prose", summary({ detail: { sets, game: "forty-thirty", gameKind: "standard" } })],
+    ["a tie-break line with no points", summary({ detail: { sets, game: "TB –", gameKind: "tiebreak" } })],
   ])("%s -> null", (_name, input) => {
     expect(scoreLevels(input)).toBeNull();
   });
@@ -279,7 +294,29 @@ describe("scoreLevels — shapes it refuses (a refusal reads the caller's own he
       perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
       detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 3, away: 2, closed: false }], games: { home: 3, away: 2 }, game: "40–30", gameKind: "standard" },
     });
-    expect(scoreLevels(nested)).toEqual({ won: [0, 1], mid: [3, 2], live: { label: "40–30" } });
+    expect(scoreLevels(nested)).toEqual({ won: [0, 1], mid: [3, 2], live: { label: "40–30", sides: ["40", "30"], kind: "game" } });
+  });
+
+  it.each([
+    ["advantage home", "Ad–40", ["Ad", "40"]],
+    ["advantage away", "40–Ad", ["40", "Ad"]],
+    ["deuce", "40–40", ["40", "40"]],
+    ["love-all", "0–0", ["0", "0"]],
+    ["fifteen-love", "15–0", ["15", "0"]],
+  ])("a standard game at %s splits per side by the engine's own calls (%s)", (_name, game, sides) => {
+    const nested = summary({
+      perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
+      detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 3, away: 2, closed: false }], games: { home: 3, away: 2 }, game, gameKind: "standard" },
+    });
+    expect(scoreLevels(nested)!.live).toEqual({ label: game, sides, kind: "game" });
+  });
+
+  it("a set tie-break splits per side in plain points, double digits included", () => {
+    const nested = summary({
+      perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
+      detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 6, away: 6, closed: false }], games: { home: 6, away: 6 }, game: "TB 10–8", gameKind: "tiebreak" },
+    });
+    expect(scoreLevels(nested)!.live).toEqual({ label: "TB 10–8", sides: ["10", "8"], kind: "tiebreak" });
   });
 });
 
@@ -287,3 +324,56 @@ describe("scoreLevels — shapes it refuses (a refusal reads the caller's own he
 function goldenTiebreaks(): GoldenMoment[] {
   return MOMENTS.get("tennis")!.filter((m) => detailOf(m).gameKind === "tiebreak" && setsOf(m)?.some((s) => !s.closed));
 }
+
+describe("courtSubLines — the small per-side figures beside a court card's big score", () => {
+  it("every moment of every registered sport: the format the engine's own fields give — a set sport's open set, tennis's games then points, a stopped match's games only", () => {
+    const seen = { setSport: 0, tennisInPlay: 0, tennisStopped: 0, mtb: 0, none: 0, notASetSport: 0 };
+    for (const key of SPORTS) {
+      for (const m of MOMENTS.get(key)!) {
+        const where = `${key} stream ${m.stream} @${m.events}`;
+        const levels = scoreLevels(m.summary);
+        // A match in play is `in_play`; a decided one has stopped (a stopped match can still hold its open entry).
+        const inPlay = !m.decided;
+        const got = courtSubLines(levels, inPlay);
+        expect(got, where).toEqual(setsOf(m) === null ? [null, null] : courtSubLinesOracle(m, inPlay));
+        if (setsOf(m) === null) seen.notASetSport++;
+        else if (got[0] === null) seen.none++;
+        else if (key !== "tennis") seen.setSport++;
+        else if (detailOf(m).gameKind === "matchTiebreak") seen.mtb++;
+        else seen[inPlay ? "tennisInPlay" : "tennisStopped"]++;
+      }
+    }
+    expect(seen.setSport, "badminton / table tennis / volleyball moments with a set open").toBeGreaterThan(100);
+    expect(seen.tennisInPlay, "tennis moments in play with a set open").toBeGreaterThan(500);
+    expect(seen.none, "set sport moments with nothing in progress").toBeGreaterThan(20);
+    expect(seen.notASetSport, "cricket, football and the rest").toBeGreaterThan(500);
+    expect(seen.tennisStopped, "a tennis match stopped mid-set: games only, no point is being played").toBeGreaterThan(0);
+  });
+
+  it("the same tennis moment reads with its points in play and without them once stopped — the figure appears only while a point can be played", () => {
+    let checked = 0;
+    for (const m of MOMENTS.get("tennis")!) {
+      const levels = scoreLevels(m.summary);
+      if (levels === null || levels.live === null || levels.live.kind === "matchTiebreak") continue;
+      const withPoints = courtSubLines(levels, true);
+      const without = courtSubLines(levels, false);
+      expect(withPoints[0], `stream ${m.stream} @${m.events}`).toBe(`${without[0]} ${levels.live.sides[0]}`);
+      expect(withPoints[1]).toBe(`${without[1]} ${levels.live.sides[1]}`);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(500);
+  });
+
+  it("a match tie-break: its points in parentheses, in play or not (they fill the open entry)", () => {
+    const base = tennisMatchTiebreak(["H", "H", "A", "H", "A"]);
+    expect(courtSubLines(scoreLevels(base.summary), true)).toEqual(["(3)", "(2)"]);
+    expect(courtSubLines(scoreLevels(base.summary), false)).toEqual(["(3)", "(2)"]);
+    expect(courtSubLines(scoreLevels(base.summary), true)).toEqual(courtSubLinesOracle(base, true));
+  });
+
+  it("nothing to read: no levels (cricket, an unreadable shape) and no live level (between sets, finished) are both [null, null]", () => {
+    expect(courtSubLines(null, true)).toEqual([null, null]);
+    expect(courtSubLines({ won: [1, 0], mid: null, live: null }, true)).toEqual([null, null]);
+    expect(courtSubLines({ won: [1, 0], mid: [3, 2], live: null }, true)).toEqual([null, null]);
+  });
+});

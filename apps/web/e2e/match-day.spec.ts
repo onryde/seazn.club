@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
+  activeOrg,
   addEntrantsViaApi,
   apiJson,
   competitionPath,
@@ -552,7 +553,10 @@ interface LevelsSeed {
   badmintonFixture: string;
 }
 
-async function seedLevels(request: APIRequestContext, label: string): Promise<LevelsSeed> {
+/** Realistic long entrant names — a doubles pair named in full runs past 40 characters, and 320 is where it shows. */
+const LONG_NAMES = ["Alexandra Montgomery-Fitzwilliam & Partner", "Bartholomew Featherstonehaugh-Smythe & Partner"] as const;
+
+async function seedLevels(request: APIRequestContext, label: string, opts: { longNames?: boolean } = {}): Promise<LevelsSeed> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `Match Day levels ${label} ${TAG}`,
@@ -573,7 +577,8 @@ async function seedLevels(request: APIRequestContext, label: string): Promise<Le
     });
     if (div.status >= 300 || !div.data) throw new Error(`division ${sport} → ${div.status} ${JSON.stringify(div.error)}`);
     const divisionId = div.data.id;
-    const ents = await addEntrantsViaApi(request, divisionId, [`Ana ${nonce}`, `Ben ${nonce}`]);
+    const names = opts.longNames === true ? [...LONG_NAMES] : [`Ana ${nonce}`, `Ben ${nonce}`];
+    const ents = await addEntrantsViaApi(request, divisionId, names);
     if (ents.status >= 300 || ents.ids.length !== 2) throw new Error(`entrants → ${ents.status}`);
     const { fixtureIds } = await createStageAndGenerate(request, divisionId);
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
@@ -639,6 +644,17 @@ async function storedSummary(fixtureId: string): Promise<{ perSide: { line: stri
 
 const levelsOf = (page: Page) => page.getByTestId("md-score-large");
 
+/** The public match page of a fixture of the signed-in org: `/shared/{org}/{competition}/{division}/fixtures/{id}`. */
+async function publicFixturePath(request: APIRequestContext, page: Page, fixtureId: string): Promise<string> {
+  const fx = await apiJson<{ division_id: string }>(request, `/api/v1/fixtures/${fixtureId}`);
+  const div = await apiJson<{ slug: string; competition_id: string }>(request, `/api/v1/divisions/${fx.data!.division_id}`);
+  const comp = await apiJson<{ slug: string }>(request, `/api/v1/competitions/${div.data!.competition_id}`);
+  return `/shared/${(await activeOrg(page)).slug}/${comp.data!.slug}/${div.data!.slug}/fixtures/${fixtureId}`;
+}
+
+/** What the public court card sets beside a side's big score (`mc-score-{i}`): the span that follows it. */
+const cardSub = (page: Page, i: 0 | 1) => page.locator(`[data-testid="mc-score-${i}"] + span`);
+
 test.describe("Match Day — a set sport's score is its levels (B3)", () => {
   test("desktop: tennis reads sets · games · points, badminton sets · points — the rows and the panel; no finished set's score; no sideways scroll", async ({
     page,
@@ -678,11 +694,32 @@ test.describe("Match Day — a set sport's score is its levels (B3)", () => {
     await expect(big.locator("[data-md-score-mid]")).toHaveCount(0);
     await expect(big).not.toContainText("21–15");
     await expectNoHorizontalScroll(page);
+
+    // The public match page's court card — what a spectator reads in large type — carries the same levels per side: tennis the
+    // sets won big, then the set's games in parentheses and the game's points; badminton the games won and the open game's points.
+    // The figures are the script's own (home won 3 games to 2 and leads the game 40–30; the engine's summary was read above).
+    await page.goto(await publicFixturePath(request, page, seed.tennisFixture), { waitUntil: "load" });
+    await expect(page.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("mc-score-0")).toHaveText("1");
+    await expect(page.getByTestId("mc-score-1")).toHaveText("0");
+    await expect(cardSub(page, 0)).toHaveText("(3) 40");
+    await expect(cardSub(page, 1)).toHaveText("(2) 30");
+    await expectNoHorizontalScroll(page);
+    await page.goto(await publicFixturePath(request, page, seed.badmintonFixture), { waitUntil: "load" });
+    await expect(page.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("mc-score-0")).toHaveText("1");
+    await expect(cardSub(page, 0)).toHaveText("(12)");
+    await expect(cardSub(page, 1)).toHaveText("(10)");
+    await expectNoHorizontalScroll(page);
   });
 
-  test("phone (320): the same levels fit the panel's width — nothing clipped, no sideways scroll", async ({ page, request }) => {
+  test("phone (320): the same levels fit the panel's width with 40-character entrant names — nothing clipped, no sideways scroll, on the list and on both panels", async ({
+    page,
+    request,
+  }) => {
     await page.setViewportSize({ width: 320, height: 568 });
-    const seed = await seedLevels(request, "Phone");
+    const seed = await seedLevels(request, "Phone", { longNames: true });
+    for (const name of LONG_NAMES) expect(name.length, `"${name}" is a realistic long name`).toBeGreaterThanOrEqual(40);
     await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
     await expect(row(page, seed.tennisCourt).locator("[data-md-row-score]")).toHaveText("1–0 · 3–2 · 40–30");
     await expectNoHorizontalScroll(page);
@@ -690,13 +727,34 @@ test.describe("Match Day — a set sport's score is its levels (B3)", () => {
     await row(page, seed.tennisCourt).click();
     const big = levelsOf(page);
     await expect(big.locator("[data-md-score-live]")).toHaveText("40–30");
-    // Every figure sits inside the 320 column, wrapped if it must be rather than cut.
+    // The long names are really on the panel (the premise), and every figure sits inside the 320 column, wrapped if it must be.
+    await expect(page.getByTestId("md-focus")).toContainText(LONG_NAMES[0]);
     const boxes = await big.locator("span").evaluateAll((els) => els.map((e) => ({ left: e.getBoundingClientRect().left, right: e.getBoundingClientRect().right, text: e.textContent })));
     expect(boxes.length, "won, mid and live").toBe(3);
     for (const b of boxes) {
       expect(b.left, `${b.text} starts on screen`).toBeGreaterThanOrEqual(0);
       expect(b.right, `${b.text} ends on screen`).toBeLessThanOrEqual(320);
     }
+    await expectNoHorizontalScroll(page);
+    // The whole scoreboard sits inside the viewport: no box of the panel reaches past it.
+    const past = await page.getByTestId("md-scoreboard").evaluate((el) =>
+      [...el.querySelectorAll<HTMLElement>("*")].filter((e) => e.getBoundingClientRect().right > document.documentElement.clientWidth + 1 && getComputedStyle(e).display !== "none" && !e.closest("[role=region]")).map((e) => e.tagName.toLowerCase() + "." + String(e.className).slice(0, 40)),
+    );
+    expect(past, "a box of the scoreboard reaches past the 320 viewport").toEqual([]);
+
+    // Badminton too (the other kind of levels, the same long names).
+    await page.getByTestId("md-back").click();
+    await row(page, seed.badmintonCourt).click();
+    await expect(levelsOf(page).locator("[data-md-score-live]")).toHaveText("12–10");
+    await expectNoHorizontalScroll(page);
+
+    // The public court card at 320 with the same long names: the figures stay on screen and the page does not scroll sideways.
+    await page.goto(await publicFixturePath(request, page, seed.tennisFixture), { waitUntil: "load" });
+    await expect(page.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+    await expect(cardSub(page, 0)).toHaveText("(3) 40");
+    const sub = await cardSub(page, 0).boundingBox();
+    expect(sub, "the small figure is painted").not.toBeNull();
+    expect(sub!.x + sub!.width, "the small figure ends inside the 320 viewport").toBeLessThanOrEqual(320);
     await expectNoHorizontalScroll(page);
   });
 });

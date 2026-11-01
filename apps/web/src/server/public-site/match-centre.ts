@@ -96,6 +96,7 @@ import {
 // The SAME readers `live-score.tsx` uses for the pair the match centre had
 // dropped — one authority per fact, never a second parse of the same jsonb.
 import { matchPhase, matchStrength } from "@/lib/public-site";
+import { courtSubLines, scoreLevels } from "@/lib/score/levels";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { forfeitLedgerOf, forfeitSentence, forfeitTag } from "@/lib/forfeit-tag";
 import type { PublicFixture } from "./data";
@@ -865,33 +866,23 @@ function rateLineOf(live: CricketLive): string | null {
 
 /**
  * R11 fix round, C10 — the tennis court card carried the sets score
- * ("0 / 0") but dropped the LIVE games score of the set in progress; that
- * "0-0" showed up only in the Summary tab's per-set breakdown table below.
+ * ("0 / 0") but dropped the LIVE games score of the set in progress.
  * `subLines` is the schema's OWN pre-existing "beside the score" slot
- * (`match-centre-schema.ts`: `subLines: … // "(8.0)" | null`), never wired
- * up by `buildHeader` before this — populated here from the SAME
- * `setsView` the Summary tab's `SetScoreboard` already reads (`buildSets`,
- * `./timeline.ts`), never recomputed. Scoped to `kind: "sets"` (tennis,
- * volleyball, badminton, …) — a `"periods"` breakdown (football, hockey)
- * has no single "current set" to carry, and cricket's `detail` has no
- * `sets` array at all, so `setsView` is `null` for it and this returns
- * `[null, null]` unconditionally, same as before this fix. The open set is
- * the FIRST `closedMask` entry that is `false` — the engine's own record of
- * which column is in progress, never inferred from "the last one" (the same
- * reasoning `sets-tab.tsx`'s own note 3 already states for the Sets tab, and
- * the same scan its per-column loop runs). Re-review of this round caught the
- * first draft asserting that reasoning in the comment while reading
- * `closedMask[length - 1]` in the code: today the two coincide, because a set
- * must close before the next one opens, but that is a sport rule this
- * function had no business assuming on the engine's behalf.
+ * (`match-centre-schema.ts`: `subLines: … // "(8.0)" | null`).
+ *
+ * Task B3 (Match Day spec §6.2): it now reads the SAME structured score reader
+ * Match Day's panel does (`@/lib/score/levels`) rather than the Summary tab's
+ * `setsView`, so the two surfaces cannot disagree about which number is which.
+ * A set sport keeps its open set's points ("(12)"); tennis adds the game's
+ * points after its games while the match is in play ("(3) 40"); every other
+ * sport answers `[null, null]` as before (cricket's `detail` has no `sets`,
+ * and a period breakdown has no single "current set" to carry).
  */
-function liveSubLines(setsView: SetsViewT | null): [string | null, string | null] {
-  if (setsView === null || setsView.kind !== "sets") return [null, null];
-  const open = setsView.closedMask.findIndex((closed) => closed === false);
-  if (open < 0) return [null, null];
-  const home = setsView.rows[0][open];
-  const away = setsView.rows[1][open];
-  return [home === null || home === undefined ? null : `(${home})`, away === null || away === undefined ? null : `(${away})`];
+function liveSubLines(
+  summary: PublicFixture["summary"],
+  inPlay: boolean,
+): [string | null, string | null] {
+  return courtSubLines(scoreLevels(summary), inPlay);
 }
 
 /**
@@ -1166,7 +1157,8 @@ function buildHeader(
     status,
     sides,
     scoreLines,
-    subLines: liveSubLines(setsView),
+    // A double walkover credits nobody: its summary carries no score, as `scoreLines` above.
+    subLines: liveSubLines(tag?.kind === "double_walkover" ? null : fixture.summary, status === "in_play"),
     battingIndex,
     statusLine,
     rateLine,

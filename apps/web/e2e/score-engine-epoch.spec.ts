@@ -86,8 +86,13 @@ test("(a) engine_epoch equal to the server's fold epoch is written (201) and the
   await page.goto(r.publicPath);
   await dismissCookieBanner(page);
   await expect(page.getByTestId("mc-court-card")).toBeVisible({ timeout: 20_000 });
+  // Task B3: that bracketed figure is the structured score reader's open set (`lib/score/levels.ts`, `courtSubLines`) — a set
+  // sport's "(points)" is unchanged by it; tennis's "(games) points" is pinned in match-day.spec.ts, where a tennis match is played.
   await expect(page.locator('[data-testid="mc-score-0"] + span')).toHaveText("(1)", { timeout: 20_000 });
   await expect(page.locator('[data-testid="mc-score-1"] + span')).toHaveText("(0)");
+  // And the big numbers are the games WON, not the rally: nothing has closed a game, so 0 and 0.
+  await expect(page.getByTestId("mc-score-0")).toHaveText("0");
+  await expect(page.getByTestId("mc-score-1")).toHaveText("0");
 });
 
 test("(b) engine_epoch 0 is a 400 VALIDATION and the ledger is unchanged", async ({ page }) => {

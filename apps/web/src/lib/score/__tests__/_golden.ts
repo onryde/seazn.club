@@ -51,6 +51,8 @@ registerBuiltins({
 /** One prefix of one recorded stream, folded: the engine's summary there and whether the match is decided at that point. */
 export interface GoldenMoment {
   summary: MatchDaySummary;
+  /** The engine's folded STATE at that point (opaque here): the oracles below read the facts a summary only words. */
+  state: unknown;
   decided: boolean;
   /** Index of the stream in the corpus and the prefix length — a failing sweep names the moment it failed at. */
   stream: number;
@@ -95,7 +97,7 @@ export function goldenMoments(key: string): GoldenMoment[] {
       }
       const summary = summaryOf(mod, folded) as MatchDaySummary;
       if (!summary.headline) continue;
-      out.push({ summary, decided: outcomeOf(mod, folded) !== null, stream: s, events: k });
+      out.push({ summary, state: folded.state, decided: outcomeOf(mod, folded) !== null, stream: s, events: k });
     }
   });
   return out;
@@ -140,14 +142,14 @@ export function foldGolden(
   key: string,
   config: string,
   events: GoldenStream["events"],
-): { summary: MatchDaySummary; decided: boolean } {
+): { summary: MatchDaySummary; state: unknown; decided: boolean } {
   const corpus = CORPORA.find((c) => c.key === key);
   if (corpus === undefined) throw new Error(`no golden corpus for ${key}`);
   const mod = registry.latest(key) as AnySportModule;
   const cfg = mod.configSchema.parse(corpus.configs[config]);
   const lineups = defaultLineupPair(resolvePositions(mod, cfg));
   const folded = foldMatchWithStoppage(mod, cfg, lineups, envelopes({ config, events }));
-  return { summary: summaryOf(mod, folded) as MatchDaySummary, decided: outcomeOf(mod, folded) !== null };
+  return { summary: summaryOf(mod, folded) as MatchDaySummary, state: folded.state, decided: outcomeOf(mod, folded) !== null };
 }
 
 /**
@@ -155,7 +157,7 @@ export function foldGolden(
  * point of one — they stop as it begins — so this takes the corpus's own prefix that ends there (the engine says
  * `gameKind: "matchTiebreak"`) and extends it with the engine's own `tennis.point` events; the summary is the engine's fold.
  */
-export function tennisMatchTiebreak(points: readonly ("H" | "A")[]): { summary: MatchDaySummary; decided: boolean } {
+export function tennisMatchTiebreak(points: readonly ("H" | "A")[]): { summary: MatchDaySummary; state: unknown; decided: boolean } {
   const corpus = CORPORA.find((c) => c.key === "tennis")!;
   const at = goldenMoments("tennis").find((m) => (m.summary.detail as { gameKind?: unknown }).gameKind === "matchTiebreak");
   if (at === undefined) throw new Error("no recorded tennis moment at the start of a match tie-break");
@@ -195,4 +197,44 @@ export function midOf(s: MatchDaySummary): string | null {
   if (typeof d.game !== "string" || !hasOpenSet(s) || d.gameKind === "matchTiebreak") return null;
   const games = d.games as { home: number; away: number };
   return `${games.home}–${games.away}`;
+}
+
+/** ITF Rule 5(a): a standard game's points won, 0 to 3, are called 0, 15, 30, 40 — the rulebook's, typed here on purpose. */
+const POINT_CALLS = ["0", "15", "30", "40"] as const;
+
+/**
+ * The live level's score PER SIDE, home then away — read off the engine's folded STATE (`state.points`, `state.games` is not
+ * needed), never off the `detail.game` string the reader under test splits. Tennis: a standard game in the rulebook's calls
+ * (deuce is 40–40, advantage "Ad" against the other's "40"), a tie-break (set or match) in plain points. A set kernel: its match
+ * totals less the closed sets. Null while no set is open.
+ */
+export function liveSidesOf(m: { summary: MatchDaySummary; state: unknown }): [string, string] | null {
+  if (!hasOpenSet(m.summary)) return null;
+  const d = detail(m.summary);
+  if (typeof d.game === "string") {
+    const p = (m.state as { points: { kind: string; home: number; away: number; advantage?: "home" | "away" } }).points;
+    if (p.kind !== "standard") return [String(p.home), String(p.away)];
+    if (p.home === 3 && p.away === 3) return [p.advantage === "home" ? "Ad" : "40", p.advantage === "away" ? "Ad" : "40"];
+    return [POINT_CALLS[p.home]!, POINT_CALLS[p.away]!];
+  }
+  const points = d.points as { home: number; away: number };
+  const closed = setTable(m.summary).filter((x) => x.closed);
+  return [String(points.home - closed.reduce((n, x) => n + x.home, 0)), String(points.away - closed.reduce((n, x) => n + x.away, 0))];
+}
+
+/**
+ * What a court card's small per-side figures must read at `m` — the documented format, from the engine's own fields: a set
+ * sport's open set "(12)"; tennis in play "(games) points" ("(3) 40"); tennis not in play (a match stopped mid-set) just
+ * "(games)"; a match tie-break "(points)". Games are `detail.games`, points are `liveSidesOf` (the folded state), so neither is
+ * the open entry or the label the reader under test reads. `[null, null]` while no set is open.
+ */
+export function courtSubLinesOracle(m: { summary: MatchDaySummary; state: unknown }, inPlay: boolean): [string | null, string | null] {
+  const sides = liveSidesOf(m);
+  if (sides === null) return [null, null];
+  const d = detail(m.summary);
+  if (typeof d.game !== "string" || d.gameKind === "matchTiebreak") return [`(${sides[0]})`, `(${sides[1]})`];
+  const games = d.games as { home: number; away: number };
+  return inPlay
+    ? [`(${games.home}) ${sides[0]}`, `(${games.away}) ${sides[1]}`]
+    : [`(${games.home})`, `(${games.away})`];
 }

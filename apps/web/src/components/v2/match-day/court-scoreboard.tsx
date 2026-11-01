@@ -97,7 +97,12 @@ export function CourtScoreboard({
       // Phones: the headline steps down one size (LiveScoreBody sets it at text-5xl for a full-width match page; a 320 column
       // broke "1 – 0 (14-9)" at its hyphen), and the stream link sits above the panel, where a 44 px target cannot cover the
       // score. From md it is the panel's corner.
-      className="relative flex flex-col max-md:[&_.text-5xl]:text-4xl"
+      //
+      // `min-w-0`: this section is an item of the focus panel's grid, whose automatic minimum is its content's, and the set
+      // table's (names capped at 10rem, two set columns) is wider than a 320 column's 248px — the whole page grew 26px sideways.
+      // With the floor off the table sits in its own scroll region (as on the public page), and on a phone its name column is
+      // capped at 7rem, which is what lets a 40-character pair name and the live set's column both fit in 248px.
+      className="relative flex min-w-0 flex-col max-md:[&_.text-5xl]:text-4xl max-md:[&_th[scope=row]]:max-w-28"
     >
       <div className="mb-2 flex justify-end md:absolute md:right-5 md:top-5 md:z-10 md:mb-0 md:max-w-[60%]">{stream}</div>
       {line === null || summary === null ? (

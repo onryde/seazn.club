@@ -34,6 +34,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import enPublic from "@/dictionaries/en/public.json";
 import { BRACKET_DECIDER_METHODS } from "@/lib/scoring-vocab";
+import { courtSubLinesOracle, goldenMoments } from "@/lib/score/__tests__/_golden";
 import {
   AWAY,
   HOME,
@@ -1145,6 +1146,48 @@ describe("buildMatchCentre — cricket", () => {
         }),
       );
       expect(doc.header.subLines).toEqual(["(6)", "(4)"]);
+    });
+
+    // Task B3: the court card's figures are the structured score reader's (`@/lib/score/levels`), the one Match Day's panel reads,
+    // so these run it over the ENGINE's own folds of every recorded stream of every set sport rather than a hand-typed summary
+    // (the hand-typed ones above have no `game`/`gameKind`, which no real tennis summary lacks).
+    it("over the engine's recorded streams: a set sport's open set, tennis's games then points while in play, games only once stopped", () => {
+      const seen = { withPoints: 0, setPoints: 0, stopped: 0, nothing: 0 };
+      for (const key of ["badminton", "tabletennis", "volleyball", "tennis"]) {
+        const cfg = (engineRegistry.latest(key) as AnySportModule).configSchema.parse({});
+        for (const m of goldenMoments(key)) {
+          const inPlay = !m.decided;
+          const doc = buildMatchCentre(
+            input({
+              sportKey: key,
+              cfg,
+              events: [],
+              fixture: F({ status: inPlay ? "in_play" : "decided", summary: m.summary as unknown as PublicFixture["summary"] }),
+            }),
+          );
+          const got = doc.header.subLines;
+          expect(got, `${key} stream ${m.stream} @${m.events}`).toEqual(courtSubLinesOracle(m, inPlay));
+          if (got[0] === null) seen.nothing++;
+          else if (!inPlay) seen.stopped++;
+          else if (/^\(\d+\) \S+$/.test(got[0])) seen.withPoints++;
+          else seen.setPoints++;
+        }
+      }
+      expect(seen.withPoints, "tennis moments reading `(games) points`").toBeGreaterThan(400);
+      expect(seen.setPoints, "set-sport moments reading `(points)`").toBeGreaterThan(100);
+      expect(seen.stopped, "a tennis match stopped mid-set").toBeGreaterThan(0);
+      expect(seen.nothing, "moments with no set in progress").toBeGreaterThan(20);
+    });
+
+    it("a double walkover credits nobody: no subLines either, even from a summary that holds an open set", () => {
+      const m = goldenMoments("badminton").find((x) => !x.decided && courtSubLinesOracle(x, true)[0] !== null)!;
+      const cfg = (engineRegistry.latest("badminton") as AnySportModule).configSchema.parse({});
+      const build = (over: Partial<PublicFixture>) =>
+        buildMatchCentre(input({ sportKey: "badminton", cfg, events: [], fixture: F({ summary: m.summary as unknown as PublicFixture["summary"], ...over }) })).header.subLines;
+      expect(build({ status: "decided", outcome: { kind: "double_walkover" } as unknown as PublicFixture["outcome"] })).toEqual([null, null]);
+      // The same summary on an ordinary in-play fixture is read, so the line above is the walkover and not an unreadable summary.
+      expect(build({ status: "in_play" })).toEqual(courtSubLinesOracle(m, true));
+      expect(courtSubLinesOracle(m, true)[0]).not.toBeNull();
     });
 
     it("cricket (a DIFFERENT `detail` shape entirely — no `sets` array) is UNAFFECTED — subLines stays [null, null]", () => {
