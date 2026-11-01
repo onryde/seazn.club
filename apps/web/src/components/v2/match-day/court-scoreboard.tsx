@@ -9,10 +9,11 @@
 // "Live" on this page means a STREAM is live (the list's red badge, the corner link). The panel's own status line says the
 // match is in play, in the public dictionary's own words for that status (review V1).
 //
-// A SET sport's large type is Match Day's own (review V3, `scoreLine`): games won, and the current game's points beside them,
-// readable across a hall. `LiveScoreBody`'s slab would show the finished games there and strip the live points
-// (`stripLiveSetPoints`, lib/public-site.ts) — right for the public match page, which is left as it is — so for a set sport this
-// draws the slab and asks `LiveScoreBody` for its set table only (`suppressScorebug`). Every other sport keeps its own scorebug.
+// A SET sport's large type is Match Day's own (review V3, `scoreLine`): the sets or games won, and beside them the live level —
+// the current game's points, and for tennis the games of the set in play too — readable across a hall. The levels come from the
+// one structured reader the public match page's large type also uses (`scoreLevels`, lib/score/levels.ts; task B3), never the
+// headline. So for a set sport this draws the slab and asks `LiveScoreBody` for its set table only (`suppressScorebug`). Every
+// other sport keeps its own scorebug.
 //
 // Who serves (S1): a set kernel's summary never says, so the wire carries the engine's serve reader's answer (`serving`); tennis's
 // summary says it itself. Either is written into the summary's `detail.serving` — the field the public scorebug's own marker
@@ -121,8 +122,13 @@ export function CourtScoreboard({
                 data-testid="md-score-large"
                 className="flex flex-wrap items-baseline gap-x-5 gap-y-2 font-display font-bold tabular-nums leading-none"
               >
-                <span className="text-5xl tracking-tight sm:text-6xl">{`${line.won[0]} – ${line.won[1]}`}</span>
-                {line.live !== null && <span className="text-3xl text-court-ink/75 sm:text-4xl">{line.live}</span>}
+                <span className="text-5xl tracking-tight sm:text-6xl">{`${line.levels.won[0]} – ${line.levels.won[1]}`}</span>
+                {line.levels.mid !== null && (
+                  <span data-md-score-mid className="text-3xl text-court-ink/75 sm:text-4xl">{`${line.levels.mid[0]}–${line.levels.mid[1]}`}</span>
+                )}
+                {line.levels.live !== null && (
+                  <span data-md-score-live className="text-3xl text-court-ink/75 sm:text-4xl">{line.levels.live.label}</span>
+                )}
               </p>
               {servingName !== null && (
                 <p data-md-serving className="mt-4 flex min-w-0 items-baseline gap-2 font-display text-lg font-semibold sm:text-xl">

@@ -26,6 +26,7 @@ import {
   setBreakdown,
   stripLiveSetPoints,
 } from "@/lib/public-site";
+import { scoreLevels } from "@/lib/score/levels";
 import { type LiveFixtureData } from "./live-score-data";
 import { NO_LEDGER, creditsNobody, forfeitTag, forfeitWords } from "@/lib/forfeit-tag";
 import {
@@ -127,6 +128,10 @@ export function LiveScoreBody({
   // sentence below says what happened.
   const noScore = creditsNobody(data.outcome);
   const showBreakdown = breakdown !== null && sideIds.length === 2 && !noScore;
+  // Task B3 — a set sport's large type is its LEVELS (`scoreLevels`, the reader Match Day's panel shares): the sets or games won,
+  // and beside them the live points, never a finished set's score. Null for every other sport (and for a set summary it cannot
+  // read), which keeps the engine's headline as it was.
+  const levels = showBreakdown ? scoreLevels(data.summary) : null;
   // Period-kernel surfaces (v6/00 §5): power-play strength while live,
   // goals-by-period once periods exist, the discipline list, tennis serve dot.
   const strength = inPlay ? matchStrength(data.summary) : null;
@@ -271,14 +276,34 @@ export function LiveScoreBody({
               above and this HEADLINE are two different pieces of copy that
               happen to describe the same moment; they keep two different
               keys on purpose now. */}
-          <p className={`font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl${noScore ? " text-court-muted" : ""}`}>
-            {noScore
-              ? t(activeDict, "forfeit.tag.doubleWalkover")
-              : data.summary?.headline
-              ? showBreakdown
-                ? stripLiveSetPoints(data.summary.headline)
-                : data.summary.headline
-              : t(activeDict, "matchCentre.status.notStarted")}
+          <p
+            data-testid="ls-score-large"
+            className={`font-display text-5xl font-bold tabular-nums leading-none tracking-tight sm:text-6xl${noScore ? " text-court-muted" : ""}${
+              levels !== null ? " flex flex-wrap items-baseline gap-x-5 gap-y-2" : ""
+            }`}
+          >
+            {noScore ? (
+              t(activeDict, "forfeit.tag.doubleWalkover")
+            ) : levels !== null ? (
+              <>
+                <span>{`${levels.won[0]} — ${levels.won[1]}`}</span>
+                {/* The engine keeps a stopped match's open set (a forfeit, a retirement): only a match in play has a live level. */}
+                {inPlay && levels.mid !== null && (
+                  <span data-ls-score-mid className="text-3xl text-court-ink/75 sm:text-4xl">{`${levels.mid[0]}–${levels.mid[1]}`}</span>
+                )}
+                {inPlay && levels.live !== null && (
+                  <span data-ls-score-live className="text-3xl text-court-ink/75 sm:text-4xl">{levels.live.label}</span>
+                )}
+              </>
+            ) : data.summary?.headline ? (
+              showBreakdown ? (
+                stripLiveSetPoints(data.summary.headline)
+              ) : (
+                data.summary.headline
+              )
+            ) : (
+              t(activeDict, "matchCentre.status.notStarted")
+            )}
           </p>
           {!showBreakdown && data.summary?.perSide ? (
             <ul className="mt-5 space-y-2">

@@ -14,6 +14,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import type { MatchCentreDocT, MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../../live-score-data";
 import { MatchCentre, type MatchCentreProps } from "../match-centre";
+import { hasOpenSet, inPlaySummary, liveOf, midOf, setTable } from "@/lib/score/__tests__/_golden";
 
 const dict = en as Dict;
 
@@ -159,6 +160,28 @@ describe("MatchCentre — graceful fallback (no document, or an empty tabs list)
     expect(html).toContain(dict["matchCentre.status.notStarted"] as string);
     expect(html).not.toContain('data-testid="mc-root"');
     expect(html).not.toContain('data-testid="mc-court-card"');
+  });
+
+  // Task B3 — the fallback is where a set sport's large type is LiveScoreBody's own slab (a document's court card carries the
+  // score otherwise): sets won large, the live level beside it, never the headline's finished-set strip.
+  it.each([["badminton"], ["tennis"]])("%s: with NO document the fallback's large type is the levels — sets won, then the live points", (key) => {
+    const summary = inPlaySummary(key, (s) => hasOpenSet(s) && setTable(s).some((x) => x.closed) && liveOf(s) !== "0–0");
+    expect(summary, `a ${key} golden stream mid-match`).not.toBeNull();
+    const initial: LiveFixtureData = { status: "in_play", summary, outcome: null };
+    const html = renderToStaticMarkup(
+      <MatchCentre fixtureId="fx-none" initial={initial} realtime={false} dict={dict} tabParam={null} />,
+    );
+    expect(html).toContain('data-testid="mc-fallback"');
+    const at = html.indexOf('data-testid="ls-score-large"');
+    expect(at).toBeGreaterThan(-1);
+    const big = html.slice(at, html.indexOf("</p>", at));
+    expect(big).toContain(`>${summary!.perSide![0]!.line} — ${summary!.perSide![1]!.line}<`);
+    expect(/<span data-ls-score-live[^>]*>([^<]*)<\/span>/.exec(big)?.[1]).toBe(liveOf(summary!));
+    expect(/<span data-ls-score-mid[^>]*>([^<]*)<\/span>/.exec(big)?.[1] ?? null).toBe(midOf(summary!));
+    for (const x of setTable(summary!).filter((y) => y.closed)) {
+      const done = `${x.home}–${x.away}`;
+      if (done !== liveOf(summary!) && done !== midOf(summary!)) expect(big, `a finished set's ${done}`).not.toContain(done);
+    }
   });
 
   it("a document with an EMPTY tabs array also falls back, rather than crashing on tabs[0] — AND still names both sides (the document HAD a header, unlike the no-document case)", () => {

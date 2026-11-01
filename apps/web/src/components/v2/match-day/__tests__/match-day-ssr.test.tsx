@@ -9,10 +9,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactNode } from "react";
-import { EngineError, foldMatchWithStoppage, outcomeOf, summaryOf, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
-import { registerBuiltins } from "@seazn/engine/sports";
-import { registry, resolvePositions, type AnySportModule, type SportRegistry } from "@seazn/engine/sport";
-import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -56,6 +52,8 @@ import { ATTENTION_SEVERITY, type Attention } from "@/lib/division-phase";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
 import { SCORER_ATTENTIONS } from "@/lib/match-day/types";
 import { youtubeVideoId, youtubeWatchUrl } from "@/lib/youtube";
+// The golden-stream corpus and the engine's sport list are shared with the score reader's own suite (task B3): one corpus.
+import { CORPORA, SPORTS, goldenMoments, hasOpenSet, inPlaySummary, liveOf, midOf, tennisMatchTiebreak } from "@/lib/score/__tests__/_golden";
 
 const dict = en as Dict;
 const DICTS = { en, es, fr, nl } as Record<string, Dict>;
@@ -63,63 +61,9 @@ const pub = publicEn as Dict;
 
 // ---- A match in play, as the ENGINE folds it (review I1: never a made-up headline) --------------------------------------
 
-try {
-  registerBuiltins(registry);
-} catch (err) {
-  // Another suite in this worker already booted the shared default registry.
-  if (!EngineError.is(err, "MODULE_DUPLICATE")) throw err;
-}
-
-/** The golden corpora (@seazn/engine/testkit): each sport's recorded streams, found by walking the engine's tree. */
-interface GoldenStream {
-  config: string;
-  lineups?: LineupPair;
-  events: { type: string; payload: unknown; voids?: string }[];
-}
-const CORPORA = goldenCorpora().map(({ corpus }) => corpus as { key: string; configs: Record<string, unknown>; streams: GoldenStream[] });
-
 /** Golden streams seat their entrants as "H" and "A". */
 const HOME = { id: "H", name: "Harbour Rovers" };
 const AWAY = { id: "A", name: "Avenue Athletic" };
-
-/**
- * The engine's summary of a match IN PLAY for `key`: the latest prefix of one of its recorded golden streams that has scored
- * something, folds, is not decided, and satisfies `pick`. Longest streams first, longest prefix first. Null when the sport has
- * no corpus or no such moment — a sweep counts those apart, it never invents one.
- */
-function inPlaySummary(key: string, pick: (s: MatchDaySummary) => boolean = () => true): MatchDaySummary | null {
-  const corpus = CORPORA.find((c) => c.key === key);
-  if (corpus === undefined) return null;
-  const mod = registry.latest(key) as AnySportModule;
-  for (const stream of [...corpus.streams].sort((a, b) => b.events.length - a.events.length)) {
-    const cfg = mod.configSchema.parse(corpus.configs[stream.config]);
-    const lineups = stream.lineups ?? defaultLineupPair(resolvePositions(mod, cfg));
-    const envelopes: EventEnvelope[] = stream.events.map((e, i) => ({
-      id: `e-${i}`,
-      fixtureId: "fx-match-day",
-      seq: i,
-      type: e.type,
-      payload: e.payload,
-      recordedAt: new Date(Date.UTC(2026, 9, 31, 11, 0, i)).toISOString(),
-      recordedBy: null,
-      ...(e.voids === undefined ? {} : { voids: e.voids }),
-    }));
-    for (let k = envelopes.length; k >= 1; k--) {
-      const prefix = envelopes.slice(0, k);
-      if (!prefix.some((e) => !e.type.startsWith("core."))) break;
-      let folded: ReturnType<typeof foldMatchWithStoppage>;
-      try {
-        folded = foldMatchWithStoppage(mod, cfg, lineups, prefix);
-      } catch {
-        continue; // a prefix the fold refuses (a void whose target is cut off): not a moment of play
-      }
-      if (outcomeOf(mod, folded) !== null) continue;
-      const summary = summaryOf(mod, folded) as MatchDaySummary;
-      if (summary.headline && pick(summary)) return summary;
-    }
-  }
-  return null;
-}
 
 const detailOf = (s: MatchDaySummary): Record<string, unknown> =>
   typeof s.detail === "object" && s.detail !== null ? (s.detail as Record<string, unknown>) : {};
@@ -128,8 +72,6 @@ const hasSets = (s: MatchDaySummary): boolean => Array.isArray(detailOf(s).sets)
 const isSetSport = (s: MatchDaySummary): boolean => hasSets(s) && (s.perSide?.length ?? 0) === 2;
 type SetRow = { home: number; away: number; closed: boolean };
 const setsOf = (s: MatchDaySummary): SetRow[] => detailOf(s).sets as SetRow[];
-/** The engine's own live points: the headline's trailing "(…)" ("19–19", tennis's "40–Ad"); null between games. */
-const livePointsOf = (s: MatchDaySummary): string | null => /\(([^)]*)\)\s*$/.exec(s.headline!)?.[1] ?? null;
 /** The spec's rule (§6.2, review V3): a set sport's large type is games or sets won, "0 – 1"; any other sport keeps its own
  *  headline (LiveScoreBody's). */
 const gamesWon = (s: MatchDaySummary): string => `${s.perSide![0]!.line} – ${s.perSide![1]!.line}`;
@@ -142,7 +84,7 @@ const BADMINTON = inPlaySummary(
   "badminton",
   (s) =>
     isSetSport(s) &&
-    livePointsOf(s) !== null &&
+    liveOf(s) !== null &&
     setsOf(s).some((x) => x.closed) &&
     setsOf(s).some((x) => !x.closed && x.home + x.away > 0),
 );
@@ -296,10 +238,9 @@ describe("focused court: playing", () => {
     const sb = scoreboardOf(focus(goldenCourt("badminton", summary)));
     const big = largeOf(sb);
     expect(big, "the large type").not.toBe("");
-    // Expected values from the engine's own fold, read off its set table (never the headline the code reads).
+    // Expected values from the engine's own fold, read off its totals and set table (never the headline the code reads).
     const sets = setsOf(summary);
-    const open = sets.find((x) => !x.closed)!;
-    const live = `${open.home}–${open.away}`;
+    const live = liveOf(summary)!;
     const closed = sets.filter((x) => x.closed).map((x) => `${x.home}–${x.away}`);
     expect(closed.length).toBeGreaterThan(0);
     expect(big).toContain(`>${gamesWon(summary)}<`);
@@ -650,9 +591,8 @@ describe("the court list", () => {
     expect(at, "the row's score").toBeGreaterThan(-1);
     const tag = rows[0]!.slice(rows[0]!.lastIndexOf("<", at), rows[0]!.indexOf(">", at));
     const score = rows[0]!.slice(rows[0]!.indexOf(">", at) + 1, rows[0]!.indexOf("</span>", at));
-    const open = setsOf(summary).find((x) => !x.closed)!;
     const won = summary.perSide!.map((x) => x.line);
-    expect(score).toBe(`${won[0]}–${won[1]} · ${open.home}–${open.away}`);
+    expect(score).toBe(`${won[0]}–${won[1]} · ${liveOf(summary)}`);
     expect(score).not.toMatch(/[()]/);
     for (const x of setsOf(summary).filter((y) => y.closed)) expect(score).not.toContain(`${x.home}–${x.away}`);
     expect(tag).not.toContain("font-mono");
@@ -677,19 +617,155 @@ describe("the court list", () => {
   });
 });
 
-/** Every sport the engine registers (never a list typed here: a new sport joins the sweep by registering). */
-const SPORTS: string[] = [];
-registerBuiltins({
-  register(m: AnySportModule) {
-    SPORTS.push(m.key);
-  },
-  get: () => {
-    throw new Error("capture registry: get");
-  },
-  latest: () => {
-    throw new Error("capture registry: latest");
-  },
-} as SportRegistry);
+// ---- B3: one structured score reader (lib/score/levels.ts) -------------------------------------------------------------
+// Every level below is read off the engine's own fields (`liveOf` / `midOf` / the closed sets' counts), never the headline. The
+// summaries are the engine's folds of its recorded golden streams.
+
+type Levels = { won: string; mid: string | null; live: string | null };
+/** What a set sport's panel and row must say, from the engine's fields. */
+const expectedLevels = (s: MatchDaySummary): Levels => ({ won: gamesWon(s), mid: midOf(s), live: liveOf(s) });
+/** The text of the panel's `data-md-score-*` span, or null when the panel draws none. */
+function levelText(big: string, attr: "mid" | "live"): string | null {
+  const m = new RegExp(`<span data-md-score-${attr}[^>]*>([^<]*)</span>`).exec(big);
+  return m === null ? null : m[1]!.replace(/&amp;/g, "&");
+}
+const rowScore = (c: MatchDayCourt): string => {
+  const html = renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} onSelect={() => {}} />);
+  const at = html.indexOf("data-md-row-score");
+  return at < 0 ? "" : html.slice(html.indexOf(">", at) + 1, html.indexOf("</span>", at));
+};
+const wonDash = (s: MatchDaySummary): string => `${s.perSide![0]!.line}–${s.perSide![1]!.line}`;
+
+/** Tennis mid-game with all three levels distinct from each other and from every finished set's score (else a toContain proves
+ *  nothing about which number is which). */
+const TENNIS_MID_GAME = inPlaySummary("tennis", (s) => {
+  if (!isSetSport(s) || !hasOpenSet(s) || detailOf(s).gameKind !== "standard" || liveOf(s) === "0–0") return false;
+  const mid = midOf(s);
+  const closed = setsOf(s).filter((x) => x.closed).map((x) => `${x.home}–${x.away}`);
+  return closed.length > 0 && mid !== null && mid !== liveOf(s) && !closed.includes(mid) && !closed.includes(liveOf(s)!);
+});
+/** Tennis inside a set's tie-break (the engine's `gameKind`). */
+const TENNIS_SET_TIEBREAK = inPlaySummary("tennis", (s) => isSetSport(s) && hasOpenSet(s) && detailOf(s).gameKind === "tiebreak");
+/** Tennis with a finished set that went to a tie-break (its closed entry carries `tb`) and another set under way. */
+const TENNIS_AFTER_TIEBREAK = inPlaySummary(
+  "tennis",
+  (s) => isSetSport(s) && hasOpenSet(s) && setsOf(s).some((x) => x.closed && (x as { tb?: unknown }).tb !== undefined),
+);
+/** Tennis between sets: sets closed, the next not begun — nothing live, no games. */
+const TENNIS_BETWEEN_SETS = inPlaySummary(
+  "tennis",
+  (s) => isSetSport(s) && !hasOpenSet(s) && setsOf(s).some((x) => x.closed) && detailOf(s).serving !== null,
+);
+
+describe("B3 — Match Day reads the score's levels from the engine's structure", () => {
+  it("tennis mid-game: sets won large, then the set's games, then the game's points — three levels, each its own number, in that order", () => {
+    const summary = TENNIS_MID_GAME;
+    expect(summary, "a tennis golden stream mid-game after a finished set").not.toBeNull();
+    const big = largeOf(scoreboardOf(focus(goldenCourt("tennis", summary!))));
+    const want = expectedLevels(summary!);
+    expect(big).toContain(`>${esc(want.won)}<`);
+    expect(levelText(big, "mid")).toBe(want.mid);
+    expect(levelText(big, "live")).toBe(want.live);
+    expect(big.indexOf(esc(want.won))).toBeLessThan(big.indexOf("data-md-score-mid"));
+    expect(big.indexOf("data-md-score-mid")).toBeLessThan(big.indexOf("data-md-score-live"));
+    for (const x of setsOf(summary!).filter((y) => y.closed)) expect(big, `a finished set's ${x.home}–${x.away}`).not.toContain(`${x.home}–${x.away}`);
+    expect(big).not.toMatch(/[()]/);
+  });
+
+  it("tennis mid-game, the court list's row: 'sets · games · points' on one line, tabular figures", () => {
+    const summary = TENNIS_MID_GAME!;
+    const want = expectedLevels(summary);
+    expect(rowScore(goldenCourt("tennis", summary))).toBe(`${wonDash(summary)} · ${want.mid} · ${want.live}`);
+  });
+
+  it("tennis in a set's tie-break: the games stay the middle level and the tie-break's points are live ('TB 3–2')", () => {
+    const summary = TENNIS_SET_TIEBREAK;
+    expect(summary, "a tennis golden stream inside a set tie-break").not.toBeNull();
+    const court = goldenCourt("tennis", summary!);
+    const big = largeOf(scoreboardOf(focus(court)));
+    expect(levelText(big, "mid")).toBe(midOf(summary!));
+    expect(levelText(big, "live")).toBe(detailOf(summary!).game);
+    expect(levelText(big, "live")).toMatch(/^TB \d+–\d+$/);
+    expect(rowScore(court)).toBe(`${wonDash(summary!)} · ${midOf(summary!)} · ${detailOf(summary!).game}`);
+  });
+
+  it("tennis in the match tie-break: no games level, the tie-break's points are live ('MTB 3–2') and the finished sets stay out of the large type", () => {
+    const { summary, decided } = tennisMatchTiebreak(["H", "H", "A", "H", "A"]);
+    expect(decided).toBe(false);
+    expect(detailOf(summary).game).toBe("MTB 3–2");
+    const court = goldenCourt("tennis", summary);
+    const big = largeOf(scoreboardOf(focus(court)));
+    expect(big).toContain(`>${esc(gamesWon(summary))}<`);
+    expect(levelText(big, "mid")).toBeNull();
+    expect(levelText(big, "live")).toBe("MTB 3–2");
+    for (const x of setsOf(summary).filter((y) => y.closed)) expect(big, `a finished set's ${x.home}–${x.away}`).not.toContain(`${x.home}–${x.away}`);
+    expect(rowScore(court)).toBe(`${wonDash(summary)} · MTB 3–2`);
+  });
+
+  it("tennis after a set that went to a tie-break: its '7–6(3)' is neither large type nor live", () => {
+    const summary = TENNIS_AFTER_TIEBREAK;
+    expect(summary, "a tennis golden stream with a finished tie-break set and another under way").not.toBeNull();
+    const tb = setsOf(summary!).find((x) => x.closed && (x as { tb?: unknown }).tb !== undefined)!;
+    const court = goldenCourt("tennis", summary!);
+    const big = largeOf(scoreboardOf(focus(court)));
+    expect(big).not.toContain(`${tb.home}–${tb.away}`);
+    expect(big).not.toMatch(/[()]/);
+    expect(levelText(big, "live")).toBe(liveOf(summary!));
+    expect(rowScore(court)).not.toMatch(/[()]/);
+    expect(rowScore(court)).not.toContain(`${tb.home}–${tb.away}`);
+  });
+
+  it("tennis between sets: only the sets won — no games, no points", () => {
+    const summary = TENNIS_BETWEEN_SETS;
+    expect(summary, "a tennis golden stream between sets").not.toBeNull();
+    const court = goldenCourt("tennis", summary!);
+    const big = largeOf(scoreboardOf(focus(court)));
+    expect(big).toContain(`>${esc(gamesWon(summary!))}<`);
+    expect(levelText(big, "mid")).toBeNull();
+    expect(levelText(big, "live")).toBeNull();
+    expect(rowScore(court)).toBe(wonDash(summary!));
+  });
+
+  it("the stream preview's score strip reads the same levels (tennis: sets · games · points)", () => {
+    const summary = TENNIS_MID_GAME!;
+    const html = focus(
+      goldenCourt("tennis", summary, { stream: "live", live_video: { url: youtubeWatchUrl("dQw4w9WgXcQ"), made_for_kids: false } }),
+    );
+    const strip = html.slice(html.indexOf('data-testid="md-preview-score"'));
+    const want = expectedLevels(summary);
+    expect(strip).toContain(`>${esc(want.won)}<`);
+    expect(levelText(strip, "mid")).toBe(want.mid);
+    expect(levelText(strip, "live")).toBe(want.live);
+  });
+
+  it("every in-play moment of every set sport's golden streams: panel and row say exactly the engine's levels (count reported)", () => {
+    let moments = 0;
+    const perSport: Record<string, number> = {};
+    let withMid = 0;
+    let withLive = 0;
+    for (const key of SPORTS) {
+      for (const m of goldenMoments(key)) {
+        if (m.decided || !isSetSport(m.summary)) continue;
+        const court = goldenCourt(key, m.summary);
+        const want = expectedLevels(m.summary);
+        const where = `${key} stream ${m.stream} @${m.events}`;
+        const big = largeOf(scoreboardOf(focus(court)));
+        expect(big, where).toContain(`>${esc(want.won)}<`);
+        expect(levelText(big, "mid"), where).toBe(want.mid);
+        expect(levelText(big, "live"), where).toBe(want.live);
+        expect(rowScore(court), where).toBe([wonDash(m.summary), want.mid, want.live].filter((x) => x !== null).join(" · "));
+        moments++;
+        perSport[key] = (perSport[key] ?? 0) + 1;
+        if (want.mid !== null) withMid++;
+        if (want.live !== null) withLive++;
+      }
+    }
+    console.info(`[B3 sweep] set-sport in-play moments: ${moments} ${JSON.stringify(perSport)}; with a middle level ${withMid}; with live points ${withLive}`);
+    for (const key of ["badminton", "tabletennis", "volleyball", "tennis"]) expect(perSport[key], `${key} moments`).toBeGreaterThan(20);
+    expect(withMid, "tennis moments with a games level").toBeGreaterThan(100);
+    expect(withLive).toBeGreaterThan(500);
+  });
+});
 
 describe("every sport: the court noun and the scoreboard follow the sport (G5)", () => {
   it("each registered sport's court shows its noun, and its scoreboard from the ENGINE's folded summary, both sides named", () => {
@@ -712,14 +788,19 @@ describe("every sport: the court noun and the scoreboard follow the sport (G5)",
       const sb = scoreboardOf(html);
       expect(sb, key).not.toBe("");
       if (isSetSport(summary)) {
-        // V3: games or sets won large, the engine's live points beside them, no finished set's score.
+        // V3 / B3: sets or games won large, then tennis's games in the set and the live points, no finished set's score — every
+        // level read off the engine's fields, none off the headline.
         const big = largeOf(sb);
         expect(big, key).toContain(`>${esc(gamesWon(summary))}<`);
-        const live = livePointsOf(summary);
+        const live = liveOf(summary);
+        const mid = midOf(summary);
         if (live !== null) expect(big, key).toContain(`>${esc(live)}<`);
+        else expect(big, `${key}: no live level, none shown`).not.toContain("data-md-score-live");
+        if (mid !== null) expect(big, key).toContain(`>${esc(mid)}<`);
+        else expect(big, `${key}: no middle level, none shown`).not.toContain("data-md-score-mid");
         for (const x of setsOf(summary).filter((y) => y.closed)) {
           const done = `${x.home}–${x.away}`;
-          if (done !== live) expect(big, `${key} shows finished ${done}`).not.toContain(done);
+          if (done !== live && done !== mid) expect(big, `${key} shows finished ${done}`).not.toContain(done);
         }
         setSports.push(key);
       } else {
@@ -1191,8 +1272,7 @@ describe("A4 — a playing court with a live stream shows its preview; any other
     // The score under the picture, by Match Day's rule (games won, the current game's points), and who serves.
     const score = preview.slice(preview.indexOf('data-testid="md-preview-score"'));
     expect(score).toContain(`>${gamesWon(BADMINTON!)}<`);
-    const open = setsOf(BADMINTON!).find((x) => !x.closed)!;
-    expect(score).toContain(`>${open.home}–${open.away}<`);
+    expect(score).toContain(`>${liveOf(BADMINTON!)}<`);
     expect(score).toContain(`${esc(AWAY.name)} `);
     // The stream panel is one tap away.
     expect(preview).toContain(`href="${routes.fixture("acme", "safe-badminton", "girls-u14", 7)}?stream=open"`);

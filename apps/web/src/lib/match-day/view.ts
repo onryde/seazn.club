@@ -5,7 +5,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import { fmtPublicTime } from "@/lib/format";
 import type { VenueNoun } from "@/lib/venue";
-import { setBreakdown } from "@/lib/public-site";
+import { scoreLevels, type ScoreLevels } from "@/lib/score/levels";
 import type { Attention, Severity } from "@/lib/division-phase";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallWarning } from "./call";
@@ -13,32 +13,29 @@ import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView, N
 
 /**
  * A playing match's score as Match Day shows it (spec §6.2 "games or sets won in large type, current points beside them";
- * review V3/V4). A set sport — the engine's summary carries a set table and a line per side — reads as its games or sets won
- * (each side's own `perSide` line) and the CURRENT game's points: the engine's own live points, the headline's trailing "(…)"
- * ("19–19"; tennis's "40–Ad"), absent between games. A finished game's score is never part of it: those are the set table's.
- * Any other sport reads as its own headline, whole. Null before the engine has published one.
+ * review V3/V4; task B3). A set sport — the engine's summary carries a set table and a count of sets won per side — reads as its
+ * levels (`scoreLevels`, lib/score/levels.ts): the sets or games WON, tennis's games in the set in play between them and the
+ * live points, and nothing of a finished set's score. Any other sport reads as its own headline, whole. Null before the engine
+ * has published one.
  *
- * Not `stripLiveSetPoints` (lib/public-site.ts): the public match page keeps the finished games in its large type and drops the
- * live points — the reverse of what a hall needs from across the floor. That page is left as it is (review V3).
+ * The levels are read off the summary's structure, never its headline: a tie-break's "7–6(3)" ends a headline the way a game's
+ * live points do, and only the structure says which is which.
  */
-export type ScoreLine = { kind: "sets"; won: readonly [string, string]; live: string | null } | { kind: "plain"; text: string };
+export type ScoreLine = { kind: "sets"; levels: ScoreLevels } | { kind: "plain"; text: string };
 
-export function scoreLine(f: Pick<MatchDayFixture, "summary" | "sport_key">): ScoreLine | null {
+export function scoreLine(f: Pick<MatchDayFixture, "summary">): ScoreLine | null {
   const s = f.summary;
   if (s === null || !s.headline) return null;
-  const sides = s.perSide ?? [];
-  if (setBreakdown(s, f.sport_key) !== null && sides.length === 2) {
-    const live = /\(([^)]*)\)\s*$/.exec(s.headline)?.[1]?.trim();
-    return { kind: "sets", won: [sides[0]!.line, sides[1]!.line], live: live ? live : null };
-  }
-  return { kind: "plain", text: s.headline };
+  const levels = scoreLevels(s);
+  return levels === null ? { kind: "plain", text: s.headline } : { kind: "sets", levels };
 }
 
-/** The court list's one-line form of `scoreLine`: "0–1 · 12–10" for a set sport, the sport's own headline otherwise. */
+/** The court list's one-line form of `scoreLine`: "0–1 · 12–10" for a set sport, "1–0 · 3–2 · 40–30" for tennis (sets · games ·
+ *  points), the sport's own headline otherwise. */
 export function compactScore(line: ScoreLine): string {
   if (line.kind === "plain") return line.text;
-  const won = `${line.won[0]}–${line.won[1]}`;
-  return line.live === null ? won : `${won} · ${line.live}`;
+  const { won, mid, live } = line.levels;
+  return [`${won[0]}–${won[1]}`, ...(mid === null ? [] : [`${mid[0]}–${mid[1]}`]), ...(live === null ? [] : [live.label])].join(" · ");
 }
 
 /** The v1 envelope's optimistic-concurrency refusal (api-v1/http.ts): a call or undo that raced another schedule write. */

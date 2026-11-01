@@ -25,6 +25,9 @@ import type { Dict } from "@/lib/i18n-constants";
 import { LiveScoreBody } from "../live-score";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { stripLiveSetPoints } from "@/lib/public-site";
+import type { MatchDaySummary } from "@/lib/match-day/types";
+import { SPORTS, goldenMoments, hasOpenSet, inPlaySummary, liveOf, midOf, setTable, tennisMatchTiebreak } from "@/lib/score/__tests__/_golden";
 
 const entrantNames = { W: "Riverside FC", L: "Oakdale United" };
 
@@ -867,5 +870,147 @@ describe("LiveScoreBody — W2a chess tie-break sentence", () => {
     const html = render({ tiebreak: { rung: "rapid" } });
     expect(html).toContain("Bela Nakamura won on rapid tie-break");
     expect(html).not.toContain("(");
+  });
+});
+
+// Task B3 — a set sport's large type is its LEVELS (lib/score/levels.ts, the reader Match Day shares): the sets or games won,
+// and beside them the live points — never a finished set's score, which `stripLiveSetPoints(headline)` used to put there (and,
+// on a finished tennis match, corrupted: "7–6(5)" lost its "(5)"). Every summary is the ENGINE's fold of a recorded golden
+// stream; every expected level is read off the engine's own fields (`_golden.ts` oracles), never the headline.
+describe("LiveScoreBody — B3: a set sport's large type is its levels", () => {
+  const emptyTemplates: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
+  const names = { H: "Riverside FC", A: "Oakdale United" };
+  const render = (status: string, summary: MatchDaySummary, sportKey: string, outcome: { kind: string; winner?: string } | null = null) =>
+    renderToStaticMarkup(
+      <LiveScoreBody
+        data={{ status, summary, outcome }}
+        entrantNames={names}
+        sportKey={sportKey}
+        decidedTemplates={emptyTemplates}
+        dict={en as Dict}
+      />,
+    );
+  /** The large type element, to its closing tag. */
+  const largeOf = (html: string): string => {
+    const at = html.indexOf('data-testid="ls-score-large"');
+    return at < 0 ? "" : html.slice(at, html.indexOf("</p>", at));
+  };
+  const spanText = (big: string, attr: "mid" | "live"): string | null =>
+    new RegExp(`<span data-ls-score-${attr}[^>]*>([^<]*)</span>`).exec(big)?.[1] ?? null;
+  const won = (s: MatchDaySummary): string => `${s.perSide![0]!.line} — ${s.perSide![1]!.line}`;
+  const closedScores = (s: MatchDaySummary): string[] => setTable(s).filter((x) => x.closed).map((x) => `${x.home}–${x.away}`);
+
+  it("badminton mid-game: games won large, the open game's points beside them, no finished game's score", () => {
+    const summary = inPlaySummary("badminton", (s) => hasOpenSet(s) && setTable(s).some((x) => x.closed) && !closedScores(s).includes(liveOf(s)!));
+    expect(summary, "a badminton golden stream mid-game 2").not.toBeNull();
+    const big = largeOf(render("in_play", summary!, "badminton"));
+    expect(big).toContain(`>${won(summary!)}<`);
+    expect(spanText(big, "live")).toBe(liveOf(summary!));
+    expect(spanText(big, "mid")).toBeNull();
+    for (const done of closedScores(summary!)) expect(big, `a finished game's ${done}`).not.toContain(done);
+    expect(big).not.toContain(summary!.headline!);
+  });
+
+  it("tennis mid-game: sets won, the set's games, the game's points — each its own number", () => {
+    const summary = inPlaySummary("tennis", (s) => {
+      const d = s.detail as Record<string, unknown>;
+      return hasOpenSet(s) && d.gameKind === "standard" && liveOf(s) !== "0–0" && midOf(s) !== liveOf(s) && !closedScores(s).includes(midOf(s)!) && !closedScores(s).includes(liveOf(s)!) && closedScores(s).length > 0;
+    });
+    expect(summary, "a tennis golden stream mid-game after a finished set").not.toBeNull();
+    const big = largeOf(render("in_play", summary!, "tennis"));
+    expect(big).toContain(`>${won(summary!)}<`);
+    expect(spanText(big, "mid")).toBe(midOf(summary!));
+    expect(spanText(big, "live")).toBe(liveOf(summary!));
+    for (const done of closedScores(summary!)) expect(big, `a finished set's ${done}`).not.toContain(done);
+  });
+
+  it("tennis in the match tie-break: no games level, the tie-break's points are live", () => {
+    const { summary } = tennisMatchTiebreak(["H", "A", "A", "H", "H", "H"]);
+    const big = largeOf(render("in_play", summary, "tennis"));
+    expect(spanText(big, "mid")).toBeNull();
+    expect(spanText(big, "live")).toBe("MTB 4–2");
+    expect(big).toContain(`>${won(summary)}<`);
+  });
+
+  it("a finished set sport: the sets won alone — the set table below carries the sets; no live level", () => {
+    let checked = 0;
+    for (const key of ["badminton", "tabletennis", "volleyball", "tennis"]) {
+      const m = goldenMoments(key).filter((x) => x.decided && setTable(x.summary).length > 0 && !hasOpenSet(x.summary)).at(-1);
+      expect(m, `${key}: a finished golden match`).toBeDefined();
+      const html = render("decided", m!.summary, key, { kind: "win", winner: "H" });
+      const big = largeOf(html);
+      expect(big, key).toContain(`>${won(m!.summary)}<`);
+      expect(spanText(big, "live"), key).toBeNull();
+      expect(spanText(big, "mid"), key).toBeNull();
+      for (const done of closedScores(m!.summary)) expect(big, `${key}: ${done}`).not.toContain(done);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a finished tennis match whose set went to a tie-break: the tie-break's '(n)' is neither stripped from the large type nor shown as live", () => {
+    // The witness: stripLiveSetPoints on this headline would have eaten the loser's tie-break points.
+    const m = goldenMoments("tennis").find(
+      (x) =>
+        x.decided &&
+        !hasOpenSet(x.summary) &&
+        setTable(x.summary).some((s) => (s as { tb?: unknown }).tb !== undefined) &&
+        stripLiveSetPoints(x.summary.headline!) !== x.summary.headline,
+    );
+    expect(m, "a finished tennis golden match with a tie-break set").toBeDefined();
+    const big = largeOf(render("decided", m!.summary, "tennis", { kind: "win", winner: "H" }));
+    expect(big).toContain(`>${won(m!.summary)}<`);
+    expect(big).not.toMatch(/[()]/);
+    expect(spanText(big, "live")).toBeNull();
+  });
+
+  it("a match stopped mid-set (a retirement): the engine keeps the open set, but only a match IN PLAY shows a live level", () => {
+    const stopped = goldenMoments("tennis").find((x) => x.decided && hasOpenSet(x.summary));
+    expect(stopped, "a tennis golden match stopped mid-set").toBeDefined();
+    const over = largeOf(render("decided", stopped!.summary, "tennis", { kind: "award", winner: "A" }));
+    expect(spanText(over, "live")).toBeNull();
+    expect(spanText(over, "mid")).toBeNull();
+    // The positive half: the same summary, were the match in play, would show them.
+    const inPlay = largeOf(render("in_play", stopped!.summary, "tennis"));
+    expect(spanText(inPlay, "live")).toBe(liveOf(stopped!.summary));
+    expect(spanText(inPlay, "mid")).toBe(midOf(stopped!.summary));
+  });
+
+  it("a double walkover on a set sport credits nobody: the tag stands in the large type, not a 0 — 0 of levels", () => {
+    const m = goldenMoments("badminton").find((x) => x.decided && setTable(x.summary).length > 0);
+    expect(m).toBeDefined();
+    const big = largeOf(render("decided", m!.summary, "badminton", { kind: "double_walkover" }));
+    expect(big).toContain(en["forfeit.tag.doubleWalkover"] as string);
+    expect(big).not.toContain("data-ls-score-");
+    expect(big).not.toContain("flex-wrap");
+    expect(big).not.toContain(won(m!.summary));
+  });
+
+  it("every other registered sport keeps its own headline in the large type, whole (count reported)", () => {
+    let checked = 0;
+    const kept: string[] = [];
+    for (const key of SPORTS) {
+      if (["badminton", "tabletennis", "volleyball", "tennis"].includes(key)) continue;
+      const summary = inPlaySummary(key);
+      if (summary === null) continue;
+      const big = largeOf(render("in_play", summary, key));
+      expect(big.endsWith(`>${summary.headline!.replace(/&/g, "&amp;")}`), `${key}: the headline, whole`).toBe(true);
+      expect(big, key).not.toContain("data-ls-score-");
+      kept.push(key);
+      checked++;
+    }
+    expect(kept, "cricket among them").toContain("cricket");
+    expect(checked).toBeGreaterThan(4);
+  });
+
+  it("a set summary the reader cannot read (a side line that is not a count) keeps the legacy large type", () => {
+    const summary: MatchDaySummary = {
+      headline: "1 — 0 · 21–15 (14–11)",
+      perSide: [{ entrantId: "H", line: "6-4 3-6" }, { entrantId: "A", line: "0" }],
+      detail: { sets: [{ home: 21, away: 15, closed: true }, { home: 14, away: 11, closed: false }] },
+    };
+    const big = largeOf(render("in_play", summary, "badminton"));
+    expect(big.endsWith(">1 — 0 · 21–15")).toBe(true);
+    expect(big).not.toContain("data-ls-score-");
   });
 });

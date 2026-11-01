@@ -533,3 +533,170 @@ test.describe("Match Day — Find a court on the division's run sheet (B2)", () 
     await expect(page.getByTestId("md-header").getByRole("heading", { level: 1 })).toContainText("Match Day");
   });
 });
+
+/**
+ * Task B3 (spec §6.2): a set sport's score on Match Day is its LEVELS, read off the engine's structured summary — the sets won in
+ * large type, then tennis's games in the set in play, then the game's points ("1 – 0   3–2   40–30"; the row "1–0 · 3–2 · 40–30"),
+ * never a finished set's score. The node-environment suite folds the engine's recorded streams for every sport; this plays a real
+ * tennis match and a real badminton match through the events API, onto two courts of one competition, and reads what a browser
+ * shows.
+ *
+ *   - Tennis (tour): home takes set 1 6–0, then leads set 2 3–2 in games and 40–30 in the game: levels 1–0 · 3–2 · 40–30.
+ *   - Badminton (bwf): home takes game 1 21–15, then leads game 2 12–10: levels 1–0 · 12–10 (no games level).
+ */
+interface LevelsSeed {
+  competitionId: string;
+  tennisCourt: string;
+  badmintonCourt: string;
+  tennisFixture: string;
+  badmintonFixture: string;
+}
+
+async function seedLevels(request: APIRequestContext, label: string): Promise<LevelsSeed> {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Match Day levels ${label} ${TAG}`,
+    visibility: "public",
+  });
+  if (comp.status >= 300 || !comp.data) throw new Error(`competition → ${comp.status} ${JSON.stringify(comp.error)}`);
+  const competitionId = comp.data.id;
+  const nonce = Math.random().toString(36).slice(2, 7);
+  const { courts } = await seedVenueWithCourts(request, [`LV1 ${label} ${nonce} ${TAG}`, `LV2 ${label} ${nonce} ${TAG}`]);
+  const [tennisCourt, badmintonCourt] = [courts[0]!, courts[1]!];
+
+  /** A one-fixture division of `sport`, started, on `court`, its match kicked off by a real core.start. */
+  const division = async (name: string, sport: string, variant: string, court: { id: string }): Promise<{ fixtureId: string; home: string; away: string }> => {
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", {
+      name,
+      sport_key: sport,
+      variant_key: variant,
+    });
+    if (div.status >= 300 || !div.data) throw new Error(`division ${sport} → ${div.status} ${JSON.stringify(div.error)}`);
+    const divisionId = div.data.id;
+    const ents = await addEntrantsViaApi(request, divisionId, [`Ana ${nonce}`, `Ben ${nonce}`]);
+    if (ents.status >= 300 || ents.ids.length !== 2) throw new Error(`entrants → ${ents.status}`);
+    const { fixtureIds } = await createStageAndGenerate(request, divisionId);
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: { matchMinutes: 30, courts: [tennisCourt.id, badmintonCourt.id] },
+    });
+    expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
+    const fixtureId = fixtureIds[0]!;
+    // Today's UTC day, a minute inside either end, as the board's own seed does.
+    const now = Date.now();
+    const dayStart = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+    const at = new Date(Math.min(dayStart + 86_400_000 - 60_000, Math.max(dayStart + 60_000, now - 20 * 60_000))).toISOString();
+    await withDb((sql) => sql`update fixtures set court_id = ${court.id}, scheduled_at = ${at} where id = ${fixtureId}`);
+    return { fixtureId, home: ents.ids[0]!, away: ents.ids[1]! };
+  };
+
+  /** Events through the API, each on the last one's seq. */
+  const play = async (fixtureId: string, events: { type: string; payload: unknown }[]): Promise<void> => {
+    let seq = 0;
+    for (const e of events) {
+      const res = await apiJson<{ seq: number }>(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", { expected_seq: seq, ...e });
+      expect(res.status, `${e.type}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
+      seq = res.data!.seq;
+    }
+  };
+
+  const tennis = await division("Open singles", "tennis", "tour", tennisCourt);
+  const point = (by: string) => ({ type: "tennis.point", payload: { by } });
+  const game = (by: string) => [point(by), point(by), point(by), point(by)];
+  await play(tennis.fixtureId, [
+    { type: "core.start", payload: {} },
+    // Set 1: six games to love for home.
+    ...[1, 2, 3, 4, 5, 6].flatMap(() => game(tennis.home)),
+    // Set 2: home, away, home, away, home -> 3-2 in games; then 40-30 in the game (H A H A H).
+    ...[tennis.home, tennis.away, tennis.home, tennis.away, tennis.home].flatMap(game),
+    ...[tennis.home, tennis.away, tennis.home, tennis.away, tennis.home].map(point),
+  ]);
+
+  const badminton = await division("Open badminton", "badminton", "bwf", badmintonCourt);
+  const rally = (wonBy: string) => ({ type: "badminton.rally", payload: { wonBy } });
+  const times = (n: number, wonBy: string) => Array.from({ length: n }, () => rally(wonBy));
+  await play(badminton.fixtureId, [
+    { type: "core.start", payload: {} },
+    // Game 1: 15 to away first, then 21 to home -> 21-15, home takes it.
+    ...times(15, badminton.away),
+    ...times(21, badminton.home),
+    // Game 2 in play: 12 to home, 10 to away.
+    ...times(12, badminton.home),
+    ...times(10, badminton.away),
+  ]);
+
+  return { competitionId, tennisCourt: tennisCourt.name, badmintonCourt: badmintonCourt.name, tennisFixture: tennis.fixtureId, badmintonFixture: badminton.fixtureId };
+}
+
+/** The engine's own folded summary of a fixture, as the app stored it — the oracle the browser's figures are checked against. */
+async function storedSummary(fixtureId: string): Promise<{ perSide: { line: string }[]; detail: Record<string, unknown> }> {
+  const rows = await withDb((sql) => sql<{ summary: { perSide: { line: string }[]; detail: Record<string, unknown> } }[]>`select summary from match_states where fixture_id = ${fixtureId}`);
+  expect(rows, "the match has a folded state").toHaveLength(1);
+  return rows[0]!.summary;
+}
+
+const levelsOf = (page: Page) => page.getByTestId("md-score-large");
+
+test.describe("Match Day — a set sport's score is its levels (B3)", () => {
+  test("desktop: tennis reads sets · games · points, badminton sets · points — the rows and the panel; no finished set's score; no sideways scroll", async ({
+    page,
+    request,
+  }) => {
+    const seed = await seedLevels(request, "Desk");
+    // The engine's own fields say what the script produced (so the literals below are the rulebook's, not the page's).
+    const tennis = await storedSummary(seed.tennisFixture);
+    expect(tennis.perSide.map((p) => p.line)).toEqual(["1", "0"]);
+    expect(tennis.detail.games).toEqual({ home: 3, away: 2 });
+    expect(tennis.detail.game).toBe("40–30");
+    const badminton = await storedSummary(seed.badmintonFixture);
+    expect(badminton.perSide.map((p) => p.line)).toEqual(["1", "0"]);
+    expect(badminton.detail.points).toEqual({ home: 21 + 12, away: 15 + 10 });
+
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    await expect(row(page, seed.tennisCourt)).toHaveAttribute("data-state", "playing");
+    await expect(row(page, seed.badmintonCourt)).toHaveAttribute("data-state", "playing");
+    await expect(row(page, seed.tennisCourt).locator("[data-md-row-score]")).toHaveText("1–0 · 3–2 · 40–30");
+    await expect(row(page, seed.badmintonCourt).locator("[data-md-row-score]")).toHaveText("1–0 · 12–10");
+
+    // The panel: tennis, three levels in order.
+    await row(page, seed.tennisCourt).click();
+    const big = levelsOf(page);
+    await expect(big).toContainText("1 – 0");
+    await expect(big.locator("[data-md-score-mid]")).toHaveText("3–2");
+    await expect(big.locator("[data-md-score-live]")).toHaveText("40–30");
+    // Set 1 closed 6-0 and its score is nowhere in the large type.
+    await expect(big).not.toContainText("6–0");
+    await expect(big).not.toContainText("(");
+    await expectNoHorizontalScroll(page);
+
+    // Badminton: the games won and the open game's points; no games-in-a-set level at all.
+    await row(page, seed.badmintonCourt).click();
+    await expect(big).toContainText("1 – 0");
+    await expect(big.locator("[data-md-score-live]")).toHaveText("12–10");
+    await expect(big.locator("[data-md-score-mid]")).toHaveCount(0);
+    await expect(big).not.toContainText("21–15");
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("phone (320): the same levels fit the panel's width — nothing clipped, no sideways scroll", async ({ page, request }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    const seed = await seedLevels(request, "Phone");
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    await expect(row(page, seed.tennisCourt).locator("[data-md-row-score]")).toHaveText("1–0 · 3–2 · 40–30");
+    await expectNoHorizontalScroll(page);
+
+    await row(page, seed.tennisCourt).click();
+    const big = levelsOf(page);
+    await expect(big.locator("[data-md-score-live]")).toHaveText("40–30");
+    // Every figure sits inside the 320 column, wrapped if it must be rather than cut.
+    const boxes = await big.locator("span").evaluateAll((els) => els.map((e) => ({ left: e.getBoundingClientRect().left, right: e.getBoundingClientRect().right, text: e.textContent })));
+    expect(boxes.length, "won, mid and live").toBe(3);
+    for (const b of boxes) {
+      expect(b.left, `${b.text} starts on screen`).toBeGreaterThanOrEqual(0);
+      expect(b.right, `${b.text} ends on screen`).toBeLessThanOrEqual(320);
+    }
+    await expectNoHorizontalScroll(page);
+  });
+});

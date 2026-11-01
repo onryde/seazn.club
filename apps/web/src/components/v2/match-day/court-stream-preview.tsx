@@ -6,7 +6,7 @@
 //
 // Under, not over: the player's own terms put nothing on top of the embedded player or its controls (replay-embed.tsx), and a
 // composed stream already carries the overlay's scorebug in its picture. The score line is Match Day's own rule (`scoreLine`):
-// games or sets won and the current game's points for a set sport, the sport's own headline otherwise — every sport.
+// the sets or games won, tennis's games in the set, and the live points for a set sport, the sport's own headline otherwise — every sport.
 //
 // Only reached when `streamPreviewOf` found an embeddable video; any other live stream (a pasted key, a made-for-kids broadcast)
 // keeps the C1 scoreboard with its corner badge. There is never an empty video box (§5).
@@ -70,9 +70,12 @@ export function CourtStreamPreview({
         >
           {line.kind === "sets" ? (
             <>
-              <span className="font-display text-3xl font-bold leading-none tabular-nums">{`${line.won[0]} – ${line.won[1]}`}</span>
-              {line.live !== null && (
-                <span className="font-display text-2xl font-semibold leading-none tabular-nums text-court-ink/75">{line.live}</span>
+              <span className="font-display text-3xl font-bold leading-none tabular-nums">{`${line.levels.won[0]} – ${line.levels.won[1]}`}</span>
+              {line.levels.mid !== null && (
+                <span data-md-score-mid className="font-display text-2xl font-semibold leading-none tabular-nums text-court-ink/75">{`${line.levels.mid[0]}–${line.levels.mid[1]}`}</span>
+              )}
+              {line.levels.live !== null && (
+                <span data-md-score-live className="font-display text-2xl font-semibold leading-none tabular-nums text-court-ink/75">{line.levels.live.label}</span>
               )}
             </>
           ) : (
