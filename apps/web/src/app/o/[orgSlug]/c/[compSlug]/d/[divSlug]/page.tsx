@@ -762,7 +762,7 @@ export default async function DivisionPage({
             <Link
               href={routes.competitionRegistration(orgSlug, compSlug, "registrants", id)}
               aria-label={t(dict, "aria.registration")}
-              className="btn btn-ghost gap-1.5"
+              className="btn btn-ghost gap-1.5 max-md:min-h-11"
             >
               <UserPlus className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden sm:inline">{t(dict, "action.registration")}</span>

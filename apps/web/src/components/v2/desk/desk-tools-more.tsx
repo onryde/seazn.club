@@ -17,6 +17,11 @@
 // beside the "Open" menu (`desk-open-menu.tsx`, C5) that holds Slideshow, View
 // Public Page and the QR poster - and none of them is offered twice at a width.
 //
+// Match Day C5 (owner addition) put one more row in this fold: OFF a match day it LEADS with "Match Day" (same tab, no new-tab
+// mark), because the Open menu - which carries that door on a desktop - is not on a phone, and the filled "Open Match Day" button
+// in the tool row only exists on the day. On the day the button is the door and this fold does not list it, so a destination is
+// still offered once. The caller (`page.tsx`) decides which; this component draws whatever `items` it is handed, in order.
+//
 // W3 Task 8 (ruling 15): this used to switch at `sm:` (640) — unified on
 // `md:` (768) so the masthead agrees with the ledger about where "phone"
 // ends. See `apps/web/src/app/o/[orgSlug]/c/[compSlug]/page.tsx`, the actual

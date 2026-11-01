@@ -966,6 +966,11 @@ test("entrant kinds: a view-only member's Entrants tab does not carry them", asy
     await expect(viewer.locator("[data-kind]")).toHaveCount(0);
   } finally {
     await context.close();
-    await withDb((sql) => sql`delete from org_members where org_id = ${orgId} and user_id = ${userId}`);
+    // The membership first (its FK cascades from the user, but an explicit delete keeps the order obvious), then the user this test
+    // inserted: left behind, every run added a "C4 Viewer" account for the next one to step over (Match Day C4 M4).
+    await withDb(async (sql) => {
+      await sql`delete from org_members where org_id = ${orgId} and user_id = ${userId}`;
+      if (userId !== "") await sql`delete from users where id = ${userId}`;
+    });
   }
 });

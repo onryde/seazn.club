@@ -312,7 +312,14 @@ test.describe.serial("pro lifecycle", () => {
     await page.goto(await divisionPath(page.request, divisionId));
     // Match Day C5b: the link is an item of the header's "Open" menu (with Slideshow and the QR poster), folded away until the
     // menu is opened - so open it, and look for the link INSIDE it.
-    await page.getByTestId("desk-open-menu-toggle").click({ timeout: 20_000 });
+    // The toggle paints before the page hydrates, and a click that lands in that gap is dropped (the menu never opens, the assertion
+    // below then waits on a link that is not there). So retry the open until the toggle itself reports `aria-expanded="true"` - and
+    // never click an already-open one, which would close it (Match Day C5b M1).
+    const openToggle = page.getByTestId("desk-open-menu-toggle");
+    await expect(async () => {
+      if ((await openToggle.getAttribute("aria-expanded")) !== "true") await openToggle.click({ timeout: 5_000 });
+      await expect(openToggle).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
     await expect(
       page
         .getByTestId("desk-open-menu")

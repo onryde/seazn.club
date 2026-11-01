@@ -277,6 +277,38 @@ describe("division page — Slideshow, View Public Page and QR fold into one Ope
     expect(openAt, "Open leads Registration").toBeLessThan(regAt);
   });
 
+  // Match Day E1 item 8 (C5b M2): the phone sheet is `position: absolute` against the nearest positioned ancestor, and `max-md:static` on
+  // the menu's own root is what makes that ancestor the HEADER ROW. Take `relative` off the row and the sheet anchors to something
+  // far above it - the whole page's first positioned box - and lands wherever that happens to be. The row's class is the only thing
+  // that says which ancestor it is, so it is pinned here, on the real row (the Open menu's PARENT), not on a copy of its class.
+  it("the header row holding the Open menu is `relative`: it is the anchor of the phone sheet (the menu root is max-md:static)", async () => {
+    const tree = await renderPage();
+    const parents: ReactElement[] = [];
+    const visit = (node: ReactNode, parent: ReactElement | null): void => {
+      if (Array.isArray(node)) {
+        for (const child of node) visit(child as ReactNode, parent);
+        return;
+      }
+      if (!isValidElement(node)) return;
+      if (node.type === DeskOpenMenu && parent !== null) parents.push(parent);
+      visit((node.props as { children?: ReactNode }).children, node);
+    };
+    visit(tree, null);
+    expect(parents.length, "anti-vacuity: the Open menu's parent was found").toBe(1);
+    const row = String((parents[0]!.props as { className?: string }).className ?? "");
+    expect(row, "the row positions its absolutely-placed sheet").toMatch(/(^|\s)relative(\s|$)/);
+    // ...and the menu really is the static half of that pair, so the pin above is about something.
+    expect(String((openMenus(tree)[0]!.props as { className?: string }).className)).toContain("max-md:static");
+  });
+
+  // Match Day E1 item 8 (C5b M3): the Registration tile beside the Open menu was a 38px `.btn` on a phone - the tap floor is 44.
+  it("the Registration tile clears the 44px tap floor on a phone", async () => {
+    const tree = await renderPage();
+    const tiles = findAll(tree, Link).filter((el) => String((el.props as { href?: string }).href ?? "").includes("/registration"));
+    expect(tiles.length, "anti-vacuity: the Registration tile was found").toBe(1);
+    expect(String((tiles[0]!.props as { className?: string }).className)).toMatch(/(^|\s)max-md:min-h-11(\s|$)/);
+  });
+
   it("invents no Match Day item: the division page never linked Match Day from its header", async () => {
     const items = itemsOf(openMenus(await renderPage())[0]!);
     expect(items.map((i) => i.id)).not.toContain("matchday");

@@ -279,8 +279,13 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   await expect(page.getByTestId("division-builder-create")).toHaveCount(0);
   // A reachability check would pass on any value, so drive the case a
   // power-of-two list cannot express: a generic bracket makes 3 a real shape.
+  // Match Day E1 item 8 (D1): mending the box takes the refusal off the screen at once - no further press needed - and the
+  // builder's number input and Next button hold the 44px tap floor (they measured 42 and 38).
   await qualify.fill("3");
   await expect(qualify).toHaveValue("3");
+  await expect(page.getByTestId("division-builder-error"), "the refusal goes when the knob it names changes").toHaveCount(0);
+  expect((await qualify.boundingBox())!.height, "the Top N box holds 44px").toBeGreaterThanOrEqual(44);
+  expect((await page.getByTestId("division-builder-next").boundingBox())!.height, "Next holds 44px").toBeGreaterThanOrEqual(44);
   // Three rounds is a full round robin for four entrants — the strict Ann >
   // Bo > Cy > Di table the knockout half reads below. Default wizard rounds
   // is 5; pin the organiser-set budget here rather than trusting the default.

@@ -305,6 +305,9 @@ export function DivisionBuilder({
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   const [error, setError] = useState<string | null>(null);
+  // Match Day E1 item 8 (D1): a refusal of a format knob (formatBoundProblem) remembers the knob values it was raised for, so it can be
+  // dropped the moment the organiser changes the box it names (see the render-phase clear below).
+  const [formatRefusal, setFormatRefusal] = useState<{ text: string; knobs: string } | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   // Parallel to paywallFeature rather than folded into one object, so every
   // existing `paywallFeature === "..."` comparison (the archived-slot
@@ -434,7 +437,7 @@ export function DivisionBuilder({
     // could otherwise reach the stages POST - which refuses it after the division itself was created, leaving it empty.
     const formatProblem = formatBoundProblem();
     if (formatProblem !== null) {
-      setError(formatProblem);
+      refuse(formatProblem);
       return;
     }
 
@@ -614,10 +617,18 @@ export function DivisionBuilder({
     return null;
   }
 
+  /** Raise a refusal into the form's one error slot. One that is a format-knob refusal (the same sentence `formatBoundProblem` says now)
+   *  is remembered with the knobs it was raised for, so it goes when they change; any other error is never tagged, so a knob change
+   *  cannot touch it. */
+  function refuse(text: string) {
+    setError(text);
+    if (text === formatBoundProblem()) setFormatRefusal({ text, knobs: boundKnobs });
+  }
+
   function goNext() {
     const err = tabError(tab);
     if (err) {
-      setError(err);
+      refuse(err);
       return;
     }
     setError(null);
@@ -636,12 +647,24 @@ export function DivisionBuilder({
   if (shownPreview && shownPreview.knobs !== knobs) setPreview(null);
   const preview = shownPreview?.phases ?? null;
 
+  // Match Day E1 item 8 (D1): the same render-phase clear for a format refusal. It is about the bounded knobs (and the template, which
+  // decides which of them are on screen); when any of them changes, the sentence about the old value goes - from the form's error slot
+  // and from the example's - and only if the slot still holds THAT sentence, so an unrelated error raised since is never touched. A
+  // clear, not a hidden value: putting the old value back does not resurrect it.
+  const boundKnobs = JSON.stringify([template, qualified, swissRounds, poolCount]);
+  if (formatRefusal !== null && formatRefusal.knobs !== boundKnobs) {
+    setFormatRefusal(null);
+    if (error === formatRefusal.text) setError(null);
+    if (previewError === formatRefusal.text) setPreviewError(null);
+  }
+
   async function runPreview() {
     setPreviewError(null);
     // The example draws the stages Create would send, so a knob Create refuses draws nothing either.
     const formatProblem = formatBoundProblem();
     if (formatProblem !== null) {
       setPreviewError(formatProblem);
+      setFormatRefusal({ text: formatProblem, knobs: boundKnobs });
       return;
     }
     setPreviewBusy(true);
@@ -664,7 +687,7 @@ export function DivisionBuilder({
     if (TAB_ORDER.indexOf(key) > tabIndex) {
       const err = tabError(tab);
       if (err) {
-        setError(err);
+        refuse(err);
         return;
       }
     }
@@ -781,7 +804,7 @@ export function DivisionBuilder({
               value={maxAge}
               onChange={(e) => setMaxAge(e.target.value)}
               placeholder={msg("wizard.ageOpen")}
-              className="input"
+              className="input min-h-11"
             />
           </label>
           <label className="block">
@@ -807,7 +830,7 @@ export function DivisionBuilder({
               max={31}
               value={cutoffDay}
               onChange={(e) => setCutoffDay(e.target.value)}
-              className="input"
+              className="input min-h-11"
               disabled={!maxAge}
             />
           </label>
@@ -931,7 +954,7 @@ export function DivisionBuilder({
                 max={FORMAT_BOUNDS.pools.max}
                 value={poolCount}
                 onChange={(e) => setPoolCount(Number(e.target.value))}
-                className="input"
+                className="input min-h-11"
               />
             </label>
           )}
@@ -945,7 +968,7 @@ export function DivisionBuilder({
                 max={FORMAT_BOUNDS.swissRounds.max}
                 value={swissRounds}
                 onChange={(e) => setSwissRounds(Number(e.target.value))}
-                className="input"
+                className="input min-h-11"
               />
             </label>
           )}
@@ -961,7 +984,7 @@ export function DivisionBuilder({
                 max={FORMAT_BOUNDS.qualify.max}
                 value={qualified}
                 onChange={(e) => setQualified(Number(e.target.value))}
-                className="input"
+                className="input min-h-11"
               />
             </label>
           )}
@@ -1128,7 +1151,7 @@ export function DivisionBuilder({
                 setMatchMinutesTouched(true);
                 setMatchMinutes(Number(e.target.value) || 30);
               }}
-              className="input w-full"
+              className="input min-h-11 w-full"
             />
             <span className="mt-0.5 block text-xs text-slate-400">{msg("wizard.matchLengthHint")}</span>
           </label>
@@ -1233,7 +1256,8 @@ export function DivisionBuilder({
         <button
           type="button"
           onClick={() => router.push(routes.competition(orgSlug, compSlug))}
-          className="btn btn-ghost"
+          // Match Day E1 item 8 (D1): the nav row's buttons hold the 44px floor (the bare `.btn` is 38px).
+          className="btn btn-ghost min-h-11"
         >
           {msg("wizard.cancel")}
         </button>
@@ -1242,7 +1266,7 @@ export function DivisionBuilder({
             <button
               type="button"
               onClick={() => setTab(TAB_ORDER[tabIndex - 1]!)}
-              className="btn btn-ghost"
+              className="btn btn-ghost min-h-11"
             >
               {msg("wizard.back")}
             </button>
@@ -1253,7 +1277,7 @@ export function DivisionBuilder({
               data-testid="division-builder-create"
               onClick={() => void submit()}
               disabled={busy || !name.trim() || !sportKey || !variantKey}
-              className="btn btn-primary"
+              className="btn btn-primary min-h-11"
             >
               {busy ? msg("wizard.creating") : msg("wizard.create")}
             </button>
@@ -1262,7 +1286,7 @@ export function DivisionBuilder({
               type="button"
               data-testid="division-builder-next"
               onClick={goNext}
-              className="btn btn-primary"
+              className="btn btn-primary min-h-11"
             >
               {msg("wizard.next")}
             </button>
