@@ -9,8 +9,16 @@
 //   2. A stream short code typed as a viewer types it (`seazn.club/s/<CODE>`, in either case — fix round 1, I2): 302 to
 //      the sponsor, and each visit is a `stream` row for the code's fixture. Each visit names its own client IP, so a
 //      Redis-backed repeat window (none in e2e today) could not fold them into one.
-// The sponsor's site is fulfilled by a route stub, so no test leaves the box. The expected values are the spec's
+// The sponsor's site is never reached: no test leaves the box. The expected values are the spec's
 // (`?f=<fixture>&src=match`, `stream`), never read off the page under test.
+//
+// WHY THE TAP ROUTES THE `/s/` HOP, NOT THE SPONSOR'S HOST (fix round 2, CI run 41256296230): Playwright calls a route
+// handler "only for the first url if the response is a redirect" (playwright-core types.d.ts, `page.route`), so a
+// route on the sponsor's host never fires behind the 302 — the popup went to DNS, which `.example` never answers, and
+// died on chrome-error. Probed locally against a redirect stub: same tab or popup, `continue`d or `route.fetch`ed and
+// fulfilled, the redirect TARGET is never routed. So the popup's first request — the board's own href — is routed,
+// sent to the REAL server unchanged (`route.fetch`, redirects not followed: the server records the click from this
+// browser's request), its real answer is asserted exactly, and the popup is handed the sponsor's page in its place.
 import { expect, test, type Page } from "@playwright/test";
 import { TAG, activeOrg, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, withDb } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
@@ -85,10 +93,6 @@ for (const width of [320, 768, 1280] as const) {
 
     test("the match page sponsor board counts a click for that match", async ({ page, context }) => {
       const r = await rig(page);
-      // The sponsor's own site, stubbed: the tap must reach it, but nothing leaves the box.
-      await context.route(`https://${SPONSOR_HOST}/**`, (route) =>
-        route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>Sponsor</title><h1>Sponsor</h1>" }),
-      );
 
       await page.goto(r.publicPath);
       await dismissCookieBanner(page);
@@ -110,11 +114,35 @@ for (const width of [320, 768, 1280] as const) {
       for (const id of [r.titleId, r.goldId]) expect(hrefs, id).toContain(`/s/${id}?f=${r.fixtureId}&src=match`);
       expect(hrefs.length, "links checked").toBeGreaterThanOrEqual(2);
 
-      // The tap a spectator makes: the gold panel opens the sponsor's site in a new tab, through the tracked redirect.
+      // The tap a spectator makes: the gold panel opens a new tab through the tracked redirect. Its `/s/` hop goes to the
+      // real server (see the header for why it is routed): context-level, so the popup's first request is caught.
+      let resolveHop!: (hop: { url: string; status: number; location: string | undefined }) => void;
+      let rejectHop!: (err: unknown) => void;
+      const hop = new Promise<{ url: string; status: number; location: string | undefined }>((res, rej) => {
+        resolveHop = res;
+        rejectHop = rej;
+      });
+      await context.route(
+        (url) => url.pathname === `/s/${r.goldId}`,
+        async (route) => {
+          try {
+            const real = await route.fetch({ maxRedirects: 0 });
+            resolveHop({ url: route.request().url(), status: real.status(), location: real.headers()["location"] });
+            await route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><title>Sponsor</title><h1>Sponsor</h1>" });
+          } catch (err) {
+            rejectHop(err);
+          }
+        },
+      );
       const link = board.locator(`a[href^="/s/${r.goldId}?"]`);
       await link.scrollIntoViewIfNeeded();
       const [popup] = await Promise.all([page.waitForEvent("popup"), link.click()]);
-      await popup.waitForURL(`https://${SPONSOR_HOST}/gold`);
+      const tapped = await hop;
+      // The new tab asked for the board's own href, and the real server sent it to the sponsor's stored url.
+      expect(new URL(tapped.url).pathname + new URL(tapped.url).search).toBe(`/s/${r.goldId}?f=${r.fixtureId}&src=match`);
+      expect(tapped.status, "the real /s/ hop redirects").toBe(302);
+      expect(tapped.location, "to the sponsor's stored url").toBe(`https://${SPONSOR_HOST}/gold`);
+      await expect(popup).toHaveTitle("Sponsor");
       await expect.poll(() => clicksOf(r.goldId), { timeout: 15_000 }).toEqual([{ fixture_id: r.fixtureId, source: "match" }]);
       // Only the tapped sponsor counted.
       expect(await clicksOf(r.titleId)).toEqual([]);
