@@ -902,6 +902,15 @@ function owedLines(le: LateEntryAnswer, nameOf: (id: string) => string): { tone:
   return out;
 }
 
+/** The run sheet opens on "Today" on a match day — a board in play makes the division's phase `match_day`
+ *  (division-phase.ts), which seeds the sheet's filter (stages-panel.tsx) — and "Today" hides an untimed row. Every
+ *  fixture here is untimed, so a row lookup after a board has started reads the sheet under All (CI run 41328392447). */
+async function showAllFixtures(page: Page) {
+  const all = page.locator('[data-testid="run-sheet-filter"] [data-filter="all"]');
+  await all.click({ timeout: 20_000 });
+  await expect(all).toHaveAttribute("aria-pressed", "true");
+}
+
 async function noticeLines(page: Page) {
   const lines = page.getByTestId("entrants-late-entry-line");
   await expect(lines.first()).toBeVisible({ timeout: 20_000 });
@@ -953,6 +962,7 @@ for (const sport of LATE_SPORTS) {
       expect(board, "the new board is round 1's").toBeDefined();
       expect([board!.home_entrant_id, board!.away_entrant_id].sort()).toEqual([body.data!.id, bye!.home_entrant_id].sort());
       await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      await showAllFixtures(page);
       const row = page.locator(`li[data-fixture-no="${board!.fixture_no}"]`);
       await expect(row).toContainText(late, { timeout: 20_000 });
       await expect(row).toContainText(holder);
@@ -979,7 +989,19 @@ for (const sport of LATE_SPORTS) {
       await expect(page.getByTestId("stage-swiss-latecomer")).toHaveText(fill("swiss.lateEntry.joinNextRound.one", { count: 1 }), {
         timeout: 20_000,
       });
-      await expect(page.getByText(late)).toHaveCount(0);
+      // No line of the run sheet names the latecomer: round 1's three boards are listed (so the sheet is not empty) and
+      // none of its rows, nor a bye line, carries the name.
+      await showAllFixtures(page);
+      const round1 = await r.boards(1);
+      expect(round1.length, "premise: six entrants pair three boards").toBe(3);
+      for (const f of round1) await expect(page.locator(`li[data-fixture-no="${f.fixture_no}"]`)).toBeVisible();
+      await expect(page.locator("li[data-fixture-no]").filter({ hasText: late })).toHaveCount(0);
+      await expect(page.getByTestId("run-sheet-bye").filter({ hasText: late })).toHaveCount(0);
+      // Where the name IS shown: the stage's "Waiting for the next round" line (the roster-drift banner in its Swiss
+      // state), which says Pair next round seats them — the same fact the rail's count states.
+      const waiting = page.getByTestId("roster-drift-banner");
+      await expect(waiting).toHaveAttribute("data-roster-drift-state", "swiss-awaiting-pairing");
+      await expect(waiting).toContainText(late);
     });
 
     // W3 T10c (owner 2026-11-01, "support all entrant kind"): a doubles PAIR is the late entrant (spec §4 "Doubles"). A

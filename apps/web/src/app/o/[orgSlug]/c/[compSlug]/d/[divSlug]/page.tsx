@@ -53,7 +53,7 @@ import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
-import { withTenant } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
 import { DivisionSettings } from "@/components/v2/division-settings";
@@ -617,13 +617,13 @@ export default async function DivisionPage({
   // W3 T10: on the Entrants tab of a started division with a running root Swiss, an add is a LATE add — the form says
   // so and reads the add's `late_entry` back. A bye taken in a round already opened for online play owes the pair an
   // invite, so a chess division's opened rounds ride along (keys `${stageId}:${round}`, `roundKey`).
+  // `stage_round_opens` is SEALED (V451: no app_user grant): inside `withTenant` the read is refused (42501) and the tab
+  // crashed (CI run 41328392447). Read with the privileged client, as competition-desk.ts does, for this one division
+  // only — the one requireDivisionPage just proved is this org's.
   const swissLateEntry =
     tab === "entrants" && editable && divisionTakesSwissLateEntry(division.status, stages)
       ? {
-          openOnlineRounds:
-            division.sport_key === "boardgame"
-              ? [...(await withTenant(auth.orgId, (tx) => roundOpensOfDivisions(tx, [id]))).keys()]
-              : [],
+          openOnlineRounds: division.sport_key === "boardgame" ? [...(await roundOpensOfDivisions(sql, [id])).keys()] : [],
         }
       : null;
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
