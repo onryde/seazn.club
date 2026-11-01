@@ -572,6 +572,10 @@ divisions). Fix, in this task's re-vendor:
   apply. Never give a shell the whole field's people — every shell of a round would then clash with every other and the
   round would serialise onto one court.
 - `toRequest` sets the flag on exactly the Swiss shells that carry no entrant (bye shells never reach placement, X-SW-29).
+- **Ruling 256 (same addendum):** the producers also send `roundGapMinutes` (= the division's minimum rest) and
+  `roundsPerDayCap` (= the division's per-player daily match cap), 0 when unset, on every Swiss fixture and pinned row;
+  re-pin where those two division settings live before building. Test: a Swiss with rest 30 and cap 2 auto-schedules
+  round 2 ≥ round 1's last end + 30, and no day holds more than 2 rounds.
 - Tests: `X-SW-31 auto-schedule of a Swiss stage with unpaired rounds is solved, not refused` (the request carries the
   flag, the solver path returns a placement, no `solver_unavailable` fallback); a counted contract test that `toRequest`
   never emits a fixture with both index lists empty AND no flag (fails at 0 checked); `round_no` is stamped on every

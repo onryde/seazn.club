@@ -855,6 +855,32 @@ it("X-SW-9 a stage pinned to the pre-W3 badminton chain still ranks by its pin (
 
 ---
 
+### Task 10c: Unpaired round slots, the round gap and rounds per day (rulings 255–256; X-SW-31 follow-on)
+
+**Contract (identical to the placement service, PR feat/w3-unpaired-round-slots):**
+- `unpairedRoundSlot?: boolean` on the solver-port fixture / `SolveBuildInput` fixture: no entrants and no people; it
+  takes a court and time, and no person constraint applies. Set it only AFTER `roundBearingFor` — a slot whose round
+  was stripped must not go out flagged (the service refuses the whole request, and greedy ships).
+- `roundGapMinutes` (proto `Fixture.round_gap_minutes`): under the END barrier, every board of round r starts no
+  earlier than the last END of round r−1 in the same sequence PLUS this many minutes. 0/absent = no gap (PR #4's END).
+- `roundsPerDayCap` (proto `Fixture.rounds_per_day_cap`): in one sequence, the number of distinct rounds with at least
+  one board on a calendar day is at most this. 0/absent = no cap. Applies to paired and unpaired boards alike (in a
+  Swiss each player plays once per round, so rounds per day IS matches per player per day).
+- Both are uniform across a sequence (mixed values → CONFIG_INVALID / INVALID_REQUEST, like `roundBarrier`), and both
+  bind pins (`existing`) as the barrier does.
+- App values: gap = the division's minimum rest between a player's matches; cap = the division's per-player daily
+  match cap; 0 when the division sets none.
+
+**Three placement sides** (CP-SAT is the service; here: the greedy placer, the verifier, the solver-port mapping):
+- the placer honours the gap and the cap (seeded from `existing` like T10b's floor);
+- the verifier reports `round_order_end` with the gap included in `shortfallMinutes`, and a new kind
+  `rounds_per_day` (identity: sequence + day; detail: count vs cap);
+- a new refusal detail `no_slot_rounds_per_day` when the cap leaves no day.
+
+**Tests:** empty case first (0/absent → byte-identical to T10b); the gap pushes round 2 by exactly the gap; the cap
+moves round 3 to day 2 with cap 2; pins bind both; mixed values refused; the flag after a stripped round never goes out;
+a counted parity sweep (placer output passes the verifier) failing at 0. Mutate each guard once.
+
 ### Task 11: Open the engine PR (release-order gates, changeset, branch gates, live-division result, body). Runs AFTER Task 12
 
 **Files:**
