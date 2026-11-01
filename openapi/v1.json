@@ -67955,7 +67955,6 @@
                     ]
                   },
                   "sort": {
-                    "default": 0,
                     "type": "integer",
                     "minimum": -9007199254740991,
                     "maximum": 9007199254740991
@@ -69348,13 +69347,11 @@
                     "maxLength": 200
                   },
                   "sort": {
-                    "default": 0,
                     "type": "integer",
                     "minimum": -9007199254740991,
                     "maximum": 9007199254740991
                   },
                   "tags": {
-                    "default": [],
                     "maxItems": 50,
                     "type": "array",
                     "items": {
@@ -101467,9 +101464,6 @@
                     ]
                   },
                   "role_keys": {
-                    "default": [
-                      "referee"
-                    ],
                     "minItems": 1,
                     "type": "array",
                     "items": {
