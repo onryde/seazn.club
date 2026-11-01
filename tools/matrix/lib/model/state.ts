@@ -19,6 +19,7 @@
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { EngineError, forbidsLevelResult, isLevelOutcome, type StageKind } from "@seazn/engine/core";
 import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
+import { isRunningRootSwiss } from "../../../../apps/web/src/lib/open-entry-stages.ts";
 import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
 import type { CheckResult } from "../results.ts";
@@ -200,17 +201,28 @@ export const LINEUP_LOCKED_FINDING = "model-lineup-past-scheduled";
 
 /** entrants.ts createEntrants: once the division is `active` or `completed`
  *  (Start, then completion) the entrant list is locked with a 422, unless a
- *  stage is an open-window format. Pinned against entrants.ts's text by
+ *  stage is an open-window format (`openKinds`) or — W3 ruling 250, T9 — the
+ *  division holds a root Swiss (`rootSwiss`: `hasRootSwissStage`), which
+ *  swiss-late-entry.ts admits a late player into while it RUNS and refuses by
+ *  name (SWISS_OVER) once it is complete. Pinned against entrants.ts's text by
  *  model-core.test.ts, so a product change turns the pin red. */
-export const ROSTER_LOCK: { readonly status: number; readonly openKinds: readonly string[] } = Object.freeze({
+export const ROSTER_LOCK: { readonly status: number; readonly openKinds: readonly string[]; readonly rootSwiss: boolean } = Object.freeze({
   status: 422,
   openKinds: Object.freeze(["ladder", "americano"]),
+  rootSwiss: true,
 });
 
 /** The product refuses an entrant here. The model's single stage is the
- *  division's only stage, and Start is what moves the division to `active`. */
+ *  division's only stage, and Start is what moves the division to `active`.
+ *  A running root Swiss keeps the list open (ruling 250) — the product's own
+ *  predicate (open-entry-stages.ts `isRunningRootSwiss`, T10 I1) over the
+ *  model's one stage: no progression (modelRowRefusal admits single-stage rows
+ *  only), the config the model posted, and `complete` once Complete answered
+ *  completed. A complete Swiss and every other kind stay locked. */
 export function rosterLocked(m: ModelState): boolean {
-  return m.started && !ROSTER_LOCK.openKinds.includes(m.stageKind);
+  if (!m.started || ROSTER_LOCK.openKinds.includes(m.stageKind)) return false;
+  const stage = { kind: m.stageKind, progression: null, config: m.stageConfig, status: m.completed ? "complete" : "active" };
+  return !(ROSTER_LOCK.rootSwiss && isRunningRootSwiss(stage));
 }
 
 /** A take-back refused under NEXT_MATCH_LOCK that still moved the product's tip. */

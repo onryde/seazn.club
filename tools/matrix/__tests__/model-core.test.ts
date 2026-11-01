@@ -29,7 +29,7 @@ import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-f
 import {
   LINEUP_LOCKED_FINDING, LINEUP_SIDE_SIZE_FINDING, LINEUP_WARNED_CHECK, LINEUPS_CHECK, MODEL_FAMILY_ROUTE, ModelUnsupported,
   NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, NEXT_MATCH_UNHELD_FINDING, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
-  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelRowRefusal, orientationBound, type FixtureModel,
+  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelRowRefusal, orientationBound, rosterLocked, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
 import { NotAWave } from "../lib/routing.ts";
@@ -222,6 +222,7 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
   it("ROSTER_LOCK is the product's own: the statuses, the open-window kinds and the status are read from entrants.ts", () => {
     expect(lock.statuses).toEqual(["active", "completed"]);
     expect([...ROSTER_LOCK.openKinds]).toEqual(lock.openKinds);
+    expect(ROSTER_LOCK.rootSwiss, "W3 ruling 250: a root Swiss exempts the division (hasRootSwissStage)").toBe(lock.rootSwiss);
     expect(ROSTER_LOCK.status).toBe(lock.status);
     expect(lock.openKinds.length).toBeGreaterThan(0);
     // RR-2 tripwire: without it, a product fix silently moves the finding count to 0 and the register never hears.
@@ -300,6 +301,17 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     }
     expect(checked).toBe(lock.openKinds.length);
     expect(checked).toBeGreaterThan(0);
+  });
+  it("W3 ruling 250: a started root Swiss keeps the list open while it runs; complete, or fed by a cut, it is locked", async () => {
+    // single-sport: the lock reads stage kinds and the stage's state, not a sport.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0]]);
+    const at = (over: Partial<ModelState>) => rosterLocked({ ...m, ...over });
+    expect(at({}), "premise: a started league is locked").toBe(true);
+    expect(at({ stageKind: "swiss", stageConfig: { rounds: 3 } }), "a running root Swiss").toBe(false);
+    expect(at({ stageKind: "swiss", stageConfig: { rounds: 3 }, completed: true }), "a complete Swiss").toBe(true);
+    expect(at({ stageKind: "swiss", stageConfig: { rounds: 3, qualified: [] } }), "a Swiss seeded by a cut is not a root Swiss").toBe(true);
+    expect(at({ stageKind: "swiss", stageConfig: { rounds: 3 }, started: false }), "before Start nothing is locked").toBe(false);
   });
 });
 

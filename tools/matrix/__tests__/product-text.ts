@@ -59,6 +59,9 @@ export interface RosterLockText {
   statuses: string[];
   /** Stage kinds that keep a started roster open. */
   openKinds: string[];
+  /** W3 ruling 250 (T9): a root Swiss stage also exempts the division (`hasRootSwissStage`); swiss-late-entry.ts then
+   *  admits the late player while that Swiss runs and refuses it by name (SWISS_OVER) once it is over. */
+  rootSwiss: boolean;
   status: number;
   /** The HttpError's own code, or null (none: the wire carries wireCode). */
   code: string | null;
@@ -68,15 +71,23 @@ export interface RosterLockText {
 }
 
 /** entrants.ts createEntrants: a started tournament's entrant list is locked
- *  unless one of its stages is an open-window format. */
+ *  unless one of its stages is an open-window format — or, since W3 T9 (ruling
+ *  250), the division holds a root Swiss: `!openFormat && !(await
+ *  hasRootSwissStage(tx, divisionId))`. Strict: any other condition shape is
+ *  drift and throws. */
 export function rosterLockText(): RosterLockText {
   const src = read("apps/web/src/server/usecases/entrants.ts");
-  const m = /\n\s*if \(((?:division\.status === "[a-z_]+"(?: \|\| )?)+)\) \{\s*const \[openFormat\] = await tx`[\s\S]*?kind in \(([^)]*)\)[\s\S]*?if \(!openFormat\) \{\s*throw new HttpError\(\s*(\d{3}),\s*"([^"]*)",?\s*(?:("[A-Z_]+"|[A-Za-z_]\w*),?\s*)?\);/.exec(src);
+  const m = /\n\s*if \(((?:division\.status === "[a-z_]+"(?: \|\| )?)+)\) \{\s*const \[openFormat\] = await tx`[\s\S]*?kind in \(([^)]*)\)[\s\S]*?if \(!openFormat( && !\(await hasRootSwissStage\(tx, divisionId\)\))?\) \{\s*throw new HttpError\(\s*(\d{3}),\s*"([^"]*)",?\s*(?:("[A-Z_]+"|[A-Za-z_]\w*),?\s*)?\);/.exec(src);
   if (m === null) throw new Error("product-text: entrants.ts roster lock not found in the expected shape — re-read it and update the model's ROSTER_LOCK");
   const statuses = [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
   const openKinds = [...m[2].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
-  const status = Number(m[3]);
-  const arg = m[5];
+  const rootSwiss = m[3] !== undefined;
+  // The exemption is the product's root-Swiss read, not a look-alike: imported from swiss-late-entry.ts.
+  if (rootSwiss && !/\nimport \{[^}]*\bhasRootSwissStage\b[^}]*\} from "\.\/swiss-late-entry";/.test(src)) {
+    throw new Error("product-text: entrants.ts's hasRootSwissStage is not swiss-late-entry.ts's — re-read it and update the model's ROSTER_LOCK");
+  }
+  const status = Number(m[4]);
+  const arg = m[6];
   let code: string | null = null;
   if (arg !== undefined) {
     if (arg.startsWith("\"")) code = arg.slice(1, -1);
@@ -86,7 +97,7 @@ export function rosterLockText(): RosterLockText {
       code = def[1];
     }
   }
-  return { statuses, openKinds, status, code, wireCode: code ?? wireCodeFor(status), message: m[4] };
+  return { statuses, openKinds, rootSwiss, status, code, wireCode: code ?? wireCodeFor(status), message: m[5] };
 }
 
 /** schedule.ts ROUND_ROBIN_STAGE_KINDS: the stage kinds the product generates
