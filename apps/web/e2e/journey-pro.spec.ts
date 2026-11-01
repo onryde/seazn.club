@@ -310,10 +310,13 @@ test.describe.serial("pro lifecycle", () => {
     // 308 into the hub). The spellings are the hub's own: "matches" is a
     // `deriveHubTabs` id and `?division=` is what `readDivisionParam` reads.
     await page.goto(await divisionPath(page.request, divisionId));
+    // Match Day C5b: the link is an item of the header's "Open" menu (with Slideshow and the QR poster), folded away until the
+    // menu is opened - so open it, and look for the link INSIDE it.
+    await page.getByTestId("desk-open-menu-toggle").click({ timeout: 20_000 });
     await expect(
-      page.locator(
-        `a[href="/shared/${orgSlug}/${competitionSlug}?tab=matches&division=${divisionSlug}"]`,
-      ),
+      page
+        .getByTestId("desk-open-menu")
+        .locator(`a[href="/shared/${orgSlug}/${competitionSlug}?tab=matches&division=${divisionSlug}"]`),
     ).toBeVisible({ timeout: 20_000 });
 
     // Public competition page lists the division.

@@ -1319,6 +1319,101 @@ test("competition desk: the tool row is a phone composition below md, not the de
   await expectNoHorizontalScroll(page);
 });
 
+// Match Day C5b (owner approved 2026-11-01): the DIVISION page's header carried the same three tools as the competition page -
+// Slideshow, View Public Page, the QR poster - as icon-only tiles under `sm`. They are ONE "Open" menu now (the competition
+// page's component). Unlike the competition page the division header has no phone fold, so the menu is on screen at EVERY width
+// and each destination is in the DOM exactly once; below `md` the panel opens as a full-width sheet under the header row, because
+// the trigger's x depends on how the title and chips wrap. A 43-character division name is what makes it wrap at 320.
+test("division header: Slideshow, View Public Page and QR are one Open menu at every width, once each, on screen, 44px (C5b)", async ({
+  page,
+  request,
+}) => {
+  const width = projectViewport()?.width ?? 0;
+  const isPhone = width < 768;
+  const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+    name: `Division Open ${TAG}`, visibility: "public", ends_on: "2030-12-31",
+  });
+  expect(comp.status).toBe(201);
+  const div = await apiJson<{ id: string; slug: string }>(
+    request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST",
+    { name: "Under-12 Girls Regional Championship Pool A", sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false } },
+  );
+  expect(div.status).toBe(201);
+  await page.goto(await divisionPath(request, div.data!.id), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const m = /^\/o\/([^/]+)\/c\/([^/]+)\/d\/([^/?]+)/.exec(new URL(page.url()).pathname);
+  expect(m, `on the division page, got ${page.url()}`).not.toBeNull();
+  const [, orgSlug, , divSlug] = m!;
+
+  const toggle = page.getByTestId("desk-open-menu-toggle");
+  const items = page.getByTestId("desk-open-menu").getByRole("menuitem");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Under-12 Girls");
+  await expect(toggle, "Open is on screen at every width - this header has no phone fold").toBeVisible();
+  await expect(toggle).toHaveText("Open");
+  await expect(toggle).toHaveAttribute("aria-haspopup", "menu");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  if (isPhone) {
+    const tb = await toggle.boundingBox();
+    expect(tb, "the trigger has a box").not.toBeNull();
+    expect(tb!.height, "a phone trigger clears the 44px floor").toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+  }
+  await expect(items, "folded away until it is opened").toHaveCount(0);
+
+  // Each destination is in the DOM exactly ONCE at this width (a hidden copy beside a visible one is still a copy).
+  const slideshowHref = `/slideshow/divisions/${div.data!.id}`;
+  const publicHref = `/shared/${orgSlug}/${comp.data!.slug}?tab=matches&division=${divSlug}`;
+  const qrHref = `/shared/${orgSlug}/${comp.data!.slug}/poster.pdf?division=${divSlug}`;
+  for (const href of [slideshowHref, publicHref, qrHref]) {
+    await expect(page.locator(`a[href="${href}"]`), `${href} appears once`).toHaveCount(1);
+  }
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(items).toHaveCount(3);
+  await expect(items.nth(0)).toHaveText("Slideshow ↗");
+  await expect(items.nth(1)).toHaveText("View Public Page ↗");
+  await expect(items.nth(2)).toHaveText("QR");
+  await expect(items.nth(0)).toHaveAttribute("href", slideshowHref);
+  await expect(items.nth(1)).toHaveAttribute("href", publicHref);
+  await expect(items.nth(2)).toHaveAttribute("href", qrHref);
+  for (let i = 0; i < 3; i++) await expect(items.nth(i)).toHaveAttribute("target", "_blank");
+  for (let i = 0; i < 3; i++) {
+    const item = items.nth(i);
+    await expect(item).toBeVisible();
+    const box = await item.boundingBox();
+    expect(box, `item ${i} has a box`).not.toBeNull();
+    expect(box!.height, `item ${i} clears the 44px floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    expect(box!.x, `item ${i} starts on screen`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `item ${i} ends on screen`).toBeLessThanOrEqual(width || 1280);
+    const reachable = await item.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return !!hit && el.contains(hit);
+    });
+    expect(reachable, `item ${i} is on top of everything behind it`).toBe(true);
+  }
+  if (isPhone) {
+    // The sheet: full width under the header row, wherever the trigger wrapped to.
+    const panel = page.getByTestId("desk-open-menu").getByRole("menu");
+    const pb = await panel.boundingBox();
+    const tb = await toggle.boundingBox();
+    expect(pb, "the panel has a box").not.toBeNull();
+    expect(pb!.width, "a phone panel is a full-width sheet").toBeGreaterThan(width * 0.8);
+    expect(pb!.y, "it opens below the trigger, not over it").toBeGreaterThanOrEqual(tb!.y + tb!.height - 1);
+  }
+  await expectNoHorizontalScroll(page);
+  // Escape closes it and returns focus; so does a press outside.
+  await page.keyboard.press("Escape");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(items).toHaveCount(0);
+  await expect(toggle, "focus returns to Open").toBeFocused();
+  await toggle.click();
+  await expect(items).toHaveCount(3);
+  await page.getByRole("heading", { level: 1 }).click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expectNoHorizontalScroll(page);
+});
+
 // R3.5 review round 1 (2026-08-26, finding 4) — split out of "console
 // routes: no horizontal scroll" above. Two fixture seeds plus ~18
 // postEvents (~36 round trips) used to run at the HEAD of that test's own
