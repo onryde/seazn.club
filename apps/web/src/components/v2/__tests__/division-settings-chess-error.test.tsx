@@ -59,8 +59,6 @@ const settings = {
   fixturesHref: "/o/org/c/comp/d/div/fixtures",
   embed: null,
   danger: null,
-  entrantModel: { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null },
-  entrantModelSource: "override",
   autoPosts: false,
   canAutoPost: true,
   showSeeds: true,

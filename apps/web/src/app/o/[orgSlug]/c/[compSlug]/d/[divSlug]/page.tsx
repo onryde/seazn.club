@@ -66,6 +66,7 @@ import type { StageDraft } from "@/lib/format-templates";
 import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
+import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
 import { entrantListLocked } from "@/lib/open-entry-stages";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
@@ -310,10 +311,10 @@ export default async function DivisionPage({
   const editable = canEdit && !billingFrozen;
   const sportModule = resolveModule(division.sport_key, division.module_version);
   // Effective entrant model (sport default ← config.entrants override) — shared
-  // by the entrants panel (add form + roster editor) and the Settings tab.
+  // by the entrants panel (add form + roster editor) and the entrant kinds block above it (Match Day C4: it left Settings).
   // Chess is individual-only (owner ruling 2026-10-26): a division saved before the ruling may still carry a widened
   // `config.entrants`, so the stored override is NOT read for chess - the panels offer individual entry only. The
-  // stored value itself is untouched (Settings > Entrants names it and offers Reset).
+  // stored value itself is untouched (the kinds block names it and offers Reset).
   const entrantModel = effectiveEntrantModel(
     sportModule.entrantModel ?? null,
     isChessSport(division.sport_key) ? null : division.config,
@@ -846,28 +847,42 @@ export default async function DivisionPage({
         </nav>
 
         {tab === "entrants" && (
-          <EntrantsPanel
-            divisionId={id}
-            entrants={entrants}
-            logoUrls={entrantLogos}
-            canEdit={editable}
-            positionGroups={lineupCatalog.groups}
-            roles={lineupCatalog.roles ?? []}
-            // RS007/V380 dropped `divisions.eligibility` (jsonb) — the real
-            // first-class columns, so EntrantsPanel's badge reflects every
-            // division's actual restriction instead of always reading empty.
-            eligibility={{
-              category: division.category,
-              age_min: division.age_min,
-              age_max: division.age_max,
-              eligibility_note: division.eligibility_note,
-            }}
-            entrantModel={entrantModel}
-            suspensions={entrantSuspensions}
-            rosterLocked={entrantListLocked(division.status, stages.map((s) => s.kind))}
-            viewerPlan={viewerPlan}
-            divisionStatus={division.status}
-          />
+          <div className="space-y-6">
+            {/* Match Day C4 (owner, 2026-10-31): the entrant kinds left Settings for the top of this tab, organiser only - they decide
+                what the add-entrant form below offers. `canEdit` here is the PAGE-level organiser (a viewer never gets the block);
+                the block itself is handed `editable`, so a billing-frozen club's organiser sees it read-only, as Settings showed it. */}
+            {canEdit && (
+              <EntrantKindsSettings
+                divisionId={id}
+                sportKey={division.sport_key}
+                config={division.config}
+                entrantModel={entrantModel}
+                canEdit={editable}
+              />
+            )}
+            <EntrantsPanel
+              divisionId={id}
+              entrants={entrants}
+              logoUrls={entrantLogos}
+              canEdit={editable}
+              positionGroups={lineupCatalog.groups}
+              roles={lineupCatalog.roles ?? []}
+              // RS007/V380 dropped `divisions.eligibility` (jsonb) — the real
+              // first-class columns, so EntrantsPanel's badge reflects every
+              // division's actual restriction instead of always reading empty.
+              eligibility={{
+                category: division.category,
+                age_min: division.age_min,
+                age_max: division.age_max,
+                eligibility_note: division.eligibility_note,
+              }}
+              entrantModel={entrantModel}
+              suspensions={entrantSuspensions}
+              rosterLocked={entrantListLocked(division.status, stages.map((s) => s.kind))}
+              viewerPlan={viewerPlan}
+              divisionStatus={division.status}
+            />
+          </div>
         )}
 
         {tab === "fixtures" && (
@@ -1204,13 +1219,6 @@ export default async function DivisionPage({
               progression: (st.progression ?? null) as unknown as StageDraft["progression"],
             }))}
             canEdit={editable}
-            entrantModel={entrantModel}
-            entrantModelSource={
-              (() => {
-                const e = (division.config as { entrants?: unknown } | null)?.entrants;
-                return e && typeof e === "object" ? "override" : "sport";
-              })()
-            }
             divisionPathPrefix={`/o/${orgSlug}/c/${compSlug}/d/`}
             fixturesHref={routes.division(orgSlug, compSlug, divSlug, "fixtures")}
             autoPosts={division.auto_posts}

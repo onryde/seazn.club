@@ -7,19 +7,18 @@
 // tie-break order - left this tab for the Division rules strip on the Fixtures tab (`components/v2/rules/`); the Format
 // group keeps the structure and points the organiser there. `lockedFields` is still read for the group's summary (a variant
 // a started stage plays reads "(locked)").
+// Match Day C4 (owner, 2026-10-31): the entrant kinds moved to the top of the Entrants tab (`entrant-kinds-settings.tsx`) and the
+// Advanced overrides JSON is gone for good; "Format" - the structure above - stays here with its rebuild.
 import { useEffect, useState, type ReactNode } from "react";
+import { SettingsGroup } from "@/components/v2/settings-group";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
-import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
-import {
-  CHESS_INDIVIDUAL_ONLY,
-  entrantsOverrideWidensBeyondIndividual,
-  isChessSport,
-} from "@/lib/chess-individual-only";
+import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess";
+import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { lockLineFor } from "./division-settings-locks";
 import type { RefusedField } from "@/lib/rule-errors";
@@ -41,17 +40,7 @@ import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import type { ViewerPlan } from "@/lib/viewer-plan";
-
-// The three entrant shapes, in a stable display order. The effective model
-// (module default ← division override) decides which are ticked.
-const ENTRANT_KINDS = ["individual", "pair", "team"] as const;
-const KIND_LABEL_KEY: Record<(typeof ENTRANT_KINDS)[number], MessageKey> = {
-  individual: "divset.entrants.kind.individual",
-  pair: "divset.entrants.kind.pair",
-  team: "divset.entrants.kind.team",
-};
 
 // One option label per declared camera policy (lib/camera-policy.ts is the
 // vocabulary; camera-policy-copy.test.ts sweeps it against all four locales).
@@ -134,8 +123,8 @@ export interface DivisionSettingsInfo {
    *  COLS, usecases/divisions.ts); not yet READ by scheduling or
    *  candidate-court filtering, which is P9's. Optional (not required) so
    *  existing callers/fixtures that predate this field — the page always
-   *  passes it, but division-settings-entrants.test.tsx and any other
-   *  DivisionSettingsInfo fixture do not — keep compiling and rendering; the
+   *  passes it, but a hand-built
+   *  DivisionSettingsInfo test fixture may not — keep compiling and rendering; the
    *  component defaults a missing value to "no requirement" rather than
    *  throwing. */
   required_court_tags?: string[];
@@ -145,44 +134,6 @@ export interface DivisionSettingsInfo {
   camera_policy?: CameraPolicy | null;
   /** The competition's policy — what an unset division inherits. */
   inherited_camera_policy?: CameraPolicy;
-}
-
-function Group({
-  title,
-  summary,
-  defaultOpen = false,
-  danger = false,
-  children,
-}: {
-  title: string;
-  summary?: string;
-  defaultOpen?: boolean;
-  danger?: boolean;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section className={`card p-0 ${danger ? "border-red-200" : ""}`}>
-      {/* Below md the summary takes a row of its own under the title (order +
-          basis-full) instead of squeezing it: at 320px a long title next to a
-          summary wrapped one word per line. md+ is one row, as before. */}
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 px-5 py-3 text-left md:flex-nowrap md:justify-between"
-      >
-        <span className={`min-w-0 flex-1 text-sm font-semibold ${danger ? "text-red-700" : "text-slate-700"}`}>
-          {title}
-        </span>
-        <span aria-hidden className="order-2 text-xs text-slate-500 md:order-3">{open ? "▾" : "▸"}</span>
-        {summary && !open && (
-          <span className="order-3 basis-full truncate text-xs text-slate-500 md:order-2 md:max-w-sm md:basis-auto">{summary}</span>
-        )}
-      </button>
-      {open && <div className="space-y-3 px-5 pb-5">{children}</div>}
-    </section>
-  );
 }
 
 async function fileToWebp(file: File, max: number): Promise<Blob> {
@@ -328,8 +279,6 @@ export function DivisionSettings({
   fixturesHref,
   embed,
   danger,
-  entrantModel,
-  entrantModelSource,
   autoPosts,
   canAutoPost,
   showSeeds,
@@ -366,12 +315,6 @@ export function DivisionSettings({
   embed: ReactNode;
   /** DivisionDangerZone, unchanged. */
   danger: ReactNode;
-  /** Resolved effective entrant model (module default merged with any
-   *  `config.entrants` override) — seeds the Entrants block's controls. */
-  entrantModel: EffectiveEntrantModel;
-  /** Whether the effective model comes from the sport default or a saved
-   *  `config.entrants` override — drives the caption + Reset affordance. */
-  entrantModelSource: "sport" | "override";
   /** SPEC-2 auto-draft opt-in (divisions.auto_posts). */
   autoPosts: boolean;
   /** news.auto entitlement (Pro) — off → the toggle shows the PlusReveal. */
@@ -436,22 +379,11 @@ export function DivisionSettings({
     setSyncedCameraSignature(cameraSignature);
     setCameraChoice(storedCameraChoice);
   }
-  // Entrants block (spec 2026-07-18): the ticked kinds, the default, and the
-  // team extras seed from the resolved effective model.
-  // Chess is individual-only (owner ruling 2026-10-26): the block offers no kind to choose. A division saved before
-  // the ruling can still hold a widened override; it is named and can be Reset, never edited or re-saved here.
-  const chessOnly = isChessSport(division.sport_key);
-  const chessLegacyEntrants =
-    chessOnly && entrantsOverrideWidensBeyondIndividual((division.config as { entrants?: unknown } | null)?.entrants);
-  const [entrantKinds, setEntrantKinds] = useState<string[]>(entrantModel.kinds);
-  const [entrantDefault, setEntrantDefault] = useState<string>(entrantModel.defaultKind);
-  const [squadNumbers, setSquadNumbers] = useState<boolean>(entrantModel.squadNumbers);
-  const [captain, setCaptain] = useState<boolean>(entrantModel.captain);
   const [autoPostsOn, setAutoPostsOn] = useState<boolean>(autoPosts);
   const [showSeedsOn, setShowSeedsOn] = useState<boolean>(showSeeds);
   // D5/P8 required-court-tags picker (design doc §"Division settings:
   // required-tags picker"). Staged locally, explicit Save — same shape as
-  // the Entrants block above, not autosave-per-chip like venues-panel's
+  // the camera and news blocks, not autosave-per-chip like venues-panel's
   // court tags, because this file's OWN convention (every other multi-field
   // section here) is stage-then-Save.
   const [requiredCourtTags, setRequiredCourtTags] = useState<string[]>(division.required_court_tags ?? []);
@@ -522,11 +454,10 @@ export function DivisionSettings({
         const controls = Array.isArray(err.extra.controls) ? err.extra.controls.map(String).join(", ") : "";
         setError(msg("divset.err.timeControlUnsupported", { controls }));
       } else if (err instanceof ApiV1Error && err.code === CHESS_INDIVIDUAL_ONLY) {
-        // Server English otherwise (no server-side i18n): localise the code. Reached by an entrants save that names a
-        // non-individual kind (a stale page, or a legacy override re-sent beside a different one), and by the format
-        // Apply on a chess division stored with americano/mexicano before the ruling: that structure stays listed and
-        // selected (templatesForSport `current`), so re-applying it - even to change only rounds or courts - is
-        // refused by the stage writers (follow-up to #1027).
+        // Server English otherwise (no server-side i18n): localise the code. Reached by the format Apply on a chess
+        // division stored with americano/mexicano before the ruling: that structure stays listed and selected
+        // (templatesForSport `current`), so re-applying it - even to change only rounds or courts - is refused by the
+        // stage writers (follow-up to #1027). The entrant-kinds save, which met it here too, moved to the Entrants tab.
         setError(msg("divset.err.chessIndividualOnly"));
       } else if (err instanceof ApiV1Error && err.code === ONLINE_CHESS_DISABLED_CODE) {
         // T20 (fix round 1, m6): turning online play on while the club is not offered online chess — a save racing a
@@ -630,45 +561,6 @@ export function DivisionSettings({
       }
     }, msg("divset.camera.saved"));
 
-  // Tick/untick a kind, keeping canonical order and never emptying the list;
-  // if the current default falls out, re-point it at the first remaining kind.
-  const toggleKind = (kind: string) => {
-    const next: string[] = ENTRANT_KINDS.filter((k) =>
-      k === kind ? !entrantKinds.includes(k) : entrantKinds.includes(k),
-    );
-    if (next.length === 0) return;
-    setEntrantKinds(next);
-    if (!next.includes(entrantDefault)) setEntrantDefault(next[0]!);
-  };
-
-  const saveEntrants = () =>
-    run(async () => {
-      // Same wholesale-config contract as applyFormat: the server merges the
-      // variant preset with the sent config and re-validates, so base the
-      // override on the current snapshot and set `entrants` on it.
-      const entrants: Record<string, unknown> = { kinds: entrantKinds, defaultKind: entrantDefault };
-      if (entrantKinds.includes("team")) {
-        entrants.squadNumbers = squadNumbers;
-        entrants.captain = captain;
-      }
-      const override = { ...((division.config as Record<string, unknown>) ?? {}), entrants };
-      await apiV1(`/api/v1/divisions/${division.id}`, {
-        method: "PATCH",
-        json: { config: override },
-      });
-    }, msg("divset.entrants.saved"));
-
-  const resetEntrants = () =>
-    run(async () => {
-      // Drop the override key → the server re-derives from the module default.
-      const override = { ...((division.config as Record<string, unknown>) ?? {}) };
-      delete override.entrants;
-      await apiV1(`/api/v1/divisions/${division.id}`, {
-        method: "PATCH",
-        json: { config: override },
-      });
-    }, msg("divset.entrants.resetDone"));
-
   // SPEC-2: toggle divisions.auto_posts (Pro news.auto). Turning it ON while
   // unentitled returns 402 server-side; the UI gates on canAutoPost so the
   // control only enables when entitled (turning it off is always allowed).
@@ -720,7 +612,7 @@ export function DivisionSettings({
 
   return (
     <div className="max-w-2xl space-y-3" data-testid="division-settings">
-      <Group title={msg("divset.general")} defaultOpen summary={division.name}>
+      <SettingsGroup title={msg("divset.general")} defaultOpen summary={division.name}>
         <label className="block text-xs text-slate-500">
           {msg("divset.name")}
           <input
@@ -786,9 +678,9 @@ export function DivisionSettings({
             onChange={(e) => uploadLogo(e.target.files?.[0])}
           />
         </div>
-      </Group>
+      </SettingsGroup>
 
-      <Group
+      <SettingsGroup
         title={msg("divset.format")}
         // T16 (canvas SettingsPhone): the summary states that the division plays online — a fact, shown whatever the
         // flag and even when the format is locked (the select itself is hidden then).
@@ -919,7 +811,7 @@ export function DivisionSettings({
         {/* Match Day C2: the match format, points and tie-breaks left Settings for the Division rules strip on the Fixtures
             tab (owner, 2026-10-31: "Rules" leave Settings; "Format" - the structure above - stays). */}
         <p className="border-t border-slate-100 pt-3 text-xs text-slate-600" data-testid="division-rules-moved">
-          {msg("divset.rulesMoved")}{" "}
+          {msg(onlinePlayShown(division.sport_key, onlineChessOffered) ? "divset.rulesMovedOnline" : "divset.rulesMoved")}{" "}
           <Link href={fixturesHref} className="font-semibold text-purple-700 underline underline-offset-2">
             {msg("divset.rulesMovedLink")}
           </Link>
@@ -940,13 +832,13 @@ export function DivisionSettings({
             </Link>
           </p>
         )}
-      </Group>
+      </SettingsGroup>
 
       {/* T6 — its own group, OUTSIDE the format lock: the camera requirement
           is edited mostly on divisions that already have fixtures, where the
           Format group above is read-only. T20: only while the club is offered online chess. */}
       {division.sport_key === "boardgame" && onlineChessOffered && (
-        <Group
+        <SettingsGroup
           title={msg("divset.camera.label")}
           summary={cameraSummary(storedCameraChoice, inheritedCamera, msg)}
         >
@@ -996,159 +888,10 @@ export function DivisionSettings({
               {msg("divset.camera.save")}
             </button>
           )}
-        </Group>
+        </SettingsGroup>
       )}
 
-      <Group
-        title={msg("divset.entrants.title")}
-        summary={
-          chessOnly
-            ? msg(KIND_LABEL_KEY.individual)
-            : entrantKinds.map((k) => msg(KIND_LABEL_KEY[k as (typeof ENTRANT_KINDS)[number]])).join(", ")
-        }
-        defaultOpen
-      >
-        {chessOnly ? (
-          <div className="space-y-2" data-testid="entrants-chess-only">
-            <p className="text-xs text-slate-600">{msg("divset.entrants.chessOnly")}</p>
-            {chessLegacyEntrants && (
-              <div
-                role="status"
-                className="grid min-w-0 gap-2 break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
-                data-testid="entrants-chess-legacy"
-              >
-                <span>{msg("divset.entrants.chessLegacy")}</span>
-                {canEdit && (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={resetEntrants}
-                    className="btn w-full justify-self-start text-xs sm:w-auto"
-                  >
-                    {msg("divset.entrants.reset")}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-        <p className="text-xs text-slate-500">{msg("divset.entrants.desc")}</p>
-
-        {/* Source line: a muted "Sport default" note, or, once overridden, the
-            same note swapped for a quiet Reset affordance beside it. */}
-        <div className="flex flex-wrap items-center gap-2 text-[11px]">
-          {entrantModelSource === "sport" ? (
-            <span className="text-slate-500" data-testid="entrants-sport-default">
-              {msg("divset.entrants.sportDefault")}
-            </span>
-          ) : (
-            <>
-              <span className="text-slate-500">{msg("divset.entrants.overridden")}</span>
-              {canEdit && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={resetEntrants}
-                  className="rounded text-slate-500 underline transition hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300"
-                >
-                  {msg("divset.entrants.reset")}
-                </button>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Kinds — multi-select chips, mirroring RoleChipPicker's toggle style.
-            min-inline-size:0 keeps the fieldset from bursting narrow cards. */}
-        <fieldset className="min-w-0 space-y-1.5 [min-inline-size:0]" disabled={!canEdit}>
-          <legend className="label">{msg("divset.entrants.kinds")}</legend>
-          <div className="flex flex-wrap gap-1.5" role="group" aria-label={msg("divset.entrants.kinds")}>
-            {ENTRANT_KINDS.map((kind) => {
-              const active = entrantKinds.includes(kind);
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  data-kind={kind}
-                  aria-pressed={active}
-                  onClick={() => toggleKind(kind)}
-                  disabled={!canEdit}
-                  className={`rounded-full border px-3 py-1 text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-300 disabled:cursor-not-allowed disabled:opacity-60 ${
-                    active
-                      ? "border-purple-600 bg-purple-600 text-white"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-purple-300"
-                  }`}
-                >
-                  {msg(KIND_LABEL_KEY[kind])}
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
-
-        <label className="block text-xs text-slate-500">
-          {msg("divset.entrants.defaultKind")}
-          <select
-            disabled={!canEdit}
-            value={entrantDefault}
-            onChange={(e) => setEntrantDefault(e.target.value)}
-            className="input mt-1 block w-full sm:w-auto"
-          >
-            {entrantKinds.map((kind) => (
-              <option key={kind} value={kind}>
-                {msg(KIND_LABEL_KEY[kind as (typeof ENTRANT_KINDS)[number]])}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {/* Team affordances — indented + grouped, shown only while a team kind
-            is ticked (there is nothing to number or captain otherwise). */}
-        {entrantKinds.includes("team") && (
-          <div className="space-y-2 rounded-lg bg-slate-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {msg("divset.entrants.teamOptions")}
-            </p>
-            <label className="flex items-start gap-2 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                checked={squadNumbers}
-                onChange={(e) => setSquadNumbers(e.target.checked)}
-                disabled={!canEdit}
-                className="mt-0.5"
-              />
-              {msg("divset.entrants.squadNumbers")}
-            </label>
-            <label className="flex items-start gap-2 text-xs text-slate-600">
-              <input
-                type="checkbox"
-                checked={captain}
-                onChange={(e) => setCaptain(e.target.checked)}
-                disabled={!canEdit}
-                className="mt-0.5"
-              />
-              {msg("divset.entrants.captain")}
-            </label>
-          </div>
-        )}
-
-        {canEdit && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={saveEntrants}
-            className="btn btn-primary w-full text-xs sm:w-auto"
-          >
-            {msg("divset.entrants.save")}
-          </button>
-        )}
-        <p className="text-[11px] text-slate-500">{msg("divset.entrants.note")}</p>
-          </>
-        )}
-      </Group>
-
-      <Group
+      <SettingsGroup
         title={msg("divset.requiredTags.title")}
         summary={requiredCourtTags.length > 0 ? requiredCourtTags.join(", ") : msg("divset.requiredTags.any")}
       >
@@ -1174,9 +917,9 @@ export function DivisionSettings({
             {msg("divset.requiredTags.save")}
           </button>
         )}
-      </Group>
+      </SettingsGroup>
 
-      <Group
+      <SettingsGroup
         title={msg("divset.news.title")}
         summary={autoPostsOn ? msg("divset.news.on") : msg("divset.news.off")}
       >
@@ -1206,9 +949,9 @@ export function DivisionSettings({
           {msg("divset.news.timing")}
         </p>
         <p className="text-[11px] text-slate-500">{msg("divset.news.note")}</p>
-      </Group>
+      </SettingsGroup>
 
-      <Group
+      <SettingsGroup
         title={msg("divset.publicPage.title")}
         summary={showSeedsOn ? msg("divset.publicPage.seedsShown") : msg("divset.publicPage.seedsHidden")}
       >
@@ -1226,15 +969,15 @@ export function DivisionSettings({
         <p id={`show-seeds-help-${division.id}`} className="text-xs text-slate-500">
           {msg("divset.publicPage.seedsHelp")}
         </p>
-      </Group>
+      </SettingsGroup>
 
-      <Group title={msg("divset.sharing")} summary={msg("divset.sharingSummary")}>
+      <SettingsGroup title={msg("divset.sharing")} summary={msg("divset.sharingSummary")}>
         {embed}
-      </Group>
+      </SettingsGroup>
 
-      <Group title={msg("divset.danger")} summary={msg("divset.dangerSummary")} danger>
+      <SettingsGroup title={msg("divset.danger")} summary={msg("divset.dangerSummary")} danger>
         {danger}
-      </Group>
+      </SettingsGroup>
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {saveFeedback}

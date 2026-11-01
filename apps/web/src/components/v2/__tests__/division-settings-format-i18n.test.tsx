@@ -40,7 +40,6 @@ import type { ReactNode } from "react";
 import { renderIsland, propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
@@ -69,14 +68,6 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
 
 const en = enUi as Record<string, string>;
 
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
-
 function mount() {
   return renderIsland(DivisionSettings, {
     division: {
@@ -97,8 +88,6 @@ function mount() {
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: <div />,
     danger: <div />,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
     showSeeds: true,

@@ -75,12 +75,10 @@ import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 import { PointsEditor } from "@/components/v2/rules/points-editor";
 import { LockLine } from "@/components/v2/rules/lock-line";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
 const L = (key: string, vars: Record<string, string | number> = {}, dict: Record<string, string> = enUi as Record<string, string>): string =>
   dict[key]!.replace(/\{(\w+)\}/g, (hole, name: string) => (name in vars ? String(vars[name]) : hole));
 
-const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
 const topOf = (path: string): string => path.split(".")[0]!;
 const lock = (field: string, over: Partial<RefusedField> = {}): RefusedField => ({
   field,
@@ -105,8 +103,6 @@ function props(over: Record<string, unknown> = {}, sportKey = "badminton", varia
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: null,
     danger: null,
-    entrantModel: ENTRANT_MODEL,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
     showSeeds: true,

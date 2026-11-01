@@ -9,13 +9,11 @@ import type { ReactNode } from "react";
 import { renderIsland, propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
 
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
 const ALL_KEYS = STAGE_TEMPLATES.map((t) => t.key);
 
@@ -33,8 +31,6 @@ function mount(sport_key: string, variant_key: string, stages: Stage[]) {
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: <div />,
     danger: <div />,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
     showSeeds: true,

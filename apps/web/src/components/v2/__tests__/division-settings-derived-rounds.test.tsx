@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { renderIsland, propsOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { buildTemplateStages } from "@/lib/format-templates";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import enUi from "@/dictionaries/en/ui.json";
 
 vi.mock("next/navigation", () => ({
@@ -28,14 +27,6 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
     },
   };
 });
-
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
 
 const KNOBS = { swissRounds: 5, poolCount: 2, legs: 1, qualified: 4 };
 
@@ -86,8 +77,6 @@ function mount(stages: StageProp[], locked: boolean) {
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: <div />,
     danger: <div />,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
     showSeeds: true,

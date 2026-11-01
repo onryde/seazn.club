@@ -33,7 +33,6 @@ import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -58,14 +57,6 @@ function msgFor(dict: Record<string, string>) {
 }
 const EN = enUi as Record<string, string>;
 const ES = esUi as Record<string, string>;
-
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
 
 function chessProps(
   own: CameraPolicy | null,
@@ -93,8 +84,6 @@ function chessProps(
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: <div />,
     danger: <div />,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
     showSeeds: true,
@@ -253,9 +242,12 @@ describe("contrast: no text-slate-400 on the Settings tab (axe: 2.63:1 at 11px f
   });
 
   it("…nor does any collapsed body the static render cannot open (source sweep)", () => {
-    const src = readFileSync(new URL("../division-settings.tsx", import.meta.url), "utf8");
-    expect(src.length, "premise: the component source was read").toBeGreaterThan(1000);
-    expect(src.match(/\btext-slate-400\b/g) ?? []).toEqual([]);
+    // Match Day C4: the entrant kinds block left for the Entrants tab; it and the shared group header are the same surface's source.
+    for (const file of ["../division-settings.tsx", "../entrant-kinds-settings.tsx", "../settings-group.tsx"]) {
+      const src = readFileSync(new URL(file, import.meta.url), "utf8");
+      expect(src.length, `premise: ${file} was read`).toBeGreaterThan(1000);
+      expect(src.match(/\btext-slate-400\b/g) ?? [], file).toEqual([]);
+    }
   });
 });
 
@@ -293,10 +285,17 @@ describe("online play lives on the Division rules strip, and Settings says where
     expect(saved.find((e) => propsOf(e)["data-testid"] === "division-camera-online-link")).toBeUndefined();
   });
 
-  it("the pointer that replaced the match rules names online play, in every locale (counted)", () => {
+  it("the pointer a chess division reads (online chess offered) names online play, in every locale (counted)", () => {
+    // Match Day C4: the pointer names online play only where the strip draws the control (the other sports read the plain
+    // sentence; division-settings-cleanup.test.tsx sweeps that across the registry).
     let checked = 0;
     for (const [loc, dict] of LOCALES) {
-      expect(dict["divset.rulesMoved"]!.toLowerCase(), loc).toContain(dict["divset.onlinePlay.label"]!.toLowerCase());
+      activeDict.current = dict;
+      const tree = renderIsland(DivisionSettings, chessProps(null, "off")).tree();
+      const pointer = tree.find((e) => propsOf(e)["data-testid"] === "division-rules-moved");
+      expect(pointer, `${loc}: premise, the pointer is on the page`).toBeDefined();
+      expect(textOf(pointer!).toLowerCase(), loc).toContain(dict["divset.onlinePlay.label"]!.toLowerCase());
+      expect(textOf(pointer!), `${loc}: the online sentence`).toContain(dict["divset.rulesMovedOnline"]!);
       checked++;
     }
     expect(checked, "locales").toBe(4);

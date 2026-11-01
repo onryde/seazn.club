@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   variant_key: "classical",
   config: {} as Record<string, unknown>,
   moduleEntrantModel: null as unknown,
+  /** Match Day C4: a billing-frozen competition makes the page's `editable` false while `canEdit` stays true. */
+  frozen: false,
 }));
 
 vi.mock("@/server/page-auth", () => pageAuth);
@@ -25,7 +27,7 @@ vi.mock("@/server/usecases/stages", () => ({
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
 }));
 vi.mock("@/server/usecases/competitions", () => ({
-  getCompetition: vi.fn(async () => ({ id: "comp-1", frozen: false, visibility: "public", slug: "comp-one" })),
+  getCompetition: vi.fn(async () => ({ id: "comp-1", frozen: state.frozen, visibility: "public", slug: "comp-one" })),
 }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => state.locale) }));
 vi.mock("@/server/usecases/divisions", () => ({
@@ -116,6 +118,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { CHESS_SPORT_KEY } from "@/lib/chess-individual-only";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
+import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
 import { DivisionSettings } from "@/components/v2/division-settings";
 
 /** The entrant model the page handed to the one component of this type on this tab. */
@@ -134,21 +137,24 @@ beforeEach(() => {
   state.variant_key = "classical";
   state.config = {};
   state.moduleEntrantModel = null;
+  state.frozen = false;
   pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
 });
 
 describe("division page: chess ignores a legacy widened entrants override", () => {
-  it("a chess division with a widened override is handed individual-only, on the entrants tab and the Settings tab", async () => {
+  it("a chess division with a widened override is handed individual-only, by both components that hold the entrant model on the Entrants tab", async () => {
     const chess = builtinModules.find((m) => m.key === CHESS_SPORT_KEY)!;
     state.sport_key = CHESS_SPORT_KEY;
     state.config = WIDENED;
     state.moduleEntrantModel = chess.entrantModel ?? null;
     const want = effectiveEntrantModel(chess.entrantModel ?? null);
     expect(want.kinds, "premise: the engine declares chess individual-only").toEqual(["individual"]);
-    for (const [tab, type] of [["entrants", EntrantsPanel], ["settings", DivisionSettings]] as const) {
-      const got = await modelOn(tab, type);
-      expect(got.kinds, tab).toEqual(want.kinds);
-      expect(got.defaultKind, tab).toBe(want.defaultKind);
+    // Match Day C4: the entrant kinds moved from the Settings tab to the top of the Entrants tab; the roster panel and the kinds
+    // block read the one clamped model.
+    for (const type of [EntrantsPanel, EntrantKindsSettings]) {
+      const got = await modelOn("entrants", type);
+      expect(got.kinds, String(type.name)).toEqual(want.kinds);
+      expect(got.defaultKind, String(type.name)).toBe(want.defaultKind);
     }
   });
 
@@ -166,6 +172,78 @@ describe("division page: chess ignores a legacy widened entrants override", () =
       checked++;
     }
     expect(checked).toBe(builtinModules.length - 1);
+    expect(checked).toBeGreaterThan(1);
+  });
+});
+
+
+// Match Day C4 (owner, 2026-10-31): the entrant kinds live at the top of the Entrants tab, for the organiser only, and are gone from
+// Settings. The page is the seam: it decides who sees the block and hands it the division's STORED config (the save is a wholesale
+// config PATCH, and Reset / the legacy-chess line read the stored `entrants` key off it). Driven through the real page, both
+// directions: the editor gets it, the viewer does not, and the Settings tab no longer asks for an entrant model at all.
+describe("division page: the entrant kinds block (Match Day C4)", () => {
+  const FOOTBALL_STORED = { variant: "standard", entrants: { kinds: ["individual", "team"], defaultKind: "team" } };
+
+  it("an organiser's Entrants tab mounts the block once, above the roster, with this division's id, sport, stored config and model", async () => {
+    state.sport_key = "football";
+    state.config = FOOTBALL_STORED;
+    state.moduleEntrantModel = (builtinModules.find((m) => m.key === "football")!).entrantModel ?? null;
+    const tree = await renderPage("entrants");
+    const kinds = findAll(tree, (el) => el.type === EntrantKindsSettings);
+    expect(kinds, "exactly one kinds block").toHaveLength(1);
+    const p = kinds[0]!.props as { divisionId: string; sportKey: string; config: unknown; canEdit: boolean; entrantModel: { kinds: string[]; defaultKind: string } };
+    expect(p.divisionId).toBe("div-1");
+    expect(p.sportKey).toBe("football");
+    expect(p.config, "the STORED config, entrants override included").toEqual(FOOTBALL_STORED);
+    expect(p.canEdit).toBe(true);
+    expect(p.entrantModel).toEqual(effectiveEntrantModel((builtinModules.find((m) => m.key === "football")!).entrantModel ?? null, FOOTBALL_STORED));
+    // Above the roster: in document order, the kinds block comes before the roster panel.
+    const order = findAll(tree, (el) => el.type === EntrantKindsSettings || el.type === EntrantsPanel).map((el) => el.type);
+    expect(order).toEqual([EntrantKindsSettings, EntrantsPanel]);
+  });
+
+  it("a viewer's Entrants tab has no kinds block (the roster panel is still there: the positive pair)", async () => {
+    pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
+    const tree = await renderPage("entrants");
+    expect(findAll(tree, (el) => el.type === EntrantKindsSettings)).toHaveLength(0);
+    expect(findAll(tree, (el) => el.type === EntrantsPanel), "premise: the Entrants tab rendered").toHaveLength(1);
+  });
+
+  it("a billing-frozen organiser still sees the block, read-only (canEdit false), as Settings showed it", async () => {
+    state.frozen = true;
+    const tree = await renderPage("entrants");
+    const kinds = findAll(tree, (el) => el.type === EntrantKindsSettings);
+    expect(kinds).toHaveLength(1);
+    expect((kinds[0]!.props as { canEdit: boolean }).canEdit).toBe(false);
+  });
+
+  it("the kinds block is on the Entrants tab only: not on Fixtures or Settings, and Settings is no longer handed an entrant model", async () => {
+    state.sport_key = "football"; // the chess fixtures tab asks the arbiter and external-play reads, which this scaffold does not mock
+    state.moduleEntrantModel = (builtinModules.find((m) => m.key === "football")!).entrantModel ?? null;
+    for (const tab of ["fixtures", "settings"]) {
+      const tree = await renderPage(tab);
+      expect(findAll(tree, (el) => el.type === EntrantKindsSettings), `${tab}: no kinds block`).toHaveLength(0);
+    }
+    const settings = findAll(await renderPage("settings"), (el) => el.type === DivisionSettings);
+    expect(settings, "premise: Settings rendered").toHaveLength(1);
+    const keys = Object.keys(settings[0]!.props as object);
+    expect(keys, "premise: the props were read").toContain("structureLocked");
+    expect(keys).not.toContain("entrantModel");
+    expect(keys).not.toContain("entrantModelSource");
+  });
+
+  it("every sport in the registry gets the block on its Entrants tab, handed its own sport key (counted)", async () => {
+    let checked = 0;
+    for (const m of builtinModules) {
+      state.sport_key = m.key;
+      state.config = {};
+      state.moduleEntrantModel = m.entrantModel ?? null;
+      const kinds = findAll(await renderPage("entrants"), (el) => el.type === EntrantKindsSettings);
+      expect(kinds, m.key).toHaveLength(1);
+      expect((kinds[0]!.props as { sportKey: string }).sportKey, m.key).toBe(m.key);
+      checked++;
+    }
+    expect(checked).toBe(builtinModules.length);
     expect(checked).toBeGreaterThan(1);
   });
 });

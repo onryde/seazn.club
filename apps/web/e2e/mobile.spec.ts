@@ -3989,6 +3989,14 @@ test("density-pair sweep: four more .select/.input controls hold the 44px floor 
   // than as the selector fault it would be.
   await assertFloor(page.getByTestId("entrant-row-seed").first(), "entrant seed input");
   await expectNoHorizontalScroll(page);
+  // Match Day C4: the entrant kinds block sits at the top of this tab (organiser). Folded, its header row holds the floor; opened,
+  // so do the three kind chips and the Save, and the page still has no horizontal scroll.
+  const kindsToggle = page.getByRole("button", { name: /^Entrant kinds/ });
+  await assertFloor(kindsToggle, "entrant kinds header");
+  await kindsToggle.click();
+  for (const kind of ["individual", "pair", "team"]) await assertFloor(page.getByTestId("entrant-kinds").locator(`[data-kind="${kind}"]`), `entrant kind chip ${kind}`);
+  await assertFloor(page.getByRole("button", { name: "Save entrant settings" }), "entrant kinds Save");
+  await expectNoHorizontalScroll(page);
 
   // Registrations tab (the org-console "registrations panel" component) was
   // checked here until RS001 deleted it along with the rest of the old

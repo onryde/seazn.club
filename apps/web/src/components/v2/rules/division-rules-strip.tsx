@@ -22,7 +22,7 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import type { TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import type { Dict } from "@/lib/i18n-constants";
 import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy";
-import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
+import { ONLINE_CHESS_DISABLED_CODE, onlinePlayShown } from "@/lib/online-chess";
 import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
 import { LICHESS_CLOCK_FIELD_KEYS, selectedTimeControlKey, timeControlOptions, timeControlRuleValues } from "@/lib/online-time-control";
 import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online-link-gaps";
@@ -160,7 +160,7 @@ export function DivisionRulesStrip({
   // play it), the Lichess clock, then the rule grid's own fields (`divisionGridFields`, the grid's own list). The first lock
   // names the stage for the whole section; when EVERY control is locked the section is read-only - its chips, no Save.
   const variantShown = savedVariantKey !== null && variants.length > 0;
-  const onlineShown = sportKey === "boardgame" && onlineChessOffered;
+  const onlineShown = onlinePlayShown(sportKey, onlineChessOffered);
   const omitted = lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined;
   const formatControls: (RefusedField | undefined)[] = [
     ...(variantShown ? [variantLock] : []),

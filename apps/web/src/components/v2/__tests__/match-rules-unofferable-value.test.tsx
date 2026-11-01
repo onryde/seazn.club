@@ -21,7 +21,7 @@
 // override the organiser never chose to clear.
 //
 // Node env, no DOM: `renderToStaticMarkup` is the house pattern for asserting
-// this panel family's markup (division-settings-entrants.test.tsx).
+// this panel family's markup (division-settings-public-page.test.tsx).
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MatchRuleFields, buildRuleOverride } from "@/components/v2/rules/match-format-editor";

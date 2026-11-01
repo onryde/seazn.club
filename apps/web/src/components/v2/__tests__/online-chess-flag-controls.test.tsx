@@ -56,15 +56,6 @@ import { DivisionSettings } from "@/components/v2/division-settings";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
 import { LichessLinkCard } from "@/components/lichess-link-card";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
-
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
 
 type SettingsProps = Parameters<typeof DivisionSettings>[0];
 function settingsProps(sportKey: string, config: Record<string, unknown>, onlineChessOffered: boolean): SettingsProps {
@@ -90,8 +81,6 @@ function settingsProps(sportKey: string, config: Record<string, unknown>, online
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: null,
     danger: null,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: true,
     showSeeds: true,

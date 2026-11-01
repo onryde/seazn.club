@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { TAG, apiJson, activeOrg, expectNoHorizontalScroll, linkPersonToUserBySql, withDb } from "./helpers";
+import { TAG, apiJson, activeOrg, expectNoHorizontalScroll, linkPersonToUserBySql, loginUi, withDb } from "./helpers";
 import { seedOnlineRound, seedUser } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
 import { openDivisionRules, saveFormat, savePoints } from "./helpers/rules-strip";
@@ -859,4 +859,104 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     await expect(gaps, "nobody left: no box").toHaveCount(0);
     expect(errors).toEqual([]);
   });
+});
+
+// Match Day C4 (owner, 2026-10-31): the entrant kinds left the Settings tab for the TOP of the Entrants tab. Driven in the browser:
+// Settings carries none of it, the Entrants tab opens it above the roster, a Save lands in the stored config and survives a
+// reload, and Reset drops the override AND the chips follow (the block re-syncs from the page's new model - a Reset that left the
+// old ticks on screen would pass every API check). Whole file runs, never `-g`.
+test("entrant kinds: on the Entrants tab above the roster, not in Settings; Save lands, Reset puts the controls back", async ({ page, request }) => {
+  const org = await activeOrg(page);
+  const rig = await seedRig(request);
+  const base = `/o/${org.slug}/c/${rig.compSlug}/d/${rig.divSlug}`;
+  const T = (key: Parameters<typeof uiString>[1]) => uiString("en", key);
+  const toggle = page.getByRole("button", { name: new RegExp(`^${escapeRe(T("divset.entrants.kinds"))}`) });
+  // Scoped to the block: the roster's own add-entrant form draws kind chips with the same attribute.
+  const chip = (kind: string) => page.getByTestId("entrant-kinds").locator(`[data-kind="${kind}"]`);
+  const storedEntrants = async () =>
+    (await apiJson<{ config: { entrants?: { kinds?: string[] } } }>(request, `/api/v1/divisions/${rig.divisionId}`)).data!.config.entrants;
+
+  // Settings: none of it - no group, no chips, no Save - while Format (with its rebuild) is still there.
+  await page.goto(`${base}?tab=settings`);
+  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
+  await expect(toggle, "no entrant kinds group in Settings").toHaveCount(0);
+  await expect(page.locator("[data-kind]"), "no kind chip in Settings").toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Format/ }), "Format stays in Settings").toBeVisible();
+
+  // Entrants tab: the group is there, folded, and sits ABOVE the roster's add form.
+  await page.goto(`${base}?tab=entrants`);
+  await expect(toggle).toBeVisible({ timeout: 20_000 });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  const header = await toggle.boundingBox();
+  const addForm = await page.getByRole("heading", { name: "Add entrant" }).boundingBox();
+  expect(header, "the group header is laid out").not.toBeNull();
+  expect(addForm, "the add-entrant form is laid out").not.toBeNull();
+  expect(header!.y, "the entrant kinds sit above the roster").toBeLessThan(addForm!.y);
+
+  // Open it: the sport default is named; tick the opposite of Pair and Save.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("entrants-sport-default")).toBeVisible();
+  const before = (await chip("pair").getAttribute("aria-pressed")) === "true";
+  await chip("pair").click();
+  await expect(chip("pair")).toHaveAttribute("aria-pressed", String(!before));
+  await page.getByRole("button", { name: T("divset.entrants.save") }).click();
+  await expect(page.getByTestId("entrant-kinds-notice")).toHaveText(T("divset.entrants.saved"), { timeout: 15_000 });
+  const saved = await storedEntrants();
+  expect(saved?.kinds?.includes("pair"), "the stored override carries the new pair state").toBe(!before);
+
+  // Reload: still ticked the new way, and the override is named with its Reset.
+  await page.goto(`${base}?tab=entrants`);
+  await toggle.click();
+  await expect(chip("pair")).toHaveAttribute("aria-pressed", String(!before));
+  await expect(page.getByTestId("entrants-sport-default"), "an override is saved: no sport-default caption").toHaveCount(0);
+
+  // Reset: the override is dropped and the chips FOLLOW the sport default again.
+  await page.getByRole("button", { name: T("divset.entrants.reset") }).click();
+  await expect(page.getByTestId("entrant-kinds-notice")).toHaveText(T("divset.entrants.resetDone"), { timeout: 15_000 });
+  expect(await storedEntrants(), "the override key is gone").toBeUndefined();
+  await expect(chip("pair"), "the chips follow the sport default after a Reset").toHaveAttribute("aria-pressed", String(before), { timeout: 15_000 });
+  await expect(page.getByTestId("entrants-sport-default")).toBeVisible();
+  await expectNoHorizontalScroll(page);
+});
+
+// ...and the other direction, in a browser: a VIEW-ONLY member of the organisation reads the same Entrants tab and is not offered the
+// block (the page mounts it behind the organiser gate; the page-level unit test pins the props, this proves the rendered tab). The
+// roster's own add form is already hidden from them, so the tab being rendered at all is the positive pair.
+test("entrant kinds: a view-only member's Entrants tab does not carry them", async ({ page, request, browser }) => {
+  const org = await activeOrg(page);
+  const rig = await seedRig(request);
+  const base = `/o/${org.slug}/c/${rig.compSlug}/d/${rig.divSlug}`;
+  const toggle = (p: Page) => p.getByRole("button", { name: new RegExp(`^${escapeRe(uiString("en", "divset.entrants.kinds"))}`) });
+
+  // The organiser sees it (the control for the viewer's absence below).
+  await page.goto(`${base}?tab=entrants`);
+  await expect(toggle(page)).toBeVisible({ timeout: 20_000 });
+
+  const tag = Math.random().toString(36).slice(2, 8);
+  const email = `delivered+c4-viewer-${TAG}-${tag}@resend.dev`;
+  let orgId = "";
+  let userId = "";
+  await withDb(async (sql) => {
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${email}, ${"C4 Viewer " + tag}, true) returning id`;
+    const [c] = await sql<{ org_id: string }[]>`select org_id from competitions where id = (select competition_id from divisions where id = ${rig.divisionId})`;
+    orgId = c!.org_id;
+    userId = u!.id;
+    await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'viewer')`;
+  });
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  try {
+    const viewer = await context.newPage();
+    await loginUi(viewer, email);
+    await viewer.request.post("/api/onboarding/complete", { data: {} }).catch(() => undefined);
+    await viewer.goto(`${base}?tab=entrants`);
+    await expect(viewer.locator("main").getByRole("link", { name: /Entrants/ }).first(), "premise: the tab strip rendered for the member").toBeVisible({ timeout: 20_000 });
+    await expect(viewer.locator("main").getByText("Add entrant"), "premise: a viewer has no add form either").toHaveCount(0);
+    await expect(toggle(viewer), "no entrant kinds block for a view-only member").toHaveCount(0);
+    await expect(viewer.locator("[data-kind]")).toHaveCount(0);
+  } finally {
+    await context.close();
+    await withDb((sql) => sql`delete from org_members where org_id = ${orgId} and user_id = ${userId}`);
+  }
 });

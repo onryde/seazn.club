@@ -5,7 +5,7 @@
 // This file is the one statement of that rule. It is pure and client-safe (no
 // server-only imports), so the writers (divisions, registration settings,
 // entrants, imports, stages) and the organiser surfaces that would otherwise
-// OFFER the options (the division Settings > Entrants block, the registration
+// OFFER the options (the entrant kinds block at the top of the division Entrants tab, the registration
 // hub config panel, and, through format-templates.ts templatesForSport, the
 // builder's and Settings' format pickers, which offer no americano/mexicano
 // for chess) read the same predicate and the same refusal.
