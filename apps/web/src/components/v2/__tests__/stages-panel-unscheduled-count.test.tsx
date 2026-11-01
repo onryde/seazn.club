@@ -11,47 +11,17 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: 
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => vi.fn(async () => false) }));
 vi.mock("@/components/ui/tip", () => ({ TipCallout: ({ id }: { id: string }) => <div data-tip={id} /> }));
 
-// Competition Desk W2, max-effort review finding 11 — "two competing
-// 'unscheduled' headings on one tab, over three disagreeing counts of one fact".
-//
-// The duplication itself is time-boxed: `stages-panel.tsx`'s pinned per-stage
-// section keeps the auto-schedule CTA until Task 5 moves it to the rail, while
-// `run-sheet.tsx` owns the ROWS. Both halves are on this one screen until then,
-// so the two things that have to hold in the interim are pinned here, and both
-// are measured from ONE render of the real panel — which mounts the real run
-// sheet inside it, so the numbers under test are the ones an organiser sees
-// side by side rather than two separately-constructed fixtures.
-//
-//  1. The two headings must not read as the same sentence. "Not scheduled yet"
-//     against "Not yet scheduled" was a word-for-word TRANSPOSITION, which is
-//     why plain string inequality is not the assertion — it passes on exactly
-//     the defect. The word MULTISET is, in all four locales.
-//  2. The per-stage counts and the division-wide chip must be the same fact
-//     counted twice, never two predicates. `isUnscheduledFixture` is the one
-//     authority (`division-phase.ts`, W1's ledger).
+// Competition Desk W2, max-effort review finding 11 - "two competing 'unscheduled' headings on one tab, over three disagreeing counts of
+// one fact". Match Day E1 item 1 (owner 2026-11-01) removed one of the two competitors: the card's footer row ("To schedule in this
+// stage N ->") is gone, for an editor and a viewer alike; the counts line above the rows ("3 to schedule") already says it. What is
+// left to hold, measured from ONE render of the real panel (which mounts the real run sheet inside it, so the numbers are the ones an
+// organiser sees side by side):
+//  1. the footer is gone, in every locale's words - no `stage-unscheduled-count` element, and the retired heading text appears
+//     nowhere in the card (its key was deleted with it);
+//  2. the per-stage "N to schedule" counts and the division-wide chip are the same fact counted twice, never two predicates.
+//     `isUnscheduledFixture` is the one authority (`division-phase.ts`, W1's ledger).
 
 const DICTS = { en: enUi, fr: frUi, es: esUi, nl: nlUi } as Record<string, Record<string, string>>;
-
-function words(s: string): string[] {
-  return s
-    .toLocaleLowerCase()
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter(Boolean)
-    .sort();
-}
-
-describe("the two unscheduled headings do not read as the same sentence", () => {
-  it.each(Object.keys(DICTS))("%s: the stage heading is not a transposition of the sheet heading", (locale) => {
-    const dict = DICTS[locale]!;
-    const stageHeading = dict["schedule.unscheduled.title"]!;
-    const sheetHeading = dict["runsheet.unscheduled.title"]!;
-    // Positive pair: both strings actually exist in this locale, so the
-    // comparison below is between two real headings and not two undefineds.
-    expect(stageHeading, `schedule.unscheduled.title missing in ${locale}`).toBeTruthy();
-    expect(sheetHeading, `runsheet.unscheduled.title missing in ${locale}`).toBeTruthy();
-    expect(words(stageHeading)).not.toEqual(words(sheetHeading));
-  });
-});
 
 // --- the counts -------------------------------------------------------------
 
@@ -120,9 +90,19 @@ const PROPS = {
   viewerPlan: "community" as const,
 };
 
-/** Every per-stage "to schedule" badge, in stage order. */
+/** Every per-stage "N to schedule" clause of the counts line, in stage order - the words come from the dictionary's own plural
+ *  templates, so the number is read by the sentence the organiser reads (a card with nothing to schedule has no clause). */
 function stageCounts(html: string): number[] {
-  return [...html.matchAll(/data-testid="stage-unscheduled-count"[^>]*>(\d+)</g)].map((m) => Number(m[1]));
+  const [pre, post] = (enUi as Record<string, string>)["schedule.progress.toSchedule.other"]!.split("{count}") as [string, string];
+  const out: number[] = [];
+  for (const m of html.matchAll(/data-testid="stage-progress-counts"[^>]*>([^<]*)</g)) {
+    for (const clause of m[1]!.split(" \u00b7 ").map((c) => c.trim())) {
+      if (!clause.startsWith(pre) || !clause.endsWith(post)) continue;
+      const n = Number(clause.slice(pre.length, clause.length - post.length));
+      if (Number.isInteger(n)) out.push(n);
+    }
+  }
+  return out;
 }
 
 /** The division-wide chip's number, as rendered by the run sheet the panel
@@ -134,7 +114,7 @@ function chipCount(html: string): number | null {
   return n ? Number(n[1]) : null;
 }
 
-describe("one fact, counted once — the stage badges and the sheet's chip agree", () => {
+describe("one fact, counted once - the stage counts and the sheet's chip agree", () => {
   const html = renderToStaticMarkup(<StagesPanel {...PROPS} />);
 
   // The authority's own answer for the same rows. Derived, never typed in.
@@ -147,10 +127,10 @@ describe("one fact, counted once — the stage badges and the sheet's chip agree
     expect(stageCounts(html)).toEqual([3, 1]);
   });
 
-  it("the per-stage badges sum to the division-wide chip", () => {
-    const badges = stageCounts(html);
-    expect(badges.length, "no per-stage unscheduled badge rendered").toBeGreaterThan(0);
-    expect(badges.reduce((a, b) => a + b, 0)).toBe(chipCount(html));
+  it("the per-stage counts sum to the division-wide chip", () => {
+    const counts = stageCounts(html);
+    expect(counts.length, "no per-stage 'to schedule' count rendered").toBeGreaterThan(0);
+    expect(counts.reduce((a, b) => a + b, 0)).toBe(chipCount(html));
   });
 
   it("and that total is the authority's, not a second predicate's", () => {
@@ -158,19 +138,22 @@ describe("one fact, counted once — the stage badges and the sheet's chip agree
   });
 });
 
-// Fix round 2 (Ruling T4-B, CRITICAL finding): moving the count onto
-// `<StageRail>` (Task 4) means the rail's own `!canEdit -> return null`
-// guard would silently swallow this badge for a non-editing viewer — it
-// carried NO `canEdit` gate in its pre-rail position, only
-// `unscheduled.length > 0`. The identical regression Ruling T3-A already
-// fixed for `courtTagsEditor`; same fix here, same file.
-describe("Fix round 2 (Ruling T4-B) — a non-editing viewer still sees the unscheduled count", () => {
-  it("renders stage-unscheduled-count even when canEdit is false", () => {
-    const html = renderToStaticMarkup(<StagesPanel {...PROPS} canEdit={false} />);
-    expect(
-      stageCounts(html).length,
-      "no per-stage unscheduled badge rendered for a non-editing viewer",
-    ).toBeGreaterThan(0);
-    expect(stageCounts(html)).toEqual([3, 1]);
+// E1 item 1: the footer row is gone for BOTH viewers (it used to be the rail's slot for an editor and an inline copy for a viewer), and the
+// count it carried is still there - in the card's counts line, which every viewer reads.
+describe("E1 item 1 - the 'To schedule in this stage' footer is gone, the count stays", () => {
+  it("no footer element and no retired heading text, editor and viewer, in every locale", () => {
+    let checked = 0;
+    for (const canEdit of [true, false]) {
+      const html = renderToStaticMarkup(<StagesPanel {...PROPS} canEdit={canEdit} />);
+      expect(stageCounts(html), `canEdit=${canEdit}: positive pair - the count itself is on the card`).toEqual([3, 1]);
+      expect(html, `canEdit=${canEdit}`).not.toContain("stage-unscheduled-count");
+      expect(html, `canEdit=${canEdit}: the footer's dashed band`).not.toContain("border-dashed");
+      for (const [locale, dict] of Object.entries(DICTS)) {
+        expect(dict["schedule.unscheduled.title"], `${locale}: the retired key is deleted with its only reader`).toBeUndefined();
+        expect(html, `${locale}`).not.toContain("To schedule in this stage");
+        checked++;
+      }
+    }
+    expect(checked, "editor and viewer x four locales").toBe(8);
   });
 });

@@ -17,7 +17,16 @@ import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
-import { isBye, type RunSheetBlock, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
+import {
+  BRACKET_STAGE_KINDS,
+  isBye,
+  roundPlayed,
+  roundWhen,
+  stageRoundSections,
+  type RunSheetBlock,
+  type RunSheetFixture,
+  type RunSheetOnlinePlay,
+} from "@/lib/run-sheet-groups";
 import type { FeedLabelPair } from "@/lib/schedule-board";
 import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { bracketRoundLabel } from "@/components/v2/stages-panel";
@@ -283,7 +292,9 @@ export function RunSheet({
   // keeps its round headers at the ordinary `top-14` — there is no day
   // header for them to stack under, and reserving the extra height
   // unconditionally would open an empty band under nav for no reason.
-  const hasDayBlock = blocks.some((b) => b.kind === "day");
+  // E1 item 1: a stage card's sheet (`embedded`) has no day headers any more - its rows sit under round bars - so there is no day
+  // header for a bar to stack under, whatever day blocks the division's blocks hold for other cards.
+  const hasDayBlock = !embedded && blocks.some((b) => b.kind === "day");
 
 
   // F3 (W2 walkthrough gate 1): only the unscheduled/settled groups need a
@@ -386,7 +397,7 @@ export function RunSheet({
       const stage = stageById.get(block.stageId);
       const allStageFixtures = block.rounds.flatMap((r) => r.fixtures);
       const roundsWithRows = block.rounds
-        .map((r) => ({ round: r.round, fixtures: r.fixtures.filter(keep) }))
+        .map((r) => ({ round: r.round, allFixtures: r.fixtures, fixtures: r.fixtures.filter(keep) }))
         .filter((r) => r.fixtures.length > 0);
       if (roundsWithRows.length === 0) return null;
       return (
@@ -426,22 +437,13 @@ export function RunSheet({
                   both cases and there is no class to keep in Tailwind's
                   scanner. Review finding m2 is what retired the old
                   `top-[86px]` literal — see the effect's comment. */}
-              <header
-                style={{ top: "calc(3.5rem + var(--desk-day-h, 0px))" }}
-                className={`sticky z-10 border-b border-slate-100 bg-slate-50 px-4 py-2 ${i === 0 && !embedded ? "rounded-t-2xl" : ""}`}
+              <RoundBar
+                title={`${stage && !embedded ? `${stage.name} — ` : ""}${bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}`}
+                played={roundPlayedText(msgPlural, r.allFixtures)}
+                roundedTop={i === 0 && !embedded}
               >
-                <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  {/* Embedded in a stage card the card's own header already names the stage; the section has no rounded
-                      top of its own to protect either (review m2). */}
-                  {stage && !embedded ? `${stage.name} — ` : ""}
-                  {bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}
-                  {dates !== null && (
-                    <span data-run-sheet-round-dates className="ml-1.5 font-normal normal-case text-slate-500">
-                      · {dates}
-                    </span>
-                  )}
-                </h4>
-              </header>
+                {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
+              </RoundBar>
               <ul className="divide-y divide-slate-50">
                 {r.fixtures.map((f) => (
                   <RunSheetRow
@@ -464,6 +466,7 @@ export function RunSheet({
                     venueNoun={venueNoun}
                     awaitsSettle={settleIds.has(f.id)}
                     feedLabels={feedLabels}
+                    inRound={embedded}
                   />
                 ))}
               </ul>
@@ -569,7 +572,88 @@ export function RunSheet({
     return null;
   }
 
-  const renderedBlocks = blocks.map(renderBlock).filter((node): node is React.ReactElement => node !== null);
+  // Match Day E1 item 1 (owner 2026-11-01): a NON-bracket stage's card groups its rows under a bar per ROUND - league, round robin,
+  // groups and Swiss alike. The stage's rows come out of the same division-wide blocks (`stageRoundSections`), under the same
+  // `keep`; what the bar says about the round (how many are played, when) is read off the whole round / the rows shown (below).
+  // A bracket stage keeps `renderBlock`'s own named rounds, in the same bar.
+  const roundsStage = embedded && stageId !== null ? stageById.get(stageId) : undefined;
+  const renderRounds = (): React.ReactElement | null => {
+    if (stageId === null) return null;
+    const sections = stageRoundSections(blocks, stageId)
+      .map((section) => ({ round: section.round, all: section.fixtures, rows: section.fixtures.filter(keep) }))
+      .filter((section) => section.rows.length > 0);
+    if (sections.length === 0) return null;
+    // ONE NOW rule per card: before the first row of today still to come, else after the last row of today (a stage with nothing
+    // timed today carries none). Rows read round by round, so "the first still to come" is the first in that order.
+    let nowAt: { round: number; index: number } | null = null;
+    let lastToday: { round: number; index: number } | null = null;
+    for (const section of sections) {
+      for (let index = 0; index < section.rows.length; index++) {
+        const at = section.rows[index]!.scheduled_at;
+        if (at === null || dayKeyInTz(Date.parse(at), tz) !== today) continue;
+        lastToday = { round: section.round, index: index + 1 };
+        if (nowAt === null && Date.parse(at) > nowMs) nowAt = { round: section.round, index };
+      }
+    }
+    const nowPlace: { round: number; index: number } | null = nowAt ?? lastToday;
+    return (
+      <section key={`rounds-${stageId}`} data-run-sheet-block="rounds">
+        {sections.map((section) => {
+          const when = roundWhen(section.rows, tz);
+          const sameDay = when !== null && when.firstDay === when.lastDay;
+          const dates = roundDateLabel(section.rows, tz, locale);
+          return (
+            <div key={section.round} data-run-sheet-round={section.round}>
+              <RoundBar title={msg("schedule.round", { n: section.round })} played={roundPlayedText(msgPlural, section.all)}>
+                {dates !== null && <span data-run-sheet-round-dates>{" · "}{dates}</span>}
+                {sameDay && when !== null && (
+                  <span data-run-sheet-round-span>
+                    {" · "}
+                    {when.from === when.to ? when.from : `${when.from}\u2013${when.to}`}
+                  </span>
+                )}
+              </RoundBar>
+              <ul className="divide-y divide-slate-50">
+                {section.rows.map((f, i) => (
+                  <RowWithNow
+                    key={f.id}
+                    fixture={f}
+                    showNow={nowPlace !== null && nowPlace.round === section.round && nowPlace.index === i}
+                    msg={msg}
+                    hrefFor={hrefFor}
+                    tz={tz}
+                    orgTz={orgTz}
+                    nowMs={nowMs}
+                    canEdit={canEdit}
+                    entrantNames={entrantNames}
+                    courtNames={courtNames}
+                    venues={venues}
+                    boardSlotOptions={boardSlotOptions}
+                    onRescheduled={onRescheduled}
+                    streamState={streamStates?.[f.id]}
+                    onlinePlay={onlinePlay?.[f.id]}
+                    arbiterHref={arbiterHrefFor?.(f.id)}
+                    matchDayHref={matchDayHref}
+                    venueNoun={venueNoun}
+                    awaitsSettle={settleIds.has(f.id)}
+                    feedLabels={feedLabels}
+                    inRound
+                  />
+                ))}
+                {nowPlace !== null && nowPlace.round === section.round && nowPlace.index === section.rows.length && <NowRule msg={msg} />}
+              </ul>
+            </div>
+          );
+        })}
+      </section>
+    );
+  };
+
+  const renderedBlocks = (
+    roundsStage !== undefined && !BRACKET_STAGE_KINDS.has(roundsStage.kind)
+      ? [renderRounds()]
+      : blocks.map(renderBlock)
+  ).filter((node): node is React.ReactElement => node !== null);
 
   return (
     // Fix (competition desk W3, controller ruling C-1) — `overflow-hidden`
@@ -855,12 +939,66 @@ function RowWithNow({
   /** Declared here only so it survives `...rest` into `RunSheetRow` — this
    *  wrapper reads nothing off it (same posture as `streamState`/`venues`). */
   feedLabels?: Record<string, FeedLabelPair>;
+  /** E1 item 1 - survives `...rest` into `RunSheetRow`: the row sits under its round's bar. */
+  inRound?: boolean;
 }) {
   return (
     <>
       {showNow && <NowRule msg={msg} />}
       <RunSheetRow fixture={fixture} href={hrefFor(fixture)} {...rest} />
     </>
+  );
+}
+
+/** "0 of 2 played": the round's own fact, from every real match in it (`roundPlayed`), in the plural the locale picks for the total. */
+function roundPlayedText(
+  msgPlural: (key: string, count: number, vars?: Record<string, string | number>) => string,
+  fixtures: readonly RunSheetFixture[],
+): string {
+  const { played, total } = roundPlayed(fixtures);
+  return msgPlural("runsheet.round.played", total, { played, total });
+}
+
+/**
+ * The bar over a round's rows - one look for a league's "Round 2" and a knockout's "Semi-finals" (Match Day E1 item 1). The name
+ * leads, the round's facts follow on the same line (how many are played, then whatever `children` add: the day, the clock span),
+ * and it wraps at a phone's width rather than clipping. Sticks under the page's nav as the day heading and the bracket header
+ * before it did (`--desk-day-h` is 0px when no day heading is on the sheet, which is every stage card now).
+ */
+function RoundBar({
+  title,
+  played,
+  roundedTop = false,
+  children,
+}: {
+  title: string;
+  played: string;
+  /** The first bar of a division-wide sheet, which has a rounded top of its own to follow. */
+  roundedTop?: boolean;
+  children?: React.ReactNode;
+}) {
+  return (
+    <header
+      style={{ top: "calc(3.5rem + var(--desk-day-h, 0px))" }}
+      className={`sticky z-10 border-y border-slate-200 bg-slate-100 px-4 py-2 ${roundedTop ? "rounded-t-2xl" : ""}`}
+      data-testid="run-sheet-round-bar"
+    >
+      {/* ONE heading: the name and its facts read as one sentence ("Round 2 · 0 of 1 played · Sat 5 Sep · 21:10-21:50") to a
+          screen reader and to a locator, and wrap together at a phone's width. */}
+      <h4 className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+        <span className="min-w-0 text-sm font-semibold text-slate-800">{title}</span>
+        {/* A real space between the two spans (a flex container paints none, so it costs no layout): the heading's text reads "Final
+            · 0 of 1 played" to a screen reader and to a locator instead of "Final· 0 of 1 played". */}
+        {" "}
+        {/* The facts take their own line on a phone (a deliberate second line, never a dot stranded at the start of a wrap) and sit
+            beside the name from `md`, led by a dot. The dot is part of the sentence for a screen reader and a locator either way. */}
+        <span className="min-w-0 text-xs font-normal text-slate-600 max-md:basis-full">
+          <span className="max-md:hidden">{"\u00b7 "}</span>
+          {played}
+          {children}
+        </span>
+      </h4>
+    </header>
   );
 }
 

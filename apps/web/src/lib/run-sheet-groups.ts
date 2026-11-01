@@ -23,6 +23,7 @@
 // row is the bug, wherever the seam is drawn (_RULES.md, "One zone per
 // fixture").
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
+import { zonedTimeInput } from "@/lib/zoned-datetime";
 import type { FixtureRow } from "@/server/usecases/stages";
 import { unseatedForfeitLoser } from "@/lib/forfeit-tag";
 import type { CameraPolicy } from "@/lib/camera-policy";
@@ -332,4 +333,83 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
     out.push({ kind: "settled", fixtures: settledUntimed });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Match Day E1 item 1 (owner 2026-11-01): a stage card groups its rows under a header bar PER ROUND, not per day. The division-wide
+// `buildRunSheet` above is unchanged (its day / unscheduled / settled blocks still feed the filter counts and the bracket blocks);
+// these three pure functions regroup ONE non-bracket stage's rows from those same blocks.
+// ---------------------------------------------------------------------------
+
+/** One round of a non-bracket stage as the card shows it: its rows in the order they are read. */
+export type StageRoundSection = { round: number; fixtures: RunSheetFixture[] };
+
+/**
+ * One NON-BRACKET stage's rows from the division's blocks, as round sections in the order the rounds are played. Within a round the rows run in time
+ * order and the ones with no time sit last, in the order the draw gave them: the rows a person plays first are read first, and
+ * "No time yet" never interrupts a timed run. Bracket blocks are skipped (a knockout keeps its own named rounds); a bye the
+ * grouping kept (a Swiss sit-out) rides in its round as an untimed row.
+ *
+ * Reads the blocks, never the raw fixture list, so a row `buildRunSheet` leaves off (an untimed league bye, R7c) is absent here too.
+ */
+export function stageRoundSections(blocks: readonly RunSheetBlock[], stageId: string): StageRoundSection[] {
+  const byRound = new Map<number, RunSheetFixture[]>();
+  for (const block of blocks) {
+    if (block.kind === "bracket") continue;
+    for (const f of block.fixtures) {
+      if (f.stage_id !== stageId) continue;
+      const list = byRound.get(f.round_no) ?? [];
+      list.push(f);
+      byRound.set(f.round_no, list);
+    }
+  }
+  const rank = (a: RunSheetFixture, b: RunSheetFixture) => a.seq_in_round - b.seq_in_round || a.fixture_no - b.fixture_no;
+  const inReadingOrder = (a: RunSheetFixture, b: RunSheetFixture) => {
+    if (a.scheduled_at !== null && b.scheduled_at !== null) {
+      return Date.parse(a.scheduled_at) - Date.parse(b.scheduled_at) || rank(a, b);
+    }
+    if (a.scheduled_at !== null) return -1;
+    if (b.scheduled_at !== null) return 1;
+    return rank(a, b);
+  };
+  const sorted = [...byRound.entries()].map(([round, fixtures]) => ({ round, fixtures: [...fixtures].sort(inReadingOrder) }));
+  // Rounds read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last"): by the
+  // earliest kickoff in the round, the rounds with no time at all after them, and round number to break every tie - which is
+  // also the whole order while nothing is timed yet.
+  const earliest = (r: StageRoundSection): number => (r.fixtures[0]?.scheduled_at != null ? Date.parse(r.fixtures[0].scheduled_at) : Number.POSITIVE_INFINITY);
+  return sorted.sort((a, b) => {
+    const ea = earliest(a);
+    const eb = earliest(b);
+    if (ea !== eb) return ea < eb ? -1 : 1;
+    return a.round - b.round;
+  });
+}
+
+/** "N of M played" for one round: M is every real match in it (byes are no match), N the ones with a result. The three void
+ *  statuses are in M and not in N, exactly as the stage's own counts line has them - the two must not disagree. */
+export function roundPlayed(fixtures: readonly RunSheetFixture[]): { played: number; total: number } {
+  let played = 0;
+  let total = 0;
+  for (const f of fixtures) {
+    if (isBye(f)) continue;
+    total++;
+    if (f.status === "decided" || f.status === "finalized") played++;
+  }
+  return { played, total };
+}
+
+/**
+ * When a round is played, from the rows it is asked of: the first and last calendar day in the VENUE zone and, when they are one
+ * day, the clock span of its timed rows ("21:10" to "21:50", equal when only one row has a time). `null` when no row has a time:
+ * a bar with nothing to say about time says nothing (an empty cell is not information).
+ */
+export function roundWhen(
+  fixtures: readonly RunSheetFixture[],
+  tz: string,
+): { firstDay: string; lastDay: string; from: string; to: string } | null {
+  const instants = fixtures.filter((f) => f.scheduled_at !== null).map((f) => Date.parse(f.scheduled_at as string));
+  if (instants.length === 0) return null;
+  const first = Math.min(...instants);
+  const last = Math.max(...instants);
+  return { firstDay: dayKeyInTz(first, tz), lastDay: dayKeyInTz(last, tz), from: zonedTimeInput(first, tz), to: zonedTimeInput(last, tz) };
 }

@@ -7,14 +7,8 @@ import { StageRail, SwissPairingMenuPanel, type StageRailProps } from "../stage-
 
 const stage = { id: "s1", name: "League", kind: "league", seq: 1, status: "active" } as never;
 
-// Task 4 — every existing call site grows the required props.
-// `unscheduledBadgeSlot: null` is a neutral default: a null slot means the
-// pinned unscheduled section stays absent, so these pre-existing tests keep
-// asserting exactly what they asserted before this task touched the file.
-// Fix round 2 (Ruling T4-B): the rail no longer builds the badge itself
-// from a count — it renders whatever `unscheduledBadgeSlot` element the
-// panel hands it, same `courtTagsSlot` shape, so the panel can also mount
-// that SAME element inline for a non-editing viewer.
+// Match Day E1 item 1: the rail no longer takes a court-tags or an unscheduled-badge slot (the panel draws the first at the card's
+// foot and the second is gone), so none of these call sites passes one.
 //
 // Task 10 grows the same set again (`open`/`onToggleOpen`), same convention:
 // `open: false` is a neutral default — none of these tests exercise the
@@ -32,7 +26,6 @@ const stage = { id: "s1", name: "League", kind: "league", seq: 1, status: "activ
 const NEUTRAL = {
   counts: { played: 0, inPlay: 0, unplayed: 4 },
   matchCount: 4,
-  unscheduledBadgeSlot: null,
   open: false,
   onToggleOpen: () => {},
   swissHasUnseated: false,
@@ -41,19 +34,20 @@ const NEUTRAL = {
   // below keeps asserting exactly what it did.
   swissPairingMenu: null,
 };
-const BADGE = <p data-testid="stage-unscheduled-count">3</p>;
 
 describe("StageRail", () => {
   it("a started stage with matches open: Complete is present but disabled with its reason; Generate is gone; Delete stays", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
+        adhoc={false} {...NEUTRAL} />,
     );
     expect(html).not.toContain('data-testid="stage-generate"');
     const complete = /<button[^>]*data-testid="stage-complete"[^>]*>/.exec(html)?.[0] ?? null;
     expect(complete, "Complete is rendered, not hidden").not.toBeNull();
-    expect(complete).toMatch(/\sdisabled=""/);
+    // E1 item 1: `aria-disabled`, NOT `disabled` - it stays focusable so the reason is reachable by keyboard.
+    expect(complete).toContain('aria-disabled="true"');
+    expect(complete).not.toMatch(/\sdisabled=""/);
     expect(complete).toContain('aria-describedby="stage-complete-hint-s1"');
     expect(html).toContain('id="stage-complete-hint-s1"');
     expect(html).toContain("Complete stage unlocks when all 4 matches are played.");
@@ -65,7 +59,7 @@ describe("StageRail", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={pending} canEdit busy={null} fixtureCount={0} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc courtTagsSlot={null} {...NEUTRAL} counts={{ played: 0, inPlay: 0, unplayed: 0 }} matchCount={0} />,
+        adhoc {...NEUTRAL} counts={{ played: 0, inPlay: 0, unplayed: 0 }} matchCount={0} />,
     );
     const generate = /<button[^>]*data-testid="stage-generate"[^>]*>/.exec(html)?.[0] ?? null;
     expect(generate).not.toBeNull();
@@ -79,7 +73,7 @@ describe("StageRail", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={1} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} counts={{ played: 0, inPlay: 1, unplayed: 0 }} matchCount={1} />,
+        adhoc={false} {...NEUTRAL} counts={{ played: 0, inPlay: 1, unplayed: 0 }} matchCount={1} />,
     );
     expect(html).toContain(en["stageCard.completeHint.one"]);
     expect(html).not.toContain("all 1 matches");
@@ -89,9 +83,9 @@ describe("StageRail", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={3} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} counts={{ played: 2, inPlay: 1, unplayed: 0 }} matchCount={3} />,
+        adhoc={false} {...NEUTRAL} counts={{ played: 2, inPlay: 1, unplayed: 0 }} matchCount={3} />,
     );
-    expect(/<button[^>]*data-testid="stage-complete"[^>]*>/.exec(html)?.[0]).toMatch(/\sdisabled=""/);
+    expect(/<button[^>]*data-testid="stage-complete"[^>]*>/.exec(html)?.[0]).toContain('aria-disabled="true"');
     expect(html).toContain("all 3 matches");
   });
 
@@ -99,12 +93,15 @@ describe("StageRail", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={3} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} counts={{ played: 3, inPlay: 0, unplayed: 0 }} matchCount={3} />,
+        adhoc={false} {...NEUTRAL} counts={{ played: 3, inPlay: 0, unplayed: 0 }} matchCount={3} />,
     );
     const complete = /<button[^>]*data-testid="stage-complete"[^>]*>/.exec(html)?.[0] ?? "";
     expect(complete).not.toMatch(/\sdisabled=""/);
+    expect(complete, "no aria-disabled ATTRIBUTE (the class variant `aria-disabled:` is styling)").not.toMatch(/\saria-disabled=/);
+    expect(complete).not.toContain("aria-describedby");
     expect(complete).toMatch(/\bbtn-primary\b/);
     expect(html).not.toContain("stage-complete-hint");
+    expect(html).not.toContain("stage-complete-info");
   });
 
   it("a completed stage offers no action at all (Delete aside)", () => {
@@ -112,7 +109,7 @@ describe("StageRail", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={done} canEdit busy={null} fixtureCount={3} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc courtTagsSlot={null} {...NEUTRAL} counts={{ played: 3, inPlay: 0, unplayed: 0 }} matchCount={3} />,
+        adhoc {...NEUTRAL} counts={{ played: 3, inPlay: 0, unplayed: 0 }} matchCount={3} />,
     );
     for (const id of ["stage-generate", "stage-complete", "stage-add-match", "stage-unpair"]) {
       expect(html, id).not.toContain(`data-testid="${id}"`);
@@ -126,7 +123,7 @@ describe("StageRail", () => {
     const withSlot = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} open toolsSlot={TOOLS} />,
+        adhoc={false} {...NEUTRAL} open toolsSlot={TOOLS} />,
     );
     const sheetAt = withSlot.indexOf('data-testid="stage-rail-sheet"');
     const toolsAt = withSlot.indexOf('data-testid="tools-probe"');
@@ -139,7 +136,7 @@ describe("StageRail", () => {
     const without = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} open />,
+        adhoc={false} {...NEUTRAL} open />,
     );
     expect(without).not.toContain("tools-probe");
     expect(without.replace(/<div data-testid="tools-probe">rows<\/div>/, ""), "the slot is the only difference").toBe(withSlot.replace(/<div data-testid="tools-probe">rows<\/div>/, ""));
@@ -149,16 +146,16 @@ describe("StageRail", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit={false} busy={null} fixtureCount={4} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} toolsSlot={<div data-testid="tools-probe" />} />,
+        adhoc={false} {...NEUTRAL} toolsSlot={<div data-testid="tools-probe" />} />,
     );
     expect(html).toBe("");
   });
 
-  it("renders nothing at all when the viewer cannot edit — even with a non-null badge slot", () => {
+  it("renders nothing at all when the viewer cannot edit", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit={false} busy={null} fixtureCount={4} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} unscheduledBadgeSlot={BADGE} />,
+        adhoc={false} {...NEUTRAL} />,
     );
     expect(html).toBe("");
   });
@@ -185,23 +182,15 @@ describe("StageRail", () => {
       renderToStaticMarkup(
         <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
           onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-          adhoc courtTagsSlot={null} {...NEUTRAL} />,
+          adhoc {...NEUTRAL} />,
       ),
     );
     pin(
-      "closed, with an unscheduled count — precisely when the CTA used to appear",
+      "phone sheet open",
       renderToStaticMarkup(
         <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
           onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-          adhoc courtTagsSlot={null} {...NEUTRAL} unscheduledBadgeSlot={BADGE} />,
-      ),
-    );
-    pin(
-      "phone sheet open, with an unscheduled count",
-      renderToStaticMarkup(
-        <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-          adhoc courtTagsSlot={null} {...NEUTRAL} open unscheduledBadgeSlot={BADGE} />,
+          adhoc {...NEUTRAL} open />,
       ),
     );
   });
@@ -210,34 +199,16 @@ describe("StageRail", () => {
     const adhocHtml = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc courtTagsSlot={null} {...NEUTRAL} />,
+        adhoc {...NEUTRAL} />,
     );
     expect(adhocHtml).toContain('data-testid="stage-add-match"');
 
     const nonAdhocHtml = renderToStaticMarkup(
       <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
+        adhoc={false} {...NEUTRAL} />,
     );
     expect(nonAdhocHtml).not.toContain('data-testid="stage-add-match"');
-  });
-
-  it("renders courtTagsSlot content where given", () => {
-    const html = renderToStaticMarkup(
-      <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={<i data-testid="ct-slot" />} {...NEUTRAL} />,
-    );
-    expect(html).toContain('data-testid="ct-slot"');
-  });
-
-  it("renders no pinned section at all — no badge — when unscheduledBadgeSlot is null", () => {
-    const html = renderToStaticMarkup(
-      <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
-    );
-    expect(html).not.toContain('data-testid="stage-unscheduled-count"');
   });
 
   it("Swiss with zero fixtures labels Generate; with unseated shells labels Pair next", () => {
@@ -246,7 +217,7 @@ describe("StageRail", () => {
     const empty = renderToStaticMarkup(
       <StageRail stage={pendingSwiss} canEdit busy={null} fixtureCount={0} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} counts={{ played: 0, inPlay: 0, unplayed: 0 }} matchCount={0} />,
+        adhoc={false} {...NEUTRAL} counts={{ played: 0, inPlay: 0, unplayed: 0 }} matchCount={0} />,
     );
     expect(empty).toContain("Generate fixtures");
     expect(empty).not.toContain("Pair next round");
@@ -254,7 +225,7 @@ describe("StageRail", () => {
     const unseated = renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={8} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated canUnpairSwiss={false} />,
+        adhoc={false} {...NEUTRAL} swissHasUnseated canUnpairSwiss={false} />,
     );
     expect(unseated).toContain("Pair next round");
     expect(unseated).not.toContain("Generate fixtures");
@@ -265,29 +236,18 @@ describe("StageRail", () => {
     const withUnpair = renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={4} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated={false} canUnpairSwiss />,
+        adhoc={false} {...NEUTRAL} swissHasUnseated={false} canUnpairSwiss />,
     );
     expect(withUnpair).toContain('data-testid="stage-unpair"');
 
     const without = renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={4} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} />,
+        adhoc={false} {...NEUTRAL} />,
     );
     expect(without).not.toContain('data-testid="stage-unpair"');
   });
 
-  it("renders whatever unscheduledBadgeSlot element it is given, verbatim — the rail builds no badge markup of its own", () => {
-    const html = renderToStaticMarkup(
-      <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
-        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL}
-        unscheduledBadgeSlot={<p data-testid="stage-unscheduled-count" data-marker="from-panel">7</p>} />,
-    );
-    expect(html).toContain('data-marker="from-panel"');
-    const match = /data-testid="stage-unscheduled-count"[^>]*>(\d+)</.exec(html);
-    expect(match?.[1]).toBe("7");
-  });
 });
 
 // F6, found by driving the product (2026-09-20): on a Swiss stage that had
@@ -320,12 +280,14 @@ describe("StageRail — which action holds the filled primary", () => {
     renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={6} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} {...over} />,
+        adhoc={false} {...NEUTRAL} {...over} />,
     );
 
-  /** Is the button disabled (the attribute is on the tag itself)? */
-  const disabled = (html: string, testid: string) =>
-    /\sdisabled=""/.test(new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? "");
+  /** Is the button unavailable? Complete waits through `aria-disabled` (E1 item 1: it stays focusable); the rest use `disabled`. */
+  const disabled = (html: string, testid: string) => {
+    const tag = new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? "";
+    return /\sdisabled=""/.test(tag) || /aria-disabled="true"/.test(tag);
+  };
 
   it("premise: both buttons carry a variant class at all, so 'neither' is a real failure", () => {
     const v = variants(rail({ swissHasUnseated: true }));
@@ -393,7 +355,7 @@ describe("StageRail — the Pair next split button", () => {
     renderToStaticMarkup(
       <StageRail stage={swiss} canEdit busy={null} fixtureCount={10} deletable={false}
         onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
-        adhoc={false} courtTagsSlot={null} {...NEUTRAL} swissHasUnseated {...over} />,
+        adhoc={false} {...NEUTRAL} swissHasUnseated {...over} />,
     );
   const tag = (html: string, testid: string) =>
     new RegExp(`<button[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? null;
@@ -578,7 +540,7 @@ describe("StageRail — a press that does not land keeps the pick (review M2)", 
           settle = resolve;
         });
       },
-      onDelete: () => {}, addingTo: null, onToggleAddMatch: () => {}, adhoc: false, courtTagsSlot: null,
+      onDelete: () => {}, addingTo: null, onToggleAddMatch: () => {}, adhoc: false,
       ...NEUTRAL, swissHasUnseated: true, swissPairingMenu: ROUND_ONE,
     };
     const island = renderIsland(StageRail, props);
@@ -634,5 +596,111 @@ describe("StageRail — a press that does not land keeps the pick (review M2)", 
     rail.click("stage-generate");
     expect(rail.menu(), "the click closed the menu before the press settled").toBeDefined();
     expect(propsOf(rail.menu()!).pick).toBe("rank_adjacent");
+  });
+});
+
+
+// Match Day E1 item 1 (owner 2026-11-01): the actions live in the card's HEADER, the Complete reason sits behind an ⓘ, and a divider
+// separates the actions group from the settings buttons beside it. Static markup for the structure; `renderIsland` for the press.
+describe("StageRail - E1 item 1: header actions, the Complete ⓘ, the divider", () => {
+  const active = { id: "s1", name: "League", kind: "league", seq: 1, status: "active" } as never;
+  const complete = { ...(active as object), status: "complete" } as never;
+  const rail = (over: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      <StageRail stage={active} canEdit busy={null} fixtureCount={4} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} {...NEUTRAL} {...over} />,
+    );
+  const tag = (html: string, testid: string) => new RegExp(`<[a-z]+[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? null;
+
+  it("from md the sheet is the header's actions group: a flex row, no sheet chrome (the phone sheet classes are max-md only)", () => {
+    const sheet = tag(rail(), "stage-rail-sheet") ?? "";
+    expect(sheet, "the sheet renders").not.toBe("");
+    expect(sheet).toMatch(/\bmd:flex\b/);
+    expect(sheet).toMatch(/\bmd:flex-row\b/);
+    expect(sheet).toMatch(/\bmd:items-center\b/);
+    expect(sheet, "no block layout left over from the old below-the-rows card").not.toMatch(/\bmd:block\b/);
+    expect(sheet, "no md padding on the old card edge").not.toMatch(/\bmd:py-4\b/);
+  });
+
+  it("the ⓘ: present only while Complete waits; it names the reason's id and carries the reason text; Complete uses aria-disabled", () => {
+    const waiting = rail();
+    const info = tag(waiting, "stage-complete-info");
+    expect(info, "the ⓘ is there while a match is open").not.toBeNull();
+    expect(info).toContain('aria-describedby="stage-complete-hint-s1"');
+    expect(info).toContain('aria-expanded="false"');
+    expect(info).toContain(`aria-label="${en["stageCard.completeInfo"]}"`);
+    expect(info).toMatch(/\bmin-h-11\b/);
+    expect(info).toMatch(/\bmin-w-11\b/);
+    // The reason is a tooltip in the DOM the whole time - shown by hover/focus CSS, hidden otherwise - not a paragraph of its own.
+    const reason = tag(waiting, "stage-complete-hint") ?? "";
+    expect(reason).toContain('role="tooltip"');
+    expect(reason).toContain('id="stage-complete-hint-s1"');
+    expect(reason).toContain('data-open="false"');
+    expect(reason).toMatch(/\bhidden\b/);
+    expect(reason).toMatch(/group-hover\/tip:block/);
+    expect(reason).toMatch(/group-focus-within\/tip:block/);
+    expect(waiting).toContain("Complete stage unlocks when all 4 matches are played.");
+    expect(waiting, "the old inline <p> hint is gone").not.toMatch(/<p[^>]*data-testid="stage-complete-hint"/);
+    // The other side of it: nothing to explain, no ⓘ.
+    const ready = rail({ counts: { played: 4, inPlay: 0, unplayed: 0 } });
+    expect(ready).not.toContain("stage-complete-info");
+    expect(ready).not.toContain("stage-complete-hint");
+  });
+
+  it("a press on a waiting Complete does nothing; on a ready one it sends 'complete'; a press in flight disables it outright", () => {
+    const press = (counts: { played: number; inPlay: number; unplayed: number }, busy: string | null) => {
+      const sent: string[] = [];
+      const island = renderIsland(StageRail, {
+        stage: active, canEdit: true, busy, fixtureCount: 4, deletable: false,
+        onAct: async (_id: string, action: string) => { sent.push(action); return true; },
+        onDelete: () => {}, addingTo: null, onToggleAddMatch: () => {}, adhoc: false,
+        ...NEUTRAL, counts, matchCount: 4,
+      } as StageRailProps);
+      const el = island.tree().find((e) => propsOf(e)["data-testid"] === "stage-complete");
+      if (!el) throw new Error("no Complete button");
+      (propsOf(el).onClick as () => void)();
+      return { sent, disabled: propsOf(el).disabled, ariaDisabled: propsOf(el)["aria-disabled"] };
+    };
+    const waiting = press({ played: 0, inPlay: 0, unplayed: 4 }, null);
+    expect(waiting.sent, "the press is swallowed").toEqual([]);
+    expect(waiting.ariaDisabled).toBe(true);
+    expect(waiting.disabled, "focusable: not `disabled`").toBe(false);
+    const ready = press({ played: 4, inPlay: 0, unplayed: 0 }, null);
+    expect(ready.sent, "positive pair: a ready Complete does send").toEqual(["complete"]);
+    expect(ready.ariaDisabled).toBeUndefined();
+    const busy = press({ played: 4, inPlay: 0, unplayed: 0 }, "s1");
+    expect(busy.disabled, "a press in flight disables outright").toBe(true);
+  });
+
+  it("the divider: between the actions and the settings buttons only - needs both, and says nothing to a screen reader", () => {
+    const withBoth = rail({ dividerAfter: true });
+    const divider = tag(withBoth, "stage-controls-divider") ?? "";
+    expect(divider, "drawn when there are actions and settings").not.toBe("");
+    expect(divider).toContain('aria-hidden="true"');
+    expect(divider).toMatch(/\bhidden\b/);
+    expect(divider).toMatch(/\bmd:block\b/);
+    // No settings beside it (the default): a stray line would divide nothing.
+    expect(rail()).not.toContain("stage-controls-divider");
+    // Settings but no action to divide them from: a complete stage with nothing deletable has an empty group.
+    const empty = rail({ stage: complete, dividerAfter: true, counts: { played: 4, inPlay: 0, unplayed: 0 }, deletable: false });
+    expect(empty, "positive pair: the rail itself rendered").toContain('data-testid="stage-rail-sheet"');
+    expect(empty).not.toContain("stage-controls-divider");
+    // Delete alone is an action: the divider is back.
+    expect(rail({ stage: complete, dividerAfter: true, deletable: true, counts: { played: 4, inPlay: 0, unplayed: 0 } })).toContain("stage-controls-divider");
+  });
+
+  it("the destructive Delete is the LAST action, never wedged between two benign ones (Add match, Complete)", () => {
+    const html = rail({ adhoc: true, deletable: true, counts: { played: 4, inPlay: 0, unplayed: 0 } });
+    const at = (id: string) => html.indexOf(`data-testid="${id}"`);
+    for (const id of ["stage-complete", "stage-add-match", "stage-delete"]) expect(at(id), `${id} renders`).toBeGreaterThan(-1);
+    expect(at("stage-delete"), "after Complete").toBeGreaterThan(at("stage-complete"));
+    expect(at("stage-delete"), "after Add match").toBeGreaterThan(at("stage-add-match"));
+  });
+
+  it("the old slots are gone: the rail draws no court tags and no 'to schedule' footer", () => {
+    const html = rail({ open: true });
+    expect(html).not.toContain("stage-unscheduled-count");
+    expect(html).not.toContain("border-dashed");
   });
 });

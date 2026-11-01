@@ -160,6 +160,7 @@ export function RunSheetRow({
   arbiterHref,
   matchDayHref,
   venueNoun = "court",
+  inRound = false,
 }: {
   fixture: RunSheetFixture;
   href: string;
@@ -211,6 +212,10 @@ export function RunSheetRow({
   onlinePlay?: RunSheetOnlinePlay;
   /** T16 — the arbiter panel opened on this board: where a flag chip leads. */
   arbiterHref?: string;
+  /** Match Day E1 item 1: the row sits under its round's header bar (a stage card's sheet), so the bar says the round and the row
+   *  does not: no "Round N" in its meta line, and an open match with no time says so in words ("No time yet") where the
+   *  "Not yet scheduled" group used to say it for it. Absent = the row names its own round, as every other mount reads it. */
+  inRound?: boolean;
   /** Match Day B2 (spec 2026-10-31 §9: "Unscheduled fixtures link to the free-court candidate list"). Present ONLY on a match
    *  day, for an organiser (the division page decides both: it is the same `needsYouHome` rule that puts Open Match Day on the
    *  competition page, read for `editable`), and then it is where the "Find a court" link on an unscheduled match leads:
@@ -296,7 +301,8 @@ export function RunSheetRow({
     const awarded = outcomeText(msg, fixture.outcome, entrantNames);
     return (
       <li className="px-4 py-2 text-sm text-slate-500 italic" data-testid="run-sheet-bye">
-        {msg("schedule.round", { n: fixture.round_no })} · {msg("schedule.bye", { name })}
+        {inRound ? null : `${msg("schedule.round", { n: fixture.round_no })} · `}
+        {msg("schedule.bye", { name })}
         {awarded ? ` · ${awarded}` : null}
       </li>
     );
@@ -435,7 +441,18 @@ export function RunSheetRow({
   // the desktop meta line and the phone line-2 text below read the SAME
   // value instead of restating the interpolation twice. Always non-empty:
   // `schedule.round` has no guard, unlike the two optional prefixes.
-  const metaLine = `${stageName ? `${stageName} · ` : ""}${courtLabel ? `${courtLabel} · ` : ""}${msg("schedule.round", { n: fixture.round_no })}`;
+  // E1 item 1: under a round's bar the row drops its own "Round N" and says "No time yet" for an open match nobody has timed (the
+  // `OPEN` pair the run sheet's grouping already routes to "unscheduled": scheduled, or in play with no time - the in-play one used
+  // to sit under "Not yet scheduled" only because it had no time). A played match with no time is a RESULT and says nothing.
+  const noTimeYet = inRound && fixture.scheduled_at === null && (fixture.status === "scheduled" || fixture.status === "in_play");
+  const metaLine = [
+    stageName ? stageName : null,
+    courtLabel ? courtLabel : null,
+    inRound ? null : msg("schedule.round", { n: fixture.round_no }),
+    noTimeYet ? msg("runsheet.noTimeYet") : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
   // Below `md`, W2's gate photographed THREE reflowed lines at 320 (meta,
   // name, then either the result sub-line or the action pill on its own —
   // four when a fixture actually carried one). Two deliberate lines instead:
@@ -445,7 +462,7 @@ export function RunSheetRow({
   // untouched: `metaLine` and `subLine` keep rendering as their own separate
   // paragraphs there (see the `hidden md:block` pair below); this combined
   // string is read ONLY by the `md:hidden` line-2 paragraph further down.
-  const phoneLineTwo = subLine !== null && subLine !== "" ? `${metaLine} · ${subLine}` : metaLine;
+  const phoneLineTwo = subLine !== null && subLine !== "" ? (metaLine === "" ? subLine : `${metaLine} · ${subLine}`) : metaLine;
   // W2b loop H F1 (controller ruling: the result tag never truncates). As ONE truncating string, line 2 lost its END
   // first — at 320 "Round 2 · forfeited · Bears of Brockley won (w/o)" read "… Bears of Br…", so the result said
   // nothing. The line ends with the result's tail whenever it carries one (the sub-line's precedence above puts the
@@ -607,7 +624,7 @@ export function RunSheetRow({
             {/* Task 9: desktop-only now — `phoneLineTwo` below carries this
                 same text (combined with the result sub-line) on phone, so
                 printing it here too would be the row's THIRD line again. */}
-            <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">{metaLine}</p>
+            {metaLine !== "" && <p className="hidden min-w-0 truncate text-xs text-slate-500 md:block">{metaLine}</p>}
             {/* IMPORTANT 2 (fix round 1): the ONE-action rule governs the
                 action CONTROL, not the row's own identity link — `FixtureLine`
                 had both. An unscheduled row's single action is "Set time" (a

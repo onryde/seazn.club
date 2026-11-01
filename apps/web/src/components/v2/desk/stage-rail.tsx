@@ -5,6 +5,12 @@
 // three stage-header action controls (Generate/Pair next, Complete stage,
 // Delete stage), moved verbatim out of stages-panel.tsx's own header render.
 //
+// Match Day E1 item 1 (owner 2026-11-01): the rail no longer sits BELOW the rows. `stages-panel.tsx` mounts it inside the stage card's
+// HEADER: from `md` its sheet is the header's actions group (Generate / Pair next, Unpair, Complete stage, Add match, Delete - the
+// `stageActions` rules unchanged, only their place moved), left of a thin divider and the settings buttons; below `md` the trigger
+// rides the header and the controls are the same bottom sheet as before. Court tags and the old "To schedule in this stage" footer
+// are the panel's now (the first at the card's foot, the second gone: the counts line above the rows says it).
+//
 // PRESENTATIONAL ONLY, deliberately: this component receives everything it
 // renders as props and calls no `use*` DATA hook of its own (useMsg is a
 // plain context read, not a data fetch, and is fine — the per-stage capacity
@@ -72,6 +78,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { stageActions } from "@/lib/stage-card/summaries";
+import { WithInfoTip } from "./info-tip";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import {
   swissPairingForKey,
@@ -142,42 +149,13 @@ export interface StageRailProps {
   /** Whether this stage's kind is in `ADHOC_STAGE_KINDS` — computed by the
    *  panel, not the rail, so the rail stays presentational. */
   adhoc: boolean;
-  /** `StageCourtTagsEditor` stays mounted by the panel and is handed down as
-   *  an already-built element — a slot, not a component reference — so the
-   *  rail keeps owning no data hook of its own. */
-  courtTagsSlot: React.ReactNode;
-  /** Match Day C3 (review round 1, phone ruling): the stage's Match format / Points / Tie-breaks rows, built by the panel (it owns which
+  /** Match Day E1 item 1: the header has settings buttons to the right of this group, so the group ends in a thin divider (from `md`)
+   *  - but only when it holds a control: a divider beside nothing is a stray line. */
+  dividerAfter?: boolean;
+  /** Match Day C3 (review round 1, phone ruling): the stage's Match rules / Points / Tie-breaks rows, built by the panel (it owns which
    *  panel is open) and mounted as the TOP rows of this sheet below `md` - the card's one phone trigger. The slot carries its own
    *  `md:hidden` (the header's buttons are the desktop twin). Absent: nothing, so the rail's other callers are unchanged. */
   toolsSlot?: React.ReactNode;
-  /** Task 4, fix round 2 (ruling T4-B) — the unscheduled-count badge,
-   *  already-built by the panel, same `courtTagsSlot` shape and same reason:
-   *  a non-editing viewer must still see this badge (it carried NO `canEdit`
-   *  gate in its previous, pre-rail position), but this component returns
-   *  `null` outright for `!canEdit` — so the panel builds the element ONCE
-   *  and mounts it in exactly one of two places: here when `canEdit`, or
-   *  inline in its own tree when not (see stages-panel.tsx's own comment at
-   *  that second site — same pattern Ruling T3-A already set for
-   *  `courtTagsSlot`, never a second shape for the same problem). `null`
-   *  when there is nothing unscheduled — hides the whole pinned section,
-   *  matching the panel's own former `unscheduled.length > 0` gate
-   *  byte-for-byte, now expressed as "the slot itself is absent" rather
-   *  than a separate count prop.
-   *
-   *  Owner request (competition desk W3): the "Auto-schedule remaining" CTA
-   *  and its capacity-blocked-reason line are GONE — scheduling belongs on
-   *  the Schedule page (`ScheduleBoard`, `d/[divSlug]/schedule`, which owns
-   *  the full `AutoScheduleMode` flow already), not the fixtures page. The
-   *  owner's own ruling: remove the ACTION, keep the FACT — this slot is
-   *  now the whole pinned section on its own, and the panel builds it as a
-   *  LINK to the Schedule page instead of plain text, so a viewer with
-   *  something to schedule has somewhere to go. `capacityBlocked`/
-   *  `onAutoSchedule` props retired with the button; `capacityGateBlocks`
-   *  itself stays in stages-panel.tsx (still tested on its own,
-   *  `stages-panel-capacity.test.tsx` — a general D2 pre-check utility,
-   *  not specific to this button) — only this component's OWN use of it
-   *  is gone. */
-  unscheduledBadgeSlot: React.ReactNode;
 }
 
 export function StageRail({
@@ -195,9 +173,8 @@ export function StageRail({
   open,
   onToggleOpen,
   adhoc,
-  courtTagsSlot,
-  unscheduledBadgeSlot,
   toolsSlot,
+  dividerAfter = false,
   swissHasUnseated,
   canUnpairSwiss,
   swissPairingMenu,
@@ -263,6 +240,13 @@ export function StageRail({
   const showGenerate = primary?.action === "generate" || primary?.action === "pair_next";
   const completeButton = [primary, ...secondary].find((b) => b?.action === "complete");
   const completeHintId = `stage-complete-hint-${stage.id}`;
+  // Which controls the actions row below draws, read once here so the divider beside the group can tell an empty group from a full one (a
+  // complete stage with nothing to delete draws none). Add match is not listed: `stageActions` hands an ad-hoc stage with fixtures an
+  // "add_match" only beside Generate (not started) or Complete (started), so wherever Add match shows, one of those already counts.
+  const addMatchShown = stage.status !== "complete" && adhoc && fixtureCount > 0;
+  const hasActions =
+    (stage.status !== "complete" && (showGenerate || (stage.kind === "swiss" && canUnpairSwiss) || completeButton !== undefined)) ||
+    deletable;
 
   // Review finding M4. Below `md` this sheet BEHAVES modally — a
   // `fixed inset-0` backdrop swallows every tap on the page behind it — but it
@@ -315,23 +299,10 @@ export function StageRail({
     };
   }, [open, stage.id]);
 
-  // A non-editing viewer's answer to "what do they see at 320 / at 1280?"
-  // (owner sign-off question, Task 10): NOTHING new, at either width — this
-  // guard runs BEFORE the trigger/backdrop/sheet JSX below, so `!canEdit`
-  // returns `null` before any of it is even constructed, exactly the same
-  // "built once, one of two mutually exclusive spots" contract Tasks 3/4/5
-  // already established for `courtTagsSlot`/`unscheduledBadgeSlot`/the grid
-  // track itself. There is no non-editing equivalent of this trigger to
-  // place elsewhere, unlike those two slots: every control this component
-  // renders is an EDIT action (generate/complete/delete/add-match/auto-
-  // schedule) — the read-only facts a non-editing viewer needs (the
-  // unscheduled count, the court-tags view) already have their own inline
-  // `!canEdit` fallback in stages-panel.tsx's `stage-sheet` column, untouched
-  // by this task. Proven by mutation, not merely asserted: defeating this
-  // line (`!canEdit && false`) reddens `stage-rail.test.tsx`'s "renders
-  // nothing at all when the viewer cannot edit" case, which asserts the
-  // rendered HTML is the exact empty string — strong enough to catch a
-  // leaked trigger, backdrop or sheet, not just a leaked action button.
+  // A non-editing viewer gets NOTHING from this component, at any width: every control it renders is an EDIT action
+  // (generate / pair / complete / delete / add match), and the guard runs BEFORE the trigger, backdrop and sheet are built, so
+  // `stage-rail.test.tsx`'s "renders nothing at all when the viewer cannot edit" asserts the exact empty string. The read-only
+  // facts a viewer needs (the court-tags view, the settings buttons) are the panel's own, at every width.
   if (!canEdit) return null;
 
   return (
@@ -366,67 +337,14 @@ export function StageRail({
           aria-hidden="true"
         />
       )}
-      {/* The sheet itself — cribbed from `components/modal.tsx`'s
-          bottom-sheet CSS (brief), breakpoint moved from `sm:` to `md:` per
-          ruling 15. Below `md`: a fixed bottom sheet, `hidden` unless
-          `open` — every control inside stays ATTACHED either way, only
-          VISIBILITY toggles (brief: "wait on toBeAttached, not toBeVisible,
-          for the folded controls"). At `md` and up: reset back to a plain
-          block REGARDLESS of `open`, so a phone sheet left open across a
-          resize renders as an ordinary full-width stacked block ("Option
-          B" below — no more grid column to speak of), never a leftover
-          overlay. `tabIndex`/`role`/`aria-label` are gated on `open` — see
-          the m10 note on the attributes themselves for why that satisfies
-          AGENTS.md #23 rather than breaking it.
-
-          Fix round 1 (controller measurement, owner sign-off session):
-          `md:py-4`, not `md:p-0`. `.card` (globals.css) carries no padding
-          of its own — every card region insets itself (`stage-sheet`'s own
-          header is `px-4 py-3`) — and this div's PRE-Task-10 shape
-          (`min-w-0` on the wrapping `stage-rail` div in stages-panel.tsx, a
-          bare fragment from `<StageRail>`) already had none either, so the
-          desktop rail's first control has always sat flush against the
-          card's rounded top edge; Task 10 is simply what finally got
-          measured and reported.
-
-          Fix round 3 (D2/D3, controller measurement): VERTICAL padding
-          only here (`md:py-4`, and `md:px-0` explicitly — not merely
-          omitted, so a phone sheet left `open` across a resize past `md`
-          cannot leave the mobile branch's own `p-4` horizontal padding
-          stuck in effect; `py-*` never touches `padding-left`/`-right`) —
-          round 1's `md:p-4` gave this
-          div its OWN horizontal inset on top of `courtTagsSlot`'s and
-          `unscheduledBadgeSlot`'s div's OWN `px-4`, DOUBLE-padding those two
-          (32px) while the action-button row below (which had no horizontal
-          padding of its own) got only this div's 16px — exactly the
-          measured 16px step between button left edges (l855) and
-          court-tags/CTA left edges (l871). `courtTagsSlot`/
-          `unscheduledBadgeSlot` are shared elements (also rendered inline in
-          `stage-sheet` for a non-editing viewer, stages-panel.tsx) — their
-          OWN `px-4` cannot change without moving that other placement too —
-          so the fix is here and on the action-button row (`md:px-4` added
-          there instead, a few lines down): every direct child of this div
-          now supplies its OWN 16px horizontal inset, none of them doubled
-          by an ambient one from this container.
-
-          "Option B" (controller measurement, owner sign-off session,
-          superseding Task 5/Ruling T5-A): the two-column desktop grid this
-          div used to sit inside is GONE — a 280px column stacking five rail
-          items forced the CARD to whatever height the rail needed
-          (equal-height grid-row stretch), and no amount of body content in
-          `stage-sheet` could ever close the resulting gap (measured:
-          `body=262px rail=262px content=99px VOID=163px`, 62% empty, at
-          1280). `stages-panel.tsx` no longer wraps `stage-sheet`/
-          `stage-rail` in a grid at all — both are now ordinary stacked
-          blocks, full CARD width at every size. Everything above and below
-          in THIS div (padding, `md:block`, D2/D3/D4's fixes) already
-          produces a full-width block at `md` and up regardless of the
-          surrounding grid context, so none of it needed to change for this
-          — a full-width column and "no column, full width" happen to want
-          the same CSS on this specific div. D2's left/right-edge fix and
-          D4's 44px floor stay meaningful (and verified) at the new,
-          much-wider content box; D3 was retracted (flex slack in a 248px
-          row, not a misalignment) and is not chased further here. */}
+      {/* The sheet. Below `md`: a fixed bottom sheet cribbed from `components/modal.tsx`, `hidden` unless `open` - every control inside
+          stays ATTACHED either way (only visibility toggles). From `md` up (Match Day E1 item 1): the sheet is no card-width block
+          below the rows but the ACTIONS GROUP of the stage's header - `md:flex`, no padding, no chrome - so Generate / Pair next,
+          Complete stage, Add match and Delete sit in the header beside the settings buttons, whatever `open` says (a phone sheet
+          left open across a resize falls back to the same group, never a dangling overlay). One DOM: the controls are in the tree
+          once, in this group, at every width.
+          `tabIndex`/`role`/`aria-label` follow the `open` PROP (JS state, not a media query), so a desktop keyboard user never
+          walks a "Stage tools" dialog stop through a box that does not scroll (review m10; AGENTS.md rule 23). */}
       <div
         ref={sheetRef}
         id={sheetId}
@@ -457,55 +375,17 @@ export function StageRail({
           open
             ? "fixed inset-x-0 bottom-0 z-30 flex max-h-[85dvh] flex-col gap-2 overflow-y-auto rounded-t-2xl border border-slate-200 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl"
             : "hidden",
-          "md:static md:z-auto md:block md:max-h-none md:overflow-visible md:rounded-none md:border-0 md:bg-transparent md:px-0 md:py-4 md:shadow-none",
+          "md:static md:z-auto md:flex md:max-h-none md:flex-row md:flex-wrap md:items-center md:gap-2 md:overflow-visible md:rounded-none md:border-0 md:bg-transparent md:p-0 md:shadow-none",
         ].join(" ")}
       >
         {open && (
           <span aria-hidden className="mx-auto mb-1 block h-1 w-10 shrink-0 rounded-full bg-slate-200 md:hidden" />
         )}
         {toolsSlot}
-        {/* Fix round 2 (controller measurement): the action-button quartet
-            (generate/complete, delete, add-match — never more than three
-            render at once) used to sit as bare `.btn` (`inline-flex`)
-            siblings with no wrap instruction of its own, so at desktop
-            (280px column, since retired by "Option B" below — this row is
-            now full CARD width, so wrapping is unlikely in practice, but
-            the deliberate-wrap recipe stays as the safety net for a long
-            label or a narrow `md` width) they wrapped like TEXT — an
-            accidental "2 + 1 ragged" line break with no controlled gap.
-            `flex flex-wrap
-            items-center gap-2` is the SAME recipe `unscheduledBadgeSlot`'s
-            own row already uses a few lines down — a deliberate wrap, not
-            an accidental one. `flex-col` (unprefixed) keeps the phone sheet
-            exactly as it already was — a vertical stack, one control per
-            row — the coordinator confirmed correct; only `md:flex-row`
-            changes it back into a row at desktop.
-
-            Fix round 3 (D2, controller measurement): `md:px-4` added here —
-            this row was the one direct child of the sheet with NO
-            horizontal padding of its own (`courtTagsSlot`/
-            `unscheduledBadgeSlot`'s div both already carry `px-4`), so
-            after round 1 gave the sheet itself `md:p-4` this row sat 16px
-            further LEFT than the other two. Round 3 removes the sheet's own
-            horizontal padding (`md:py-4` now, see the sheet's own comment
-            above) and gives it here instead — the same source every other
-            direct child already used, so all three now agree.
-
-            D4 (controller measurement): `min-h-11` is now on every button
-            below (generate/complete/delete/add-match — `stage-auto-schedule`
-            already carried it), not conditionally inside the mobile sheet.
-            Before this only the sheet's OWN chrome happened to give them
-            room; at 768/834 (device widths in the seven-width matrix, `md:`
-            and up, no sheet chrome at all) they measured 28-30px — under the
-            44px tap floor. `min-h-11` is a plain Tailwind utility, not
-            breakpoint-gated, so it now holds at every width. Explicitly NOT
-            fixing here: `.btn-primary` still renders ~2px shorter than
-            `.btn-ghost`/`.btn-danger` (a border-width difference,
-            globals.css:229/232/235) — repo-wide, not this file's, owner
-            decision pending; `min-h-11` is a FLOOR so this difference cannot
-            put anything back under 44px, it just means the two button kinds
-            are not pixel-identical in height above the floor. */}
-        <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center md:px-4">
+        {/* The actions: a vertical stack in the phone sheet (one control per row), a wrapping row in the header from `md` (a deliberate
+            wrap, `gap-2`, not text-like ragged wrapping). `min-h-11` is on every button below at every width - 768/834 have no
+            sheet chrome to give them room, and a 28px button is under the tap floor. */}
+        <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
           {stage.status !== "complete" && (
             <>
               {/* Swiss round-1 pairing — the split button (spec
@@ -634,41 +514,48 @@ export function StageRail({
                   {busy === stage.id ? msg("schedule.working") : msg("schedule.unpair")}
                 </button>
               )}
-              {completeButton && (
-                <button
-                  type="button"
-                  disabled={busy !== null || !completeButton.enabled}
-                  aria-describedby={completeButton.enabled ? undefined : completeHintId}
-                  onClick={() => void onAct(stage.id, "complete")}
-                  data-testid="stage-complete"
-                  className={`btn min-h-11 px-3 py-1.5 text-xs ${
-                    primary?.action === "complete" ? "btn-primary" : "btn-ghost"
-                  }`}
-                >
-                  {msg("schedule.complete")}
-                </button>
-              )}
-              {/* Present but disabled while any match is open (item 8): the reason is on the screen, in words, because a disabled
-                  control cannot show a hint on a phone (no hover). `min-w-0` + wrap so a long locale never overflows at 320. */}
-              {completeButton && !completeButton.enabled && (
-                <p id={completeHintId} data-testid="stage-complete-hint" className="min-w-0 text-xs text-slate-600">
-                  {msgPlural("stageCard.completeHint", matchCount)}
-                </p>
-              )}
+              {completeButton &&
+                (() => {
+                  const complete = (
+                    // `aria-disabled`, not `disabled`, while a match is open (E1 item 1): it stays in the tab order and on the hover
+                    // path, so the reason is reachable by keyboard and by finger; the press does nothing. A press in flight
+                    // (`busy`) is the one case that disables outright - there is nothing to read there.
+                    <button
+                      type="button"
+                      disabled={busy !== null}
+                      aria-disabled={!completeButton.enabled || undefined}
+                      aria-describedby={completeButton.enabled ? undefined : completeHintId}
+                      onClick={() => {
+                        if (!completeButton.enabled) return;
+                        void onAct(stage.id, "complete");
+                      }}
+                      data-testid="stage-complete"
+                      className={`btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-not-allowed aria-disabled:opacity-50 max-md:grow ${
+                        primary?.action === "complete" ? "btn-primary" : "btn-ghost"
+                      }`}
+                    >
+                      {msg("schedule.complete")}
+                    </button>
+                  );
+                  // Present but waiting while any match is open (item 8): the reason sits behind an ⓘ beside the button - hover, keyboard
+                  // focus or a tap - and `aria-describedby` above names it, so it is read with the button as well.
+                  return completeButton.enabled ? (
+                    complete
+                  ) : (
+                    <WithInfoTip
+                      id={completeHintId}
+                      label={msg("stageCard.completeInfo")}
+                      reason={msgPlural("stageCard.completeHint", matchCount)}
+                      infoTestId="stage-complete-info"
+                      reasonTestId="stage-complete-hint"
+                    >
+                      {complete}
+                    </WithInfoTip>
+                  );
+                })()}
             </>
           )}
-          {deletable && (
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => onDelete({ id: stage.id, name: stage.name })}
-              data-testid="stage-delete"
-              className="btn btn-danger min-h-11 px-3 py-1.5 text-xs"
-            >
-              {msg("schedule.delete")}
-            </button>
-          )}
-          {stage.status !== "complete" && adhoc && fixtureCount > 0 && (
+          {addMatchShown && (
             // Task 3 — trigger only. `AddMatchForm` deliberately stays mounted in
             // stages-panel.tsx: it reads `boardSlotOptions`, which also feeds
             // `<RunSheet>`, so hoisting the form itself here would mean building
@@ -685,20 +572,20 @@ export function StageRail({
               {msg("stage.addMatch.button")}
             </button>
           )}
+          {deletable && (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => onDelete({ id: stage.id, name: stage.name })}
+              data-testid="stage-delete"
+              className="btn btn-danger min-h-11 px-3 py-1.5 text-xs"
+            >
+              {msg("schedule.delete")}
+            </button>
+          )}
         </div>
-        {courtTagsSlot}
-        {/* Task 4 — the pinned unscheduled section, moved onto the rail
-            verbatim: same classNames, same gating, same testid.
-            Owner request (competition desk W3): the auto-schedule CTA and
-            its blocked-reason line are GONE from this page (scheduling
-            belongs on the Schedule page) — this is now just the badge,
-            built as a LINK by the panel (`unscheduledBadgeSlot`'s own doc
-            comment above). Fix round 2 (T4-B): the badge itself is still a
-            slot, not a value — never re-derive it here. */}
-        {unscheduledBadgeSlot && (
-          <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
-            <div className="flex flex-wrap items-center gap-2">{unscheduledBadgeSlot}</div>
-          </div>
+        {dividerAfter && hasActions && (
+          <span aria-hidden="true" data-testid="stage-controls-divider" className="hidden h-6 w-px shrink-0 bg-slate-300 md:block" />
         )}
       </div>
     </>

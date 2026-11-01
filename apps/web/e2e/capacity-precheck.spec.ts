@@ -89,20 +89,15 @@ test("capacity precheck: impossible config shows the card + disabled Solve + a r
   // than one is the expected shape, and a bare locator trips strict mode.
   await expect(card.getByText(/Add 1 day|Add 1 Court|Shorten matches/).first()).toBeVisible();
 
-  // Owner ruling (Task 2, "remove auto-schedule from the fixtures page"):
-  // the Solve action no longer lives on the fixtures/stages console at all
-  // — scheduling is Schedule-page-only now (ScheduleBoard/AutoScheduleMode),
-  // so there is nothing left to disable here. This spec used to assert a
-  // disabled `stage-auto-schedule` button + blocked-reason line on THIS
-  // page; both are gone from stages-panel.tsx along with the CTA. What
-  // remains true and worth pinning here: the fixtures page still surfaces
-  // the unscheduled count as INFORMATION (kept per owner ruling — "the
-  // fact", not "the action") and it leads to the Schedule page rather than
-  // acting in place.
+  // Owner ruling (Task 2, "remove auto-schedule from the fixtures page"): the Solve action no longer lives on the fixtures/stages console
+  // at all - scheduling is Schedule-page-only now (ScheduleBoard/AutoScheduleMode), so there is nothing left to disable here. What
+  // remains true and worth pinning: the fixtures page still surfaces the unscheduled count as INFORMATION ("the fact", not "the action").
+  // Match Day E1 item 1 removed the footer link ("To schedule in this stage N ->"); the fact is in the card's counts line.
   await page.goto(await divisionPath(page.request, divisionId, "?tab=fixtures"));
-  const unscheduledLink = page.getByTestId("stage-unscheduled-count");
-  await expect(unscheduledLink).toBeVisible({ timeout: 20_000 });
-  await expect(unscheduledLink.locator("..")).toHaveAttribute("href", new RegExp(`/schedule$`));
+  const counts = page.getByTestId("stage-progress-counts");
+  await expect(counts).toBeVisible({ timeout: 20_000 });
+  await expect(counts).toContainText(/\d+ to schedule/);
+  await expect(page.getByTestId("stage-unscheduled-count"), "the footer is gone").toHaveCount(0);
 
   // Server is the authority, not just the UI (acceptance criteria) — the
   // SAME impossibility is refused at the API even if a client bypassed the

@@ -101,7 +101,9 @@ function panel(over: Record<string, unknown> = {}, locale: Locale = "en", dict: 
 const tag = (html: string, testId: string): string | null => new RegExp(`<[a-z]+[^>]*data-testid="${testId}"[^>]*>`).exec(html)?.[0] ?? null;
 const count = (html: string, testId: string): number => html.split(`data-testid="${testId}"`).length - 1;
 const text = (html: string): string => html.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ");
-const disabled = (html: string, testId: string): boolean => /\sdisabled=""/.test(tag(html, testId) ?? "");
+// "Locked": a pressed-in-flight button is `disabled`; Complete waiting on an open match is `aria-disabled` (E1 item 1 - it stays focusable
+// so the reason behind its ⓘ is reachable). Either way the press does nothing, which is what these tests mean by it.
+const disabled = (html: string, testId: string): boolean => /\sdisabled=""|\saria-disabled="true"/.test(tag(html, testId) ?? "");
 
 // Match Day E1 item 2 (owner 2026-11-01): "Match format" is "Match rules" everywhere a person reads it. The literals below are the owner's
 // words, typed here on purpose: reading them back from the dictionary would pass with the old name still in it. "Format" (league /
@@ -314,18 +316,101 @@ describe("the body: a one-line summary, no inline sections (items 5, 6, 7, 12)",
   });
 });
 
+// Match Day E1 item 1 (owner 2026-11-01): the stage's actions (Add match, Complete stage, Pair next / Unpair / Generate) are in the card
+// HEADER - an actions group on the left, a thin divider, then the settings buttons on the right.
+describe("E1 item 1: the header is [actions | divider | settings], the footer row is gone", () => {
+  const order = (html: string, ids: string[]) => ids.map((id) => html.indexOf(`data-testid="${id}"`));
+
+  it("an editor: actions, then the divider, then the settings buttons, all inside the header's one controls cluster", () => {
+    const html = panel();
+    const [rail, complete, add, divider, tools, format] = order(html, ["stage-rail", "stage-complete", "stage-add-match", "stage-controls-divider", "stage-tools", "stage-tool-format"]);
+    for (const [name, at] of Object.entries({ rail, complete, add, divider, tools, format })) expect(at, `${name} is on the card`).toBeGreaterThan(-1);
+    expect(complete!, "Complete is in the actions group").toBeGreaterThan(rail!);
+    expect(divider!, "the divider follows the last action").toBeGreaterThan(Math.max(complete!, add!));
+    expect(divider!, "and precedes the settings buttons").toBeLessThan(tools!);
+    expect(tools!).toBeLessThan(format!);
+    expect(count(html, "stage-controls-divider"), "one divider").toBe(1);
+    expect(count(html, "stage-controls"), "one cluster").toBe(1);
+    const cluster = html.slice(html.indexOf('data-testid="stage-controls"'));
+    expect(cluster.indexOf('data-testid="stage-rail"'), "the actions group opens the cluster").toBeLessThan(cluster.indexOf('data-testid="stage-tools"'));
+    // The divider is a desktop device: hidden below md, where the actions are the Stage tools sheet.
+    expect(tag(html, "stage-controls-divider"), "bare `hidden`, not `max-md:hidden`").toMatch(/class="(?:[^"]* )?hidden /);
+    expect(tag(html, "stage-controls-divider")).toMatch(/\bmd:block\b/);
+    // The header is the cluster's home: it comes before the counts line and before the rows.
+    expect(rail!).toBeLessThan(html.indexOf('data-testid="stage-progress-counts"'));
+    expect(rail!).toBeLessThan(html.indexOf('data-testid="stage-run-sheet"'));
+  });
+
+  it("every stage kind, counted: at most one divider, and only with actions on the left AND settings on the right", () => {
+    let checked = 0;
+    let withDivider = 0;
+    for (const kind of StageKind.options) {
+      for (const status of ["pending", "active", "complete"]) {
+        const html = panel({
+          stages: [stageRow({ kind, status })],
+          stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league") },
+          fixtures: status === "pending" ? [] : MOCK_FIXTURES,
+        });
+        const dividers = count(html, "stage-controls-divider");
+        expect(dividers, `${kind}/${status}`).toBeLessThanOrEqual(1);
+        if (dividers === 1) {
+          withDivider++;
+          const at = html.indexOf('data-testid="stage-controls-divider"');
+          const actionAt = Math.max(...["stage-generate", "stage-complete", "stage-add-match", "stage-unpair", "stage-delete"].map((id) => html.indexOf(`data-testid="${id}"`)));
+          expect(actionAt, `${kind}/${status}: an action sits before the divider`).toBeGreaterThan(-1);
+          expect(actionAt, `${kind}/${status}`).toBeLessThan(at);
+          expect(html.indexOf('data-testid="stage-tools"'), `${kind}/${status}: settings after it`).toBeGreaterThan(at);
+        }
+        checked++;
+      }
+    }
+    expect(checked, "kinds x statuses swept").toBe(StageKind.options.length * 3);
+    expect(withDivider, "anti-vacuity: some card really has both groups").toBeGreaterThan(0);
+  });
+
+  it("a viewer: no actions group, no divider; the settings buttons stay on screen at every width", () => {
+    const html = panel({ canEdit: false });
+    expect(html).not.toContain('data-testid="stage-rail"');
+    expect(html).not.toContain("stage-controls-divider");
+    expect(tag(html, "stage-controls"), "positive pair: the viewer still has the cluster").not.toBeNull();
+    expect(tag(html, "stage-tools")).not.toMatch(/max-md:hidden/);
+    expect(count(html, "stage-tool-format")).toBe(1);
+  });
+
+  it("the footer is gone: no 'To schedule in this stage' band; the court tags sit at the card's foot for editor and viewer alike", () => {
+    for (const canEdit of [true, false]) {
+      const html = panel({ canEdit });
+      expect(html, `canEdit=${canEdit}`).not.toContain("stage-unscheduled-count");
+      expect(text(html), `canEdit=${canEdit}`).not.toContain("To schedule in this stage");
+      expect(count(html, "stage-court-tags"), `canEdit=${canEdit}: one court-tags line`).toBe(1);
+      expect(html.indexOf('data-testid="stage-court-tags"'), `canEdit=${canEdit}: after the rows`).toBeGreaterThan(html.indexOf('data-testid="stage-run-sheet"'));
+    }
+  });
+
+  it("the Complete reason is an ⓘ, not a paragraph: it names the button, and a stage that can complete has no ⓘ", () => {
+    const waiting = panel();
+    expect(tag(waiting, "stage-complete-info")).toContain('aria-describedby="stage-complete-hint-' + A + '"');
+    expect(tag(waiting, "stage-complete")).toContain('aria-describedby="stage-complete-hint-' + A + '"');
+    expect(waiting).not.toMatch(/<p[^>]*stage-complete-hint/);
+    const done = panel({ fixtures: [fixture(A, 1, { status: "decided", outcome: DECIDED })] });
+    expect(tag(done, "stage-complete")).not.toBeNull();
+    expect(done).not.toContain("stage-complete-info");
+  });
+});
+
 describe("the embedded sheet never rounds a bottom the card does not end on (review m3)", () => {
-  // Something always follows the sheet inside a stage card: an editor's rail, a viewer's read-only court-tags line. So no
-  // stage-card sheet takes the card's radius on its last row - for either audience. (React serialises `>` as `&gt;` in class text.)
+  // Something always follows the sheet inside a stage card: the court-tags line (an editor's editor, a viewer's read-only line - E1
+  // item 1 moved the editor's out of the rail to the card's foot). So no stage-card sheet takes the card's radius on its last row - for
+  // either audience. (React serialises `>` as `&gt;` in class text.)
   const ROUND_LAST = "[&amp;&gt;section:last-child&gt;ul&gt;li:last-child]:rounded-b-2xl";
-  it("editor and viewer: the embedded sheet carries no last-row rounding; the court-tags line / rail follows it", () => {
+  it("editor and viewer: the embedded sheet carries no last-row rounding; the court-tags line follows it", () => {
     let checked = 0;
     for (const canEdit of [true, false]) {
       const html = panel({ canEdit });
       expect(count(html, "stage-run-sheet"), `canEdit=${canEdit}: the sheet is in the card`).toBe(1);
       expect(html, `canEdit=${canEdit}: no last-row rounding`).not.toContain(ROUND_LAST);
       const sheetAt = html.indexOf('data-testid="stage-run-sheet"');
-      const followedBy = canEdit ? html.indexOf('data-testid="stage-rail"', sheetAt) : html.indexOf('data-testid="stage-court-tags"', sheetAt);
+      const followedBy = html.indexOf('data-testid="stage-court-tags"', sheetAt);
       expect(followedBy, `canEdit=${canEdit}: something follows the sheet in the card`).toBeGreaterThan(sheetAt);
       checked++;
     }
@@ -350,8 +435,10 @@ describe("the stage's fixtures are in the card (item 9)", () => {
   it("the rows are the stage's: three matches in, three rows in the card", () => {
     const html = panel();
     expect(html.split("data-fixture-no=").length - 1).toBe(MOCK_FIXTURES.length);
-    const sheet = html.slice(html.indexOf('data-testid="stage-run-sheet"'));
-    expect(sheet.indexOf('data-testid="stage-rail"'), "the rows sit before the stage's actions").toBeGreaterThan(-1);
+    // E1 item 1: the stage's actions are in the card HEADER, above the rows (they used to sit below them).
+    const railAt = html.indexOf('data-testid="stage-rail"');
+    expect(railAt, "the actions are on the card").toBeGreaterThan(-1);
+    expect(railAt, "the actions sit before the stage's rows").toBeLessThan(html.indexOf('data-testid="stage-run-sheet"'));
   });
 
   it("two stages: each card holds only its own stage's rows, under ONE filter bar for the division", () => {
@@ -389,6 +476,8 @@ describe("the buttons follow the stage's state (item 8) - through the real panel
     expect(tag(html, "stage-generate")).toBeNull();
     expect(tag(html, "stage-complete")).not.toBeNull();
     expect(disabled(html, "stage-complete")).toBe(true);
+    expect(tag(html, "stage-complete"), "E1 item 1: focusable, not `disabled`").toContain('aria-disabled="true"');
+    expect(tag(html, "stage-complete")).not.toMatch(/\sdisabled=""/);
     expect(text(html)).toContain(UI["stageCard.completeHint.other"]!.replace("{count}", "3"));
     expect(tag(html, "stage-add-match")).not.toBeNull();
   });

@@ -4,7 +4,7 @@
 // builder is proven by its REAL producer and consumer, not by a fixture on
 // both ends (_RULES.md, "the inert seam").
 import { describe, expect, it } from "vitest";
-import { buildRunSheet, isBye, type RunSheetInput } from "../run-sheet-groups";
+import { buildRunSheet, isBye, roundPlayed, roundWhen, stageRoundSections, type RunSheetInput } from "../run-sheet-groups";
 
 const TZ = "Europe/London";
 const NOW = Date.UTC(2026, 8, 3, 13, 0); // 14:00 London, Thu 3 Sep
@@ -528,5 +528,110 @@ describe("isBye — ruling 116's walkover is no bye", () => {
     }
     expect(checked).toBe(ROWS.length);
     expect(ROWS.filter((r) => r.bye).length, "both answers are reached").toBeGreaterThan(0);
+  });
+});
+
+// Match Day E1 item 1 (owner 2026-11-01): a stage card groups its rows under a bar per ROUND. The pure pieces, over the blocks
+// `buildRunSheet` hands the card - the empty case first, then the order inside a round, then the numbers on the bar.
+describe("stageRoundSections - one non-bracket stage's rows by round", () => {
+  const sections = (fixtures: ReturnType<typeof fx>[], stageId = "s1", stages: RunSheetInput["stages"] = [LEAGUE, CUP]) =>
+    stageRoundSections(buildRunSheet(input({ fixtures, stages })), stageId);
+
+  it("the empty case: no rows, no blocks, a stage with no rows of its own - none, never an empty round", () => {
+    expect(stageRoundSections([], "s1")).toEqual([]);
+    expect(sections([fx({ id: "other", stage_id: "s9" })]), "another stage's row is not this stage's").toEqual([]);
+  });
+
+  it("rounds read in the order they are PLAYED: a round that kicks off earlier comes first whatever its number (design/fix-ui/03), the untimed rounds after, by number", () => {
+    const out = sections([
+      fx({ id: "t1", round_no: 1, scheduled_at: "2026-07-21T19:28:00.000Z", fixture_no: 1 }),
+      fx({ id: "t2", round_no: 2, scheduled_at: "2026-07-22T19:28:00.000Z", fixture_no: 2 }),
+      fx({ id: "t3", round_no: 3, scheduled_at: "2026-07-20T21:28:00.000Z", fixture_no: 3 }),
+      fx({ id: "u5", round_no: 5, scheduled_at: null, fixture_no: 5 }),
+      fx({ id: "u4", round_no: 4, scheduled_at: null, fixture_no: 4 }),
+    ]);
+    expect(out.map((r) => r.round)).toEqual([3, 1, 2, 4, 5]);
+    expect(sections([fx({ id: "a", round_no: 2, scheduled_at: null, fixture_no: 1 }), fx({ id: "b", round_no: 1, scheduled_at: null, fixture_no: 2 })]).map((r) => r.round), "nothing timed: round number").toEqual([1, 2]);
+  });
+
+  it("rounds come in round order, whatever order the rows arrived in, and one round holds both timed and untimed rows", () => {
+    const out = sections([
+      fx({ id: "r2", round_no: 2, scheduled_at: null, seq_in_round: 1, fixture_no: 3 }),
+      fx({ id: "r1a", round_no: 1, scheduled_at: "2026-09-05T10:00:00.000Z", fixture_no: 1 }),
+      fx({ id: "r1b", round_no: 1, scheduled_at: null, seq_in_round: 2, fixture_no: 2 }),
+    ]);
+    expect(out.map((r) => r.round)).toEqual([1, 2]);
+    expect(out[0]!.fixtures.map((f) => f.id), "the untimed row of round 1 stays IN round 1 - the 'Not yet scheduled' group is gone").toEqual(["r1a", "r1b"]);
+    expect(out[1]!.fixtures.map((f) => f.id)).toEqual(["r2"]);
+  });
+
+  it("inside a round: time order, untimed LAST, ties and untimed rows in draw order - and an in-play row with no time is in its round, not in a group", () => {
+    const out = sections([
+      fx({ id: "untimed-1", scheduled_at: null, seq_in_round: 1, fixture_no: 1 }),
+      fx({ id: "late", scheduled_at: "2026-09-05T11:00:00.000Z", seq_in_round: 2, fixture_no: 2 }),
+      fx({ id: "inplay-untimed", scheduled_at: null, status: "in_play", seq_in_round: 3, fixture_no: 3 }),
+      fx({ id: "early", scheduled_at: "2026-09-05T09:00:00.000Z", seq_in_round: 4, fixture_no: 4 }),
+      fx({ id: "tie-b", scheduled_at: "2026-09-05T09:00:00.000Z", seq_in_round: 5, fixture_no: 5 }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.fixtures.map((f) => f.id)).toEqual(["early", "tie-b", "late", "untimed-1", "inplay-untimed"]);
+  });
+
+  it("a bracket stage's rows are not regrouped here (the knockout keeps its named rounds), and a stage's rows never carry another stage's", () => {
+    const out = stageRoundSections(
+      buildRunSheet(input({ stages: [LEAGUE, CUP], fixtures: [fx({ id: "league", stage_id: "s1" }), fx({ id: "ko", stage_id: "s2", fixture_no: 2 })] })),
+      "s2",
+    );
+    expect(out, "a bracket stage asked for rounds gets none: its block is the bracket's").toEqual([]);
+    expect(sections([fx({ id: "league", stage_id: "s1" }), fx({ id: "ko", stage_id: "s2", fixture_no: 2 })]).flatMap((r) => r.fixtures.map((f) => f.id))).toEqual(["league"]);
+  });
+
+  it("a Swiss sit-out the grouping keeps rides in its round as an untimed row; an untimed league bye is not on the sheet at all", () => {
+    const swiss = { id: "sw", seq: 1, kind: "swiss" };
+    const award = { kind: "award", winner: "h1", loser: null, reason: "bye" };
+    const swissOut = stageRoundSections(
+      buildRunSheet(input({ stages: [swiss], fixtures: [fx({ id: "bye", stage_id: "sw", away_entrant_id: null, scheduled_at: null, status: "forfeited", outcome: award }), fx({ id: "m", stage_id: "sw", fixture_no: 2, seq_in_round: 2 })] })),
+      "sw",
+    );
+    expect(swissOut[0]!.fixtures.map((f) => f.id)).toEqual(["m", "bye"]);
+    expect(sections([fx({ id: "bye", away_entrant_id: null, scheduled_at: null, status: "forfeited", outcome: award })])).toEqual([]);
+  });
+});
+
+describe("roundPlayed - the 'N of M played' on a round bar", () => {
+  it("the empty case: no rows is 0 of 0", () => {
+    expect(roundPlayed([])).toEqual({ played: 0, total: 0 });
+  });
+
+  it("every status, counted: only decided and finalized are played; a bye is no match; the void statuses are in the total and not in the played", () => {
+    const statuses = ["scheduled", "in_play", "needs_decision", "decided", "finalized", "cancelled", "abandoned", "forfeited"];
+    const rows = statuses.map((status, i) => fx({ id: `f${i}`, status, fixture_no: i + 1 }));
+    const bye = fx({ id: "bye", fixture_no: 99, away_entrant_id: null, status: "forfeited", outcome: { kind: "award", winner: "h1", loser: null, reason: "bye" } });
+    expect(roundPlayed(rows)).toEqual({ played: 2, total: statuses.length });
+    expect(roundPlayed([...rows, bye]), "a bye adds to neither").toEqual({ played: 2, total: statuses.length });
+    expect(statuses.length, "anti-vacuity: every status was in the sweep").toBe(8);
+  });
+});
+
+describe("roundWhen - the 'when' on a round bar, in the VENUE zone", () => {
+  it("the empty case: no row with a time says nothing", () => {
+    expect(roundWhen([], TZ)).toBeNull();
+    expect(roundWhen([fx({ scheduled_at: null })], TZ)).toBeNull();
+  });
+
+  it("one day: the clock span of the timed rows (the untimed one adds nothing); one timed row: the span is that time twice", () => {
+    const span = roundWhen([fx({ scheduled_at: "2026-09-05T20:10:00.000Z" }), fx({ scheduled_at: null }), fx({ scheduled_at: "2026-09-05T20:50:00.000Z" })], TZ);
+    expect(span).toEqual({ firstDay: "2026-09-05", lastDay: "2026-09-05", from: "21:10", to: "21:50" });
+    expect(roundWhen([fx({ scheduled_at: "2026-09-05T20:10:00.000Z" })], TZ)).toMatchObject({ from: "21:10", to: "21:10" });
+  });
+
+  it("two days: the first and last day differ, so there is no one clock span to print", () => {
+    const span = roundWhen([fx({ scheduled_at: "2026-09-05T20:10:00.000Z" }), fx({ scheduled_at: "2026-09-06T09:00:00.000Z" })], TZ);
+    expect(span?.firstDay).toBe("2026-09-05");
+    expect(span?.lastDay).toBe("2026-09-06");
+  });
+
+  it("the venue zone decides the day: 23:30 UTC in London summer time is already the next day", () => {
+    expect(roundWhen([fx({ scheduled_at: "2026-09-05T23:30:00.000Z" })], TZ)).toMatchObject({ firstDay: "2026-09-06", from: "00:30" });
   });
 });

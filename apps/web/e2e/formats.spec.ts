@@ -393,7 +393,10 @@ test("swiss_knockout template: Top 3 builds a one-bye bracket the division page 
   await expect(koCard.getByRole("heading", { level: 3 }), "the card is the Knockout stage's").toContainText("Knockout");
   const koRounds = koCard.getByRole("heading", { level: 4 });
   await expect(koRounds.filter({ hasText: "Semi-finals" }), "the Knockout card has a Semi-finals round").toBeVisible();
-  await expect(koRounds.filter({ hasText: /^Final$/ }), "the Knockout card has a Final round").toBeVisible();
+  // Match Day E1 item 1: the round header is a bar - the round's name, then its "N of M played" fact in the same heading - so the name
+  // is the heading's LEADING word, not its whole text. `Final` followed by a space or the end: "Semi-finals" and "Quarter-final"
+  // do not match it, and the count of two headers below is what keeps a third from slipping in.
+  await expect(koRounds.filter({ hasText: /^Final(\s|$)/ }), "the Knockout card has a Final round").toBeVisible();
   // Exactly those two round headers: a third would be a quarter-final round (the bracket sized to 8), and a card with none
   // would make the two checks above pass on a heading that is not a round header.
   await expect(koRounds, "two round headers in the Knockout card, no third").toHaveCount(2);

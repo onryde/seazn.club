@@ -194,3 +194,122 @@ test("a stage not yet started: Generate leads, no Complete, and the card still s
   await expect(card.getByTestId("stage-format-summary"), "and the summary is there").toBeVisible();
   await expect(card.getByTestId("stage-run-sheet"), "no fixtures yet, no sheet").toHaveCount(0);
 });
+
+// Match Day E1 item 1 (owner 2026-11-01): the stage's actions are in the card HEADER - [actions | divider | settings] on one line from md,
+// the same actions in the Stage tools sheet below it - and Complete's reason is an ⓘ: hover and keyboard focus show it, a tap toggles it,
+// the waiting button uses `aria-disabled` (still focusable) and a press on it does nothing.
+test("E1: Complete's reason is an ⓘ - hover, focus and tap show it, the waiting button is aria-disabled and a press does nothing; the actions sit in the header", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const { divisionId, stageId, fixtureIds } = await seedLeague(request, "tip");
+  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  await startMatch(request, fixtureIds[0]!);
+  const card = await openCard(page, request, divisionId, stageId);
+
+  const railTrigger = card.getByTestId("stage-rail-trigger");
+  const phone = await railTrigger.isVisible();
+  const complete = card.getByTestId("stage-complete");
+  const info = card.getByTestId("stage-complete-info");
+  const hint = card.getByTestId("stage-complete-hint");
+  const hintId = `stage-complete-hint-${stageId}`;
+
+  if (!phone) {
+    // From md the actions are in the header's one line: title, then [Complete + ⓘ, Add match, Delete] | divider | settings buttons.
+    const header = card.locator("header").first();
+    await expect(header.getByTestId("stage-complete"), "Complete is in the card header").toBeVisible();
+    await expect(header.getByTestId("stage-add-match"), "Add match is in the card header").toBeVisible();
+    await expect(header.getByTestId("stage-controls-divider"), "a thin divider between the groups").toBeVisible();
+    await expect(header.getByTestId("stage-tool-format"), "the settings buttons are in the header").toBeVisible();
+    const [c, d, t] = await Promise.all([complete.boundingBox(), card.getByTestId("stage-controls-divider").boundingBox(), card.getByTestId("stage-tool-format").boundingBox()]);
+    expect(c!.x + c!.width, "actions, then the divider").toBeLessThanOrEqual(d!.x + 1);
+    expect(d!.x + d!.width, "then the settings").toBeLessThanOrEqual(t!.x + 1);
+  } else {
+    await railTrigger.click();
+    await expect(card.getByTestId("stage-rail-sheet"), "phone: the actions are in the Stage tools sheet").toBeVisible();
+    await expect(card.getByTestId("stage-controls-divider"), "no divider on a phone").toBeHidden();
+  }
+
+  // The wiring a screen reader and a keyboard rely on.
+  await expect(complete).toBeVisible();
+  await expect(complete, "waiting: aria-disabled").toHaveAttribute("aria-disabled", "true");
+  expect(await complete.evaluate((el) => el.hasAttribute("disabled")), "...and NOT `disabled`: it stays focusable").toBe(false);
+  await expect(complete).toHaveAttribute("aria-describedby", hintId);
+  await expect(info).toHaveAttribute("aria-describedby", hintId);
+  await expect(hint).toHaveAttribute("role", "tooltip");
+  await expect(hint).toHaveAttribute("id", hintId);
+  await expect(hint).toHaveText(/unlocks when all 3 matches are played/);
+  await expect(info).toHaveAccessibleName(/not available yet/);
+  expect((await info.boundingBox())!.height, "the ⓘ clears the 44px floor").toBeGreaterThanOrEqual(44);
+  expect((await info.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+
+  if (!phone) {
+    // Closed until asked: hidden. Hover shows it; moving away hides it. Keyboard focus shows it; focusing elsewhere hides it.
+    await expect(hint, "closed: the bubble is not on screen").toBeHidden();
+    await info.hover();
+    await expect(hint, "hover shows the reason").toBeVisible();
+    await page.mouse.move(2, 2);
+    await expect(hint, "moving away hides it").toBeHidden();
+    await info.focus();
+    await expect(hint, "keyboard focus shows the reason").toBeVisible();
+    await card.getByTestId("stage-tool-format").focus();
+    await expect(hint, "focus elsewhere hides it").toBeHidden();
+    // The button itself is focusable (aria-disabled, not disabled) and focusing IT shows the reason too.
+    await complete.focus();
+    await expect(complete).toBeFocused();
+    await expect(hint, "focusing the waiting button shows why").toBeVisible();
+    await card.getByTestId("stage-tool-format").focus();
+  }
+
+  // A tap toggles it, at every width; Escape closes the bubble and nothing else (below md the sheet stays open).
+  await info.click();
+  await expect(hint, "a tap opens the reason").toBeVisible();
+  await expect(info).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(info, "Escape closes the bubble").toHaveAttribute("aria-expanded", "false");
+  if (phone) await expect(card.getByTestId("stage-rail-sheet"), "...and leaves the Stage tools sheet open").toBeVisible();
+  await info.click();
+  await expect(hint).toBeVisible();
+  await card.getByTestId("stage-add-match").evaluate((el) => (el as HTMLElement).blur());
+  await page.mouse.click(2, 2);
+  await expect(info, "a tap outside closes it").toHaveAttribute("aria-expanded", "false");
+
+  // A press on the waiting Complete does nothing: forced past Playwright's own enabled check (aria-disabled reads as not enabled), the
+  // stage is still active and no dialog or notice appeared.
+  if (phone && !(await card.getByTestId("stage-rail-sheet").isVisible())) await railTrigger.click();
+  await complete.click({ force: true });
+  const stages = await apiJson<{ id: string; status: string }[]>(request, `/api/v1/divisions/${divisionId}/stages`);
+  expect(stages.data!.find((x) => x.id === stageId)!.status, "the stage was not completed by a press on the waiting button").toBe("active");
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
+
+test("E1: a started Swiss stage groups its rows under a bar per round, with the played count and 'No time yet' on the untimed rows", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `E1 swiss bars ${TAG}`, visibility: "private" });
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Swiss",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divisionId = div.data!.id;
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 2 } });
+  await addEntrantsViaApi(request, divisionId, ["S1", "S2", "S3", "S4"].map((n) => `${n} ${TAG}`));
+  const started = await apiJson<{ generated: number }>(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.data!.generated, "two rounds of two boards").toBe(4);
+
+  const card = await openCard(page, request, divisionId, stage.data!.id);
+  await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
+  const bars = card.getByTestId("run-sheet-round-bar");
+  await expect(bars, "a bar per round").toHaveCount(2);
+  await expect(bars.nth(0)).toContainText("Round 1");
+  await expect(bars.nth(1)).toContainText("Round 2");
+  await expect(bars.nth(0)).toContainText("0 of 2 played");
+  await expect(card.getByText("Not yet scheduled")).toHaveCount(0);
+  // Nothing is timed: every row says so on the row, and the bars carry no clock span.
+  const rows = card.locator("li[data-fixture-no]");
+  await expect(rows).toHaveCount(4);
+  for (let i = 0; i < 4; i++) await expect(rows.nth(i)).toContainText("No time yet");
+  await expect(card.locator("[data-run-sheet-round-span]")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+});
