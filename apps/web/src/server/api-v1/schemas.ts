@@ -2753,8 +2753,8 @@ export const SwissReshapeResult = z.object({
 /** W3 T11 (X-SW-16; rulebook-W3-swiss.md §3.1/§3.2): a Swiss round count against the field a Generate minted or paired
  *  for — the field's recommended count, safe maximum ⌊n/2⌋ and hard maximum (n − 1 even, n odd). On a Generate's answer
  *  only as a warning: `warn` (above the safe maximum), or `shrunk` (fix round 1: a running Swiss's field shrank under its
- *  count while this round still pairs — it can reach at most `hardMax` rounds; `rounds`, `field` and `canFinish: true`
- *  ride with it). Above the hard maximum otherwise the Generate is refused (SWISS_ROUNDS_ABOVE_MAX). */
+ *  count while this round still pairs — it can reach at most `hardMax` rounds; `rounds`, `field` and `canFinish` ride
+ *  with it, `canFinish` false for round 1, where nothing is played yet). Above the hard maximum otherwise the Generate is refused (SWISS_ROUNDS_ABOVE_MAX). */
 export const SwissRoundsJudgementResult = z.object({
   verdict: z.enum(["warn", "shrunk"]),
   recommended: z.number().int(),
@@ -2762,7 +2762,7 @@ export const SwissRoundsJudgementResult = z.object({
   hardMax: z.number().int(),
   rounds: z.number().int().optional(),
   field: z.number().int().optional(),
-  canFinish: z.literal(true).optional(),
+  canFinish: z.boolean().optional(),
 });
 
 export const GenerateResult = z.object({

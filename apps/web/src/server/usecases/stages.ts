@@ -1311,7 +1311,8 @@ export function judgeSwissRoundsAt(rounds: number, fieldSize: number, canFinish:
  * - in a running Swiss (withdrawals shrank the field), only a round this field cannot reach is refused: `target >
  *   hardMax` (409, `canFinish: true` — `target` is then past round 1, whose decision `swissGen` checked). A round still
  *   within the shrunk field's hard maximum is paired, and the answer carries the `shrunk` warning: the Swiss can reach at
- *   most `hardMax` rounds; finish after that one, or now. Blocking it would strand a live event over rounds it has not
+ *   most `hardMax` rounds; finish after that one, or now — `canFinish: target > 1` (re-review n1): a round-1 Pair after
+ *   no-shows withdrew has nothing played to finish with. Blocking it would strand a live event over rounds it has not
  *   reached; the engine's own no-legal-pairing outcome (SW-H1) stays the backstop.
  */
 export function judgeSwissPairAt(
@@ -1332,7 +1333,7 @@ export function judgeSwissPairAt(
     );
   }
   const { recommended, safeMax, hardMax } = judgement;
-  return { verdict: "shrunk", rounds, field: fieldSize, recommended, safeMax, hardMax, canFinish: true };
+  return { verdict: "shrunk", rounds, field: fieldSize, recommended, safeMax, hardMax, canFinish: target > 1 };
 }
 
 /**

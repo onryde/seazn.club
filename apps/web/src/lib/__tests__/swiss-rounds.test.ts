@@ -347,6 +347,26 @@ describe("X-SW-16 the guidance line and the warn notice (4 locales)", () => {
     expect(checked, "locales").toBe(4);
   });
 
+  it("re-review n1: before any round is complete (a round-1 Pair after no-shows withdrew) the shrunk notice never offers 'finish now'", () => {
+    const later = { ...SHRUNK_6x5_TO_4, canFinish: false };
+    expect(swissRoundsWarnNotice(later, pluralIn("en"))).toBe("4 entrants left: this Swiss can reach at most 3 rounds. Finish after round 3.");
+    expect(swissRoundsWarnNotice({ ...later, field: 2, hardMax: 1 }, pluralIn("en"))).toBe(
+      "2 entrants left: this Swiss can reach at most 1 round. Finish after round 1.",
+    );
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const now = swissRoundsWarnNotice({ ...SHRUNK_6x5_TO_4, field: 12, hardMax: 11 }, pluralIn(locale))!;
+      const notYet = swissRoundsWarnNotice({ ...later, field: 12, hardMax: 11 }, pluralIn(locale))!;
+      expect(notYet, locale).toMatch(/\b12\b/);
+      expect(notYet, locale).toMatch(/\b11\b/);
+      expect(notYet, locale).not.toMatch(/\{/);
+      expect(notYet, `${locale}: the not-yet line is its own copy, not the finish-now one`).not.toBe(now);
+      expect(now.startsWith(notYet.slice(0, -1)), `${locale}: the not-yet line is the finish-now line without its last clause`).toBe(true);
+      checked++;
+    }
+    expect(checked, "locales").toBe(4);
+  });
+
   it("the answer's notice: a warn and a shrunk ride on it; ok, a refuse and nothing do not", () => {
     expect(swissRoundsNoticeOf(WARN_6x5)).toEqual(WARN_6x5);
     expect(swissRoundsNoticeOf(SHRUNK_6x5_TO_4)).toEqual(SHRUNK_6x5_TO_4);

@@ -304,8 +304,39 @@ describe.runIf(HAS_DB)("X-SW-16 Pair next refuses after withdrawals shrink the f
       await expect(generateStageFixtures(rig.auth, rig.stageId)).rejects.toMatchObject(refusal);
       expect(await rowsOf(rig.stageId)).toEqual(rowsBefore);
       expect(await ledgerState(rig.divisionId)).toEqual(ledgerBefore);
+
+      // Resolvable another way (why it is a 409; re-review n2 — until Task 13 ships Finish, the one way out): the
+      // organiser's late players grow round 4's field. Two, not one: the four left have played three rounds among
+      // themselves, so two of them (the 1 v 4 of round 1) have met everyone else left — one newcomer would take the bye
+      // and leave them a rematch (the engine's SW-H1, a different refusal). With two, round 4's field is 6 (§3.2: n = 6
+      // → recommended 3, safe 3, hard 5), and the very same Pair next goes through, warned since 5 > 3.
+      const lates = await createEntrants(rig.auth, rig.divisionId, [entrantInput(rig.kind, "Late A"), entrantInput(rig.kind, "Late B")]);
+      for (const late of lates) {
+        expect(late.late_entry, "premise: between rounds a late player joins round 4").toMatchObject({ case: "c", round: 4 });
+      }
+      const paired = await generateStageFixtures(rig.auth, rig.stageId);
+      expect(paired.swiss_rounds, "the 409 is cleared: round 4 pairs, warned").toEqual({ verdict: "warn", recommended: 3, safeMax: 3, hardMax: 5 });
+      const r4 = boardsOf(await rowsOf(rig.stageId), 4);
+      expect(r4.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter(Boolean).sort(), "round 4 seats all six on boards").toEqual(
+        [...four, ...lates.map((l) => l.id)].sort(),
+      );
     });
   }
+
+  it("re-review n1: a round-1 Pair after Start whose no-shows withdrew is paired with the shrunk warning, canFinish false — nothing is played yet", async () => {
+    // 6 × 5 started (its shells minted for 6), two no-shows withdraw before round 1 is paired: the field is 4 (hard max
+    // 3, §3.2). Round 1 is within it, so it pairs; nothing is complete, so there is nothing to finish with (yet).
+    const rig = await swissRig(SPORTS[0], 6, 5);
+    await startDivision(rig.auth, rig.divisionId);
+    await withdrawEntrantCascade(rig.auth, rig.entrants[4]!);
+    await withdrawEntrantCascade(rig.auth, rig.entrants[5]!);
+    const paired = await generateStageFixtures(rig.auth, rig.stageId);
+    expect(paired.swiss_rounds).toEqual({ verdict: "shrunk", rounds: 5, field: 4, recommended: 2, safeMax: 2, hardMax: 3, canFinish: false });
+    const seated = boardsOf(await rowsOf(rig.stageId), 1).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]);
+    expect(seated.filter(Boolean).sort(), "round 1 seats the four left").toEqual(
+      [rig.entrants[0], rig.entrants[1], rig.entrants[2], rig.entrants[3]].sort(),
+    );
+  });
 
   it("before any round is complete there is nothing to finish: a pre-Start shrink refuses Pair round 1 with canFinish false (422)", async () => {
     // Shells minted for 6 (5 rounds allowed), two withdraw before anything is paired: round 1's field is 4.

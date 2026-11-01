@@ -2391,6 +2391,8 @@
   "swiss.rounds.shrunk.other": "{field} entrants remain, enough for at most {count} rounds. You can finish the Swiss with the rounds already played.",
   "swiss.rounds.shrunkWarn.one": "{field} entrants left: this Swiss can reach at most {count} round. Finish after round {count}, or finish now.",
   "swiss.rounds.shrunkWarn.other": "{field} entrants left: this Swiss can reach at most {count} rounds. Finish after round {count}, or finish now.",
+  "swiss.rounds.shrunkWarnLater.one": "{field} entrants left: this Swiss can reach at most {count} round. Finish after round {count}.",
+  "swiss.rounds.shrunkWarnLater.other": "{field} entrants left: this Swiss can reach at most {count} rounds. Finish after round {count}.",
   "swiss.rounds.warn.one": "With more than {safeMax} round, a later round may have no pairing that avoids a rematch. If that happens, you can finish the Swiss with the rounds already played. Recommended for this field: {recommended}, at most {hardMax}.",
   "swiss.rounds.warn.other": "With more than {safeMax} rounds, a later round may have no pairing that avoids a rematch. If that happens, you can finish the Swiss with the rounds already played. Recommended for this field: {recommended}, at most {hardMax}.",
   "swiss.lateEntry.repaired.one": "Round {round} re-paired with {name}: {count} entrant's match changed.",

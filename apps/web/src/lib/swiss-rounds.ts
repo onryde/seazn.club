@@ -102,7 +102,13 @@ export function judgeSwissRounds(rounds: number, field: number): SwissRoundsJudg
 }
 
 /** The plural bases (`.one` / `.other` in all four locales) this module says. */
-export const SWISS_ROUNDS_PLURAL_KEYS = ["swiss.rounds.guidance", "swiss.rounds.warn", "swiss.rounds.shrunk", "swiss.rounds.shrunkWarn"] as const;
+export const SWISS_ROUNDS_PLURAL_KEYS = [
+  "swiss.rounds.guidance",
+  "swiss.rounds.warn",
+  "swiss.rounds.shrunk",
+  "swiss.rounds.shrunkWarn",
+  "swiss.rounds.shrunkWarnLater",
+] as const;
 export type SwissRoundsPluralKey = (typeof SWISS_ROUNDS_PLURAL_KEYS)[number];
 
 type Vars = Record<string, string | number>;
@@ -123,14 +129,15 @@ export function swissRoundsGuidanceLine(field: number, plural: SwissRoundsPlural
 /**
  * W3 T11 fix round 1 (controller ruling on review m2, "never block a pairable round"): a RUNNING Swiss whose field shrank
  * under its round count. The round being paired is still within the shrunk field's hard maximum, so it is paired; the
- * Swiss can reach at most `hardMax` rounds, and the organiser can finish it after that round or now (`canFinish`, T13).
- * A round beyond `hardMax` is refused (SWISS_ROUNDS_ABOVE_MAX, 409).
+ * Swiss can reach at most `hardMax` rounds; the organiser can finish it after that round, and — once a round is complete
+ * (`canFinish`, re-review n1: false for round 1, where nothing is played yet) — now (T13). A round beyond `hardMax` is
+ * refused (SWISS_ROUNDS_ABOVE_MAX, 409).
  */
 export interface SwissRoundsShrunk extends SwissRoundsGuidance {
   verdict: "shrunk";
   rounds: number;
   field: number;
-  canFinish: true;
+  canFinish: boolean;
 }
 
 /** What a Generate's answer carries (`GenerateOutcome.swiss_rounds`): the safe-max warning, or the shrunk-field warning. */
@@ -148,15 +155,17 @@ export function swissRoundsNoticeOf(j: SwissRoundsJudgement | SwissRoundsShrunk 
  * - `warn` — the round count is above the field's safe maximum: a later round may have no legal pairing, and what
  *   happens then (rulebook §3.2 "allowed, with a plain warning that a round may become unpairable and what happens then
  *   (§3.3)");
- * - `shrunk` — the field of a running Swiss shrank: how many rounds it can still reach, and to finish after that one or
- *   now.
+ * - `shrunk` — the field of a running Swiss shrank: how many rounds it can still reach, and to finish after that one —
+ *   or now, once a round is complete (`canFinish`); before then there is nothing to finish with.
  * Null for every other answer.
  */
 export function swissRoundsWarnNotice(
   j: SwissRoundsJudgement | SwissRoundsShrunk | undefined,
   plural: SwissRoundsPlural,
 ): string | null {
-  if (j?.verdict === "shrunk") return plural("swiss.rounds.shrunkWarn", j.hardMax, { field: j.field });
+  if (j?.verdict === "shrunk") {
+    return plural(j.canFinish ? "swiss.rounds.shrunkWarn" : "swiss.rounds.shrunkWarnLater", j.hardMax, { field: j.field });
+  }
   if (j?.verdict !== "warn") return null;
   return plural("swiss.rounds.warn", j.safeMax, { safeMax: j.safeMax, recommended: j.recommended, hardMax: j.hardMax });
 }
