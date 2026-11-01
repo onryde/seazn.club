@@ -138,6 +138,18 @@ export function divisionSummaryClauses(sportKey: string, module: AnySportModule,
   return [...(describeMatchRules(sportKey, module, resolved) ?? []), ...describeAbandon(module, resolved)];
 }
 
+/**
+ * Match Day E1 item 4 (owner 2026-11-01): what a VARIANT plays, as clauses, for the one line under the Division rules strip's
+ * Variant select. The variant's declared preset (`SportModule.variants`, synced to `sport_variants.config`, or an org preset's
+ * own config) through the public line's own format describer, so the picker and the public pages word one format one way and
+ * no table of variant meanings is kept here. Nothing for a variant with no stored preset and nothing for a preset the describer
+ * has no words for (generic's "winner entered at the end" is the describer's, not this function's).
+ */
+export function variantMeaningClauses(sportKey: string, module: AnySportModule, preset: Record<string, unknown> | undefined): RulesClause[] {
+  if (preset === undefined) return [];
+  return describeMatchRules(sportKey, module, preset) ?? [];
+}
+
 // ---------------------------------------------------------------------------
 // The deciders notice (X-SR-6, review M-3).
 // ---------------------------------------------------------------------------

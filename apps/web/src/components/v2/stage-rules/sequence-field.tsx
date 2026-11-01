@@ -123,7 +123,7 @@ export function SequenceField({
         <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-2 py-2">
           {remaining.length > 0 && (
             <select
-              className="select min-h-11 min-w-[10rem] flex-1"
+              className="select min-h-11 min-w-[10rem] w-full flex-1 md:max-w-xs"
               aria-label={`${fieldLabel}: ${msg("stageRules.sequence.add")}`}
               data-testid={`${testId}-add`}
               disabled={disabled}

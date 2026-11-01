@@ -225,7 +225,7 @@ function OrderEditor({
       <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-2 py-2">
         {addable.length > 0 && (
           <select
-            className="select min-h-11 min-w-[10rem] flex-1"
+            className="select min-h-11 min-w-[10rem] w-full flex-1 md:max-w-xs"
             aria-label={msg("stageTiebreaks.add")}
             data-testid="stage-tiebreaks-add"
             disabled={saving}
@@ -385,7 +385,7 @@ export function StageTiebreaks({ mode, started, showLockLine = true, stage, modu
       </button>
     ) : controls.reset && choices.length > 1 ? (
       <select
-        className="select min-h-11 min-w-[10rem]"
+        className="select min-h-11 w-full md:max-w-xs"
         aria-label={msg("stageTiebreaks.resetMenu")}
         data-testid="stage-tiebreaks-reset"
         disabled={saving}

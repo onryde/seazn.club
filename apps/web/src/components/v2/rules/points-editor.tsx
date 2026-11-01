@@ -657,7 +657,7 @@ export function StagePoints({ mode, started, showLockLine = true, stageId, modul
         ))}
         {offered.length > 0 && (
           <select
-            className="select min-h-11 min-w-[10rem] max-w-full"
+            className="select min-h-11 w-full md:max-w-xs"
             aria-label={msg("stagePoints.bonusAdd")}
             data-testid="stage-points-bonus-add"
             disabled={saving}
@@ -856,8 +856,8 @@ function DivisionPoints({ mode, module, divisionConfig, value, onChange, kinds, 
       ) : (
         <div className="grid grid-cols-3 gap-2 sm:max-w-sm">
           {keys.map((key) => (
-            <label key={key} className="block min-w-0 text-xs text-slate-600">
-              {msg(POINTS_KEY_CONCEPT[key]!.labelKey)}
+            <label key={key} className="block min-w-0">
+              <span className="label">{msg(POINTS_KEY_CONCEPT[key]!.labelKey)}</span>
               <input
                 type="number"
                 min={0}
@@ -867,7 +867,7 @@ function DivisionPoints({ mode, module, divisionConfig, value, onChange, kinds, 
                 disabled={saving}
                 value={value[key] ?? ""}
                 onChange={(e) => onChange({ ...value, [key]: e.target.value })}
-                className="input mt-1 min-h-11 w-full"
+                className="input min-h-11 w-full"
               />
             </label>
           ))}

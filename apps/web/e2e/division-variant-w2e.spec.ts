@@ -107,7 +107,16 @@ test("D2 the Division rules strip switches the division to 3x21: the stored form
   if (HINT_LIVE) await expect(page.getByTestId("division-variant-hint")).toHaveText(HINT_TEXT);
   else await expect(page.getByTestId("division-variant-hint")).toHaveCount(0);
 
+  // Match Day E1 item 4: one line under the select says what the PICKED variant plays, in the public line's words, with the engine's own
+  // preset numbers (read here, never typed). It follows the picker before anything is saved: the select is state, not the stored row.
+  const meaning = page.getByTestId("division-variant-meaning");
+  const saved15 = preset("badminton", "bwf-3x15");
+  await expect(meaning, "the saved 3x15 variant's numbers").toContainText(String(saved15.setTo));
+  await expect(meaning).toContainText(String(saved15.cap));
   await picker.selectOption("bwf");
+  await expect(meaning, "picking 3x21 re-words the line before any save").toContainText(String(to21.setTo));
+  await expect(meaning).toContainText(String(to21.cap));
+  await expect(meaning, "and the 3x15 target is gone from it").not.toContainText(new RegExp(`\\b${String(saved15.setTo)}\\b`));
   await page.getByTestId("division-rules-format-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
   await expect

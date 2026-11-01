@@ -118,7 +118,8 @@ export function RuleFieldControl({
           onChange={(e) => onEdit(e.target.value)}
           aria-describedby={described}
           aria-invalid={invalidMark}
-          className="select"
+          // Match Day E1 item 4: full width below md, capped at 20rem from md (a choice list is not a 700px bar), always a block.
+          className="select block w-full md:max-w-xs"
         >
           <option value="">{msg("rules.default")}</option>
           {/* D9 (owner ruling 2026-09-18) - a SAVED value this select cannot offer must be shown, not swallowed.

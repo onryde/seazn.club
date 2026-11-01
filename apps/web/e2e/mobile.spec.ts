@@ -6596,6 +6596,93 @@ test("Stage tools sheet at every width: the three settings buttons are its top r
   expect(branch, `${page.viewportSize()!.width}px takes the ${branch} branch`).toBe(page.viewportSize()!.width < 768 ? "sheet" : "header");
 });
 
+// Match Day E1 item 4 (owner 2026-11-01: the Variant label and select "look messy"): every field in the Division rules strip's panels is
+// label-above and content-sized - full width below md, 20rem from md - and one line under the Variant select says what the variant
+// plays. The unit test pins the classes and the words; this one reads the PAINT at every width, which is where the original defect
+// lived (the label flipped from beside the select at 1280 to above it at 320).
+test("Division rules strip field layout at every width: labels above their controls, selects full width below md and 20rem from md, the variant's meaning under its select, no scroll", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `E1 rules layout ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Singles",
+    sport_key: "badminton",
+    variant_key: "bwf",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await openPanels(strip, "format", "points", "tiebreaks");
+  // Below md the Tie-breaks list sits behind its own phone disclosure (a `max-md:hidden` body under a toggle that is `md:hidden`): the
+  // Add-a-step select is not on screen until it is opened, so open it - and prove it is the select that appeared, not a different one.
+  const foldToggle = strip.getByTestId("division-rules-panel-tiebreaks").locator('[data-role="phone-disclosure-toggle"]');
+  if (await foldToggle.isVisible()) {
+    if ((await foldToggle.getAttribute("aria-expanded")) !== "true") await foldToggle.click();
+    await expect(foldToggle).toHaveAttribute("aria-expanded", "true");
+  }
+  await expect(strip.getByTestId("stage-tiebreaks-add"), "the Add-a-step select is on screen at every width").toBeVisible();
+
+  const width = page.viewportSize()!.width;
+  const phone = width < 768; // md: the first width with the cap
+  const REM = 16;
+  const variant = strip.getByTestId("division-settings-variant");
+  await expect(variant).toBeVisible();
+  // Label above: the `.label` span's box ends where the select's begins - never to its left on the same line.
+  const label = variant.locator("xpath=preceding-sibling::span[1]");
+  await expect(label).toHaveText("Variant");
+  const [lb, sb] = [(await label.boundingBox())!, (await variant.boundingBox())!];
+  expect(lb.y + lb.height, "the Variant label ends above its select").toBeLessThanOrEqual(sb.y + 1);
+  expect(Math.abs(lb.x - sb.x), "and starts on the select's left edge").toBeLessThan(2);
+  // Width: the whole row below md; capped at 20rem from md.
+  const row = (await variant.locator("xpath=ancestor::label[1]").boundingBox())!;
+  if (phone) expect(Math.abs(sb.width - row.width), `${width}px: the select fills its row`).toBeLessThan(2);
+  else expect(sb.width, `${width}px: the select is capped at 20rem`).toBeLessThanOrEqual(20 * REM + 1);
+  expect(sb.height, "44px tap floor").toBeGreaterThanOrEqual(44);
+  // What the variant plays, in words: the engine's own preset numbers (read here, never typed).
+  const bwf = (builtinModules.find((m) => m.key === "badminton")!.variants as Record<string, { setTo: number; cap: number }>).bwf!;
+  const meaning = strip.getByTestId("division-variant-meaning");
+  await expect(meaning).toBeVisible();
+  await expect(meaning).toContainText(String(bwf.setTo));
+  await expect(meaning).toContainText(String(bwf.cap));
+  const mb = (await meaning.boundingBox())!;
+  expect(mb.y, "the line sits under the select").toBeGreaterThanOrEqual(sb.y + sb.height - 1);
+
+  // The grid's own selects and the Add-a-step menu follow the same width rule.
+  const selects = strip.locator("select");
+  const count = await selects.count();
+  expect(count, "anti-vacuity: the three panels draw selects").toBeGreaterThanOrEqual(3);
+  let measured = 0;
+  for (let i = 0; i < count; i++) {
+    const sel = selects.nth(i);
+    if (!(await sel.isVisible())) continue;
+    const box = (await sel.boundingBox())!;
+    if (!phone) expect(box.width, `${width}px: select ${i} is capped at 20rem`).toBeLessThanOrEqual(20 * REM + 1);
+    else {
+      // The row's CONTENT width: the Add-a-step row is `px-2`, so its box is 16px wider than what a select can fill.
+      const room = await sel.evaluate((el) => {
+        const p = el.parentElement!;
+        const cs = getComputedStyle(p);
+        return p.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - parseFloat(cs.borderLeftWidth) - parseFloat(cs.borderRightWidth);
+      });
+      expect(Math.abs(box.width - room), `${width}px: select ${i} fills its row`).toBeLessThan(2);
+    }
+    measured++;
+  }
+  expect(measured, "every visible select measured").toBeGreaterThanOrEqual(3);
+  await expectNoHorizontalScroll(page);
+});
+
 test("W2c stage points section at every width: the sentence, More, the walkover row, the bonus menu and Save hold the 44px floor, nothing clips or scrolls, the visible control set matches 1280, and the refusal card fits", async ({
   page,
   request,

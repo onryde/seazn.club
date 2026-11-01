@@ -29,12 +29,12 @@ import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online
 import { keptPinnedOf, refusedFieldsOf, type KeptPinnedStage, type RefusedField } from "@/lib/rule-errors";
 import { hydrateRuleValues, rulesFor, visibleRuleFields } from "@/lib/match-rules";
 import { moduleFor } from "@/lib/rule-scope";
-import { rulesChipText } from "@/lib/rules-line";
+import { rulesChipText, rulesLineText } from "@/lib/rules-line";
 import { variantHint, variantOptionLabel } from "@/lib/variant-label-keys";
 import { configUnderVariant, divisionFormatPatch, ruleValuesAfterVariantSwitch } from "@/components/v2/division-format-patch";
 import { RULE_LOCK_PARTIAL_KEY, lockLineFor, lockSentence, mergeLocks, refusedLines, type RefusedLine } from "@/components/v2/division-settings-locks";
 import { ruleFormState } from "@/components/v2/match-rules-state";
-import { divisionSummaryClauses } from "@/components/v2/stage-rules/stage-row-model";
+import { divisionSummaryClauses, variantMeaningClauses } from "@/components/v2/stage-rules/stage-row-model";
 import { LockLine } from "./lock-line";
 import { MatchFormatEditor, divisionGridFields } from "./match-format-editor";
 import { PointsEditor, divisionPointsDirty, divisionPointsKeys, divisionPointsOf, divisionPointsPatch, hydrateDivisionPoints } from "./points-editor";
@@ -155,6 +155,10 @@ export function DivisionRulesStrip({
   const pointsLock = lockLineFor("points", locks);
   const clockLock = lockLineFor("clock", locks, ["variant"]);
   const hint = savedVariantKey === null ? undefined : variantHint(sportKey, variantKey, locale);
+  // Match Day E1 item 4: what the PICKED variant plays, in the public line's own words, under the select (the dated BWF note below
+  // it is a separate, older line). Read from the picked variant's preset - not the division's own cfg, which may override it.
+  const meaning = ruleDict === undefined ? [] : variantMeaningClauses(sportKey, sportModule, presetOf(variantKey));
+  const meaningText = meaning.length === 0 || ruleDict === undefined ? undefined : rulesLineText(ruleDict, meaning);
   // The Match format section says its lock ONCE (fix round 1, I1; spec §12 items 4 and 13): every control it draws, each with
   // its lock (undefined: open), in the order they are drawn - the variant, online play (never locked: a started stage does not
   // play it), the Lichess clock, then the rule grid's own fields (`divisionGridFields`, the grid's own list). The first lock
@@ -408,15 +412,17 @@ export function DivisionRulesStrip({
               {formatLock !== undefined && <LockLine testId="division-locked-format" text={lockSentence(formatLock, msg)} />}
               {variantShown && (
                 <div>
-                  <label className="block text-xs text-slate-600">
-                    {msg("divset.variant")}
+                  {/* Match Day E1 item 4: every field in these panels is label-above, content-sized. The label is the `.label` span (the grid's own
+                      fields wear it), the select a block that is full width below md and 20rem from md - so the label can never sit beside it. */}
+                  <label className="block">
+                    <span className="label">{msg("divset.variant")}</span>
                     <select
                       disabled={busy || variantLock !== undefined}
                       value={variantKey}
                       onChange={(e) => pickVariantKey(e.target.value)}
-                      aria-describedby={hint === undefined ? undefined : `${panelId}-variant-hint`}
+                      aria-describedby={[meaningText === undefined ? undefined : `${panelId}-variant-meaning`, hint === undefined ? undefined : `${panelId}-variant-hint`].filter((id) => id !== undefined).join(" ") || undefined}
                       data-testid="division-settings-variant"
-                      className="select mt-1 min-h-11 w-full sm:max-w-sm"
+                      className="select block min-h-11 w-full md:max-w-xs"
                     >
                       {variants.map((v) => (
                         <option key={v.key} value={v.key}>
@@ -425,6 +431,11 @@ export function DivisionRulesStrip({
                       ))}
                     </select>
                   </label>
+                  {meaningText !== undefined && (
+                    <p id={`${panelId}-variant-meaning`} data-testid="division-variant-meaning" className="mt-1 min-w-0 text-xs text-slate-700">
+                      {meaningText}
+                    </p>
+                  )}
                   {hint !== undefined && (
                     <p id={`${panelId}-variant-hint`} role="note" data-testid="division-variant-hint" className="mt-2 min-w-0 rounded-md bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700">
                       {msg(hint.key, hint.vars)}
@@ -435,13 +446,13 @@ export function DivisionRulesStrip({
 
               {onlineShown && (
                 <div>
-                  <label className="block text-xs text-slate-600">
-                    {msg("divset.onlinePlay.label")}
+                  <label className="block">
+                    <span className="label">{msg("divset.onlinePlay.label")}</span>
                     <select
                       disabled={busy}
                       value={onlinePlay}
                       onChange={(e) => setOnlinePlay(e.target.value as "off" | "lichess")}
-                      className="select mt-1 min-h-11 w-full sm:max-w-sm"
+                      className="select block min-h-11 w-full md:max-w-xs"
                       data-testid="division-online-play"
                     >
                       <option value="off">{msg("divset.onlinePlay.off")}</option>
@@ -478,8 +489,8 @@ export function DivisionRulesStrip({
 
               {lichessClock && (
                 <div>
-                  <label className="block text-xs text-slate-600">
-                    {msg("divset.timeControl.label")}
+                  <label className="block">
+                    <span className="label">{msg("divset.timeControl.label")}</span>
                     <select
                       disabled={busy || clockLock !== undefined}
                       value={timeControl}
@@ -487,7 +498,7 @@ export function DivisionRulesStrip({
                         const picked = timeControlRuleValues(e.target.value);
                         if (picked) setRuleValues({ ...ruleValues, ...picked });
                       }}
-                      className="select mt-1 min-h-11 w-full sm:max-w-sm"
+                      className="select block min-h-11 w-full md:max-w-xs"
                       data-testid="division-time-control"
                     >
                       {timeControl === "" && <option value="">{msg("divset.timeControl.choose")}</option>}
