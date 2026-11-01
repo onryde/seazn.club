@@ -24,7 +24,7 @@ Public sponsor logos link through a tracked redirect, so the click count in the 
 
 ## Selling packages (Pro or Event Pass)
 
-A **sponsorship package** is a priced offer (name, tier, price). Selling one works like entry fees:
+A **sponsorship package** is a priced offer (name, tier, price). You sell packages from **Sponsors → Packages and orders**, in your organization's Sponsors page. Selling one works like entry fees:
 
 1. You need **Get paid (Stripe Connect)** set up — the same onboarding used for card entry fees.
 2. Create a package, then start an order with the sponsor's name and email.

@@ -28,6 +28,12 @@ vi.mock("@/server/usecases/sponsors", () => ({ listSponsorRows: h.listSponsorRow
 vi.mock("@/lib/entitlements", () => ({ hasFeatureOnAnyPass: h.hasFeatureOnAnyPass }));
 vi.mock("@/lib/db", () => ({ sql: h.sql }));
 
+// The existing active-tab scroller (Settings and Directory use it): a marker, so the test can see WHAT it wraps. The real one is a
+// client effect (`scrollIntoView` on `[aria-current="page"]`) that prerender never runs.
+vi.mock("@/components/ui/scroll-active-tab-into-view", () => ({
+  ScrollActiveTabIntoView: ({ children }: { children: React.ReactNode }) => <div data-active-tab-scroller>{children}</div>,
+}));
+
 // The islands, as markers carrying exactly what the page handed them.
 vi.mock("@/components/org-sponsors", () => ({
   OrgSponsors: (p: { orgId: string; initialSponsors: unknown[]; competitions: unknown[]; hasTiers: boolean; canEdit: boolean; billingHref: string }) => (
@@ -50,6 +56,13 @@ vi.mock("@/components/sponsor-packages", () => ({
 
 import SponsorsHubPage from "../page";
 import { SPONSORS_EDITOR_ONLY_TABS, SPONSORS_TABS, sponsorsHref, type SponsorsTab } from "@/lib/sponsors-hub";
+import { LOCALES } from "@/lib/i18n-constants";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+
+const UI_BY_LOCALE = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
 
 const ORG = { id: "org-1", name: "Riverside", slug: "riverside", role: "owner" };
 
@@ -155,6 +168,56 @@ describe("the Sponsors hub - the tab bar", () => {
     const html = await render();
     expect(html).toMatch(/<h1[^>]*>Sponsors<\/h1>/);
     expect(html).toMatch(/<nav[^>]*aria-label="Sponsors sections"/);
+  });
+});
+
+describe("the tab bar scrolls its active tab into view (the Settings and Directory precedent; at 320 the 4th tab is off-screen)", () => {
+  it("the nav sits inside the active-tab scroller and the current tab is inside it too, for every tab (counted)", async () => {
+    let checked = 0;
+    for (const tab of SPONSORS_TABS) {
+      const html = await render(tab);
+      const scroller = /<div data-active-tab-scroller[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1];
+      expect(scroller, `?tab=${tab}: the nav is wrapped`).toBeDefined();
+      expect(scroller, `?tab=${tab}: the wrapper holds the tab bar`).toContain('aria-label="Sponsors sections"');
+      // The scroller finds its target with `[aria-current="page"]`: the current tab must carry it, inside the wrapper.
+      expect(scroller, `?tab=${tab}: the current tab is inside it`).toMatch(new RegExp(`data-testid="sponsors-tab-link-${tab}"[^>]*aria-current="page"|aria-current="page"[^>]*data-testid="sponsors-tab-link-${tab}"`));
+      expect(scroller!.match(/aria-current="page"/g), `?tab=${tab}: exactly one current tab`).toHaveLength(1);
+      checked++;
+    }
+    expect(checked).toBe(SPONSORS_TABS.length);
+  });
+});
+
+describe("a panel's heading IS its tab's label - one declaration, so the two cannot disagree (m2)", () => {
+  /** The visible text of an element found by its exact attribute, tags stripped. */
+  const textOf = (html: string, re: RegExp): string | undefined => re.exec(html)?.[1]?.replace(/<[^>]+>/g, "").trim();
+
+  it("every tab, in every locale: the tab link, the panel heading and the dictionary label are the same string (counted)", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      h.resolveLocale.mockResolvedValue(locale);
+      for (const tab of SPONSORS_TABS) {
+        const label = UI_BY_LOCALE[locale]![`sponsors.hub.tab.${tab}`];
+        expect(typeof label, `${locale}/${tab}: the dictionary has the label`).toBe("string");
+        const html = await render(tab);
+        const link = textOf(html, new RegExp(`<a[^>]*data-testid="sponsors-tab-link-${tab}"[^>]*>([\\s\\S]*?)</a>`));
+        const heading = textOf(html, new RegExp(`<h2 id="sponsors-tab-${tab}-heading"[^>]*>([\\s\\S]*?)</h2>`));
+        expect(link, `${locale}/${tab}: tab link`).toBe(label);
+        expect(heading, `${locale}/${tab}: panel heading`).toBe(label);
+        // ...and the section is labelled BY that heading, so a screen reader announces the same words as the tab.
+        expect(html, `${locale}/${tab}: aria-labelledby`).toContain(`aria-labelledby="sponsors-tab-${tab}-heading"`);
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * SPONSORS_TABS.length);
+    expect(checked).toBeGreaterThanOrEqual(16);
+  });
+
+  it("the Packages panel no longer says 'Sell sponsorship' (the retired heading) - it says what its tab says", async () => {
+    h.resolveLocale.mockResolvedValue("en");
+    const html = await render("packages");
+    expect(html).not.toContain("Sell sponsorship");
+    expect(html).toMatch(/<h2 id="sponsors-tab-packages-heading"[^>]*>Packages and orders<\/h2>/);
   });
 });
 
