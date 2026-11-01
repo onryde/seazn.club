@@ -4,7 +4,7 @@ description: Put sponsors on your streams, see how often each one aired and was 
 order: 6
 ---
 
-Open **Sponsors** from your Dashboard. The hub has four tabs: **Overview**, **Sponsors**, **On stream** and **Packages and orders**. Every member can read Overview and Sponsors; only an owner or admin sees On stream and Packages and orders. Adding sponsors, tiers and packages are covered in [Sponsors](/help/sharing/sponsors).
+Open **Sponsors** in the top bar or on your Dashboard. The hub has four tabs: **Overview**, **Sponsors**, **On stream** and **Packages and orders**. Every member can read Overview and Sponsors; only an owner or admin sees On stream and Packages and orders. Adding sponsors, tiers and packages are covered in [Sponsors](/help/sharing/sponsors).
 
 ## On stream
 

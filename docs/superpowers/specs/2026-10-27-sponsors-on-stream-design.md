@@ -276,12 +276,36 @@ Footnote: "composed streams", "viewer numbers from YouTube". `noindex`, rate-lim
 
 ## 6. Constraints the builder must meet
 
-### 6.1 The top bar at 320 *(owner ruling 2026-10-31, "a")*
+### 6.1 The top bar at 320 *(owner ruling 2026-10-31, "a"; amended by owner ruling 2026-11-01)*
 
 `nav.tsx` holds Dashboard / Directory / Settings (+ Player home for dual-role); a 4th icon overflows below ~340 px. The
 Sponsors link is `hidden min-[350px]:flex` (the Player-home precedent) and the org Dashboard carries a Sponsors entry
 at every width. At ≥ 350 the dual-role 5-link case is measured; if it overflows, Player home folds first. Proven by the
 seven-width `mobile.spec.ts` scan.
+
+**Amended, owner ruling 2026-11-01** ("instead of putting sponsor icon, can we put setting as a icon all time"). The
+2026-10-31 build added Sponsors as a sixth *labelled* link; every org has Streaming, so every org's bar grew, and at 1280
+the org chip truncated a 38-character club name (`nav-org-chip-overflow.spec.ts`, red on CI). Now:
+
+- **Settings is its icon alone at every width.** It keeps `aria-label` (its accessible name) and gains a `title` tooltip
+  with the same words. It sits last in the bar, beside the other icon controls (help, and Sign out below `lg`).
+- **Sponsors is an ordinary labelled link** on the same label rung as Dashboard, Directory and Streaming. The width
+  Settings' label gave back pays for it, so main's rung holds unchanged: the org nav's labels from `md`, the dual-role
+  nav's from `lg` (the 2026-10-28 tablet-label ruling). The `xl` rung the 2026-10-31 build introduced is gone.
+- **Phones are unchanged from the 2026-10-31 build:** below 350 px Sponsors is hidden (the Dashboard entry is the way
+  in); Player home, on a bar with Streaming, still folds first until 390 px.
+- **An org with a logo folds one step later.** The logo puts 38 px more in the row, and the four links that never fold
+  already overrun 320–353 px with it (main did too: 34 px at 320). So Sponsors shows from 390 px for a logo org, and
+  Player home from 430 px with Streaming (390 without). Measured: five links fit from 382 px, six from 410.
+- **From `md` the links give back the extra link's width in their own spacing.** The bar still carries one link more
+  than main, and the org chip's club name is the only thing in the row that shrinks. So the links touch from `md`,
+  Settings keeps its 28 px phone size, the org nav's labelled links use a 4 px icon-to-word gap in the `md` band, and
+  every labelled link has 8 px of side padding from `lg` instead of 12.
+- **Measured in a browser** (local Chromium, signed-in owner, Streaming on, en/es/fr/nl, the 38-character club name).
+  At 1280 the club name shows whole in en, as on main. At 768, en shows 93 px of the name against the 61 px its first
+  eight characters need (main: 114). There is no horizontal page scroll anywhere from 320 to 1280 for an org without a
+  logo. A logo org overruns at 320–353 exactly as on main and nowhere else. Spanish pays most: "Patrocinadores" is a
+  long word, so at 768 the chip shows 102 px against main's 166.
 
 ### 6.2 YouTube paid promotion
 

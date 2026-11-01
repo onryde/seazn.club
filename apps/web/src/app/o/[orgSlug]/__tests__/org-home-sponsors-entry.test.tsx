@@ -1,6 +1,6 @@
 // R4 sponsors-on-stream S11 - the org Dashboard's Sponsors entry (OWNER RULING §6.1 "a", 2026-10-31).
 //
-// The top-bar Sponsors icon is `hidden min-[350px]:flex`: it is gone below 350px. The ruling's other half is that the
+// The top-bar Sponsors link is `hidden min-[350px]:flex` (`min-[390px]` for an org with a logo): it is gone below 350px. The ruling's other half is that the
 // Dashboard carries a Sponsors entry AT EVERY WIDTH, so a phone user at 320 always has a way in. "At every width" is a
 // claim about CLASSES, so it is asserted on the link's class tokens: nothing that hides it at any breakpoint
 // (`hidden`, `max-*:hidden`, `sm:hidden`, `md:hidden` ...) - and the link is there for a viewer too (the hub gives a

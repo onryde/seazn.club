@@ -8,7 +8,8 @@
 //      on the hub's Sponsors tab, with a second query param carried through, and Settings itself no longer lists Sponsors.
 //   3. A viewer (a non-editor) gets the same read-only view Settings gave: the Sponsors tab renders, with no add form; the editor-only
 //      tabs are not offered, and `?tab=packages` falls back to Overview instead of refusing.
-//   4. The Dashboard's Sponsors entry - the way in at EVERY width, the top-bar icon being hidden under 350px - works from 320.
+//   4. The Dashboard's Sponsors entry - the way in at EVERY width, the top-bar Sponsors link being hidden under 350px - works from 320;
+//      from 350 the top-bar link is there too, and on a desktop it is a LABELLED link while Settings is its gear alone (owner 2026-11-01).
 //   5. On stream (S12): the tab, driven as an editor drives it - the first tick turns the rotation on at Normal (R12) and the page shows
 //      it; the dial and a competition's own scope persist across a reload; the preview names a sport's breaks when it has no finished
 //      match; and a viewer is refused the settings write (R19). Default viewport only (R17).
@@ -32,6 +33,10 @@ import { overviewHref } from "../src/lib/sponsor-report";
 /** Copy read from the dictionary the page renders from, never retyped (this folder's idiom: settings-org-tabs.spec.ts). */
 const UI: Record<string, string> = JSON.parse(
   readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
+/** The console chrome's copy (the gantry reads `console`, not `ui`). */
+const CONSOLE: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/console.json", import.meta.url)), "utf8"),
 );
 const label = (tab: SponsorsTab): string => {
   const v = UI[`sponsors.hub.tab.${tab}`];
@@ -145,11 +150,11 @@ test("a viewer gets the read-only view Settings gave: Sponsors without the add f
   }
 });
 
-test("the Dashboard's Sponsors entry opens the hub at 320, where the top-bar icon is hidden", async ({ page }) => {
+test("the Dashboard's Sponsors entry opens the hub at 320, where the top-bar Sponsors link is hidden", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto(`/o/${org.slug}`);
-  // Under 350px the top-bar Sponsors icon is `display: none`; the Dashboard's own entry is the way in.
-  await expect(page.getByTestId("nav-sponsors"), "the top-bar icon is hidden at 320").toBeHidden();
+  // Under 350px the top-bar Sponsors link is `display: none`; the Dashboard's own entry is the way in.
+  await expect(page.getByTestId("nav-sponsors"), "the top-bar link is hidden at 320").toBeHidden();
   const entry = page.getByTestId("org-home-sponsors");
   await expect(entry, "the Dashboard entry is visible at 320").toBeVisible();
   await expectNoHorizontalScroll(page);
@@ -158,10 +163,20 @@ test("the Dashboard's Sponsors entry opens the hub at 320, where the top-bar ico
   await expect(page.getByTestId("sponsors-tab-overview")).toBeVisible();
   await expectNoHorizontalScroll(page);
 
-  // From 350 the top-bar icon is there too (the Player-home precedent), pointing at the same place.
+  // From 350 the top-bar link is there too (the Player-home precedent), pointing at the same place - its icon alone on a phone.
   await page.setViewportSize({ width: 350, height: 800 });
   await expect(page.getByTestId("nav-sponsors")).toBeVisible();
   await expect(page.getByTestId("nav-sponsors")).toHaveAttribute("href", `/o/${org.slug}/sponsors`);
+
+  // On a desktop (owner ruling 2026-11-01) Sponsors paints its word like Dashboard and Directory, and Settings is the gear alone: no
+  // words painted or hidden, reached by role + its name, with the same words as its tooltip.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.getByTestId("nav-sponsors"), "a labelled link at 1280").toHaveText(CONSOLE["nav.sponsors"] ?? "");
+  const settings = page.locator("header.app-gantry nav").getByRole("link", { name: CONSOLE["nav.settings"] ?? "", exact: true });
+  await expect(settings, "Settings is found by its accessible name").toBeVisible();
+  await expect(settings).toHaveAttribute("href", `/o/${org.slug}/settings`);
+  await expect(settings).toHaveAttribute("title", CONSOLE["nav.settings"] ?? "");
+  await expect(settings, "Settings paints no words").toHaveText("");
 });
 
 test("on stream: the first tick turns the rotation on at Normal, the dial and a competition's own scope persist, and the preview names the sport's breaks", async ({ page, request }) => {

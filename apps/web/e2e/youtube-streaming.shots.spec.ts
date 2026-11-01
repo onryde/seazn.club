@@ -23,16 +23,19 @@ test.use({ storageState: { cookies: [], origins: [] } });
 const SHOTS = process.env.YOUTUBE_SHOTS_DIR ?? resolve(process.cwd(), "../../.superpowers/sdd/shots/youtube-streaming");
 const WIDTHS = [1280, 768, 320] as const;
 /** The nav budget is measured here: the phone floor and the width just above it (335 was 3px over), the dual-role link's own threshold (350),
- *  the widths around `md`/`lg`/`xl` where the labels appear (768-836 is where fr/nl Sign-out was pushed out; 1024-1100 is where six labelled
- *  links would not fit, so the six-link bar waits for xl), and desktop. Every one must FIT.
+ *  the widths around `md`/`lg` where the labels appear (768-836 is where fr/nl Sign-out was pushed out), and desktop. Every one must FIT.
  *
- *  R4 sponsors-on-stream S11 (owner ruling 2026-10-31 "a") added the Sponsors link, which makes the worst case SIX links (Streaming + a claimed
- *  player): 349/350 bracket the Sponsors link's own threshold, 360/375/389/390/430 are the phone widths the six-link bar was measured at (390 is
- *  where Player home returns), and 1100/1279 are the last widths before the six-link bar gains its labels at xl (1280). */
-const NAV_WIDTHS = [320, 335, 349, 350, 360, 375, 389, 390, 430, 640, 700, 768, 800, 836, 1023, 1024, 1100, 1279, 1280] as const;
-/** The gantry's phone thresholds (nav.tsx): the Sponsors link shows from 350; Player home, on a bar that also has Streaming, from 390. */
+ *  R4 sponsors-on-stream added the Sponsors link, which makes the worst case SIX links on a phone (Streaming + a claimed player): 349/350
+ *  bracket the Sponsors link's own threshold, and 360/375/389/390/430 are the phone widths the six-link bar was measured at (390 is where
+ *  Player home returns). Owner ruling 2026-11-01: Settings is its icon alone at every width and Sponsors takes the label it gave back, so
+ *  the labels ride main's rung again (md for the org nav, lg for the dual-role nav) and the old xl band (1100/1279) is gone. */
+const NAV_WIDTHS = [320, 335, 349, 350, 360, 375, 389, 390, 430, 640, 700, 768, 800, 836, 1023, 1024, 1280] as const;
+/** The gantry's phone thresholds (nav.tsx) for an org without a logo, as every org here is: the Sponsors link shows from 350; Player home,
+ *  on a bar that also has Streaming, from 390. A logo org's thresholds (390 and 430) are pinned by nav-sponsors.test.tsx. */
 const SPONSORS_FROM_PX = 350;
 const PLAYER_HOME_STREAMING_FROM_PX = 390;
+/** Where the labels come on (nav.tsx `navLabelClass`, main's rung): Tailwind `md` for the org nav, `lg` for the dual-role nav. */
+const LABELS_FROM_PX = { org: 768, dualRole: 1024 } as const;
 
 const BANNER_WAIT_MS = 5_000;
 const asked = new WeakSet<Page>();
@@ -139,8 +142,10 @@ async function expectReadsBefore(first: Locator, second: Locator, label: string)
 }
 
 /** The top gantry fits: every link in its <nav> shares one row (no wrap) and ends inside the viewport (nothing clipped or pushed), the
- *  Sign-out button (the control that used to be pushed out) ends inside it too, and each link's centre hit-tests to the link itself. */
-async function expectGantryFits(page: Page, where: string, opts: { playerHome?: boolean } = {}): Promise<void> {
+ *  Sign-out button (the control that used to be pushed out) ends inside it too, and each link's centre hit-tests to the link itself.
+ *  And the labels (owner 2026-11-01): Settings is its icon alone at every width - no painted words, named by aria-label with the same
+ *  words as its title tooltip, the last link - while every other shown link paints its label exactly from `labelsFrom`. */
+async function expectGantryFits(page: Page, where: string, opts: { playerHome?: boolean; labelsFrom: number }): Promise<void> {
   const seen = await page.evaluate(() => {
     const links = Array.from(document.querySelectorAll("header.app-gantry nav a")).filter((a) => {
       const r = a.getBoundingClientRect();
@@ -166,8 +171,27 @@ async function expectGantryFits(page: Page, where: string, opts: { playerHome?: 
       headerH: Math.round(header.height),
       testids: links.map((a) => (a as HTMLElement).dataset.testid ?? ""),
       hrefs: links.map((a) => a.getAttribute("href") ?? ""),
+      // innerText, not textContent: a `hidden` label span is in the markup at every width; only a PAINTED label is in innerText.
+      painted: links.map((a) => (a as HTMLElement).innerText.trim()),
+      settings: (() => {
+        const s = document.querySelector('header.app-gantry nav a[data-testid="nav-settings"]') as HTMLElement | null;
+        return s ? { aria: s.getAttribute("aria-label"), title: s.getAttribute("title"), text: s.textContent?.trim() ?? "" } : null;
+      })(),
     };
   });
+  // Settings, the gear alone (owner ruling 2026-11-01): shown, last, no words in it at all, and named twice over by the same words.
+  expect(seen.settings, `${where}: the Settings link is in the gantry`).not.toBeNull();
+  expect(seen.testids.at(-1), `${where}: Settings is the last nav link`).toBe("nav-settings");
+  expect(seen.settings!.text, `${where}: Settings has no words, painted or hidden`).toBe("");
+  expect(seen.settings!.aria, `${where}: Settings is named`).toBeTruthy();
+  expect(seen.settings!.title, `${where}: Settings' tooltip says what its name says`).toBe(seen.settings!.aria);
+  // Every other shown link paints its label from the bar's rung, and not before: icons-together or labels-together.
+  const labelled = seen.painted.filter((_, i) => seen.testids[i] !== "nav-settings");
+  expect(labelled.length, `${where}: labelled links to look at`).toBeGreaterThanOrEqual(2);
+  expect(
+    labelled.map((t) => t.length > 0),
+    `${where}: labels ${seen.vw >= opts.labelsFrom ? "ON" : "off"} at ${seen.vw}px (from ${opts.labelsFrom}): ${JSON.stringify(labelled)}`,
+  ).toEqual(labelled.map(() => seen.vw >= opts.labelsFrom));
   expect(seen.n, `${where}: the gantry has links to measure`).toBeGreaterThanOrEqual(3);
   expect(seen.testids, `${where}: the Streaming item is among them`).toContain("nav-streaming");
   // The Sponsors link (R4 S11): `hidden min-[350px]:flex` - there from 350, gone below it (the Dashboard's own entry covers 320).
@@ -296,7 +320,7 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   await expect(link, "the Streaming nav item").toBeVisible();
   await expect(link).toHaveAttribute("href", "/streaming");
   await expect(link).toHaveAttribute("aria-label", dictOf("console")["nav.streaming"] ?? "");
-  // Order: Directory, Streaming, Sponsors (R4 S11), Settings.
+  // Order: Directory, Streaming, Sponsors, then Settings LAST (owner ruling 2026-11-01: the gear alone, beside help and Sign out).
   const order = await page.evaluate(() =>
     Array.from(document.querySelectorAll("header.app-gantry nav a")).map((a) => a.getAttribute("href") ?? ""),
   );
@@ -305,6 +329,13 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   expect(at("/directory")).toBeLessThan(at("/streaming"));
   expect(at("/streaming")).toBeLessThan(at(`/o/${orgSlug}/sponsors`));
   expect(at(`/o/${orgSlug}/sponsors`), "Sponsors sits between Streaming and Settings").toBeLessThan(at(`/o/${orgSlug}/settings`));
+  expect(at(`/o/${orgSlug}/settings`), "Settings closes the bar").toBe(order.length - 1);
+  // At 1280 Sponsors paints its word, and Settings is reached by its name alone (role + aria-label), its words only in the tooltip.
+  await expect(page.getByTestId("nav-sponsors"), "Sponsors is a labelled link at 1280").toHaveText(dictOf("console")["nav.sponsors"] ?? "");
+  const settings = page.locator("header.app-gantry nav").getByRole("link", { name: dictOf("console")["nav.settings"] ?? "", exact: true });
+  await expect(settings, "Settings is found by its accessible name").toBeVisible();
+  await expect(settings).toHaveAttribute("title", dictOf("console")["nav.settings"] ?? "");
+  await expect(settings, "and paints no words").toHaveText("");
   await shot(page, "nav-1280");
 
   // The page the item leads to is the Streaming one (the nav marks no current item, so the heading is the proof).
@@ -314,7 +345,7 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   for (const w of NAV_WIDTHS) {
     await page.setViewportSize({ width: w, height: 800 });
     await page.waitForTimeout(150);
-    await expectGantryFits(page, `en at ${w}`);
+    await expectGantryFits(page, `en at ${w}`, { labelsFrom: LABELS_FROM_PX.org });
   }
   for (const locale of ["es", "fr", "nl"] as const) {
     await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url()).origin }]);
@@ -325,12 +356,12 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
     for (const w of NAV_WIDTHS) {
       await page.setViewportSize({ width: w, height: 800 });
       await page.waitForTimeout(150);
-      await expectGantryFits(page, `${locale} at ${w}`);
+      await expectGantryFits(page, `${locale} at ${w}`, { labelsFrom: LABELS_FROM_PX.org });
     }
   }
 });
 
-test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (six links with Sponsors, Player home folding first, labels from xl) fits at every width in all four locales", async ({ page }) => {
+test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (six links with Sponsors, Player home folding first on phones, labels from lg, Settings the gear alone) fits at every width in all four locales", async ({ page }) => {
   test.setTimeout(budget({ navs: 4 + 2, acts: 12 })); // navs = page OPENS (one per locale); the width loop only resizes
   const { email } = await rig(page, "navdual");
   // The dual-role seam (nav.tsx isPlayer): a claimed player profile adds the Player home link. Own throwaway account, never a shared identity.
@@ -347,11 +378,11 @@ test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (
       `${locale}: Sign out is named in ${locale}`,
     ).toBeVisible();
     const links = await page.locator("header.app-gantry nav a").count();
-    expect(links, `${locale}: Dashboard, Directory, Streaming, Sponsors, Settings and Player home`).toBe(6);
+    expect(links, `${locale}: Dashboard, Directory, Streaming, Sponsors, Player home and Settings`).toBe(6);
     for (const w of NAV_WIDTHS) {
       await page.setViewportSize({ width: w, height: 800 });
       await page.waitForTimeout(150);
-      await expectGantryFits(page, `dual-role ${locale} at ${w}`, { playerHome: true });
+      await expectGantryFits(page, `dual-role ${locale} at ${w}`, { playerHome: true, labelsFrom: LABELS_FROM_PX.dualRole });
     }
   }
 });
