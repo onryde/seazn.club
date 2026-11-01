@@ -50,7 +50,7 @@ describe("pageLedger", () => {
     expect(hidden.finishedCount).toBe(4);
     const shown = pageLedger(rows, { page: 1, showFinished: true });
     expect(ids(shown.rows)).toEqual(["r1", "r2", "r3", "r4", "r5"]);
-    // The count is the toggle's label ("Show finished (4)", "Hide finished (4)"): the same number on both sides.
+    // The count is the toggle's label ("Show finished (4)", the same label on and off): the same number on both sides.
     expect(shown.finishedCount).toBe(4);
   });
 

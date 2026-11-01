@@ -1701,7 +1701,6 @@ export type DictionaryKey =
   | "danger.suggestArchive"
   | "datetime.timeLabel"
   | "desk.ledger.allFinished"
-  | "desk.ledger.hideFinished"
   | "desk.ledger.next"
   | "desk.ledger.open"
   | "desk.ledger.pager.label"

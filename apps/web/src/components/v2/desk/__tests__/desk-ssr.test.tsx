@@ -913,15 +913,50 @@ describe("DivisionLedger paging and the finished filter", () => {
     expect(link(html, "desk-ledger-finished-toggle")).toBe("/o/org/c/comp?finished=1");
   });
 
-  it("shown, the same toggle says Hide and leads back to the default view", () => {
+  // Match Day E1 item 6: "Show finished (N)" is a SWITCH. Still a link (the state is the URL), so the control keeps its href and gains the
+  // switch role, its state in aria-checked, and a track + thumb drawn from house tokens. The label never changes with the state - a
+  // switch says what it controls, aria-checked says where it is - so the old "Hide finished" wording is gone.
+  const toggleTag = (html: string): string => html.match(/<a [^>]*data-testid="desk-ledger-finished-toggle"[^>]*>/)![0];
+  it("the toggle is a switch: role, aria-checked, a track and a thumb, 44px, one label for both states", () => {
+    const rows = [...rowsOf(3, "scheduled"), ...rowsOf(4, "finished", 4)];
+    let checked = 0;
+    for (const showFinished of [false, true]) {
+      const html = render(rows, { showFinished });
+      const tag = toggleTag(html);
+      expect(tag, `showFinished=${showFinished}`).toContain('role="switch"');
+      expect(tag).toContain(`aria-checked="${showFinished}"`);
+      expect(tag).toMatch(/class="[^"]*\bmin-h-11\b/);
+      // The visual: a track (the pill) holding a thumb (the knob), both inside the link, both hidden from the accessibility tree.
+      const inner = html.slice(html.indexOf(tag) + tag.length, html.indexOf("</a>", html.indexOf(tag)));
+      expect(inner, "track").toMatch(/<span aria-hidden="true"[^>]*data-testid="desk-ledger-finished-track"/);
+      expect(inner, "thumb").toMatch(/<span aria-hidden="true"[^>]*data-testid="desk-ledger-finished-thumb"/);
+      // The label: the same words either way, with the count.
+      expect(inner).toContain(t(en, "desk.ledger.showFinished", { n: 4 }));
+      expect(inner).not.toContain("Hide finished");
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the switch's track and thumb move with the state (on = purple track, thumb to the end)", () => {
+    const rows = [...rowsOf(3, "scheduled"), ...rowsOf(4, "finished", 4)];
+    const off = render(rows, { showFinished: false });
+    const on = render(rows, { showFinished: true });
+    const cls = (html: string, id: string) => html.match(new RegExp(`data-testid="${id}"[^>]*class="([^"]*)"`))![1]!;
+    expect(cls(on, "desk-ledger-finished-track")).toMatch(/\bbg-purple-600\b/);
+    expect(cls(off, "desk-ledger-finished-track")).toMatch(/\bbg-slate-300\b/);
+    expect(cls(on, "desk-ledger-finished-thumb")).toMatch(/\btranslate-x-4\b/);
+    expect(cls(off, "desk-ledger-finished-thumb")).not.toMatch(/\btranslate-x-4\b/);
+  });
+
+  it("shown, the same switch leads back to the default view", () => {
     const rows = [...rowsOf(3, "scheduled"), ...rowsOf(4, "finished", 4)];
     const html = render(rows, { showFinished: true, query: [["tab", "x"]] });
     // 7 rows, five a page: the first page holds the 3 live ones and the first 2 finished ones.
     expect(rowCount(html)).toBe(5);
     expect(html.match(/data-testid="desk-ledger-row" data-phase="finished"/g)?.length).toBe(2);
     expect(rowCount(render(rows, { showFinished: true, page: 2 }))).toBe(2);
-    expect(html).toContain(t(en, "desk.ledger.hideFinished", { n: 4 }));
-    expect(html).not.toContain(t(en, "desk.ledger.showFinished", { n: 4 }));
+    expect(toggleTag(html)).toContain('aria-checked="true"');
     expect(link(html, "desk-ledger-finished-toggle")).toBe("/o/org/c/comp?tab=x");
   });
 

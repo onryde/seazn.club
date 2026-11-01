@@ -635,7 +635,6 @@
   "desk.ledger.next": "Próximo: {when} {home} v {away}",
   "desk.ledger.open": "Abrir",
   "desk.ledger.showFinished": "Mostrar finalizadas ({n})",
-  "desk.ledger.hideFinished": "Ocultar finalizadas ({n})",
   "desk.ledger.allFinished": "Todas las divisiones han finalizado. Muestra las finalizadas para verlas.",
   "desk.ledger.pager.label": "Páginas de divisiones",
   "desk.ledger.pager.prev": "Anterior",

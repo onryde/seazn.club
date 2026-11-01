@@ -871,6 +871,10 @@ test.describe("competition desk - divisions list paging (Match Day B2)", () => {
     await expect(pager).toHaveAttribute("data-page", "1");
     await expect(pager).toHaveAttribute("data-pages", "2");
     await expect(toggle).toHaveText(`Show finished (${DONE})`);
+    // Match Day E1 item 6: it is a switch (still a link), off here, with the same words on and off.
+    await expect(toggle).toHaveAttribute("role", "switch");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByRole("switch", { name: `Show finished (${DONE})` })).toHaveCount(1);
     await expect(page.getByTestId("desk-ledger-prev")).toHaveAttribute("aria-disabled", "true");
 
     // Next: a link, the URL carries the page, and the last page has the one remaining row and no Next.
@@ -892,7 +896,8 @@ test.describe("competition desk - divisions list paging (Match Day B2)", () => {
     await toggle.click();
     await expect(page).toHaveURL(/[?&]finished=1(&|$)/);
     await expect(page).not.toHaveURL(/dpage=/);
-    await expect(toggle).toHaveText(`Hide finished (${DONE})`);
+    await expect(toggle).toHaveText(`Show finished (${DONE})`);
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
     await expect(pager).toHaveAttribute("data-page", "1");
     await expect(pager).toHaveAttribute("data-pages", "2");
     await expect(rows).toHaveCount(5);
@@ -903,7 +908,8 @@ test.describe("competition desk - divisions list paging (Match Day B2)", () => {
 
     // The same state, loaded cold from the address: the toggle and the page survive a reload.
     await page.reload();
-    await expect(toggle).toHaveText(`Hide finished (${DONE})`);
+    await expect(toggle).toHaveText(`Show finished (${DONE})`);
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
     await expect(pager).toHaveAttribute("data-page", "2");
 
     // Phone and tablet: no sideways scroll, and the pager's links are tappable (44px) where it is a phone.
@@ -915,7 +921,8 @@ test.describe("competition desk - divisions list paging (Match Day B2)", () => {
       for (const id of ["desk-ledger-next", "desk-ledger-finished-toggle"]) {
         const box = await page.getByTestId(id).boundingBox();
         expect(box, `${id} at ${width}`).not.toBeNull();
-        if (width === 320) expect(box!.height, `${id} tap height at 320`).toBeGreaterThanOrEqual(44);
+        // The pager's link is the tap floor on a phone only; the switch (Match Day E1 item 6) is 44px at every width.
+        if (width === 320 || id === "desk-ledger-finished-toggle") expect(box!.height, `${id} tap height at ${width}`).toBeGreaterThanOrEqual(44);
       }
     }
 

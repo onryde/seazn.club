@@ -139,10 +139,11 @@ describe("the competition page's divisions list reads its page and filter from t
     }
   });
 
-  it("?finished=1 shows them: eight rows over two pages, the finished ones last, and the toggle says Hide", async () => {
+  it("?finished=1 shows them: eight rows over two pages, the finished ones last, and the switch reads on", async () => {
     const first = await render({ finished: "1" });
     expect(rows(first)).toBe(5);
-    expect(first).toContain(t(en, "desk.ledger.hideFinished", { n: DONE }));
+    expect(first).toMatch(/<a [^>]*role="switch"[^>]*aria-checked="true"[^>]*data-testid="desk-ledger-finished-toggle"|<a [^>]*data-testid="desk-ledger-finished-toggle"[^>]*aria-checked="true"/);
+    expect(first).toContain(t(en, "desk.ledger.showFinished", { n: DONE }));
     expect(hrefOf(first, "desk-ledger-finished-toggle")).toBe(BASE);
     const second = await render({ finished: "1", dpage: "2" });
     expect(rows(second)).toBe(LIVE + DONE - 5);

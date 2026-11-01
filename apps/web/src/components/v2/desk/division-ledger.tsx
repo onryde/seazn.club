@@ -169,17 +169,34 @@ export function DivisionLedger({
           count into its own heading now. */}
       {/* B2: the filter. Nothing to toggle - no finished division the default view hides - prints nothing at all. A link, not a
           button: the state is the URL (`?finished=1`), so a reload or the back button keeps it, and it opens page 1 because
-          the rows the pages are cut from have changed. 44px tall below `md`, the tap floor. */}
+          the rows the pages are cut from have changed.
+          Match Day E1 item 6: it is a SWITCH to the eye and to a screen reader - `role="switch"` with the state in `aria-checked`, a
+          track and a thumb in house tokens (slate off, purple on) - and still that link, so the click still navigates. The label does not
+          change with the state ("Show finished (N)" on and off): a switch names what it controls, `aria-checked` says where it is.
+          44px tall at every width, the tap floor. */}
       {view.finishedCount > 0 && (
         <div className="mb-2 flex justify-end">
           <Link
             href={ledgerHref(base, query, { page: 1, showFinished: !showFinished })}
+            role="switch"
+            aria-checked={showFinished}
             data-testid="desk-ledger-finished-toggle"
             data-showing={showFinished ? "1" : "0"}
             data-finished-count={view.finishedCount}
-            className="btn btn-ghost px-3 py-1.5 text-xs max-md:min-h-11"
+            className="btn btn-ghost min-h-11 gap-2 px-3 py-1.5 text-xs"
           >
-            {t(dict, showFinished ? "desk.ledger.hideFinished" : "desk.ledger.showFinished", { n: view.finishedCount })}
+            <span
+              aria-hidden="true"
+              data-testid="desk-ledger-finished-track"
+              className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors motion-reduce:transition-none ${showFinished ? "bg-purple-600" : "bg-slate-300"}`}
+            >
+              <span
+                aria-hidden="true"
+                data-testid="desk-ledger-finished-thumb"
+                className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform motion-reduce:transition-none ${showFinished ? "translate-x-4" : ""}`}
+              />
+            </span>
+            {t(dict, "desk.ledger.showFinished", { n: view.finishedCount })}
           </Link>
         </div>
       )}
