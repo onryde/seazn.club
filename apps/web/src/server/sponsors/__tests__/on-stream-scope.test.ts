@@ -10,7 +10,16 @@
 // abandoned, forfeited or foreign-org fixture is never the sample ; a fold that refuses costs that candidate only. Sports: cricket,
 // football and badminton fold; generic (and chess) declare no breaks and have nothing to count. The seam to the planner is last.
 import { afterAll, describe, expect, it, vi } from "vitest";
+
+// The overlay's replay, passed through untouched - one test forces ONE replay to stop part-way (`breaksComplete` false, which
+// a real ledger over a shipped module cannot be made to do), to prove the loader will not count an unproven absence of breaks.
+vi.mock("@/server/overlay/recent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/overlay/recent")>();
+  return { ...actual, replayDerived: vi.fn(actual.replayDerived) };
+});
+
 import { builtinModules } from "@seazn/engine/sports";
+import { replayDerived } from "@/server/overlay/recent";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { SPONSOR_FREQUENCIES, type SponsorCard } from "@/lib/sponsor-plan";
@@ -183,6 +192,34 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     const inAutumn = await loadOnStreamScope(o.orgId, other.id);
     expect(inAutumn.sports.map((s) => [s.sportKey, s.sample])).toEqual([["badminton", sampleOf(bw)]]);
     expect(builtinModules.some((m) => m.key === "cricket")).toBe(true);
+  });
+
+  it("a competition scope reads ITS OWN matches of a sport two competitions both play: each scope gets its own latest, the whole org gets the newest of all", async () => {
+    const o = await org();
+    const other = await createCompetition(o.auth, { ends_on: "2030-12-31", name: "Autumn Cup", visibility: "public", branding: {} });
+    const a = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football spring");
+    const b = await seedDivision(o.auth, other.id, "football", VARIANT.football!, "football autumn");
+    const spring = chooseWalk("football", a.cfg);
+    const autumn = chooseWalk("football", b.cfg, 1);
+    expect(sampleOf(spring), "premise: the two matches differ").not.toEqual(sampleOf(autumn));
+    await finishWith(o.orgId, a, spring, daysAgo(5));
+    await finishWith(o.orgId, b, autumn, daysAgo(1));
+
+    const sampleIn = async (scope: string | null) => (await loadOnStreamScope(o.orgId, scope)).sports[0]!.sample;
+    expect(await sampleIn(null), "the whole org: the newest of all").toEqual(sampleOf(autumn));
+    expect(await sampleIn(o.competitionId), "Spring: its own, though Autumn's is newer").toEqual(sampleOf(spring));
+    expect(await sampleIn(other.id), "Autumn: its own").toEqual(sampleOf(autumn));
+  });
+
+  it("a replay that stops part-way proves nothing about breaks: that fixture is skipped, not counted as a match with fewer breaks (and the same fixture counts once the replay runs to the end)", async () => {
+    const o = await org();
+    const rig = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football div");
+    const walk = chooseWalk("football", rig.cfg);
+    await finishWith(o.orgId, rig, walk, daysAgo(1));
+    const real = vi.mocked(replayDerived).getMockImplementation()!;
+    vi.mocked(replayDerived).mockImplementationOnce((args) => ({ ...real(args), breaksComplete: false }));
+    expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample, "incomplete: no sample").toBeNull();
+    expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample, "the positive pair: complete again").toEqual(sampleOf(walk));
   });
 
   it("the settings come from S5's resolver: no row -> null; the org row; a competition with no row reads the org's (not its own); a competition row is its own", async () => {

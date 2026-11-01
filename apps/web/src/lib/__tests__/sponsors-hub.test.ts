@@ -9,6 +9,8 @@ import {
   SPONSORS_EDITOR_ONLY_TABS,
   SPONSORS_TABS,
   legacySettingsSponsorsTarget,
+  onStreamHref,
+  resolveOnStreamScope,
   resolveSponsorsTab,
   sponsorsHref,
   sponsorsTabsFor,
@@ -121,5 +123,43 @@ describe("legacySettingsSponsorsTarget (settings?tab=sponsors -> sponsors?tab=sp
     expect(legacySettingsSponsorsTarget("acme", { tab: "sponsors", next: "a&tab=team=1" })).toBe(
       "/o/acme/sponsors?tab=sponsors&next=a%26tab%3Dteam%3D1",
     );
+  });
+});
+
+describe("onStreamHref (the On stream tab's scope picker URL, S12)", () => {
+  it("no scope is the hub's own On stream URL; a competition adds &scope= (encoded) after the tab", () => {
+    expect(onStreamHref("riverside")).toBe(sponsorsHref("riverside", "on_stream"));
+    expect(onStreamHref("riverside", null)).toBe("/o/riverside/sponsors?tab=on_stream");
+    expect(onStreamHref("riverside", "c1")).toBe("/o/riverside/sponsors?tab=on_stream&scope=c1");
+    expect(onStreamHref("riverside", "a&b=c"), "a value cannot smuggle a second param").toBe("/o/riverside/sponsors?tab=on_stream&scope=a%26b%3Dc");
+    expect(onStreamHref("riverside", ""), "an empty id is no scope").toBe("/o/riverside/sponsors?tab=on_stream");
+  });
+});
+
+describe("resolveOnStreamScope (a raw ?scope= is a scope only if it is one of THIS org's competitions)", () => {
+  const competitions = [{ id: "c1" }, { id: "c2" }];
+
+  it("an org competition's id is the scope; anything else is the organisation scope (null) - counted", () => {
+    let checked = 0;
+    for (const [raw, want] of [
+      ["c1", "c1"],
+      ["c2", "c2"],
+      [undefined, null],
+      ["", null],
+      ["c3", null],
+      ["C1", null],
+      ["__proto__", null],
+      ["constructor", null],
+      [["c1", "c2"], null],
+      [[], null],
+    ] as const) {
+      expect(resolveOnStreamScope(raw as string | string[] | undefined, competitions), JSON.stringify(raw)).toBe(want);
+      checked++;
+    }
+    expect(checked).toBe(10);
+  });
+
+  it("an org with no competitions has only the organisation scope", () => {
+    expect(resolveOnStreamScope("c1", [])).toBeNull();
   });
 });
