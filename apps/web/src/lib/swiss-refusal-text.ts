@@ -14,7 +14,9 @@ export type SwissRefusalMsg = (key: MessageKey, vars?: Record<string, string | n
  * `SWISS_ROUNDS_ABOVE_MAX` whose details name the field (`{ rounds, field, hardMax, canFinish }`), a second sentence
  * says what to do: as sent (Generate, Start) the field's guidance, so the organiser reads the number to set; after the
  * field shrank under a running Swiss (`canFinish`), what the field still pairs and that the Swiss can be finished — the
- * count is fixed once a match has started (T12), so "recommended" would mislead there.
+ * count is fixed once a match has started (T12), so "recommended" would mislead there. For `SWISS_ROUNDS_LOCKED`
+ * (`{ canFinish, canAddRound }`), a second sentence names only the recoveries actually offered — Finish now, Add a round,
+ * both, or (neither) that the Swiss keeps its rounds; with neither detail sent, the sentence alone (W3 T12 Phase 2 fix).
  */
 export function swissRefusalText(
   code: SwissRefusalCode,
@@ -23,6 +25,20 @@ export function swissRefusalText(
   plural: SwissRoundsPlural,
 ): string {
   const sentence = msg(swissRefusalKey(code));
+  if (code === "SWISS_ROUNDS_LOCKED") {
+    const finish = details?.canFinish;
+    const add = details?.canAddRound;
+    if (typeof finish !== "boolean" && typeof add !== "boolean") return sentence;
+    const offered: MessageKey =
+      finish === true && add === true
+        ? "swiss.rounds.locked.finishOrAdd"
+        : finish === true
+          ? "swiss.rounds.locked.finish"
+          : add === true
+            ? "swiss.rounds.locked.add"
+            : "swiss.rounds.locked.none";
+    return `${sentence} ${msg(offered)}`;
+  }
   if (code !== "SWISS_ROUNDS_ABOVE_MAX") return sentence;
   const field = details?.field;
   const hardMax = details?.hardMax;

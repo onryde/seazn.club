@@ -184,7 +184,9 @@ describe.each(LOCALES)("SwissRoundsDialog (X-SW-17, owner pick B) [%s]", (locale
     d.press("stage-rounds-save");
     await flush();
     expect(d.calls.closed, "a refusal keeps the dialog open").toBe(0);
-    expect(textOf(d.get("stage-rounds-error"))).toContain(D["swiss.refusal.SWISS_ROUNDS_LOCKED"]);
+    // Phase 2 fix: only the recovery offered is named (canFinish false, canAddRound true), never "Finish now".
+    expect(textOf(d.get("stage-rounds-error"))).toContain(`${D["swiss.refusal.SWISS_ROUNDS_LOCKED"]} ${D["swiss.rounds.locked.add"]}`);
+    expect(textOf(d.get("stage-rounds-error"))).not.toContain(D["swiss.rounds.locked.finishOrAdd"]);
     expect(textOf(d.get("stage-rounds-error")), "never the server's English").not.toContain("server English");
     expect(textOf(d.get("stage-rounds-add-round"))).toBe(D["stage.more.addRound"]);
     d.press("stage-rounds-add-round");
@@ -197,7 +199,7 @@ describe.each(LOCALES)("SwissRoundsDialog (X-SW-17, owner pick B) [%s]", (locale
     n.press("stage-rounds-fewer");
     n.press("stage-rounds-save");
     await flush();
-    expect(textOf(n.get("stage-rounds-error"))).toContain(D["swiss.refusal.SWISS_ROUNDS_LOCKED"]);
+    expect(textOf(n.get("stage-rounds-error"))).toContain(`${D["swiss.refusal.SWISS_ROUNDS_LOCKED"]} ${D["swiss.rounds.locked.none"]}`);
     expect(n.find("stage-rounds-add-round")).toBeUndefined();
   });
 });

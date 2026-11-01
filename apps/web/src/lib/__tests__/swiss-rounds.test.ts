@@ -420,3 +420,49 @@ describe("X-SW-16 swissRefusalText — a Swiss refusal in the reader's language"
     expect(swissRefusalText("SWISS_OVER", { field: 4 }, msgIn("fr"), pluralIn("fr"))).toBe(fr["swiss.refusal.SWISS_OVER"]);
   });
 });
+
+// W3 T12 Phase 2 fix (controller ruling, 2026-11-01): SWISS_ROUNDS_LOCKED names only the recoveries the server says are
+// offered — `canFinish` (Finish now) and `canAddRound` (Add a round), the refusal's own details — the same pattern as
+// ABOVE_MAX's `canFinish` branch above; the case with neither has its own sentence. Expected text is each dictionary's
+// copy, never read off swissRefusalText.
+describe("W3 T12 swissRefusalText — SWISS_ROUNDS_LOCKED names only the recoveries offered (4 locales)", () => {
+  const CASES = [
+    { canFinish: true, canAddRound: true, key: "swiss.rounds.locked.finishOrAdd" },
+    { canFinish: true, canAddRound: false, key: "swiss.rounds.locked.finish" },
+    { canFinish: false, canAddRound: true, key: "swiss.rounds.locked.add" },
+    { canFinish: false, canAddRound: false, key: "swiss.rounds.locked.none" },
+  ] as const;
+  const locked = (locale: Locale, details: Record<string, unknown> | undefined) =>
+    swissRefusalText("SWISS_ROUNDS_LOCKED", details, msgIn(locale), pluralIn(locale));
+
+  it("each branch is the fixed-count sentence, then that branch's own sentence, in every locale", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const D = DICTS[locale];
+      const seen = new Set<string>();
+      for (const c of CASES) {
+        expect(D[c.key], `${locale}: ${c.key} has copy`).toBeTruthy();
+        const text = locked(locale, { canFinish: c.canFinish, canAddRound: c.canAddRound });
+        expect(text, `${locale} ${c.key}`).toBe(`${D["swiss.refusal.SWISS_ROUNDS_LOCKED"]} ${D[c.key]}`);
+        seen.add(text);
+        checked++;
+      }
+      expect(seen.size, `${locale}: four different sentences`).toBe(4);
+    }
+    expect(checked, "anti-vacuity: 4 branches x 4 locales").toBe(16);
+  });
+
+  it("in English a sentence offers Finish only when canFinish and a new round only when canAddRound", () => {
+    for (const c of CASES) {
+      const text = locked("en", { canFinish: c.canFinish, canAddRound: c.canAddRound });
+      expect(/finish/i.test(text), `${c.key}: Finish named`).toBe(c.canFinish);
+      expect(/add a round/i.test(text), `${c.key}: Add a round named`).toBe(c.canAddRound);
+    }
+  });
+
+  it("the fixed-count sentence (the server's English) names no recovery; without the details it is said alone", () => {
+    expect(SWISS_REFUSALS.SWISS_ROUNDS_LOCKED.message).not.toMatch(/finish|add a round/i);
+    expect(locked("en", undefined)).toBe(SWISS_REFUSALS.SWISS_ROUNDS_LOCKED.message);
+    expect(locked("fr", { field: 4 })).toBe(fr["swiss.refusal.SWISS_ROUNDS_LOCKED"]);
+  });
+});

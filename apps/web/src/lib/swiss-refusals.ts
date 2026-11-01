@@ -103,10 +103,12 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     message: "That is more rounds than this field can pair.",
     key: "swiss.refusal.SWISS_ROUNDS_ABOVE_MAX",
   },
-  // W3 T12 (RB3-5): the round count after the first match started — only Finish now or Add a round remain.
+  // W3 T12 (RB3-5): the round count after the first match started — only Finish now or Add a round remain, and only
+  // when the details say so (`canFinish`, `canAddRound`): the sentence names no recovery, and `swissRefusalText` adds
+  // the one(s) actually offered (Phase 2 fix, controller ruling).
   SWISS_ROUNDS_LOCKED: {
     status: 409,
-    message: "A match has started, so the number of rounds is fixed. Finish the Swiss now or add a round.",
+    message: "A match has started, so the number of rounds is fixed.",
     key: "swiss.refusal.SWISS_ROUNDS_LOCKED",
   },
   // W3 T12 Phase 2 (BG-SW-1; controller ruling): the chess colours switch after the first match started. Its OWN code, so
