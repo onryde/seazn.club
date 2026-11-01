@@ -4790,6 +4790,22 @@ export const PutSponsorStreamSettings = z.object({
 });
 export const SponsorStreamSettings = PutSponsorStreamSettings;
 
+/** R4 sponsors on stream, S13 (spec §4, §5.2): a shareable report link for one sponsor over inclusive DATES (V483 from_date /
+ *  to_date), optionally one competition. The usecase re-checks the dates (server/sponsors/report.ts), so a caller that skips
+ *  this schema is refused the same way. */
+export const CreateSponsorReportLink = z
+  .object({
+    competitionId: Uuid.nullable(),
+    from: z.iso.date(),
+    to: z.iso.date(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.to < v.from) ctx.addIssue({ code: "custom", path: ["to"], message: ENDS_BEFORE_STARTS });
+  });
+/** The url is root-relative (`/r/sponsor/<token>`) and answered ONCE: only the token's hash is kept. */
+export const CreatedSponsorReportLink = z.object({ id: z.string(), url: z.string() });
+export const RevokedSponsorReportLink = z.object({ revoked: z.literal(true) });
+
 export const ReorderSponsors = z.object({ ids: z.array(Uuid).min(1).max(200) });
 
 export const SponsorPackage = z.object({

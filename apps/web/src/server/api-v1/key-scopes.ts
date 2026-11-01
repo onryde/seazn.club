@@ -328,6 +328,9 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /orgs/:id/sponsors/reorder",
   // Sponsors on stream (R4 S12): the rotation's dial is the same console-only org-branding surface as the sponsors it rotates.
   "PUT /orgs/:id/sponsor-stream-settings",
+  // R4 S13: a report link is a bearer url to one sponsor's numbers, minted and revoked from the console only.
+  "POST /orgs/:id/sponsors/:sponsorId/report-links",
+  "DELETE /orgs/:id/sponsor-report-links/:linkId",
   // Sponsor monetization (v10): money surface — never key-accessible.
   "GET /orgs/:id/sponsor-packages",
   "POST /orgs/:id/sponsor-packages",
