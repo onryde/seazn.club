@@ -11,7 +11,8 @@ import { type Session, appendScoreEvent, newSession, check, signIn, smokeDb, tag
  * nothing. T3 (X-SW-5, X-SW-29; SW-M7, SW-M13): a bye's format is frozen when Pair awards it, so a later format save
  * leaves it, and a bye shell takes no court or time (422 SWISS_BYE_NOT_PLACEABLE). T5 (X-SW-28, #835): Undo of Pair next
  * puts the round back onto its shells — no round-1 row is left seated. T6 (X-SW-12, ruling 251): an entrant whose first
- * Swiss round is 2 is on no round-1 row and is seated from round 2. Own fresh owner. Every read is a v1 route; the one
+ * Swiss round is 2 is on no round-1 row and is seated from round 2. T7 (X-SW-15, RB3-2; rulebook P-A2): a double-walkover
+ * pair has not met, so the next Pair may seat it again. Own fresh owner. Every read is a v1 route; the one
  * write that needs DATABASE_URL is T6's stamp of `entrants.swiss_first_round` (no route writes it until Task 9), and
  * without it that check fails rather than skips. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
@@ -20,8 +21,8 @@ export async function w3SwissASuite(): Promise<void> {
   // T1: 2 (a rebuild keeps 3 slots; a shrinking rebuild counts the slots it freed) + T2: 1 (a pre-Start reshape keeps
   // the pinned boards) + T4: 1 (no ad-hoc match on a Swiss stage; T4 runs before T3 by controller ruling C1) + T3: 2 (a
   // bye's format is frozen at award; a bye shell is never placed) + T5: 1 (Undo of Pair next clears the round's seats) +
-  // T6: 1 (an entrant with a first Swiss round is on no round below it).
-  const EXPECTED_CHECKS = 8;
+  // T6: 1 (an entrant with a first Swiss round is on no round below it) + T7: 1 (a double-walkover pair meets again).
+  const EXPECTED_CHECKS = 9;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -400,6 +401,55 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-12: an entrant whose first Swiss round is 2 is on no round-1 row (4 others on 2 boards) and is seated in round 2" +
           (ok ? "" : ` — stamped ${stamped === -1 ? "no DATABASE_URL" : stamped}, players ${latePlayers.length}, start ${started.status}, pair 1 ${pair1.status} ${JSON.stringify(pair1.json).slice(0, 160)}, round 1 ${r1Boards.length} boards / fifth on it ${on(r1, fifth)} / others ${othersOnR1}, walkovers ${walkovers.join(",")}, pair 2 ${pair2.status} ${JSON.stringify(pair2.json).slice(0, 160)}, fifth on round 2 ${on(r2, fifth)}`),
+        ok,
+      );
+    }
+
+    // Check 9 (T7, X-SW-15; rulebook P-A2, RB3-2): a pair whose match was not played has not met. A generic Swiss of four
+    // (3 rounds) in the same competition: Start, Pair round 1 — the fold, R1 v R3 and R2 v R4 — and BOTH boards recorded as
+    // double walkovers through the Forfeit button's route. Nobody scored and nobody met, so round 2's fold over the same
+    // seeds seats the same two pairs again. Before T7 every seated pair counted as met, and round 2 had to pair R1 v R2
+    // and R3 v R4 (or R1 v R4 and R2 v R3) instead: the expected pairs are round 1's, read back, never the pairer's.
+    {
+      const reDiv = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/competitions/${byeComp?.id}/divisions`, "POST", {
+          name: "Rematch",
+          sport_key: "generic",
+          variant_key: "score",
+          config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        }),
+      )?.id;
+      const rePlayers =
+        v1data<{ id: string }[] | undefined>(
+          await v1(owner, `/api/v1/divisions/${reDiv}/entrants`, "POST",
+            Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `R${i + 1} ${tag}`, seed: i + 1 }))),
+        ) ?? [];
+      const reStage = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/divisions/${reDiv}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 } }),
+      )?.id;
+      const reStarted = await v1(owner, `/api/v1/divisions/${reDiv}/start`, "POST");
+      const rePair1 = await v1(owner, `/api/v1/stages/${reStage}/generate`, "POST");
+      type Seat = Fx & { home_entrant_id: string | null; away_entrant_id: string | null; status?: string };
+      const reBoards = async (r: number) =>
+        (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${reDiv}/fixtures`)) ?? []).filter(
+          (f) => f.stage_id === reStage && f.round_no === r && f.home_entrant_id !== null && f.away_entrant_id !== null,
+        );
+      const pairsOf = (rs: Seat[]) => rs.map((f) => [f.home_entrant_id, f.away_entrant_id].sort().join("|")).sort();
+      const round1 = await reBoards(1);
+      const forfeits: number[] = [];
+      for (const b of round1) {
+        forfeits.push((await appendScoreEvent(owner, b.id, "core.forfeit", { by: "both", reason: "walkover" })).status);
+      }
+      const decided = (await reBoards(1)).filter((f) => f.status === "forfeited").length;
+      const rePair2 = await v1(owner, `/api/v1/stages/${reStage}/generate`, "POST");
+      const round2 = await reBoards(2);
+      const ok =
+        rePlayers.length === 4 && reStarted.status < 300 && rePair1.status === 200 && round1.length === 2 &&
+        forfeits.length === 2 && forfeits.every((st) => st < 300) && decided === 2 && rePair2.status === 200 &&
+        round2.length === 2 && JSON.stringify(pairsOf(round2)) === JSON.stringify(pairsOf(round1));
+      w3Check(
+        "w3a X-SW-15: both round-1 double-walkover pairs are seated again in round 2 (2 boards, the same pairs)" +
+          (ok ? "" : ` — players ${rePlayers.length}, start ${reStarted.status}, pair 1 ${rePair1.status}, round 1 ${round1.length} boards, forfeits ${forfeits.join(",")}, decided ${decided}, pair 2 ${rePair2.status} ${JSON.stringify(rePair2.json).slice(0, 160)}, round 2 ${JSON.stringify(pairsOf(round2))} vs round 1 ${JSON.stringify(pairsOf(round1))}`),
         ok,
       );
     }

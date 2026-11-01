@@ -41,6 +41,7 @@ import {
 } from "@seazn/engine/scheduling";
 import {
   carryDeltas,
+  isUnplayedForfeit,
   placementTable,
   progressionSize,
   resolveProgression,
@@ -65,6 +66,7 @@ import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { forfeitPlayedFacts, playedFor } from "@/server/engine-db/forfeit-played";
 import { FIXTURE_DELETED_REASON, ROUND_VOIDED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
@@ -1303,13 +1305,13 @@ export interface SwissHistoryState {
  * `existing` is the stage's rows in ANY order: the colours are a sequence, so the function sorts its own copy into round
  * order (round_no, seq_in_round) rather than trusting its caller's ORDER BY. That precondition is enforced here, not stated
  * (review m1; T3 found a physical-order read handing a later-updated round back after a later round).
- * `entrants` is the field being paired (`swissFieldForRound`). `playedFacts` (fixture id → was it played) is Task 7's
- * input; until then every caller passes an empty map and nothing reads it.
+ * `entrants` is the field being paired (`swissFieldForRound`). `playedFacts` is fixture id → was anything played, for
+ * every two-seated forfeit-decided row (`forfeitPlayedFacts` under the division's module): W3 T7's `played` rule reads it,
+ * and a forfeit-decided row it does not cover is refused (`playedFor`), never guessed.
  */
 export function buildSwissHistory(
   existing: readonly SwissExistingFixture[],
   entrants: readonly ActiveEntrant[],
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Task 7's input (its `played` rule); it reads it, and drops this line
   playedFacts: ReadonlyMap<string, boolean>,
 ): SwissHistoryState {
   // Round order is this function's own invariant (review m1): a copy, so the caller's array is untouched.
@@ -1323,10 +1325,10 @@ export function buildSwissHistory(
     const o = f.outcome as { kind?: string; winner?: string } | null;
     // Only a system bye — one seat, won by the seated side — is a bye. Every
     // sport kernel ALSO emits `{kind: "award"}` for a real two-sided walkover
-    // or retirement, and that is a played match: it falls through, so the pair
-    // is `played` (no rematch), both sides sat the round (no implicit bye for
-    // the absent loser) and the winner scores below. Case 3 of the 2026-09-24
-    // Saturday probe: reading every award as a bye re-paired A v H in round 2.
+    // or retirement, and that is a board, not a bye: it falls through, so both
+    // sides sat the round (no implicit bye for the absent loser) and the winner
+    // scores below. Case 3 of the 2026-09-24 Saturday probe: reading every
+    // award as a bye re-paired A v H in round 2 on a phantom point for H.
     if (isOneSidedAwardBye(f) && o?.winner) {
       const forRound = inRound.get(f.round_no) ?? new Set<string>();
       forRound.add(o.winner);
@@ -1336,7 +1338,13 @@ export function buildSwissHistory(
       continue;
     }
     if (!f.home_entrant_id || !f.away_entrant_id) continue;
-    played.add(pairKey(f.home_entrant_id, f.away_entrant_id));
+    // W3 T7 (X-SW-15; rulebook P-A2, FIDE C.04.2 3.5; RB3-2): a pair whose match was NOT PLAYED has not met, so the two
+    // may be paired again — a double walkover, and a forfeit the engine's one rule calls unplayed (`isUnplayedForfeit`:
+    // a walkover whatever its ledger reads, so a chess no-show after the Start too; any other reason only while nothing
+    // was played, so a retirement after play is a meeting). Everything else seated is a meeting, as before.
+    const unplayed =
+      o?.kind === "double_walkover" || (o != null && isUnplayedForfeit(o as MatchOutcome, playedFor(f, playedFacts)));
+    if (!unplayed) played.add(pairKey(f.home_entrant_id, f.away_entrant_id));
     const forRound = inRound.get(f.round_no) ?? new Set<string>();
     forRound.add(f.home_entrant_id).add(f.away_entrant_id);
     inRound.set(f.round_no, forRound);
@@ -1351,8 +1359,8 @@ export function buildSwissHistory(
     // FIDE C.04.1(d) (owner-approved 2026-09-24): a player who has scored a
     // walkover win may not later receive the pairing-allocated bye. `byes`
     // feeds ONLY `pairRound`'s bye pick, so this is eligibility and nothing
-    // else — no bye score (the +1 below is the win's), and `played`/`inRound`
-    // above treat it as any played match.
+    // else — no bye score (the +1 below is the win's). Unchanged by W3 T7
+    // (P-A4): the pair has not met, and the winner is still bye-ineligible.
     if (o?.kind === "award" && o.winner) byes.add(o.winner);
     if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
     else if (o?.kind === "draw" || o?.kind === "tie") {
@@ -1514,8 +1522,19 @@ async function swissGen(
   // plus latecomers whose first round is later). Refused here, before the reconcile below would size the round to 0 or 1
   // and delete its unseated shells.
   refuseSwissFieldUnderTwo(stageId, field.length);
-  // Task 7 gives `playedFacts` its first reader (its `played` rule); until then the map is empty.
-  const { score, played, colours, byes } = buildSwissHistory(existing, field, new Map());
+  // The division's pinned module: the bye's frozen cfg below, and what "played" means for a forfeit (ruling 118).
+  const [division] = await tx<{ config: unknown; sport_key: string; module_version: string }[]>`
+    select config, sport_key, module_version from divisions where id = ${divisionId}`;
+  if (!division) throw new EngineError("CONFIG_INVALID", "swiss: division missing", { stageId, divisionId });
+  const sportModule = resolveModule(division.sport_key, division.module_version);
+  // W3 T7 (X-SW-15): each two-seated forfeit's "was anything played", from its ledger, read in THIS transaction (a
+  // history step's Redo runs here too) — one query for the stage, and none when no board was decided by a forfeit.
+  const playedFacts = await forfeitPlayedFacts(
+    tx,
+    existing.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null),
+    sportModule,
+  );
+  const { score, played, colours, byes } = buildSwissHistory(existing, field, playedFacts);
 
   const cascadeRank = new Map<string, number>();
   if (rankAdjacent && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status))) {
@@ -1629,20 +1648,17 @@ async function swissGen(
     }
     // W3 T3 (SW-M7, X-SW-5; RB3-7(a)'s app half): the bye's value is frozen at AWARD. The cfg is exactly what
     // append-event.ts freezes at a match's first event — `resolveFixtureCfg` over the division, this stage and the
-    // shell's own override, at the division's pinned module — read here under the `division:` lock the caller holds,
-    // which every format save takes before its `division-config:` one, so no save lands between this read and the
-    // write. Like append-event, a null cfg freezes nothing. The snapshot is not PLAY: `systemByeSql` exempts it in
+    // shell's own override, at the division's pinned module — the division read above (W3 T7 hoisted it to serve the
+    // played facts too), under the `division:` lock the caller holds, which every format save takes before its
+    // `division-config:` one, so no save lands between that read and this write. Like append-event, a null cfg freezes nothing. The snapshot is not PLAY: `systemByeSql` exempts it in
     // `fixtureEvidenceSql` and `playedSql`, so Unpair, Rebuild, Undo and the format locks read the bye as before.
     // And a bye is not played, so it takes no slot (SW-M13, X-SW-29): time, court, venue and pin go (`holdsSlot`).
-    const [division] = await tx<{ config: unknown; sport_key: string; module_version: string }[]>`
-      select config, sport_key, module_version from divisions where id = ${divisionId}`;
-    if (!division) throw new EngineError("CONFIG_INVALID", "swiss bye: division missing", { stageId, divisionId });
     const [shellCfg] = await tx<{ rules_override: unknown }[]>`select rules_override from fixtures where id = ${byeShell.id}`;
     const frozen = resolveFixtureCfg(
       { config_snapshot: null, rules_override: shellCfg?.rules_override ?? null },
       division.config,
       { kind: "swiss", config: cfg },
-      resolveModule(division.sport_key, division.module_version),
+      sportModule,
     );
     const seated = await tx<{ id: string }[]>`
       update fixtures set

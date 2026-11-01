@@ -30,6 +30,8 @@ import { isSwissBoardSeated, latestSeatedSwissRound } from "@/lib/swiss-shell";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { pairKey, type Colour, type SwissHistory, type SwissStanding } from "@seazn/engine/scheduling";
 import { EngineError } from "@seazn/engine/core";
+import { resolveModule } from "@/server/engine-db";
+import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
@@ -379,8 +381,12 @@ function pairsWithin(ids: readonly string[], rows: readonly Board[], chess: bool
   const colours = new Map<string, Colour[]>();
   for (const f of [...rows].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round)) {
     if (f.home_entrant_id === null || f.away_entrant_id === null) continue;
+    // W3 T7 (P-A2): whether a forfeit-decided board is a meeting is its LEDGER's answer, which a row cannot give; this
+    // oracle reads rows only, so it refuses one rather than count it as met (the pre-T7 rule).
+    if (f.outcome?.kind === "award" || f.outcome?.kind === "double_walkover") {
+      throw new Error(`pairsWithin: board ${f.id} was decided by a forfeit; its meeting is its ledger's (P-A2), not a row's`);
+    }
     met.add(pairKey(f.home_entrant_id, f.away_entrant_id));
-    if (f.outcome?.kind === "award" || f.outcome?.kind === "double_walkover") continue;
     colours.set(f.home_entrant_id, [...(colours.get(f.home_entrant_id) ?? []), "W"]);
     colours.set(f.away_entrant_id, [...(colours.get(f.away_entrant_id) ?? []), "B"]);
   }
@@ -662,10 +668,17 @@ for (const sport of SPORTS) {
     }, 120_000);
   });
 
-  describe.runIf(HAS_DB)(`W3 T6 buildSwissHistory is the pre-T6 history loop, unchanged for a legacy stage (${sport.key})`, () => {
-    it(`over real rows — walkover, double walkover, draws, implicit byes, a bye row, a withdrawal — the two agree (${sport.key})`, async () => {
+  describe.runIf(HAS_DB)(`W3 T6 buildSwissHistory is the pre-T6 history loop for a legacy stage, but for T7's P-A2 rule (${sport.key})`, () => {
+    it(`over real rows — walkover, double walkover, draws, implicit byes, a bye row, a withdrawal — the two agree, and differ only on the unplayed pairs (${sport.key})`, async () => {
       const r = await startedSwiss(sport);
       const checked: string[] = [];
+      // W3 T7 (X-SW-15, rulebook P-A2): the boards this test records UNPLAYED — round 1's pre-play walkover and its
+      // double walkover. Filled where they are recorded: the test's own record, never the rule under test.
+      const unplayedBoards = new Set<string>();
+      let dropped = 0;
+      const [division] = await sql<{ sport_key: string; module_version: string }[]>`
+        select sport_key, module_version from divisions where id = ${r.divisionId}`;
+      const sportModule = resolveModule(division!.sport_key, division!.module_version);
       const compare = async (label: string) => {
         const existing = await sql<SwissExistingFixture[]>`
           select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
@@ -678,8 +691,24 @@ for (const sport of SPORTS) {
           order by seed nulls last, created_at, id`;
         expect(entrants.every((e) => e.swiss_first_round === null), `${label}: a legacy stage (every first round null)`).toBe(true);
         const want = legacySwissHistory(existing, entrants);
-        const got = buildSwissHistory(existing, entrants, new Map());
-        expect(flat(got), `${label}: identical {score, played, colours, byes}`).toEqual(flat(want));
+        // The facts as swissGen reads them: the real reader, over the stage's two-seated rows, under the division's module.
+        const twoSeated = existing.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
+        const got = buildSwissHistory(existing, entrants, await forfeitPlayedFacts(sql, twoSeated, sportModule));
+        const [g, w] = [flat(got), flat(want)];
+        // T7 changed one rule and nothing else: score, colours and byes are the legacy loop's, row for row.
+        expect({ score: g.score, colours: g.colours, byes: g.byes }, `${label}: identical {score, colours, byes}`).toEqual({
+          score: w.score,
+          colours: w.colours,
+          byes: w.byes,
+        });
+        // The differential: `played` is the legacy set less every pair none of whose boards was played (P-A2: "a pair
+        // whose match was not played has not met") — a pair re-met over a played board in a later round stays.
+        const metOverPlayedBoard = new Set(
+          twoSeated.filter((f) => !unplayedBoards.has(f.id)).map((f) => pairKey(f.home_entrant_id!, f.away_entrant_id!)),
+        );
+        const wantPlayed = w.played.filter((k) => metOverPlayedBoard.has(k));
+        expect(g.played, `${label}: played = the legacy set less the unplayed pairs`).toEqual(wantPlayed);
+        dropped += w.played.length - wantPlayed.length;
         checked.push(label);
         return want;
       };
@@ -690,6 +719,7 @@ for (const sport of SPORTS) {
       expect(r1.length, "rig: round 1 seats three boards").toBe(3);
       await scoreEvent(r.auth, r1[0]!.id, { expected_seq: 0, type: "core.forfeit", payload: { by: r1[0]!.away_entrant_id, reason: "walkover" } });
       await scoreEvent(r.auth, r1[1]!.id, { expected_seq: 0, type: "core.forfeit", payload: { by: "both", reason: "walkover" } });
+      unplayedBoards.add(r1[0]!.id).add(r1[1]!.id);
       await decideRound(r, 1, new Set([3]));
       // Round 2 played; a latecomer with no first round then sits out rounds 1 and 2 (the implicit-bye inference).
       await generateStageFixtures(r.auth, r.stageId);
@@ -705,6 +735,7 @@ for (const sport of SPORTS) {
 
       // Anti-vacuity: the comparisons ran over every shape they claim to.
       expect(checked.length, "three comparisons").toBe(3);
+      expect(dropped, `the T7 differential removed ${dropped} unplayed pair(s) from the legacy set`).toBeGreaterThan(0);
       expect(a.played.size, "pairs met").toBeGreaterThan(0);
       expect(a.byes.has(r.idOf.get("Late")!), "the implicit bye was inferred, so that path was compared").toBe(true);
       expect([...a.colours.values()].flat().length, "colours recorded").toBeGreaterThan(0);
@@ -736,7 +767,9 @@ const flat = (h: History) => ({
  * The ORACLE: swissGen's history loop as it stood before Task 6 (stages.ts at 3ca1a13890, `swissGen`, from
  * `const score = …` through the implicit-bye loop), copied verbatim except that it returns its four collections. It is
  * the "unchanged" in "extracted unchanged except for this task's rule": for a stage where every first round is null the
- * extracted function must agree with it on every row the product writes.
+ * extracted function must agree with it on every row the product writes — score, colours and byes exactly, and
+ * `played` less the pairs W3 T7's P-A2 rule no longer counts as met (the differential above). Kept verbatim, the old
+ * `played` rule included, so that difference stays visible rather than copied into the oracle.
  */
 function legacySwissHistory(existing: SwissExistingFixture[], entrants: { id: string }[]): History {
   const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
