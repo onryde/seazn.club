@@ -2800,6 +2800,42 @@ export const UnpairResult = z.object({
   round: z.number().int(),
 });
 
+/** PATCH /stages/{id} (W3 T12, SW-M10 / #838, X-SW-17 and BG-SW-1) — a Swiss stage's round count and chess colours,
+ *  editable until the stage's first start. At least one key; an unknown key is refused (strict). */
+export const PatchSwissStage = z
+  .object({ rounds: z.number().int().min(1), chess: z.boolean() })
+  .partial()
+  .strict()
+  .refine((p) => Object.keys(p).length > 0, "empty patch");
+export type PatchSwissStage = z.infer<typeof PatchSwissStage>;
+
+export const PatchSwissStageResult = z.object({
+  rounds: z.number().int(),
+  chess: z.boolean(),
+  /** The count against the field its next Pair seats (rulebook §3.1/§3.2); null when `rounds` was not sent or there is
+   *  no pairable field yet. Above the hard maximum the PATCH is refused instead (SWISS_ROUNDS_ABOVE_MAX). */
+  swiss_rounds: z
+    .object({
+      verdict: z.enum(["ok", "warn"]),
+      recommended: z.number().int(),
+      safeMax: z.number().int(),
+      hardMax: z.number().int(),
+    })
+    .nullable(),
+  /** Shells deleted for removed rounds (`slots_freed`: how many of them held a laid-out slot) and minted for added ones. */
+  shells: z.object({
+    added: z.number().int(),
+    removed: z.number().int(),
+    slots_freed: z.number().int(),
+  }),
+});
+
+/** POST /stages/{id}/swiss/add-round (W3 T12, X-SW-17) — the new round count and the shells minted for it. */
+export const AddSwissRoundResult = z.object({
+  rounds: z.number().int(),
+  shells_added: z.number().int(),
+});
+
 /** POST /stages/{id}/open-round (T19, D12) — the organiser opens one round
  *  of an online-play stage: stamps it and invites its players. */
 export const OpenRoundInput = z.object({ roundNo: z.number().int().positive() }).strict();

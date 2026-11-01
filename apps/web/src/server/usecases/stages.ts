@@ -448,6 +448,9 @@ export interface StageCarry {
   points?: unknown;
   tiebreakers?: unknown;
   crossGroupTiebreakers?: unknown;
+  /** W3 T12 (T8 review m6): a Swiss slot's chess colours switch (`PATCH /stages/{id}`, BG-SW-1) — the organiser's
+   *  choice, so a re-Apply of the template (which names no `chess`) keeps it instead of re-seeding the boardgame default. */
+  chess?: boolean;
 }
 
 /** W2c Task 12 — the config each stage of a batch is inserted with: its rules validated on the stage PUT's terms and
@@ -471,7 +474,7 @@ function stageConfigsAtCreate(
     const sent = (s.config ?? {}) as Record<string, unknown>;
     // Each own table value the body does not send is the slot's carry (a body's own replaces it whole; null drops it).
     const config: Record<string, unknown> = { ...sent };
-    for (const key of ["points", "tiebreakers", "crossGroupTiebreakers"] as const) {
+    for (const key of ["points", "tiebreakers", "crossGroupTiebreakers", "chess"] as const) {
       if (carry?.[key] !== undefined && sent[key] === undefined) config[key] = carry[key];
     }
     return validatedStageConfig(
@@ -756,11 +759,15 @@ export async function replaceStages(
       // W2d Task 10: and its own orders, the same way (a slot with none carries none, and inherits).
       const tiebreakers = r.config?.tiebreakers;
       const crossGroupTiebreakers = r.config?.crossGroupTiebreakers;
+      // W3 T12 (T8 review m6): a Swiss slot's chess switch, the organiser's (the default is re-seeded only for a slot
+      // that stores none — `withSwissChessDefault`).
+      const chess = r.config?.chess;
       keep.set(`${r.seq}:${r.kind}`, {
         rules: cleared ? {} : (rules as Record<string, unknown>),
         ...(points !== undefined && points !== null ? { points } : {}),
         ...(tiebreakers !== undefined && tiebreakers !== null ? { tiebreakers } : {}),
         ...(crossGroupTiebreakers !== undefined && crossGroupTiebreakers !== null ? { crossGroupTiebreakers } : {}),
+        ...(typeof chess === "boolean" ? { chess } : {}),
       });
     }
     await tx`delete from stages where division_id = ${divisionId}`;
@@ -1387,7 +1394,7 @@ export async function swissActiveEntrants(tx: Tx, divisionId: string, stageId: s
 /** Review m4: a Swiss round's field (`swissFieldForRound`) under 2 is refused exactly as generateStageFixturesTx refuses a
  *  roster under 2 — the same code, message and data, so every reader of that refusal reads this one too. Nothing is
  *  written first: both callers in `swissGen` throw before any reconcile or mint. */
-function refuseSwissFieldUnderTwo(stageId: string, fieldSize: number): void {
+export function refuseSwissFieldUnderTwo(stageId: string, fieldSize: number): void {
   if (fieldSize < 2) {
     throw new EngineError("STAGE_NOT_READY", "need at least 2 active entrants to generate", { stageId, entrants: fieldSize });
   }

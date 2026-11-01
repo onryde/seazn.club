@@ -247,6 +247,9 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/pools/:id/clear-entrants", scope: "manage", pin: "pool" },
   { method: "GET", path: "/stages/:id", scope: "read", pin: "stage" },
   { method: "DELETE", path: "/stages/:id", scope: "manage", pin: "stage" },
+  // W3 T12 (SW-M10, #838): a Swiss stage's round count and chess colours — the same edit the Format tab's Apply makes
+  // (`PUT /divisions/:id/stages`, `manage`), on one stage.
+  { method: "PATCH", path: "/stages/:id", scope: "manage", pin: "stage" },
   { method: "GET", path: "/stages/:id/americano", scope: "read", pin: "stage" },
   { method: "POST", path: "/stages/:id/challenges", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/complete", scope: "manage", pin: "stage" },
@@ -255,6 +258,7 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/stages/:id/fixtures", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/generate", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/unpair", scope: "manage", pin: "stage" },
+  { method: "POST", path: "/stages/:id/swiss/add-round", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/officials/source", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/rebuild", scope: "manage", pin: "stage" },
   // Per-stage match-format override (design 2026-09-17 §T3). Same scope and

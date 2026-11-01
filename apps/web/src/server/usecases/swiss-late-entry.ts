@@ -32,8 +32,8 @@ import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
 import { withTenant } from "@/lib/db";
-import { fixtureHasResultSql } from "./fixture-results-sql";
 import { swissRefusal } from "./swiss-refusal";
+import { swissAddRoundState, swissBoardStartedSql } from "./swiss-rounds-admin";
 import { OCCUPYING, afterScheduleWrite, courtVenueIds, divisionLockState } from "./schedule";
 import {
   DECIDED,
@@ -92,16 +92,16 @@ async function stageRows(tx: Tx, stageId: string): Promise<SwissExistingFixture[
     select ${STAGE_ROW_COLS(tx)} from fixtures f where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
 }
 
-/** Spec §4 "started": a score event, live, or decided — `fixtureHasResultSql`, read on the row itself — and (Review Focus
- *  1) a board an online game stands behind (any `fixture_external_play` row). A device link is NOT a start (ruling C5
- *  re-ruled after the T9 review, I1): a link carries no opened or claimed marker, and printing a day's scorer sheets mints
- *  a never-expiring link for every printable board — counting one would switch case (a) off for the whole printed day.
- *  A link that was used has written a score event, which is a start already. */
+/** Spec §4 "started", read on each row through THE predicate (`swissBoardStartedSql`, swiss-rounds-admin.ts — W3 T12
+ *  moved it there whole so the rounds lock reads the same one): a score event, live, or decided (`fixtureHasResultSql`);
+ *  (Review Focus 1) a board an online game stands behind (any `fixture_external_play` row); and decided other than the
+ *  bye. A device link is NOT a start (ruling C5 re-ruled after the T9 review, I1): a link carries no opened or claimed
+ *  marker, and printing a day's scorer sheets mints a never-expiring link for every printable board — counting one would
+ *  switch case (a) off for the whole printed day. A link that was used has written a score event, which is a start
+ *  already. */
 async function stageRowsWithStarts(tx: Tx, stageId: string): Promise<StageRow[]> {
   return tx<StageRow[]>`
-    select ${STAGE_ROW_COLS(tx)},
-           (${fixtureHasResultSql(tx, "f")}
-            or exists (select 1 from fixture_external_play x where x.fixture_id = f.id)) as started
+    select ${STAGE_ROW_COLS(tx)}, ${swissBoardStartedSql(tx, "f")} as started
     from fixtures f where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
 }
 
@@ -117,9 +117,9 @@ function toBoard(f: StageRow): LateEntryBoard {
     extKey: f.ext_key,
     home: f.home_entrant_id,
     away: f.away_entrant_id,
-    // Spec §4: "decided other than the bye" is started too — a two-sided walkover the generator or an import wrote with no
-    // event behind it reads as no result to `fixtureHasResultSql`, yet its board is settled.
-    started: f.started === true || (!isBye && DECIDED.has(f.status)),
+    // Spec §4: "decided other than the bye" is started too — read by `swissBoardStartedSql` with the rest (W3 T12: one
+    // authority, no second arm here).
+    started: f.started === true,
     decided: DECIDED.has(f.status),
     isBye,
   };
@@ -262,12 +262,11 @@ export async function admitSwissLateEntrant(
   }
   const rows = await stageRowsWithStarts(tx, stage.id);
 
-  // Over: the stage is complete, or a later stage of the division (its knockout) has a started fixture.
-  const [later] = await tx`
-    select 1 from fixtures f join stages s on s.id = f.stage_id
-    where s.division_id = ${divisionId} and s.seq > ${stage.seq} and ${fixtureHasResultSql(tx, "f")}
-    limit 1`;
-  const swissOver = stage.status === "complete" || later !== undefined;
+  // Over: the stage is complete, or a later stage of the division (its knockout) has a started fixture. W3 T12 (ruling
+  // C11): read off THE "Add a round" predicate, which also answers the refusal's `canAddRound` below — for the field Add a
+  // round will see, which never holds this arrival (a refusal rolls its insert back).
+  const addRound = await swissAddRoundState(tx, { ...stage, division_id: divisionId }, { excluding: entrantId });
+  const swissOver = addRound.over;
 
   // Admitted already: this stage stamped the entrant, or wrote a ledger row for them. A reinstatement is a NEW arrival
   // (the Reinstate ruling): whatever an earlier admission recorded, the rounds they were away for are missed.
@@ -352,7 +351,7 @@ export async function admitSwissLateEntrant(
     case "noop":
       return null;
     case "refused":
-      if (!automatic) throw swissRefusal(decision.code, { canAddRound: !swissOver });
+      if (!automatic) throw swissRefusal(decision.code, { canAddRound: addRound.canAddRound });
       // X-SW-13 / Review Focus 4: the arrival stands, recorded as joining after the last round (the desk lists it so;
       // an added round seats it).
       return recordC(rounds + 1);

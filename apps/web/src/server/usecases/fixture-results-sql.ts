@@ -23,6 +23,10 @@
 //     - the joint builder's fixed occupancy (competition-schedule-ai.ts)
 //     - the board read's `held` flag (`listDivisionFixturesForBoard`,
 //       fixtures.ts)
+//     - swiss-rounds-admin.ts (W3 T12): inside `swissBoardStartedSql`, the
+//       Swiss "a board has started" predicate (late entry's case decision and
+//       the rounds lock, X-SW-17), and the "Swiss is over" read (a later
+//       stage under way) that late entry and Add a round share
 //   `fixtureEvidenceSql` alone, beside the caller's own status clause
 //     - stages.ts: the Swiss shell reconcile, unseat and Unpair
 //   `systemByeSql` (W3 T3; defined in engine-db/system-bye-sql.ts, below every
