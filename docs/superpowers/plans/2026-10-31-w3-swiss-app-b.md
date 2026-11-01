@@ -439,6 +439,10 @@ type TiebreakerKey = /* … */ | "opp_diff";
 - Modify: `apps/web/src/server/engine-db/competition.ts`:
   - `loadStageInputs` `:351-526`: select `ext_key` with the fixtures (`:369-379`); compute `played` once per stage; set `base.unplayed` on two-sided decided fixtures; carry the absent map in `StageInputs`;
   - `toTableStage` `:588-610`: `...(inputs.stage.kind === "swiss" && absent.size > 0 ? { swissAbsentRounds: absent } : {})`.
+- Modify: `apps/web/src/server/engine-db/table-rules.ts` `tableRulesOf` (~:167). This is the only place where the sport module and the merged cfg meet.
+  - Fill `swissDraw: swissDrawFactsOf(module, mergedCfg)` on every Swiss stage. That covers both the bye/absence draw value (engine T7 fix round, ruling R4) and the clean-sweep win.
+  - The engine refuses a Swiss stage with no `swissDraw` eagerly (engine T8 carry). If the field is missing, every Swiss standings read fails.
+  - Pin it with `X-SW-7 a Swiss stage with a bye ranks through the real producer (odd field)`, and add the even-field case beside it. A test with an even field only never reaches the old lazy throw.
 - Test:
   - `apps/web/src/server/engine-db/__tests__/swiss-absent-rounds.test.ts` (pure);
   - `apps/web/src/server/engine-db/__tests__/swiss-art16-producer.test.ts` (DB, real producer and consumer).
