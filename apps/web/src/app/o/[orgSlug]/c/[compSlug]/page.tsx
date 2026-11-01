@@ -289,9 +289,9 @@ export default async function CompetitionPage({
             </div>
           </div>
           {/* Header actions.
-              `md` and up: a wrapped row of labelled buttons — the "Open" menu
-              (Slideshow, View Public Page, QR; C5), Schedule board,
-              Registration and Settings, each labelled.
+              `md` and up: a wrapped row of labelled buttons — Schedule board,
+              Registration, the "Open" menu (Slideshow, View Public Page, QR;
+              C5) and Settings, in that order (E1 item 5), each labelled.
               Below `md` (F2, round J): NOT the same row shrunk. It stacks,
               full width, and the set itself changes — one primary action
               (Schedule board), the one tool that carries status
@@ -373,10 +373,6 @@ export default async function CompetitionPage({
                 <span>{t(dict, "desk.tools.openMatchDay")}</span>
               </Link>
             )}
-            {/* Match Day C5 (owner request 2026-11-01): Slideshow, View Public Page and QR were three buttons here; they are ONE
-                "Open" menu, in the place Slideshow sat. Same labels, icons, hrefs, new tabs and ↗ marks as the buttons — see
-                `openItems` above. Desktop only: below `md` the More fold below already carries these same destinations. */}
-            <DeskOpenMenu className="max-md:hidden" label={t(dict, "desk.tools.open")} items={openItems} />
             {/* The organiser's most likely action at a venue, so on a phone it
                 is THE action: first, full width, filled, and labelled — except
                 on a match day (B1), when Open Match Day above is, and this
@@ -439,6 +435,14 @@ export default async function CompetitionPage({
                 awaiting={awaitingConfirmation > 0}
               />
             )}
+            {/* Match Day C5 (owner request 2026-11-01): Slideshow, View Public Page and QR were three buttons; they are ONE "Open"
+                menu. Same labels, icons, hrefs, new tabs and ↗ marks as the buttons - see `openItems` above. Desktop only: below
+                `md` the More fold below already carries these same destinations.
+                Match Day E1 item 5 (owner, 2026-11-01): it sits immediately BEFORE Settings - the Match Day door, the schedule board
+                and registration (the organiser's working tools) lead, then the places to look at the competition, then Settings. The
+                DOM node moved, not a CSS `order`: the row's Tab order is its paint order at 768 and up (the order test pins that no
+                `order-*` class reaches it), and the phone stack never shows this control, so its own `max-md:order-*` rules are untouched. */}
+            <DeskOpenMenu className="max-md:hidden" label={t(dict, "desk.tools.open")} items={openItems} />
             <Link
               href={routes.competitionSettings(orgSlug, compSlug)}
               aria-label={t(dict, "aria.settings")}

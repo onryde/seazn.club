@@ -422,7 +422,10 @@ describe("the competition page's Open menu (C5)", () => {
     expect(rest).not.toContain("↗");
   });
 
-  it("Open leads the row where Slideshow sat: after the Match Day door, before the schedule board, registration and settings", async () => {
+  // Match Day E1 item 5 (owner, 2026-11-01): Open moved from the front of the row to sit immediately before Settings - the Match Day
+  // door, the schedule board and registration (the organiser's working tools) lead, then the Open menu (places to LOOK at the
+  // competition), then Settings. Source order, because the row is only in paint order where CSS `order` never reaches it (below).
+  it("Open sits immediately before Settings: Match Day door, schedule board, registration, Open, settings", async () => {
     const html = await render(deskWith({ fixturesToday: 2 }), true, "public"); // a match day: the door is in the row too
     const row = subtreeOf(html, "desk-tool-row")!;
     const at = (needle: string) => {
@@ -432,17 +435,37 @@ describe("the competition page's Open menu (C5)", () => {
     };
     const order = [
       at('data-testid="desk-tool-match-day"'),
-      at('data-testid="desk-open-menu"'),
       at('data-testid="desk-tool-schedule"'),
       at(`href="${REGISTRATION}"`),
+      at('data-testid="desk-open-menu"'),
       at(`href="${SETTINGS}"`), // the first one is the desktop link; the phone fold comes after it
     ];
-    expect(order, "source order: Match Day door, Open, schedule board, registration, settings").toEqual([...order].sort((a, b) => a - b));
+    expect(order, "source order: Match Day door, schedule board, registration, Open, settings").toEqual([...order].sort((a, b) => a - b));
+    // "Immediately": nothing else the row draws sits between the Open menu's end and the desktop Settings link.
+    const menu = subtreeOf(row, "desk-open-menu");
+    expect(menu, "premise: the Open menu subtree was found").not.toBeNull();
+    const between = row.slice(row.indexOf(menu!) + menu!.length, row.indexOf(`href="${SETTINGS}"`));
+    expect(between, "no other control between Open and Settings").not.toMatch(/data-testid="desk-tool-|href="/);
+  });
+
+  it("on a quiet day the order is the same without the door: schedule board, registration, Open, settings", async () => {
+    const html = await render(deskWith({ fixturesToday: 0 }), true, "public");
+    const row = subtreeOf(html, "desk-tool-row")!;
+    expect(row, "no filled door off the day").not.toContain('data-testid="desk-tool-match-day"');
+    const idx = [
+      row.indexOf('data-testid="desk-tool-schedule"'),
+      row.indexOf(`href="${REGISTRATION}"`),
+      row.indexOf('data-testid="desk-open-menu"'),
+      row.indexOf(`href="${SETTINGS}"`),
+    ];
+    expect(idx.every((i) => i >= 0), "all four are in the row").toBe(true);
+    expect(idx).toEqual([...idx].sort((a, b) => a - b));
   });
 
   // Keyboard Tab follows the DOM, not the paint. The desktop row is therefore in source order only if CSS `order` never reaches it:
   // every `order-*` class in the row must be phone-only (`max-md:`), where the Open menu is hidden anyway. (Owner 2026-11-01 asked
-  // for Open before Settings; it already was - this is what keeps "before" meaning the same thing to a mouse and a keyboard.)
+  // for Open before Settings - E1 item 5 moved the DOM node, not a CSS order - and this is what keeps "before" meaning the same thing
+  // to a mouse and a keyboard.)
   it("reorders nothing at 768 and up: every order-* class in the tool row is phone-only, so Tab order is the source order above", async () => {
     const html = await render(deskWith({ fixturesToday: 2 }), true, "public");
     const row = subtreeOf(html, "desk-tool-row")!;

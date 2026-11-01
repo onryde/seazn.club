@@ -1192,12 +1192,20 @@ test("competition desk: the tool row is a phone composition below md, not the de
     await expect(openToggle).toBeVisible();
     await expect(openToggle).toHaveAttribute("aria-haspopup", "menu");
     await expect(openToggle).toHaveAttribute("aria-expanded", "false");
-    // Open sits where Slideshow sat: left of the schedule board, on the same line.
+    // Match Day E1 item 5 (owner, 2026-11-01): Open sits immediately before Settings - after the schedule board and Registration, on
+    // the same line, and left of Settings. (It used to lead the row, where Slideshow sat.) The unit test pins the DOM order; this
+    // reads the paint, so a CSS `order` that split the two would be seen here.
     const openBox = await openToggle.boundingBox();
     const scheduleBox = await schedule.boundingBox();
-    expect(openBox && scheduleBox, "both controls have a box").toBeTruthy();
+    const registrationBox = await page.getByTestId("desk-tool-row").getByRole("link", { name: /Registration/ }).first().boundingBox();
+    const settingsBox = await page.getByTestId("desk-tool-row").getByRole("link", { name: "Settings", exact: true }).first().boundingBox();
+    expect(openBox && scheduleBox && registrationBox && settingsBox, "all four controls have a box").toBeTruthy();
     expect(Math.abs(openBox!.y - scheduleBox!.y), "Open and the schedule board share a line").toBeLessThan(20);
-    expect(openBox!.x, "Open leads the schedule board").toBeLessThan(scheduleBox!.x);
+    expect(Math.abs(openBox!.y - settingsBox!.y), "Open and Settings share a line").toBeLessThan(20);
+    expect(openBox!.x, "Open follows the schedule board").toBeGreaterThan(scheduleBox!.x);
+    expect(openBox!.x, "Open follows Registration").toBeGreaterThan(registrationBox!.x);
+    expect(openBox!.x, "Open sits immediately before Settings").toBeLessThan(settingsBox!.x);
+    expect(registrationBox!.x, "Registration is between the schedule board and Open").toBeGreaterThan(scheduleBox!.x);
 
     // Open it. Quiet day, public competition: Match Day first (same tab, no ↗), then the three tools (new tabs).
     const openMenu = page.getByTestId("desk-open-menu");
@@ -3540,6 +3548,7 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   const origin = new URL(page.url()).origin;
   await page.context().addCookies([{ name: "seazn_locale", value: "es", url: origin }]);
   await page.reload({ waitUntil: "load" });
+  await openBracket(page); // a reload closes the card's tree again
   await expect(sheet.getByText(ES_R1_1, { exact: false }).first()).toBeVisible({ timeout: 20_000 });
   await expect(sheet).not.toContainText(EN_R1_1);
   // The tree localizes with it — both surfaces read the dictionary, neither
@@ -3548,7 +3557,6 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
   await expect(tree).not.toContainText(EN_R1_1);
   await expectNoHorizontalScroll(page);
 });
-  await openBracket(page); // a reload closes the card's tree again
 
 // ---------------------------------------------------------------------------
 // P6 (D4b task B) — the organiser-facing proposal panel: full browser flow
