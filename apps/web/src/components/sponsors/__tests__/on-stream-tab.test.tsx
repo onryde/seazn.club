@@ -226,12 +226,14 @@ describe("the rotation - what a click sends", () => {
     expect(propsOf(m.find("on-stream-dial-light")).disabled).toBe(false);
   });
 
-  it("a refused write puts the old value back and says so (the server's words), and does not refresh", async () => {
-    fetchMock.mockResolvedValueOnce({ ok: false, json: async () => ({ error: { message: "competition not found" } }) });
+  // Final review D3: the dictionary's words for the envelope's code (components/sponsors/save-error.ts), never the server's
+  // English sentence.
+  it("a refused write puts the old value back and says so (the dictionary's words for the code), and does not refresh", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ ok: false, error: { code: "NOT_FOUND", message: "competition not found" } }) });
     const m = mount({ settings: { enabled: true, frequency: "normal" } });
     m.click("on-stream-dial-busy");
     await vi.waitFor(() => expect(m.has("on-stream-error")).toBe(true));
-    expect(m.text("on-stream-error")).toBe("competition not found");
+    expect(m.text("on-stream-error")).toBe(msg("sponsors.error.notFound"));
     expect(dialValue(m), "back to the stored one").toEqual(["normal"]);
     expect(nav.refresh).not.toHaveBeenCalled();
   });
@@ -276,13 +278,23 @@ describe("the tick list", () => {
     expect(lastRequest()).toEqual({ url: `/api/v1/orgs/${ORG}/sponsors/s1`, method: "PATCH", body: { on_stream: false } });
   });
 
-  it("a refused tick is put back and reported", async () => {
-    fetchMock.mockResolvedValueOnce({ ok: false, json: async () => ({ error: "Insufficient permissions" }) });
-    const m = mount();
-    m.tick("s2", true);
-    await vi.waitFor(() => expect(m.has("on-stream-error")).toBe(true));
-    expect(m.text("on-stream-error")).toBe("Insufficient permissions");
-    expect(propsOf(m.find("on-stream-tick-s2")).checked).toBe(false);
+  it("a refused tick is put back and reported in the dictionary's words; a code the map does not know reads the fallback (count reported)", async () => {
+    const answers: Array<[unknown, MessageKey]> = [
+      [{ ok: false, status: 403, json: async () => ({ ok: false, error: { code: "FORBIDDEN", message: "Insufficient permissions" } }) }, "sponsors.error.forbidden"],
+      [{ ok: false, status: 500, json: async () => ({ ok: false, error: { code: "INTERNAL", message: "boom" } }) }, "settings.saveFailed"],
+      [{ ok: false, status: 502, json: async () => { throw new SyntaxError("not json"); } }, "settings.saveFailed"],
+    ];
+    let checked = 0;
+    for (const [answer, key] of answers) {
+      fetchMock.mockResolvedValueOnce(answer);
+      const m = mount();
+      m.tick("s2", true);
+      await vi.waitFor(() => expect(m.has("on-stream-error")).toBe(true));
+      expect(m.text("on-stream-error"), key).toBe(msg(key));
+      expect(propsOf(m.find("on-stream-tick-s2")).checked).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(answers.length);
   });
 
   it("a sponsor that is not active cannot be newly ticked, but a ticked one can still be unticked", () => {

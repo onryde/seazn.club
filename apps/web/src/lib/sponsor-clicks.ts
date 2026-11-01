@@ -28,8 +28,21 @@ const LINK_SOURCES: ReadonlySet<string> = new Set<ClickSource>(["match", "site"]
 /** `sponsor_clicks.fixture_id` is a uuid foreign key: anything else would fail the insert, so it is dropped here. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The host the overlay prints a short code under (owner ruling R7: `seazn.club/s/<code>`). */
-export const SPONSOR_LINK_HOST = "seazn.club";
+/** The host a short code prints under when the deployment names no public base url (owner ruling R7: `seazn.club/s/<code>`). */
+export const SPONSOR_LINK_FALLBACK_HOST = "seazn.club";
+
+/** The host the overlay prints a short code under: the app's own public base url's (final review D1), so a code printed on
+ *  stg leads to stg. `NEXT_PUBLIC_BASE_URL` is BAKED into the client bundle at build (fly.toml / fly.stg.toml build args),
+ *  so it is read by its literal name; unset, empty or unparseable falls back to seazn.club. */
+export function sponsorLinkHost(): string {
+  const base = process.env.NEXT_PUBLIC_BASE_URL;
+  if (!base) return SPONSOR_LINK_FALLBACK_HOST;
+  try {
+    return new URL(base).host || SPONSOR_LINK_FALLBACK_HOST;
+  } catch {
+    return SPONSOR_LINK_FALLBACK_HOST;
+  }
+}
 
 /** A click's tag, off its query. A repeated parameter reads its first value (`URLSearchParams.get`). */
 export function parseClickTag(q: URLSearchParams): { fixtureId: string | null; source: ClickSource } {
@@ -99,5 +112,5 @@ export function redirectTarget(stored: string | null | undefined): string | null
  *  link-like: a viewer typing a code the redirect cannot resolve gets a dead page. */
 export function sponsorShortLinkText(code: string | null | undefined): string | null {
   if (typeof code !== "string" || !SPONSOR_SHORT_CODE_PATTERN.test(code)) return null;
-  return `${SPONSOR_LINK_HOST}/s/${code}`;
+  return `${sponsorLinkHost()}/s/${code}`;
 }

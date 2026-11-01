@@ -22,7 +22,8 @@ import "server-only";
 //      The assignment's sponsor is a value COPIED into this org's row, so it is checked to be this org's too
 //      (`foreign_sponsor` otherwise). NO assignment (S5 deleted it: a take-back voided the break while its card was on
 //      air — coordinator ruling, S8 review) falls back to the CARD's sponsor exactly as rule 2 reads it, recorded as
-//      `rotation` with the item's break kind and style: a real airing is never lost to the void race.
+//      `rotation` with the item's break kind and style, so the void race alone does not lose an airing (it is still refused
+//      when the card's sponsor is gone too: deleted since, or another org's - `sponsor_gone`).
 //   4. A start already recorded for (session, moment) keeps the FIRST row — never its card or sponsor overwritten. The
 //      same sponsor again is a re-send after a lost 2xx (neither written nor refused); another one is refused, counted
 //      (a compositor page reload inside a carousel showing's 10 s bucket, S7's note).
@@ -59,7 +60,7 @@ export type AiringRefusal =
   | "foreign_fixture"   // the session's fixture is not the session's org's (cannot happen; refused by name if it does)
   | "card_not_sponsor"  // a card id that is no uuid, so names no sponsor (the S5 card id = sponsor id contract broke)
   | "sponsor_gone"      // a card naming no sponsor of this org: deleted since, or another org's
-  | "foreign_sponsor"   // a break's assignment names a sponsor that is not the assignment's org's (cannot happen)
+  | "foreign_sponsor"   // a break's assignment names a sponsor that is not the assignment's org's (a corrupt row: an error)
   | "another_card"      // a second start for a recorded moment, naming another sponsor: the first row stands
   | "no_start"          // an end with no recorded start
   | "end_before_start"; // an end earlier than its start
@@ -72,7 +73,8 @@ export interface AiringsRecorded {
 }
 
 /** Who the airing is for: the session row's own ids, read under its lock. `fixtureId` is null once the fixture was deleted
- *  mid-session (V410 `on delete set null`): a break card then has no assignment to name its sponsor. */
+ *  mid-session (V410 `on delete set null`): a break card then has no assignment to read, so it takes the CARD's sponsor
+ *  as rule 3's fallback does (refused `sponsor_gone` when that sponsor is not this org's). */
 export interface AiringSession {
   sessionId: string;
   orgId: string;
@@ -196,6 +198,14 @@ export async function recordAirings(tx: Tx, s: AiringSession, items: readonly Re
     log.error({ sid: s.sessionId, orgId: s.orgId, items: notSponsor }, "sponsor airings: a card id is not a sponsor id — the card source broke the card id = sponsor id contract");
     captureError(new Error("sponsor airings: a card id is not a sponsor id (card id = sponsor id contract broken)"),
       { orgId: s.orgId, route: "relay.sponsor_airings.card_not_sponsor", extra: { sessionId: s.sessionId, items: notSponsor } });
+  }
+  // A break's assignment row of THIS org naming ANOTHER org's sponsor (final review S8 m4): the database checks no composite
+  // reference, so a corrupt row is a tenancy breach to look at, not a refusal among the others. An error, reported once per beat.
+  const foreign = out.why.filter((w) => w === "foreign_sponsor").length;
+  if (foreign > 0) {
+    log.error({ sid: s.sessionId, orgId: s.orgId, items: foreign }, "sponsor airings: a break's assignment names another org's sponsor — refused; the assignment row is corrupt");
+    captureError(new Error("sponsor airings: a break's assignment names another org's sponsor"),
+      { orgId: s.orgId, route: "relay.sponsor_airings.foreign_sponsor", extra: { sessionId: s.sessionId, items: foreign } });
   }
   return out;
 }

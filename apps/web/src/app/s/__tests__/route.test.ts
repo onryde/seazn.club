@@ -45,7 +45,7 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
 import { sql, statementCount } from "@/lib/db";
 import { SPONSOR_LINK_MISS_LIMIT } from "@/lib/rate-limit";
-import { sponsorShortLinkText, SPONSOR_LINK_HOST } from "@/lib/sponsor-clicks";
+import { sponsorLinkHost, sponsorShortLinkText } from "@/lib/sponsor-clicks";
 import { SPONSOR_SHORT_CODE_MAX_LENGTH } from "@/lib/sponsor-short-code";
 import { CLICK_DEDUPE_WINDOW_SECONDS } from "@/server/sponsors/clicks";
 import { drawShortCode, mintShortCode, shortCodesFor } from "@/server/sponsors/short-codes";
@@ -232,7 +232,7 @@ describe.skipIf(!HAS_DB)("GET /s/[key] — an R7 short code (the stream)", () =>
     const { codes } = await shortCodesFor(sql, { orgId, fixtureId, sponsorIds: [sponsorId] });
     const printed = sponsorShortLinkText(codes.get(sponsorId));
     expect(printed, "premise: the card prints a link").not.toBeNull();
-    const prefix = `${SPONSOR_LINK_HOST}/s/`;
+    const prefix = `${sponsorLinkHost()}/s/`;
     expect(printed!.startsWith(prefix)).toBe(true);
     return printed!.slice(prefix.length);
   }

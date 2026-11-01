@@ -9,10 +9,11 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CLICK_SOURCES,
-  SPONSOR_LINK_HOST,
+  SPONSOR_LINK_FALLBACK_HOST,
+  sponsorLinkHost,
   classifySponsorLink,
   parseClickTag,
   redirectTarget,
@@ -206,10 +207,36 @@ describe("classifySponsorLink — the /s/ key's shape (S10)", () => {
 });
 
 describe("sponsorShortLinkText (R7)", () => {
-  it("a valid code reads seazn.club/s/<code>", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("a valid code reads seazn.club/s/<code> when the deployment names no public base url", () => {
+    vi.stubEnv("NEXT_PUBLIC_BASE_URL", undefined);
     const code = SPONSOR_SHORT_CODE_ALPHABET.slice(-SPONSOR_SHORT_CODE_MIN_LENGTH);
-    expect(SPONSOR_LINK_HOST).toBe("seazn.club");
+    expect(SPONSOR_LINK_FALLBACK_HOST).toBe("seazn.club");
     expect(sponsorShortLinkText(code)).toBe(`seazn.club/s/${code}`);
+  });
+
+  // Final review D1: the printed code leads to the deployment that minted it - on stg, stg (fly.stg.toml bakes
+  // NEXT_PUBLIC_BASE_URL=https://stg.seazn.club into the build; prod's fly.toml bakes https://seazn.club).
+  it("the host is the app's public base url's (NEXT_PUBLIC_BASE_URL, baked at build); empty or unparseable falls back to seazn.club (count reported)", () => {
+    const code = SPONSOR_SHORT_CODE_ALPHABET.slice(-SPONSOR_SHORT_CODE_MIN_LENGTH);
+    const cases: Array<[string | undefined, string]> = [
+      ["https://stg.seazn.club", "stg.seazn.club"],
+      ["https://stg.seazn.club/", "stg.seazn.club"],
+      ["https://seazn.club", "seazn.club"],
+      ["http://localhost:3000", "localhost:3000"],
+      ["", "seazn.club"],
+      ["not a url", "seazn.club"],
+      [undefined, "seazn.club"],
+    ];
+    let checked = 0;
+    for (const [base, host] of cases) {
+      vi.stubEnv("NEXT_PUBLIC_BASE_URL", base);
+      expect(sponsorLinkHost(), JSON.stringify(base)).toBe(host);
+      expect(sponsorShortLinkText(code), JSON.stringify(base)).toBe(`${host}/s/${code}`);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("no code, or one outside the pattern: null (the card prints nothing link-like)", () => {

@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLocaleOrDefault, useMsg } from "@/components/i18n/dict-provider";
+import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtIsoDay, isIsoDay, type ReportLinkDefaults, type ReportLinkSummary } from "@/lib/sponsor-report";
 
@@ -84,7 +85,7 @@ export function ShareReport(props: ShareReportProps) {
       setCopy("idle");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("settings.saveFailed"));
+      setError(msg(sponsorSaveErrorKey(err)));
     } finally {
       setBusy(false);
     }
@@ -107,7 +108,7 @@ export function ShareReport(props: ShareReportProps) {
       setConfirming(null);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : msg("settings.saveFailed"));
+      setError(msg(sponsorSaveErrorKey(err)));
     } finally {
       setBusy(false);
     }

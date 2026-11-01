@@ -71,7 +71,7 @@ import {
 } from "@/lib/sponsor-plan";
 import { SPONSOR_TIER_WEIGHTS } from "@/lib/sponsor-tiers";
 import { SPONSOR_SHORT_CODE_PATTERN } from "@/lib/sponsor-short-code";
-import { SPONSOR_LINK_HOST, sponsorShortLinkText } from "@/lib/sponsor-clicks";
+import { sponsorLinkHost, sponsorShortLinkText } from "@/lib/sponsor-clicks";
 import { isoDay } from "@/lib/sponsor-report";
 import { INITIAL, momentQueueReducer, type MomentQueueState, type QueueAction } from "@/components/overlay/moment-queue";
 import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "@/components/overlay/moment-timing";
@@ -436,13 +436,13 @@ describe.skipIf(!HAS_DB)("S15: the sponsor chain, plan → airing → click → 
     const card = plan.cards.find((c) => c.id === heavier.id)!;
     const printed = sponsorShortLinkText(card.shortCode);
     expect(printed, "the card prints its short link").not.toBeNull();
-    const path = printed!.slice(SPONSOR_LINK_HOST.length);
+    const path = printed!.slice(sponsorLinkHost().length);
     expect(path).toBe(`/s/${card.shortCode}`);
     // Other writers queue tail work too (the sponsor writes' cache busts, the ledger's): run it now, so the count below is
     // the route's alone.
     await flush();
     const res = await sponsorLinkRoute(
-      new Request(`https://${SPONSOR_LINK_HOST}${path}`, { headers: { "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", "x-forwarded-for": "203.0.113.15" } }),
+      new Request(`https://${sponsorLinkHost()}${path}`, { headers: { "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", "x-forwarded-for": "203.0.113.15" } }),
       { params: Promise.resolve({ key: card.shortCode! }) },
     );
     expect(res.status).toBe(302);

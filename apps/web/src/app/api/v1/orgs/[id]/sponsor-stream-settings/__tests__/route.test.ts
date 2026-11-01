@@ -178,6 +178,28 @@ describe.skipIf(!HAS_DB)("PUT /orgs/{id}/sponsor-stream-settings - the route", (
     expect(await rowsOf(o.orgId)).toHaveLength(1);
   });
 
+  // Final review D2: the door runs BEFORE the body is read, so a caller who may not write learns nothing about the body's
+  // shape (a 400 would tell a viewer, or a stranger, what the route accepts).
+  it("the door before the body: a viewer's MALFORMED body is 403, a non-member's 401 - never the 400 an editor gets for it (count reported)", async () => {
+    const o = await organiser();
+    const viewerId = await memberOf(o.orgId, "viewer");
+    const bad: unknown[] = [{ competitionId: null, enabled: true, frequency: "constant" }, "{not json", {}];
+    let checked = 0;
+    for (const body of bad) {
+      authState.userId = viewerId;
+      const viewer = await put(o.orgId, body);
+      expect(viewer.status, `viewer ${JSON.stringify(body)}`).toBe(403);
+      expect(((await viewer.json()) as Envelope).error?.message).toBe("Insufficient permissions");
+      authState.userId = (await makeUser("stranger")).id;
+      expect((await put(o.orgId, body)).status, `non-member ${JSON.stringify(body)}`).toBe(401);
+      authState.userId = o.ownerId;
+      expect((await put(o.orgId, body)).status, `the owner's own 400 for ${JSON.stringify(body)} (the positive pair)`).toBe(400);
+      checked++;
+    }
+    expect(checked).toBe(bad.length);
+    expect(await rowsOf(o.orgId), "nobody wrote").toEqual([]);
+  });
+
   it("another org: a non-member is refused at the door (401, like every org route) and writes nothing; another org's COMPETITION is 404 and writes nothing; a malformed org id is 404", async () => {
     const o = await organiser();
     const foreign = await organiser();             // signs in as ANOTHER org's owner
