@@ -336,6 +336,41 @@ function recordOnRows(rows: readonly Row[], id: string) {
   return { won, lost, byes };
 }
 
+/** What the sport's DECLARED Swiss points rule pays each result the rigs produce (`tablePointsRule` through
+ *  `sportStageRule`, the stage editor's own read): a played win, a played loss, a bye. Mirrors the engine's documented
+ *  payout (points.ts `payout`, ruling 108): a set sport pays its `bySetScore` pair, a bye pays the rule's forfeit row
+ *  when it sets one, else the winner's win (a bye is a win, rulebook §7). Premises guard what this does not model. */
+function declaredPay(rig: Rig): { win: number; loss: number; bye: number } {
+  const declared = sportStageRule(rig.sport.module, rig.sport.module.variants[rig.sport.variant], "swiss");
+  expect(declared, `premise: ${rig.sport.key} declares a Swiss points rule`).not.toBeNull();
+  const rule = declared!.rule;
+  expect(rule.bonuses, "premise: the rule pays no bonuses").toEqual([]);
+  const set = rule.bySetScore;
+  // A set table keyed by exact scores would pay by the score; the rigs' sports declare only the catch-all.
+  if (set !== undefined) expect(Object.keys(set), "premise: the set table is the catch-all alone").toEqual(["*"]);
+  const pair = set?.["*"];
+  const win = pair ? pair[0] : rule.win.regulation;
+  return { win, loss: pair ? pair[1] : rule.loss.regulation, bye: rule.forfeit?.winnerPoints ?? win };
+}
+
+/** The points `id`'s fixture rows earn under `pay` — no draws in these rigs (premise) — and nothing for a round with no
+ *  row: a missed round adds 0 (ruling 251). */
+function pointsOnRows(rows: readonly Row[], id: string, pay: { win: number; loss: number; bye: number }): number {
+  expect(rows.filter((f) => f.outcome?.kind === "draw").length, "premise: no draws").toBe(0);
+  const { won, lost, byes } = recordOnRows(rows, id);
+  return (won - byes) * pay.win + lost * pay.loss + byes * pay.bye;
+}
+
+/** Every stored row's POINTS against the declared rule over the fixture rows (review round 2): the fold pays what the
+ *  sport declares, and a latecomer's missed rounds pay nothing. Answers how many rows were checked. */
+async function assertStoredPoints(rig: Rig, label: string): Promise<number> {
+  const rows = await rowsOf(rig.swissStageId);
+  const pay = declaredPay(rig);
+  const table = await storedTable(rig.swissStageId);
+  for (const r of table) expect(r.points, `${label}: ${r.entrantId}'s stored points are the declared rule's`).toBe(pointsOnRows(rows, r.entrantId, pay));
+  return table.length;
+}
+
 /** Ruling 251 on the two records a missed round could leak into: the Pair's history (its score and bye eligibility,
  *  P-A4) and the stored table. Expected values are the rows' own facts; a missed round adds nothing to either. */
 async function assertMissedRoundsScoreZero(rig: Rig, lateId: string, label: string): Promise<void> {
@@ -348,7 +383,13 @@ async function assertMissedRoundsScoreZero(rig: Rig, lateId: string, label: stri
   if (facts.won + facts.lost === 0) {
     // Nothing decided yet: the stored table may not list them, and if it does it holds nothing.
     if (row !== undefined) {
-      expect({ played: row.played, won: row.won, lost: row.lost, drawn: row.drawn }, `${label}: an empty record`).toEqual({ played: 0, won: 0, lost: 0, drawn: 0 });
+      expect({ played: row.played, won: row.won, lost: row.lost, drawn: row.drawn, points: row.points }, `${label}: an empty record`).toEqual({
+        played: 0,
+        won: 0,
+        lost: 0,
+        drawn: 0,
+        points: 0,
+      });
     }
     return;
   }
@@ -360,6 +401,8 @@ async function assertMissedRoundsScoreZero(rig: Rig, lateId: string, label: stri
     lost: facts.lost,
     drawn: 0,
   });
+  // Points too (review round 2), for every stored row: the latecomer's are the declared rule over the rounds played.
+  expect(await assertStoredPoints(rig, label), `${label}: anti-vacuity: stored rows checked`).toBeGreaterThan(0);
 }
 
 const refusal = (code: SwissRefusalCode) => ({ status: SWISS_REFUSALS[code].status, code });
@@ -619,19 +662,28 @@ const CUT_TEMPLATES = SWISS_TEMPLATES.filter(
   (t) => buildTemplateStages(t, { qualified: QUALIFIED, swissRounds: 3, poolCount: 2, legs: 1 }).length > 1,
 );
 
-/** Four seeded entrants; round 1 starts, so a late entrant takes (c) and misses round 1 (no bye row in it). The Swiss is
- *  played out with one strength order: the latecomer beats everyone, otherwise the better seed wins. Then completed
- *  through the real `completeStage`, which computes the tail's seed proposal. */
-/** The cut rig's Swiss rounds (the template's `swissRounds` knob). */
-const CUT_ROUNDS = 3;
+/** The cut rig's Swiss rounds (the template's `swissRounds` knob). Four, so that in `top-seed-first` the latecomer, who
+ *  plays three and can lose only to seed 1, ends on at least two wins: with five entrants that is always inside the
+ *  top four whatever the tie-breaks, so its seed — and the lower bound under it — is always asserted. */
+const CUT_ROUNDS = 4;
 
-async function toTheCut(template: string, kind: Kind) {
+/** Who wins a board in the cut rig. `latecomer-first`: the latecomer beats everyone, otherwise the better seed wins.
+ *  `top-seed-first` (review round 2): seed 1 beats everyone — the latecomer included — so seed 1 ends on CUT_ROUNDS wins
+ *  while the latecomer, who missed a round, holds at most CUT_ROUNDS − 1: a real "more points" set above it. */
+const CUT_ORDERS = ["latecomer-first", "top-seed-first"] as const;
+type CutOrder = (typeof CUT_ORDERS)[number];
+
+/** Four seeded entrants; round 1 starts, so a late entrant takes (c) and misses round 1 (no bye row in it). The Swiss is
+ *  played out in `order`, then completed through the real `completeStage`, which computes the tail's seed proposal. */
+async function toTheCut(template: string, kind: Kind, order: CutOrder = "latecomer-first") {
   const rig = await templateRig(template, kind, 4, CUT_ROUNDS);
   await pair(rig);
   await startBoard(rig, boardsOf(await rowsOf(rig.swissStageId), 1)[0]!);
   const late = await addLate(rig, "Late");
   expect(late.late_entry, "premise: the latecomer misses round 1").toMatchObject({ case: "c", round: 2 });
-  const strength = (id: string) => (id === late.id ? 0 : rig.entrants.indexOf(id) + 1);
+  const seedOf = (id: string) => rig.entrants.indexOf(id) + 1;
+  const strength = (id: string) =>
+    order === "latecomer-first" ? (id === late.id ? 0 : seedOf(id)) : id === late.id ? 1.5 : seedOf(id);
   const better = (f: Row) => (strength(f.home_entrant_id!) < strength(f.away_entrant_id!) ? f.home_entrant_id! : f.away_entrant_id!);
   for (let r = 1; r <= CUT_ROUNDS; r++) {
     if (r > 1) await pair(rig);
@@ -692,103 +744,112 @@ describe.runIf(HAS_DB)("X-SW-12 the cut carries a latecomer correctly", () => {
   });
 
   const cut = new Set<string>();
+  /** Templates that seeded a latecomer with a real "more points" set above it (review round 2: the lower bound bites). */
+  const moreAbove = new Set<string>();
   for (const template of CUT_TEMPLATES) {
     for (const kind of KINDS) {
-      it(`X-SW-12 the cut carries a latecomer correctly: ${template} × ${kind} (${sportOf(kind).key})`, async () => {
-        const { rig, late, rows, proposalId } = await toTheCut(template, kind);
-        // 0 for the missed round (ruling 251). The rig has the latecomer win every board it sits at, so its rows hold
-        // rounds 2 and 3 won and nothing for round 1 (a rig premise, not a witness).
-        const facts = recordOnRows(rows, late.id);
-        expect(facts.won, "premise: two wins, the rounds played").toBe(CUT_ROUNDS - 1);
-        // The witness (review m2): the Pair's history — the place a missed round could be credited as a bye — holds the
-        // two wins, not three. The stored fold has no implicit-bye path, so its record below is a structural guard.
-        const hist = await historyOf(rig);
-        expect(hist.score.get(late.id), "the Pair scores the missed round 0 (a bye-credit would make it 3)").toBe(CUT_ROUNDS - 1);
-        expect(hist.byes.has(late.id), "bye-ineligible only for a real bye row, never for the missed round").toBe(facts.byes > 0);
-        const table = await storedTable(rig.swissStageId);
-        const row = table.find((r) => r.entrantId === late.id);
-        expect(row, "the stored table lists the latecomer").toBeDefined();
-        expect({ played: row!.played, won: row!.won, lost: row!.lost, drawn: row!.drawn }, "the stored table: two rounds played, both won").toEqual({
-          played: CUT_ROUNDS - 1,
-          won: CUT_ROUNDS - 1,
-          lost: 0,
-          drawn: 0,
-        });
+      for (const order of CUT_ORDERS) {
+        it(`X-SW-12 the cut carries a latecomer correctly: ${template} × ${kind} (${sportOf(kind).key}), ${order}`, async () => {
+          const { rig, late, rows, proposalId } = await toTheCut(template, kind, order);
+          // 0 for the missed round (ruling 251): the latecomer's rows hold rounds 2 and 3 and nothing for round 1.
+          const facts = recordOnRows(rows, late.id);
+          expect(facts.won + facts.lost, "premise: the latecomer played every round but the missed one").toBe(CUT_ROUNDS - 1);
+          if (order === "latecomer-first") expect(facts.won, "premise: won every round played").toBe(CUT_ROUNDS - 1);
+          // The witness (review m2): the Pair's history — the place a missed round could be credited as a bye — holds
+          // only what was won (in latecomer-first, CUT_ROUNDS − 1, where a bye-credit would add one). The stored fold has no
+          // implicit-bye path; its record and points below are structural guards.
+          const hist = await historyOf(rig);
+          expect(hist.score.get(late.id) ?? 0, "the Pair scores the missed round 0").toBe(facts.won);
+          expect(hist.byes.has(late.id), "bye-ineligible only for a real bye row, never for the missed round").toBe(facts.byes > 0);
+          const table = await storedTable(rig.swissStageId);
+          const row = table.find((r) => r.entrantId === late.id);
+          expect(row, "the stored table lists the latecomer").toBeDefined();
+          expect({ played: row!.played, won: row!.won, lost: row!.lost, drawn: row!.drawn }, "the stored table: the rounds played").toEqual({
+            played: CUT_ROUNDS - 1,
+            won: facts.won,
+            lost: facts.lost,
+            drawn: 0,
+          });
 
-        // Review I1 — the rank oracle, independent of the stored table (stage-seeding reads that same snapshot, so it
-        // cannot judge it). Points are every Swiss table's first criterion. The sport's own Swiss points rule pays a loss
-        // nothing (premise, the engine's declaration), the rig plays no draws, and a bye scores as a win (rulebook §7):
-        // so the points order is the order of WINS, counted here off the fixture rows alone.
-        const declared = sportStageRule(rig.sport.module, rig.sport.module.variants[rig.sport.variant], "swiss");
-        expect(declared, "premise: the sport declares a Swiss points rule").not.toBeNull();
-        const lossPays = [declared!.rule.loss.regulation, ...Object.values(declared!.rule.bySetScore ?? {}).map(([, loser]) => loser)];
-        expect(lossPays, "premise: a loss pays nothing").toEqual(lossPays.map(() => 0));
-        expect(rows.filter((f) => f.outcome?.kind === "draw").length, "premise: no draws").toBe(0);
-        const field = [...rig.entrants, late.id];
-        const winsOf = new Map(field.map((id) => [id, recordOnRows(rows, id).won]));
-        expect(new Set(table.map((r) => r.entrantId)), "the stored table is the field").toEqual(new Set(field));
-        let ordered = 0;
-        for (let i = 1; i < table.length; i++) {
-          const [hi, lo] = [table[i - 1]!.entrantId, table[i]!.entrantId];
-          expect(winsOf.get(hi)!, `stored place ${i} has at least place ${i + 1}'s wins`).toBeGreaterThanOrEqual(winsOf.get(lo)!);
-          ordered++;
-        }
-        expect(ordered, "anti-vacuity: every neighbouring pair of the field").toBe(field.length - 1);
-        const lateWins = winsOf.get(late.id)!;
-        const above = field.filter((id) => winsOf.get(id)! > lateWins).length;
-        const level = field.filter((id) => winsOf.get(id)! === lateWins).length;
-        expect(above + level, "premise: the latecomer qualifies whatever the tie-breaks").toBeLessThanOrEqual(QUALIFIED);
+          // Review I1 + round 2 — the rank oracle, independent of the stored table (stage-seeding reads that same
+          // snapshot, so it cannot judge it). Points are every Swiss table's first criterion; each entrant's points are
+          // the sport's DECLARED rule over its fixture rows, a missed round paying 0. Every stored row must carry exactly
+          // those points, the stored order must never rise in them, and the latecomer's seed must sit below everyone
+          // with more and above everyone with fewer.
+          const pay = declaredPay(rig);
+          const field = [...rig.entrants, late.id];
+          const pointsOf = new Map(field.map((id) => [id, pointsOnRows(rows, id, pay)]));
+          expect(new Set(table.map((r) => r.entrantId)), "the stored table is the field").toEqual(new Set(field));
+          expect(await assertStoredPoints(rig, "at the cut"), "anti-vacuity: every stored row's points checked").toBe(field.length);
+          let ordered = 0;
+          for (let i = 1; i < table.length; i++) {
+            const [hi, lo] = [table[i - 1]!.entrantId, table[i]!.entrantId];
+            expect(pointsOf.get(hi)!, `stored place ${i} has at least place ${i + 1}'s points`).toBeGreaterThanOrEqual(pointsOf.get(lo)!);
+            ordered++;
+          }
+          expect(ordered, "anti-vacuity: every neighbouring pair of the field").toBe(field.length - 1);
+          const latePoints = pointsOf.get(late.id)!;
+          const above = field.filter((id) => pointsOf.get(id)! > latePoints).length;
+          const level = field.filter((id) => pointsOf.get(id)! === latePoints).length;
+          if (order === "top-seed-first") {
+            // Seed 1 won every board (round 1's included); the latecomer cannot have played that many.
+            expect(pointsOf.get(rig.entrants[0]!), "premise: seed 1 took every round").toBe(CUT_ROUNDS * pay.win);
+            expect(above, "a real set with more points than the latecomer").toBeGreaterThanOrEqual(1);
+          }
+          expect(above + level, "premise: the latecomer qualifies whatever the tie-breaks").toBeLessThanOrEqual(QUALIFIED);
 
-        const [proposal] = await sql<{ computed: { qualifiers: { rank: number; source: { rank: number }; entrantId: string; destinationSlot: string }[]; ties: { slots: string[]; entrantIds: string[] }[] } }[]>`
-          select computed from stage_seed_proposals where id = ${proposalId}`;
-        expect(proposal!.computed.qualifiers.length, "anti-vacuity: the cut took four").toBe(QUALIFIED);
-        const mine = proposal!.computed.qualifiers.find((q) => q.entrantId === late.id);
-        expect(mine, "the proposal seats the latecomer").toBeDefined();
-        const seed = mine!.rank;
-        // Seeded below everyone with more wins and above everyone with fewer (the rows' oracle); inside its win group the
-        // order is the engine's tie-break.
-        // FIDE C.07 16.2.3 (VUR — a missed round counts as a zero-point unplayed round in the tie-breaks) is NOT asserted:
-        // engine 1.1.0 does not implement it (an Engine PR 2.0.0 row), so the chess cells' in-group seed is the engine's
-        // non-VUR tie-break. App-B carry: assert it against VUR here once the engine 2.0.0 snapshot is installed.
-        expect(seed, "no entrant with more wins is seeded below the latecomer").toBeGreaterThanOrEqual(above + 1);
-        expect(seed, "no entrant with fewer wins is seeded above the latecomer").toBeLessThanOrEqual(above + level);
-        // The hand-off stays faithful: the stored place, the stored rank and the proposal's source rank are that seed.
-        const position = table.findIndex((r) => r.entrantId === late.id) + 1;
-        expect({ position, rank: row!.rank, sourceRank: mine!.source.rank }, "the cut carries the stored place").toEqual({
-          position: seed,
-          rank: seed,
-          sourceRank: seed,
-        });
-        // The day-one bracket's seed labels, read BEFORE the fill (a filled slot carries the entrant, not the label).
-        const labels = new Map<string, number | undefined>();
-        for (const f of await sql<{ id: string; home_slot_label: { seed?: number } | null; away_slot_label: { seed?: number } | null }[]>`
-          select id, home_slot_label, away_slot_label from fixtures where stage_id = ${rig.tailStageId!}`) {
-          labels.set(`${f.id}:home`, f.home_slot_label?.seed);
-          labels.set(`${f.id}:away`, f.away_slot_label?.seed);
-        }
-        // Confirm, resolving any flagged tie as the engine computed it (each slot keeps its computed qualifier).
-        const bySlot = new Map(proposal!.computed.qualifiers.map((q) => [q.destinationSlot, q.entrantId]));
-        await confirmSeedProposal(rig.auth, rig.tailStageId!, {
-          proposalId,
-          tiePicks: proposal!.computed.ties.map((t) => ({ slots: t.slots, order: t.slots.map((s) => bySlot.get(s)!) })),
-        });
-        // The bracket seats the latecomer on a slot the template's seeding labelled with that seed.
-        const seats = await sql<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
-          select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${rig.tailStageId!}`;
-        const seededAt = seats.flatMap((f) => [
-          ...(f.home_entrant_id === late.id ? [labels.get(`${f.id}:home`)] : []),
-          ...(f.away_entrant_id === late.id ? [labels.get(`${f.id}:away`)] : []),
-        ]);
-        expect(seededAt.length, "the latecomer holds a seat in the tail").toBeGreaterThan(0);
-        expect(new Set(seededAt), "every seat they hold was labelled with their seed").toEqual(new Set([seed]));
-        cut.add(`${template}|${kind}`);
-      }, 180_000);
+          const [proposal] = await sql<{ computed: { qualifiers: { rank: number; source: { rank: number }; entrantId: string; destinationSlot: string }[]; ties: { slots: string[]; entrantIds: string[] }[] } }[]>`
+            select computed from stage_seed_proposals where id = ${proposalId}`;
+          expect(proposal!.computed.qualifiers.length, "anti-vacuity: the cut took four").toBe(QUALIFIED);
+          const mine = proposal!.computed.qualifiers.find((q) => q.entrantId === late.id);
+          // FIDE C.07 16.2.3 (VUR — a missed round counts as a zero-point unplayed round in the tie-breaks) is NOT
+          // asserted: engine 1.1.0 does not implement it (an Engine PR 2.0.0 row), so the chess cells' order inside a
+          // points group is the engine's non-VUR tie-break. App-B carry: assert it against VUR here once the engine 2.0.0
+          // snapshot is installed.
+          expect(mine, "the proposal seats the latecomer").toBeDefined();
+          const seed = mine!.rank;
+          expect(seed, "no entrant with more points is seeded below the latecomer").toBeGreaterThanOrEqual(above + 1);
+          expect(seed, "no entrant with fewer points is seeded above the latecomer").toBeLessThanOrEqual(above + level);
+          if (above > 0) moreAbove.add(template);
+          // The hand-off stays faithful: the stored place, the stored rank and the proposal's source rank are that seed.
+          const position = table.findIndex((r) => r.entrantId === late.id) + 1;
+          expect({ position, rank: row!.rank, sourceRank: mine!.source.rank }, "the cut carries the stored place").toEqual({
+            position: seed,
+            rank: seed,
+            sourceRank: seed,
+          });
+          // The day-one bracket's seed labels, read BEFORE the fill (a filled slot carries the entrant, not the label).
+          const labels = new Map<string, number | undefined>();
+          for (const f of await sql<{ id: string; home_slot_label: { seed?: number } | null; away_slot_label: { seed?: number } | null }[]>`
+            select id, home_slot_label, away_slot_label from fixtures where stage_id = ${rig.tailStageId!}`) {
+            labels.set(`${f.id}:home`, f.home_slot_label?.seed);
+            labels.set(`${f.id}:away`, f.away_slot_label?.seed);
+          }
+          // Confirm, resolving any flagged tie as the engine computed it (each slot keeps its computed qualifier).
+          const bySlot = new Map(proposal!.computed.qualifiers.map((q) => [q.destinationSlot, q.entrantId]));
+          await confirmSeedProposal(rig.auth, rig.tailStageId!, {
+            proposalId,
+            tiePicks: proposal!.computed.ties.map((t) => ({ slots: t.slots, order: t.slots.map((s) => bySlot.get(s)!) })),
+          });
+          // The bracket seats the latecomer on a slot the template's seeding labelled with that seed.
+          const seats = await sql<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>`
+            select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${rig.tailStageId!}`;
+          const seededAt = seats.flatMap((f) => [
+            ...(f.home_entrant_id === late.id ? [labels.get(`${f.id}:home`)] : []),
+            ...(f.away_entrant_id === late.id ? [labels.get(`${f.id}:away`)] : []),
+          ]);
+          expect(seededAt.length, "the latecomer holds a seat in the tail").toBeGreaterThan(0);
+          expect(new Set(seededAt), "every seat they hold was labelled with their seed").toEqual(new Set([seed]));
+          cut.add(`${template}|${kind}|${order}`);
+        }, 180_000);
+      }
     }
   }
 
-  it("anti-vacuity: every tail template × kind was carried through the cut", () => {
+  it("anti-vacuity: every tail template × kind × order was carried through the cut", () => {
     expect(cut.size).toBeGreaterThan(0);
-    expect(cut.size).toBe(CUT_TEMPLATES.length * KINDS.length);
+    expect(cut.size).toBe(CUT_TEMPLATES.length * KINDS.length * CUT_ORDERS.length);
+    expect([...moreAbove].sort(), "every tail template seeded a latecomer with entrants above it on points").toEqual([...CUT_TEMPLATES].sort());
   });
 });
 
