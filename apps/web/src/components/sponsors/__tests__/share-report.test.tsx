@@ -12,6 +12,7 @@
 //   S3  two-step       Revoke sends at once (skip `setConfirming`)               -> "Revoke asks first"
 //   S4  once           Done keeps the url (skip `setCreated(null)`)              -> "the url is shown once"
 //   S5  period reset   drop the defaults render-phase reset (fix round 1, I1)     -> "a period change while the panel is open..."
+//   S5c scope clause   drop `seenDefaults.competitionId !== defaults.competitionId` -> "a change of competition ALONE..." (round 2, N2)
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
@@ -186,6 +187,17 @@ describe("a period change while the panel is open (fix round 1, I1: Next keeps c
     m.island.rerender(base({ defaults: { ...YEAR, to: "2026-11-01" } }));
     expect(propsOf(m.find("sponsor-share-from")).value, "a new period: reset").toBe(YEAR.from);
     expect(propsOf(m.find("sponsor-share-to")).value).toBe("2026-11-01");
+  });
+
+  it("a change of competition ALONE (same dates: two competitions made the same day, no start date) still resets typed dates", () => {
+    const sameDay = { from: "2026-11-01", to: "2026-11-01" };
+    const m = mount({ defaults: { ...sameDay, competitionId: "c1" }, competitionName: "Spring Cup" });
+    m.type("sponsor-share-from", "2026-10-01");
+    m.type("sponsor-share-to", "2026-10-31");
+    m.island.rerender(base({ defaults: { ...sameDay, competitionId: "c2" }, competitionName: "Autumn Cup" }));
+    expect(propsOf(m.find("sponsor-share-from")).value).toBe(sameDay.from);
+    expect(propsOf(m.find("sponsor-share-to")).value).toBe(sameDay.to);
+    expect(m.text("sponsor-share-competition")).toBe(msg("sponsors.share.competition", { competition: "Autumn Cup" }));
   });
 
   it("a url already on screen survives the period change (it is shown only once); Done then shows the form at the NEW dates", async () => {
