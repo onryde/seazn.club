@@ -78,6 +78,9 @@ export const VERDICTS: Record<string, true | string> = {
   "api/v1/capture/codes/[code]": true,
   "refer/[code]": "a referral link is shared in public on purpose; it only drops an attribution cookie",
   "(public)/r/[ref]": "a registration reference is a lookup, not auth; the emailed ?token= authorises a withdrawal",
+  // R4 S14: the sponsor report link IS a credential (32 random bytes; whoever holds it reads that sponsor's figures), though it
+  // sits under `/r/` beside the registration lookup above.
+  "(public)/r/sponsor/[token]": true,
   "api/v1/public/registrations/by-ref/[ref]": "the same reference; the withdrawal token rides the request body",
 };
 

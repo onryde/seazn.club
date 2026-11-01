@@ -39,6 +39,8 @@ import { USER_ID } from "./_fake-sql";
 import { VERDICTS, secretRoutes, SRC_DIR } from "./_route-scan";
 import { createInvite } from "@/server/usecases/invites";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
+import { mintReportToken } from "@/server/sponsors/report-token";
+import { reportLinkPath } from "@/lib/sponsor-report";
 import { routes } from "@/lib/routes";
 import { JoinInvite } from "@/components/join-invite";
 import { ClaimInvite } from "@/components/claim-invite";
@@ -64,17 +66,20 @@ const lowerHex = (value: string) => value.replace(/(%(?:25)*)([0-9A-F]{2})/g, (_
 const MINTS = 300;
 const INVITES: string[] = [];
 const CHECKINS: string[] = [];
+const REPORTS: string[] = [];
 const tomorrow = new Date(Date.now() + 24 * 3600_000);
 await (async () => {
   for (let i = 0; i < MINTS; i++) {
     const invite = await createInvite(randomUUID(), USER_ID, { role: i % 2 ? "admin" : "viewer", max_uses: 1 });
     INVITES.push(invite.token);
     CHECKINS.push(await mintCheckinToken(randomUUID(), tomorrow));
+    REPORTS.push(mintReportToken());
   }
 })();
 const KINDS: [string, string[]][] = [
   ["invite", INVITES],
   ["check-in", CHECKINS],
+  ["sponsor report", REPORTS],
 ];
 
 describe("premise: the tokens are real and varied", () => {
@@ -90,6 +95,10 @@ describe("premise: the tokens are real and varied", () => {
   });
   it("routes.checkin() is the page URL the organiser prints", () => {
     expect(routes.checkin(CHECKINS[0]!)).toBe(`/checkin/${CHECKINS[0]}`);
+  });
+  it("reportLinkPath() is the sponsor report URL the club shares (S13 builds it, S14 serves it)", () => {
+    expect(reportLinkPath(REPORTS[0]!)).toBe(`/r/sponsor/${REPORTS[0]}`);
+    expect(REPORTS.every((t) => /^[A-Za-z0-9_-]{43}$/.test(t)), "32 random bytes, base64url").toBe(true);
   });
 });
 
@@ -170,6 +179,7 @@ const PUBLIC_BUILDERS: Record<string, string> = {
   "/refer": "a referral link is shared in public on purpose",
   "/r": "a registration reference is a lookup, not auth",
   "/api/v1/public/registrations/by-ref": "the same reference, in the public API",
+  "/s": "a sponsor's short link is printed on the stream for every viewer on purpose; it only counts a click and redirects",
 };
 
 describe("every /<path>/${token} template is scrubbed, or is knowingly public", () => {
@@ -177,7 +187,7 @@ describe("every /<path>/${token} template is scrubbed, or is knowingly public", 
 
   it("the scan found the builders (anti-vacuity)", () => {
     expect([...builders.keys()].sort()).toEqual(
-      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/api/orgs/[id]/invites", "/score", "/api/v1/capture/codes", "/refer", "/r", "/api/v1/public/registrations/by-ref"]),
+      expect.arrayContaining(["/join", "/checkin", "/api/checkin", "/claim", "/api/claims", "/api/invites", "/api/orgs/[id]/invites", "/score", "/api/v1/capture/codes", "/refer", "/r", "/api/v1/public/registrations/by-ref", "/r/sponsor"]),
     );
     expect(builders.size).toBeGreaterThanOrEqual(12);
   });
@@ -303,6 +313,11 @@ describe("what must not be mangled", () => {
       "/uninvites/abc",
       `/api/v1/persons/${uuid}/claim-invites`,
       "/api/v1/me/officiating-claims",
+      // `/r/<ref>` is a registration lookup, not auth - a reference literally "sponsor" included - and `/r/sponsor/` is a
+      // route root only at the root.
+      "/r/RS-4K7Q2M",
+      "/r/sponsor",
+      "/o/acme/r/sponsor/not-a-root",
     ];
     let checked = 0;
     for (const p of notSecrets) {
@@ -318,7 +333,7 @@ describe("what must not be mangled", () => {
   });
 
   it("a prefix with no secret after it is left alone; the positive pair: the real routes DO lose the secret", () => {
-    for (const bare of ["/join/", "/checkin/", "/api/invites/", "/api/checkin/", `${ORIGIN}/join/?from=qr`]) expect(scrubScoreUrl(bare), bare).toBe(bare);
+    for (const bare of ["/join/", "/checkin/", "/api/invites/", "/api/checkin/", "/r/sponsor/", `${ORIGIN}/join/?from=qr`]) expect(scrubScoreUrl(bare), bare).toBe(bare);
     for (const p of [`/join/${INVITES[0]}`, `/checkin/${CHECKINS[0]}`, `/api/invites/${INVITES[0]}/claim`, `/api/orgs/${randomUUID()}/invites/${INVITES[1]}/revoke`]) {
       expect(scrubScoreUrl(`${ORIGIN}${p}?seen=%2Fjoin%2F`)).not.toMatch(new RegExp(`${INVITES[0]}|${CHECKINS[0]}|${INVITES[1]}`));
     }
@@ -348,6 +363,28 @@ describe("the hooks scrub them wherever an event carries one", () => {
       expect(JSON.stringify(out)).not.toContain(secret);
       expect(out!.properties.$pathname).toBe(without(pathname, secret));
     }
+  });
+
+  it("PostHog and Sentry: the sponsor report page (S14) - $current_url, $pathname, referrer, the transaction and a navigation breadcrumb", () => {
+    const report = REPORTS[0]!;
+    const url = `${ORIGIN}${reportLinkPath(report)}`;
+    const out = posthogBeforeSend({
+      uuid: "u2",
+      event: "$pageview",
+      properties: { $current_url: url, $pathname: reportLinkPath(report), $referrer: url },
+      $set_once: { $initial_current_url: url },
+    } as unknown as CaptureResult);
+    expect(out).not.toBeNull();
+    expect(JSON.stringify(out)).not.toContain(report);
+    expect(out!.properties.$pathname).toBe("/r/sponsor/[token]");
+    const event = scrubSentryEvent({
+      event_id: "e2",
+      transaction: `GET /r/sponsor/${report}`,
+      request: { url, headers: { Referer: url } },
+      breadcrumbs: [{ category: "navigation", data: { from: `${ORIGIN}/`, to: url } }],
+    } as Event);
+    expect(JSON.stringify(event)).not.toContain(report);
+    expect(event.transaction).toBe("GET /r/sponsor/[token]");
   });
 
   it("Sentry: request URL, transaction, breadcrumbs, spans, a replay's URL list and a recording frame", () => {

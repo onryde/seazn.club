@@ -148,7 +148,7 @@ export function CookieConsent() {
       // The buyers who see this banner are first-time buyers, which is every
       // buyer of a $29 pass. Nothing needs to sit above a modal; sticky headers
       // are z-40 too and this still beats them on the same DOM-order tie.
-      className="fixed bottom-4 left-4 right-20 z-40 mx-auto max-w-xl rounded-2xl border border-purple-100 bg-white p-4 shadow-xl sm:left-6 sm:right-auto sm:max-w-sm"
+      className="fixed bottom-4 left-4 right-20 z-40 mx-auto max-w-xl rounded-2xl border border-purple-100 bg-white p-4 shadow-xl sm:left-6 sm:right-auto sm:max-w-sm print:hidden"
     >
       <p className="text-sm text-slate-600">
         {clientCommon(locale, "cookie.message")}{" "}

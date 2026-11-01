@@ -14,6 +14,7 @@ import {
   fmtIsoDay,
   fmtOnScreen,
   isIsoDay,
+  linkWindow,
   overviewHref,
   periodWindow,
   reportLinkPath,
@@ -180,5 +181,40 @@ describe("fmtIsoDay - a link's date in the reader's locale, the UTC day it names
     // The day, not its neighbour: 1 January stays 1 January (a zone west of UTC would otherwise read 31 December).
     expect(fmtIsoDay("en", "2026-01-01")).toMatch(/2026/);
     expect(fmtIsoDay("en", "2026-01-01")).toMatch(/\b1\b/);
+  });
+});
+
+// R4 S14 - the public report's window (controller addendum 2026-11-01: S13's rule, `[from_date, to_date + 1 day)` in UTC). A link
+// carries INCLUSIVE dates, so the window is from 00:00 UTC of its first day to 00:00 UTC of the day AFTER its last. The expected
+// instants are typed from that rule by hand. `windowDates` is the inverse, so a window round-trips through a link.
+describe("linkWindow - a report link's inclusive dates as the half-open UTC window the report counts", () => {
+  it("from 00:00 UTC of the first day to 00:00 UTC of the day after the last - a one-day link, a month end, a year end, a leap day", () => {
+    const cases: [string, string, string, string][] = [
+      ["2026-06-15", "2026-06-15", "2026-06-15T00:00:00.000Z", "2026-06-16T00:00:00.000Z"],
+      ["2026-06-01", "2026-06-30", "2026-06-01T00:00:00.000Z", "2026-07-01T00:00:00.000Z"],
+      ["2026-01-01", "2026-12-31", "2026-01-01T00:00:00.000Z", "2027-01-01T00:00:00.000Z"],
+      ["2028-02-01", "2028-02-29", "2028-02-01T00:00:00.000Z", "2028-03-01T00:00:00.000Z"],
+    ];
+    let checked = 0;
+    for (const [from, to, wantFrom, wantTo] of cases) {
+      expect(linkWindow(from, to), `${from}..${to}`).toEqual({ from: at(wantFrom), to: at(wantTo) });
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+  });
+
+  it("round-trips with windowDates: the dates a window gives back are the dates it was made from (counted)", () => {
+    let checked = 0;
+    for (const [from, to] of [["2026-06-15", "2026-06-15"], ["2025-12-12", "2026-01-10"], ["2028-02-29", "2028-03-01"]] as const) {
+      expect(windowDates(linkWindow(from, to)), `${from}..${to}`).toEqual({ from, to });
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("refuses what is not a pair of real dates in order - by name, never a NaN or an inverted window", () => {
+    const bad: [string, string][] = [["2026-02-30", "2026-03-01"], ["2026-06-01T00:00", "2026-06-02"], ["", "2026-06-02"], ["2026-06-02", "2026-06-01"]];
+    for (const [from, to] of bad) expect(() => linkWindow(from, to), `${from}..${to}`).toThrow(RangeError);
+    expect(bad.length).toBe(4);
   });
 });

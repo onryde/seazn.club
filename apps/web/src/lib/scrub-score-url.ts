@@ -43,7 +43,7 @@
 // `/api/auth/change-email/confirm`. Sentry's `request.query_string` has no path to scope by, so it is scrubbed when the
 // event's URL or transaction names one of those routes, the way a capture route's request is recognised (`isCaptureEvent`).
 //
-// Three more credentials carry themselves in the PATH, and become `[token]` after their prefix, plain or URL-encoded at
+// Four more credentials carry themselves in the PATH, and become `[token]` after their prefix, plain or URL-encoded at
 // any depth, by the `/capture/codes/` rules (`SECRET_PATH_ROUTES`). Each is a ROUTE ROOT and is matched only there (the start
 // of a path, after an origin, or after the marketing locale prefix): a club or competition slug is free text, so
 // `/o/x/c/join/d/claim` is an address and not a secret (`ROUTE_ROOT`):
@@ -55,8 +55,11 @@
 //    screen masks the token on purpose;
 //  - the fixture check-in code `/checkin/<token>` and `/api/checkin/<token>` (an HS256 JWT valid until the fixture's local
 //    midnight; checkin-token.ts): it is the proof of presence at the venue, so it is a credential, not a public address.
-// Left alone: `/refer/<code>` (a referral link is shared in public on purpose) and `/r/<ref>` (a lookup, not auth; the
-// emailed `token` is what authorises a withdrawal).
+//  - the sponsor report link `/r/sponsor/<token>` (32 random bytes, base64url; until the club revokes it; R4 S14): whoever
+//    holds it reads that sponsor's figures and frames, with no login - a bearer credential, though it sits under `/r/`.
+// Left alone: `/refer/<code>` (a referral link is shared in public on purpose) and the registration reference `/r/<ref>` (a
+// lookup, not auth; the emailed `token` is what authorises a withdrawal) - a reference literally `sponsor` included, since
+// only a segment AFTER `/r/sponsor/` is a credential.
 //
 // A team's JOIN CODE is a capability too (`generateRefCode`, 30^6): whoever holds it can join the entry. It rides the register
 // pages as `?join_code=<code>[&player_id=…]` (the join page and its preview request) and as `?join=<code>` (the register
@@ -151,14 +154,16 @@ const ENCODED_ROOM_TOKEN = new RegExp(`(%(?:25)*(?:3[Ff]|26)t%(?:25)*3[Dd])${JWT
 /**
  * Route prefixes whose NEXT segment is a credential: the profile-claim secret (`/claim/<secret>` and the accept call
  * `/api/claims/<secret>/accept`), the org-invite token (`/join/<token>` and `/api/invites/<token>[/accept|/claim]`; the
- * revoke call `/api/orgs/<id>/invites/<token>/revoke`) and the day's check-in code (`/checkin/<token>`,
- * `/api/checkin/<token>`). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`, `/checkin-link` and
+ * revoke call `/api/orgs/<id>/invites/<token>/revoke`), the day's check-in code (`/checkin/<token>`,
+ * `/api/checkin/<token>`) and the sponsor report link (`/r/sponsor/<token>`, R4 S14). Each is spelled with its trailing slash, so `/claims/…`, `/joined/…`, `/checkin-link` and
  * `/register/join` (a public page with nothing after it) do not match, and `[id]` stands for one path segment.
  *
  * Every one is a ROUTE ROOT, and is matched there only (`ROUTE_ROOT`): a club or competition slug is free text, so
  * `/o/x/c/join/d/claim` is an address and not a secret. They are spelled in full, not by their shortest tail, for the same
  * reason: `/invites/` alone would match any segment named `invites` anywhere.
- * Not here, on purpose: `/refer/<code>` (a referral link is shared in public) and `/r/<ref>` (a lookup, not auth).
+ * Not here, on purpose: `/refer/<code>` (a referral link is shared in public) and the registration reference `/r/<ref>` (a
+ * lookup, not auth; `/r/sponsor/` above is the one credential under `/r/`, and a reference that reads `sponsor` has nothing
+ * after it).
  */
 const SECRET_PATH_ROUTES = [
   "/claim/",
@@ -168,6 +173,7 @@ const SECRET_PATH_ROUTES = [
   "/api/checkin/",
   "/api/invites/",
   "/api/orgs/[id]/invites/",
+  "/r/sponsor/",
 ] as const;
 /** The marketing locale prefix (`/fr/pricing`): a route root may follow it. */
 const LOCALE_PREFIX = LOCALES.join("|");

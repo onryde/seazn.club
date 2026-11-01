@@ -11,6 +11,8 @@ import { mintClaimSecret } from "@/server/usecases/person-claims";
 import { createInvite } from "@/server/usecases/invites";
 import { mintCheckinToken } from "@/server/usecases/checkin-token";
 import { mintMatchRoomToken } from "@/server/usecases/match-room-token";
+import { mintReportToken } from "@/server/sponsors/report-token";
+import { reportLinkPath } from "@/lib/sponsor-report";
 import { REPLAY_INTEGRATION_NAME } from "@/lib/replay-guard";
 import { USER_ID } from "./_fake-sql";
 
@@ -28,6 +30,7 @@ export async function credentialPages(): Promise<{ name: string; url: string; se
   const verify = await createVerificationToken(USER_ID);
   const room = await mintMatchRoomToken({ fixtureId: randomUUID(), personId: randomUUID(), roundOpenId: randomUUID(), roundOpenedAt: new Date().toISOString() });
   const play = routes.sharedFixturePlay("chess-club", "autumn-open", "open", randomUUID(), room);
+  const report = mintReportToken();
   const pages = [
     { name: "device-link scorer page", url: `${ORIGIN}/score/${TOKEN}`, secrets: [TOKEN] },
     { name: "profile claim", url: `${ORIGIN}${routes.claim(claim)}`, secrets: [claim] },
@@ -41,6 +44,9 @@ export async function credentialPages(): Promise<{ name: string; url: string; se
     { name: "personal match room", url: `${ORIGIN}${play}`, secrets: [room] },
     { name: "sign-in carrying a claim in next", url: `${ORIGIN}/login?next=${encodeURIComponent(routes.claim(claim))}`, secrets: [claim] },
     { name: "claim with a hash", url: `${ORIGIN}${routes.claim(claim)}#top`, secrets: [claim] },
+    { name: "sponsor report (S14)", url: `${ORIGIN}${reportLinkPath(report)}`, secrets: [report] },
+    { name: "sponsor report under a locale prefix", url: `${ORIGIN}/nl${reportLinkPath(report)}`, secrets: [report] },
+    { name: "sponsor report, as a router href (path only)", url: reportLinkPath(report), secrets: [report] },
   ];
   for (const p of pages) for (const s of p.secrets) expect(p.url, `premise: ${p.name} carries its secret`).toContain(s);
   return pages;

@@ -65,6 +65,9 @@ const ORDINARY_PAGES = [
   `${ORIGIN}/magic-link?next=%2Fdashboard`,
   `${ORIGIN}/shared/chess-club/autumn-open/open/fixtures/00000000-0000-4000-8000-000000000003`,
   `${ORIGIN}/o/acme/c/spring/d/open/join/claim`,
+  // A registration reference is a lookup, not auth - a reference literally "sponsor" included; only /r/sponsor/<token> holds one.
+  `${ORIGIN}/r/RS-4K7Q2M`,
+  `${ORIGIN}/r/sponsor`,
   "/dashboard",
   "/",
 ];
