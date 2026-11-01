@@ -96,8 +96,9 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   const goldClicks = new RegExp(`data-testid="sponsor-overview-row-${goldId}"[\\s\\S]*?data-testid="sponsor-overview-clicks"[^>]*>([\\d,.\\u00a0\\u202f]+)<`)
     .exec(overview.body)?.[1];
   check(
+    // Exactly one: the gold sponsor is new this run (`tag`), and the one /s/ click above is its only click row.
     "sponsors: the Overview lists the gold sponsor with the click recorded above",
-    overview.status === 200 && goldClicks !== undefined && Number(goldClicks.replace(/\D/g, "")) >= 1,
+    overview.status === 200 && goldClicks !== undefined && Number(goldClicks.replace(/\D/g, "")) === 1,
   );
   const created = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${goldId}/report-links`, "POST", { competitionId: null, from: "2026-01-01", to: "2026-12-31" });
   const link = created.status === 201 ? v1data<{ id: string; url: string }>(created) : null;

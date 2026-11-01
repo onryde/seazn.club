@@ -31,7 +31,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type postgres from "postgres";
 import { withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { EDITOR_ROLES } from "@/lib/types";
+import { mayHoldBearerCredential } from "@/lib/types";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { ENDS_BEFORE_STARTS } from "@/server/api-v1/schemas";
 import {
@@ -61,12 +61,11 @@ function assertOrg(auth: AuthCtx, orgId: string): void {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
 }
 
-/** R19: only an editor (owner / admin) may create, revoke or list report links. An API key resolves role null and is
- *  refused here too (the routes never admit one: NEVER_KEY_ROUTES). */
+/** R19: only an editor (owner / admin) may create, revoke or list report links - a link is a bearer credential to a
+ *  sponsor's numbers, so the house rule for who may hold one (`mayHoldBearerCredential`, lib/types.ts) decides. An API key
+ *  resolves role null and is refused here too (the routes never admit one: NEVER_KEY_ROUTES). */
 function assertEditor(auth: AuthCtx): void {
-  if (auth.role === null || !(EDITOR_ROLES as readonly string[]).includes(auth.role)) {
-    throw new HttpError(403, "Insufficient permissions");
-  }
+  if (!mayHoldBearerCredential(auth.role)) throw new HttpError(403, "Insufficient permissions");
 }
 
 async function assertCompetition(tx: Tx, orgId: string, competitionId: string): Promise<void> {

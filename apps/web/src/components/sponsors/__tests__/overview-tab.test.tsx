@@ -20,6 +20,7 @@
 //   U2  share editor-only  drop `canEdit &&` on the share cell                -> "R19: a viewer"
 //   U3  deleted no link  drop `row.sponsorId !== null &&` on the button       -> "a deleted sponsor"
 //   U4  picker value     `onChange` pushes overviewHref(orgSlug, THIS_YEAR)   -> "the picker"
+//   U5  competition note  drop `period.kind === "competition" &&`              -> "the competition-click footnote..." (fix round 1, m4)
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
@@ -142,14 +143,25 @@ describe("the rows", () => {
       const cell = (field: string) => flat(textOf(m.byTestId(`sponsor-overview-${field}`).find((e) => (propsOf(e)["data-row"] as string) === k)!));
       expect(cell("times"), r.name).toBe(String(r.timesShown));
       expect(cell("onscreen"), r.name).toBe(fmtOnScreen("en", r.onScreenMs));
-      expect(cell("clicks"), r.name).toBe(r.linkClicks === null ? DASH : String(r.linkClicks));
-      if (r.viewerImpressions === null) expect(cell("viewers"), r.name).toBe(DASH);
+      // A missing value is the dash on screen plus words for a screen reader (fix round 1, m7): "not measured" for viewers,
+      // "not available" for a deleted sponsor's clicks (they went with it).
+      expect(cell("clicks"), r.name).toBe(r.linkClicks === null ? `${DASH} ${msg("sponsors.overview.notAvailable")}` : String(r.linkClicks));
+      if (r.viewerImpressions === null) expect(cell("viewers"), r.name).toBe(`${DASH} ${msg("sponsors.overview.notMeasured")}`);
       else expect(cell("viewers"), r.name).toBe(flat(`${r.viewerImpressions.toLocaleString("en")} ${msg("sponsors.overview.peak", { count: r.peakViewers!.toLocaleString("en") })}`));
       checked++;
     }
     expect(checked).toBe(ROWS.length);
     // Zero is a number, not a dash: Ridge's 0 clicks read 0.
     expect(m.island.text()).toContain(fmtOnScreen("en", 252_000));
+  });
+
+  it("every dash is hidden from screen readers and spoken as words instead (counted)", () => {
+    const m = mount();
+    const dashes = m.island.tree().filter((e) => e.type === "span" && textOf(e) === DASH);
+    expect(dashes.length, "Gone's clicks + Harbour's and Gone's viewers").toBe(3);
+    for (const d of dashes) expect(propsOf(d)["aria-hidden"]).toBe("true");
+    const spoken = m.island.tree().filter((e) => e.type === "span" && String(propsOf(e).className) === "sr-only").map((e) => textOf(e)).sort();
+    expect(spoken).toEqual([msg("sponsors.overview.notAvailable"), msg("sponsors.overview.notMeasured"), msg("sponsors.overview.notMeasured")].sort());
   });
 
   it("every stat carries its label in the row (the phone card's line, the desktop's screen-reader name), in order", () => {
@@ -184,6 +196,27 @@ describe("the rows", () => {
     expect(m.text("sponsor-overview-notes")).toContain(msg("sponsors.overview.deletedFootnote"));
     // With no deleted row, that note is not shown.
     expect(mount({ rows: ROWS.slice(0, 2) }).text("sponsor-overview-notes")).not.toContain(msg("sponsors.overview.deletedFootnote"));
+  });
+
+  it("the competition-click footnote shows for a competition period only, naming the two time periods by their own labels (counted)", () => {
+    const want = msg("sponsors.overview.competitionClicksFootnote", {
+      thisYear: msg("sponsors.overview.period.this_year"),
+      last30: msg("sponsors.overview.period.last_30_days"),
+    });
+    const cases: [SponsorPeriod, boolean][] = [
+      [{ kind: "this_year" }, false],
+      [{ kind: "last_30_days" }, false],
+      [{ kind: "competition", competitionId: COMPETITIONS[0]!.id }, true],
+    ];
+    let checked = 0;
+    for (const [period, shown] of cases) {
+      const m = mount({ period });
+      expect(m.has("sponsor-overview-competition-clicks-note"), period.kind).toBe(shown);
+      if (shown) expect(m.text("sponsor-overview-competition-clicks-note")).toBe(flat(want));
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(want).toContain(msg("sponsors.overview.period.this_year"));
   });
 
   it("the notes carry the link-click footnote exactly, and never call clicks visitors or people", () => {

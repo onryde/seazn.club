@@ -72,7 +72,15 @@ export function OverviewTab(props: OverviewTabProps) {
   const cols = sharable ? "md:grid-cols-[minmax(0,1fr)_24rem_7.5rem]" : "md:grid-cols-[minmax(0,1fr)_24rem]";
   const hasDeleted = rows.some((r) => r.sponsorId === null);
 
-  const count = (n: number | null) => (n === null ? DASH : fmtNumber(locale, n));
+  /** A value the server does not have: the dash on screen, and words for a screen reader (which would read "em dash"). */
+  const dash = (spoken: string) => (
+    <>
+      <span aria-hidden="true">{DASH}</span>
+      <span className="sr-only">{spoken}</span>
+    </>
+  );
+  /** A count, or - for a deleted sponsor's clicks, which went with it - a dash read as "not available". */
+  const count = (n: number | null) => (n === null ? dash(msg("sponsors.overview.notAvailable")) : fmtNumber(locale, n));
   /** One number with its label: a labelled line on a phone card, a right-aligned cell under the header from `md`. */
   const stat = (key: string, field: string, label: string, value: React.ReactNode, accent = false) => (
     <div className="flex min-w-0 items-baseline justify-between gap-3 md:block md:text-right">
@@ -170,7 +178,7 @@ export function OverviewTab(props: OverviewTabProps) {
                         "viewers",
                         msg("sponsors.overview.col.viewerImpressions"),
                         r.viewerImpressions === null ? (
-                          DASH
+                          dash(msg("sponsors.overview.notMeasured"))
                         ) : (
                           <>
                             {count(r.viewerImpressions)}
@@ -225,6 +233,17 @@ export function OverviewTab(props: OverviewTabProps) {
           <div>
             <dt className="inline font-medium text-slate-600">{msg("sponsors.overview.col.linkClicks")}</dt>{" "}
             <dd className="inline">{msg("sponsors.overview.clicksFootnote")}</dd>
+            {period.kind === "competition" && (
+              <>
+                {" "}
+                <dd className="inline" data-testid="sponsor-overview-competition-clicks-note">
+                  {msg("sponsors.overview.competitionClicksFootnote", {
+                    thisYear: msg("sponsors.overview.period.this_year"),
+                    last30: msg("sponsors.overview.period.last_30_days"),
+                  })}
+                </dd>
+              </>
+            )}
           </div>
           <div>
             <dt className="inline font-medium text-slate-600">{msg("sponsors.overview.airingsTerm")}</dt>{" "}

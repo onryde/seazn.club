@@ -36,6 +36,21 @@ export function ShareReport(props: ShareReportProps) {
 
   const [from, setFrom] = useState(defaults.from);
   const [to, setTo] = useState(defaults.to);
+  // The period picker is a `router.push` to the same page with a new `?period=`, and Next keeps client state across a
+  // search-param navigation - so an open panel would keep the OLD period's dates while `defaults.competitionId` follows the
+  // new one, and Create would mint a link with one period's scope and another's dates. When the defaults' VALUES change, the
+  // form re-opens at them (render-phase reset, never an effect). Compared by value: a refresh that hands the same period back
+  // as a new object keeps what the organiser typed. A url already on screen is kept - it is shown only this once.
+  const [seenDefaults, setSeenDefaults] = useState(defaults);
+  if (
+    seenDefaults.from !== defaults.from ||
+    seenDefaults.to !== defaults.to ||
+    seenDefaults.competitionId !== defaults.competitionId
+  ) {
+    setSeenDefaults(defaults);
+    setFrom(defaults.from);
+    setTo(defaults.to);
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** The absolute url, while it is on screen - the only copy that exists. */
@@ -126,7 +141,7 @@ export function ShareReport(props: ShareReportProps) {
           <input
             id={`${id}-url`}
             data-testid="sponsor-share-url"
-            className="input min-w-0 text-xs"
+            className="ph-no-capture input min-w-0 text-xs"
             readOnly
             value={created}
             onFocus={(e) => e.target.select()}
