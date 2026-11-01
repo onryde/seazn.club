@@ -16,31 +16,44 @@
 // Needs you (spec §6.3, §9; task A4): on a match day the competition's whole Needs-you list lives HERE, behind one attention
 // button in the header — "11 need you · 3 results owed" — that opens the desk's own list (`NeedsYou`, reused) with the results
 // owed first, each with Enter result. No list, no button. A middle-dot line never leaves a dot dangling at a wrap (`DotLine`).
+//
+// Task B4 (owner rulings Q1, 2026-10-31):
+//  - "Playing, no court": the matches in play with no court (an untimed bracket match, an online board) list under the courts
+//    and open a panel of their own (`NoCourtFocus`) — and on a day with no courts at all they ARE the list, rather than "No
+//    courts to run yet". Only a day with neither says so, and says what to do;
+//  - a view-only member (`readOnly`) gets the same page with nothing that writes, and without the Needs-you list;
+//  - Needs you's unscheduled row carries "Find a court": the first free court's candidates, opened in place (`?court=` when
+//    the link is opened another way), or back to the list when no court is free.
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicDate } from "@/lib/format";
 import type { Dict, Locale } from "@/lib/i18n-constants";
-import { plural, t } from "@/lib/i18n-runtime";
+import { t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import type { Severity } from "@/lib/division-phase";
 import type { MatchDayView } from "@/lib/match-day/types";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
-  courtCounts,
   filterCourts,
+  filterNoCourt,
+  firstFreeCourt,
+  headerCountParts,
   isLive,
   isMatchDayView,
+  matchLabel,
   needsYouButtonParts,
   needsYouOrder,
   needsYouTone,
   resolveFocus,
   sharedNoun,
+  withFindCourt,
+  type Opened,
 } from "@/lib/match-day/view";
 import { browserBandPollDeps, startBandPolling } from "@/components/v2/desk/band-poll";
 import { NeedsYou } from "@/components/v2/desk/needs-you";
-import { CourtFocus, type MatchDayCtx } from "./court-focus";
-import { CourtList } from "./court-list";
+import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court-focus";
+import { CourtList, NoCourtList } from "./court-list";
 
 export interface MatchDayShellProps {
   competitionId: string;
@@ -57,6 +70,10 @@ export interface MatchDayShellProps {
   scoreDict: Dict;
   /** The organisation's plan class, for the scorer QR's paywall copy. */
   viewerPlan: ViewerPlan;
+  /** A member who may view but not edit (B4, owner ruling Q1b): the page with nothing that writes. */
+  readOnly?: boolean;
+  /** `?court=<id>`: the court to open first (Needs you's "Find a court" link, opened another way). Ignored when not on the list. */
+  focusCourtId?: string | null;
 }
 
 export function MatchDayShell({
@@ -70,12 +87,18 @@ export function MatchDayShell({
   dict,
   scoreDict,
   viewerPlan,
+  readOnly = false,
+  focusCourtId = null,
 }: MatchDayShellProps) {
   const [view, setView] = useState<MatchDayView>(initial);
   /** The court the organiser opened (its name kept to say so if it leaves the list); null until one is. */
-  const [opened, setOpened] = useState<{ id: string; name: string } | null>(null);
-  /** On a phone: the list (false) or one court full-screen (true). Desktop shows both and ignores it. */
-  const [phoneOpen, setPhoneOpen] = useState(false);
+  const [opened, setOpened] = useState<Opened | null>(() => {
+    const court = focusCourtId === null ? undefined : initial.courts.find((c) => c.court_id === focusCourtId);
+    return court === undefined ? null : { kind: "court", id: court.court_id, name: court.court_name };
+  });
+  /** On a phone: the list (false) or one court full-screen (true). Desktop shows both and ignores it. A `?court=` that names a
+   *  court on the list opens it full-screen, as tapping it would. */
+  const [phoneOpen, setPhoneOpen] = useState(() => opened !== null);
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [notice, setNotice] = useState<{ courtId: string; message: string } | null>(null);
   /** The Needs-you list, open under the header. */
@@ -96,27 +119,49 @@ export function MatchDayShell({
 
   const filter = chosen.size === 0 ? null : chosen;
   const courts = useMemo(() => filterCourts(view.courts, filter), [view.courts, filter]);
-  const focus = resolveFocus(courts, opened);
+  const noCourt = useMemo(() => filterNoCourt(view.playing_no_court, filter), [view.playing_no_court, filter]);
+  const focus = resolveFocus(courts, noCourt, opened);
   const focused = focus.kind === "court" ? focus.court : null;
+  const focusedMatch = focus.kind === "match" ? focus.fixture : null;
   // A phone whose court left the list is back on the list (review M6b): it stays there when the court returns, rather than
   // jumping back into a court the organiser was told had gone. React's render-phase adjustment, not an effect.
   if (phoneOpen && focus.kind === "lost") setPhoneOpen(false);
   // Same adjustment for the Needs-you list (fix round 1, m5): once a poll empties it, the button goes and the list is CLOSED,
-  // so rows arriving later bring the button back closed rather than reopening the list unasked.
-  if (needsOpen && view.needs_you.length === 0) setNeedsOpen(false);
-  /** A phone shows one court full-screen only while the court it opened is still there. */
-  const phoneCourt = phoneOpen && focused !== null;
-  const counts = courtCounts(courts);
+  // so rows arriving later bring the button back closed rather than reopening the list unasked. A view-only reader never has it.
+  const needsYou = readOnly ? [] : view.needs_you;
+  if (needsOpen && needsYou.length === 0) setNeedsOpen(false);
+  /** A phone shows one court (or match) full-screen only while what it opened is still there. */
+  const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : view.courts);
-  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan };
-  const needsTone = needsYouTone(view.needs_you);
+  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly };
+  const needsTone = needsYouTone(needsYou);
+  const matchDayHref = routes.competitionMatchDay(orgSlug, compSlug);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
 
+  const toTop = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches) window.scrollTo({ top: 0 });
+  };
   const open = (courtId: string) => {
-    setOpened({ id: courtId, name: courts.find((c) => c.court_id === courtId)?.court_name ?? "" });
+    setOpened({ kind: "court", id: courtId, name: courts.find((c) => c.court_id === courtId)?.court_name ?? "" });
     setNotice((n) => (n !== null && n.courtId === courtId ? n : null));
     setPhoneOpen(true);
-    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches) window.scrollTo({ top: 0 });
+    toTop();
+  };
+  const openMatch = (f: MatchDayView["playing_no_court"][number]) => {
+    setOpened({ kind: "match", id: f.id, name: matchLabel(dict, f) });
+    setNotice(null);
+    setPhoneOpen(true);
+    toTop();
+  };
+  /** Needs you's "Find a court", in place: the first free court opened (its candidates), or the list when none is free. */
+  const findCourt = () => {
+    setNeedsOpen(false);
+    const free = firstFreeCourt(courts);
+    if (free !== null) open(free.court_id);
+    else {
+      setPhoneOpen(false);
+      toTop();
+    }
   };
   const toggle = (divisionId: string) =>
     setChosen((prev) => {
@@ -146,12 +191,13 @@ export function MatchDayShell({
             <DotLine
               testId="md-counts"
               className="mt-0.5 text-sm text-slate-600"
-              parts={[
-                plural(dict, `matchDay.header.places.${noun}`, counts.courts, locale),
-                t(dict, "matchDay.header.playing", { count: counts.playing }),
-                t(dict, "matchDay.header.free", { count: counts.free }),
-              ]}
+              parts={headerCountParts(dict, locale, noun, courts, noCourt.length)}
             />
+            {readOnly && (
+              <p data-testid="md-read-only" className="mt-2 text-xs text-slate-600">
+                {t(dict, "matchDay.readOnly")}
+              </p>
+            )}
           </div>
           {needsTone !== null && (
             <button
@@ -164,7 +210,7 @@ export function MatchDayShell({
               className={`inline-flex min-h-11 min-w-0 shrink-0 items-center gap-2.5 rounded-xl px-3.5 py-2 text-left text-sm font-semibold ring-1 ring-inset transition max-md:w-full md:max-w-[22rem] ${NEEDS_TONE[needsTone]}`}
             >
               <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${NEEDS_DOT[needsTone]}`} />
-              <DotLine className="min-w-0 flex-1" parts={needsYouButtonParts(dict, view, locale)} />
+              <DotLine className="min-w-0 flex-1" parts={needsYouButtonParts(dict, { ...view, needs_you: needsYou }, locale)} />
               <svg
                 aria-hidden
                 viewBox="0 0 16 16"
@@ -180,7 +226,13 @@ export function MatchDayShell({
         </div>
         {needsTone !== null && (
           <div id={needsId} data-testid="md-needs-you" hidden={!needsOpen} className="mt-4 min-w-0 [&_[data-testid=desk-needs-you]]:mb-0">
-            {needsOpen && <NeedsYou dict={dict} items={needsYouOrder(view.needs_you)} />}
+            {needsOpen && (
+              <NeedsYou
+                dict={dict}
+                items={withFindCourt(dict, needsYouOrder(needsYou), view.courts, matchDayHref)}
+                onAlt={findCourt}
+              />
+            )}
           </div>
         )}
         {divisions.length > 1 && (
@@ -209,7 +261,7 @@ export function MatchDayShell({
         )}
       </header>
 
-      {courts.length === 0 ? (
+      {courts.length === 0 && noCourt.length === 0 ? (
         <div data-testid="md-empty" className="card p-6">
           <p className="font-semibold text-slate-900">{t(dict, "matchDay.empty.title")}</p>
           <p className="mt-1 text-sm text-slate-600">
@@ -229,8 +281,16 @@ export function MatchDayShell({
               <p className="mt-1 text-sm text-slate-600">{t(dict, "matchDay.focus.pick")}</p>
             </div>
           )}
-          <div data-testid="md-list" className={`min-w-0 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
-            <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} onSelect={open} />
+          <div data-testid="md-list" className={`grid min-w-0 gap-5 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
+            {courts.length > 0 && <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} onSelect={open} />}
+            <NoCourtList
+              fixtures={noCourt}
+              selectedId={focusedMatch?.id ?? null}
+              dict={dict}
+              hrefOf={(f) => fixtureHref(ctx, f)}
+              openLabel={t(dict, readOnly ? "matchDay.focus.openMatch" : "matchDay.focus.openPad")}
+              onSelect={openMatch}
+            />
           </div>
           {focused !== null && (
             <CourtFocus
@@ -250,6 +310,17 @@ export function MatchDayShell({
               onDismissNotice={() => setNotice(null)}
               refreshKey={view.now}
               divisions={filter}
+              hiddenOnPhone={!phoneCourt}
+            />
+          )}
+          {focusedMatch !== null && (
+            <NoCourtFocus
+              key={focusedMatch.id}
+              ctx={ctx}
+              fixture={focusedMatch}
+              backLabel={t(dict, courts.length > 0 ? `matchDay.back.${noun}` : "matchDay.back.list")}
+              onBack={() => setPhoneOpen(false)}
+              onChanged={() => void refresh()}
               hiddenOnPhone={!phoneCourt}
             />
           )}

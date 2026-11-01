@@ -66,9 +66,31 @@ export function courtCounts(courts: readonly Pick<MatchDayCourt, "state">[]): Co
   return { courts: courts.length, playing, free };
 }
 
-/** Whether anything on the page is moving: a match playing or called. Decides the poll's cadence (band-poll.ts). */
-export function isLive(view: Pick<MatchDayView, "courts">): boolean {
-  return view.courts.some((c) => c.state === "playing" || c.state === "called");
+/** Whether anything on the page is moving: a match playing or called — on a court, or playing on none (B4). Decides the poll's
+ *  cadence (band-poll.ts). */
+export function isLive(view: Pick<MatchDayView, "courts" | "playing_no_court">): boolean {
+  return view.playing_no_court.length > 0 || view.courts.some((c) => c.state === "playing" || c.state === "called");
+}
+
+/** The header's counts line (§6.3, B4): "N courts · N playing · N free", then the matches playing on no court when there are
+ *  any ("1 match with no court"). With no courts at all the court words say nothing — "0 playing · 0 free" — so the line is the
+ *  no-court count alone, or "0 courts" when there is nothing either (the empty page). */
+export function headerCountParts(
+  dict: Dict,
+  locale: Locale,
+  noun: VenueNoun,
+  courts: readonly Pick<MatchDayCourt, "state">[],
+  noCourt: number,
+): string[] {
+  const counts = courtCounts(courts);
+  const noCourtPart = noCourt > 0 ? [plural(dict, "matchDay.header.noCourt", noCourt, locale)] : [];
+  if (counts.courts === 0) return noCourtPart.length > 0 ? noCourtPart : [plural(dict, `matchDay.header.places.${noun}`, 0, locale)];
+  return [
+    plural(dict, `matchDay.header.places.${noun}`, counts.courts, locale),
+    t(dict, "matchDay.header.playing", { count: counts.playing }),
+    t(dict, "matchDay.header.free", { count: counts.free }),
+    ...noCourtPart,
+  ];
 }
 
 /** The division filter (§6.3): `null` is every division, the default. Otherwise it narrows each court's queue to the chosen
@@ -86,18 +108,62 @@ export function filterCourts(courts: readonly MatchDayCourt[], divisions: Readon
   return out;
 }
 
-/** What is focused (§6.1, review M6): the court the organiser opened while it is still on the list; none opened yet → the first
- *  court (the desktop's default); the opened court gone from the list (the filter dropped it, or the day moved on) → `lost`,
- *  named — the page goes back to the list rather than silently showing a different court. */
+/** The same filter on the "Playing, no court" group (B4): every match, or only the chosen divisions'. */
+export function filterNoCourt(fixtures: readonly MatchDayFixture[], divisions: ReadonlySet<string> | null): MatchDayFixture[] {
+  return divisions === null ? [...fixtures] : fixtures.filter((f) => divisions.has(f.division_id));
+}
+
+/** What the organiser opened: a court, or a match playing on no court (B4) — with its name, to say so if it leaves the list. */
+export type Opened = { kind: "court" | "match"; id: string; name: string };
+
+/** What is focused (§6.1, review M6): what the organiser opened while it is still on the list; none opened yet → the first
+ *  court (the desktop's default), else the first match playing on no court (B4: a day with no courts at all); what was opened
+ *  gone from the list (the filter dropped it, the day moved on, the match ended) → `lost`, named — the page goes back to the
+ *  list rather than silently showing something else. */
 export type Focus =
   | { kind: "court"; court: MatchDayCourt }
+  | { kind: "match"; fixture: MatchDayFixture }
   | { kind: "lost"; name: string }
   | { kind: "none" };
 
-export function resolveFocus(courts: readonly MatchDayCourt[], opened: { id: string; name: string } | null): Focus {
-  if (opened === null) return courts[0] === undefined ? { kind: "none" } : { kind: "court", court: courts[0] };
+export function resolveFocus(
+  courts: readonly MatchDayCourt[],
+  noCourt: readonly MatchDayFixture[],
+  opened: Opened | null,
+): Focus {
+  if (opened === null) {
+    if (courts[0] !== undefined) return { kind: "court", court: courts[0] };
+    return noCourt[0] === undefined ? { kind: "none" } : { kind: "match", fixture: noCourt[0] };
+  }
+  if (opened.kind === "match") {
+    const fixture = noCourt.find((f) => f.id === opened.id);
+    return fixture === undefined ? { kind: "lost", name: opened.name } : { kind: "match", fixture };
+  }
   const court = courts.find((c) => c.court_id === opened.id);
   return court === undefined ? { kind: "lost", name: opened.name } : { kind: "court", court };
+}
+
+/** Needs you's "Find a court" (B4, spec §9 carried): the free court whose candidates an unscheduled match is likely among —
+ *  the first free court on the list — or null when none is free. */
+export function firstFreeCourt<C extends Pick<MatchDayCourt, "court_id" | "state">>(courts: readonly C[]): C | null {
+  return courts.find((c) => c.state === "free") ?? null;
+}
+
+/** Match Day's own Needs-you rows (B4, spec §9 carried): an `unscheduled` row opens the schedule board, as on the competition
+ *  page, AND — here, on the day — "Find a court": the first free court's candidate list (`?court=`), where an unscheduled match
+ *  ready to play is listed under "No court yet"; with no court free, the page itself (the list of courts). Every other row is
+ *  the desk's, unchanged. */
+export function withFindCourt(
+  dict: Dict,
+  items: readonly NeedsYouItem[],
+  courts: readonly Pick<MatchDayCourt, "court_id" | "state">[],
+  matchDayHref: string,
+): NeedsYouItem[] {
+  const free = firstFreeCourt(courts);
+  const href = free === null ? matchDayHref : `${matchDayHref}?court=${encodeURIComponent(free.court_id)}`;
+  return items.map((it) =>
+    it.kind === "unscheduled" ? { ...it, alt: { label: t(dict, "matchDay.needsYou.findCourt"), href } } : it,
+  );
 }
 
 /** How many candidates could start here NOW (§7, review I2): a blocked one cannot, so it is not counted. */
@@ -117,7 +183,13 @@ export function primaryCandidateId(candidates: readonly MatchDayCandidate[]): st
 export function isMatchDayView(v: unknown): v is MatchDayView {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Partial<MatchDayView>;
-  return Array.isArray(o.courts) && typeof o.date === "string" && typeof o.tz === "string" && typeof o.now === "string";
+  return (
+    Array.isArray(o.courts) &&
+    Array.isArray(o.playing_no_court) &&
+    typeof o.date === "string" &&
+    typeof o.tz === "string" &&
+    typeof o.now === "string"
+  );
 }
 
 /** The same guard for a candidates answer. */

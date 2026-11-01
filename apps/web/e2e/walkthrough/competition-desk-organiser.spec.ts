@@ -9,7 +9,7 @@ import { needsYouInMatchDay } from "../needs-you-home";
 
 test.describe.configure({ mode: "serial" });
 
-test("an organiser watches the desk go Setting up → Scheduled → In play (a match day) → No scorer → Finished, and every button lands where it says", async ({ page, request }, testInfo) => {
+test("an organiser watches the desk go Setting up → Scheduled → Today (a match day) → No scorer → Finished, and every button lands where it says", async ({ page, request }, testInfo) => {
   test.setTimeout(240_000);
   const shot = (name: string) => page.screenshot({ path: `${testInfo.outputPath()}/${name}.png`, fullPage: true });
   const org = await activeOrg(page);
@@ -126,8 +126,8 @@ test("an organiser watches the desk go Setting up → Scheduled → In play (a m
   await expect(needs.locator('[data-attention="result_missing"]')).toBeVisible();
   await shot("03c-past-kickoff-no-result");
 
-  // 4. Reach: kick-off today (API PATCH). Read: a match day — the pill says In play (Match Day B1: "Match Day" is the
-  //    product's name now, not a phase word), Open Match Day is offered, and Needs you has moved into Match Day.
+  // 4. Reach: kick-off today (API PATCH). Read: a match day — the pill says Today (owner ruling Q2, task B4; it read
+  //    "In play" from B1, which sat beside the masthead's "N in play" as a second live count), Open Match Day is offered, and Needs you has moved into Match Day.
   //
   // J1 class (fix round F): this used to be `new Date()` with
   // `setUTCHours(18, 0, 0, 0)` — "today at 18:00 UTC". `match_day` is bucketed
@@ -152,7 +152,7 @@ test("an organiser watches the desk go Setting up → Scheduled → In play (a m
   await page.goto(compPath);
   await expect(row).toHaveAttribute("data-phase", "match_day");
   await expect(page.locator('[data-phase="match_day"]').first()).toBeVisible();
-  await expect(row.locator('[data-pill="match_day"]:visible')).toHaveText("In play");
+  await expect(row.locator('[data-pill="match_day"]:visible')).toHaveText("Today");
   await expect(page.getByTestId("desk-tool-match-day")).toBeVisible();
   // The unscheduled round still needs the organiser — in Match Day now; this page says so in one line.
   await expect(needs).toHaveCount(0);
@@ -216,6 +216,9 @@ test("an organiser watches the desk go Setting up → Scheduled → In play (a m
   // Nothing needs the organiser, on either surface: no list here, and no line pointing at one in Match Day.
   await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
   await expect(page.getByTestId("desk-needs-you-in-match-day")).toHaveCount(0);
+  // Owner ruling Q3 (2026-10-31, task B4): the division is Finished, but its last match was today, so it is still a match
+  // day — Open Match Day stays beside "Finished" (the results, the courts as they ended) until the day is over.
+  await expect(page.getByTestId("desk-tool-match-day")).toBeVisible();
   await shot("06-finished");
 
   // 7. The page holds at every width, in this final state.

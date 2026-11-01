@@ -1688,6 +1688,8 @@ export const MatchDayView = z.object({
   tz: z.string(),
   now: z.iso.datetime({ offset: true }),
   courts: z.array(MatchDayCourt),
+  // B4 (owner ruling Q1): this competition's matches in play with no court, in live divisions, in kick-off order.
+  playing_no_court: z.array(MatchDayFixture),
   needs_you: z.array(
     z.object({
       key: z.string(),

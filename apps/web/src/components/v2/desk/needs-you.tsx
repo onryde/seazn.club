@@ -16,6 +16,9 @@ export interface NeedsYouItem {
   title: string;
   sub: string;
   action: { label: string; href: string };
+  /** A second, quieter way in, beside `action` (task B4): Match Day's "Find a court" on an unscheduled row (`withFindCourt`,
+   *  lib/match-day/view.ts). The desk never sets one, so the competition page's rows are unchanged. */
+  alt?: { label: string; href: string };
 }
 
 /**
@@ -282,8 +285,37 @@ export function resultsOwedOf(desk: Pick<CompetitionDesk, "divisions">): number 
   return owed;
 }
 
-export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] }) {
+export function NeedsYou({
+  dict,
+  items,
+  onAlt,
+}: {
+  dict: Dict;
+  items: NeedsYouItem[];
+  /** A client island's own handling of a row's `alt` (Match Day opens the court in place); the link's `href` still works
+   *  without it — opened in a new tab, or before the island hydrates. */
+  onAlt?: (item: NeedsYouItem) => void;
+}) {
   if (items.length === 0) return null;
+  const altLink = (it: NeedsYouItem, className: string) =>
+    it.alt === undefined ? null : (
+      <Link
+        href={it.alt.href}
+        data-needs-you-alt
+        onClick={
+          onAlt === undefined
+            ? undefined
+            : (e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                e.preventDefault();
+                onAlt(it);
+              }
+        }
+        className={className}
+      >
+        {it.alt.label}
+      </Link>
+    );
   return (
     <section data-testid="desk-needs-you" className="mb-6">
       <h2 className="mb-2 font-mono text-[11px] uppercase tracking-[0.08em] text-slate-600">
@@ -309,6 +341,10 @@ export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] })
               >
                 {it.action.label}
               </Link>
+              {altLink(
+                it,
+                "mt-1 flex min-h-11 w-full items-center justify-center rounded-lg text-sm font-medium text-purple-700 underline-offset-2 hover:underline",
+              )}
             </div>
             {/* Desktop, `md` and up — unchanged three-column layout. */}
             <div className="hidden items-center gap-3 px-4 py-3 md:flex">
@@ -319,6 +355,10 @@ export function NeedsYou({ dict, items }: { dict: Dict; items: NeedsYouItem[] })
               </div>
               {/* Loop R M7(e): this row shows from md (768), and 768 and 834 are touch widths — 44px there; the compact
                   28px button only from lg, a mouse width. */}
+              {altLink(
+                it,
+                "inline-flex min-h-11 shrink-0 items-center rounded-lg px-2 text-xs font-medium text-purple-700 underline-offset-2 hover:underline lg:min-h-0 lg:py-1.5",
+              )}
               <Link href={it.action.href} className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} min-h-11 shrink-0 px-3 py-1.5 text-xs lg:min-h-0`}>
                 {it.action.label}
               </Link>

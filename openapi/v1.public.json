@@ -2833,7 +2833,7 @@
     },
     "/api/v1/competitions/{id}/match-day": {
       "get": {
-        "summary": "Match Day: the competition's courts today. The courts are every division's candidate courts and every court holding one of its matches today (each match on its own division's day: the venue zone, else the organisation's; `date`, the header's label, is the organisation's day in `tz`). Archived divisions are left out. Each court's `state` comes from its matches' status, from any competition of the organisation: `playing` (this competition's match in play: `current`), `called` (called and not started: `current`), `in_use_elsewhere` (another competition's match playing or called: `in_use_by`), else `free` (`free_since`). `queue`: this competition's unstarted matches planned on the court today, in planned order, `estimated_at` = the later of `planned_at` and the end of the match before (another competition's planned matches on the court count; planned times are never written). `needs_you`: the competition desk's Needs-you rows, in the reader's language; `results_owed`: matches past their time with no result; `fixtures_today`: this competition's matches today, plus any in play",
+        "summary": "Match Day: the competition's courts today. The courts are every division's candidate courts and every court holding one of its matches today (each match on its own division's day: the venue zone, else the organisation's; `date`, the header's label, is the organisation's day in `tz`). Archived divisions are left out. Each court's `state` comes from its matches' status, from any competition of the organisation: `playing` (this competition's match in play: `current`), `called` (called and not started: `current`), `in_use_elsewhere` (another competition's match playing or called: `in_use_by`), else `free` (`free_since`). `queue`: this competition's unstarted matches planned on the court today, in planned order, `estimated_at` = the later of `planned_at` and the end of the match before (another competition's planned matches on the court count; planned times are never written). `playing_no_court`: this competition's matches in play with no court (an untimed bracket match, an online board), in live divisions, in kick-off order (no recorded kick-off last), each carrying what a playing court's `current` carries. `needs_you`: the competition desk's Needs-you rows, in the reader's language; `results_owed`: matches past their time with no result; `fixtures_today`: this competition's matches today, plus any in play",
         "tags": [
           "competitions"
         ],
@@ -3446,6 +3446,242 @@
                             "additionalProperties": false
                           }
                         },
+                        "playing_no_court": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "division_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "division_name": {
+                                "type": "string"
+                              },
+                              "division_slug": {
+                                "type": "string"
+                              },
+                              "fixture_no": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "sport_key": {
+                                "type": "string"
+                              },
+                              "stage_label": {
+                                "type": "string"
+                              },
+                              "home": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "away": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "home_entrant_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "away_entrant_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "headline": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "summary": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "headline": {
+                                        "type": "string"
+                                      },
+                                      "perSide": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "entrantId": {
+                                              "type": "string"
+                                            },
+                                            "line": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "entrantId",
+                                            "line"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "detail": {}
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "serving": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "home",
+                                      "away"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "started_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "called_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "stream": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "live",
+                                      "waiting"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "scorer_attention": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "enum": [
+                                      "no_scorer",
+                                      "not_recording"
+                                    ]
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "live_video": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "url": {
+                                        "type": "string"
+                                      },
+                                      "made_for_kids": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "url",
+                                      "made_for_kids"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "division_id",
+                              "division_name",
+                              "division_slug",
+                              "fixture_no",
+                              "sport_key",
+                              "stage_label",
+                              "home",
+                              "away",
+                              "home_entrant_id",
+                              "away_entrant_id",
+                              "headline",
+                              "summary",
+                              "serving",
+                              "started_at",
+                              "called_at",
+                              "stream",
+                              "scorer_attention",
+                              "live_video"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "needs_you": {
                           "type": "array",
                           "items": {
@@ -3516,6 +3752,7 @@
                         "tz",
                         "now",
                         "courts",
+                        "playing_no_court",
                         "needs_you",
                         "results_owed",
                         "fixtures_today"
@@ -3604,6 +3841,41 @@
                             "estimated_at": "2026-08-01T09:00:00Z"
                           }
                         ]
+                      }
+                    ],
+                    "playing_no_court": [
+                      {
+                        "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "division_name": "example",
+                        "division_slug": "example",
+                        "fixture_no": 1,
+                        "sport_key": "example",
+                        "stage_label": "example",
+                        "home": "example",
+                        "away": "example",
+                        "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "headline": "example",
+                        "summary": {
+                          "headline": "example",
+                          "perSide": [
+                            {
+                              "entrantId": null,
+                              "line": null
+                            }
+                          ],
+                          "detail": null
+                        },
+                        "serving": "home",
+                        "started_at": "2026-08-01T09:00:00Z",
+                        "called_at": "2026-08-01T09:00:00Z",
+                        "stream": "live",
+                        "scorer_attention": "no_scorer",
+                        "live_video": {
+                          "url": "example",
+                          "made_for_kids": true
+                        }
                       }
                     ],
                     "needs_you": [

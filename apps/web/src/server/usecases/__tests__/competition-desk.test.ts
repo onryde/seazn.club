@@ -1415,8 +1415,9 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
         const now = new Date(d);
         const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
         expect(desk.fixtures_today, label).toBe(onDay(now, ORG_TZ));
-        // One count, two surfaces: Match Day's own count is the same number at the same instant.
-        expect((await getMatchDay(day.auth, day.comp.id, now)).fixtures_today, `${label}: Match Day agrees`).toBe(
+        // One count, two surfaces: Match Day reports the desk's own count (B4: it reads `desk.fixtures_today`, one count per
+        // poll) — a wiring check only. The non-tautological pin of the two agreeing is the phase implication test below.
+        expect((await getMatchDay(day.auth, day.comp.id, now)).fixtures_today, `${label}: Match Day reports it`).toBe(
           desk.fixtures_today,
         );
         checked++;
@@ -1440,6 +1441,49 @@ describe.skipIf(!HAS_DB)("getCompetitionDesk", () => {
       expect((await getCompetitionDesk(day.auth, day.comp.id, monday)).fixtures_today).toBe(1); // only the one in play
       await setStatus(planned[0]!.id, "decided");
       expect((await getCompetitionDesk(day.auth, day.comp.id, monday)).fixtures_today).toBe(0);
+    });
+
+    // B1 review minor (task B4): the division pill's `match_day` phase (division-phase.ts rule 3: a match in play, or one planned
+    // on the division's day) and the competition page's gate (`fixtures_today`, countFixturesToday) are two derivations of "a
+    // match today". They must never disagree in the direction an organiser sees: a division reading "Today" on a page that
+    // offers no Match Day. Two independent readers, checked against each other at every instant of a sequence — not one number
+    // compared with itself.
+    it("a division in the match_day phase implies fixtures_today > 0 — on every day of a multi-day event, before, during and after its matches", async () => {
+      const day = await seedDay();
+      const [p1, p2, p3, p4] = day.comp.pairs as [Pair, Pair, Pair, Pair];
+      // Started, so the phase ladder reaches its match_day rung (a division in setup reads setting_up).
+      await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+      const sat = between(day.comp, p1, p2).id;
+      const mon = between(day.comp, p3, p4).id;
+      await sql`update fixtures set scheduled_at = ${"2026-11-07T10:00:00.000Z"} where id = ${sat}`; // Sat 11:00, Amsterdam
+      await sql`update fixtures set scheduled_at = ${"2026-11-09T09:00:00.000Z"} where id = ${mon}`; // Mon 10:00, Amsterdam
+      const instants: [string, string, () => Promise<void>][] = [
+        ["the day before", "2026-11-06T12:00:00.000Z", async () => {}],
+        ["the first day", "2026-11-07T08:00:00.000Z", async () => {}],
+        ["a middle day with no matches", "2026-11-08T12:00:00.000Z", async () => {}],
+        ["the middle day, Saturday's match in play", "2026-11-08T12:00:00.000Z", () => setStatus(sat, "in_play")],
+        ["the middle day, Saturday's match decided", "2026-11-08T12:00:00.000Z", () => setStatus(sat, "decided")],
+        ["the last day", "2026-11-09T08:00:00.000Z", async () => {}],
+        ["the last day, its match cancelled", "2026-11-09T08:00:00.000Z", () => setStatus(mon, "cancelled")],
+      ];
+      let implied = 0;
+      let otherPhases = 0;
+      for (const [label, at, act] of instants) {
+        await act();
+        const desk = await getCompetitionDesk(day.auth, day.comp.id, new Date(at));
+        const division = desk.divisions.get(day.comp.divisionId);
+        expect(division, `${label}: the division is on the desk`).toBeDefined();
+        if (division!.phase === "match_day") {
+          expect(desk.fixtures_today, `${label}: a "Today" division on a page with no match today`).toBeGreaterThan(0);
+          implied++;
+        } else {
+          otherPhases++;
+        }
+      }
+      // Anti-vacuity: the implication was really exercised (the first day, the in-play middle day, the last day), and the
+      // sweep saw the other side too, so a ladder that always answered match_day could not pass silently.
+      expect(implied, "instants in the match_day phase").toBe(3);
+      expect(otherPhases, "instants in another phase").toBe(instants.length - 3);
     });
 
     it("the Needs-you list lives in one place: Match Day carries it only on a match day, the competition page before the day", async () => {

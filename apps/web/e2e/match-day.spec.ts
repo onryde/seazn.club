@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Browser, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
   activeOrg,
@@ -9,6 +9,7 @@ import {
   competitionPath,
   createStageAndGenerate,
   expectNoHorizontalScroll,
+  loginUi,
   scoreFixture,
   seedVenueWithCourts,
   withDb,
@@ -46,6 +47,10 @@ interface Seed {
   court2: string;
   /** The `needsYou` seed's third court (Eve v Fay in play, unscored); null otherwise. */
   court3: string | null;
+  /** The courts' ids, for a write sent straight to a route (B4's read-only refusals). */
+  court1Id: string;
+  court2Id: string;
+  divisionId: string;
   /** Ana v Ben: on Court 1, in play (a real core.start) unless the seed is `quiet`. */
   anaBen: string;
   /** Cal v Dee: Court 2's own next match, the top candidate. */
@@ -142,7 +147,19 @@ async function seedMatchDay(
     });
   }
 
-  return { competitionId, court1: court1.name, court2: court2.name, court3: court3?.name ?? null, anaBen, calDee, anaCal, names };
+  return {
+    competitionId,
+    court1: court1.name,
+    court2: court2.name,
+    court3: court3?.name ?? null,
+    court1Id: court1.id,
+    court2Id: court2.id,
+    divisionId,
+    anaBen,
+    calDee,
+    anaCal,
+    names,
+  };
 }
 
 /** A real core.start through the engine — the way a scorer's pad starts a match, never a status patch. */
@@ -241,6 +258,12 @@ async function needsYouAndScorer(page: Page, seed: Seed, minted = false): Promis
   await heading.click();
   await expect(scorer).toHaveAttribute("open", "");
   await expect(action).toBeVisible();
+  // A4 n1 (task B4): the fold and the panel's own "More" fold are separate NAMED groups — opening this one turns its own
+  // chevron and leaves More's, still closed, unturned (an unnamed `group` turned both).
+  // Tailwind v4's `rotate-90` writes the `rotate` property, not `transform` (which stays "none" either way).
+  await expect(scorer.locator(":scope > summary svg")).toHaveCSS("rotate", "90deg");
+  await expect(scorer.getByTestId("device-link-more")).not.toHaveAttribute("open", /.*/);
+  await expect(scorer.getByTestId("device-link-more").locator(":scope > summary svg")).toHaveCSS("rotate", "none");
   if (minted) await expect(scorer.getByTestId("device-link-mint")).toHaveCount(0);
   await action.click();
   await expect(scorer.getByTestId("dlink-qr")).toBeVisible({ timeout: 15_000 });
@@ -363,6 +386,13 @@ test.describe("Match Day — desktop", () => {
     await expect(page.getByTestId("md-court-row")).toHaveCount(3);
     await expect(page.getByTestId("md-counts")).toContainText("2 playing");
     await needsYouAndScorer(page, seed);
+    // A4 n2 (task B4): the fold's open state is its MATCH's — Court 3's, opened above, does not carry over to Court 1's
+    // (an unkeyed <details> kept its DOM `open` when the focus moved to another playing court).
+    await expect(page.getByTestId("md-focus").getByTestId("md-scorer")).toHaveAttribute("open", "");
+    await row(page, seed.court1).click();
+    await expect(page.getByTestId("md-focus")).toContainText(seed.names.ana);
+    await expect(page.getByTestId("md-focus").getByTestId("md-scorer")).toBeAttached();
+    await expect(page.getByTestId("md-focus").getByTestId("md-scorer")).not.toHaveAttribute("open", /.*/);
 
     await page.setViewportSize({ width: 768, height: 1024 });
     await page.reload({ waitUntil: "load" });
@@ -736,11 +766,25 @@ test.describe("Match Day — a set sport's score is its levels (B3)", () => {
       expect(b.right, `${b.text} ends on screen`).toBeLessThanOrEqual(320);
     }
     await expectNoHorizontalScroll(page);
-    // The whole scoreboard sits inside the viewport: no box of the panel reaches past it.
-    const past = await page.getByTestId("md-scoreboard").evaluate((el) =>
-      [...el.querySelectorAll<HTMLElement>("*")].filter((e) => e.getBoundingClientRect().right > document.documentElement.clientWidth + 1 && getComputedStyle(e).display !== "none" && !e.closest("[role=region]")).map((e) => e.tagName.toLowerCase() + "." + String(e.className).slice(0, 40)),
-    );
-    expect(past, "a box of the scoreboard reaches past the 320 viewport").toEqual([]);
+    // The whole scoreboard sits inside the viewport: no box of the panel reaches past it — except inside a region that SCROLLS,
+    // whose extra content is reachable (AGENTS.md #23). The exemption is checked, not trusted (B3 review minor, task B4): every
+    // region the scoreboard holds must compute overflow-x auto or scroll, so a clipping box can never hide behind the excuse.
+    const scan = await page.getByTestId("md-scoreboard").evaluate((el) => {
+      const edge = document.documentElement.clientWidth + 1;
+      const over = [...el.querySelectorAll<HTMLElement>("*")].filter((e) => e.getBoundingClientRect().right > edge && getComputedStyle(e).display !== "none");
+      return {
+        past: over.filter((e) => !e.closest("[role=region]")).map((e) => e.tagName.toLowerCase() + "." + String(e.className).slice(0, 40)),
+        excused: over.filter((e) => e.closest("[role=region]")).length,
+        regions: [...el.querySelectorAll<HTMLElement>("[role=region]")].map((r) => ({
+          name: r.getAttribute("aria-label") ?? "",
+          overflowX: getComputedStyle(r).overflowX,
+        })),
+      };
+    });
+    expect(scan.past, "a box of the scoreboard reaches past the 320 viewport").toEqual([]);
+    console.info(`[B3 scan] scoreboard regions: ${scan.regions.length}; boxes past the edge inside one: ${scan.excused}`);
+    if (scan.excused > 0) expect(scan.regions.length, "boxes were excused, so a region holds them").toBeGreaterThan(0);
+    for (const r of scan.regions) expect(["auto", "scroll"], `region "${r.name}" scrolls rather than clips`).toContain(r.overflowX);
 
     // Badminton too (the other kind of levels, the same long names).
     await page.getByTestId("md-back").click();
@@ -755,6 +799,307 @@ test.describe("Match Day — a set sport's score is its levels (B3)", () => {
     const sub = await cardSub(page, 0).boundingBox();
     expect(sub, "the small figure is painted").not.toBeNull();
     expect(sub!.x + sub!.width, "the small figure ends inside the 320 viewport").toBeLessThanOrEqual(320);
+    await expectNoHorizontalScroll(page);
+  });
+});
+
+/**
+ * Task B4 (owner rulings Q1, 2026-10-31). What the node-environment suite cannot see: the "Playing, no court" group and its
+ * panel in a real browser at every width, a competition with no courts at all, a view-only member's page and the server's
+ * refusals of their writes through the real routes, and Needs you's "Find a court" opening a court in place.
+ */
+
+/** B4: a division of this competition whose one match kicks off for real (a core.start through the engine) and is never
+ *  placed — in play on NO court, as an untimed bracket match or an online board is. `noCourts`: the division asks for a court
+ *  tag no court has, so it can use none of the organisation's courts (an empty court list means EVERY court). */
+async function seedNoCourtMatch(
+  request: APIRequestContext,
+  competitionId: string,
+  label: string,
+  opts: { start?: boolean; noCourts?: boolean; courts?: string[] } = {},
+): Promise<{ fixtureId: string; home: string; away: string; divisionName: string; divisionId: string }> {
+  const nonce = Math.random().toString(36).slice(2, 7);
+  const divisionName = `Cup ${label} ${nonce}`;
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", {
+    name: divisionName,
+    sport_key: "generic",
+    variant_key: "score",
+  });
+  if (div.status >= 300 || !div.data) throw new Error(`division → ${div.status} ${JSON.stringify(div.error)}`);
+  const divisionId = div.data.id;
+  const [home, away] = [`Gus ${label} ${nonce}`, `Hal ${label} ${nonce}`];
+  const ents = await addEntrantsViaApi(request, divisionId, [home, away]);
+  if (ents.status >= 300 || ents.ids.length !== 2) throw new Error(`entrants → ${ents.status}`);
+  await createStageAndGenerate(request, divisionId);
+  if (opts.courts) {
+    // The division plays on these courts, as the seed's does: with none configured its candidates are EVERY court of the
+    // shared organisation, and the header's count would be the whole run's.
+    const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/schedule-settings`, "PUT", {
+      tz: "UTC",
+      config: { matchMinutes: 30, courts: opts.courts },
+    });
+    expect(settings.status, `schedule settings: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
+  }
+  if (opts.noCourts) {
+    await withDb((sql) => sql`update divisions set required_court_tags = ${`{b4-none-${nonce}}`}::text[] where id = ${divisionId}`);
+  }
+  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  const [f] = await withDb((sql) => sql<{ id: string; court_id: string | null }[]>`select id, court_id from fixtures where division_id = ${divisionId}`);
+  expect(f!.court_id, "premise: the match has no court").toBeNull();
+  if (opts.start) await startFixture(request, f!.id);
+  return { fixtureId: f!.id, home, away, divisionName, divisionId };
+}
+
+/** A competition of its own whose only division can use no court (`seedNoCourtMatch`'s `noCourts`). */
+async function seedNoCourtCompetition(request: APIRequestContext, label: string) {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Match Day ${label} ${TAG}`,
+    visibility: "public",
+  });
+  if (comp.status >= 300 || !comp.data) throw new Error(`competition → ${comp.status} ${JSON.stringify(comp.error)}`);
+  return { competitionId: comp.data.id, ...(await seedNoCourtMatch(request, comp.data.id, label, { noCourts: true })) };
+}
+
+/** A view-only member of the competition's organisation, signed in on a page of their own. The seat is a TEAM SEAT in the
+ *  shared org (forfeit-dialog.spec.ts's `officialScorerPage`): it lives exactly as long as the page, and `close()` frees it. */
+async function viewerPage(browser: Browser, competitionId: string): Promise<{ page: Page; close: () => Promise<void> }> {
+  const tag = Math.random().toString(36).slice(2, 8);
+  const email = `delivered+b4-viewer-${TAG}-${tag}@resend.dev`;
+  let orgId = "";
+  let userId = "";
+  await withDb(async (sql) => {
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${email}, ${"B4 Viewer " + tag}, true) returning id`;
+    const [c] = await sql<{ org_id: string }[]>`select org_id from competitions where id = ${competitionId}`;
+    orgId = c!.org_id;
+    userId = u!.id;
+    await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'viewer')`;
+  });
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  const page = await context.newPage();
+  await loginUi(page, email);
+  await page.request.post("/api/onboarding/complete", { data: {} }).catch(() => undefined);
+  return {
+    page,
+    close: async () => {
+      try {
+        await context.close();
+      } finally {
+        await withDb((sql) => sql`delete from org_members where org_id = ${orgId} and user_id = ${userId}`);
+      }
+    },
+  };
+}
+
+test.describe("Match Day — B4: playing with no court, no courts at all, a view-only member, Find a court", () => {
+  test("a match in play on no court lists under the courts, marked as a court would be, and opens its own panel — scoreboard, scorer QR, no queue, nothing to call — at 1280, 768 and 320", async ({
+    page,
+    request,
+  }) => {
+    const seed = await seedMatchDay(request, "NoCourt");
+    const nc = await seedNoCourtMatch(request, seed.competitionId, "NoCourt", { start: true, courts: [seed.court1Id, seed.court2Id] });
+    const path = await competitionPath(request, seed.competitionId, "/match-day");
+    await page.goto(path, { waitUntil: "load" });
+
+    const group = page.getByTestId("md-no-court");
+    await expect(group).toBeVisible();
+    await expect(group.getByRole("heading")).toHaveText(UI_EN["matchDay.noCourt.title"]!);
+    await expect(page.getByTestId("md-counts")).toContainText("2 courts");
+    await expect(page.getByTestId("md-counts")).toContainText("1 match with no court");
+    const ncRow = page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${nc.fixtureId}"]`);
+    await expect(page.getByTestId("md-no-court-row")).toHaveCount(1);
+    await expect(ncRow).toContainText(nc.home);
+    await expect(ncRow).toContainText(nc.away);
+    await expect(ncRow).toContainText(nc.divisionName);
+    // A real kick-off and nothing more, nobody named: the desk's no_scorer — the same mark a court's row carries.
+    await expect(ncRow).toHaveAttribute("data-scorer", "no_scorer");
+    // Under the courts, never among them.
+    const lastCourt = await page.getByTestId("md-court-row").last().boundingBox();
+    const groupBox = await group.boundingBox();
+    expect(groupBox!.y, "the group sits under the court list").toBeGreaterThan(lastCourt!.y + lastCourt!.height - 1);
+    await expect(group.getByTestId("md-no-court-open")).toHaveAttribute("href", /\/f\/\d+$/);
+    await expect(group.getByTestId("md-no-court-open")).toHaveText("Open pad");
+    await expectNoHorizontalScroll(page);
+
+    await ncRow.click();
+    const focus = page.getByTestId("md-focus");
+    await expect(focus).toHaveAttribute("data-no-court", "true");
+    await expect(focus).toHaveAttribute("data-fixture-id", nc.fixtureId);
+    await expect(ncRow).toHaveAttribute("aria-current", "true");
+    await expect(focus.getByTestId("md-scoreboard")).toBeVisible();
+    await expect(focus.getByTestId("md-scorer").locator(":scope > summary")).toContainText("Remote scoring");
+    await expect(focus).not.toContainText(UI_EN["matchDay.queue.title"]!);
+    await expect(focus.getByTestId("md-undo-call")).toHaveCount(0);
+    await expect(focus.getByRole("button", { name: /^Call to / })).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await page.reload({ waitUntil: "load" });
+    await page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${nc.fixtureId}"]`).click();
+    await expect(page.getByTestId("md-focus")).toHaveAttribute("data-no-court", "true");
+    await expect(page.getByTestId("md-list")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.reload({ waitUntil: "load" });
+    const list = page.getByTestId("md-list");
+    await expect(list).toBeVisible();
+    await expect(page.getByTestId("md-focus")).toBeHidden();
+    await expectNoHorizontalScroll(page);
+    await page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${nc.fixtureId}"]`).click();
+    await expect(page.getByTestId("md-focus")).toBeVisible();
+    await expect(list).toBeHidden();
+    await expect(page.getByTestId("md-back")).toContainText("All courts");
+    await expectNoHorizontalScroll(page);
+    await page.getByTestId("md-back").click();
+    await expect(list).toBeVisible();
+  });
+
+  test("a competition with no courts: with nothing playing the page says what to do; a match kicked off makes the group the page — at 1280, 768 and 320", async ({
+    page,
+    request,
+  }) => {
+    const z = await seedNoCourtCompetition(request, "Zero");
+    const path = await competitionPath(request, z.competitionId, "/match-day");
+    await page.goto(path, { waitUntil: "load" });
+    // EMPTY CASE FIRST: no courts and nothing playing.
+    const empty = page.getByTestId("md-empty");
+    await expect(empty).toContainText(UI_EN["matchDay.empty.title"]!);
+    await expect(empty).toContainText(UI_EN["matchDay.empty.body"]!);
+    await expect(empty.getByRole("link", { name: UI_EN["matchDay.empty.schedule"]! })).toBeVisible();
+    await expect(page.getByTestId("md-court-row")).toHaveCount(0);
+    await expect(page.getByTestId("md-no-court")).toHaveCount(0);
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: width === 320 ? 568 : 1024 });
+      await expectNoHorizontalScroll(page);
+    }
+
+    await startFixture(request, z.fixtureId);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.reload({ waitUntil: "load" });
+    await expect(page.getByTestId("md-empty")).toHaveCount(0);
+    await expect(page.getByTestId("md-court-row")).toHaveCount(0);
+    await expect(page.getByTestId("md-no-court")).toBeVisible();
+    await expect(page.getByTestId("md-counts")).toHaveText(/^\W*1 match with no court\W*$/);
+    // Desktop opens the one match beside the list, as it opens the first court on a day with courts.
+    await expect(page.getByTestId("md-focus")).toHaveAttribute("data-fixture-id", z.fixtureId);
+    await expect(page.getByTestId("md-focus").getByTestId("md-scoreboard")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expectNoHorizontalScroll(page);
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.reload({ waitUntil: "load" });
+    await expect(page.getByTestId("md-focus")).toBeHidden();
+    await page.locator(`[data-testid="md-no-court-row"][data-fixture-id="${z.fixtureId}"]`).click();
+    await expect(page.getByTestId("md-focus")).toBeVisible();
+    await expect(page.getByTestId("md-back")).toContainText(UI_EN["matchDay.back.list"]!);
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("a view-only member opens Match Day from the competition page's secondary door, read-only — and the server refuses their call, undo and scorer link", async ({
+    page,
+    request,
+    browser,
+  }) => {
+    const seed = await seedMatchDay(request, "Viewer");
+    const viewer = await viewerPage(browser, seed.competitionId);
+    try {
+      const vp = viewer.page;
+      const compPath = await competitionPath(request, seed.competitionId);
+      await vp.goto(compPath, { waitUntil: "load" });
+      const door = vp.getByTestId("desk-tool-match-day");
+      await expect(door).toBeVisible();
+      await expect(door).not.toHaveClass(/(^|\s)btn-primary(\s|$)/);
+      await door.click();
+      await expect(vp).toHaveURL(/\/match-day$/);
+      await expect(vp.getByTestId("md-read-only")).toHaveText(UI_EN["matchDay.readOnly"]!);
+      await expect(vp.getByTestId("md-needs-you-toggle")).toHaveCount(0);
+
+      // Court 1, playing, focused first: the score — and no scorer QR, no "+ Connect a stream"; the pad link reads Open match.
+      const focus = vp.getByTestId("md-focus");
+      await expect(focus.getByTestId("md-scoreboard")).toBeVisible();
+      await expect(focus.getByTestId("md-scorer")).toHaveCount(0);
+      await expect(focus).not.toContainText("+ Connect a stream");
+      await expect(focus.getByTestId("md-open-pad")).toHaveText(UI_EN["matchDay.focus.openMatch"]!);
+      // Court 2, free: its candidates, and no button to call one.
+      await row(vp, seed.court2).click();
+      await expect(focus).toHaveAttribute("data-state", "free");
+      await expect(focus.locator(`[data-testid="md-candidate"][data-fixture-id="${seed.calDee}"]`)).toBeVisible();
+      await expect(focus.getByRole("button", { name: /^Call to / })).toHaveCount(0);
+      await expectNoHorizontalScroll(vp);
+
+      // The organiser calls Cal v Dee onto Court 2; the viewer's board shows it Called, with no Undo.
+      const called = await apiJson(request, `/api/v1/fixtures/${seed.calDee}/call`, "POST", { court_id: seed.court2Id });
+      expect(called.status, JSON.stringify(called.error)).toBeLessThan(300);
+      await vp.reload({ waitUntil: "load" });
+      await row(vp, seed.court2).click();
+      await expect(focus).toHaveAttribute("data-state", "called");
+      await expect(focus.getByTestId("md-undo-call")).toHaveCount(0);
+
+      // The server refuses each write on its own, through the real routes — hiding a button is never the only guard.
+      const before = await withDb(async (sql) => ({
+        calls: (await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id in ${sql([seed.calDee, seed.anaCal])}`)[0]!.n,
+        links: (await sql<{ n: number }[]>`select count(*)::int as n from device_links where fixture_id = ${seed.anaBen}`)[0]!.n,
+      }));
+      const refusals = [
+        ["call", await apiJson(vp.request, `/api/v1/fixtures/${seed.anaCal}/call`, "POST", { court_id: seed.court2Id })],
+        ["undo", await apiJson(vp.request, `/api/v1/fixtures/${seed.calDee}/call`, "DELETE")],
+        ["scorer link", await apiJson(vp.request, `/api/v1/fixtures/${seed.anaBen}/device-links`, "POST", {})],
+      ] as const;
+      for (const [label, r] of refusals) expect(r.status, `${label}: ${JSON.stringify(r.error)}`).toBe(403);
+      expect(refusals).toHaveLength(3);
+      const after = await withDb(async (sql) => ({
+        calls: (await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id in ${sql([seed.calDee, seed.anaCal])}`)[0]!.n,
+        links: (await sql<{ n: number }[]>`select count(*)::int as n from device_links where fixture_id = ${seed.anaBen}`)[0]!.n,
+      }));
+      expect(after, "a viewer wrote nothing").toEqual(before);
+      expect(before.calls, "premise: the organiser's call is the one row").toBe(1);
+
+      await vp.setViewportSize({ width: 320, height: 568 });
+      await vp.reload({ waitUntil: "load" });
+      await expect(vp.getByTestId("md-read-only")).toBeVisible();
+      await expectNoHorizontalScroll(vp);
+    } finally {
+      await viewer.close();
+    }
+    // The organiser's own page is unchanged: the toggle-free header was the role, not the board.
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    await expect(page.getByTestId("md-read-only")).toHaveCount(0);
+  });
+
+  test("Needs you's unscheduled row: Find a court opens the free court's candidates in place and closes the list; its link opens the same court from a fresh load at 320", async ({
+    page,
+    request,
+  }) => {
+    const seed = await seedMatchDay(request, "FindCourt", { needsYou: true });
+    await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+    const toggle = page.getByTestId("md-needs-you-toggle");
+    await toggle.click();
+    const unscheduled = page.getByTestId("md-needs-you").locator('[data-attention="unscheduled"]');
+    await expect(unscheduled).toHaveCount(1);
+    // The board stays the row's action; Find a court is the second, quieter way in.
+    await expect(unscheduled.getByRole("link", { name: UI_EN["desk.needsYou.unscheduled.action"]! }).locator("visible=true")).toBeVisible();
+    const find = unscheduled.locator("[data-needs-you-alt]").locator("visible=true");
+    await expect(find).toHaveText(UI_EN["matchDay.needsYou.findCourt"]!);
+    const href = await find.getAttribute("href");
+    expect(href, "Find a court names a court").toMatch(new RegExp(`/match-day\\?court=${seed.court2Id}$`));
+    const url = page.url();
+    await find.click();
+    await expect(page.getByTestId("md-focus")).toContainText(`${seed.court2} is free`);
+    await expect(page.getByTestId("md-focus").getByTestId("md-candidate").first()).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("desk-needs-you")).toHaveCount(0);
+    expect(page.url(), "opened in place, no navigation").toBe(url);
+    await expectNoHorizontalScroll(page);
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto(href!, { waitUntil: "load" });
+    await expect(page.getByTestId("md-focus")).toBeVisible();
+    await expect(page.getByTestId("md-focus")).toContainText(`${seed.court2} is free`);
+    await expect(page.getByTestId("md-list")).toBeHidden();
     await expectNoHorizontalScroll(page);
   });
 });

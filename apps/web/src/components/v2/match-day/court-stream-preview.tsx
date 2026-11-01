@@ -22,15 +22,19 @@ import type { PublicReplayPart } from "@/lib/youtube";
 export function CourtStreamPreview({
   fixture,
   part,
-  courtName,
+  label,
   streamHref,
   dict,
   scoreDict,
+  readOnly = false,
 }: {
   fixture: MatchDayFixture;
   /** The video, from `streamPreviewOf` — already proven embeddable. */
   part: PublicReplayPart;
-  courtName: string;
+  /** The preview's accessible name: "Live stream on Court 3", or for a match on no court (B4) "Live stream: Ana v Ben". */
+  label: string;
+  /** A view-only reader (B4): the stream plays, but "Stream settings" — an organiser's door — is not offered. */
+  readOnly?: boolean;
   /** The match's console page with its stream panel open. */
   streamHref: string;
   dict: Dict;
@@ -41,7 +45,6 @@ export function CourtStreamPreview({
   const serving =
     fixture.serving ?? (fixture.summary === null ? null : servingSide(fixture.summary));
   const servingName = serving === "home" ? fixture.home : serving === "away" ? fixture.away : null;
-  const label = t(dict, "matchDay.preview.label", { court: courtName });
   return (
     <section
       data-testid="md-stream-preview"
@@ -53,12 +56,14 @@ export function CourtStreamPreview({
           <span aria-hidden className="animate-live-pulse h-2 w-2 rounded-full bg-red-500" />
           {t(dict, "stream.youtube.link.live")}
         </span>
-        <Link
-          href={streamHref}
-          className="-mr-2 inline-flex min-h-11 items-center rounded-lg px-2 text-xs font-medium text-court-muted underline-offset-2 hover:text-court-ink hover:underline lg:min-h-0 lg:py-1"
-        >
-          {t(dict, "matchDay.stream.settings")}
-        </Link>
+        {!readOnly && (
+          <Link
+            href={streamHref}
+            className="-mr-2 inline-flex min-h-11 items-center rounded-lg px-2 text-xs font-medium text-court-muted underline-offset-2 hover:text-court-ink hover:underline lg:min-h-0 lg:py-1"
+          >
+            {t(dict, "matchDay.stream.settings")}
+          </Link>
+        )}
       </div>
       <div className="min-w-0 px-4 sm:px-5">
         <ReplayEmbed parts={[part]} labels={{ region: label, playerTitle: label, className: "mt-2" }} />

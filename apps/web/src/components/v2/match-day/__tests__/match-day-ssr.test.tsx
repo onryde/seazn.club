@@ -22,9 +22,15 @@ import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview } from "@/lib/match-day/cal
 import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDaySummary, MatchDayView } from "@/lib/match-day/types";
 import {
   callableCount,
+  compactScore,
   courtCounts,
   filterCandidates,
   filterCourts,
+  filterNoCourt,
+  firstFreeCourt,
+  headerCountParts,
+  scoreLine,
+  withFindCourt,
   isCandidateList,
   isLive,
   isMatchDayView,
@@ -40,8 +46,8 @@ import {
   resolveFocus,
   sharedNoun,
 } from "@/lib/match-day/view";
-import { CourtList } from "@/components/v2/match-day/court-list";
-import { CourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
+import { CourtList, NoCourtList } from "@/components/v2/match-day/court-list";
+import { CourtFocus, NoCourtFocus, type MatchDayCtx } from "@/components/v2/match-day/court-focus";
 import { CandidateRows, FreeCourtBody } from "@/components/v2/match-day/candidate-list";
 import { CallSheetBody } from "@/components/v2/match-day/call-sheet";
 import { DotLine, MatchDayShell } from "@/components/v2/match-day/match-day-shell";
@@ -100,6 +106,7 @@ const ctx: MatchDayCtx = {
   dict,
   scoreDict: publicEn as Dict,
   viewerPlan: "pro",
+  readOnly: false,
 };
 
 const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
@@ -154,12 +161,13 @@ const cand = (o: Partial<MatchDayCandidate> = {}, f: Partial<MatchDayFixture> = 
   ...o,
 });
 
-const view = (courts: MatchDayCourt[]): MatchDayView => ({
+const view = (courts: MatchDayCourt[], playing_no_court: MatchDayFixture[] = []): MatchDayView => ({
   competition_id: "comp-1",
   date: "2026-10-31",
   tz: "Europe/London",
   now: "2026-10-31T11:31:00.000Z",
   courts,
+  playing_no_court,
   needs_you: [],
   results_owed: 0,
   fixtures_today: 6,
@@ -923,21 +931,31 @@ describe("the header, the filter and the poll's cadence", () => {
 
   it("M6 — the opened court while it is on the list; none opened → the first; opened but gone → lost, by name", () => {
     const courts = [court({ court_id: "c-1", court_name: "Court 1" }), court({ court_id: "c-2", court_name: "Court 2" })];
-    expect(resolveFocus(courts, null)).toEqual({ kind: "court", court: courts[0] });
-    expect(resolveFocus(courts, { id: "c-2", name: "Court 2" })).toEqual({ kind: "court", court: courts[1] });
+    const opened = (id: string, name: string) => ({ kind: "court" as const, id, name });
+    expect(resolveFocus(courts, [], null)).toEqual({ kind: "court", court: courts[0] });
+    expect(resolveFocus(courts, [], opened("c-2", "Court 2"))).toEqual({ kind: "court", court: courts[1] });
     // The filter (or the day) took Court 3 away: say so, never fall back to Court 1.
-    expect(resolveFocus(courts, { id: "c-3", name: "Court 3" })).toEqual({ kind: "lost", name: "Court 3" });
-    expect(resolveFocus([], { id: "c-3", name: "Court 3" })).toEqual({ kind: "lost", name: "Court 3" });
-    expect(resolveFocus([], null)).toEqual({ kind: "none" });
+    expect(resolveFocus(courts, [], opened("c-3", "Court 3"))).toEqual({ kind: "lost", name: "Court 3" });
+    expect(resolveFocus([], [], opened("c-3", "Court 3"))).toEqual({ kind: "lost", name: "Court 3" });
+    expect(resolveFocus([], [], null)).toEqual({ kind: "none" });
     // And in a filtered list: the opened court's division unchosen, it is lost.
     const kept = filterCourts([court({ court_id: "c-9", current: fx({ division_id: "d-u17" }) })], new Set(["d-u14"]));
-    expect(resolveFocus(kept, { id: "c-9", name: "Court 9" })).toEqual({ kind: "lost", name: "Court 9" });
+    expect(resolveFocus(kept, [], opened("c-9", "Court 9"))).toEqual({ kind: "lost", name: "Court 9" });
   });
 
   it("M1 — a poll's or a candidates fetch's answer is used only when it has the shape (a cut-off 200 is undefined)", () => {
     expect(isMatchDayView(view([court()]))).toBe(true);
     expect(isMatchDayView(view([]))).toBe(true);
-    for (const bad of [undefined, null, {}, [], { courts: "x", date: "d", tz: "UTC", now: "n" }, { ...view([]), courts: undefined }]) {
+    for (const bad of [
+      undefined,
+      null,
+      {},
+      [],
+      { courts: "x", date: "d", tz: "UTC", now: "n" },
+      { ...view([]), courts: undefined },
+      // B4: a view without the "Playing, no court" group (a server older than the page) is not one this page can draw.
+      { ...view([]), playing_no_court: undefined },
+    ]) {
       expect(isMatchDayView(bad), JSON.stringify(bad)).toBe(false);
     }
     expect(isCandidateList([])).toBe(true);
@@ -950,6 +968,9 @@ describe("the header, the filter and the poll's cadence", () => {
     expect(isLive(view([court({ state: "called" })]))).toBe(true);
     expect(isLive(view([court({ state: "free", current: null }), court({ state: "in_use_elsewhere", current: null })]))).toBe(false);
     expect(isLive(view([]))).toBe(false);
+    // B4: a match playing on no court is a match playing — its score moves, so the page polls fast, courts or none.
+    expect(isLive(view([], [fx()]))).toBe(true);
+    expect(isLive(view([court({ state: "free", current: null })], [fx()]))).toBe(true);
   });
 });
 
@@ -1356,5 +1377,371 @@ describe("A3 carry-in — a middle-dot line never leaves a dot dangling", () => 
     const html = renderToStaticMarkup(<DotLine parts={["a", "b", "c"]} />);
     expect([...html.matchAll(/>([abc])</g)].map((m) => m[1])).toEqual(["a", "b", "c"]);
     expect(html.split(">·<").length - 1).toBe(3);
+  });
+});
+
+// ---- Task B4 (owner rulings Q1, 2026-10-31) --------------------------------------------------------------------------------
+
+/** A match playing on no court, as the golden corpus folds it. */
+const goldenMatch = (key: string, summary: MatchDaySummary, o: Partial<MatchDayFixture> = {}) =>
+  fx({
+    id: `nc-${key}`,
+    sport_key: key,
+    home: HOME.name,
+    away: AWAY.name,
+    home_entrant_id: HOME.id,
+    away_entrant_id: AWAY.id,
+    headline: summary.headline ?? null,
+    summary,
+    ...o,
+  });
+
+const roCtx: MatchDayCtx = { ...ctx, readOnly: true };
+
+const noCourtFocus = (f: MatchDayFixture, c: MatchDayCtx = ctx) =>
+  renderToStaticMarkup(<NoCourtFocus ctx={c} fixture={f} backLabel="All courts" onBack={() => {}} onChanged={() => {}} />);
+
+const noCourtList = (fixtures: MatchDayFixture[], openLabel = t(dict, "matchDay.focus.openPad"), selectedId: string | null = null) =>
+  renderToStaticMarkup(
+    <NoCourtList
+      fixtures={fixtures}
+      selectedId={selectedId}
+      dict={dict}
+      hrefOf={(f) => routes.fixture(ctx.orgSlug, ctx.compSlug, f.division_slug, f.fixture_no)}
+      openLabel={openLabel}
+      onSelect={() => {}}
+    />,
+  );
+
+const shellWith = (v: MatchDayView, o: { readOnly?: boolean; focusCourtId?: string | null } = {}) =>
+  renderToStaticMarkup(
+    <MatchDayShell
+      competitionId="comp-1"
+      competitionName="Safe Badminton 2026"
+      orgSlug="acme"
+      compSlug="safe-badminton"
+      locale="en"
+      divisions={[]}
+      initial={v}
+      dict={dict}
+      scoreDict={publicEn as Dict}
+      viewerPlan="pro"
+      {...o}
+    />,
+  );
+
+describe("B4 — 'Playing, no court': the group under the courts", () => {
+  it("EMPTY CASE FIRST: no match playing on no court — no group, no heading", () => {
+    expect(noCourtList([])).toBe("");
+    const html = shellWith(view([court()]));
+    expect(html).not.toContain('data-testid="md-no-court"');
+    expect(html).not.toContain(`>${t(dict, "matchDay.noCourt.title")}<`);
+  });
+
+  it("each row: the match, its division and stage, its score in the court rows' own form, Live only while its stream is, the scorer mark, and 'Open pad' to its console", () => {
+    const rows = [
+      goldenMatch("badminton", BADMINTON!, { id: "nc-1", stream: "live", scorer_attention: "no_scorer" }),
+      fx({ id: "nc-2", home: "Isha Rao", away: "Lily Chen", fixture_no: 12, summary: null, headline: null, stream: "waiting" }),
+    ];
+    const html = noCourtList(rows);
+    expect(html).toContain(`>${t(dict, "matchDay.noCourt.title")}<`);
+    const [first, second] = rowsOf(html, "md-no-court-row");
+    expect(rowsOf(html, "md-no-court-row")).toHaveLength(2);
+    expect(first).toContain(`>${esc(t(dict, "matchDay.match", { home: HOME.name, away: AWAY.name }))}<`);
+    expect(first).toContain(`>${esc("Girls U14")} · ${esc("Swiss round 3")}<`);
+    // The court rows' own score form (`compactScore` of the engine's structure), not a headline typed here.
+    expect(first).toContain(`>${esc(compactScore(scoreLine(rows[0]!)!))}<`);
+    expect(first).toContain('data-md-stream="live"');
+    expect(first).toContain('data-scorer="no_scorer"');
+    expect(first).toContain(`>${t(dict, "matchDay.scorer.no_scorer")}<`);
+    // A stream still waiting for its phone is not live: no badge; no state, no score line; no attention, no mark.
+    expect(second).not.toContain("data-md-stream");
+    expect(second).not.toContain("data-md-row-score");
+    expect(second).not.toContain('data-scorer="');
+    // "Open pad": a sibling link to the match's console (never inside the row's button), named by its match.
+    const opens = html.match(/<a [^>]*data-testid="md-no-court-open"[^>]*>/g) ?? [];
+    expect(opens).toHaveLength(2);
+    expect(opens[1]).toContain(`href="${routes.fixture("acme", "safe-badminton", "girls-u14", 12)}"`);
+    expect(opens[1]).toContain(`aria-label="${esc(`${t(dict, "matchDay.focus.openPad")}: ${t(dict, "matchDay.match", { home: "Isha Rao", away: "Lily Chen" })}`)}"`);
+    expect(html).not.toMatch(/<button[^>]*>(?:(?!<\/button>).)*<a /s);
+  });
+
+  it("the selected match, and only it, is marked", () => {
+    const html = noCourtList([fx({ id: "nc-1" }), fx({ id: "nc-2" })], t(dict, "matchDay.focus.openPad"), "nc-2");
+    const [a, b] = (html.match(/<button[^>]*data-testid="md-no-court-row"[^>]*>/g) ?? []) as [string, string];
+    expect(a).not.toContain('aria-current="true"');
+    expect(b).toContain('aria-current="true"');
+  });
+
+  it("its panel: the match, the scoreboard named by the match, the scorer QR folded — and no queue, nothing to call, no Undo", () => {
+    const f = goldenMatch("badminton", BADMINTON!, { started_at: "2026-10-31T11:20:00.000Z" });
+    const html = noCourtFocus(f);
+    expect(tagWith(html, "md-focus")).toContain('data-no-court="true"');
+    expect(html).toContain(`>${t(dict, "matchDay.noCourt.title")}<`);
+    expect(html).toContain(`aria-label="${esc(t(dict, "matchDay.noCourt.scoreboard", { match: t(dict, "matchDay.match", { home: HOME.name, away: AWAY.name }) }))}"`);
+    expect(scoreboardOf(html)).not.toBe("");
+    expect(tagWith(html, "md-scorer")).toContain('data-folded="true"');
+    expect(html).toContain('data-role="device-link-panel"');
+    expect(html).not.toContain(`>${t(dict, "matchDay.queue.title")}<`);
+    expect(html).not.toContain('data-testid="md-undo-call"');
+    expect(html).not.toContain(`>${t(dict, "matchDay.candidate.call", { court: "" }).trim()}`);
+    expect(tagWith(html, "md-open-pad")).toContain(`href="${routes.fixture("acme", "safe-badminton", "girls-u14", 7)}"`);
+    // Its stream: the same "+ Connect a stream" a playing court offers.
+    expect(html).toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+  });
+
+  it("SWEEP — every registered sport with a recorded golden stream: a match on no court shows that sport's scoreboard, both sides named (count reported)", () => {
+    let swept = 0;
+    let noCorpus = 0;
+    for (const key of SPORTS) {
+      const summary = inPlaySummary(key);
+      if (summary === null) {
+        expect(CORPORA.some((c) => c.key === key), `${key} has a corpus but no in-play moment`).toBe(false);
+        noCorpus++;
+        continue;
+      }
+      const sb = scoreboardOf(noCourtFocus(goldenMatch(key, summary)));
+      expect(sb, key).not.toBe("");
+      expect(sb, key).toContain(esc(HOME.name));
+      expect(sb, key).toContain(esc(AWAY.name));
+      expect(sb, key).toContain(t(pub, "matchCentre.status.in_play"));
+      swept++;
+    }
+    console.info(`[B4 sweep] no-court scoreboards: ${swept} sports swept, ${noCorpus} with no corpus, of ${SPORTS.length}`);
+    expect(swept + noCorpus).toBe(SPORTS.length);
+    expect(swept).toBeGreaterThan(5);
+  });
+
+  it("filterNoCourt: every match with no filter; only the chosen divisions' with one (empty in, empty out)", () => {
+    const ms = [fx({ id: "a", division_id: "d-u14" }), fx({ id: "b", division_id: "d-u17" })];
+    expect(filterNoCourt([], null)).toEqual([]);
+    expect(filterNoCourt([], new Set(["d-u14"]))).toEqual([]);
+    expect(filterNoCourt(ms, null)).toEqual(ms);
+    expect(filterNoCourt(ms, new Set(["d-u17"])).map((f) => f.id)).toEqual(["b"]);
+    expect(filterNoCourt(ms, new Set(["d-x"]))).toEqual([]);
+  });
+
+  it("focus: no courts → the first match on no court; an opened match while it plays; once it ends → lost, by its match", () => {
+    const ms = [fx({ id: "nc-1" }), fx({ id: "nc-2" })];
+    const courts = [court({ court_id: "c-1" })];
+    expect(resolveFocus([], [], null)).toEqual({ kind: "none" });
+    expect(resolveFocus([], ms, null)).toEqual({ kind: "match", fixture: ms[0] });
+    // Courts first: the desktop's default stays the first court while there is one.
+    expect(resolveFocus(courts, ms, null)).toEqual({ kind: "court", court: courts[0] });
+    expect(resolveFocus(courts, ms, { kind: "match", id: "nc-2", name: "Zara Khan v Ella Brooks" })).toEqual({ kind: "match", fixture: ms[1] });
+    expect(resolveFocus(courts, [ms[0]!], { kind: "match", id: "nc-2", name: "Zara Khan v Ella Brooks" })).toEqual({
+      kind: "lost",
+      name: "Zara Khan v Ella Brooks",
+    });
+    // A court and a match never answer for each other, even sharing an id.
+    expect(resolveFocus([court({ court_id: "nc-1" })], [], { kind: "match", id: "nc-1", name: "m" })).toEqual({ kind: "lost", name: "m" });
+    expect(resolveFocus([], ms, { kind: "court", id: "nc-1", name: "c" })).toEqual({ kind: "lost", name: "c" });
+  });
+});
+
+describe("B4 — the header's counts", () => {
+  it("EMPTY CASE FIRST: no courts and nothing playing on no court — '0 courts', and nothing else", () => {
+    expect(headerCountParts(dict, "en", "court", [], 0)).toEqual([plural(dict, "matchDay.header.places.court", 0, "en")]);
+  });
+
+  it("no courts, matches on no court: the no-court count alone (never '0 playing · 0 free')", () => {
+    expect(headerCountParts(dict, "en", "court", [], 2)).toEqual([plural(dict, "matchDay.header.noCourt", 2, "en")]);
+    expect(headerCountParts(dict, "en", "court", [], 1)).toEqual([plural(dict, "matchDay.header.noCourt", 1, "en")]);
+    expect(plural(dict, "matchDay.header.noCourt", 1, "en")).not.toBe(plural(dict, "matchDay.header.noCourt", 2, "en").replace("2", "1"));
+  });
+
+  it("courts: courts · playing · free, then the no-court count only when there is one", () => {
+    const courts = [court(), court({ court_id: "c-2", state: "free", current: null })];
+    const base = [
+      plural(dict, "matchDay.header.places.court", 2, "en"),
+      t(dict, "matchDay.header.playing", { count: 1 }),
+      t(dict, "matchDay.header.free", { count: 1 }),
+    ];
+    expect(headerCountParts(dict, "en", "court", courts, 0)).toEqual(base);
+    expect(headerCountParts(dict, "en", "court", courts, 3)).toEqual([...base, plural(dict, "matchDay.header.noCourt", 3, "en")]);
+  });
+
+  it("the words exist in all four locales, singular and plural (count reported)", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS)) {
+      for (const key of [
+        "matchDay.header.noCourt.one",
+        "matchDay.header.noCourt.other",
+        "matchDay.noCourt.title",
+        "matchDay.noCourt.scoreboard",
+        "matchDay.noCourt.preview",
+        "matchDay.focus.openMatch",
+        "matchDay.back.list",
+        "matchDay.readOnly",
+        "matchDay.needsYou.findCourt",
+      ]) {
+        expect(typeof d[key], `${locale} ${key}`).toBe("string");
+        checked++;
+      }
+    }
+    expect(checked).toBe(4 * 9);
+  });
+});
+
+describe("B4 — Q1(c): a day with no courts", () => {
+  it("EMPTY CASE FIRST: no courts and nothing playing — the empty page, saying what to do, with the schedule board", () => {
+    const html = shellWith(view([]));
+    expect(html).toContain('data-testid="md-empty"');
+    expect(html).toContain(`>${esc(t(dict, "matchDay.empty.title"))}<`);
+    expect(html).toContain(`>${esc(t(dict, "matchDay.empty.body"))}<`);
+    expect(html).toContain(`href="${routes.competitionSchedule("acme", "safe-badminton")}"`);
+    expect(html).not.toContain('data-testid="md-no-court"');
+  });
+
+  it("no courts, a match playing on none: the group IS the list and its match is open beside it — never the empty page", () => {
+    const m = fx({ id: "nc-1", sport_key: "chess", division_name: "Rapid" });
+    const html = shellWith(view([], [m]));
+    expect(html).not.toContain('data-testid="md-empty"');
+    expect(html).not.toContain(`>${esc(t(dict, "matchDay.empty.title"))}<`);
+    expect(html).toContain('data-testid="md-no-court"');
+    expect(html).not.toContain(`aria-label="${esc(t(dict, "matchDay.list.label"))}"`);
+    expect(tagWith(html, "md-focus")).toContain('data-fixture-id="nc-1"');
+    expect(html).toContain(`>${plural(dict, "matchDay.header.noCourt", 1, "en")}<`);
+    expect(html).toContain(`>${t(dict, "matchDay.back.list")}<`);
+  });
+
+  it("courts AND matches on no court: the courts, then the group under them; the first court is focused", () => {
+    const html = shellWith(view([court()], [fx({ id: "nc-1" })]));
+    const list = html.indexOf(`aria-label="${esc(t(dict, "matchDay.list.label"))}"`);
+    expect(list).toBeGreaterThan(-1);
+    expect(html.indexOf('data-testid="md-no-court"')).toBeGreaterThan(list);
+    expect(tagWith(html, "md-focus")).toContain('data-court-id="c-3"');
+  });
+});
+
+describe("B4 — Q1(b): a view-only member sees the day and nothing that writes", () => {
+  const CALLED = () => court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) });
+
+  it("EMPTY CASE FIRST (the organiser's page is unchanged): an editor gets Undo, the scorer QR, 'Open pad' and '+ Connect a stream'", () => {
+    expect(focus(CALLED())).toContain('data-testid="md-undo-call"');
+    const playing = focus(court());
+    expect(playing).toContain('data-testid="md-scorer"');
+    expect(playing).toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+    expect(playing).toContain(`>${t(dict, "matchDay.focus.openPad")}<`);
+    expect(shellWith(view([court()]))).not.toContain('data-testid="md-read-only"');
+  });
+
+  it("a called court: no Undo call; a playing court: no scorer QR, no '+ Connect a stream', 'Open match' for the pad", () => {
+    const roFocus = (c: MatchDayCourt) =>
+      renderToStaticMarkup(
+        <CourtFocus ctx={roCtx} court={c} backLabel="All courts" onBack={() => {}} onChanged={() => {}} onRefused={() => {}} refreshKey="k" divisions={null} />,
+      );
+    const called = roFocus(CALLED());
+    expect(called).toContain(`>${t(dict, "matchDay.called.title")}<`);
+    expect(called).not.toContain('data-testid="md-undo-call"');
+    expect(called).not.toContain('data-testid="md-scorer"');
+    const playing = roFocus(court());
+    expect(scoreboardOf(playing)).not.toBe("");
+    expect(playing).not.toContain('data-testid="md-scorer"');
+    expect(playing).not.toContain('data-role="device-link-panel"');
+    expect(playing).not.toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+    expect(playing).toContain(`>${t(dict, "matchDay.focus.openMatch")}<`);
+    expect(playing).not.toContain(`>${t(dict, "matchDay.focus.openPad")}<`);
+  });
+
+  it("a free court's candidates: listed, with no call button at all", () => {
+    const candidates = [cand({}, { id: "x-1" }), cand({ source: "no_court", from_court_name: null }, { id: "x-2" })];
+    const editor = renderToStaticMarkup(<CandidateRows ctx={ctx} court={court({ state: "free", current: null })} candidates={candidates} onCall={() => {}} />);
+    const viewer = renderToStaticMarkup(<CandidateRows ctx={roCtx} court={court({ state: "free", current: null })} candidates={candidates} onCall={() => {}} />);
+    expect(editor.match(/<button/g) ?? []).toHaveLength(2);
+    expect(rowsOf(viewer, "md-candidate")).toHaveLength(2);
+    expect(viewer).not.toContain("<button");
+  });
+
+  it("a match on no court: its scoreboard, no scorer QR, 'Open match'", () => {
+    const html = noCourtFocus(goldenMatch("badminton", BADMINTON!), roCtx);
+    expect(scoreboardOf(html)).not.toBe("");
+    expect(html).not.toContain('data-testid="md-scorer"');
+    expect(html).not.toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+    expect(html).toMatch(new RegExp(`data-testid="md-open-pad"[^>]*>${t(dict, "matchDay.focus.openMatch")}<`));
+  });
+
+  it("the page: 'View only', and no Needs-you button even with rows waiting (the competition page shows a viewer none either)", () => {
+    const rows = deskRows([ONE_OF_EACH.no_scorer, ONE_OF_EACH.unscheduled]);
+    expect(rows.length).toBe(2);
+    const html = shellWith({ ...view([court()]), needs_you: rows, results_owed: 0 }, { readOnly: true });
+    expect(html).toContain(`>${esc(t(dict, "matchDay.readOnly"))}<`);
+    expect(html).not.toContain('data-testid="md-needs-you-toggle"');
+    expect(html).not.toContain('data-testid="md-needs-you"');
+    // The editor's page with the same rows has the button: the difference is the role, not the rows.
+    expect(shellWith({ ...view([court()]), needs_you: rows, results_owed: 0 })).toContain('data-testid="md-needs-you-toggle"');
+  });
+});
+
+describe("B4 — §9 carried: Needs you's unscheduled row finds a court", () => {
+  const BASE = routes.competitionMatchDay("acme", "safe-badminton");
+
+  it("EMPTY CASE FIRST: no rows in, no rows out; a row of any other kind is the desk's, untouched (count reported)", () => {
+    expect(withFindCourt(dict, [], [court({ state: "free", current: null })], BASE)).toEqual([]);
+    const others = deskRows(KINDS.filter((k) => k !== "unscheduled").map((k) => ONE_OF_EACH[k]));
+    const out = withFindCourt(dict, others, [court({ state: "free", current: null })], BASE);
+    expect(out).toEqual(others);
+    expect(out.filter((r) => r.alt !== undefined)).toEqual([]);
+    console.info(`[B4] Needs-you rows of other kinds left untouched: ${out.length} (${new Set(out.map((r) => r.kind)).size} kinds)`);
+    expect(new Set(out.map((r) => r.kind)).size, "every other kind checked").toBe(KINDS.length - 1);
+  });
+
+  it("a free court: 'Find a court' opens the FIRST free court's candidates (?court=); the schedule board stays the row's action", () => {
+    const [row] = deskRows([ONE_OF_EACH.unscheduled]);
+    const courts = [court({ court_id: "c-1" }), court({ court_id: "c-4", state: "free", current: null }), court({ court_id: "c-6", state: "free", current: null })];
+    expect(firstFreeCourt(courts)?.court_id).toBe("c-4");
+    const [out] = withFindCourt(dict, [row!], courts, BASE);
+    expect(out!.alt).toEqual({ label: t(dict, "matchDay.needsYou.findCourt"), href: `${BASE}?court=c-4` });
+    expect(out!.action).toEqual(row!.action);
+    expect(out!.action.href).toBe(routes.divisionSchedule("acme", "safe-badminton", "girls-u14"));
+  });
+
+  it("no court free: 'Find a court' is the page itself (the list), never a court that cannot take the match", () => {
+    const [row] = deskRows([ONE_OF_EACH.unscheduled]);
+    expect(firstFreeCourt([court(), court({ court_id: "c-2", state: "called" })])).toBeNull();
+    expect(firstFreeCourt([])).toBeNull();
+    const [out] = withFindCourt(dict, [row!], [court(), court({ court_id: "c-2", state: "in_use_elsewhere", current: null })], BASE);
+    expect(out!.alt!.href).toBe(BASE);
+  });
+
+  it("the list draws it as a second, quieter link beside the action — and the competition page's rows (no alt) draw none", () => {
+    const rows = withFindCourt(dict, deskRows([ONE_OF_EACH.unscheduled, ONE_OF_EACH.no_scorer]), [court({ court_id: "c-4", state: "free", current: null })], BASE);
+    const html = renderToStaticMarkup(<NeedsYou dict={dict} items={rows} />);
+    const alts = html.match(/<a [^>]*data-needs-you-alt[^>]*>[^<]*<\/a>/g) ?? [];
+    // One row with it, drawn once per layout (phone and md), each to the same court.
+    expect(alts).toHaveLength(2);
+    for (const a of alts) {
+      expect(a).toContain(`href="${BASE}?court=c-4"`);
+      expect(a).toContain(`>${t(dict, "matchDay.needsYou.findCourt")}<`);
+      expect(a).not.toMatch(/\sbtn-primary[\s"]/);
+    }
+    expect(renderToStaticMarkup(<NeedsYou dict={dict} items={deskRows([ONE_OF_EACH.unscheduled])} />)).not.toContain("data-needs-you-alt");
+  });
+
+  it("?court=<id> opens that court first — full screen on a phone, as a tap would; an id not on the list is ignored", () => {
+    const courts = [court(), court({ court_id: "c-5", state: "free", current: null })];
+    const html = shellWith(view(courts), { focusCourtId: "c-5" });
+    expect(tagWith(html, "md-focus")).toContain('data-court-id="c-5"');
+    expect(tagWith(html, "md-focus")).not.toMatch(/[\s"]max-md:hidden[\s"]/);
+    expect(tagWith(html, "md-list")).toMatch(/[\s"]max-md:hidden[\s"]/);
+    const ignored = shellWith(view(courts), { focusCourtId: "c-404" });
+    expect(tagWith(ignored, "md-focus")).toContain('data-court-id="c-3"');
+    expect(tagWith(ignored, "md-list")).not.toMatch(/[\s"]max-md:hidden[\s"]/);
+  });
+});
+
+describe("B4 — A4 n1/n2: the scorer fold and the panel's More fold are separate groups", () => {
+  it("the fold is a NAMED group whose chevron turns on its own open only, and More's chevron turns on More's own only", () => {
+    const html = focus(court());
+    const scorer = tagWith(html, "md-scorer");
+    expect(scorer).toMatch(/class="[^"]*\bgroup\/scorer\b/);
+    expect(scorer).not.toMatch(/class="group\s|\sgroup\s|\sgroup"/);
+    const panel = html.slice(html.indexOf('data-testid="md-scorer"'));
+    expect(panel).toContain("group-open/scorer:rotate-90");
+    const more = tagWith(html, "device-link-more");
+    expect(more).toMatch(/class="[^"]*\bgroup\/more\b/);
+    expect(panel).toContain("group-open/more:rotate-90");
+    // No unnamed variant left anywhere in the court's panel: an unnamed `group-open:` would turn on ANY open ancestor group.
+    expect(html).not.toMatch(/[\s"]group-open:/);
   });
 });

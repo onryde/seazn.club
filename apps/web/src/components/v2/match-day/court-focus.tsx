@@ -14,6 +14,14 @@
 // it never kills a printed sheet. Open on a called court (the hand-over is next); folded behind its heading on a playing one (the
 // scorer is on; the scoreboard comes first), the No-scorer mark staying on the heading. Keyed by the match, so another court's
 // match never shows the last one's link.
+//
+// Task B4 (owner ruling Q1):
+//  - a match playing on NO court (an untimed bracket match, an online board) opens `NoCourtFocus`: the playing court's own
+//    panel — the match, its scoreboard or live stream, the scorer's QR — with no queue and nothing to call;
+//  - a view-only reader (`ctx.readOnly`: an org member who may view but not edit) sees every panel with nothing that writes:
+//    no Undo call, no Call (candidate-list.tsx), no scorer QR (showing it mints a link), no "+ Connect a stream" and no stream
+//    settings; "Open pad" reads "Open match", since the console decides what that reader may do there. The server refuses
+//    every one of those writes on its own (read-only-staff.test.ts); hiding them is the page being honest, not the guard.
 import { useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -46,6 +54,8 @@ export interface MatchDayCtx {
   scoreDict: Dict;
   /** The organisation's plan class: the scorer QR's paywall copy (`DeviceLinkPanel`). */
   viewerPlan: ViewerPlan;
+  /** A view-only reader (B4, owner ruling Q1b): every panel shows, nothing that writes does. */
+  readOnly: boolean;
 }
 
 /** The match's console page: its pad and its per-match stream panel. */
@@ -95,15 +105,7 @@ export function CourtFocus({
       aria-label={court.court_name}
       className={`grid min-w-0 content-start gap-4${hiddenOnPhone ? " max-md:hidden" : ""}`}
     >
-      <button
-        type="button"
-        data-testid="md-back"
-        onClick={onBack}
-        className="-ml-2 inline-flex min-h-11 items-center gap-1 justify-self-start rounded-lg px-2 text-sm font-medium text-purple-700 hover:bg-purple-50 md:hidden"
-      >
-        <span aria-hidden>‹</span>
-        {backLabel}
-      </button>
+      <BackButton label={backLabel} onBack={onBack} />
 
       <header className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
@@ -112,11 +114,7 @@ export function CourtFocus({
             <span>{t(dict, `matchDay.noun.${court.sport_noun}`)}</span> · <span>{court.venue_name}</span>
           </p>
         </div>
-        {f !== null && (court.state === "playing" || court.state === "called") && (
-          <Link href={fixtureHref(ctx, f)} className="btn btn-ghost min-h-11 shrink-0 text-sm lg:min-h-0 lg:py-1.5">
-            {t(dict, "matchDay.focus.openPad")}
-          </Link>
-        )}
+        {f !== null && (court.state === "playing" || court.state === "called") && <OpenPadLink ctx={ctx} fixture={f} />}
       </header>
 
       {notice !== null && (
@@ -143,24 +141,26 @@ export function CourtFocus({
             <CourtStreamPreview
               fixture={f}
               part={preview}
-              courtName={court.court_name}
+              label={t(dict, "matchDay.preview.label", { court: court.court_name })}
               streamHref={`${fixtureHref(ctx, f)}?stream=open`}
               dict={dict}
               scoreDict={ctx.scoreDict}
+              readOnly={ctx.readOnly}
             />
           ) : (
             <CourtScoreboard
               fixture={f}
-              courtName={court.court_name}
+              label={t(dict, "matchDay.focus.scoreboard", { court: court.court_name })}
               streamHref={`${fixtureHref(ctx, f)}?stream=open`}
               dict={dict}
               scoreDict={ctx.scoreDict}
+              readOnly={ctx.readOnly}
             />
           )}
         </>
       )}
       {court.state === "called" && f !== null && <CalledPanel ctx={ctx} fixture={f} onChanged={onChanged} onRefused={onRefused} />}
-      {f !== null && (court.state === "playing" || court.state === "called") && (
+      {f !== null && (court.state === "playing" || court.state === "called") && !ctx.readOnly && (
         <ScorerPanel
           ctx={ctx}
           fixture={f}
@@ -191,6 +191,100 @@ export function CourtFocus({
 
       {court.state !== "free" && <Queue ctx={ctx} court={court} />}
     </section>
+  );
+}
+
+/**
+ * A match playing on NO court (task B4, owner ruling Q1: an untimed bracket match, an online board). The playing court's own
+ * panel — the match, its scoreboard (or its live stream's preview), the scorer's QR folded behind its heading — with no queue
+ * and nothing to call: there is no court to queue on, or to call onto. On a phone it is a full screen of its own, like a court.
+ */
+export function NoCourtFocus({
+  ctx,
+  fixture: f,
+  backLabel,
+  onBack,
+  onChanged,
+  hiddenOnPhone = false,
+}: {
+  ctx: MatchDayCtx;
+  fixture: MatchDayFixture;
+  backLabel: string;
+  onBack: () => void;
+  /** A scorer link made or revoked here: refresh the view now (a live link is a scorer, so the mark goes). */
+  onChanged: () => void;
+  hiddenOnPhone?: boolean;
+}) {
+  const { dict } = ctx;
+  const match = matchLabel(dict, f);
+  const preview = streamPreviewOf(f);
+  const streamHref = `${fixtureHref(ctx, f)}?stream=open`;
+  return (
+    <section
+      data-testid="md-focus"
+      data-state="playing"
+      data-no-court="true"
+      data-fixture-id={f.id}
+      aria-label={t(dict, "matchDay.noCourt.title")}
+      className={`grid min-w-0 content-start gap-4${hiddenOnPhone ? " max-md:hidden" : ""}`}
+    >
+      <BackButton label={backLabel} onBack={onBack} />
+      <header className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <h2 className="min-w-0 truncate text-xl font-semibold text-purple-950">{t(dict, "matchDay.noCourt.title")}</h2>
+        <OpenPadLink ctx={ctx} fixture={f} />
+      </header>
+      <MatchLine ctx={ctx} fixture={f} />
+      {preview !== null ? (
+        <CourtStreamPreview
+          fixture={f}
+          part={preview}
+          label={t(dict, "matchDay.noCourt.preview", { match })}
+          streamHref={streamHref}
+          dict={dict}
+          scoreDict={ctx.scoreDict}
+          readOnly={ctx.readOnly}
+        />
+      ) : (
+        <CourtScoreboard
+          fixture={f}
+          label={t(dict, "matchDay.noCourt.scoreboard", { match })}
+          streamHref={streamHref}
+          dict={dict}
+          scoreDict={ctx.scoreDict}
+          readOnly={ctx.readOnly}
+        />
+      )}
+      {!ctx.readOnly && <ScorerPanel ctx={ctx} fixture={f} attention={f.scorer_attention} folded onChanged={onChanged} />}
+    </section>
+  );
+}
+
+/** "‹ All courts": a phone's way back to the list. */
+function BackButton({ label, onBack }: { label: string; onBack: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="md-back"
+      onClick={onBack}
+      className="-ml-2 inline-flex min-h-11 items-center gap-1 justify-self-start rounded-lg px-2 text-sm font-medium text-purple-700 hover:bg-purple-50 md:hidden"
+    >
+      <span aria-hidden>‹</span>
+      {label}
+    </button>
+  );
+}
+
+/** The match's console page: "Open pad" for an organiser, "Open match" for a view-only reader (the console decides what they
+ *  may do there — an accepted official among them still scores). */
+function OpenPadLink({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixture }) {
+  return (
+    <Link
+      href={fixtureHref(ctx, fixture)}
+      data-testid="md-open-pad"
+      className="btn btn-ghost min-h-11 shrink-0 text-sm lg:min-h-0 lg:py-1.5"
+    >
+      {t(ctx.dict, ctx.readOnly ? "matchDay.focus.openMatch" : "matchDay.focus.openPad")}
+    </Link>
   );
 }
 
@@ -252,13 +346,15 @@ function CalledPanel({
           {t(dict, "matchDay.called.at", { time: fmtPublicTime(ctx.locale, ctx.tz, fixture.called_at) })}
         </p>
       )}
-      <button
-        type="button"
-        data-testid="md-undo-call"
-        disabled={busy}
-        onClick={() => void undo()}
-        className="btn mt-4 min-h-11 border border-white/30 text-court-ink hover:bg-white/10"
-      >{busy ? t(dict, "matchDay.called.undoing") : t(dict, "matchDay.called.undo")}</button>
+      {!ctx.readOnly && (
+        <button
+          type="button"
+          data-testid="md-undo-call"
+          disabled={busy}
+          onClick={() => void undo()}
+          className="btn mt-4 min-h-11 border border-white/30 text-court-ink hover:bg-white/10"
+        >{busy ? t(dict, "matchDay.called.undoing") : t(dict, "matchDay.called.undo")}</button>
+      )}
     </div>
   );
 }
@@ -304,12 +400,15 @@ function ScorerPanel({
   );
   if (folded) {
     return (
-      <details data-testid="md-scorer" data-folded="true" className="group min-w-0">
+      // Keyed by the match (A4 n2): the fold's open state is the DOM's, so without a key an opened fold carried over to the next
+      // playing court the organiser tapped. A named group (A4 n1): the panel inside has its own "More" fold (`group/more`), and
+      // an unnamed `group` here turned More's chevron too the moment this fold opened.
+      <details key={fixture.id} data-testid="md-scorer" data-folded="true" className="group/scorer min-w-0">
         <summary className="flex min-h-11 min-w-0 cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 rounded-lg [&::-webkit-details-marker]:hidden">
           <svg
             aria-hidden
             viewBox="0 0 16 16"
-            className="h-3.5 w-3.5 shrink-0 fill-none stroke-current text-slate-500 transition-transform group-open:rotate-90 motion-reduce:transition-none"
+            className="h-3.5 w-3.5 shrink-0 fill-none stroke-current text-slate-500 transition-transform group-open/scorer:rotate-90 motion-reduce:transition-none"
             strokeWidth={1.8}
           >
             <path d="M6 3.5 10.5 8 6 12.5" strokeLinecap="round" strokeLinejoin="round" />

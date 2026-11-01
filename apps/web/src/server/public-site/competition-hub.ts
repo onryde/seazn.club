@@ -422,6 +422,8 @@ function cricketBattingIndex(
 export function hubHeader(
   fixture: PublicFixture,
   sides: [SideT, SideT],
+  // Unread since task B3: the sub-lines come from the summary's structure (`openSetSubLines` → lib/score/levels), not the sport.
+  // Kept in the signature so every call site keeps passing the division's sport for the next field that needs one.
   sportKey: string,
   generatedAt: string,
 ): MatchCentreHeaderT {

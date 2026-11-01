@@ -128,11 +128,17 @@ export interface MatchDayView {
   tz: string;
   now: string;
   courts: MatchDayCourt[];
+  /** This competition's matches in play with NO court (owner ruling Q1, task B4): an untimed bracket match, an online chess
+   *  board — every `in_play` match of a live (not archived) division whose `court_id` is null, in kick-off order (a match with
+   *  no recorded kick-off last). Each carries what a playing court's match carries (`serving`, `scorer_attention`,
+   *  `live_video`), so its panel is the same scoreboard and scorer QR. Empty when there is none. */
+  playing_no_court: MatchDayFixture[];
   /** The competition desk's Needs-you rows (`needsYouItems`), in the reader's language — on a match day only (B1, spec §9: the
    *  list lives in one place at a time, `needsYouHome`); empty before the day, when the competition page carries it. */
   needs_you: NeedsYouItem[];
   /** How many matches owe a result: the desk's `result_missing` attentions, summed (`resultsOwedOf`); 0 when not a match day. */
   results_owed: number;
-  /** This competition's matches today, each on its own division's day, plus those in play (`countFixturesToday`). */
+  /** This competition's matches today, each on its own division's day, plus those in play (`countFixturesToday`, read once per
+   *  poll: the competition desk's own `fixtures_today`). */
   fixtures_today: number;
 }

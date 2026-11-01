@@ -46,7 +46,9 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
       }
       (moments.some((m) => setsOf(m) !== null) ? withTable : without).push(key);
     }
-    for (const key of SET_SPORTS) expect(withTable, `${key} should carry a set table`).toContain(key);
+    // Both ways (B3 review minor): every typed set sport carries a set table AND every sport the engine gives one is typed here
+    // — a new set sport added to the registry fails this until SET_SPORTS (and every sweep below it) covers it.
+    expect([...withTable].sort(), "the sports whose engine carries a set table are exactly SET_SPORTS").toEqual([...SET_SPORTS].sort());
     expect(without, "the non-set sports swept").toContain("cricket");
     expect(without.length).toBeGreaterThan(2);
     expect(checked).toBe(all().length);

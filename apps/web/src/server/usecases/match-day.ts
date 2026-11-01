@@ -175,7 +175,26 @@ interface Board {
   courts: BoardCourt[];
   /** This competition's ready "no court yet" matches, in order; read only when asked for. */
   noCourt: FixtureRow[];
+  /** This competition's matches in play on no court, in its live divisions, in kick-off order (`playingNoCourtOf`). */
+  playingNoCourt: FixtureRow[];
   courtNames: Map<string, string>;
+}
+
+/** A kick-off as a sort key: a match with no recorded kick-off sorts after every one that has one. */
+const kickoffKey = (r: Pick<FixtureRow, "started_at">): number =>
+  r.started_at === null ? Infinity : new Date(r.started_at).getTime();
+
+/**
+ * "Playing, no court" (owner ruling Q1, task B4): of the board's rows, every match IN PLAY with no court in a LIVE division —
+ * an untimed bracket match, an online chess board — in kick-off order (no kick-off last), then by number and id. The retired
+ * competition-page strip was the one place these showed; no court row can carry one, so this is their only place now.
+ * `rows` holds every in-play match of the competition whatever its day (the fetch's `IN_PLAY` arm), archived divisions'
+ * included — so the live-division test is this function's, not the fetch's.
+ */
+function playingNoCourtOf(rows: readonly FixtureRow[], liveDivisions: ReadonlySet<string>): FixtureRow[] {
+  return rows
+    .filter((r) => r.status === IN_PLAY && r.court_id === null && liveDivisions.has(r.division_id))
+    .sort((a, b) => kickoffKey(a) - kickoffKey(b) || a.fixture_no - b.fixture_no || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 /** The board: everything the view and the candidates read, in one tenant transaction. */
@@ -369,7 +388,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
             (a.id < b.id ? -1 : 1),
         )
     : [];
-  return { comp, tz, day, courts, noCourt, courtNames };
+  return { comp, tz, day, courts, noCourt, playingNoCourt: playingNoCourtOf(rows, liveDivisions), courtNames };
 }
 
 /** What only a playing court's match carries: who serves (S1), the desk's scorer attention, and its live stream's video (A4). */
@@ -424,8 +443,9 @@ function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, e
 }
 
 /**
- * Match Day for one competition, now: its courts with what each is doing and its queue, the desk's Needs-you list in the
- * reader's language (`locale`, default English), the results owed, and today's match count. Reads only.
+ * Match Day for one competition, now: its courts with what each is doing and its queue, its matches playing on no court, the
+ * desk's Needs-you list in the reader's language (`locale`, default English), the results owed, and today's match count. Reads
+ * only.
  */
 export async function getMatchDay(
   auth: AuthCtx,
@@ -433,30 +453,37 @@ export async function getMatchDay(
   now: Date = new Date(),
   opts: { locale?: Locale } = {},
 ): Promise<MatchDayView> {
-  const { board, fixturesToday, serving } = await withTenant(auth.orgId, async (tx) => {
+  const { board, serving } = await withTenant(auth.orgId, async (tx) => {
     const board = await readBoard(tx, competitionId, now, { noCourt: false });
-    // Who serves, on this competition's playing courts only, for a sport whose engine reads a serve (S1). One match whose fold
-    // throws (a side whose entrant went: `loadFoldInputs`' WRONG_PHASE) says nothing about who serves — `null`, logged — and
-    // never takes the rest of the board down with it (A3 carry-in). A savepoint, so a statement it failed cannot abort the
-    // tenant transaction the next court's fold and the reads below still need — a JS throw never aborts a transaction, a
-    // failed STATEMENT does; witnessed by match-day.test.ts "S1 guard (SQL)" (fix round 1, m3), which a direct call reds.
+    // Who serves, on this competition's playing matches only — on a court, or on none (B4: the same scoreboard either way) —
+    // for a sport whose engine reads a serve (S1). One match whose fold throws (a side whose entrant went: `loadFoldInputs`'
+    // WRONG_PHASE) says nothing about who serves — `null`, logged — and never takes the rest of the board down with it (A3
+    // carry-in). A savepoint, so a statement it failed cannot abort the tenant transaction the next court's fold and the reads
+    // below still need — a JS throw never aborts a transaction, a failed STATEMENT does; witnessed by match-day.test.ts "S1
+    // guard (SQL)" (fix round 1, m3), which a direct call reds.
+    const playing = [
+      ...board.courts.flatMap((c) => (c.state === "playing" && c.current !== null ? [c.current] : [])),
+      ...board.playingNoCourt,
+    ];
     const serving = new Map<string, Serving>();
-    for (const c of board.courts) {
-      if (c.state === "playing" && c.current !== null && sportReadsServe(c.current.sport_key)) {
-        const fixtureId = c.current.id;
-        try {
-          serving.set(fixtureId, await tx.savepoint((sp) => servingSideOf(sp, fixtureId)));
-        } catch (err) {
-          log.warn({ err, fixtureId, competitionId }, "match-day: serve fold failed; serving left unknown");
-          serving.set(fixtureId, null);
-        }
+    for (const r of playing) {
+      if (!sportReadsServe(r.sport_key)) continue;
+      const fixtureId = r.id;
+      try {
+        serving.set(fixtureId, await tx.savepoint((sp) => servingSideOf(sp, fixtureId)));
+      } catch (err) {
+        log.warn({ err, fixtureId, competitionId }, "match-day: serve fold failed; serving left unknown");
+        serving.set(fixtureId, null);
       }
     }
-    return { board, fixturesToday: await countFixturesToday(tx, competitionId, now), serving };
+    return { board, serving };
   });
   const locale = opts.locale ?? DEFAULT_LOCALE;
   // Each reads through its own connection: none may run inside the tenant transaction above (pool nesting).
-  const ids = board.courts.flatMap((c) => [...(c.current ? [c.current.id] : []), ...c.queue.map((q) => q.row.id)]);
+  const ids = [
+    ...board.courts.flatMap((c) => [...(c.current ? [c.current.id] : []), ...c.queue.map((q) => q.row.id)]),
+    ...board.playingNoCourt.map((r) => r.id),
+  ];
   const [streams, desk, divisions, dict] = await Promise.all([
     openStreamStates(auth, ids),
     getCompetitionDesk(auth, competitionId, now),
@@ -479,11 +506,17 @@ export async function getMatchDay(
       if (a.kind === "no_scorer" || a.kind === "not_recording") for (const id of a.fixtureIds) scorerAttention.set(id, a.kind);
     }
   }
+  // Today's match count is the desk's own (`countFixturesToday`, read in the desk's transaction at this same `now`): one count
+  // per poll, not two (B1 review minor), and the competition page's gate and this page's are the same number by construction.
+  const fixturesToday = desk.fixtures_today;
   // B1 (spec §9, "Needs you lives in one place at a time"): the list is Match Day's on a match day only — before the day it is the
   // competition page's (`needsYouHome`, the one rule both surfaces ask), and Match Day carries none of it, its owed count included.
   const atHome = needsYouAt("match_day", fixturesToday, needs);
-  // The preview's video (A4, §6.2): asked for the playing matches whose stream is live, and only those.
-  const liveIds = board.courts.flatMap((c) => (c.state === "playing" && c.current !== null && streams[c.current.id] === "live" ? [c.current.id] : []));
+  // The preview's video (A4, §6.2): asked for the playing matches whose stream is live — on a court or on none — and only those.
+  const liveIds = [
+    ...board.courts.flatMap((c) => (c.state === "playing" && c.current !== null ? [c.current.id] : [])),
+    ...board.playingNoCourt.map((r) => r.id),
+  ].filter((id) => streams[id] === "live");
   const videos = await liveSessionVideos(auth.orgId, liveIds);
   const extras = (fixtureId: string): PlayingExtras => {
     const video = videos[fixtureId];
@@ -500,6 +533,7 @@ export async function getMatchDay(
     tz: board.tz,
     now: now.toISOString(),
     courts: board.courts.map((c) => courtView(c, streams, extras)),
+    playing_no_court: board.playingNoCourt.map((r) => fixtureView(r, streams, extras(r.id))),
     needs_you: atHome,
     results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,

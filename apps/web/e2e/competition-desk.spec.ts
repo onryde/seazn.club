@@ -788,7 +788,7 @@ test.describe("competition desk", () => {
     // they PRINT — it says nothing about which day BUCKETS the fixture into
     // `match_day` in the first place. Reproduced live before this fix (see
     // fix-round-e-report.md): a fixture genuinely dated TODAY at the venue
-    // (Kolkata) read "Scheduled", never match_day ("In play" since Match Day B1), because the phase was
+    // (Kolkata) read "Scheduled", never match_day ("Today" since Match Day B4), because the phase was
     // bucketed in the ORG zone (London), which was still on the day before.
     test("match day is decided by the venue's calendar day, not the org's", async ({ page, request }) => {
       const org = await activeOrg(page);
@@ -810,9 +810,9 @@ test.describe("competition desk", () => {
         // even though this same instant is a different calendar day for the
         // org, which is the only reason this can tell the two zones apart.
         await expect(row).toHaveAttribute("data-phase", "match_day");
-        // B1: the organiser's word for it is "In play" (Match Day is the product's name), and the competition page's own
+        // B4 (owner ruling Q2): the organiser's word for it is "Today" (Match Day is the product's name), and the competition page's own
         // match-day gate (`fixtures_today`, Match Day's count) reads the SAME venue day — Open Match Day is offered.
-        await expect(row.locator('[data-pill="match_day"]:visible').first()).toHaveText("In play");
+        await expect(row.locator('[data-pill="match_day"]:visible').first()).toHaveText("Today");
         await expect(page.getByTestId("desk-tool-match-day")).toBeVisible();
       } finally {
         await restore?.();

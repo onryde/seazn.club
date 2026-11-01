@@ -40,18 +40,23 @@ function withServing(summary: MatchDaySummary, serving: MatchDayFixture["serving
 
 export function CourtScoreboard({
   fixture,
-  courtName,
+  label,
   streamHref,
   dict,
   scoreDict,
+  readOnly = false,
 }: {
   fixture: MatchDayFixture;
-  courtName: string;
+  /** The panel's accessible name: "Score on Court 3", or for a match on no court (B4) "Score: Ana v Ben". */
+  label: string;
   /** The match's console page with its stream panel open. */
   streamHref: string;
   dict: Dict;
   /** The `public` dictionary's scoreboard words (`matchCentre.*`, `forfeit.*`), in the reader's language. */
   scoreDict: Dict;
+  /** A view-only reader (B4, owner ruling Q1b): a stream that is up still shows, but "+ Connect a stream" — an organiser's
+   *  action — is not offered. */
+  readOnly?: boolean;
 }) {
   // LiveScoreBody prints `matchCentre.status.live` over an in-play match; here that word belongs to streams.
   const panelDict: Dict = { ...scoreDict, "matchCentre.status.live": t(scoreDict, "matchCentre.status.in_play") };
@@ -82,7 +87,7 @@ export function CourtScoreboard({
         <span aria-hidden className="h-2 w-2 rounded-full bg-amber-400" />
         {t(dict, "matchDay.stream.waiting")}
       </Link>
-    ) : (
+    ) : readOnly ? null : (
       <Link
         href={streamHref}
         className="inline-flex min-h-11 items-center rounded-full px-2 text-xs font-medium text-purple-700 underline-offset-2 hover:underline md:min-h-0 md:py-1 md:text-court-muted md:hover:text-court-ink"
@@ -93,7 +98,7 @@ export function CourtScoreboard({
   return (
     <section
       data-testid="md-scoreboard"
-      aria-label={t(dict, "matchDay.focus.scoreboard", { court: courtName })}
+      aria-label={label}
       // Phones: the headline steps down one size (LiveScoreBody sets it at text-5xl for a full-width match page; a 320 column
       // broke "1 – 0 (14-9)" at its hyphen), and the stream link sits above the panel, where a 44 px target cannot cover the
       // score. From md it is the panel's corner.
@@ -104,7 +109,9 @@ export function CourtScoreboard({
       // capped at 7rem, which is what lets a 40-character pair name and the live set's column both fit in 248px.
       className="relative flex min-w-0 flex-col max-md:[&_.text-5xl]:text-4xl max-md:[&_th[scope=row]]:max-w-28"
     >
-      <div className="mb-2 flex justify-end md:absolute md:right-5 md:top-5 md:z-10 md:mb-0 md:max-w-[60%]">{stream}</div>
+      {stream !== null && (
+        <div className="mb-2 flex justify-end md:absolute md:right-5 md:top-5 md:z-10 md:mb-0 md:max-w-[60%]">{stream}</div>
+      )}
       {line === null || summary === null ? (
         // Started, but its engine has published no scoreline yet. `LiveScoreBody` would print "Not started" under its own
         // status line for a summary with no headline — a contradiction on a court that is playing — so this says what is true.

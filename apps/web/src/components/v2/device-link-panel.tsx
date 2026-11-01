@@ -261,9 +261,9 @@ export function DeviceLinkPanel({
       <p className="text-xs text-slate-600">{msg("dlink.desc", { scorer: msg(officialLabelKey(sportKey)).toLowerCase() })}</p>
     );
     const more = (body: ReactNode) => (
-      <details data-testid="device-link-more" className="group mt-3 min-w-0 text-left">
+      <details data-testid="device-link-more" className="group/more mt-3 min-w-0 text-left">
         <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 rounded-lg text-xs font-semibold text-purple-800 hover:text-purple-900 lg:min-h-0 lg:py-1 [&::-webkit-details-marker]:hidden">
-          <svg aria-hidden viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 fill-none stroke-current transition-transform group-open:rotate-90 motion-reduce:transition-none" strokeWidth={1.8}>
+          <svg aria-hidden viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 fill-none stroke-current transition-transform group-open/more:rotate-90 motion-reduce:transition-none" strokeWidth={1.8}>
             <path d="M6 3.5 10.5 8 6 12.5" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           {msg("dlink.more")}

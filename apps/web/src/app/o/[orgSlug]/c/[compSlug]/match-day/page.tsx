@@ -1,9 +1,14 @@
 export const dynamic = "force-dynamic";
 // Match Day (spec docs/superpowers/specs/2026-10-31-match-day-design.md §6, task A3): the organiser's surface for running a
-// competition's day court by court. Organisers with edit rights only (§10: "the same edit permission as the division desk");
-// anyone else gets the 404 the console gives a page it does not show them. The view is read here for the first paint and
-// polled by the shell after that.
-import { notFound } from "next/navigation";
+// competition's day court by court. The view is read here for the first paint and polled by the shell after that.
+//
+// Who (owner ruling Q1b, task B4 — supersedes §10's "edit permission only"): any member of the organisation who may view the
+// competition opens it. An organiser with edit rights runs the day; anyone else (a viewer) gets the same page READ-ONLY — no
+// Call, no Undo, no scorer QR (showing it mints a link), no Needs-you list (the competition page does not show them one either).
+// The write doors refuse a viewer on their own (`requireResourceAuth(…, "write")`; read-only-staff.test.ts); hiding them here
+// is the page being honest, never the guard. A non-member gets the 404 `requireOrgPage` gives every console page.
+//
+// `?court=<id>` opens that court (B4: Needs you's "Find a court" names the free court whose candidates it means).
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getMatchDay } from "@/server/usecases/match-day";
 import { orgPlanKey } from "@/lib/entitlements";
@@ -14,10 +19,16 @@ import { getDictionary } from "@/lib/i18n";
 import { pickDictPrefixes } from "@/lib/i18n-subset";
 import { MatchDayShell } from "@/components/v2/match-day/match-day-shell";
 
-export default async function MatchDayPage({ params }: { params: Promise<{ orgSlug: string; compSlug: string }> }) {
+export default async function MatchDayPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ orgSlug: string; compSlug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { orgSlug, compSlug } = await params;
+  const court = (await searchParams).court;
   const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/match-day" });
-  if (!page.canEdit) notFound();
   const id = page.competition.id;
   const locale = await resolveLocale();
   const [ui, pub, view, divisions, planKey] = await Promise.all([
@@ -43,6 +54,8 @@ export default async function MatchDayPage({ params }: { params: Promise<{ orgSl
         dict={pickDictPrefixes(ui, ["matchDay.", "desk.needsYou.title", "dlink.title", "stream.youtube.link.live"])}
         scoreDict={pickDictPrefixes(pub, ["matchCentre.", "forfeit."])}
         viewerPlan={viewerPlanFrom(planKey)}
+        readOnly={!page.canEdit}
+        focusCourtId={typeof court === "string" ? court : null}
       />
     </main>
   );

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 import { plural, t } from "@/lib/i18n";
 import { BansToReviewPill, PhasePill, RED_PILL_KEY } from "@/components/v2/desk/phase-pill";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
@@ -686,7 +689,7 @@ describe("DivisionLedger", () => {
   // Match Day B1 (spec 2026-10-31 §9, "remove the divisions list's Now: column"): this used to pin "Now: Riverside FC v
   // Harbour CC". The live match is Match Day's now — the ledger names no in-play fixture at any width, and with no other row
   // carrying a next fixture it reserves no Next track either.
-  it("B1: an in-play fixture is never named on the ledger — no Now cell, no Next track, the pill reads In play", () => {
+  it("B1: an in-play fixture is never named on the ledger — no Now cell, no Next track, the pill reads Today", () => {
     const live = div({
       phase: "match_day",
       next: { home: "Riverside FC", away: "Harbour CC", scheduled_at: null, in_play: true },
@@ -699,7 +702,8 @@ describe("DivisionLedger", () => {
     expect(html).toContain("Premier");
     expect(html).toContain('data-pill="match_day"');
     expect(html).toContain(`>${en["desk.phase.match_day"]}<`);
-    expect(en["desk.phase.match_day"]).toBe("In play");
+    // Owner ruling Q2 (task B4): "Today", in every locale's own word.
+    expect([en, es, fr, nl].map((d) => d["desk.phase.match_day"])).toEqual(["Today", "Hoy", "Aujourd'hui", "Vandaag"]);
     expect(html).not.toContain("Now:");
     expect(html).not.toContain("Riverside FC");
     expect(html).not.toContain("minmax(0,1.4fr)");

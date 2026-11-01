@@ -66,6 +66,7 @@ vi.mock("@/lib/billing", () => ({ checkoutTrialDays: () => 14 }));
 import Page from "../page";
 import { CompetitionPassProvider } from "@/components/competition-pass-provider";
 import { plural, t } from "@/lib/i18n-runtime";
+import { routes } from "@/lib/routes";
 import en from "@/dictionaries/en/ui.json";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import { needsYouAt, needsYouHome, needsYouItems } from "@/components/v2/desk/needs-you";
@@ -176,13 +177,14 @@ describe("the competition page on a match day (B1)", () => {
     expect(html).toContain(t(en, "desk.tools.openMatchDay"));
   });
 
-  it("carries no live duplicate: no in-play strip, no ledger 'Now:' cell, and the division pill reads In play", async () => {
+  it("carries no live duplicate: no in-play strip, no ledger 'Now:' cell, and the division pill reads Today", async () => {
     const html = await render(deskWith({ fixturesToday: 1, phase: "match_day", next: LIVE_NEXT, inPlay: 1 }));
     // Positive pair first: the ledger row really rendered, with its phase pill.
     expect(html).toContain('data-testid="desk-ledger-row"');
     expect(html).toContain('data-pill="match_day"');
-    expect(t(en, "desk.phase.match_day")).toBe("In play");
-    expect(html).toContain(">In play<");
+    // Owner ruling Q2 (2026-10-31, task B4): the match_day pill reads "Today" — "In play" read as a live count beside "N in play".
+    expect(t(en, "desk.phase.match_day")).toBe("Today");
+    expect(html).toContain(">Today<");
     expect(html).not.toContain("desk-in-play-band");
     expect(html).not.toContain("Now:");
     // The live fixture's names were only ever on the page through the strip and the Now cell.
@@ -196,12 +198,26 @@ describe("the competition page on a match day (B1)", () => {
     expect(html).not.toContain('data-testid="desk-needs-you"');
   });
 
-  it("a viewer is offered no door into Match Day (it is organisers' only) and, as before, no list", async () => {
+  // B4 (owner ruling Q1b, 2026-10-31): a view-only member opens Match Day read-only, so the door is theirs too — as a
+  // SECONDARY action, never the filled one: a viewer runs nothing, and the schedule board keeps the one fill it has the day
+  // before. Still no list (a viewer is never shown Needs you) and no line into Match Day's list.
+  it("a viewer is offered Match Day as a secondary door — not filled, not first — and, as before, no list", async () => {
+    const filled = "max-md:bg-purple-600";
     const html = await render(deskWith({ fixturesToday: 4, attention: OWED_AND_UNSCHEDULED }), false);
     expect(html).toContain('data-testid="desk-ledger-row"'); // positive pair: the page rendered
-    expect(html).not.toContain("desk-tool-match-day");
+    const door = tagOf(html, "desk-tool-match-day");
+    expect(door).not.toBeNull();
+    expect(door).toContain(`href="${routes.competitionMatchDay("riverside", "summer-league")}"`);
+    expect(door).toMatch(/[\s"]btn-ghost[\s"]/);
+    expect(door).not.toMatch(/[\s"]btn-primary[\s"]/);
+    expect(door).not.toContain(filled);
+    expect(door).not.toContain("max-md:order-first");
+    expect(tagOf(html, "desk-tool-schedule")).toContain(filled);
+    expect(countOf(html, filled), "exactly one filled phone control").toBe(1);
     expect(html).not.toContain("desk-needs-you-in-match-day");
     expect(html).not.toContain('data-testid="desk-needs-you"');
+    // Not on a day with no matches, for a viewer either.
+    expect(tagOf(await render(deskWith({ fixturesToday: 0 }), false), "desk-tool-match-day")).toBeNull();
   });
 
   it("one primary on a phone: Open Match Day leads filled on a match day, the schedule board does the day before", async () => {

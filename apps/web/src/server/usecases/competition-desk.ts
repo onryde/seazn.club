@@ -98,15 +98,22 @@ export interface CompetitionDesk {
    *  SQL with no real `core.start` sorts after every one that has actually
    *  kicked off). Built from the SAME per-division `rows` this function
    *  already filters to compute `in_play` above, so the count and the list
-   *  can never drift into two authorities for one fact (spec's "one shape,
-   *  two doors"; `desk.in_play === desk.in_play_fixtures.length` always). */
+   *  can never drift into two authorities for one fact
+   *  (`desk.in_play === desk.in_play_fixtures.length` always).
+   *
+   *  No page in this app reads it any more: the competition page's live strip
+   *  that rendered it was retired by Match Day (B1), and live matches are
+   *  Match Day's now — on their courts, or in its "Playing, no court" group
+   *  (B4). It stays because the public desk API returns it
+   *  (`GET /competitions/{id}/desk`, schemas.ts `CompetitionDesk`); removing it is a
+   *  wire change, not a tidy-up. */
   in_play_fixtures: DeskInPlayFixture[];
   /** The soonest `next` across every division, EXCLUDING a division whose own
-   *  `next` is the fixture currently in play — that fixture already has its
-   *  own card in `in_play_fixtures`, and "up next" (the band's one dashed
-   *  card, design doc §W3) means genuinely not yet started. Derived from the
-   *  same per-division `next` (`resolveDivisionNext` below) every row in
-   *  `divisions` already carries. */
+   *  `next` is the fixture currently in play (already in `in_play_fixtures`):
+   *  "up next" means genuinely not yet started. Derived from the same
+   *  per-division `next` (`resolveDivisionNext` below) every row in
+   *  `divisions` already carries. Like `in_play_fixtures`, read by no page
+   *  since the live strip went (B1) and kept for the desk API's callers. */
   up_next: DeskNextFixture | null;
   /** Match Day B1 (spec 2026-10-31 §9): how many of this competition's matches are today — Match Day's own count, A2's
    *  `countFixturesToday` (match-day.ts), read in this desk's transaction at this desk's `now` (controller ruling R2: one count,

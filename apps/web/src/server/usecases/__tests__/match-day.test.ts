@@ -31,6 +31,7 @@ import { foldMatchWithStoppage, initSquads, summaryOf, type EventEnvelope } from
 import { resolvePositions } from "@seazn/engine/sport";
 import { badminton, setBasedServeContext, type SetBasedState } from "@seazn/engine/sports/setbased";
 import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -59,6 +60,7 @@ vi.mock("@/server/engine-db/serving", async (importOriginal) => {
   };
 });
 import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
+import { MatchDayView as MatchDayViewSchema } from "@/server/api-v1/schemas";
 import { apiSessionOnTarget, rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import { youtubeWatchUrl } from "@/lib/youtube";
 import { appendEvent } from "@/server/engine-db/append-event";
@@ -85,6 +87,8 @@ import {
   type Day,
   type Person,
 } from "./_match-day-seed";
+import { makeCommunityRig } from "./_rig";
+import { seedOnlineChessFixture } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -746,7 +750,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     expect(checked).toBe(2);
   });
 
-  it("a competition with no divisions: no courts, nothing owed, no matches today", async () => {
+  it("a competition with no divisions: no courts, nothing playing with no court, nothing owed, no matches today", async () => {
     const day = await seedDay();
     const comp = await createCompetition(day.auth, { ends_on: "2030-12-31", name: "Empty", visibility: "public", branding: {} });
     expect(await getMatchDay(day.auth, comp.id, at(0))).toEqual({
@@ -755,6 +759,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       tz: ORG_TZ,
       now: iso(0),
       courts: [],
+      playing_no_court: [],
       needs_you: [],
       results_owed: 0,
       fixtures_today: 0,
@@ -770,6 +775,127 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     );
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// B4 (owner ruling Q1, 2026-10-31): "Playing, no court". The competition page's retired live strip was the one place a match in
+// play with no court showed — an untimed bracket match, an online chess board. Match Day now lists every one at the bottom of
+// its court list. The rule, from the ruling (not the code): every `in_play` match of THIS competition with no court, in a live
+// (not archived) division, in kick-off order.
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("B4 — playing, no court", () => {
+  /** A generic knockout of four individuals in `day`'s competition, with no schedule settings: its two semi-finals (both sides
+   *  known, untimed and on no court, as generated) in draw order. */
+  async function knockout(day: Day, name: string): Promise<{ divisionId: string; semis: [string, string] }> {
+    const d = await createDivision(day.auth, day.comp.id, { name, sport_key: "generic", variant_key: "score", config: {} });
+    await createEntrants(
+      day.auth,
+      d.id,
+      ["Ada", "Bea", "Cy", "Di"].map((n, i) => ({ kind: "individual" as const, display_name: `${n} ${name}`, seed: i + 1, members: [] })),
+    );
+    const [stage] = await createStages(day.auth, d.id, { seq: 1, kind: "knockout", name: "Knockout", config: {} });
+    await generateStageFixtures(day.auth, stage!.id);
+    const semis = await sql<{ id: string }[]>`
+      select id from fixtures
+       where stage_id = ${stage!.id} and home_entrant_id is not null and away_entrant_id is not null
+       order by fixture_no`;
+    if (semis.length !== 2) throw new Error(`knockout: ${semis.length} ready matches, expected the two semi-finals`);
+    const [s1, s2] = semis;
+    const placed = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where id in ${sql([s1!.id, s2!.id])} and court_id is null and scheduled_at is null`;
+    if (placed[0]!.n !== 2) throw new Error("knockout: the semi-finals were generated with a court or a time");
+    return { divisionId: d.id, semis: [s1!.id, s2!.id] };
+  }
+
+  it("an untimed bracket match in play on no court is in the group, in kick-off order (nulls last); a match in play ON a court, an unstarted or finished one with no court, an archived division's and another competition's are not", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+    const ko = await knockout(day, "Cup");
+    const [semi1, semi2] = ko.semis;
+    // Kick-off order is not draw order: the second semi started first.
+    await start(day, semi2, -30);
+    await start(day, semi1, -15);
+    // In play with nothing recorded and nobody nominated (a status the console's Start can leave): no kick-off to order by.
+    const silent = between(day.comp, p3, p4).id;
+    await setStatus(silent, "in_play");
+    // The positive pair: a match in play ON a court is its court's, never the group's.
+    const onCourt = between(day.comp, p1, p2).id;
+    await place(day, onCourt, -20, day.courts.c1);
+    await start(day, onCourt, -20);
+
+    const excluded: [string, string][] = [];
+    excluded.push(["in play on a court", onCourt]);
+    const unstarted = between(day.comp, p2, p4).id; // no court, no time, never started: a "no court yet" candidate, not playing
+    excluded.push(["unstarted, no court", unstarted]);
+    const decided = between(day.comp, p1, p3).id;
+    await start(day, decided, -60);
+    await finish(decided, "decided", -5);
+    excluded.push(["finished, no court", decided]);
+    const plate = await knockout(day, "Plate");
+    await start(day, plate.semis[0], -25);
+    await sql`update divisions set archived_at = now() where id = ${plate.divisionId}`;
+    excluded.push(["an archived division's, in play, no court", plate.semis[0]]);
+    const other = await otherCompetition(day, "Other Cup", { courts: [day.courts.c3] });
+    await start(day, other.fixtures[0]!.id, -10);
+    excluded.push(["another competition's, in play, no court", other.fixtures[0]!.id]);
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(0));
+
+    expect(view.playing_no_court.map((f) => f.id)).toEqual([semi2, semi1, silent]);
+    // The wire: the published schema parses the group as it is served (the OpenAPI document's own shape).
+    expect(MatchDayViewSchema.parse(view).playing_no_court).toHaveLength(3);
+    // What a row and its panel read: the match, its division and stage, its real kick-off, and the desk's own scorer mark.
+    expect(view.playing_no_court[0]).toMatchObject({ division_name: "Cup", stage_label: "Knockout", started_at: iso(-30), called_at: null });
+    expect(view.playing_no_court[2]).toMatchObject({ started_at: null, scorer_attention: "no_scorer" });
+    expect(view.playing_no_court[0]!.scorer_attention).toBeNull(); // a recorded start is a ledger: someone is scoring
+    expect(view.needs_you.filter((r) => r.kind === "no_scorer"), "the mark is the Needs-you row's fact").toHaveLength(1);
+    expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "playing", current: { id: onCourt } });
+    let checked = 0;
+    for (const [label, id] of excluded) {
+      expect(view.playing_no_court.some((f) => f.id === id), label).toBe(false);
+      checked++;
+    }
+    expect(checked, "exclusions checked").toBe(5);
+
+    // The sequence: a semi ends — it leaves the group on the next read; the other stays.
+    await finish(semi2, "decided", 1);
+    expect((await getMatchDay(day.auth, day.comp.id, at(2))).playing_no_court.map((f) => f.id)).toEqual([semi1, silent]);
+  });
+
+  it("an online chess board in play: in the group, on an organisation with no courts at all", async () => {
+    const seed = await seedOnlineChessFixture({ onlinePlay: "lichess", linked: true, divisionStarted: true, scheduledAt: at(-20) });
+    const auth = { orgId: seed.orgId, via: "session", userId: seed.ownerUserId, role: "owner", keyId: null } as const;
+    const before = await getMatchDay(auth, seed.competitionId, at(0));
+    expect(before.courts, "premise: the organisation has no court").toEqual([]);
+    expect(before.playing_no_court, "a board not yet started is not playing").toEqual([]);
+
+    await setStatus(seed.fixtureId, "in_play");
+    const view = await getMatchDay(auth, seed.competitionId, at(0));
+    expect(view.courts).toEqual([]);
+    expect(view.playing_no_court.map((f) => [f.id, f.sport_key])).toEqual([[seed.fixtureId, "boardgame"]]);
+  });
+
+  it("every registered sport: a match in play with no court is in the group, on an organisation with no courts — and nothing at all is the empty case", async () => {
+    let checked = 0;
+    for (const sportModule of builtinModules) {
+      const rig = await makeCommunityRig(sportModule.key);
+      const [row] = await sql<{ competition_id: string }[]>`
+        select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${rig.fixtureId}`;
+      const competitionId = row!.competition_id;
+      // The empty case first: no court and nothing playing.
+      const empty = await getMatchDay(rig.auth, competitionId);
+      expect({ courts: empty.courts, playing: empty.playing_no_court }, sportModule.key).toEqual({ courts: [], playing: [] });
+
+      await setStatus(rig.fixtureId, "in_play");
+      const view = await getMatchDay(rig.auth, competitionId);
+      expect(view.courts, sportModule.key).toEqual([]);
+      expect(view.playing_no_court.map((f) => [f.id, f.sport_key]), sportModule.key).toEqual([[rig.fixtureId, sportModule.key]]);
+      checked++;
+    }
+    expect(checked, "sports swept").toBe(builtinModules.length);
+    expect(checked).toBeGreaterThan(5);
   });
 });
 
