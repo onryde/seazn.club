@@ -435,6 +435,38 @@ describe("stageCounts", () => {
   });
 });
 
+describe("stageCounts - held fixtures (a plain abandon awaiting its settle keeps status 'abandoned')", () => {
+  // Review I2: the status map reads `abandoned` as settled, but the page lists it as awaiting its settle and the server still
+  // refuses Complete for it (W2b X-AB-5). The held ids make it OPEN, whatever its status says.
+  it("an abandoned fixture is played without the held list and open (inPlay) with it", () => {
+    const fixtures = [{ id: "a", status: "decided" }, { id: "b", status: "abandoned" }];
+    expect(stageCounts(fixtures)).toEqual({ played: 2, inPlay: 0, unplayed: 0 });
+    expect(stageCounts(fixtures, new Set(["b"]))).toEqual({ played: 1, inPlay: 1, unplayed: 0 });
+  });
+
+  it("a held id counts once, in inPlay, for every status the schema has; an id that is not held changes nothing", () => {
+    let checked = 0;
+    for (const status of Fixture.shape.status.options) {
+      expect(stageCounts([{ id: "x", status }], new Set(["x"])), `${status}: held`).toEqual({ played: 0, inPlay: 1, unplayed: 0 });
+      expect(stageCounts([{ id: "x", status }], new Set(["y"])), `${status}: someone else's id`).toEqual(stageCounts([{ id: "x", status }]));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: statuses swept").toBe(Fixture.shape.status.options.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("the status sweep stays honest: an unknown status is refused even when the fixture is held", () => {
+    expect(() => stageCounts([{ id: "x", status: "paused" }], new Set(["x"]))).toThrow(/unknown fixture status "paused"/);
+  });
+
+  it("feeds stageActions: a stage whose only unsettled match is a held abandon has Complete disabled, not leading", () => {
+    const fixtures = [{ id: "a", status: "decided" }, { id: "b", status: "abandoned" }];
+    const input = { status: "active", hasFixtures: true, adhoc: false, pairNext: false, canUnpair: false };
+    expect(stageActions({ ...input, ...stageCounts(fixtures) }), "no held list: the old answer").toEqual({ primary: { action: "complete", enabled: true }, secondary: [] });
+    expect(stageActions({ ...input, ...stageCounts(fixtures, new Set(["b"])) })).toEqual({ primary: null, secondary: [{ action: "complete", enabled: false }] });
+  });
+});
+
 describe("stageActions", () => {
   const base: StageActionInput = {
     status: "active", played: 0, inPlay: 0, unplayed: 0, hasFixtures: true, adhoc: true, pairNext: false, canUnpair: false,

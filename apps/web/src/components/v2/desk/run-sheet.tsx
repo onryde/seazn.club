@@ -118,7 +118,6 @@ export function RunSheet({
   filter,
   onFilter,
   stageId,
-  onStageFilter,
   boardSlotOptions,
   onRescheduled,
   streamStates,
@@ -163,19 +162,12 @@ export function RunSheet({
   hrefFor: (fixture: RunSheetFixture) => string;
   filter: RunSheetFilter;
   onFilter: (filter: RunSheetFilter) => void;
-  /** Owner-approved "Option 2" (competition desk W3, on top of Option B) —
-   *  a SECOND, ORTHOGONAL filter dimension: which stage's fixtures to show,
-   *  or `null` for every stage. Deliberately not folded into
-   *  `RunSheetFilter` (that union stays exactly `"today" | "needs_result" |
-   *  "unscheduled" | "all"`) — a stage id is not one more value of "what
-   *  kind of row", it is a second axis a row must ALSO satisfy, and a
-   *  fixture can be BOTH "needs_result" and "in stage X" at once. Set from
-   *  each stage card's "View N fixtures" control (stages-panel.tsx); its
-   *  own clear affordance lives in the chip row below (`run-sheet-stage-
-   *  filter`), per owner ruling — the chip row is where a person looks to
-   *  clear a filter, not a separate, easier-to-miss control. */
+  /** A SECOND, ORTHOGONAL axis beside `filter`: which stage's fixtures to show, or `null` for every stage. Deliberately not folded
+   *  into `RunSheetFilter` (that union stays exactly `"today" | "needs_result" | "unscheduled" | "all"`) - a stage id is not one more
+   *  value of "what kind of row", it is a second axis a row must ALSO satisfy. Match Day C3: it names the stage an `embedded` sheet
+   *  lists (each stage card mounts one); nothing sets it as a user-facing filter any more (the stage chip and its clear control went
+   *  with "View N fixtures"), so it is a plain prop, with no setter. */
   stageId: string | null;
-  onStageFilter: (stageId: string | null) => void;
   boardSlotOptions?: string[];
   onRescheduled?: () => void;
   /** Spec 2026-09-30 §2 (T6) — each fixture's stream hold state (`openStreamStates`), keyed by fixture id; every row
@@ -436,10 +428,12 @@ export function RunSheet({
                   `top-[86px]` literal — see the effect's comment. */}
               <header
                 style={{ top: "calc(3.5rem + var(--desk-day-h, 0px))" }}
-                className={`sticky z-10 border-b border-slate-100 bg-slate-50 px-4 py-2 ${i === 0 ? "rounded-t-2xl" : ""}`}
+                className={`sticky z-10 border-b border-slate-100 bg-slate-50 px-4 py-2 ${i === 0 && !embedded ? "rounded-t-2xl" : ""}`}
               >
                 <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  {stage ? `${stage.name} — ` : ""}
+                  {/* Embedded in a stage card the card's own header already names the stage; the section has no rounded
+                      top of its own to protect either (review m2). */}
+                  {stage && !embedded ? `${stage.name} — ` : ""}
                   {bracketRoundLabel(msg, stage?.kind ?? "knockout", r.round, allStageFixtures)}
                   {dates !== null && (
                     <span data-run-sheet-round-dates className="ml-1.5 font-normal normal-case text-slate-500">
@@ -616,15 +610,12 @@ export function RunSheet({
       {!embedded && (
         <RunSheetFilterBar
           blocks={blocks}
-          stages={stages}
           tz={tz}
           nowMs={nowMs}
           matchMinutes={matchMinutes}
           onlinePlay={onlinePlay}
           filter={filter}
           onFilter={onFilter}
-          stageId={stageId}
-          onStageFilter={onStageFilter}
           className="border-b border-slate-100"
         />
       )}
@@ -697,22 +688,11 @@ export function RunSheet({
               filter: filtersLabel(filter, msg),
             })}
           </p>
-          {/* Owner-approved "Option 2" — also clears the STAGE filter, not
-              just the type filter: gated on either being active, so a page
-              filtered to one stage with `filter === "all"` (an empty
-              combination — that stage genuinely has no fixtures matching
-              nothing else, edge case) still gets a working way back, and
-              clicking it clears both dimensions at once rather than
-              leaving the organiser one tap short of the unfiltered
-              sheet. */}
-          {(filter !== "all" || stageId !== null) && (
+          {filter !== "all" && (
             <button
               type="button"
               data-testid="run-sheet-empty-show-all"
-              onClick={() => {
-                onFilter("all");
-                onStageFilter(null);
-              }}
+              onClick={() => onFilter("all")}
               className="btn btn-ghost mt-3 min-h-11 px-3 text-xs"
             >
               {msg("runsheet.filter.all")}
@@ -762,45 +742,37 @@ export function runSheetHasRows(blocks: readonly RunSheetBlock[], filter: RunShe
 }
 
 /**
- * The division's fixture filter: the four chips (Today / Needs result / Unscheduled / All), the active stage filter's clear
- * chip, and the time-zone caption. Match Day C3 took it out of `<RunSheet>` so the panel can mount it ONCE above the stage
+ * The division's fixture filter: the four chips (Today / Needs result / Unscheduled / All) and the time-zone caption. Match Day C3 took it out of `<RunSheet>` so the panel can mount it ONCE above the stage
  * cards while each card carries its own stage's rows (`RunSheet embedded`); the division-wide `<RunSheet>` still mounts it
  * itself. Same testids, same chips, same counts.
  */
 export function RunSheetFilterBar({
   blocks,
-  stages,
   tz,
   nowMs,
   matchMinutes,
   onlinePlay,
   filter,
   onFilter,
-  stageId,
-  onStageFilter,
   className,
 }: {
   blocks: readonly RunSheetBlock[];
-  stages: readonly RunSheetStageInfo[];
   tz: string;
   nowMs: number;
   matchMinutes: number;
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
   filter: RunSheetFilter;
   onFilter: (filter: RunSheetFilter) => void;
-  stageId: string | null;
-  onStageFilter: (stageId: string | null) => void;
   className?: string;
 }) {
   const msg = useMsg();
-  const { needsResult, unscheduled } = runSheetCounts(blocks, { stageId, nowMs, matchMinutes, onlinePlay });
+  const { needsResult, unscheduled } = runSheetCounts(blocks, { stageId: null, nowMs, matchMinutes, onlinePlay });
   const filters: { value: RunSheetFilter; label: string; count?: number }[] = [
     { value: "today", label: msg("runsheet.filter.today") },
     { value: "needs_result", label: msg("runsheet.filter.needsResult"), count: needsResult },
     { value: "unscheduled", label: msg("runsheet.filter.unscheduled"), count: unscheduled },
     { value: "all", label: msg("runsheet.filter.all") },
   ];
-  const stageName = stageId === null ? null : (stages.find((s) => s.id === stageId)?.name ?? stageId);
   return (
     <div className={`flex flex-wrap items-center gap-3 px-4 py-3 ${className ?? ""}`}>
       <div data-testid="run-sheet-filter" className="flex flex-wrap gap-1.5">
@@ -819,23 +791,6 @@ export function RunSheetFilterBar({
             {f.count !== undefined && <span className="ml-1 text-slate-500">{f.count}</span>}
           </button>
         ))}
-        {/* Owner-approved "Option 2" - the stage filter's own clear affordance, in the SAME chip row the four type filters
-            live in. Mounted only while a stage filter is active. Its visible text carries the accessible name (the stage's
-            name, user-typed); the sr-only span appends "Clear filter" so a screen reader reads an action. */}
-        {stageName !== null && (
-          <button
-            type="button"
-            data-testid="run-sheet-stage-filter"
-            onClick={() => onStageFilter(null)}
-            className="flex min-h-11 items-center gap-1.5 rounded-full bg-purple-100 px-3 text-xs font-medium text-purple-800 hover:bg-purple-200"
-          >
-            <span>
-              {msg("runsheet.stageFilter.label")}: {stageName}
-            </span>
-            <span aria-hidden="true">✕</span>
-            <span className="sr-only">{msg("runsheet.stageFilter.clearAria")}</span>
-          </button>
-        )}
       </div>
       <div className="flex-1" />
       <p className="text-xs text-slate-500" data-testid="tz-caption">

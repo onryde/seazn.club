@@ -103,7 +103,6 @@ describe("the dictionary words this task adds exist in all four locales", () => 
     "stageCard.summary.differs",
     "stageCard.completeHint.one",
     "stageCard.completeHint.other",
-    "stageCard.settings",
   ] as const satisfies readonly MessageKey[];
 
   it.each(Object.keys(LOCALES) as (keyof typeof LOCALES)[])("%s has every key, non-empty", (locale) => {

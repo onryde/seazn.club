@@ -86,7 +86,6 @@ function sheetHtml(fixtures: RunSheetFixture[]): string {
       filter="all"
       onFilter={() => {}}
       stageId={null}
-      onStageFilter={() => {}}
     />,
   );
 }
@@ -110,7 +109,6 @@ function embeddedHtml(endsCard: boolean | undefined): string {
       filter="all"
       onFilter={() => {}}
       stageId="s1"
-      onStageFilter={() => {}}
       embedded
       {...(endsCard === undefined ? {} : { endsCard })}
     />,
@@ -204,7 +202,6 @@ describe("run sheet — internal block spacing", () => {
         filter="unscheduled"
         onFilter={() => {}}
         stageId={null}
-        onStageFilter={() => {}}
       />,
     );
     expect(html).toContain('data-testid="run-sheet-empty"');

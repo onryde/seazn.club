@@ -285,6 +285,10 @@ export interface StageTiebreaksProps {
   /** The server's lock (`formatLockedStageIds`: the stage has a first score): the section says it once. Never activation —
    *  between generate and the first score the order stays editable (OC2). */
   started: boolean;
+  /** Match Day C3 (review I3): whether a locked section says its own lock line. Default true (the section is the one place the lock is
+   *  said). The stage card passes false: its summary line already carries the card's ONE lock line, and a panel opened under it must not
+   *  repeat it. */
+  showLockLine?: boolean;
   stage: StageLike;
   module: AnySportModule;
   divisionConfig: Record<string, unknown>;
@@ -324,7 +328,7 @@ export function TiebreaksEditor(props: TiebreaksEditorProps) {
   return props.scope === "stage" ? <StageTiebreaks {...props} /> : <DivisionTiebreaks {...props} />;
 }
 
-export function StageTiebreaks({ mode, started, stage, module, divisionConfig, stageConfig, inheritedOrder, onSaved }: StageTiebreaksProps) {
+export function StageTiebreaks({ mode, started, showLockLine = true, stage, module, divisionConfig, stageConfig, inheritedOrder, onSaved }: StageTiebreaksProps) {
   const msg = useMsg();
   const name = stepNameOf(msg, module.key);
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -412,7 +416,7 @@ export function StageTiebreaks({ mode, started, stage, module, divisionConfig, s
           <span className="text-xs font-semibold text-slate-800">{msg("stageTiebreaks.title")}</span>
           {!readOnly && <BadgeChip badge={shownBadge(tiebreakBadge(rules, inheritedOrder))} />}
         </div>
-        {started && <LockLine testId="stage-tiebreaks-locked" />}
+        {started && showLockLine && <LockLine testId="stage-tiebreaks-locked" />}
         <PhoneDisclosure summary={foldedSummary(readOnly ? stored : draft, name)} showLabel={msg("stageTiebreaks.show")} hideLabel={msg("stageTiebreaks.hide")}>
           {readOnly ? (
             <FoldedOrder keys={stored} sportKey={module.key} />

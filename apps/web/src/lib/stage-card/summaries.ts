@@ -161,15 +161,26 @@ const BUCKET_OF: Record<FixtureStatusValue, Bucket> = {
  * and a cancellation are settled: the stage is waiting for none of them); `inPlay` and `unplayed` together are the OPEN
  * ones. A status the schema does not have is refused by name: counting it nowhere would let Complete lead over a match the
  * card cannot see, and counting it somewhere would be a guess. Own-key lookup, so "constructor" is refused like any other.
+ *
+ * `held` is the ids the division page lists as awaiting their settle (`listFixturesAwaitingSettle`): a recorded plain abandon
+ * keeps `status = 'abandoned'` while the organiser's verdict is still owed, which the status map alone reads as settled - so
+ * Complete would lead over a match the server still refuses it for. A held id is OPEN whatever its status says (it counts in
+ * `inPlay`, like `needs_decision`); every fixture's status is still checked, held or not, so the sweep above stays honest.
  */
-export function stageCounts(fixtures: readonly { status: string }[]): { played: number; inPlay: number; unplayed: number } {
+export function stageCounts(
+  fixtures: readonly { id?: string; status: string }[],
+  held: ReadonlySet<string> = NO_HELD,
+): { played: number; inPlay: number; unplayed: number } {
   const counts: Record<Bucket, number> = { played: 0, inPlay: 0, unplayed: 0 };
   for (const f of fixtures) {
     if (!Object.hasOwn(BUCKET_OF, f.status)) throw new Error(`stageCounts: unknown fixture status "${f.status}"`);
-    counts[BUCKET_OF[f.status as FixtureStatusValue]]++;
+    const bucket: Bucket = f.id !== undefined && held.has(f.id) ? "inPlay" : BUCKET_OF[f.status as FixtureStatusValue];
+    counts[bucket]++;
   }
   return counts;
 }
+
+const NO_HELD: ReadonlySet<string> = new Set();
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Stage actions (item 8): the buttons follow the stage's state.

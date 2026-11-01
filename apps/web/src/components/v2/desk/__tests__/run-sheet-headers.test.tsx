@@ -93,7 +93,6 @@ function sheetHtml(
         filter={filter}
         onFilter={() => {}}
         stageId={null}
-        onStageFilter={() => {}}
       />
     </DictProvider>,
   );

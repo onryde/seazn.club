@@ -102,7 +102,9 @@ describe("the lock is the server's list (OC2)", () => {
     const locked = panel({ stages: stageOf("league", "Spring League"), stageTableRules: rules, formatLockedStageIds: [A] });
     expect(stateOf(locked)).toBe("locked");
     expect(locked).toContain(UI["stageCard.locked"]!);
-    expect(locked.split('data-testid="stage-tiebreaks-locked"').length - 1, "one lock line").toBe(1);
+    // Review I3: the card's one lock line is the summary's; the opened tie-breaks section is locked and says nothing of its own.
+    expect(locked.split('data-testid="stage-tiebreaks-locked"').length - 1, "the section repeats no lock line").toBe(0);
+    expect(locked.split('data-testid="stage-locked"').length - 1, "one lock line on the card").toBe(1);
     expect(stateOf(panel({ stageTableRules: rules }))).toBe("editor");
     expect(stateOf(panel({ stageTableRules: rules, formatLockedStageIds: [B] })), "another stage's lock").toBe("editor");
     expect(stateOf(panel({ stageTableRules: rules, canEdit: false }))).toBe("readonly");

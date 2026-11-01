@@ -157,11 +157,14 @@ describe("the three states of the stage's Match format (Match Day C3: one summar
     expect(html).toContain('data-stage-format-state="locked"');
     const row = formatRow(html);
     expect(summaryLine(html)).toContain("Best of 1");
-    // M-2 / Match Day item 4: the lock is stated in ONE place per section - the summary line's, and the opened section's own.
+    // M-2 / Match Day item 4 + review I3: the card says the lock ONCE - the summary line's. The opened section (the format panel is
+    // open here) stays locked and says nothing of its own.
     expect(summaryLine(html)).not.toContain("Stage override");
     expect(summaryLine(html)).not.toContain("Same as division");
     expect(row.split('data-testid="stage-locked"').length - 1, "one lock line in the summary").toBe(1);
-    expect(html.split('data-testid="stage-format-locked"').length - 1, "one statement of the lock in the format section").toBe(1);
+    expect(html.split('data-testid="stage-format-locked"').length - 1, "the opened format section repeats nothing").toBe(0);
+    expect(formatRow(html), "the section is still locked: its chips read, nothing writes").toContain('data-mode="locked"');
+    expect(html.split('data-testid="stage-locked"').length - 1 + html.split('data-testid="stage-format-locked"').length - 1, "ONE lock line on the card").toBe(1);
     expect(row).not.toContain('data-testid="stage-format-save"');
     expect(row).not.toContain('data-testid="stage-format-clear"');
   });
@@ -287,12 +290,38 @@ describe("the row is offered for EVERY sport (W2c Task 17: the STAGE_RULES_SPORT
   });
 });
 
+describe("the abandon policy is always said (review m6: the line no longer carries it, the opened panel does)", () => {
+  // The summary line states format - points - ties; the abandon policy is the panel's to say. In the read-only (locked) Match format
+  // panel it is one of the chips, whatever the sport. The policy is the ENGINE's own default (`configSchema.parse({})`), its words
+  // are the public dictionary's.
+  it("sweep: every sport that offers an abandon policy says its declared one in the locked panel's chips", () => {
+    const ruleDict = rulesLineDict(enPublic as Dict);
+    let checked = 0;
+    for (const m of builtinModules) {
+      const offered = m.abandonOptions ?? [];
+      if (offered.length === 0) continue;
+      // The engine's own declared cfg for the sport (a sport whose schema needs fields has no `{}` default).
+      const cfg = declaredCfgs(m)[0]!.cfg as Record<string, unknown>;
+      const policy = (m.configSchema.parse(cfg) as Record<string, unknown>).abandonPolicy;
+      if (typeof policy !== "string" || !offered.includes(policy)) continue;
+      const html = panel({ sportKey: m.key, divisionConfig: cfg, formatLockedStageIds: [STAGE_ID], ruleDict });
+      const chips = /data-testid="stage-format-chips"[^>]*>([\s\S]*?)<\/ul>/.exec(html)?.[1] ?? "";
+      expect(chips, `${m.key}: the locked panel carries chips`).not.toBe("");
+      const said = rulesChipText(ruleDict, { key: `format.rules.abandon.${policy}` } as never);
+      expect(said, `${m.key}: premise: the dictionary has words for ${policy}`).not.toBe("");
+      expect(chips.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " "), `${m.key}: the abandon policy "${policy}" is said`).toContain(said);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: sports whose abandon policy was checked").toBeGreaterThan(0);
+  });
+});
+
 describe("the lock line (S4) and the read-only view", () => {
   it("a locked stage says so BEFORE anyone tries: one line in organiser words, no link to the tab it is on, no edit control; the format stays readable", () => {
     const html = panel({ stages: stageWith({ bestOf: 1 }), formatLockedStageIds: [STAGE_ID], ruleDict: rulesLineDict(enPublic as Dict) });
     const UI = enUi as Record<string, string>;
-    expect(html).toContain('data-testid="stage-format-locked"');
-    const line = html.slice(html.indexOf('data-testid="stage-format-locked"'), html.indexOf("</p>", html.indexOf('data-testid="stage-format-locked"')));
+    expect(html).toContain('data-testid="stage-locked"');
+    const line = html.slice(html.indexOf('data-testid="stage-locked"'), html.indexOf("</p>", html.indexOf('data-testid="stage-locked"')));
     expect(line, "Match Day item 4: 'Locked: the stage has started'").toContain(UI["stageCard.locked"]!);
     expect(line, "Match Day item 3: the lock line links nowhere").not.toMatch(/<(a|button)\b/);
     expect(html).not.toContain('data-testid="stage-format-view"'); // the chips ARE the read-only view (item 2: said once)
@@ -301,8 +330,9 @@ describe("the lock line (S4) and the read-only view", () => {
   });
 
   it("an unlocked stage shows no lock line, and a viewer reads the format (chips) but gets no lock line and no edit", () => {
-    expect(panel({ stages: stageWith({ bestOf: 1 }) })).not.toContain('data-testid="stage-format-locked"');
+    expect(panel({ stages: stageWith({ bestOf: 1 }) })).not.toContain('data-testid="stage-locked"');
     const viewer = panel({ canEdit: false, stages: stageWith({ bestOf: 1 }), ruleDict: rulesLineDict(enPublic as Dict) });
+    expect(viewer).not.toContain('data-testid="stage-locked"');
     expect(viewer).not.toContain('data-testid="stage-format-locked"');
     expect(viewer).toContain('data-testid="stage-format-chips"');
     // With the public dictionary the summary speaks the public line's words (the stage plays ONE game), not the bare headline.

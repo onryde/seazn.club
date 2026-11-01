@@ -282,6 +282,10 @@ export interface StagePointsProps {
   mode: RulesMode;
   /** The server's lock (`formatLockedStageIds`): the section says it once. */
   started: boolean;
+  /** Match Day C3 (review I3): whether a locked section says its own lock line. Default true (the section is the one place the lock is
+   *  said). The stage card passes false: its summary line already carries the card's ONE lock line, and a panel opened under it must not
+   *  repeat it. */
+  showLockLine?: boolean;
   stageId: string;
   module: AnySportModule;
   /** The stage's kind and its own config (its `rules` move the outcomes it reaches): the rows the editor shows. */
@@ -327,7 +331,7 @@ export function PointsEditor(props: PointsEditorProps) {
   return props.scope === "stage" ? <StagePoints {...props} /> : <DivisionPoints {...props} />;
 }
 
-export function StagePoints({ mode, started, stageId, module, kind, stageConfig, divisionConfig, stored, pointsDict, pinned = null, onSaved }: StagePointsProps) {
+export function StagePoints({ mode, started, showLockLine = true, stageId, module, kind, stageConfig, divisionConfig, stored, pointsDict, pinned = null, onSaved }: StagePointsProps) {
   const readOnly = mode === "locked";
   const msg = useMsg();
   const stage = { kind, config: stageConfig };
@@ -451,7 +455,7 @@ export function StagePoints({ mode, started, stageId, module, kind, stageConfig,
     return shell(
       <div className="space-y-2" data-testid="stage-points-readonly">
         {heading}
-        {started && <LockLine testId="stage-points-locked" />}
+        {started && showLockLine && <LockLine testId="stage-points-locked" />}
         {source !== null && (
           <p className="text-xs text-slate-600" data-testid="stage-points-source">
             {msg(source)}

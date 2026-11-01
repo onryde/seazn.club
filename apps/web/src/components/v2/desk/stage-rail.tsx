@@ -174,6 +174,10 @@ export interface StageRailProps {
    *  not specific to this button) — only this component's OWN use of it
    *  is gone. */
   unscheduledBadgeSlot: React.ReactNode;
+  /** Match Day C3 (review round 1, phone ruling): the stage's Match format / Points / Tie-breaks rows, built by the panel (it owns which
+   *  panel is open) and mounted as the TOP rows of this sheet below `md` - the card's one phone trigger. The slot carries its own
+   *  `md:hidden` (the header's buttons are the desktop twin). Absent: nothing, so the rail's other callers are unchanged. */
+  toolsSlot?: React.ReactNode;
 }
 
 export function StageRail({
@@ -193,6 +197,7 @@ export function StageRail({
   adhoc,
   courtTagsSlot,
   unscheduledBadgeSlot,
+  toolsSlot,
   swissHasUnseated,
   canUnpairSwiss,
   swissPairingMenu,
@@ -458,6 +463,7 @@ export function StageRail({
         {open && (
           <span aria-hidden className="mx-auto mb-1 block h-1 w-10 shrink-0 rounded-full bg-slate-200 md:hidden" />
         )}
+        {toolsSlot}
         {/* Fix round 2 (controller measurement): the action-button quartet
             (generate/complete, delete, add-match — never more than three
             render at once) used to sit as bare `.btn` (`inline-flex`)

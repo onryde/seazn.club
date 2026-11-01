@@ -194,8 +194,12 @@ describe("I1: the page's pinned points reach the pinned stage's section, and onl
     };
     const pinned = sectionOf(STAGE_ID);
     expect(pinned).toContain('data-stage-points-basis="pin"');
-    expect(text(pinned)).toContain(UI_EN["stageCard.locked"]!);
-    expect(pinned.split('data-testid="stage-points-locked"').length - 1, "one lock line").toBe(1);
+    // Review I3: the card's ONE lock line is its summary's (one per locked stage here: two); the opened points section reads, locked,
+    // and repeats nothing.
+    expect(pinned.split('data-testid="stage-points-locked"').length - 1, "the section repeats no lock line").toBe(0);
+    expect(html.split('data-testid="stage-points-locked"').length - 1, "no section says it").toBe(0);
+    expect(html.split('data-testid="stage-locked"').length - 1, "one lock line per locked stage card").toBe(2);
+    expect(text(html)).toContain(UI_EN["stageCard.locked"]!);
     expect(text(pinned), "Match Day item 4: no internals").not.toContain("don't reach it");
     expect(text(pinned)).not.toContain(UI_EN["stagePoints.divisionPoints"]!);
     expect(text(pinned)).toContain(words(4, 2, 1));

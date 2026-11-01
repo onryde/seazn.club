@@ -251,6 +251,57 @@ describe("the body: a one-line summary, no inline sections (items 5, 6, 7, 12)",
     expect(text(html)).toContain(UI["stageCard.locked"]!);
     expect(panel({ formatLockedStageIds: [] })).not.toContain('data-testid="stage-locked"');
   });
+
+  // Review I3 (controller ruling): the card carries ONE lock line - the summary's. A panel opened under it renders locked, without
+  // a line of its own. Every sport, every table kind, all three panels open at once: the sum of the four testids is exactly 1.
+  it("sweep: all three panels open on a locked stage - exactly ONE lock line on the card, in every sport and table kind", () => {
+    const LOCK_IDS = ["stage-locked", "stage-format-locked", "stage-points-locked", "stage-tiebreaks-locked"] as const;
+    let checked = 0;
+    for (const m of builtinModules) {
+      for (const kind of ["league", "group"] as const) {
+        const html = panel({
+          sportKey: m.key,
+          stages: [stageRow({ kind })],
+          stageTableRules: { [A]: tableRulesOf(m, kind) },
+          formatLockedStageIds: [A],
+          initialOpenPanels: ["format", "points", "tiebreaks"],
+        });
+        // Anti-vacuity: the panels really are open and really are the locked kind, or a count of 1 proves nothing.
+        expect(count(html, "stage-format-editor"), `${m.key}/${kind}: the format panel is open`).toBe(1);
+        expect(html, `${m.key}/${kind}: format panel locked`).toMatch(/data-testid="stage-format-editor"[^>]*data-mode="locked"/);
+        // (A sport whose engine cannot read the stage's points renders the "inexpressible" notice instead of the rows - either way the
+        // points panel is open, and neither says a lock line.)
+        expect(count(html, "stage-points-readonly") + count(html, "stage-points-inexpressible"), `${m.key}/${kind}: the points panel is open`).toBeGreaterThan(0);
+        expect(count(html, "stage-points-clear") + count(html, "stage-points-save"), `${m.key}/${kind}: the points panel is not the editor`).toBe(0);
+        expect(html, `${m.key}/${kind}: the tie-breaks panel is open and locked`).toContain('data-state="locked"');
+        const lines = LOCK_IDS.reduce((n, id) => n + count(html, id), 0);
+        expect(lines, `${m.key}/${kind}: one lock line on the card`).toBe(1);
+        expect(count(html, "stage-locked"), `${m.key}/${kind}: it is the summary's`).toBe(1);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: sports x kinds swept").toBe(builtinModules.length * 2);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe("the embedded sheet never rounds a bottom the card does not end on (review m3)", () => {
+  // Something always follows the sheet inside a stage card: an editor's rail, a viewer's read-only court-tags line. So no
+  // stage-card sheet takes the card's radius on its last row - for either audience. (React serialises `>` as `&gt;` in class text.)
+  const ROUND_LAST = "[&amp;&gt;section:last-child&gt;ul&gt;li:last-child]:rounded-b-2xl";
+  it("editor and viewer: the embedded sheet carries no last-row rounding; the court-tags line / rail follows it", () => {
+    let checked = 0;
+    for (const canEdit of [true, false]) {
+      const html = panel({ canEdit });
+      expect(count(html, "stage-run-sheet"), `canEdit=${canEdit}: the sheet is in the card`).toBe(1);
+      expect(html, `canEdit=${canEdit}: no last-row rounding`).not.toContain(ROUND_LAST);
+      const sheetAt = html.indexOf('data-testid="stage-run-sheet"');
+      const followedBy = canEdit ? html.indexOf('data-testid="stage-rail"', sheetAt) : html.indexOf('data-testid="stage-court-tags"', sheetAt);
+      expect(followedBy, `canEdit=${canEdit}: something follows the sheet in the card`).toBeGreaterThan(sheetAt);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
 });
 
 describe("the stage's fixtures are in the card (item 9)", () => {
@@ -325,13 +376,40 @@ describe("the buttons follow the stage's state (item 8) - through the real panel
     expect(html).not.toContain("stage-complete-hint");
   });
 
-  it("a held match (needs a decision) keeps Complete locked and is said as waiting for a decision, not as 'in play'", () => {
+  it("a match in `needs_decision` keeps Complete locked and is said as waiting for a decision, not as 'in play'", () => {
     const fixtures = [fixture(A, 1, { status: "decided", outcome: DECIDED }), fixture(A, 2, { status: "needs_decision" })];
     const html = panel({ fixtures });
     expect(disabled(html, "stage-complete")).toBe(true);
     const counts = text(/data-testid="stage-progress-counts"[^>]*>([^<]*)</.exec(html)![1]!);
     expect(counts).toContain(UI["schedule.progress.held.one"]!);
     expect(counts).not.toContain(UI["schedule.progress.inPlay.one"]!);
+  });
+
+  // Review I2. The held match the organiser actually meets is a PLAIN ABANDON: it is stored `abandoned` (a settled-looking status)
+  // and is held only because the page lists it as awaiting its settle - the same list the run sheet's rows read. The status map
+  // alone would call it played and let Complete lead over a match the server still refuses Complete for.
+  it("a plain abandon listed in awaitingSettle (status 'abandoned') keeps Complete locked and is counted as waiting for a decision", () => {
+    const fixtures = [fixture(A, 1, { status: "decided", outcome: DECIDED }), fixture(A, 2, { status: "abandoned" })];
+    const unlisted = panel({ fixtures });
+    // The positive pair: the same fixtures WITHOUT the list read as settled - Complete leads, enabled (so the list is what holds it).
+    expect(disabled(unlisted, "stage-complete"), "premise: unlisted, an abandon is settled").toBe(false);
+    expect(tag(unlisted, "stage-complete")).toMatch(/\bbtn-primary\b/);
+    const html = panel({ fixtures, awaitingSettle: [fixtures[1]!.id] });
+    expect(disabled(html, "stage-complete")).toBe(true);
+    expect(tag(html, "stage-complete")).not.toMatch(/\bbtn-primary\b/);
+    expect(html).toContain("stage-complete-hint");
+    const counts = text(/data-testid="stage-progress-counts"[^>]*>([^<]*)</.exec(html)![1]!);
+    expect(counts).toContain(UI["schedule.progress.held.one"]!);
+    expect(counts).not.toContain(UI["schedule.progress.inPlay.one"]!);
+  });
+
+  it("a settle that lands (the id leaves awaitingSettle) lets Complete lead again - a second render, not a stale first one", () => {
+    const fixtures = [fixture(A, 1, { status: "decided", outcome: DECIDED }), fixture(A, 2, { status: "abandoned" })];
+    const held = panel({ fixtures, awaitingSettle: [fixtures[1]!.id] });
+    const settled = panel({ fixtures, awaitingSettle: [] });
+    expect(disabled(held, "stage-complete")).toBe(true);
+    expect(disabled(settled, "stage-complete")).toBe(false);
+    expect(settled).not.toContain("stage-complete-hint");
   });
 
   it("Swiss mid-round: Pair next round leads (enabled), Complete is present but disabled", () => {
@@ -369,31 +447,79 @@ describe("the buttons follow the stage's state (item 8) - through the real panel
   });
 });
 
-describe("the phone: ONE 'Stage settings' menu holding the same buttons (AGENTS.md rules 22, 23)", () => {
-  it("a single trigger per stage, md:hidden; the three buttons exist ONCE (one DOM, never a second tree) and ride in the menu", () => {
+describe("the phone: the three buttons are the TOP rows of the one 'Stage tools' sheet (review round 1; AGENTS.md rules 22, 23)", () => {
+  it("an editor: no separate 'Stage settings' trigger or menu; ONE phone trigger (Stage tools); the rows sit first in the sheet, md:hidden", () => {
     const html = panel();
-    expect(count(html, "stage-settings-trigger"), "one trigger").toBe(1);
-    const trigger = tag(html, "stage-settings-trigger")!;
-    expect(trigger).toMatch(/\smd:hidden\b|\bmd:hidden\b/);
-    expect(trigger).not.toMatch(/max-md:hidden/);
-    expect(trigger).toContain('aria-expanded="false"');
-    expect(trigger).toContain(`aria-controls="stage-settings-menu-${A}"`);
-    expect(trigger).toMatch(/\bmin-h-11\b/);
-    expect(text(html)).toContain(UI["stageCard.settings"]!);
-    for (const id of ["format", "points", "tiebreaks"]) expect(count(html, `stage-tool-${id}`), `${id}: once`).toBe(1);
-    const menu = tag(html, "stage-settings-menu")!;
-    expect(menu, "closed on a phone: out of the way, but ATTACHED (toBeAttached, not toBeVisible)").toMatch(/max-md:hidden/);
-    expect(menu).toMatch(/\bmd:flex\b/);
-    expect(menu).toContain(`id="stage-settings-menu-${A}"`);
+    expect(count(html, "stage-settings-trigger"), "the retired trigger is gone").toBe(0);
+    expect(count(html, "stage-settings-menu"), "the retired menu is gone").toBe(0);
+    expect(html).not.toContain("stage-settings-");
+    expect(count(html, "stage-rail-trigger"), "the card's one phone trigger").toBe(1);
+    expect(tag(html, "stage-rail-trigger")).toMatch(/\bmin-h-11\b/);
+    expect(text(html)).toContain(UI["schedule.stageTools"]!);
+    const group = tag(html, "stage-sheet-tools")!;
+    expect(group, "the rows are phone-only: the header's buttons are the desktop twin").toMatch(/\smd:hidden\b/);
+    expect(group).not.toMatch(/max-md:hidden/);
+    const header = tag(html, "stage-tools")!;
+    expect(header, "the header row is the desktop twin: hidden below md for an editor").toMatch(/max-md:hidden/);
+    // The rows come BEFORE every action in the sheet (they are its top rows), and the sheet is where they live.
+    const rail = html.slice(html.indexOf('data-testid="stage-rail-sheet"'));
+    const rowsAt = rail.indexOf('data-testid="stage-sheet-tools"');
+    expect(rowsAt, "the rows are inside the sheet").toBeGreaterThan(-1);
+    for (const action of ["stage-complete", "stage-delete", "stage-add-match"]) {
+      const at = rail.indexOf(`data-testid="${action}"`);
+      if (at !== -1) expect(rowsAt, `${action}: after the rows`).toBeLessThan(at);
+    }
+    for (const id of ["format", "points", "tiebreaks"]) {
+      const row = tag(html, `stage-sheet-tool-${id}`);
+      expect(row, `${id}: a row in the sheet`).not.toBeNull();
+      expect(row).toContain('aria-expanded="false"');
+      expect(row).toContain(`aria-controls="stage-panel-${A}-${id}"`);
+      expect(row, "44px tap floor").toMatch(/\bmin-h-11\b/);
+      expect(count(html, `stage-tool-${id}`), `${id}: the header's twin exists once`).toBe(1);
+      expect(count(html, `stage-sheet-tool-${id}`), `${id}: the sheet's row exists once`).toBe(1);
+    }
   });
 
-  it("two stages: each has its own trigger and its own menu, and the ids do not collide", () => {
+  it("sweep: the rows are the header's buttons, one for one, on every stage kind (Points and Tie-breaks on table stages only)", () => {
+    let checked = 0;
+    for (const kind of StageKind.options) {
+      const html = panel({ stages: [stageRow({ kind })], stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league") } });
+      for (const id of ["format", "points", "tiebreaks"]) {
+        expect(count(html, `stage-sheet-tool-${id}`), `${kind}/${id}: the sheet's row mirrors the header's button`).toBe(count(html, `stage-tool-${id}`));
+        checked++;
+      }
+      const table = (DRAW_KINDS as ReadonlySet<string>).has(kind);
+      expect(count(html, "stage-sheet-tool-format"), `${kind}: Match format is a row on every stage`).toBe(1);
+      expect(count(html, "stage-sheet-tool-points"), `${kind}: Points`).toBe(table ? 1 : 0);
+    }
+    expect(checked, "anti-vacuity: kinds x panels swept").toBe(StageKind.options.length * 3);
+  });
+
+  it("an open panel reads open on BOTH twins (a second look at the same state)", () => {
+    const html = panel({ initialOpenPanels: ["points"] });
+    for (const id of ["stage-tool-points", "stage-sheet-tool-points"]) expect(tag(html, id), id).toContain('aria-expanded="true"');
+    for (const id of ["stage-tool-format", "stage-sheet-tool-format"]) expect(tag(html, id), id).toContain('aria-expanded="false"');
+  });
+
+  it("two stages: each card has its own rows, aimed at its own panels, and no id collides", () => {
     const stages = [stageRow(), stageRow({ id: B, seq: 2, name: "Group B", kind: "group", status: "pending" })];
     const html = panel({ stages, fixtures: [], stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league"), [B]: tableRulesOf(sport("badminton"), "group") } });
-    expect(count(html, "stage-settings-trigger")).toBe(2);
-    expect(count(html, "stage-settings-menu")).toBe(2);
-    expect(count(html, "stage-tool-format")).toBe(2);
-    const ids = [...html.matchAll(/\sid="(stage-settings-menu-[^"]+)"/g)].map((m) => m[1]);
+    expect(count(html, "stage-rail-trigger")).toBe(2);
+    expect(count(html, "stage-sheet-tools")).toBe(2);
+    expect(count(html, "stage-sheet-tool-format")).toBe(2);
+    expect(html).toContain(`aria-controls="stage-panel-${A}-format"`);
+    expect(html).toContain(`aria-controls="stage-panel-${B}-format"`);
+    const ids = [...html.matchAll(/\sid="(stage-rail-sheet-[^"]+)"/g)].map((m) => m[1]);
+    expect(ids.length).toBe(2);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("a viewer has no sheet (the rail renders nothing), so the header's buttons stay on screen at every width", () => {
+    const html = panel({ canEdit: false });
+    expect(count(html, "stage-rail-sheet")).toBe(0);
+    expect(count(html, "stage-sheet-tools")).toBe(0);
+    const header = tag(html, "stage-tools")!;
+    expect(header, "no max-md:hidden: a phone viewer still reaches the panels").not.toMatch(/max-md:hidden/);
+    for (const id of ["format", "points", "tiebreaks"]) expect(count(html, `stage-tool-${id}`), id).toBe(1);
   });
 });

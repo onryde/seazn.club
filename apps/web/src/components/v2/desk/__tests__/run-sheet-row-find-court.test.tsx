@@ -164,7 +164,7 @@ describe("the run sheet row's Find a court link", () => {
         <RunSheet
           blocks={blocks} stages={stages} tz={TZ} orgTz={TZ} nowMs={NOW_MS} matchMinutes={30}
           entrantNames={ENTRANTS} canEdit hrefFor={(f) => `/f/${f.fixture_no}`}
-          filter="all" onFilter={() => {}} stageId={null} onStageFilter={() => {}} matchDayHref={matchDayHref} venueNoun={venueNoun}
+          filter="all" onFilter={() => {}} stageId={null} matchDayHref={matchDayHref} venueNoun={venueNoun}
         />,
       );
     expect(findCourts(render()), "not a match day: none anywhere").toBe(0);

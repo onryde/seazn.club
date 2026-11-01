@@ -104,14 +104,21 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
   // Review ruling R3 — no round waiting ⇒ no menu. Positive pair first: the
   // rail must still be rendering its buttons, or the absence proves nothing.
   it("every round seated ⇒ no toggle", () => {
+    // Match Day C3 (review m5): the split button (and so its toggle) only renders where Generate / Pair next leads, which an
+    // ACTIVE stage never does - so the absence of the toggle there is the stage's state, not the guard under test. A PENDING stage
+    // keeps the Generate button on screen (the positive pair), and then only "a round is waiting to be paired" can put a toggle in
+    // it: every round seated, it must not.
     const html = renderToStaticMarkup(
-      <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1, 2])} />,
+      <StagesPanel {...props} stages={[swissStage({ rounds: 2 }, "pending")]} fixtures={fixtures([1, 2])} />,
     );
-    // Match Day C3: with every round seated Pair next is gone (nothing to pair); the rail still renders its buttons - Complete, here
-    // disabled while the seated matches are open - so the absence below is measured on a rail that is there.
-    expect(html).toContain('data-testid="stage-complete"');
-    expect(html).not.toContain('data-testid="stage-generate"');
+    expect(html, "the rail is rendering its lead button, or the absence proves nothing").toContain('data-testid="stage-generate"');
+    expect(html).not.toContain(">Pair next round</button>");
     expect(html).not.toContain(TOGGLE);
+    // And the same stage with a round waiting DOES carry it - the toggle is a function of the unseated round, not of the status.
+    const waiting = renderToStaticMarkup(
+      <StagesPanel {...props} stages={[swissStage({ rounds: 2 }, "pending")]} fixtures={fixtures([1])} />,
+    );
+    expect(waiting).toContain(TOGGLE);
   });
 
   it("no shells yet (first Generate) ⇒ no toggle — the server refuses a pick there", () => {
@@ -121,12 +128,14 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
   });
 
   it("a non-Swiss stage never gets one, even with unseated rows", () => {
-    const league = { ...swissStage(), kind: "league", name: "League" };
+    // Pending, like the test above: the league's Generate button is on screen, so the toggle's absence is the KIND guard working
+    // (the same unseated shells on a Swiss stage carry the toggle - see "round 1 waiting"), not a hidden button.
+    const league = { ...swissStage({ rounds: 2 }, "pending"), kind: "league", name: "League" };
     const html = renderToStaticMarkup(<StagesPanel {...props} stages={[league]} fixtures={fixtures()} />);
-    // A league never pairs: its rail offers Complete (disabled: its matches are open), never "Pair next round" or a toggle.
-    expect(html).toContain('data-testid="stage-complete"');
-    expect(html).not.toContain('data-testid="stage-generate"');
+    expect(html, "the rail's lead button is on screen").toContain('data-testid="stage-generate"');
     expect(html).not.toContain(TOGGLE);
+    const swiss = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage({ rounds: 2 }, "pending")]} fixtures={fixtures()} />);
+    expect(swiss, "the positive pair: the same rows on a Swiss stage").toContain(TOGGLE);
   });
 
   it("a viewer who cannot edit sees no rail, so no toggle", () => {

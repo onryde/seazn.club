@@ -313,6 +313,10 @@ export interface StageFormatProps {
   mode: RulesMode;
   /** The server's lock (`formatLockedStageIds`: the stage has a first score): the lock line, said once. */
   started: boolean;
+  /** Match Day C3 (review I3): whether a locked section says its own lock line. Default true (the section is the one place the lock is
+   *  said). The stage card passes false: its summary line already carries the card's ONE lock line, and a panel opened under it must not
+   *  repeat it. */
+  showLockLine?: boolean;
   sportKey: string;
   module: AnySportModule;
   kind: StageKind;
@@ -372,7 +376,7 @@ export function MatchFormatEditor(props: MatchFormatEditorProps) {
     const chips = props.ruleDict === undefined ? [] : stageSummaryClauses(props.sportKey, props.module, props.kind, props.resolved).map((c) => rulesChipText(props.ruleDict!, c));
     return (
       <div className="space-y-2" data-testid="match-format-readonly" data-scope="stage">
-        {props.started && <LockLine testId="stage-format-locked" />}
+        {props.started && props.showLockLine !== false && <LockLine testId="stage-format-locked" />}
         <FormatChips chips={chips} label={label} testId="stage-format-chips" />
       </div>
     );

@@ -120,6 +120,40 @@ describe("StageRail", () => {
     expect(html).toContain('data-testid="stage-delete"');
   });
 
+  // Match Day C3 (review round 1, phone ruling): the panel's three settings rows are the TOP rows of this sheet.
+  it("toolsSlot is the sheet's FIRST content: before every action, inside the sheet; absent, it adds nothing", () => {
+    const TOOLS = <div data-testid="tools-probe">rows</div>;
+    const withSlot = renderToStaticMarkup(
+      <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} open toolsSlot={TOOLS} />,
+    );
+    const sheetAt = withSlot.indexOf('data-testid="stage-rail-sheet"');
+    const toolsAt = withSlot.indexOf('data-testid="tools-probe"');
+    expect(sheetAt, "the sheet renders").toBeGreaterThan(-1);
+    expect(toolsAt, "the slot is inside the sheet").toBeGreaterThan(sheetAt);
+    for (const id of ["stage-complete", "stage-delete"]) {
+      expect(toolsAt, `${id}: after the tools`).toBeLessThan(withSlot.indexOf(`data-testid="${id}"`));
+    }
+    expect(withSlot.split('data-testid="stage-rail-trigger"').length - 1, "still ONE phone trigger").toBe(1);
+    const without = renderToStaticMarkup(
+      <StageRail stage={stage} canEdit busy={null} fixtureCount={4} deletable
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} open />,
+    );
+    expect(without).not.toContain("tools-probe");
+    expect(without.replace(/<div data-testid="tools-probe">rows<\/div>/, ""), "the slot is the only difference").toBe(withSlot.replace(/<div data-testid="tools-probe">rows<\/div>/, ""));
+  });
+
+  it("a viewer gets no slot either (the rail is null; the panel keeps the header's buttons for them)", () => {
+    const html = renderToStaticMarkup(
+      <StageRail stage={stage} canEdit={false} busy={null} fixtureCount={4} deletable
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} courtTagsSlot={null} {...NEUTRAL} toolsSlot={<div data-testid="tools-probe" />} />,
+    );
+    expect(html).toBe("");
+  });
+
   it("renders nothing at all when the viewer cannot edit — even with a non-null badge slot", () => {
     const html = renderToStaticMarkup(
       <StageRail stage={stage} canEdit={false} busy={null} fixtureCount={4} deletable

@@ -648,17 +648,15 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       return next;
     });
     // Save / Cancel / Use-division unmount the very button the keyboard was on. Hand focus back to the header button that opened the
-    // panel (review M-5 of the stage-rules row: focus follows the editor in AND out); on a phone that button sits in the closed
-    // "Stage settings" menu and is not rendered, so the menu's own trigger takes it.
+    // panel (review M-5 of the stage-rules row: focus follows the editor in AND out); on a phone that button is hidden (the three
+    // live in the "Stage tools" sheet there), so the sheet's own trigger takes it.
     requestAnimationFrame(() => {
       const card = document.querySelector(`section[data-stage-id="${stageId}"]`);
       const tool = card?.querySelector<HTMLElement>(`[data-testid="stage-tool-${panel}"]`);
-      const target = tool !== null && tool !== undefined && tool.offsetParent !== null ? tool : card?.querySelector<HTMLElement>('[data-testid="stage-settings-trigger"]');
+      const target = tool !== null && tool !== undefined && tool.offsetParent !== null ? tool : card?.querySelector<HTMLElement>('[data-testid="stage-rail-trigger"]');
       target?.focus();
     });
   };
-  // The phone's one "Stage settings" menu: the stage whose menu is open, or null. Below `md` the three buttons live in it.
-  const [settingsMenuFor, setSettingsMenuFor] = useState<string | null>(null);
   // Competition Desk W2 (Task 4/C5) — the run sheet's NOW rule. Never at
   // module scope (that freezes at first import, so NOW would stick to deploy
   // time), and never a bare `Date.now()` in this body either: that only moved
@@ -862,7 +860,6 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     hrefFor: (f: { fixture_no: number }) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no),
     filter,
     onFilter: setFilter,
-    onStageFilter: () => undefined,
     boardSlotOptions,
     onRescheduled: () => {
       setNotice(msg("schedule.rescheduled"));
@@ -965,15 +962,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           <div className="card">
             <RunSheetFilterBar
               blocks={runSheetBlocks}
-              stages={stages}
               tz={tz}
               nowMs={nowMs}
               matchMinutes={matchMinutes}
               onlinePlay={onlinePlay}
               filter={filter}
               onFilter={setFilter}
-              stageId={null}
-              onStageFilter={() => undefined}
             />
           </div>
         )}
@@ -1058,9 +1052,27 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // byes included - and never behind a fallback: a count that quietly read zero would unlock Complete over matches the card
         // cannot see. (It throws on a status the schema does not have, which is the loud failure we want.) The Complete hint's N is the
         // stage's matches, byes out.
-        const counts = stageCounts(stageFixtures);
-        // A held match (`needs_decision`) is open (it keeps Complete locked) but is not "in play": it waits for the organiser.
-        const stageHeld = stageFixtures.filter((f) => f.status === "needs_decision" && !isBye(toRunSheetFixture(f)));
+        // A HELD match is open: `needs_decision`, or a plain abandon the page lists as awaiting its settle (`awaitingSettle`, the
+        // list the run sheet's own rows read - not re-derived here), which keeps `status = 'abandoned'` while the verdict is owed.
+        const awaitingIds = new Set(awaitingSettle ?? []);
+        const counts = stageCounts(stageFixtures, awaitingIds);
+        // The stage's three settings buttons, built ONCE: the header row (from `md`) and the "Stage tools" sheet's top rows (below `md`,
+        // an editor only) are the same list. Points and Tie-breaks only on a table stage whose rules read.
+        const takesPoints = stageTakesPoints(stage.kind);
+        const settingsTools: { panel: RulesPanel; label: string }[] =
+          sportKey === undefined
+            ? []
+            : [
+                { panel: "format", label: msg("rulesStrip.format") },
+                ...(takesPoints ? [{ panel: "points" as const, label: msg("stagePoints.title") }] : []),
+                ...(takesPoints && stageTableRules[stage.id] !== undefined
+                  ? [{ panel: "tiebreaks" as const, label: msg("stageTiebreaks.title") }]
+                  : []),
+              ];
+        // Held keeps Complete locked but is not "in play": it waits for the organiser, and the card says so in its own clause.
+        const stageHeld = stageFixtures.filter(
+          (f) => (f.status === "needs_decision" || awaitingIds.has(f.id)) && !isBye(toRunSheetFixture(f)),
+        );
         // Fix round 2 (Ruling T4-B, CRITICAL finding): built ONCE per stage
         // — same rule the comment on `courtTagsEditor` below states for
         // itself — then placed in exactly one of two mutually exclusive
@@ -1208,64 +1220,34 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   {showKindPill(stage.name, stage.kind) && <span className="chip">{stage.kind.replace(/_/g, " ")}</span>}
                   <span className={`badge ${stageStatusStyle(stage.status)}`}>{stageStatusLabel(msg, stage.status)}</span>
                   {/* Match Day C3 (owner-approved mock, option 2): the stage's three settings open from here, inline under the
-                      header. ONE DOM at every width: at >= md the buttons sit in the header's row; below md the SAME buttons are
-                      the items of one "Stage settings" menu (the trigger is `md:hidden`, the list `max-md:hidden` until it is
-                      opened), never a second set. Inline JSX, not a child component: the harness walks this panel without
-                      invoking nested renders. Points and Tie-breaks only for a table stage; a viewer gets the same buttons and
-                      reads each panel. */}
-                  {sportKey !== undefined && (() => {
-                    const takesPoints = stageTakesPoints(stage.kind);
-                    const tools: { panel: RulesPanel; label: string }[] = [
-                      { panel: "format", label: msg("rulesStrip.format") },
-                      ...(takesPoints ? [{ panel: "points" as const, label: msg("stagePoints.title") }] : []),
-                      ...(takesPoints && stageTableRules[stage.id] !== undefined
-                        ? [{ panel: "tiebreaks" as const, label: msg("stageTiebreaks.title") }]
-                        : []),
-                    ];
-                    const menuOpen = settingsMenuFor === stage.id;
-                    return (
-                      <>
-                        <button
-                          type="button"
-                          data-testid="stage-settings-trigger"
-                          aria-expanded={menuOpen}
-                          aria-controls={`stage-settings-menu-${stage.id}`}
-                          onClick={() => setSettingsMenuFor(menuOpen ? null : stage.id)}
-                          className="ml-auto flex min-h-11 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 md:hidden"
-                        >
-                          {msg("stageCard.settings")}
-                          <span aria-hidden="true">{menuOpen ? "▴" : "▾"}</span>
-                        </button>
-                        <div
-                          id={`stage-settings-menu-${stage.id}`}
-                          role="group"
-                          aria-label={msg("stageCard.settings")}
-                          data-testid="stage-settings-menu"
-                          className={`min-w-0 ${menuOpen ? "flex w-full flex-col gap-2" : "max-md:hidden"} md:ml-auto md:flex md:w-auto md:flex-row md:flex-wrap md:items-center md:gap-2`}
-                        >
-                          {tools.map((tool) => {
-                            const on = panelOpen(stage.id, tool.panel);
-                            return (
-                              <button
-                                key={tool.panel}
-                                type="button"
-                                data-testid={`stage-tool-${tool.panel}`}
-                                aria-expanded={on}
-                                aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
-                                onClick={() => {
-                                  togglePanel(stage.id, tool.panel);
-                                  setSettingsMenuFor(null);
-                                }}
-                                className={`inline-flex min-h-11 items-center rounded-lg border px-3 text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 max-md:w-full ${on ? TOGGLE_ON : TOGGLE_OFF}`}
-                              >
-                                {tool.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </>
-                    );
-                  })()}
+                      header. From `md` up the buttons sit in the header's row. Below `md` an editor finds the same three as the
+                      TOP ROWS of the "Stage tools" sheet (controller ruling, review round 1: one phone trigger per card, not a
+                      second "Stage settings" one), so the header row is `max-md:hidden` for an editor; a viewer has no sheet
+                      (the rail renders nothing for them), so theirs stays on screen at every width. Points and Tie-breaks only
+                      for a table stage; a viewer gets the same buttons and reads each panel. */}
+                  {settingsTools.length > 0 && (
+                    <div
+                      data-testid="stage-tools"
+                      className={`ml-auto flex min-w-0 flex-wrap items-center gap-2 ${canEdit ? "max-md:hidden" : ""}`}
+                    >
+                      {settingsTools.map((tool) => {
+                        const on = panelOpen(stage.id, tool.panel);
+                        return (
+                          <button
+                            key={tool.panel}
+                            type="button"
+                            data-testid={`stage-tool-${tool.panel}`}
+                            aria-expanded={on}
+                            aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
+                            onClick={() => togglePanel(stage.id, tool.panel)}
+                            className={`inline-flex min-h-11 items-center rounded-lg border px-3 text-xs font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 ${on ? TOGGLE_ON : TOGGLE_OFF}`}
+                          >
+                            {tool.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                   {/* The swiss shape legend. `w-full` inside the header's own
                       `flex-wrap`, so it takes the SECOND line under the title
                       and chips at every width rather than adding a row of
@@ -1519,7 +1501,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     embedded
                     quietEmpty={!anyRowsKept}
                     stageId={stage.id}
-                    endsCard={!canEdit /* an editor's card carries the stage rail under the sheet; a viewer's has none */}
+                    endsCard={false /* something always follows the sheet in the card: an editor's rail, a viewer's court-tags line (review m3) */}
                   />
                 )}
 
@@ -1608,6 +1590,31 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   swissHasUnseated={swissHasUnseated}
                   canUnpairSwiss={canUnpairSwiss}
                   swissPairingMenu={swissPairingMenu}
+                  toolsSlot={
+                    settingsTools.length > 0 ? (
+                      <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
+                        {settingsTools.map((tool) => {
+                          const on = panelOpen(stage.id, tool.panel);
+                          return (
+                            <button
+                              key={tool.panel}
+                              type="button"
+                              data-testid={`stage-sheet-tool-${tool.panel}`}
+                              aria-expanded={on}
+                              aria-controls={`stage-panel-${stage.id}-${tool.panel}`}
+                              onClick={() => {
+                                togglePanel(stage.id, tool.panel);
+                                setOpenRailFor(null);
+                              }}
+                              className={`flex min-h-11 w-full items-center rounded-lg border px-3 text-left text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-600 ${on ? TOGGLE_ON : TOGGLE_OFF}`}
+                            >
+                              {tool.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null
+                  }
                   // #622 — court tags editor moves onto the rail (Task 3). Stays
                   // constructed HERE, not inside StageRail: it reads
                   // `courtTagSuggestions` off this panel's own `venues` prop, and
@@ -2573,6 +2580,7 @@ function StageRulesArea({
             scope="stage"
             mode={mode}
             started={locked}
+            showLockLine={false}
             sportKey={sportKey}
             module={sportModule}
             kind={kind}
@@ -2630,6 +2638,7 @@ function StageRulesArea({
             scope="stage"
             mode={mode}
             started={locked}
+            showLockLine={false}
             stageId={stageId}
             module={sportModule}
             kind={kind}
@@ -2650,6 +2659,7 @@ function StageRulesArea({
             scope="stage"
             mode={mode}
             started={locked}
+            showLockLine={false}
             stage={tiebreaks}
             module={sportModule}
             divisionConfig={divisionConfig}
