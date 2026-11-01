@@ -154,6 +154,7 @@ type TiebreakerKey = /* … */ | "opp_diff";
 ## Task 1: Bump to the snapshot; adapt every breaking type; re-derive the tests the release overrules
 
 **Rules:** none new. This is the substrate. Behaviour changes that arrive with the engine (X-SW-5 bye points, X-SW-9 chains, X-SW-7/8 Buchholz values) are re-derived where app tests froze the old values.
+- **Added (app-A T7 review m6):** `swiss-unplayed-rematch.test.ts`'s REMATCH board shape is engine 1.1.0's first preference, not a legality fact. 2.0.0's look-ahead may legitimately move it. If it moves, re-derive the shape by hand. The durable witness is the `history.played` assertions; never delete those.
 
 **Files:**
 - Modify: `pnpm-workspace.yaml`, the existing `overrides:` block (`:52`). Add ONE entry keyed on the alias: `"@seazn/engine": "npm:@onryde/seazn-engine@0.0.0-pr<N>.<sha>"`. Then update `pnpm-lock.yaml`. This is the only way a snapshot is installed here.
@@ -347,6 +348,8 @@ type TiebreakerKey = /* … */ | "opp_diff";
 ## Task 6: The harness reads a named refusal as a refusal, and takes the recovery (pre-requisite of the ruling-70 retirement)
 
 **Rules:** none (harness). **Premise 5:** `tools/matrix/lib/scenarios/common.ts:797-805` pushes `{ roundNo, seated: 0 }` for a REFUSED generate as well, and `invariants.ts:300` turns that into "round N paired nobody (SW-H1)". As written, the SW-H1 fix would leave ruling 70's three cells red under their old reason.
+
+**Added (app-A T7 review m3):** invariant I6 ("no two entrants meet twice in a swiss stage", `tools/matrix/lib/invariants.ts:~341-362`) counts every two-seated board as a meeting. After app-A T7 (X-SW-15, P-A2), a pair whose earlier board was a `double_walkover`, or an award the engine reads as unplayed (`isUnplayedForfeit`), may legally meet again. I6 must exempt exactly those, reading the same engine predicate and never a re-typed list. Add a differential: an unplayed rematch is not a violation, and a played rematch still is. Land it before Task 12's L3 re-baseline, or a legal rematch re-baselines as a violation.
 
 **Files:**
 - Modify:
