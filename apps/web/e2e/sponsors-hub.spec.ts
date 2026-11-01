@@ -12,15 +12,22 @@
 //   5. On stream (S12): the tab, driven as an editor drives it - the first tick turns the rotation on at Normal (R12) and the page shows
 //      it; the dial and a competition's own scope persist across a reload; the preview names a sport's breaks when it has no finished
 //      match; and a viewer is refused the settings write (R19). Default viewport only (R17).
+//   6. Overview (S13): a REAL stream click - the short code a viewer types, through the real `/s/` route - is what the Overview's
+//      Link clicks reads (S10's owed e2e); an editor creates a report link, sees it ONCE, and revokes it, with the row's stored hash
+//      checked against the url's token; a viewer reads the same numbers with no Share report, and both link routes refuse it (R19).
+//      Default viewport only (R17): no width claims here.
 // Width checks for the hub live in mobile.spec.ts (ruling R17: only that file runs in the seven width projects); this file holds its own
 // default viewport, plus the 320 pass the Dashboard entry exists for.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { expectNoHorizontalScroll } from "./helpers";
-import { apiJson } from "./helpers";
+import { apiJson, withDb } from "./helpers";
 import { releaseSettingsOrg, seedCompetition, seedMemberIdentity, seedSettingsOrg, settingsUrl, sponsorsUrl, type SeededOrg } from "./settings-support";
 import { SPONSORS_TABS, sponsorsTabsFor, type SponsorsTab } from "../src/lib/sponsors-hub";
+import { SPONSOR_SHORT_CODE_ALPHABET, SPONSOR_SHORT_CODE_MAX_LENGTH } from "../src/lib/sponsor-short-code";
+import { overviewHref } from "../src/lib/sponsor-report";
 
 /** Copy read from the dictionary the page renders from, never retyped (this folder's idiom: settings-org-tabs.spec.ts). */
 const UI: Record<string, string> = JSON.parse(
@@ -230,6 +237,115 @@ test("on stream: a viewer cannot write the settings (R19) - the route refuses wi
     await page.goto(sponsorsUrl(seeded.slug, "on_stream"));
     await expect(page.getByTestId("sponsors-tab-overview"), "and the tab itself falls back").toBeVisible();
     await expect(page.getByTestId("on-stream-tab")).toHaveCount(0);
+  } finally {
+    await member.release();
+    await releaseSettingsOrg(request, seeded);
+  }
+});
+
+/** A realistic long sponsor name (AGENTS.md: a 43-character name is what found the last phone overflow). */
+const LONG_SPONSOR = "Harbourside Building Supplies and Timber Co";
+
+test("overview: a stream click - the code a viewer types, through the real /s/ route - counts once on the Overview's Link clicks", async ({ page, request }) => {
+  const seeded = await seedSettingsOrg(request, { plan: "pro", label: "sponsors-overview-click" });
+  try {
+    const made = await apiJson<{ id: string }>(request, `/api/v1/orgs/${seeded.orgId}/sponsors`, "POST", { name: LONG_SPONSOR, tier: "gold", url: "https://harbourside.example/s13" });
+    expect(made.status, JSON.stringify(made.error)).toBe(201);
+    const sponsorId = made.data!.id;
+
+    // Before any click: the row reads zeros (a real zero, not a dash) and viewers a dash.
+    await page.goto(sponsorsUrl(seeded.slug, "overview"));
+    const row = page.getByTestId(`sponsor-overview-row-${sponsorId}`);
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("sponsor-overview-clicks")).toHaveText("0");
+    await expect(row.getByTestId("sponsor-overview-viewers")).toHaveText("—");
+
+    // The stream's short code (S5 mints it from a live overlay poll; written straight to its table here, as public-fixture.spec.ts
+    // does). Drawn from the declared alphabet at the longest length so no other run collides.
+    const pick = (from: readonly string[]) => from[Math.floor(Math.random() * from.length)]!;
+    const code = Array.from({ length: SPONSOR_SHORT_CODE_MAX_LENGTH }, () => pick([...SPONSOR_SHORT_CODE_ALPHABET])).join("");
+    await withDb((sql) => sql`insert into sponsor_short_codes (code, org_id, sponsor_id, fixture_id) values (${code}, ${seeded.orgId}, ${sponsorId}, null)`);
+    const res = await page.request.get(`/s/${code}`, { maxRedirects: 0, headers: { "cf-connecting-ip": "198.51.100.77" } });
+    expect(res.status(), "the code redirects").toBe(302);
+    expect(res.headers()["location"]).toBe("https://harbourside.example/s13");
+
+    // The Overview reads it: one link click, this year and in the last 30 days (the picker navigates).
+    await expect
+      .poll(async () => {
+        await page.reload();
+        return (await row.getByTestId("sponsor-overview-clicks").textContent())?.trim();
+      }, { timeout: 15_000 })
+      .toBe("1");
+    await page.getByTestId("sponsor-overview-period").selectOption("last_30_days");
+    await expect(page).toHaveURL(new RegExp(`${overviewHref(seeded.slug, { kind: "last_30_days" }).replace("?", "\\?")}$`));
+    await expect(row.getByTestId("sponsor-overview-clicks"), "last 30 days").toHaveText("1");
+    await expect(row.getByTestId("sponsor-overview-times"), "no stream aired it").toHaveText("0");
+    await expect(page.getByTestId("sponsor-overview-notes")).toContainText(UI["sponsors.overview.clicksFootnote"] ?? "");
+    await expectNoHorizontalScroll(page);
+  } finally {
+    await releaseSettingsOrg(request, seeded);
+  }
+});
+
+test("overview + share: an editor creates a report link, sees it once, revokes it; a viewer reads the Overview with no Share report and both link routes refuse it (R19)", async ({ page, browser, request }) => {
+  const seeded = await seedSettingsOrg(request, { plan: "pro", label: "sponsors-overview-share" });
+  const member = await seedMemberIdentity(browser, request, seeded.orgId, "viewer");
+  try {
+    const made = await apiJson<{ id: string }>(request, `/api/v1/orgs/${seeded.orgId}/sponsors`, "POST", { name: LONG_SPONSOR, tier: "title" });
+    expect(made.status, JSON.stringify(made.error)).toBe(201);
+    const sponsorId = made.data!.id;
+    const linksOf = () => withDb((sql) => sql<{ id: string; token_hash: Buffer; revoked_at: Date | null }[]>`
+      select id, token_hash, revoked_at from sponsor_report_links where org_id = ${seeded.orgId} order by created_at`);
+
+    await page.goto(sponsorsUrl(seeded.slug, "overview"));
+    const row = page.getByTestId(`sponsor-overview-row-${sponsorId}`);
+    await expect(row.getByTestId("sponsor-overview-name")).toHaveText(LONG_SPONSOR);
+    await row.getByTestId("sponsor-overview-share").click();
+    const panel = row.getByTestId("sponsor-share");
+    await expect(panel).toBeVisible();
+    await expect(panel.getByTestId("sponsor-share-none")).toBeVisible();
+
+    // Create: the url appears once, absolute, and its token hashes to the stored row.
+    await panel.getByTestId("sponsor-share-create").click();
+    const url = panel.getByTestId("sponsor-share-url");
+    await expect(url).toHaveValue(/\/r\/sponsor\/[A-Za-z0-9_-]{43}$/);
+    const shown = await url.inputValue();
+    expect(new URL(shown).origin, "absolute, on the origin the organiser is on").toBe(new URL(page.url()).origin);
+    const token = new URL(shown).pathname.split("/").at(-1)!;
+    const [stored] = await linksOf();
+    expect(stored, "one row").toBeDefined();
+    expect(Buffer.from(stored!.token_hash).equals(createHash("sha256").update(token, "utf8").digest()), "only the hash is stored").toBe(true);
+    await expectNoHorizontalScroll(page);
+
+    // Done: the url is gone for good; the live link is listed (without its token).
+    await panel.getByTestId("sponsor-share-done").click();
+    await expect(panel.getByTestId("sponsor-share-url")).toHaveCount(0);
+    const listed = panel.getByTestId(`sponsor-share-link-${stored!.id}`);
+    await expect(listed).toBeVisible();
+    expect(await panel.textContent(), "the token is nowhere in the panel").not.toContain(token);
+
+    // A second link, made through the route, for the viewer's DELETE below.
+    const second = await apiJson<{ id: string }>(request, `/api/v1/orgs/${seeded.orgId}/sponsors/${sponsorId}/report-links`, "POST", { competitionId: null, from: "2026-01-01", to: "2026-12-31" });
+    expect(second.status, JSON.stringify(second.error)).toBe(201);
+
+    // Revoke asks first, then the row goes and the table says revoked.
+    await listed.getByTestId(`sponsor-share-revoke-${stored!.id}`).click();
+    await listed.getByTestId(`sponsor-share-revoke-yes-${stored!.id}`).click();
+    await expect(panel.getByTestId(`sponsor-share-link-${stored!.id}`)).toHaveCount(0);
+    await expect.poll(async () => (await linksOf()).find((l) => l.id === stored!.id)?.revoked_at !== null).toBe(true);
+
+    // The viewer: the same row and numbers, no Share report; both link routes refuse it, and nothing changes.
+    const vp = await member.ctx.newPage();
+    await vp.goto(sponsorsUrl(seeded.slug, "overview"));
+    await expect(vp.getByTestId(`sponsor-overview-row-${sponsorId}`)).toBeVisible();
+    await expect(vp.getByTestId(`sponsor-overview-row-${sponsorId}`).getByTestId("sponsor-overview-clicks")).toHaveText("0");
+    await expect(vp.getByTestId("sponsor-overview-share"), "a viewer is never offered Share report").toHaveCount(0);
+    const post = await member.ctx.request.post(`/api/v1/orgs/${seeded.orgId}/sponsors/${sponsorId}/report-links`, { data: { competitionId: null, from: "2026-01-01", to: "2026-12-31" } });
+    expect(post.status(), "a viewer cannot create a link").toBe(403);
+    const del = await member.ctx.request.delete(`/api/v1/orgs/${seeded.orgId}/sponsor-report-links/${second.data!.id}`);
+    expect(del.status(), "a viewer cannot revoke one").toBe(403);
+    const after = await linksOf();
+    expect(after.map((l) => [l.id, l.revoked_at === null]), "the viewer changed nothing").toEqual([[stored!.id, false], [second.data!.id, true]]);
   } finally {
     await member.release();
     await releaseSettingsOrg(request, seeded);
