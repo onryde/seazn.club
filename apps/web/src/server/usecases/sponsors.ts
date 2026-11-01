@@ -39,6 +39,7 @@ import { applicationFeeCents, feePercentFor } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
 import { orgOwnerRecipient } from "./org-owner";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
+import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
 
 // The tier list lives in the client-safe lib (R4 F10: this module imports the email outbox, so the planner and the
 // overlay cannot import it). Re-exported, never re-declared — one authority.
@@ -55,6 +56,8 @@ export interface SponsorRow {
   status: "active" | "pending" | "inactive";
   click_count: number;
   created_at: string;
+  /** Ticked onto the stream's rotation (V483; R4 S12). Written only by PATCH; a created sponsor starts false. */
+  on_stream: boolean;
   /** The paid order that activated this placement, when it was bought
    *  through a package (list reads only — write paths return it unset). */
   paid_order_id?: string | null;
@@ -72,22 +75,33 @@ export interface SponsorRow {
 
 const COLS = [
   "id", "competition_id", "name", "url", "logo_path",
-  "tier", "display_order", "status", "click_count", "created_at",
+  "tier", "display_order", "status", "click_count", "created_at", "on_stream",
 ] as const;
 
-export const CreateSponsorInput = z.object({
+/** The fields a sponsor write may carry, WITHOUT defaults. A patch is built from this shape: zod 4's `.partial()` on a field
+ *  that `.default()`s still FILLS it when omitted, so a patch derived from the create schema rewrote `tier` to "partner" and
+ *  `status` to "active" on every PATCH that did not name them (R4 S12 found it on the first tick: a Title sponsor ticked onto
+ *  the stream came back a Partner, and a parked one came back active). */
+const SponsorWriteFields = z.object({
   name: z.string().min(1).max(80),
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`, and this url is a
   // redirect target (`/s/[key]`) and a board's href.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
-  tier: z.enum(SPONSOR_TIERS).default("partner"),
+  tier: z.enum(SPONSOR_TIERS),
   competition_id: z.string().uuid().nullish(),
+  status: z.enum(["active", "pending", "inactive"]),
+});
+
+export const CreateSponsorInput = SponsorWriteFields.extend({
+  tier: z.enum(SPONSOR_TIERS).default("partner"),
   status: z.enum(["active", "pending", "inactive"]).default("active"),
 });
 export type CreateSponsorInput = z.infer<typeof CreateSponsorInput>;
 
-export const PatchSponsorInput = CreateSponsorInput.partial();
+/** `on_stream` (R4 S12, controller row 30) is PATCH-ONLY and snake_case: `patchSponsor` writes the body's keys as columns.
+ *  A created sponsor starts off the stream (V483's default), so `CreateSponsorInput` does not carry it. */
+export const PatchSponsorInput = SponsorWriteFields.partial().extend({ on_stream: z.boolean().optional() });
 export type PatchSponsorInput = z.infer<typeof PatchSponsorInput>;
 
 export const ReorderSponsorsInput = z.object({
@@ -250,6 +264,8 @@ export async function patchSponsor(
       update sponsors set ${tx(patch as never, ...(cols as never[]))}
       where id = ${id} returning ${tx(COLS)}`;
     if (!row) throw new HttpError(404, "sponsor not found");
+    // R12: the first tick turns the org's rotation on. After the update (a refused tick leaves no row), in its transaction.
+    if (patch.on_stream === true) await ensureOrgStreamSettings(tx, auth.orgId, auth.userId);
     return row;
   }).then((row) => {
     bustPublicSponsors(auth.orgId);

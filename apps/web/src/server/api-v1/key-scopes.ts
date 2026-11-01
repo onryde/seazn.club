@@ -326,6 +326,8 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "PATCH /orgs/:id/sponsors/:sponsorId",
   "DELETE /orgs/:id/sponsors/:sponsorId",
   "POST /orgs/:id/sponsors/reorder",
+  // Sponsors on stream (R4 S12): the rotation's dial is the same console-only org-branding surface as the sponsors it rotates.
+  "PUT /orgs/:id/sponsor-stream-settings",
   // Sponsor monetization (v10): money surface — never key-accessible.
   "GET /orgs/:id/sponsor-packages",
   "POST /orgs/:id/sponsor-packages",

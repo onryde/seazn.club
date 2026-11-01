@@ -29,6 +29,7 @@ import { PointsRule } from "@seazn/engine/competition";
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
 import { isRedirectableUrl, SPONSOR_URL_HTTP_ONLY } from "../../lib/sponsor-clicks.ts";
+import { SPONSOR_FREQUENCIES } from "../../lib/sponsor-frequencies.ts";
 import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
 // The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
@@ -4745,6 +4746,8 @@ export const Sponsor = z.object({
   status: SponsorStatus,
   click_count: z.number().int(),
   created_at: z.string(),
+  /** R4 sponsors on stream (V483): ticked onto the stream's rotation. Written only through PATCH; a new sponsor starts false. */
+  on_stream: z.boolean(),
   /** Set on list reads when a paid package order activated this placement. */
   paid_order_id: z.string().nullable().optional(),
   /** List reads: true while a payment dispute has the placement parked — that
@@ -4757,17 +4760,35 @@ export const Sponsor = z.object({
   dispute_lost: z.boolean().optional(),
 });
 
-export const CreateSponsor = z.object({
+// The fields a sponsor write may carry, WITHOUT defaults: a patch built from a field that `.default()`s is filled by it
+// (zod 4), rewriting `tier` and `status` on a PATCH that never named them (R4 S12; see usecases/sponsors.ts).
+const SponsorWriteFields = z.object({
   name: z.string().min(1).max(80),
   // http(s) only (R4 S10 fix round 1, m1): zod's `.url()` alone accepts `javascript:` and `data:`.
   url: z.string().url().max(500).refine(isRedirectableUrl, { message: SPONSOR_URL_HTTP_ONLY }).nullish(),
   logo_path: z.string().max(500).nullish(),
-  tier: SponsorTier.default("partner"),
+  tier: SponsorTier,
   competition_id: Uuid.nullish(),
+  status: SponsorStatus,
+});
+
+export const CreateSponsor = SponsorWriteFields.extend({
+  tier: SponsorTier.default("partner"),
   status: SponsorStatus.default("active"),
 });
 
-export const PatchSponsor = CreateSponsor.partial();
+// `on_stream` is PATCH-ONLY (R4 S12, row 30): a created sponsor starts off the stream, and the first tick is what turns the
+// org's rotation on (ruling R12). It is declared HERE, beside the patch, and never on `CreateSponsor`.
+export const PatchSponsor = SponsorWriteFields.partial().extend({ on_stream: z.boolean().optional() });
+
+/** R4 sponsors on stream, S12: one scope's dial (spec §3.2, §5.1). `competitionId: null` is the org row. */
+export const SponsorStreamFrequency = z.enum(SPONSOR_FREQUENCIES);
+export const PutSponsorStreamSettings = z.object({
+  competitionId: Uuid.nullable(),
+  enabled: z.boolean(),
+  frequency: SponsorStreamFrequency,
+});
+export const SponsorStreamSettings = PutSponsorStreamSettings;
 
 export const ReorderSponsors = z.object({ ids: z.array(Uuid).min(1).max(200) });
 

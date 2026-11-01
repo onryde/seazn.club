@@ -63372,6 +63372,9 @@
                           "created_at": {
                             "type": "string"
                           },
+                          "on_stream": {
+                            "type": "boolean"
+                          },
                           "paid_order_id": {
                             "anyOf": [
                               {
@@ -63399,7 +63402,8 @@
                           "display_order",
                           "status",
                           "click_count",
-                          "created_at"
+                          "created_at",
+                          "on_stream"
                         ],
                         "additionalProperties": false
                       }
@@ -63423,7 +63427,8 @@
                       "display_order": -9007199254740991,
                       "status": "active",
                       "click_count": -9007199254740991,
-                      "created_at": "example"
+                      "created_at": "example",
+                      "on_stream": true
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -63759,6 +63764,9 @@
                         "created_at": {
                           "type": "string"
                         },
+                        "on_stream": {
+                          "type": "boolean"
+                        },
                         "paid_order_id": {
                           "anyOf": [
                             {
@@ -63786,7 +63794,8 @@
                         "display_order",
                         "status",
                         "click_count",
-                        "created_at"
+                        "created_at",
+                        "on_stream"
                       ],
                       "additionalProperties": false
                     },
@@ -63808,7 +63817,8 @@
                     "display_order": -9007199254740991,
                     "status": "active",
                     "click_count": -9007199254740991,
-                    "created_at": "example"
+                    "created_at": "example",
+                    "on_stream": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -64065,7 +64075,6 @@
                     ]
                   },
                   "tier": {
-                    "default": "partner",
                     "type": "string",
                     "enum": [
                       "title",
@@ -64087,13 +64096,15 @@
                     ]
                   },
                   "status": {
-                    "default": "active",
                     "type": "string",
                     "enum": [
                       "active",
                       "pending",
                       "inactive"
                     ]
+                  },
+                  "on_stream": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": false
@@ -64192,6 +64203,9 @@
                         "created_at": {
                           "type": "string"
                         },
+                        "on_stream": {
+                          "type": "boolean"
+                        },
                         "paid_order_id": {
                           "anyOf": [
                             {
@@ -64219,7 +64233,8 @@
                         "display_order",
                         "status",
                         "click_count",
-                        "created_at"
+                        "created_at",
+                        "on_stream"
                       ],
                       "additionalProperties": false
                     },
@@ -64241,7 +64256,8 @@
                     "display_order": -9007199254740991,
                     "status": "active",
                     "click_count": -9007199254740991,
-                    "created_at": "example"
+                    "created_at": "example",
+                    "on_stream": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -64581,6 +64597,281 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{id}/sponsor-stream-settings": {
+      "put": {
+        "summary": "Set one scope's sponsors-on-stream dial (R4): `competitionId: null` is the organisation's row, a competition id that competition's own row, which overrides the organisation's whole (`enabled` included). Upserts: a second save of the same scope updates its row. Editors only (owner / admin); never key-accessible",
+        "tags": [
+          "sponsors"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "competitionId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "format": "uuid",
+                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "frequency": {
+                    "type": "string",
+                    "enum": [
+                      "light",
+                      "normal",
+                      "busy"
+                    ]
+                  }
+                },
+                "required": [
+                  "competitionId",
+                  "enabled",
+                  "frequency"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "competitionId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "enabled": true,
+                "frequency": "light"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "competitionId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "frequency": {
+                          "type": "string",
+                          "enum": [
+                            "light",
+                            "normal",
+                            "busy"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "competitionId",
+                        "enabled",
+                        "frequency"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "competitionId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "enabled": true,
+                    "frequency": "light"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
