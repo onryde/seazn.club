@@ -12,6 +12,13 @@
 // one site visit), never read back from the page. Frames need the private bucket (no Supabase in CI e2e), so every showing here
 // is the placeholder; the signed-url path is pinned in vitest (report-public.test.ts, page.test.tsx). The rate limit is inert
 // without Redis (CI e2e has none); its branch is pinned in page.test.tsx.
+//
+// The SEED runs signed in; only the page is opened anonymous - and that split is made with an explicit cookieless context
+// (`anonymous()`), NEVER with `test.use({ storageState })`. Playwright resolves a file-level beforeAll/afterAll's
+// test-scoped fixtures (`request`) from the pool of whichever test the worker happens to run first/last
+// (worker: `setPool(test._pool)` before the hooks), so an empty jar in a describe's `test.use` leaks into the seed whenever
+// that describe's test opens the worker: CI run 41277565323 (shard 4/4) seeded from the 320 group and got 401 on POST
+// /api/orgs. The beforeAll asserts its jar holds a session, so a regression names itself instead of a 401 three calls deep.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Browser, type Page } from "@playwright/test";
@@ -33,7 +40,12 @@ const AWAY = "Kingsway Northern Athletic Club Under 21s B";
 const SHOWN_MS = [8_000, 15_000]; // the two closed showings; a third is still open
 const EMPTY_JAR = { cookies: [], origins: [] };
 
-let org: SeededOrg;
+let seed: SeededOrg | undefined;
+/** The org the beforeAll seeded; a test reaching here without it reports the seed, not a TypeError. */
+function seeded(): SeededOrg {
+  if (seed === undefined) throw new Error("sponsor-report: the beforeAll seed did not complete");
+  return seed;
+}
 let token: string;
 
 /** A browser context with no cookie and no storage at all: the sponsor, who has never signed in. */
@@ -46,7 +58,9 @@ async function anonymous(browser: Browser, viewport = { width: 1280, height: 900
 test.beforeAll(async ({ request }) => {
   expect(SPONSOR.length, "Review Focus 5's realistic name").toBe(43);
   expect(AWAY.length).toBe(43);
-  org = await seedSettingsOrg(request, { plan: "pro", label: "sponsor-report" });
+  expect((await request.storageState()).cookies.length, "the seed runs signed in (the project's storageState), never the anonymous jar").toBeGreaterThan(0);
+  const org = await seedSettingsOrg(request, { plan: "pro", label: "sponsor-report" });
+  seed = org;
   const comp = await seedCompetition(request, org.orgId, { name: "Summer League" });
   const division = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "T20", sport_key: "cricket", variant_key: "t20", config: {} });
   expect(division.status, JSON.stringify(division.error)).toBe(201);
@@ -76,15 +90,19 @@ test.beforeAll(async ({ request }) => {
   expect(reportLinkPath(token), "S13's url is the page's path").toBe(link.data!.url);
 });
 test.afterAll(async ({ request }) => {
-  await releaseSettingsOrg(request, org);
+  // A failed seed leaves nothing to release: its own error is the one reported.
+  if (seed !== undefined) await releaseSettingsOrg(request, seed);
 });
 
 for (const width of [320, 768, 1280]) {
   test.describe(`at ${width}px`, () => {
-    test.use({ viewport: { width, height: 900 }, storageState: EMPTY_JAR });
+    // The viewport only: the empty jar is `anonymous()`'s, never a `test.use` (see the header - it would reach the seed).
+    test.use({ viewport: { width, height: 900 } });
 
-    test("opens with no login: 200, no-store, noindex, the figures under their labels, no horizontal scroll, long names truncated", async ({ page, context }) => {
-      expect((await context.cookies()).map((c) => c.name), "no session in the jar").toEqual([]);
+    test("opens with no login: 200, no-store, noindex, the figures under their labels, no horizontal scroll, long names truncated", async ({ browser, viewport }) => {
+      expect(viewport, "premise: the describe's viewport").toEqual({ width, height: 900 });
+      const org = seeded();
+      const page = await anonymous(browser, viewport!);
       const res = await page.goto(reportLinkPath(token));
       expect(res?.status()).toBe(200);
       expect(res?.headers()["cache-control"] ?? "", "never cached").toContain("no-store");
@@ -112,6 +130,7 @@ for (const width of [320, 768, 1280]) {
       expect(box.scroll, `the 86-character match line truncates inside its card at ${width}px`).toBeGreaterThan(box.client);
       await expectNoHorizontalScroll(page);
       expect(await page.locator("body").innerText(), "the token is not printed on the page").not.toContain(token);
+      await page.context().close();
     });
   });
 }
@@ -133,6 +152,7 @@ test("print: the chrome goes (the print button, the cookie banner), the report s
 });
 
 test("the 404: unknown, malformed, revoked and deleted-sponsor tokens answer 404 with the same body; a link is live right up to its revoke", async ({ browser, request }) => {
+  const org = seeded();
   const page = await anonymous(browser);
   // A second sponsor and two links of its own: one revoked, then the sponsor deleted under the other.
   const second = await apiJson<{ id: string }>(request, `/api/v1/orgs/${org.orgId}/sponsors`, "POST", { name: "Ridge Cycles", tier: "partner" });
