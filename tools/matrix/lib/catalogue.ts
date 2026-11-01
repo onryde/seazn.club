@@ -54,8 +54,8 @@ export const BUILDER_DEFAULT_KNOBS: Readonly<TemplateKnobs> = Object.freeze({
   legs: 1,
 });
 
-/** The builder's clampKnob bounds (division-builder.tsx:386, 388) — pinned by
- *  catalogue.test.ts. */
+/** The builder's clampKnob bounds (division-builder.tsx buildStages, FORMAT_BOUNDS.qualify / .pools in
+ *  apps/web/src/lib/format-bounds.ts) — a mirror pinned to FORMAT_BOUNDS by catalogue.test.ts. */
 export const BUILDER_KNOB_BOUNDS: Readonly<Record<"qualified" | "poolCount", Readonly<{ min: number; max: number }>>> = Object.freeze({
   qualified: Object.freeze({ min: 2, max: 32 }),
   poolCount: Object.freeze({ min: 2, max: 8 }),

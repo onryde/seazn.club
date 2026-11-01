@@ -3012,6 +3012,7 @@ export type DictionaryKey =
   | "format.league.tagline"
   | "format.league.title"
   | "format.league.tradeoff"
+  | "format.legs.storedOutOfRange"
   | "format.minutes"
   | "format.page_playoff.bestFor"
   | "format.page_playoff.body.0"

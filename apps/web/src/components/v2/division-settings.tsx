@@ -35,6 +35,8 @@ import {
   type TemplateKnobs,
 } from "@/lib/format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
+import { LegsChoice } from "@/components/v2/legs-choice";
+import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
@@ -259,9 +261,9 @@ export function structureDraftsForApply(
 ): StageDraft[] {
   return applyStandingsCarry(
     buildTemplateStages(templateKey, {
-      qualified: clampKnob(knobs.qualified, 2, 32),
+      qualified: clampKnob(knobs.qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max),
       swissRounds: knobs.swissRounds,
-      poolCount: clampKnob(knobs.poolCount, 2, 8),
+      poolCount: clampKnob(knobs.poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max),
       legs: knobs.legs,
     }),
     carry,
@@ -740,14 +742,14 @@ export function DivisionSettings({
                 ) && (
                   <label className="block text-xs text-slate-500">
                     {msg("divset.topN")}
-                    <input type="number" min={2} max={32} disabled={!canEdit} value={qualified}
+                    <input type="number" data-format-bound="qualify" min={FORMAT_BOUNDS.qualify.min} max={FORMAT_BOUNDS.qualify.max} disabled={!canEdit} value={qualified}
                       onChange={(e) => setQualified(Number(e.target.value))} className="input mt-1 w-full" />
                   </label>
                 )}
                 {template === "groups_ko" && (
                   <label className="block text-xs text-slate-500">
                     {msg("divset.groups")}
-                    <input type="number" min={2} max={8} disabled={!canEdit} value={poolCount}
+                    <input type="number" data-format-bound="pools" min={FORMAT_BOUNDS.pools.min} max={FORMAT_BOUNDS.pools.max} disabled={!canEdit} value={poolCount}
                       onChange={(e) => setPoolCount(Number(e.target.value))} className="input mt-1 w-full" />
                   </label>
                 )}
@@ -756,8 +758,9 @@ export function DivisionSettings({
                     {msg("divset.rounds")}
                     <input
                       type="number"
-                      min={3}
-                      max={15}
+                      data-format-bound="swissRounds"
+                      min={FORMAT_BOUNDS.swissRounds.min}
+                      max={FORMAT_BOUNDS.swissRounds.max}
                       disabled={!canEdit}
                       value={swissRounds}
                       data-testid="division-settings-swiss-rounds"
@@ -767,11 +770,17 @@ export function DivisionSettings({
                   </label>
                 )}
                 {["league", "league_ko", "groups_ko"].includes(template) && (
-                  <label className="block text-xs text-slate-500">
-                    {msg("divset.legs")}
-                    <input type="number" min={1} max={4} disabled={!canEdit} value={legs}
-                      onChange={(e) => setLegs(Number(e.target.value))} className="input mt-1 w-full" />
-                  </label>
+                  // Match Day D1: the builder's Once / Home & away control (legs-choice.tsx). A stored value past the
+                  // bounds is shown with a note and kept as it is until the organiser picks one, never clamped.
+                  <div className="col-span-2">
+                    <LegsChoice
+                      legend={msg("divset.legs")}
+                      legendClassName="block text-xs text-slate-500"
+                      value={legs}
+                      onChange={setLegs}
+                      disabled={!canEdit}
+                    />
+                  </div>
                 )}
                 {templateHasProgression(template) && (
                   <label className="block text-xs text-slate-500">

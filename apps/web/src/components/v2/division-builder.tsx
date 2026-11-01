@@ -36,6 +36,8 @@ import { defaultMatchMinutes } from "@/lib/match-length";
 import { pickVariant } from "@/lib/preferred-variant";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
 import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
+import { LegsChoice } from "@/components/v2/legs-choice";
+import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { CourtMultiPicker } from "@/components/v2/shared/court-multi-picker";
 // P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
@@ -83,29 +85,6 @@ const TEMPLATE_FAMILY: Record<string, string> = {
   mexicano: "americano",
   ladder: "ladder",
 };
-
-// The Top N values the wizard's qualifier <select> offers, per template.
-// ONE declaration, because the list is read TWICE — to render the options
-// and to decide whether a carried-over `qualified` is still valid when the
-// organiser switches template. The two used to be separate literals; a
-// value offered by one and rejected by the other is how a chosen Top N
-// silently snaps back to 4.
-function qualifierOptionsFor(templateKey: string): readonly number[] {
-  if (templateKey === "group_stepladder") return [3, 4, 5, 6];
-  // Swiss Knockout's finals half is the GENERIC single-elimination bracket
-  // (scheduling/bracket.ts pads to nextPowerOfTwo and byes the leaders), so
-  // an odd Top N is a real shape rather than an error — 3 especially: the
-  // qualifying winner waits while second plays third. The other templates
-  // here feed brackets an organiser expects to be clean powers of two.
-  //
-  // The top of this list is load-bearing: format.swiss_knockout.body.1
-  // promises "anything from 2 to 32" in all four locales, and the Settings
-  // tab's own Top N input is min 2 / max 32. A wizard that stopped at 16 made
-  // the marketing copy false and left the largest brackets reachable only
-  // after the division already existed.
-  if (templateKey === "swiss_knockout") return [2, 3, 4, 6, 8, 12, 16, 24, 32];
-  return [2, 4, 8, 16];
-}
 
 // Recommendation slug → wizard template key (strip picks land here).
 const FAMILY_TEMPLATE: Record<string, string> = {
@@ -383,19 +362,15 @@ export function DivisionBuilder({
   }
 
   function buildStages(): StageDraft[] {
-    // B (round-4 review): poolCount is a free `<input type="number" min={2}
-    // max={8}>` — HTML `min` doesn't stop a cleared field reading as
-    // Number("")===0, which mints groups_ko's take rule with n:Infinity
-    // (serialises as n:null over the wire) instead of a clean validation
-    // message. qualified is a fixed <select> here (always one of a known-good
-    // set) so this is defence-in-depth for it, not a live gap — same guard as
-    // division-settings.tsx's free-text qualified input, for one shared
-    // clampKnob (format-templates.ts) rather than two divergent ones.
+    // B (round-4 review): poolCount and qualified are free number inputs bounded by FORMAT_BOUNDS — HTML `min` doesn't
+    // stop a cleared field reading as Number("")===0, which mints groups_ko's take rule with n:Infinity (serialises as
+    // n:null over the wire) instead of a clean validation message. The same guard as division-settings.tsx's, for one
+    // shared clampKnob (format-templates.ts) over one set of bounds (format-bounds.ts) rather than two divergent ones.
     return applyStandingsCarry(
       buildTemplateStages(template, {
-        qualified: clampKnob(qualified, 2, 32),
+        qualified: clampKnob(qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max),
         swissRounds,
-        poolCount: clampKnob(poolCount, 2, 8),
+        poolCount: clampKnob(poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max),
         legs,
       }),
       standingsCarry,
@@ -866,15 +841,9 @@ export function DivisionBuilder({
                 type="radio"
                 name="template"
                 checked={template === t.key}
-                onChange={() => {
-                  setTemplate(t.key);
-                  // Keep the qualifier valid for the template's option list.
-                  if (t.key === "group_playoffs" && qualified !== 4) {
-                    setQualified(4); // the Page system is a fixed 4-team shape
-                  } else if (!qualifierOptionsFor(t.key).includes(qualified)) {
-                    setQualified(4);
-                  }
-                }}
+                // The Top N carries across templates: every template that reads it takes the same range
+                // (FORMAT_BOUNDS.qualify), so a value valid for one is valid for all of them.
+                onChange={() => setTemplate(t.key)}
                 className="sr-only"
               />
               {/* F3 Task 6: t.key is a plain `string` (STAGE_TEMPLATES isn't
@@ -901,25 +870,20 @@ export function DivisionBuilder({
             template === "league_ko" ||
             template === "groups_ko" ||
             template === "group_stepladder") && (
-            <label className="block">
-              <span className="label">{msg("wizard.legs")}</span>
-              <select
-                value={legs}
-                onChange={(e) => setLegs(Number(e.target.value))}
-                className="select"
-              >
-                <option value={1}>{msg("wizard.legsSingle")}</option>
-                <option value={2}>{msg("wizard.legsHomeAway")}</option>
-              </select>
-            </label>
+            // Match Day D1: the same Once / Home & away control as Settings (legs-choice.tsx), two columns wide so
+            // "Home & away" keeps one line.
+            <div className="sm:col-span-2">
+              <LegsChoice legend={msg("wizard.legs")} legendClassName="label" value={legs} onChange={setLegs} />
+            </div>
           )}
           {template === "groups_ko" && (
             <label className="block">
               <span className="label">{msg("wizard.pools")}</span>
               <input
                 type="number"
-                min={2}
-                max={8}
+                data-format-bound="pools"
+                min={FORMAT_BOUNDS.pools.min}
+                max={FORMAT_BOUNDS.pools.max}
                 value={poolCount}
                 onChange={(e) => setPoolCount(Number(e.target.value))}
                 className="input"
@@ -931,8 +895,9 @@ export function DivisionBuilder({
               <span className="label">{msg("wizard.rounds")}</span>
               <input
                 type="number"
-                min={1}
-                max={15}
+                data-format-bound="swissRounds"
+                min={FORMAT_BOUNDS.swissRounds.min}
+                max={FORMAT_BOUNDS.swissRounds.max}
                 value={swissRounds}
                 onChange={(e) => setSwissRounds(Number(e.target.value))}
                 className="input"
@@ -942,17 +907,17 @@ export function DivisionBuilder({
           {hasSecondStage && (
             <label className="block">
               <span className="label">{msg("wizard.qualify")}</span>
-              <select
+              {/* Match Day D1: any Top N in FORMAT_BOUNDS.qualify, the range Settings takes. Was a fixed list per
+                  template, so a Top 6 league or a Top 10 stepladder could only be set after the division existed. */}
+              <input
+                type="number"
+                data-format-bound="qualify"
+                min={FORMAT_BOUNDS.qualify.min}
+                max={FORMAT_BOUNDS.qualify.max}
                 value={qualified}
                 onChange={(e) => setQualified(Number(e.target.value))}
-                className="select"
-              >
-                {qualifierOptionsFor(template).map((n) => (
-                  <option key={n} value={n}>
-                    {msg("schedule.topN", { n })}
-                  </option>
-                ))}
-              </select>
+                className="input"
+              />
             </label>
           )}
           {showStandingsCarry && (

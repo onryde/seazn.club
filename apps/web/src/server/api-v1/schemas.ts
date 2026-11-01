@@ -33,6 +33,9 @@ import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
 // The player name limit, shared with the directory's rename field (persons-panel.tsx).
 import { PERSON_NAME_MAX } from "../../lib/person-name.ts";
+// Match Day D1: the format fields' bounds, shared with the division builder and the Settings Format group. Import-free,
+// so the standalone generator loads it like the files above.
+import { FORMAT_BOUNDS } from "../../lib/format-bounds.ts";
 // Task 9 (spectator surface W1) — the match-centre document schema, reused
 // verbatim as `PublicFixtureSummary.match_centre`'s type below rather than
 // restated: match-centre-schema.ts is pure Zod with no imports beyond zod
@@ -1177,7 +1180,9 @@ export const StageConfig = z
   .strictObject({
     ...TOP_LEVEL_DECIDER_REFUSALS,
     // League / group shape.
-    legs: z.number().int().min(1).max(8).optional(),
+    // Floor from FORMAT_BOUNDS (Match Day D1). The ceiling stays 8, the generator's own clamp (usecases/stages.ts,
+    // "Jul3/08 §2: legs > 2 allowed"), until the owner's 1-2 ruling is applied here — see the D1 report.
+    legs: z.number().int().min(FORMAT_BOUNDS.legs.min).max(8).optional(),
     pools: z.strictObject({ count: z.number().int().min(1) }).optional(),
     // Knockout shape. `byes` are entrant ids; `slotOrder` is a draw order with
     // `null` for an empty slot — the two fields §18.2 was raised about.
@@ -1188,8 +1193,9 @@ export const StageConfig = z
     // Americano / Mexicano.
     mode: z.enum(["americano", "mexicano"]).optional(),
     courtCount: z.number().int().min(1).optional(),
-    // Swiss (also `rounds`).
-    rounds: z.number().int().min(1).optional(),
+    // Swiss (also `rounds`). Floor from FORMAT_BOUNDS (Match Day D1); no ceiling here, because Americano's `rounds`
+    // is this same key and is not bounded by the Swiss rounds field.
+    rounds: z.number().int().min(FORMAT_BOUNDS.swissRounds.min).optional(),
     chess: z.boolean().optional(),
     // Which pairing model the swiss generator uses. Mirrors the engine's
     // `SwissConstraints.pairing` (packages/engine/src/scheduling/swiss.ts) —

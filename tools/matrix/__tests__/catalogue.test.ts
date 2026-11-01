@@ -9,6 +9,7 @@ import { STAGE_TEMPLATES, buildTemplateStages } from "../../../apps/web/src/lib/
 import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { TOP_LEVEL_STAGE_DECIDERS } from "../../../apps/web/src/lib/top-level-stage-deciders.ts";
+import { FORMAT_BOUNDS } from "../../../apps/web/src/lib/format-bounds.ts";
 import { STAGE_DECIDER_MOVED, StageConfig } from "../../../apps/web/src/server/api-v1/schemas.ts";
 import {
   API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_KNOB_BOUNDS, BUILDER_PREFERRED_VARIANT, ROW_KEYS,
@@ -393,12 +394,12 @@ describe("catalogue — builder parity (text pins; a builder change reds here)",
       .toEqual(BUILDER_DEFAULT_KNOBS);
   });
 
+  // Match Day D1: the builder clamps against FORMAT_BOUNDS (apps/web/src/lib/format-bounds.ts), the one set of bounds it
+  // shares with Settings and the validator, so the pin reads the builder's calls by NAME and the mirror by VALUE.
   it("clamp bounds match division-builder.tsx's clampKnob calls", () => {
-    const bounds = (name: string) => {
-      const m = new RegExp(`clampKnob\\(${name}, (\\d+), (\\d+)\\)`).exec(BUILDER);
-      return { min: Number(m?.[1]), max: Number(m?.[2]) };
-    };
-    expect({ qualified: bounds("qualified"), poolCount: bounds("poolCount") }).toEqual(BUILDER_KNOB_BOUNDS);
+    expect(BUILDER).toContain("clampKnob(qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max)");
+    expect(BUILDER).toContain("clampKnob(poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max)");
+    expect(BUILDER_KNOB_BOUNDS).toEqual({ qualified: FORMAT_BOUNDS.qualify, poolCount: FORMAT_BOUNDS.pools });
   });
 
   it("the standings carry defaults to 'none' (what stagesForRow applies)", () => {
