@@ -23,6 +23,8 @@ import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import Link from "@/components/ui/console-link";
 import { TIER_BADGE, TIER_MSG } from "@/components/sponsors/tier-labels";
 import { breakMsgKey } from "@/components/sponsors/break-labels";
+import { sponsorSaveErrorKey } from "@/components/sponsors/save-error";
+import { apiV1 } from "@/lib/client-v1";
 import { sportLabel } from "@/lib/scoring-vocab";
 import type { MessageKey } from "@/lib/messages";
 import { SPONSOR_FREQUENCIES, SPONSOR_STYLE_BY_SIZE, sponsorMomentId, type SponsorCard, type SponsorFrequency } from "@/lib/sponsor-plan";
@@ -82,12 +84,9 @@ export function previewCards(sponsors: readonly OnStreamSponsor[], hasTiers: boo
     .map((s) => ({ id: s.id, sponsorId: s.id, name: s.name, logoUrl: null, tier: hasTiers ? s.tier : "partner", onStream: true }));
 }
 
-async function send(url: string, method: "PATCH" | "PUT", body: unknown, fallback: string): Promise<void> {
-  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (res.ok) return;
-  const data = (await res.json().catch(() => ({}))) as { error?: string | { message?: string } };
-  const message = typeof data.error === "string" ? data.error : data.error?.message;
-  throw new Error(message ?? fallback);
+/** One write through the v1 envelope: a refusal throws `ApiV1Error` with the envelope's code (shown via save-error.ts). */
+async function send(url: string, method: "PATCH" | "PUT", body: unknown): Promise<void> {
+  await apiV1(url, { method, json: body });
 }
 
 export function OnStreamTab(props: OnStreamTabProps) {
@@ -125,7 +124,7 @@ export function OnStreamTab(props: OnStreamTabProps) {
       router.refresh();
     } catch (err) {
       undo();
-      setError(err instanceof Error ? err.message : msg("settings.saveFailed"));
+      setError(msg(sponsorSaveErrorKey(err)));
     } finally {
       setBusy(false);
     }
@@ -134,7 +133,7 @@ export function OnStreamTab(props: OnStreamTabProps) {
   function tick(sponsor: OnStreamSponsor, next: boolean) {
     setTicks((t) => ({ ...t, [sponsor.id]: next }));
     void write(
-      () => send(`/api/v1/orgs/${orgId}/sponsors/${sponsor.id}`, "PATCH", { on_stream: next }, msg("settings.saveFailed")),
+      () => send(`/api/v1/orgs/${orgId}/sponsors/${sponsor.id}`, "PATCH", { on_stream: next }),
       () => setTicks((t) => ({ ...t, [sponsor.id]: !next })),
     );
   }
@@ -144,7 +143,7 @@ export function OnStreamTab(props: OnStreamTabProps) {
     setEnabled(next.enabled);
     setDial(next.frequency);
     void write(
-      () => send(`/api/v1/orgs/${orgId}/sponsor-stream-settings`, "PUT", { competitionId: scope, ...next }, msg("settings.saveFailed")),
+      () => send(`/api/v1/orgs/${orgId}/sponsor-stream-settings`, "PUT", { competitionId: scope, ...next }),
       () => {
         setEnabled(before.enabled);
         setDial(before.dial);

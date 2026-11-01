@@ -45,6 +45,7 @@ vi.mock("@/lib/sentry", async (importOriginal) => {
 
 import { sql, statementCount, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
 import { HttpError } from "@/lib/errors";
 import { RelayAiring, RelayHeartbeat } from "@/server/api-v1/schemas";
 import { SIGNAL_SPONSOR_END, SIGNAL_SPONSOR_START, sponsorLine, sponsorQueueLines } from "@/lib/overlay-compositor";
@@ -497,7 +498,13 @@ describe.skipIf(!HAS_DB)("S8: the heartbeat's airings become sponsor_airings row
     // This org's assignment row, its COPIED sponsor another org's (the DB checks no composite reference).
     const copied = sponsorMomentId(5, OVER_END.kind);
     await persistAssignment(p.orgId, p.fixtureId, { momentId: copied, seq: 5, sponsorId: foreignSponsor, sponsorName: "Not Yours Ltd", position: 1, source: "rotation", breakKind: OVER_END.kind, style: "lower_third", holdMs: 8000, operatorChoiceAt: null });
+    const foreignCaptured = () => vi.mocked(captureError).mock.calls.filter(([, ctx]) => ctx?.route === "relay.sponsor_airings.foreign_sponsor");
+    const foreignBefore = foreignCaptured().length;
+    expect(foreignBefore, "premise: no foreign_sponsor report before the corrupt row is read").toBe(0);
     expect(await record(p.s, [startItem({ momentId: copied, cardId: foreignSponsor, at: t0 })], t0), "this org's assignment, another org's sponsor").toEqual({ written: 0, refused: 1, why: ["foreign_sponsor"] });
+    // Final review S8 m4: a COPIED sponsor of another org is a tenancy breach in a row the DB let in - an error, reported
+    // once per beat with the org and the count, never a warning among the refusals.
+    expect(foreignCaptured().map(([, ctx]) => ctx)).toEqual([{ orgId: p.orgId, route: "relay.sponsor_airings.foreign_sponsor", extra: { sessionId: p.sessionId, items: 1 } }]);
     expect(await airingsOf(p.sessionId)).toEqual([]);
     // The positive pair on the same session: its own sponsor as a scene card is written.
     const own = await sponsorRow(p.orgId, "Yours Ltd");
@@ -557,7 +564,14 @@ describe.skipIf(!HAS_DB)("S8: the heartbeat's airings become sponsor_airings row
       startItem({ momentId: sponsorMomentId(30, OVER_END.kind), cardId: sponsorId, breakKind: `over${NUL}end`, at }),
       endItem({ momentId: `scene:starting:1${NUL}`, at }),
     ];
-    expect(bad.length, "premise: the twin admits each (zod does not refuse NUL)").toBe(4);
+    // Premise, asserted per item (final review S8 m5): the twin admits each - zod does not refuse NUL - so the refusal below
+    // is the recorder's by name, never the beat's 400.
+    let admitted = 0;
+    for (const item of bad) {
+      expect(RelayAiring.safeParse(item).success, JSON.stringify(item)).toBe(true);
+      admitted++;
+    }
+    expect(admitted).toBe(4);
     await c.beat({ state: "playing", airings: [scene(1), ...bad, scene(2)] });
     expect((await airingsOf(c.S)).map((r) => r.moment_id), "the good items, both sides of the bad ones").toEqual(["scene:starting:1", "scene:starting:2"]);
     const p = { sessionId: c.S, orgId: c.r.auth.orgId, fixtureId: c.r.fixtureId };
@@ -607,6 +621,37 @@ describe.skipIf(!HAS_DB)("S8: the heartbeat's airings become sponsor_airings row
     await c.beat({ state: "playing", airingsDropped: 1 });
     const [s2] = await sql<{ last_heartbeat: Record<string, unknown> }[]>`select last_heartbeat from fixture_stream_sessions where id = ${c.S}`;
     expect(s2!.last_heartbeat).toEqual({ state: "playing", airingsDropped: 1 });
+  });
+
+  // Final review D4: a drop is a hole in the sponsor's proof of play, so it is logged - ONCE, on the beat that first reports
+  // one (the stored beat reported none), never on every beat after (the total rides on every beat once above 0).
+  it("D4: the beat that FIRST reports airingsDropped > 0 warns once, with the session and the total; later totals above 0 do not; 0 and absent warn nothing (count reported)", async () => {
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+    try {
+      const c = await composedRig("cricket");
+      const drops = () => warn.mock.calls.filter(([o]) => typeof o === "object" && o !== null && "airingsDropped" in o);
+      let beats = 0;
+      for (const body of [{ state: "playing" }, { state: "playing", airingsDropped: 0 }]) {
+        c.r.tick(5 * SEC);
+        await c.beat(body);
+        beats++;
+      }
+      expect(drops(), "no drop, no warning").toEqual([]);
+      c.r.tick(5 * SEC);
+      await c.beat({ state: "playing", airingsDropped: 2 });
+      beats++;
+      expect(drops()).toHaveLength(1);
+      expect(drops()[0]![0]).toMatchObject({ sid: c.S, airingsDropped: 2 });
+      for (const n of [2, 5, 1]) {
+        c.r.tick(5 * SEC);
+        await c.beat({ state: "playing", airingsDropped: n });
+        beats++;
+      }
+      expect(drops(), "once per session, not once per beat").toHaveLength(1);
+      expect(beats).toBe(6);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("isolation: an airing write that FAILS in the database never costs the beat (stored, answered) — and the next beat's items still land; a failing close never stops the session ending", async () => {

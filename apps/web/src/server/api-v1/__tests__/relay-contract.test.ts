@@ -55,7 +55,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "dc0a2ff796fc5d105cc0363e04c3824905828e82cef0b0f0545f828274081651";
+const SHA256 = "54ba1d77b29b8881d29beb6dd8bf6671503602e7cbcc26de71d264abc36ddcac";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -906,13 +906,13 @@ describe("R4 S8: the beat's proof-of-play airings", () => {
     expect(old).toBe(3);
   });
 
-  it("the file's prose states the rules SC1 builds against: the 64 cap with the OLDEST dropped, cleared on a 2xx, dropped (counted) on a 400/422, kept on a 5xx / transport error / 410, validation before buffering, the FIRST start kept, the clock skew in minutes (AIRING_CLOCK_SKEW_MS), kept out of the beat stores; `at` is UTC `Z`", () => {
+  it("the file's prose states the rules SC1 builds against: the 64 cap with the OLDEST dropped, cleared on a 2xx, dropped (counted) on a 400/422, kept on every other reply (5xx / transport error / 410 / 401 / 403 / 404 / 429), validation before buffering, the FIRST start kept, the clock skew in minutes (AIRING_CLOCK_SKEW_MS), kept out of the beat stores; `at` is UTC `Z`", () => {
     const beat = defOf(contract(), "heartbeat");
     const prose = propOf(beat, AIRINGS_FIELD).description as string;
     let rules = 0;
     // S8 review polish: what each reply class does to the buffer — a 2xx clears, a 400/422 drops (counted: the beat will
-    // never be admitted as it is), a 5xx / transport error / 410 keeps.
-    for (const words of [`at most ${AIRINGS_MAX}`, "OLDEST", "2xx", "400 or 422 reply drops", "counted in airingsDropped (the beat will never", "a 5xx, a transport error or a 410 keeps it", "Validate each item", "FIRST", `${AIRING_CLOCK_SKEW_MS / 60_000} minutes`, "not kept with the beat"]) {
+    // never be admitted as it is), EVERY other reply keeps (final review S8 m2: 401/403/404/429 named, not left to inference).
+    for (const words of [`at most ${AIRINGS_MAX}`, "OLDEST", "2xx", "400 or 422 reply drops", "counted in airingsDropped (the beat will never", "Every other reply keeps it for the next beat: a 5xx, a transport error, a 410, and a 401, 403, 404 or 429", "Validate each item", "FIRST", `${AIRING_CLOCK_SKEW_MS / 60_000} minutes`, "not kept with the beat"]) {
       expect(prose, words).toContain(words);
       rules++;
     }
@@ -925,5 +925,13 @@ describe("R4 S8: the beat's proof-of-play airings", () => {
     // SC1 review addendum: the count travels alone, is a per-process total, and restarts with the process.
     const dropped = propOf(beat, "airingsDropped").description as string;
     for (const words of ["with or without airings", "upper bound", "restarts"]) expect(dropped, words).toContain(words);
+    // Final review S8 m2: the count says WHAT it counts - the buffer's overflow AND a 400/422's refused batch - and that
+    // every other reply drops nothing.
+    let counted = 0;
+    for (const words of ["64-item buffer overflowed", "answered 400 or 422", "a 401, 403, 404 or 429 keeps them", "drops nothing"]) {
+      expect(dropped, words).toContain(words);
+      counted++;
+    }
+    expect(counted).toBe(4);
   });
 });

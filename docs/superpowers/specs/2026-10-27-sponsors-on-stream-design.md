@@ -198,8 +198,10 @@ Counted from **composed streams only** in the MVP (D10):
    `seazn:sponsor:end {"momentId","at","cutShort"}` (same channel as `seazn:ready`).
 2. **Compositor:** the console reader validates both (bounded JSON ≤ 512 bytes, known keys), buffers ≤ 64 (overflow
    drops oldest, counts `airingsDropped`), sends them on the next heartbeat as `airings: [...]` (additive; contract
-   bump in `relay-job.v1.json`, vendored to web). Cleared on a 2xx reply; a 400/422 drops what the beat carried, counted
-   in `airingsDropped`; a 5xx, a transport error or a 410 keeps it. The final beat flushes.
+   bump in `relay-job.v1.json`, published by web at `docs/contracts/relay-job.v1.json` and vendored into the compositor,
+   `contracts/VENDORED.json` *(amended 2026-11-01, preflight F5: the direction is web → compositor)*). Cleared on a 2xx reply; a 400/422 drops what the beat carried, counted
+   in `airingsDropped`; every other reply keeps it - a 5xx, a transport error, a 410, and a 401/403/404/429 *(amended
+   2026-11-01, S8 m2)*. The final beat flushes.
 3. **Frame grab (compositor):** 1.5 s after a `start` line, grab one programme frame, JPEG 640×360 q≈75, off the
    streaming thread, ≤ 1 per 20 s; `POST /api/internal/relay/sessions/[sid]/airings/[momentId]/frame` with the session
    token. A failure logs once and is dropped; it never blocks the pipeline. CPU cost measured on stg before merge; a
@@ -208,8 +210,9 @@ Counted from **composed streams only** in the MVP (D10):
    refused. An airing with no `end` by session end closes at the last beat and is flagged `ended_estimated`.
 5. **Viewers:** on `start`, if the broadcast came from YouTube Connect (r2-youtube's table), read
    `videos.list?part=liveStreamingDetails` → `concurrentViewers` once (1 quota unit). No connection, hidden count or
-   error ⇒ `viewers = null` (shown as a dash). Never retried in a loop. The YouTube data kept on the airing (`viewers`,
-   `video_id`) is bound by the retention rule in §6.3.
+   error ⇒ no viewer count (shown as a dash). Never retried in a loop. *(Amended 2026-11-01, preflight F6:)* the count
+   is kept in Y1's own table keyed to `youtube_broadcasts` (`on delete cascade`), never on the airing, and the video id
+   is read through that join, never copied; §6.3.
 
 ### 3.7 Click attribution
 
@@ -232,9 +235,10 @@ the match page only.
   `(org_id, competition_id)`; a competition row overrides the org row. RLS org-scoped as V283.
 - `sponsor_airings (id, org_id, sponsor_id → set null, sponsor_name snapshot, fixture_id, session_id, moment_id,
   source ∈ rotation|scene|operator, break_kind null, style, started_at, ended_at null, cut_short, skipped (operator "Skip this card"), ended_estimated,
-  viewers int null, video_id null, youtube_refreshed_at null, frame_path null)`, unique `(session_id, moment_id)`, index
-  `(org_id, sponsor_id, started_at)`. The name snapshot keeps a report readable after a sponsor is deleted. `viewers`
-  and `video_id` are YouTube API data and follow §6.3 (refreshed daily, purged on disconnect) *(coordinator's call 2026-10-27, not an owner ruling)*.
+  frame_path null)`, unique `(session_id, moment_id)`, index
+  `(org_id, sponsor_id, started_at)`. The name snapshot keeps a report readable after a sponsor is deleted. *(Amended
+  2026-11-01, preflight F6:)* no `viewers`, `video_id` or `youtube_refreshed_at` columns: YouTube API data lives in Y1's
+  table keyed to `youtube_broadcasts` (`on delete cascade`), so Connect's own purge removes it (§6.3).
   `skipped` is set by the web from the operator log (console spec §3.4), not by the compositor. (`source` is text with a check, so a Later `deal`
   value is one check change.)
 - `sponsor_clicks (id, org_id, sponsor_id → cascade, fixture_id null, source, at)`, index `(sponsor_id, at)`.
@@ -287,6 +291,14 @@ tab shows a one-line reminder linking the channel setting.
 
 ### 6.3 YouTube data retention *(coordinator's call 2026-10-27, not an owner ruling)*
 
+> **Amended 2026-11-01 (preflight F6, a premise change from the YouTube Connect session):** Connect stores no viewer
+> counts, and its own retention hooks (`server/youtube/daily.ts`, the 30-day refresh; `server/youtube/disconnect.ts`,
+> the purge) DELETE `youtube_broadcasts` rows. So the R4 refresh/purge job below is **dropped**, and so are the
+> `viewers`, `video_id` and `youtube_refreshed_at` columns on `sponsor_airings` (§4). Viewer counts live in Y1's table
+> with `broadcast_id → youtube_broadcasts(id) on delete cascade`, and Connect's purge covers the 7-day and 30-day
+> rules. The text below is the original plan, kept for the record; the residual question (a count read while live
+> outliving 30 days) is Y1 Step 0's.
+
 YouTube's developer policies (Connect spec `2026-10-27-youtube-connect-design.md` §3, DP III.E.4, on
 `feat/youtube-connect`) allow stored YouTube API data (video ids, viewer counts) for **30 days at most unless
 refreshed**, and require it deleted **within 7 days** of an in-app disconnect.
@@ -314,11 +326,11 @@ refreshed**, and require it deleted **within 7 days** of an in-app disconnect.
   sponsor card and the sponsor card never overlaps it. Mutate the pre-empt guard once; a test must die.
 - **Seam, driven for real (failure class 1):** the planner's real output through the real page into a real heartbeat
   body, through the real `heartbeat` usecase, then read the `sponsor_airings` row back.
-- **Compositor (cargo):** line parser (bad JSON, oversize, unknown key refused); buffer bound and drop count; clear only
-  on 2xx; final-beat flush; frame-grab rate limit; a failing upload never stalls the pipeline.
+- **Compositor (cargo):** line parser (bad JSON, oversize, unknown key refused); buffer bound and drop count; clear on a
+  2xx, drop and count on a 400/422, keep on every other reply - a 5xx, a transport error, a 410, a 401/403/404/429 (§3.6.2; amended 2026-11-01, S8 m1/m2); final-beat flush; frame-grab rate limit; a failing upload never stalls the pipeline.
 - **E2E (CI dispatch):** hub at 320 / 768 / 1280, no horizontal scroll; report opens without login, 404s after revoke;
   overlay at `host=obs` shows a lower third after a cricket over, cooldown honoured.
-- **Retention job (usecase):** a connected channel's refresh sets `youtube_refreshed_at`; after a disconnect the next
+- **Retention job (usecase)** *(dropped 2026-11-01 with §6.3's job, preflight F6; Y1 owns viewer retention)*: a connected channel's refresh sets `youtube_refreshed_at`; after a disconnect the next
   run clears `viewers` and `video_id` (counts reported, 0 = fail) while times shown, time on screen and clicks are
   unchanged; a row refreshed > 30 days ago is purged; the report then shows a dash and no "watch this moment". Sequence:
   disconnect → reconnect → the purged rows stay purged.

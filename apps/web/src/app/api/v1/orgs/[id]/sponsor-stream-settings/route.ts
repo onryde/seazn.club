@@ -13,8 +13,9 @@ export async function PUT(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     assertUuid(id, "organization");
-    const body = await parseBody(req, PutSponsorStreamSettings);
+    // The door before the body (final review D2): a caller who may not write never learns the body's shape from a 400.
     const auth = await requireOrgAuth(req, id, "write");
+    const body = await parseBody(req, PutSponsorStreamSettings);
     await putStreamSettings(auth, id, body);
     return body;
   });

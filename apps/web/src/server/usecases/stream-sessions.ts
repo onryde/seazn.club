@@ -2845,6 +2845,7 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
     // replaced Machine's page is not this session's programme) and BEFORE the post-final one (a periodic beat overtaken
     // by the final still carries items that aired before it). In a SAVEPOINT: a failing airing write never costs the beat.
     if (airings && airings.length > 0) await recordBeatAirings(tx, cur, airings, deps.now());
+    warnAiringsDropped(cur, beat);
     const thisAttempt = storedBeatIsThisAttempt(cur);
     if (thisAttempt && closesAttempt(cur.last_heartbeat) && beat.state !== "stopped") {
       log.info({ sid: sessionId, state: beat.state }, "stream session: a beat received after this attempt's final beat is a sample only — the stored final stands");
@@ -2934,6 +2935,18 @@ async function previousRungOf(tx: Tx, before: Row): Promise<unknown> {
     log.error({ sid: before.id, err: String(err) }, "stream session: the sizing alarm's previous rung could not be read — the beat may re-alarm");
     return null;
   }
+}
+
+/** Final review D4: a compositor that drops proof-of-play items leaves a hole in a sponsor's report, so it is logged - ONCE
+ *  per session, not on every beat: `airingsDropped` is a process total sent on every beat once above 0, so only the beat
+ *  that first reports one after a stored beat that reported none warns (read on the locked row, so two web machines agree).
+ *  A restarted compositor that drops again starts from none and warns again: a new process's loss is news. */
+function warnAiringsDropped(cur: Row, beat: RelayHeartbeat): void {
+  const dropped = beat.airingsDropped ?? 0;
+  if (dropped <= 0) return;
+  const before = cur.last_heartbeat?.airingsDropped;
+  if (typeof before === "number" && before > 0) return;
+  log.warn({ sid: cur.id, orgId: cur.org_id, airingsDropped: dropped }, "stream session: the compositor dropped sponsor proof-of-play items (its 64-item buffer overflowed, or a 400/422 refused a batch) — the sponsor report undercounts this session");
 }
 
 /** R4 S8: `recordAirings` on the beat's transaction, isolated in a savepoint like `sampleBeat` is outside it — a

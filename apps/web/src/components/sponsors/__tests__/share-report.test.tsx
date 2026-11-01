@@ -153,12 +153,13 @@ describe("create", () => {
     expect(m.has("sponsor-share-range")).toBe(false);
   });
 
-  it("a refused create shows the server's sentence and no url", async () => {
+  // Final review D3: the dictionary's words for the envelope's code (components/sponsors/save-error.ts).
+  it("a refused create shows the dictionary's words for the code (not the server's sentence) and no url", async () => {
     fetchMock.mockResolvedValueOnce(answer(403, { ok: false, error: { code: "FORBIDDEN", message: "Insufficient permissions" } }));
     const m = mount();
     await m.submit();
     await flush();
-    expect(m.text("sponsor-share-error")).toBe("Insufficient permissions");
+    expect(m.text("sponsor-share-error")).toBe(msg("sponsors.error.forbidden"));
     expect(m.has("sponsor-share-once")).toBe(false);
     expect(nav.refresh).not.toHaveBeenCalled();
   });
@@ -253,7 +254,7 @@ describe("the active links", () => {
     m.click("sponsor-share-revoke-yes-l1");
     await flush();
     expect(m.has("sponsor-share-link-l1")).toBe(true);
-    expect(m.text("sponsor-share-error")).toBe("report link not found");
+    expect(m.text("sponsor-share-error")).toBe(msg("sponsors.error.notFound"));
   });
 });
 

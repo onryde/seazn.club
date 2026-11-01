@@ -8,7 +8,7 @@ Sponsor logos appear on your public competition pages, the registration page and
 
 ## Add sponsors
 
-Open **Sponsors** in the top bar (or on your organization's Dashboard), then the **Sponsors** tab. Add a name, an optional link and a logo (PNG/JPG/WebP up to 2 MB). Use the arrows to set the display order — that order is what the public sees.
+Open **Sponsors** from your Dashboard, then the **Sponsors** tab. The hub's other tabs, including sponsors on your streams and the reports you can send a sponsor, are covered in [The Sponsors hub](/help/sharing/sponsors-hub). Add a name, an optional link and a logo (PNG/JPG/WebP up to 2 MB). Use the arrows to set the display order — that order is what the public sees.
 
 ## Tiers (Pro or Event Pass)
 
