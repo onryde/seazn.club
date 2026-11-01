@@ -90,6 +90,29 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   check("sponsors: ...while the org, read again after that write, stays Busy, off", dialOf(readOrgAfter.body).join() === "busy" && !switchOn(readOrgAfter.body));
   check("sponsors: an unknown frequency is refused (400)", (await put(null, true, "loud")).status === 400);
 
+  // --- R4 S13: the Overview reads the click above off its `sponsor_clicks` row (never `click_count`), and a report link is
+  // created, then revoked. The Overview is the hub's landing tab; its numbers are server-rendered, so the round trip is the markup.
+  const overview = await html(admin, `/o/${proOrgSlug}/sponsors`);
+  const goldClicks = new RegExp(`data-testid="sponsor-overview-row-${goldId}"[\\s\\S]*?data-testid="sponsor-overview-clicks"[^>]*>([\\d,.\\u00a0\\u202f]+)<`)
+    .exec(overview.body)?.[1];
+  check(
+    "sponsors: the Overview lists the gold sponsor with the click recorded above",
+    overview.status === 200 && goldClicks !== undefined && Number(goldClicks.replace(/\D/g, "")) >= 1,
+  );
+  const created = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${goldId}/report-links`, "POST", { competitionId: null, from: "2026-01-01", to: "2026-12-31" });
+  const link = created.status === 201 ? v1data<{ id: string; url: string }>(created) : null;
+  const revokeUrl = `/api/v1/orgs/${proOrgId}/sponsor-report-links/${link?.id ?? "00000000-0000-4000-8000-000000000000"}`;
+  const revoked = await v1(admin, revokeUrl, "DELETE");
+  check(
+    "sponsors: create link then revoke",
+    link !== null && /^\/r\/sponsor\/[A-Za-z0-9_-]{43}$/.test(link.url) && revoked.status === 200,
+  );
+  check("sponsors: a second revoke of the same link is 404", (await v1(admin, revokeUrl, "DELETE")).status === 404);
+  check(
+    "sponsors: a report link ending before it starts is refused (400)",
+    (await v1(admin, `/api/v1/orgs/${proOrgId}/sponsors/${goldId}/report-links`, "POST", { competitionId: null, from: "2026-06-02", to: "2026-06-01" })).status === 400,
+  );
+
   // --- Monetization: package + order-first Connect checkout.
   const pkgRes = await v1(admin, `/api/v1/orgs/${proOrgId}/sponsor-packages`, "POST", {
     name: `Gold Package ${tag}`,
