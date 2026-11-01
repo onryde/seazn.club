@@ -3718,6 +3718,7 @@
   "breadcrumb.schedule": "Schema",
   "breadcrumb.newDivision": "Nieuwe divisie",
   "breadcrumb.registration": "Inschrijvingen",
+  "breadcrumb.matchDay": "Wedstrijddag",
   "breadcrumb.match": "Wedstrijd {no}",
   "div.registrations.title": "Inschrijvingen — {name}",
   "div.registrations.publicLink.title": "Openbare inschrijflink",

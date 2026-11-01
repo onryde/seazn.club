@@ -1289,6 +1289,7 @@ export type DictionaryKey =
   | "breadcrumb.billing"
   | "breadcrumb.connect"
   | "breadcrumb.match"
+  | "breadcrumb.matchDay"
   | "breadcrumb.newCompetition"
   | "breadcrumb.newDivision"
   | "breadcrumb.registration"

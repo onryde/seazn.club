@@ -3,6 +3,9 @@
 // send the division link back to the fixtures tab.
 import { describe, expect, it } from "vitest";
 import { buildCrumbs, type BreadcrumbT } from "@/lib/breadcrumb-chain";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { routes } from "@/lib/routes";
 
 const names = {
   comps: { "summer-smash": "Summer Smash 2026" },
@@ -144,6 +147,89 @@ describe("buildCrumbs", () => {
       // so the crumb cannot vary by tab — it must not pin one either, or it
       // would send the reader back to a tab they may not have been on.
       expect(buildCrumbs(hub).at(-1)!.href).not.toContain("?");
+    });
+  });
+
+  // Owner report 2026-11-01: on /match-day the trail read "My organization >
+  // Racquet Masters" with the competition as the LAST crumb, so it rendered as
+  // the current page (not a link) and the phone back chevron pointed at the
+  // ORG. Same defect as the registration hub above: an unlisted competition
+  // tail stops the trail at the competition.
+  describe("Match Day", () => {
+    const md = { ...base, pathname: "/o/acme/c/summer-smash/match-day" };
+
+    it("gets its own crumb: org > competition > Match Day", () => {
+      const crumbs = buildCrumbs(md);
+      expect(crumbs).toHaveLength(3);
+      expect(crumbs.map((c) => c.label)).toEqual([
+        "Acme Sports",
+        "Summer Smash 2026",
+        "Match Day",
+      ]);
+    });
+
+    it("makes the competition the structural parent, which is what back targets", () => {
+      const crumbs = buildCrumbs(md);
+      // The competition crumb is no longer last, so it renders as a link.
+      expect(crumbs.at(-2)).toEqual({
+        label: "Summer Smash 2026",
+        href: routes.competition("acme", "summer-smash"),
+      });
+      expect(crumbs.at(-1)!.href).toBe(routes.competitionMatchDay("acme", "summer-smash"));
+    });
+
+    it("localizes the label through the translator", () => {
+      const fr: BreadcrumbT = (key) =>
+        key === "breadcrumb.matchDay" ? "Jour de match" : String(key);
+      expect(buildCrumbs({ ...md, t: fr }).at(-1)!.label).toBe("Jour de match");
+    });
+  });
+
+  // The next competition-level route must not repeat the registration (2026-08-25)
+  // and Match Day (2026-11-01) defect. The directories under
+  // app/o/[orgSlug]/c/[compSlug]/ ARE the competition-level routes, so enumerate
+  // them rather than a list typed here, and drive buildCrumbs for each.
+  describe("every competition-level route directory owes a crumb", () => {
+    const COMP_DIR = join(import.meta.dirname, "..", "..", "app", "o", "[orgSlug]", "c", "[compSlug]");
+    // `d` is the division subtree (its own chain); `__tests__` is not a route.
+    const NOT_ROUTES = new Set(["d", "__tests__"]);
+    // Routes that deliberately have NO crumb of their own. `upgrade` carries an
+    // in-page "← Back to competition" link (upgrade/page.tsx), so it is the one
+    // page that does not rely on the trail's back target. Adding a name here is a
+    // decision; it is asserted below to be real and to really have no crumb, so
+    // the list cannot rot.
+    const NO_CRUMB = new Set(["upgrade"]);
+
+    const dirs = readdirSync(COMP_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !NOT_ROUTES.has(e.name))
+      .map((e) => e.name)
+      .sort();
+    const owing = dirs.filter((d) => !NO_CRUMB.has(d));
+    const crumbsFor = (dir: string) =>
+      buildCrumbs({ ...base, pathname: `/o/acme/c/summer-smash/${dir}` });
+
+    it("finds the route directories (anti-vacuity)", () => {
+      expect(dirs.length).toBeGreaterThan(0);
+      expect(owing.length).toBeGreaterThan(0);
+      // The two defects this guard exists for, by name.
+      expect(owing).toContain("registration");
+      expect(owing).toContain("match-day");
+    });
+
+    it("gives each one a third crumb that links to its own path", () => {
+      for (const dir of owing) {
+        const crumbs = crumbsFor(dir);
+        expect(crumbs, dir).toHaveLength(3);
+        expect(crumbs[1]!.href, dir).toBe("/o/acme/c/summer-smash");
+        expect(crumbs[2]!.href, dir).toBe(`/o/acme/c/summer-smash/${dir}`);
+      }
+    });
+
+    it("keeps the no-crumb list exact: every entry is a real route that really has none", () => {
+      for (const dir of NO_CRUMB) {
+        expect(dirs, dir).toContain(dir);
+        expect(crumbsFor(dir), dir).toHaveLength(2);
+      }
     });
   });
 

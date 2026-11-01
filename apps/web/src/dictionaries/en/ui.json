@@ -3771,6 +3771,7 @@
   "breadcrumb.schedule": "Schedule",
   "breadcrumb.newDivision": "New division",
   "breadcrumb.registration": "Registration",
+  "breadcrumb.matchDay": "Match Day",
   "breadcrumb.match": "Match {no}",
   "div.registrations.title": "Registrations — {name}",
   "div.registrations.publicLink.title": "Public registration link",

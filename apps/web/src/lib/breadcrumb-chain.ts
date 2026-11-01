@@ -35,6 +35,9 @@ export type BreadcrumbT = (key: MessageKey, vars?: Record<string, string | numbe
 const COMP_TAIL_CRUMBS = {
   settings: { key: "breadcrumb.settings", href: routes.competitionSettings },
   schedule: { key: "breadcrumb.schedule", href: routes.competitionSchedule },
+  // Match Day (2026-11-01): the owner found the competition as the LAST crumb
+  // there — rendered as the current page, not a link, with no way back.
+  "match-day": { key: "breadcrumb.matchDay", href: routes.competitionMatchDay },
   registration: {
     key: "breadcrumb.registration",
     // No tab argument: the crumb points at the hub's default tab, so it is

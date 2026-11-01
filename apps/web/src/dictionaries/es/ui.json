@@ -3718,6 +3718,7 @@
   "breadcrumb.schedule": "Calendario",
   "breadcrumb.newDivision": "Nueva división",
   "breadcrumb.registration": "Inscripciones",
+  "breadcrumb.matchDay": "Día de partidos",
   "breadcrumb.match": "Partido {no}",
   "div.registrations.title": "Inscripciones — {name}",
   "div.registrations.publicLink.title": "Enlace de inscripción público",
