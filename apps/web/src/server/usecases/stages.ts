@@ -2965,7 +2965,8 @@ export async function generateStageFixturesTx(
   // history, and the engine reads that history as a sequence. Without the ORDER BY the rows come back in whatever order
   // the plan yields — round order through the (stage_id, round_no, seq_in_round) index, PHYSICAL order through a seq or
   // bitmap scan, where a round written after a later one (any update makes a new tuple) reads back after it
-  // (swiss-history-round-order.test.ts).
+  // (swiss-history-round-order.test.ts). Since W3 T6 `buildSwissHistory` also sorts its own copy, so the colours no
+  // longer depend on this ORDER BY alone; it stays so every other reader of `existing` sees round order too.
   const existing = await tx<SwissExistingFixture[]>`
     select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
            scheduled_at, court_id, venue_id, schedule_locked
