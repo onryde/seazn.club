@@ -39,7 +39,7 @@ import { openPanels } from "./helpers/rules-strip";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
 
-/** How many lock lines a stage card says: the summary's `stage-locked` plus any section's own (Match format, Points, Tie-breaks).
+/** How many lock lines a stage card says: the summary's `stage-locked` plus any section's own (Match rules, Points, Tie-breaks).
  *  Match Day C3 review I3: exactly one, whatever panels are open. */
 async function lockLinesOn(card: Locator): Promise<number> {
   let n = 0;
@@ -109,7 +109,7 @@ async function openRow(page: Page, request: APIRequestContext, divisionId: strin
 }
 
 async function openEditor(row: Locator): Promise<void> {
-  // Match Day C3: the editor opens from the "Match format" button in the card's header, not from an Edit button in the row.
+  // Match Day C3: the editor opens from the "Match rules" button in the card's header, not from an Edit button in the row.
   await openStagePanel(enclosingStageCard(row), "format");
   await expect(row.getByTestId("stage-format-editor")).toBeVisible({ timeout: STEP_MS });
 }
@@ -176,7 +176,7 @@ for (const m of builtinModules) {
     }
 
     // 4. Use division rules: the stage stores nothing and the row says it is the division's. The reset lives in the open
-    // Match format panel (Save closed it), so the organiser opens it again first - as a person would.
+    // Match rules panel (Save closed it), so the organiser opens it again first - as a person would.
     await openEditor(row);
     await expect(row.getByTestId("stage-format-clear")).toBeVisible({ timeout: STEP_MS });
     await expect(row.getByTestId("stage-format"), "the saved stage is its own").toHaveAttribute("data-stage-format-state", "overridden");
@@ -364,7 +364,7 @@ test("generic: 'share the points' is offered only where draws are allowed, and a
 // S4: a started stage says so before anyone tries, reads its rules without being able to change them, and the server still
 // refuses a write (the 16b rule stands).
 // ---------------------------------------------------------------------------------------------------------------------
-// Match Day C2: the locked stage's Match format is the shared editor's locked mode - one lock line ("Locked: the stage has
+// Match Day C2: the locked stage's Match rules is the shared editor's locked mode - one lock line ("Locked: the stage has
 // started") and the format as chips, read-only. No "View" form of disabled inputs and no link (the row is on the Fixtures tab).
 test("a stage whose first match is scored: the lock line, the format read-only as chips, no control; the API still refuses with STAGE_FORMAT_LOCKED", async ({ page, request }) => {
   test.setTimeout(150_000);
@@ -372,7 +372,7 @@ test("a stage whose first match is scored: the lock line, the format read-only a
   const row = await openRow(page, request, divisionId, stageId);
   // Closed, the card's summary already says the stage has started - once.
   await expect(row.getByTestId("stage-locked"), "the summary says it before anyone tries").toBeVisible();
-  // The Match format button opens a READ-ONLY panel on a started stage.
+  // The Match rules button opens a READ-ONLY panel on a started stage.
   await openStagePanel(enclosingStageCard(row), "format");
   // Review I3: the ONE lock line on the card is the summary's; the opened panel is the read-only kind and repeats nothing.
   const line = row.getByTestId("stage-locked");
@@ -513,11 +513,11 @@ test("a locked stage says it is locked once; an open editor has one Cancel and f
     await openStagePanel(card, panel);
     opened++;
   }
-  expect(opened, "anti-vacuity: at least Match format and one more panel were opened").toBeGreaterThanOrEqual(2);
+  expect(opened, "anti-vacuity: at least Match rules and one more panel were opened").toBeGreaterThanOrEqual(2);
   expect(await lockLinesOn(card), "every panel open: still exactly one lock line on the card").toBe(1);
   expect((await row.innerText()).split(sentence).length - 1, "and the sentence is said once with the panels open").toBe(1);
 
-  // An editable stage: closed, the card offers the Match format button and no Cancel; open, the button is the toggle (pressed)
+  // An editable stage: closed, the card offers the Match rules button and no Cancel; open, the button is the toggle (pressed)
   // and Cancel is the one way out.
   const fresh = await seedStage(request, "generic", { label: "cancel", kind: "league", variant: "score" });
   const row2 = await openRow(page, request, fresh.divisionId, fresh.stageId);
@@ -570,7 +570,7 @@ test("chess division Settings: 'Use the default order' removes the stored tie-br
   };
   expect((await configOf()).tiebreakRungs, "premise: the division stores its own list").toEqual(stored);
 
-  // Match Day C2: the division's door is the Division rules strip's Match format panel (it left Settings).
+  // Match Day C2: the division's door is the Division rules strip's Match rules panel (it left Settings).
   await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   const strip = page.getByTestId("division-rules-strip");

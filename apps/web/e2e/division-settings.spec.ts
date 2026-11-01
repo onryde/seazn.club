@@ -141,7 +141,7 @@ test("settings tab: sections render, rename works, structure locks with fixtures
     payload: {},
   });
   expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
-  // The started stage plays the variant and every rule field, so the Match format section reads (C2 fix round 1, I1): ONE
+  // The started stage plays the variant and every rule field, so the Match rules section reads (C2 fix round 1, I1): ONE
   // line naming the stage, no variant picker, no field and no Save.
   const lockedStrip = await openDivisionRules(page, divisionUrl, "format");
   const formatPanel = lockedStrip.getByTestId("division-rules-panel-format");
@@ -553,7 +553,7 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     const rig = await seedChessDivision(request, page, { online: false });
     await gotoSettings(page, rig.settings);
     await setLocaleCookie(page, "fr");
-    // The Division rules strip's Match format panel (Match Day C2: the clock moved there from Settings), then the clock fields.
+    // The Division rules strip's Match rules panel (Match Day C2: the clock moved there from Settings), then the clock fields.
     // The fields' names are drawn from the dictionary in every locale (W2e PR B localized ALL rule-field labels, not only the
     // five ruling-157 ones), so each is looked up through the key the product renders (`RuleField.labelKey`) rather than typed
     // in English - an English literal here is a name that only the `en` page has.

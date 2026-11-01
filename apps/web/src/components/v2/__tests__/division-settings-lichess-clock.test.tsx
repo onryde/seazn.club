@@ -92,7 +92,7 @@ const RUNGS_LABEL = "Tie-break games, in order";
 
 async function save(island: Island) {
   const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === EN["rulesStrip.format.save"]);
-  expect(button, "premise: the Save match format button is there").toBeDefined();
+  expect(button, "premise: the Save match rules button is there").toBeDefined();
   const before = net.calls.filter((c) => c.url === "/api/v1/divisions/d1").length;
   (propsOf(button!).onClick as () => void)();
   await vi.waitFor(() => expect(net.calls.filter((c) => c.url === "/api/v1/divisions/d1")).toHaveLength(before + 1));

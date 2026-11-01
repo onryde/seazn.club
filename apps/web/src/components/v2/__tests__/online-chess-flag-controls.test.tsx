@@ -92,7 +92,7 @@ const byTestId = (tree: ReactElement[], id: string) => tree.filter((n) => propsO
 /** Match Day C2: Online play moved with the match rules to the Division rules strip (Fixtures tab); the camera stays in Settings. */
 const strip = (sportKey: string, config: Record<string, unknown>, onlineChessOffered: boolean) =>
   renderIsland(DivisionRulesStrip, stripPropsOf(settingsProps(sportKey, config, onlineChessOffered) as unknown as Parameters<typeof stripPropsOf>[0]), expandRules);
-const SAVE_RULES = "Save match format";
+const SAVE_RULES = "Save match rules";
 
 beforeEach(() => {
   net.calls.length = 0;

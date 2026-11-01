@@ -91,7 +91,7 @@ test("D2 a new badminton division is bwf-3x15: the builder opens on it, says why
   expect(division.data!.config.finalSetTo).toBe(to15.finalSetTo);
 });
 
-// Match Day C2: the variant moved from Settings' Match rules block to the Division rules strip's Match format panel.
+// Match Day C2: the variant moved from Settings' Match rules block to the Division rules strip's Match rules panel.
 test("D2 the Division rules strip switches the division to 3x21: the stored format is the target variant's, not the old one's", async ({ page, request }) => {
   test.setTimeout(Math.max(120_000, 6 * STEP_MS));
   const to21 = preset("badminton", "bwf");

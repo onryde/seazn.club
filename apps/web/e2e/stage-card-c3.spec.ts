@@ -80,7 +80,7 @@ test("the stage card: header buttons, a one-line summary, the stage's own fixtur
   await expect(summary, "the summary reads: format, points, ties").toHaveText(
     new RegExp(`^${escapeRe(summaryFormatText("badminton", "league", rules.data!.cfg))} \u00b7 ${escapeRe(summaryPointsText(pair[0], pair[1]))} \u00b7 ${escapeRe(summaryTiesPrefix())}\\S`),
   );
-  await expect(card.getByTestId("stage-format-editor"), "no inline Match format section").toHaveCount(0);
+  await expect(card.getByTestId("stage-format-editor"), "no inline Match rules section").toHaveCount(0);
   await expect(card.getByTestId(`stage-points-${stageId}`), "no inline Points section").toHaveCount(0);
   await expect(card.getByTestId(`stage-tiebreaks-${stageId}`), "no inline Tie-breaks section").toHaveCount(0);
 
@@ -120,7 +120,7 @@ test("the stage card: header buttons, a one-line summary, the stage's own fixtur
   }
   expect(opened, "the sweep opened every panel twice").toBe(PANELS.length * 2);
 
-  // Several can be open at once: Match format and Points together.
+  // Several can be open at once: Match rules and Points together.
   await openStagePanel(card, "format");
   await openStagePanel(card, "points");
   await expect(card.getByTestId("stage-format-editor")).toBeVisible();

@@ -117,7 +117,7 @@ async function openRow(page: Page, request: APIRequestContext, divisionId: strin
 }
 
 async function openEditor(row: Locator): Promise<void> {
-  // Match Day C3: the editor opens from the "Match format" button in the card's header (a phone: from the Stage settings menu).
+  // Match Day C3: the editor opens from the "Match rules" button in the card's header (a phone: from the Stage settings menu).
   await openStagePanel(enclosingStageCard(row), "format");
   await expect(row.getByTestId("stage-format-editor")).toBeVisible({ timeout: STEP_MS });
 }
@@ -259,7 +259,7 @@ for (const c of CASES) {
     const started = await apiJson(request, `/api/v1/fixtures/${seeded.fixtureId}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
     expect(started.status, `core.start: ${JSON.stringify(started.error)}`).toBe(201);
 
-    // Match Day C2: a started stage's Match format is the shared editor's locked mode - the lock line and the format as chips,
+    // Match Day C2: a started stage's Match rules is the shared editor's locked mode - the lock line and the format as chips,
     // with no form at all (the old "View" form of disabled inputs is gone), so nothing can reach the field.
     const row = await openRow(page, request, seeded.divisionId, stageId);
     await expect(row.getByTestId("stage-locked"), "closed, the summary says the stage has started").toBeVisible();

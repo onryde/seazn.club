@@ -100,7 +100,7 @@ async function startMatch(request: APIRequestContext, fixtureId: string): Promis
   expect(res.status, `start match: ${JSON.stringify(res.error)}`).toBe(201);
 }
 
-/** The Division rules strip on the Fixtures tab, its Match format and Points panels open. */
+/** The Division rules strip on the Fixtures tab, its Match rules and Points panels open. */
 async function openFormat(page: Page, request: APIRequestContext, divisionId: string): Promise<void> {
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
@@ -119,13 +119,13 @@ async function expectStructureLocked(page: Page, request: APIRequestContext, div
   await expect(page.getByTestId("division-rules-moved"), "Settings points at the strip for the rules").toBeVisible();
 }
 
-/** The Match format panel's Save. */
+/** The Match rules panel's Save. */
 const saveRules = (page: Page) => page.getByTestId("division-rules-format-save");
 
 /** The variant picker. By role and a leading name: `getByLabel("Variant")` also matches a rule field whose help text says "variant". */
 const variantPicker = (page: Page) => page.getByRole("combobox", { name: new RegExp(`^${L["divset.variant"]!}`) });
 
-/** The Match format panel: what a rules save says renders inside it, directly under its Save button (T20 review I-1). */
+/** The Match rules panel: what a rules save says renders inside it, directly under its Save button (T20 review I-1). */
 const formatCard = (page: Page) => page.getByTestId("division-rules-panel-format");
 
 /** The control of one rule field of a sport, by the label the form prints. */

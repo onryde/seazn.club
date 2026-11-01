@@ -109,7 +109,13 @@ describe("Settings has no rules, points, JSON overrides or entrant kinds - every
           const text = surfaceOf(island);
           const ids = testIds(island.tree());
           const where = `${m.key} canEdit=${canEdit} locked=${structureLocked}`;
-          for (const phrase of REMOVED_PHRASES) expect(text, `${where}: no "${phrase}"`).not.toContain(phrase);
+          // E1 item 2: the pointer's own sentence now opens "Match rules, points and tie-breaks are set on the Fixtures tab", so the removed
+          // block's title can only be told apart OUTSIDE it. The pointer is cut out first (and must exist: the cut is the guard's premise).
+          const pointerEl = island.tree().find((e) => propsOf(e)["data-testid"] === "division-rules-moved");
+          expect(pointerEl, `${where}: premise: the pointer is on the page`).toBeDefined();
+          const outsidePointer = text.split(textOf(pointerEl!)).join("");
+          expect(outsidePointer.length, `${where}: premise: the cut left the rest of the page`).toBeGreaterThan(100);
+          for (const phrase of REMOVED_PHRASES) expect(outsidePointer, `${where}: no "${phrase}"`).not.toContain(phrase);
           expect(text, `${where}: no entrant-kind words`).not.toContain(EN["divset.entrants.kinds"]);
           expect(ids.filter((id) => /^entrants-|rules-(format|points|tiebreaks)|division-rules-panel|advanced|override/i.test(id)), `${where}: no moved or removed test id`).toEqual([]);
           const kindChips = island.tree().filter((e) => propsOf(e)["data-kind"] !== undefined);

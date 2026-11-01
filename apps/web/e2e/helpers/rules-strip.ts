@@ -27,7 +27,7 @@ export async function openPanels(strip: Locator, ...panels: RulesPanel[]): Promi
   }
 }
 
-/** The Match format panel's Save ("Save match format"). */
+/** The Match rules panel's Save ("Save match rules"). */
 export const saveFormat = (strip: Locator): Locator => strip.getByTestId("division-rules-format-save");
 /** The Points panel's Save (offered once a box differs from what is stored). */
 export const savePoints = (strip: Locator): Locator => strip.getByTestId("division-points-save");

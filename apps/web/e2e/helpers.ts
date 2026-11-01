@@ -2648,7 +2648,7 @@ export async function setDateTime(scope: Page | Locator, value: string): Promise
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Match Day C3 - the stage card's three settings panels (Match format / Points / Tie-breaks) open from buttons in the card's
+// Match Day C3 - the stage card's three settings panels (Match rules / Points / Tie-breaks) open from buttons in the card's
 // header; closed, the card is a one-line summary. Below `md` an editor's header buttons are `max-md:hidden` and the same three are
 // the TOP rows of the card's one "Stage tools" sheet (`stage-sheet-tool-<panel>`, `md:hidden`), so a test that needs a panel opens
 // the sheet first - gated on the header button being VISIBLE, never on a width literal (AGENTS.md rule 22) - and waits on

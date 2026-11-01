@@ -965,7 +965,7 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
     await expect(focus).toHaveAttribute("data-fixture-id", nc.fixtureId);
     await expect(ncRow).toHaveAttribute("aria-current", "true");
     await expect(focus.getByTestId("md-scoreboard")).toBeVisible();
-    // Match Day C2: the format it plays, read-only - the one Match format component, with the line the read model serves
+    // Match Day C2: the format it plays, read-only - the one Match rules component, with the line the read model serves
     // (the fixture page's own `effectiveLine`; `match-day.test.ts` holds the two equal), and no control.
     const view = await apiJson<{ playing_no_court: { id: string; format_line: string | null }[] }>(
       request,

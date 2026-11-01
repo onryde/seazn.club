@@ -103,6 +103,35 @@ const count = (html: string, testId: string): number => html.split(`data-testid=
 const text = (html: string): string => html.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ");
 const disabled = (html: string, testId: string): boolean => /\sdisabled=""/.test(tag(html, testId) ?? "");
 
+// Match Day E1 item 2 (owner 2026-11-01): "Match format" is "Match rules" everywhere a person reads it. The literals below are the owner's
+// words, typed here on purpose: reading them back from the dictionary would pass with the old name still in it. "Format" (league /
+// swiss / playoff) is a different word and stays.
+const MATCH_RULES: Record<Locale, string> = { en: "Match rules", es: "Reglas del partido", fr: "Règles du match", nl: "Wedstrijdregels" };
+const RETIRED_NAMES = ["Match format", "Formato de partido", "Format de match", "Wedstrijdformat"] as const;
+
+describe("E1 item 2: the stage card says Match rules, in every locale", () => {
+  it("the header button, the sheet row and the panel's section carry the new name; no label in any locale keeps the old one", () => {
+    let locales = 0;
+    for (const [loc, dict] of DICTS) {
+      const html = panel({}, loc, dict);
+      expect(text(tag(html, "stage-tool-format") === null ? "" : html.slice(html.indexOf('data-testid="stage-tool-format"'), html.indexOf("</button>", html.indexOf('data-testid="stage-tool-format"')))), `${loc}: the header button`).toContain(MATCH_RULES[loc]);
+      const sheetAt = html.indexOf('data-testid="stage-sheet-tool-format"');
+      expect(sheetAt, `${loc}: the sheet row is there`).toBeGreaterThan(-1);
+      expect(text(html.slice(sheetAt, html.indexOf("</button>", sheetAt))), `${loc}: the sheet row`).toContain(MATCH_RULES[loc]);
+      expect((dict as Record<string, string>)["rulesStrip.format"], `${loc}: strip + card button`).toBe(MATCH_RULES[loc]);
+      expect((dict as Record<string, string>)["stageRules.section.format"], `${loc}: the panel's own section title`).toBe(MATCH_RULES[loc]);
+      let checked = 0;
+      for (const [key, value] of Object.entries(dict as Record<string, string>)) {
+        checked++;
+        for (const old of RETIRED_NAMES) expect(value, `${loc} ${key}: the retired name "${old}"`).not.toContain(old);
+      }
+      expect(checked, `${loc}: anti-vacuity, every key read`).toBeGreaterThan(5000);
+      locales++;
+    }
+    expect(locales, "all four locales").toBe(4);
+  });
+});
+
 describe("the header: Match format / Points / Tie-breaks buttons (item 9)", () => {
   it("a table stage shows all three; each is a disclosure that names the panel it opens", () => {
     const html = panel();

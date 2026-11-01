@@ -23,7 +23,7 @@
 // must carry it through untouched, which is what bug 2 broke.
 //
 // Match Day C2: the match rules and the standings points left Settings for the Division rules strip on the Fixtures tab
-// (`rules/division-rules-strip.tsx`), each with its own Save - the Match format panel's "Save match format" sends the rules
+// (`rules/division-rules-strip.tsx`), each with its own Save - the Match format panel's "Save match rules" sends the rules
 // and leaves the points as stored; the Points panel's Save sends the points. The three bugs below are the strip's to keep
 // fixed, so this suite now drives the strip (`_rules-strip.tsx` opens its two child editors the way a browser renders them).
 //

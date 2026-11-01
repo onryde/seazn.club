@@ -164,7 +164,7 @@ describe("the online-play switch warns about players who cannot be paired online
 
     expect(propsOf(select(island)).disabled, "the select is not disabled by the warning").toBe(false);
     const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === EN["rulesStrip.format.save"]);
-    expect(button, "premise: the Save match format button is there").toBeDefined();
+    expect(button, "premise: the Save match rules button is there").toBeDefined();
     expect(propsOf(button!).disabled, "the save button is not disabled by the warning").toBe(false);
 
     (propsOf(button!).onClick as () => void)();

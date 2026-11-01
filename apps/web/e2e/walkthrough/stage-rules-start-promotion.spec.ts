@@ -507,7 +507,7 @@ test("the format lock is per stage: the played stage refuses, the stage that has
     { timeout: STEP_MS },
   );
   await expect(league.getByTestId("stage-format-summary")).toHaveText(summaryHead(LEAGUE_BEST_OF));
-  // The Match format button still opens the panel (a started stage READS it), but the panel offers no Save and no reset.
+  // The Match rules button still opens the panel (a started stage READS it), but the panel offers no Save and no reset.
   await openStagePanel(league, "format");
   await expect(league.getByTestId("stage-format-save")).toHaveCount(0);
   await expect(league.getByTestId("stage-format-clear")).toHaveCount(0);

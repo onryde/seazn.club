@@ -6416,7 +6416,7 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   const sheetFormat = card.getByTestId("stage-sheet-tool-format");
   const folded = await railTrigger.isVisible();
   await expect(card.getByTestId("stage-settings-trigger"), "the retired second phone trigger is gone").toHaveCount(0);
-  // A knockout stage has no table to rank: the one button it carries is Match format (Points and Tie-breaks are table stages'
+  // A knockout stage has no table to rank: the one button it carries is Match rules (Points and Tie-breaks are table stages'
   // buttons) - present once in the header and once as a sheet row (one DOM); the other two are absent, not hidden.
   await expect(card.getByTestId("stage-tool-format")).toBeAttached();
   await expect(sheetFormat).toBeAttached();
@@ -6429,7 +6429,7 @@ test("W2c stage format row at every width: sections, the deciders notice and the
     await expect(card.getByTestId("stage-tool-format"), "below md the header button is hidden").toBeHidden();
     await railTrigger.click();
     await expect(railTrigger).toHaveAttribute("aria-expanded", "true");
-    await assertTapFloor(sheetFormat, "Match format row in the Stage tools sheet");
+    await assertTapFloor(sheetFormat, "Match rules row in the Stage tools sheet");
     // The open sheet is a modal dialog over the trigger: Escape puts it away (a second click would land on the sheet).
     await page.keyboard.press("Escape");
     await expect(railTrigger).toHaveAttribute("aria-expanded", "false");
@@ -6454,7 +6454,7 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await openStagePanel(card, "format");
   const editor = row.getByTestId("stage-format-editor");
   await expect(editor).toBeVisible();
-  // M-3: while editing, Cancel is the one way out and the Match format button reads as pressed.
+  // M-3: while editing, Cancel is the one way out and the Match rules button reads as pressed.
   await expect(card.getByTestId("stage-tool-format")).toHaveAttribute("aria-expanded", "true");
   await assertTapFloor(row.getByTestId("stage-format-cancel"), "football Cancel");
   const interactive = editor.locator("select, input, button");
@@ -6549,7 +6549,7 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   if (shots) await dlist.screenshot({ path: `${shots}/division-sequence-${projectWidth}.png` });
 });
 
-// Match Day C3 (review round 1, phone ruling): ONE phone trigger per stage card. The Match format / Points / Tie-breaks buttons are the
+// Match Day C3 (review round 1, phone ruling): ONE phone trigger per stage card. The Match rules / Points / Tie-breaks buttons are the
 // header's from `md` up and the TOP rows of the "Stage tools" sheet below it - the same three, one DOM. The branch only a phone reaches
 // (header hidden, sheet rows, Escape, choose-a-row-closes-the-sheet, a second look) runs here at every width; the shared driver is
 // `helpers/stage-tools-sheet.ts` (also run at 1280 from `stage-card-c3.spec.ts`).
@@ -6952,7 +6952,7 @@ test("W2c match rules block at every width: the fold opens, the controls hold th
   await fits("locked");
 });
 
-// W2c Task 20 (S4): the division's rule lock lines at every width (Match Day C2: on the Division rules strip's Match format
+// W2c Task 20 (S4): the division's rule lock lines at every width (Match Day C2: on the Division rules strip's Match rules
 // panel, on the Fixtures tab - they left Settings with the match rules). A started stage locks the match-rule fields, and the
 // section says so ONCE ("Locked: Pool A has started and plays this format"; C2 fix round 1, I1 - never a line per field). The lines are plain text in the existing
 // field grid - no second phone tree - so the evidence is that every line is on screen, readable (its text is not clipped by its

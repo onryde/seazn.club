@@ -10,7 +10,7 @@
 // Match Day C2: the match rules, the variant and the standings points moved from Settings to the Division rules strip on the
 // Fixtures tab (`rules/division-rules-strip.tsx`). The lock lines, the partial save and the refusal lists moved with them,
 // so the field-level halves drive the strip (`mount`, through `_rules-strip.tsx`); the structure lock and the Format group's
-// summary stay in Settings and drive it (`mountSettings`). The rules Save is the strip's "Save match format"; the points have
+// summary stay in Settings and drive it (`mountSettings`). The rules Save is the strip's "Save match rules"; the points have
 // their own Save on the Points panel.
 //
 // Where each expected value comes from: the fields and the keys they edit are SPORT_RULES, every sentence is read from the
