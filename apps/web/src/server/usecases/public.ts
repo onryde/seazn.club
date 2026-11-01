@@ -77,8 +77,9 @@ import { clientIp } from "@/lib/client-ip";
 export const PUBLIC_CACHE_CONTROL = "public, s-maxage=30, stale-while-revalidate=300";
 const TTL_SECONDS = 30;
 
-/** The client IP both public limiters key on: the shared reader (`lib/client-ip.ts`, R4 final review S10 M1 / S14 m10),
- *  so the first X-Forwarded-For hop - which a client writes - no longer leads on a Fly-direct origin. */
+/** The client IP both public limiters key on: the shared reader (`lib/client-ip.ts`, R4 final review S10 M1 / S14 m10, N1) -
+ *  behind Cloudflare each visitor is their own bucket (never the edge's), and neither a client-written X-Forwarded-For hop nor
+ *  a `CF-Connecting-IP` forged at the fly.dev origin leads. */
 function publicClientIp(req: Request): string {
   return clientIp(req.headers);
 }

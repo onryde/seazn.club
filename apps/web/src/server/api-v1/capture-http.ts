@@ -101,9 +101,9 @@ function credentialKeyOf(req: Request): string {
 }
 
 /**
- * The client IP the failed-401 budget is keyed on: the shared reader (`lib/client-ip.ts`, R4 final review S10 M1) -
- * Fly-Client-IP, then the first X-Forwarded-For hop, then X-Real-IP; Cloudflare's header only behind its opt-in, so a
- * forged `CF-Connecting-IP` no longer picks the bucket on a Fly-direct origin. A forged value only moves the forger's OWN
+ * The client IP the failed-401 budget is keyed on: the shared reader (`lib/client-ip.ts`, R4 final review S10 M1, N1) -
+ * Cloudflare's `CF-Connecting-IP` when Fly's peer is one of Cloudflare's edges (the public hosts are behind Cloudflare), else
+ * Fly's peer, so a `CF-Connecting-IP` forged at the fly.dev origin picks no bucket. A forged value only moves the forger's OWN
  * failures to another bucket: the budget never refuses a valid tok (B6 review I-1).
  */
 export function clientIpOf(req: Request): string {
