@@ -360,14 +360,33 @@ export function DivisionBuilder({
     };
   }
 
+  // Templates whose second stage is sized by the `qualified` knob, so the
+  // wizard has to show the Top N control. swiss_knockout is here for the
+  // same reason league_ko is: without it the builder would silently ship
+  // every Swiss Knockout as a Top 4 (the state's default) with no control
+  // on screen saying so — the same "no control anywhere that says so" trap
+  // the swiss rounds knob already avoids in format-templates.ts.
+  // group_playoffs is NOT here: the Page playoff is a fixed four. Nor are
+  // ko_plate and qualifying_main, which read `qualified` too (the Plate's
+  // round-1-losers count, the Main draw's intake) at their own default of 4:
+  // buildStages sends them that, never a Top N typed for another template.
+  // Declared above buildStages, which runs during render (draftTableKinds).
+  const hasSecondStage =
+    template === "league_ko" ||
+    template === "groups_ko" ||
+    template === "group_stepladder" ||
+    template === "swiss_knockout";
+
   function buildStages(): StageDraft[] {
     // B (round-4 review): poolCount and qualified are free number inputs bounded by FORMAT_BOUNDS — HTML `min` doesn't
     // stop a cleared field reading as Number("")===0, which mints groups_ko's take rule with n:Infinity (serialises as
     // n:null over the wire) instead of a clean validation message. The same guard as division-settings.tsx's, for one
     // shared clampKnob (format-templates.ts) over one set of bounds (format-bounds.ts) rather than two divergent ones.
+    // The Top N is read only where it is on screen (hasSecondStage): it carries across the templates that show it, and
+    // a template that does not show it gets the templates' default 4 rather than a value the organiser cannot see.
     return applyStandingsCarry(
       buildTemplateStages(template, {
-        qualified: clampKnob(qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max),
+        qualified: hasSecondStage ? clampKnob(qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max) : 4,
         swissRounds,
         poolCount: clampKnob(poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max),
         legs,
@@ -613,18 +632,6 @@ export function DivisionBuilder({
     setError(null);
     setTab(key);
   }
-  // Templates whose second stage is sized by the `qualified` knob, so the
-  // wizard has to show the Top N control. swiss_knockout is here for the
-  // same reason league_ko is: without it the builder would silently ship
-  // every Swiss Knockout as a Top 4 (the state's default) with no control
-  // on screen saying so — the same "no control anywhere that says so" trap
-  // the swiss rounds knob already avoids in format-templates.ts.
-  // group_playoffs is NOT here: the Page playoff is a fixed four.
-  const hasSecondStage =
-    template === "league_ko" ||
-    template === "groups_ko" ||
-    template === "group_stepladder" ||
-    template === "swiss_knockout";
   const showStandingsCarry = templateHasProgression(template);
 
   return (
@@ -840,8 +847,8 @@ export function DivisionBuilder({
                 type="radio"
                 name="template"
                 checked={template === t.key}
-                // The Top N carries across templates: every template that reads it takes the same range
-                // (FORMAT_BOUNDS.qualify), so a value valid for one is valid for all of them.
+                // The Top N carries across the templates that show it (hasSecondStage), which all take the same
+                // range (FORMAT_BOUNDS.qualify). A template that does not show it is sent the default 4 (buildStages).
                 onChange={() => setTemplate(t.key)}
                 className="sr-only"
               />

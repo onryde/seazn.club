@@ -345,6 +345,53 @@ describe("the builder posts the legs the organiser picked", () => {
   });
 });
 
+describe("a Top N the builder does not show never sizes a stage (fix round 1, I1)", () => {
+  // ko_plate and qualifying_main read the `qualified` knob (the Plate's round-1-losers count; the Main draw's intake),
+  // but the builder shows them no Top N control. A value typed for another template must not ride into them unseen:
+  // they post the templates' default, 4 (the fix brief). 6 differs from it, so the wrong answer is visible.
+  const SHOWN = 6;
+  const DEFAULT = 4;
+  function setTopN(h: Island, value: string): void {
+    const qualify = h.tree().find((e) => propsOf(e)["data-format-bound"] === "qualify");
+    if (!qualify) throw new Error("no Top N control on screen");
+    (propsOf(qualify).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+  }
+  const takeOf = () =>
+    (postedStages(/format-preview/)[1]?.progression as { sources: { take: Record<string, unknown>[] }[] }).sources[0]!.take;
+
+  it("Top 6 on league_ko, then Knockout + Plate: the Plate takes 4 round-1 losers; then Qualifying + Main draw: the Main draw takes 4", async () => {
+    let checked = 0;
+    for (const [template, want] of [
+      ["ko_plate", { kind: "roundLosers", round: 1, count: DEFAULT }],
+      ["qualifying_main", { kind: "rankRange", from: 1, to: DEFAULT }],
+    ] as const) {
+      const h = mountBuilder();
+      pickBuilderTemplate(h, "league_ko");
+      setTopN(h, String(SHOWN));
+      pickBuilderTemplate(h, template);
+      expect(h.tree().some((e) => propsOf(e)["data-format-bound"] === "qualify"), `${template} shows no Top N`).toBe(false);
+      press(h, uiEn["wizard.showExample"]);
+      await flush();
+      expect(takeOf(), template).toEqual([want]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the sequence back: league_ko again still shows and sends the Top 6 typed for it", async () => {
+    const h = mountBuilder();
+    pickBuilderTemplate(h, "league_ko");
+    setTopN(h, String(SHOWN));
+    pickBuilderTemplate(h, "ko_plate");
+    pickBuilderTemplate(h, "league_ko");
+    const qualify = h.tree().find((e) => propsOf(e)["data-format-bound"] === "qualify");
+    expect(Number(propsOf(qualify!).value)).toBe(SHOWN);
+    press(h, uiEn["wizard.showExample"]);
+    await flush();
+    expect(takeOf()).toEqual([{ kind: "rankRange", from: 1, to: SHOWN }]);
+  });
+});
+
 describe("Settings never clamps a stored legs value silently", () => {
   const leagueKo = (legs: number): StageProp[] =>
     buildTemplateStages("league_ko", { qualified: 4, swissRounds: 5, poolCount: 2, legs }).map((d) => ({
