@@ -84,7 +84,10 @@ export async function sponsorsSuite(admin: Session, proOrgId: string, proOrgSlug
   check("sponsors: settings PUT round-trips again (org scope, Busy, off)", dialOf(readBusy.body).join() === "busy" && !switchOn(readBusy.body));
   check("sponsors: a competition scope PUT answers 200", (await put(comp.id, true, "normal")).status === 200);
   const readComp = await html(admin, `/o/${proOrgSlug}/sponsors?tab=on_stream&scope=${comp.id}`);
-  check("sponsors: the competition keeps its own row (Normal, on) while the org stays Busy, off", dialOf(readComp.body).join() === "normal" && switchOn(readComp.body) && dialOf(readBusy.body).join() === "busy");
+  // The org page is read AGAIN, after the competition write: an earlier body would stay Busy/off whatever that write did to it.
+  const readOrgAfter = await html(admin, `/o/${proOrgSlug}/sponsors?tab=on_stream`);
+  check("sponsors: the competition keeps its own row (Normal, on)", dialOf(readComp.body).join() === "normal" && switchOn(readComp.body));
+  check("sponsors: ...while the org, read again after that write, stays Busy, off", dialOf(readOrgAfter.body).join() === "busy" && !switchOn(readOrgAfter.body));
   check("sponsors: an unknown frequency is refused (400)", (await put(null, true, "loud")).status === 400);
 
   // --- Monetization: package + order-first Connect checkout.
