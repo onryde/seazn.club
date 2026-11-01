@@ -1,5 +1,7 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, activeOrgIdFromRequest, competitionPath, divisionPath, seedVenueWithCourts } from "./helpers";
+import { TAG, apiJson, activeOrgIdFromRequest, competitionPath, divisionPath, seedVenueWithCourts, withDb } from "./helpers";
+import { seedOnlineRound, uiEn } from "./match-room-kit";
+import { swissColourLot, swissDrawSeed, swissRoundOneOrder } from "../src/lib/swiss-draw";
 
 // W3 Swiss app-A (spec 2026-10-31-format-matrix-w3-swiss-design.md). One
 // describe per rule, each driven through the real desk.
@@ -535,5 +537,127 @@ test.describe("X-SW-28 Undo clears a paired round", () => {
       await expect(row).not.toContainText(nameOf.get(b.away_entrant_id!)!);
     }
     await expect(page.getByTestId("run-sheet-bye")).toHaveCount(0);
+  });
+});
+
+// W3 T8 (spec §12; X-SW-22 SW-L6 RB3-16, BG-SW-1 SW-H3 RB3-10). Two halves, each through the real desk:
+//   BG-SW-1 — a boardgame Swiss created now is a chess Swiss, and round 1's colours are by lot: board 1's upper player
+//             takes the lot's colour and the boards alternate. Read where the arbiter reads it: the Arbiter Panel's
+//             round column names White first.
+//   X-SW-22 — an unseeded round 1 is the stage's seeded random draw. The organiser is told so in the Pair next menu,
+//             and the Pair seats the draw (the stage's own seed over the field in the order the server reads it).
+// Expected values come from the rulebook (the fold: position k meets position k + n/2, the upper at home; the lot's
+// alternation) composed with the pure draw functions — never read back from the Pair under test.
+test.describe("X-SW-22 / BG-SW-1", () => {
+  test("BG-SW-1 a new boardgame Swiss is a chess Swiss: round 1 is coloured by lot and the boards alternate White and Black", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    // Seeded 1..8 by the kit (seed = position in `names`), so no draw: only the lot moves a seat.
+    const names = Array.from({ length: 8 }, (_, i) => `Lot P${i + 1} ${TAG}`);
+    const r = await seedOnlineRound(request, names, { stage: "swiss", open: false });
+    const stages = await apiJson<{ id: string; config: Record<string, unknown> }[]>(request, `/api/v1/divisions/${r.divisionId}/stages`);
+    expect(stages.status, JSON.stringify(stages.error)).toBe(200);
+    expect(stages.data!.find((s) => s.id === r.stageId)?.config.chess, "the create door stored chess colours on").toBe(true);
+
+    const lot = swissColourLot(swissDrawSeed(r.stageId));
+    const half = names.length / 2;
+    // The fold, upper at home, then the lot: board k's upper player is White iff (k is odd) === (the lot is white).
+    const expected = Array.from({ length: half }, (_, i) => {
+      const [upper, lower] = [names[i]!, names[i + half]!];
+      const upperWhite = (i % 2 === 0) === (lot === "white");
+      return upperWhite ? { white: upper, black: lower } : { white: lower, black: upper };
+    });
+    expect(r.boards.map((b) => ({ white: b.home.name, black: b.away.name })), "home is White, by lot").toEqual(expected);
+    // The alternation itself, stated apart from the formula above: the upper players' colours never repeat board to board.
+    const upperIsWhite = expected.map((b, i) => b.white === names[i]);
+    let flips = 0;
+    for (let i = 1; i < upperIsWhite.length; i++) {
+      expect(upperIsWhite[i], `board ${i + 1} alternates from board ${i}`).not.toBe(upperIsWhite[i - 1]);
+      flips++;
+    }
+    expect(flips, "anti-vacuity: every adjacent pair of boards compared").toBe(half - 1);
+
+    // On the arbiter's screen: White first on every board, before the round is opened.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(r.arbiterPath);
+    const column = page.getByTestId("arbiter-round-column");
+    await expect(column, "paired, not opened").toHaveAttribute("data-phase", "before", { timeout: 30_000 });
+    for (const [i, b] of r.boards.entries()) {
+      const sides = page.getByTestId(`arbiter-column-pairing-${b.fixtureId}`).locator('[data-field="names"] > span');
+      await expect(sides.nth(0), `board ${i + 1}: White`).toHaveText(expected[i]!.white);
+      await expect(sides.nth(2), `board ${i + 1}: Black`).toHaveText(expected[i]!.black);
+    }
+  });
+
+  test("X-SW-22 an unseeded round 1: the Pair next menu says it is drawn at random, and the Pair seats the stage's draw", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    type Seated = Fx & { home_entrant_id: string | null; away_entrant_id: string | null };
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+      ends_on: "2030-12-31",
+      name: `Drawn round one ${TAG}`,
+      visibility: "private",
+    });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Open",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string }[]>(
+      request,
+      `/api/v1/divisions/${divisionId}/entrants`,
+      "POST",
+      Array.from({ length: 8 }, (_, i) => ({ kind: "individual", display_name: `Drawn P${i + 1} ${TAG}`, seed: null })),
+    );
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 3 },
+    });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, `start → ${JSON.stringify(started.error)}`).toBe(200);
+
+    // The organiser opens ▾ before pressing Pair next: round 1, and the line that says the field is drawn.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    const menu = page.getByTestId("stage-pairing-menu");
+    await expect(async () => {
+      if ((await menu.count()) === 0) await page.getByTestId("stage-pairing-toggle").click();
+      await expect(menu).toBeVisible({ timeout: 5_000 });
+    }).toPass({ timeout: 30_000 });
+    await expect(page.getByTestId("stage-pairing-draw-note")).toHaveText(uiEn["schedule.pairing.drawnAtRandom"]);
+    await expect(menu).toHaveAttribute("aria-describedby", `pairing-draw-note-${stageId}`);
+    await page.getByTestId("stage-generate").click();
+
+    const round1 = async () => {
+      const all = await apiJson<Seated[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+      expect(all.status, JSON.stringify(all.error)).toBe(200);
+      return (all.data ?? [])
+        .filter((f) => f.stage_id === stageId && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)
+        .sort((a, b) => a.seq_in_round - b.seq_in_round);
+    };
+    await expect.poll(async () => (await round1()).length, { timeout: 30_000 }).toBe(4);
+
+    // The field in the order the Pair reads it (the server's active select), drawn with the stage's own seed.
+    const field = await withDb((sql) => sql<{ id: string; seed: number | null }[]>`
+      select id, seed from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')
+       order by seed nulls last, created_at, id`);
+    expect(field.length, "premise: the whole field is active").toBe(8);
+    const drawn = swissRoundOneOrder(swissDrawSeed(stageId), field);
+    // The fold over the drawn positions; a generic Swiss has no colours, so the upper position sits at home.
+    const expected = Array.from({ length: 4 }, (_, i) => ({ home: drawn[i], away: drawn[i + 4] }));
+    expect((await round1()).map((f) => ({ home: f.home_entrant_id, away: f.away_entrant_id })), "the stage's draw").toEqual(expected);
   });
 });

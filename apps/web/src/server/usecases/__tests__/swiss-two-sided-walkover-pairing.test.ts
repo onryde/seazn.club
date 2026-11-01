@@ -37,6 +37,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { SwissHistory } from "@seazn/engine/scheduling";
 import { sql } from "@/lib/db";
+import { applyRoundOneColourLot, swissColourLot, swissDrawSeed } from "@/lib/swiss-draw";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -81,6 +82,10 @@ interface Rig {
   id: (name: string) => string;
   /** entrant id → "S1".."S6". */
   name: (id: string | null) => string;
+  /** The stage's chess colours (`config.chess === true`): round 1 is then coloured by the stage's lot (W3 T8, BG-SW-1). */
+  chess: boolean;
+  /** Chess only: the colour board 1's upper player takes (`swissColourLot`); null without chess. */
+  lot: "white" | "black" | null;
 }
 
 /** `count` individuals seeded S1..S<count> in a 3-round swiss, started,
@@ -121,11 +126,14 @@ async function pairedRoundOne(config: Record<string, unknown>, count = 6): Promi
   await generateStageFixtures(auth, stage!.id); // Pair round 1
   const byName = new Map(entrants.map((e) => [e.display_name, e.id]));
   const byId = new Map(entrants.map((e) => [e.id, e.display_name]));
+  const chess = config.chess === true;
   return {
     auth,
     stageId: stage!.id,
     id: (n) => byName.get(n)!,
     name: (i) => (i === null ? "-" : (byId.get(i) ?? i)),
+    chess,
+    lot: chess ? swissColourLot(swissDrawSeed(stage!.id)) : null,
   };
 }
 
@@ -137,18 +145,6 @@ async function forfeitBy(auth: AuthCtx, fixtureId: string, by: string): Promise<
     type: "core.forfeit",
     payload: { by, reason: "walkover" },
   });
-}
-
-/** The scorer's quick result: the HOME side wins 21-10, 21-10. */
-async function homeWins(auth: AuthCtx, fixtureId: string): Promise<void> {
-  await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
-  for (const seq of [1, 2]) {
-    await scoreEvent(auth, fixtureId, {
-      expected_seq: seq,
-      type: "badminton.game.summary",
-      payload: { home: 21, away: 10 },
-    });
-  }
 }
 
 /** The quick result, won by `winner` whichever side it sits on. */
@@ -168,22 +164,32 @@ const boardOf = (rows: FixtureRow[], round: number, who: string) =>
   rows.find((f) => f.round_no === round && (f.home_entrant_id === who || f.away_entrant_id === who))!;
 
 /**
- * Round 1 is a fold (1v4, 2v5, 3v6) whatever the stored mode. `noShow`
- * forfeits its board; the other two boards go to the home side (seeds 1, 2).
+ * Round 1 is a fold (1v4, 2v5, 3v6) whatever the stored mode — upper seed at home, or with chess colours on, coloured by
+ * the stage's lot (W3 T8, BG-SW-1: board 1's upper player takes the lot's colour and the boards alternate; home is
+ * White). `noShow` forfeits its board; the other two boards go to the UPPER seed (seeds 1, 2), whichever side it sits.
  * Returns the walkover winner A and the no-show H.
  */
 async function playRoundOne(rig: Rig, noShow: string): Promise<{ A: string; H: string }> {
   const r1 = (await fixturesOf(rig.stageId)).filter((f) => f.round_no === 1);
-  expect(r1.map((f) => `${rig.name(f.home_entrant_id)} v ${rig.name(f.away_entrant_id)}`)).toEqual([
-    "S1 v S4",
-    "S2 v S5",
-    "S3 v S6",
-  ]);
+  const fold = [
+    { home: "S1", away: "S4" },
+    { home: "S2", away: "S5" },
+    { home: "S3", away: "S6" },
+  ];
+  const expected = rig.lot === null ? fold : applyRoundOneColourLot(fold, rig.lot);
+  expect(r1.map((f) => `${rig.name(f.home_entrant_id)} v ${rig.name(f.away_entrant_id)}`)).toEqual(
+    expected.map((p) => `${p.home} v ${p.away}`),
+  );
   const H = rig.id(noShow);
   const walkover = boardOf(r1, 1, H);
   const A = walkover.home_entrant_id === H ? walkover.away_entrant_id! : walkover.home_entrant_id!;
   await forfeitBy(rig.auth, walkover.id, H);
-  for (const f of r1) if (f.id !== walkover.id) await homeWins(rig.auth, f.id);
+  const seedNo = (id: string | null) => Number(rig.name(id).slice(1));
+  for (const f of r1) {
+    if (f.id === walkover.id) continue;
+    const upper = seedNo(f.home_entrant_id) < seedNo(f.away_entrant_id) ? f.home_entrant_id! : f.away_entrant_id!;
+    await wins(rig.auth, f, upper);
+  }
 
   // The premise this file exists for: a TWO-SIDED award, not a bye row and
   // not a `win`/forfeit. If a kernel ever changes that, this goes red first.
@@ -263,13 +269,21 @@ describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a board, not
     );
     // The forfeit holds no colour: the engine is handed none for either side, and White for the two played games' hosts.
     expect([history.colours?.get(A), history.colours?.get(H)], "a forfeited game assigns no colour").toEqual([undefined, undefined]);
-    expect([history.colours?.get(rig.id("S1")), history.colours?.get(rig.id("S4"))], "the played boards' colours").toEqual([["W"], ["B"]]);
-    // Home is White. Groups: S1, S2, A on 1; H, S4, S5 on 0. The 1-group is odd, so its lowest, A, floats down.
-    //   S2 v S1 — both prefer Black after one White; the upper board S1 gets it.
+    // Board 1's upper player S1 took the lot's colour (W3 T8, BG-SW-1); S4 the other.
+    const s1 = rig.lot === "white" ? "W" : "B";
+    expect([history.colours?.get(rig.id("S1")), history.colours?.get(rig.id("S4"))], "the played boards' colours").toEqual([
+      [s1],
+      [s1 === "W" ? "B" : "W"],
+    ]);
+    // Home is White. Groups: S1, S2, A on 1; H, S4, S5 on 0. The 1-group is odd, so its lowest, A, floats down. Round 1 by
+    // lot: board 1 S1 has the lot's colour, board 2 S2 the other (S5 the lot's), board 3 the walkover (no colour).
+    //   S1 v S2 — opposite colours, so each takes the one it lacks: S2 is White after a white lot, S1 after a black one.
     //   S6 v S3 — A takes the top of the 0 group, H (seed 3), now legal: neither holds a colour, so the upper board
     //             (A, on 1) takes White.
-    //   S4 v S5 — both prefer White after one Black, equally; the upper board S4 gets it.
-    expect(shape(rig, r2)).toEqual(["S2 v S1", "S6 v S3", "S4 v S5"]);
+    //   S4 v S5 — opposite colours again: S4 (board 1's other colour) is White after a white lot, S5 after a black one.
+    expect(shape(rig, r2)).toEqual(
+      rig.lot === "white" ? ["S2 v S1", "S6 v S3", "S4 v S5"] : ["S1 v S2", "S6 v S3", "S5 v S4"],
+    );
   });
 });
 

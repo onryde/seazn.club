@@ -2,7 +2,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { StagesPanel } from "@/components/v2/stages-panel";
-import { StageRail } from "@/components/v2/desk/stage-rail";
+import { StageRail, SwissPairingMenuPanel } from "@/components/v2/desk/stage-rail";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import es from "@/dictionaries/es/ui.json";
 import { ApiV1Error } from "@/lib/client-v1";
 import { SWISS_PAIRING_ROUND_ONE_ONLY_CODE } from "@/lib/swiss-pairing";
 
@@ -130,6 +132,61 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
     );
     expect(html).not.toContain('data-testid="stage-generate"');
     expect(html).not.toContain(TOGGLE);
+  });
+});
+
+// W3 T8 (X-SW-22): an unseeded round 1 is the stage's seeded random draw, and the round-1 menu says so. The seam is the
+// panel's: it reads the page's real seeds (null for an unseeded entrant) into the menu it hands the rail. A menu
+// derivation that is right but never fed the seeds would leave the line dark — so this drives the PANEL's own menu
+// through the rail's real panel component.
+describe("StagesPanel — the round-1 menu says an unseeded field is drawn at random (X-SW-22)", () => {
+  const menuOf = (entrantSeeds: Record<string, number | null>, seated: number[] = []) => {
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation(() => Promise.resolve({}));
+    const island = renderIsland(StagesPanel, { ...props, entrantSeeds, stages: [swissStage()], fixtures: fixtures(seated) });
+    const rails = island.tree().filter((el) => el.type === StageRail);
+    expect(rails).toHaveLength(1);
+    return propsOf(rails[0]!).swissPairingMenu as Parameters<typeof SwissPairingMenuPanel>[0]["menu"];
+  };
+  const NOTE = 'data-testid="stage-pairing-draw-note"';
+  const panelHtml = (menu: Parameters<typeof SwissPairingMenuPanel>[0]["menu"]) =>
+    renderToStaticMarkup(<SwissPairingMenuPanel stageId="s1" menu={menu} pick={null} onPick={() => {}} onClose={() => {}} />);
+
+  it("a wholly seeded field: no draw, no line (the empty case first)", () => {
+    const menu = menuOf(props.entrantSeeds);
+    expect(menu).toMatchObject({ round: 1, choosable: true, unseededDrawn: false });
+    const html = panelHtml(menu);
+    expect(html, "positive control: the round-1 options rendered").toContain('data-testid="stage-pairing-fold"');
+    expect(html).not.toContain(NOTE);
+    expect(html).not.toContain("aria-describedby=");
+  });
+
+  it("one unseeded entrant: the line, under the options, described by the group", () => {
+    const menu = menuOf({ ...props.entrantSeeds, e5: null });
+    expect(menu).toMatchObject({ round: 1, choosable: true, unseededDrawn: true });
+    const html = panelHtml(menu);
+    expect(html).toContain(`${NOTE}>Unseeded players are drawn at random.</p>`);
+    expect(html).toContain('aria-describedby="pairing-draw-note-s1"');
+    expect(html).toContain('id="pairing-draw-note-s1"');
+    expect(html.indexOf(NOTE), "under both options").toBeGreaterThan(html.indexOf('data-testid="stage-pairing-rank_adjacent"'));
+  });
+
+  it("in Spanish, the line is the Spanish catalog's", () => {
+    const menu = menuOf({ ...props.entrantSeeds, e5: null });
+    const html = renderToStaticMarkup(
+      <DictProvider dict={es} locale="es">
+        <SwissPairingMenuPanel stageId="s1" menu={menu} pick={null} onPick={() => {}} onClose={() => {}} />
+      </DictProvider>,
+    );
+    expect(html).toContain(`>${es["schedule.pairing.drawnAtRandom"]}</p>`);
+  });
+
+  it("round 2 waiting: the draw is round 1's alone — no line in the read-only menu", () => {
+    const menu = menuOf({ ...props.entrantSeeds, e5: null }, [1]);
+    expect(menu).toMatchObject({ round: 2, choosable: false, unseededDrawn: false });
+    const html = panelHtml(menu);
+    expect(html, "positive control: the read-only menu rendered").toContain('data-testid="stage-pairing-readonly"');
+    expect(html).not.toContain(NOTE);
   });
 });
 

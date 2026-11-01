@@ -1,5 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
 import { type Session, appendScoreEvent, newSession, check, signIn, smokeDb, tag, v1, v1data } from "../harness.ts";
+import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swiss-draw.ts";
 
 /**
  * Format matrix W3 Swiss app-A (spec 2026-10-31-format-matrix-w3-swiss-design.md) — the app PR's smoke proof, over real
@@ -12,7 +13,8 @@ import { type Session, appendScoreEvent, newSession, check, signIn, smokeDb, tag
  * leaves it, and a bye shell takes no court or time (422 SWISS_BYE_NOT_PLACEABLE). T5 (X-SW-28, #835): Undo of Pair next
  * puts the round back onto its shells — no round-1 row is left seated. T6 (X-SW-12, ruling 251): an entrant whose first
  * Swiss round is 2 is on no round-1 row and is seated from round 2. T7 (X-SW-15, RB3-2; rulebook P-A2): a double-walkover
- * pair has not met, so the next Pair may seat it again. Own fresh owner. Every read is a v1 route; the one
+ * pair has not met, so the next Pair may seat it again. T8 (X-SW-22, SW-L6, RB3-16): an unseeded round 1 is the stage's
+ * seeded random draw, not registration order. Own fresh owner. Every read is a v1 route; the one
  * write that needs DATABASE_URL is T6's stamp of `entrants.swiss_first_round` (no route writes it until Task 9), and
  * without it that check fails rather than skips. Every check is counted, and a run that checked nothing fails.
  * SMOKE_ONLY=w3SwissA runs it alone (SELECTABLE_SUITES).
@@ -21,8 +23,9 @@ export async function w3SwissASuite(): Promise<void> {
   // T1: 2 (a rebuild keeps 3 slots; a shrinking rebuild counts the slots it freed) + T2: 1 (a pre-Start reshape keeps
   // the pinned boards) + T4: 1 (no ad-hoc match on a Swiss stage; T4 runs before T3 by controller ruling C1) + T3: 2 (a
   // bye's format is frozen at award; a bye shell is never placed) + T5: 1 (Undo of Pair next clears the round's seats) +
-  // T6: 1 (an entrant with a first Swiss round is on no round below it) + T7: 1 (a double-walkover pair meets again).
-  const EXPECTED_CHECKS = 9;
+  // T6: 1 (an entrant with a first Swiss round is on no round below it) + T7: 1 (a double-walkover pair meets again) +
+  // T8: 1 (an unseeded round 1 seats the stage's draw, not registration order).
+  const EXPECTED_CHECKS = 10;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -450,6 +453,58 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-15: both round-1 double-walkover pairs are seated again in round 2 (2 boards, the same pairs)" +
           (ok ? "" : ` — players ${rePlayers.length}, start ${reStarted.status}, pair 1 ${rePair1.status}, round 1 ${round1.length} boards, forfeits ${forfeits.join(",")}, decided ${decided}, pair 2 ${rePair2.status} ${JSON.stringify(rePair2.json).slice(0, 160)}, round 2 ${JSON.stringify(pairsOf(round2))} vs round 1 ${JSON.stringify(pairsOf(round1))}`),
+        ok,
+      );
+    }
+
+    // Check 10 (T8, X-SW-22; SW-L6, REC RB3-16): an unseeded round 1 is the stage's seeded random draw, never registration
+    // order. A generic Swiss of sixteen, nobody seeded, registered ONE POST each so registration order is the server's own
+    // tie-break (`seed nulls last, created_at, id`) with no database read. Start, Pair round 1. Expected: the fold (position
+    // k v k + 8, the upper at home — a generic Swiss has no colours) over `swissRoundOneOrder(swissDrawSeed(stage), field)`;
+    // and the round is NOT the fold over registration order, which is what main seated (16! orders: equal by chance never).
+    // Its own competition: `byeComp` already holds four divisions, the community plan's cap per competition.
+    {
+      const drawComp = v1data<{ id: string } | undefined>(
+        await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W3 Swiss A draw ${tag}`, visibility: "private" }),
+      );
+      const drawDiv = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/competitions/${drawComp?.id}/divisions`, "POST", {
+          name: "Drawn",
+          sport_key: "generic",
+          variant_key: "score",
+          config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+        }),
+      )?.id;
+      const registered: string[] = [];
+      for (let i = 0; i < 16; i++) {
+        const one = v1data<{ id: string }[] | undefined>(
+          await v1(owner, `/api/v1/divisions/${drawDiv}/entrants`, "POST", [
+            { kind: "individual", display_name: `D${i + 1} ${tag}`, seed: null },
+          ]),
+        );
+        if (one?.[0]) registered.push(one[0].id);
+      }
+      const drawStage = v1data<{ id: string } | undefined>(
+        await v1(owner, `/api/v1/divisions/${drawDiv}/stages`, "POST", { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 4 } }),
+      )?.id;
+      const drawStarted = await v1(owner, `/api/v1/divisions/${drawDiv}/start`, "POST");
+      const drawPair = await v1(owner, `/api/v1/stages/${drawStage}/generate`, "POST");
+      type Seat = Fx & { home_entrant_id: string | null; away_entrant_id: string | null };
+      const seated = (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${drawDiv}/fixtures`)) ?? [])
+        .filter((f) => f.stage_id === drawStage && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null)
+        .sort((a, b) => a.seq_in_round - b.seq_in_round)
+        .map((f) => `${f.home_entrant_id}|${f.away_entrant_id}`);
+      const fold = (order: readonly string[]) =>
+        Array.from({ length: order.length / 2 }, (_, k) => `${order[k]}|${order[k + order.length / 2]}`);
+      const drawn = drawStage ? swissRoundOneOrder(swissDrawSeed(drawStage), registered.map((id) => ({ id, seed: null }))) : [];
+      const unordered = (pairs: readonly string[]) => pairs.map((p) => p.split("|").sort().join("|")).sort();
+      const ok =
+        registered.length === 16 && drawStarted.status < 300 && drawPair.status === 200 && seated.length === 8 &&
+        JSON.stringify(seated) === JSON.stringify(fold(drawn)) &&
+        JSON.stringify(unordered(seated)) !== JSON.stringify(unordered(fold(registered)));
+      w3Check(
+        "w3a X-SW-22: an unseeded round 1 of 16 seats the stage's draw (8 boards), not the fold over registration order" +
+          (ok ? "" : ` — competition ${drawComp?.id ?? "none"}, division ${drawDiv ?? "none"}, players ${registered.length}, start ${drawStarted.status}, pair ${drawPair.status} ${JSON.stringify(drawPair.json).slice(0, 160)}, round 1 ${JSON.stringify(seated)} vs draw ${JSON.stringify(fold(drawn))}, registration fold ${JSON.stringify(fold(registered))}`),
         ok,
       );
     }

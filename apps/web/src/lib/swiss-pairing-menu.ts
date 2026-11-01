@@ -35,6 +35,9 @@ export type SwissPairingMenu = {
   fieldSize: number;
   /** R1 — whether the hint may print seed NUMBERS. */
   seedsNumbered: boolean;
+  /** X-SW-22 (W3 T8) — round 1 seats an unseeded entrant by the stage's seeded random draw (`swissFieldDrawn`); false
+   *  in every later round. */
+  unseededDrawn: boolean;
 };
 
 /** The keys this module reads — the whole surface in one place, typed as a
@@ -45,7 +48,8 @@ export type SwissPairingMessageKey =
   | "schedule.pairing.hintAdjacentGeneric"
   | "schedule.pairing.fold"
   | "schedule.pairing.adjacent"
-  | "schedule.pairing.default";
+  | "schedule.pairing.default"
+  | "schedule.pairing.drawnAtRandom";
 export type SwissPairingT = (key: SwissPairingMessageKey, vars?: Record<string, string | number>) => string;
 
 /** How many pairs the hint names before it trails off. */
@@ -92,6 +96,24 @@ export function swissFieldSeedsNumbered(
 }
 
 /**
+ * X-SW-22 (W3 T8) — does round 1 draw an unseeded entrant? Mirrors `swissGen` (usecases/stages.ts): round 1 orders an
+ * unseeded entrant by the stage's seeded random draw (`lib/swiss-draw.ts`) whenever the field it pairs holds one. A stage
+ * carrying `config.qualified` ranks its qualifiers by qualification order, so it is never drawn. A missing seed reads as
+ * unseeded, as in `swissFieldSeedsNumbered`.
+ */
+export function swissFieldDrawn(
+  config: Record<string, unknown>,
+  activeEntrantIds: readonly string[] | undefined,
+  entrantSeeds: EntrantSeeds | undefined,
+): boolean {
+  if (!activeEntrantIds || !entrantSeeds) return false;
+  if (Array.isArray(config.qualified)) return false;
+  // Below two the Pair is refused (STAGE_NOT_READY): there is no round 1 to draw — stated, not inherited from `some`.
+  if (activeEntrantIds.length < 2) return false;
+  return activeEntrantIds.some((id) => (entrantSeeds[id] ?? null) === null);
+}
+
+/**
  * The menu for one stage, or `null` when there is none: not Swiss, no shells
  * yet (the first Generate mints them — the server refuses a pick there), or
  * R3 — no round waiting to be paired.
@@ -116,7 +138,17 @@ export function swissPairingMenuFor(args: {
     // below goes generic rather than print numbers for a field it cannot see.
     fieldSize: swissActiveFieldSize(args.config, args.activeEntrantIds ?? []),
     seedsNumbered: swissFieldSeedsNumbered(args.config, args.activeEntrantIds, args.entrantSeeds),
+    unseededDrawn: round === 1 && swissFieldDrawn(args.config, args.activeEntrantIds, args.entrantSeeds),
   };
+}
+
+/** X-SW-22 — the round-1 line under the options when the field is drawn: "Unseeded players are drawn at random."
+ *  `null` otherwise, and never in a read-only later round. */
+export function swissPairingDrawNote(
+  menu: Pick<SwissPairingMenu, "choosable" | "unseededDrawn">,
+  t: SwissPairingT,
+): string | null {
+  return menu.choosable && menu.unseededDrawn ? t("schedule.pairing.drawnAtRandom") : null;
 }
 
 /** The hint under one option: "1v6, 2v7, 3v8…" when R1 allows numbers,

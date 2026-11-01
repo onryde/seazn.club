@@ -2131,6 +2131,7 @@
   "schedule.pairing.laterAdjacent": "Voisins au classement (1er c 2e, 3e c 4e…)",
   "schedule.pairing.laterFold": "Haut contre bas dans chaque groupe de points",
   "schedule.pairing.roundOneOnly": "Le mode se choisit uniquement à la ronde 1.",
+  "schedule.pairing.drawnAtRandom": "Les joueurs sans tête de série sont tirés au sort.",
   "schedule.pairing.error.roundOneOnly": "Le mode d'appariement ne se choisit qu'à la ronde 1.",
   "schedule.generate": "Générer les matchs",
   "schedule.complete": "Terminer la phase",

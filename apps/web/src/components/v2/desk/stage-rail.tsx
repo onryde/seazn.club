@@ -74,6 +74,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import { swissRefusalKey } from "@/lib/swiss-refusals";
 import {
+  swissPairingDrawNote,
   swissPairingForKey,
   swissPairingHint,
   swissPairingOptionLabel,
@@ -708,6 +709,10 @@ export function SwissPairingMenuPanel({
 }) {
   const msg = useMsg();
   const checkedMode = pick ?? menu.defaultPairing;
+  // X-SW-22 (W3 T8): round 1 over a field with an unseeded entrant is drawn at random — said once, under the options,
+  // in the read-only hint's own quiet style, and tied to the group so a screen reader hears it with the choice.
+  const drawNote = swissPairingDrawNote(menu, msg);
+  const drawNoteId = `pairing-draw-note-${stageId}`;
   return (
     // The outer box claims the desktop row's whole line (`md:basis-full`),
     // so the buttons after it wrap below; the group inside keeps a reading
@@ -720,6 +725,7 @@ export function SwissPairingMenuPanel({
         role="radiogroup"
         aria-label={msg("schedule.pairing.groupLabel", { round: menu.round })}
         aria-disabled={!menu.choosable || undefined}
+        aria-describedby={drawNote === null ? undefined : drawNoteId}
         data-testid="stage-pairing-menu"
         onKeyDown={(e) => {
           if (e.key !== "Escape") return;
@@ -731,48 +737,55 @@ export function SwissPairingMenuPanel({
         className="flex w-full min-w-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs md:max-w-md"
       >
         {menu.choosable ? (
-          SWISS_PAIRINGS.map((mode) => {
-            const checked = checkedMode === mode;
-            return (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={checked}
-                tabIndex={checked ? 0 : -1}
-                data-testid={`stage-pairing-${mode}`}
-                data-pairing-mode={mode}
-                onClick={() => onPick(mode)}
-                onKeyDown={(e) => {
-                  const next = swissPairingForKey(e.key, checkedMode);
-                  if (!next) return;
-                  e.preventDefault();
-                  onPick(next);
-                  // Roving tab stop: DOM focus follows the selection, or the
-                  // focus ring stays on a radio that is no longer checked.
-                  e.currentTarget
-                    .closest('[role="radiogroup"]')
-                    ?.querySelector<HTMLElement>(`[data-pairing-mode="${next}"]`)
-                    ?.focus();
-                }}
-                className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
-                  checked ? "bg-purple-50" : ""
-                }`}
-              >
-                <span aria-hidden="true" className={`shrink-0 ${checked ? "text-purple-700" : "text-slate-400"}`}>
-                  {checked ? "●" : "○"}
-                </span>
-                <span className="flex min-w-0 flex-col">
-                  <span className="font-semibold text-slate-800">
-                    {swissPairingOptionLabel(mode, menu.defaultPairing, msg)}
+          <>
+            {SWISS_PAIRINGS.map((mode) => {
+              const checked = checkedMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={checked}
+                  tabIndex={checked ? 0 : -1}
+                  data-testid={`stage-pairing-${mode}`}
+                  data-pairing-mode={mode}
+                  onClick={() => onPick(mode)}
+                  onKeyDown={(e) => {
+                    const next = swissPairingForKey(e.key, checkedMode);
+                    if (!next) return;
+                    e.preventDefault();
+                    onPick(next);
+                    // Roving tab stop: DOM focus follows the selection, or the
+                    // focus ring stays on a radio that is no longer checked.
+                    e.currentTarget
+                      .closest('[role="radiogroup"]')
+                      ?.querySelector<HTMLElement>(`[data-pairing-mode="${next}"]`)
+                      ?.focus();
+                  }}
+                  className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                    checked ? "bg-purple-50" : ""
+                  }`}
+                >
+                  <span aria-hidden="true" className={`shrink-0 ${checked ? "text-purple-700" : "text-slate-400"}`}>
+                    {checked ? "●" : "○"}
                   </span>
-                  {/* slate-600, not -500: -500 on the checked row's purple-50 wash
-                      measured under 4.5:1 (axe color-contrast, serious). */}
-                  <span className="text-slate-600">{swissPairingHint(mode, menu, msg)}</span>
-                </span>
-              </button>
-            );
-          })
+                  <span className="flex min-w-0 flex-col">
+                    <span className="font-semibold text-slate-800">
+                      {swissPairingOptionLabel(mode, menu.defaultPairing, msg)}
+                    </span>
+                    {/* slate-600, not -500: -500 on the checked row's purple-50 wash
+                        measured under 4.5:1 (axe color-contrast, serious). */}
+                    <span className="text-slate-600">{swissPairingHint(mode, menu, msg)}</span>
+                  </span>
+                </button>
+              );
+            })}
+            {drawNote === null ? null : (
+              <p id={drawNoteId} className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-draw-note">
+                {drawNote}
+              </p>
+            )}
+          </>
         ) : (
           <>
             <p

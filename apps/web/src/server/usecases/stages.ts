@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { SWISS_ABANDONED_BOARDS_REASON } from "@/lib/swiss-abandoned-refusal";
+import { applyRoundOneColourLot, swissColourLot, swissDrawSeed, swissRoundOneOrder } from "@/lib/swiss-draw";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { HttpError } from "@/lib/errors";
 import { assertStageKindsAllowed, chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
@@ -1264,6 +1265,11 @@ type SwissGenResult = {
    *  seating UPDATEs shells that already existed, so these must never reach
    *  the ledger's `fixture_ids`, which Undo deletes. */
   seatedIds: string[];
+  /** W3 T8 (X-SW-22): the stage's draw seed when this pass drew round 1 (an unseeded entrant in its field); else null. */
+  drawSeed: number | null;
+  /** W3 T8 (BG-SW-1): the colour board 1's upper player took when this pass coloured round 1 by lot (chess on); else
+   *  null. */
+  colourLot: "white" | "black" | null;
 };
 
 /**
@@ -1454,6 +1460,8 @@ async function swissGen(
       defaultPairing: null,
       round: null,
       seatedIds: [],
+      drawSeed: null,
+      colourLot: null,
     };
   }
 
@@ -1470,6 +1478,8 @@ async function swissGen(
       defaultPairing: null,
       round: null,
       seatedIds: [],
+      drawSeed: null,
+      colourLot: null,
     };
   }
 
@@ -1548,17 +1558,54 @@ async function swissGen(
       cascadeRank.set(row.entrantId, row.rank ?? i + 1);
     }
   }
+  // W3 T8 (X-SW-22; SW-L6, REC RB3-16): round 1 ranks an unseeded entrant by the stage's seeded random draw, not by
+  // registration order (the active select's `created_at, id`, an accident of who signed up when). Seeded entrants keep
+  // their seed order ahead of it. The seed is the stage's own id, so every Pair of round 1 — Unpair then Pair, an Undo
+  // then Redo through the step path — draws the same order, and it rides on the ledger row (`draw_seed`). A field with
+  // nobody unseeded is not drawn. Later rounds keep the field's own order (the brief scopes the draw to round 1).
+  const drawSeed = target === 1 && field.some((e) => e.seed === null) ? swissDrawSeed(stageId) : null;
+  let ranked = field;
+  if (drawSeed !== null) {
+    const byId = new Map(field.map((e) => [e.id, e]));
+    ranked = swissRoundOneOrder(drawSeed, field).map((id) => byId.get(id)!);
+  }
   const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
-  const standings: SwissStanding[] = field.map((e, i) => ({
+  const standings: SwissStanding[] = ranked.map((e, i) => ({
     entrantId: e.id,
     score: score.get(e.id) ?? 0,
     rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
   }));
-  const round = pairRound(
+  const chess = cfg.chess === true;
+  const paired = pairRound(
     standings,
     { played, colours, byes },
-    { chess: cfg.chess === true, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
+    { chess, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
   );
+  // W3 T8 (BG-SW-1; SW-H3, REC RB3-10): with chess colours on, round 1's colours are by lot (FIDE C.04.3 A3 5.1): board
+  // 1's upper player takes the lot's colour and the boards alternate. Swapped HERE, before the seats are written, so the
+  // stored fixtures carry it (home = White) and round 2's colour history reads it. The read stays `cfg.chess === true`:
+  // the boardgame default is stamped at creation only, so a stage stored before it keeps today's colours (ruling m5).
+  // A round 1 always holds a board: generateStageFixturesTx refuses a field under two (STAGE_NOT_READY) before this runs.
+  const colourLot = target === 1 && chess ? swissColourLot(swissDrawSeed(stageId)) : null;
+  if (colourLot !== null) {
+    // The lot's premise: the engine hands round 1 over with the upper player at home (scheduling/swiss.ts: neutral
+    // colours put the upper board on White). If it ever does not, the lot would colour the wrong player — refuse, by
+    // name, before anything is written.
+    const place = new Map(
+      [...standings]
+        .sort((a, b) => b.score - a.score || a.rank - b.rank || (a.entrantId < b.entrantId ? -1 : 1))
+        .map((s, i) => [s.entrantId, i]),
+    );
+    const lowerHome = paired.pairings.findIndex((p) => place.get(p.home)! > place.get(p.away)!);
+    if (lowerHome !== -1) {
+      throw new EngineError(
+        "CONFIG_INVALID",
+        `swiss round 1: board ${lowerHome + 1} came back with the lower-ranked player at home, so the colour lot cannot be applied`,
+        { stageId, board: lowerHome + 1 },
+      );
+    }
+  }
+  const round = colourLot === null ? paired : { ...paired, pairings: applyRoundOneColourLot(paired.pairings, colourLot) };
 
   // The shells were minted for the field as it was; a withdrawal (or, before
   // Start, an enrolment or a deletion) since then has resized it. Bring the
@@ -1686,7 +1733,7 @@ async function swissGen(
     seatedCount++;
   }
 
-  return { gen: [], seatedCount, reshaped, pairing, defaultPairing, round: target, seatedIds };
+  return { gen: [], seatedCount, reshaped, pairing, defaultPairing, round: target, seatedIds, drawSeed, colourLot };
 }
 
 /**
@@ -3014,6 +3061,10 @@ export async function generateStageFixturesTx(
             pairing: swiss.pairing,
             override: opts.pairing !== undefined && opts.pairing !== swiss.defaultPairing,
             seated_fixture_ids: swiss.seatedIds,
+            // W3 T8: round 1's draw seed (X-SW-22) and colour lot (BG-SW-1), each only when this pass used one, so the
+            // round can be replayed from the ledger.
+            ...(swiss.drawSeed !== null ? { draw_seed: swiss.drawSeed } : {}),
+            ...(swiss.colourLot !== null ? { colour_lot: swiss.colourLot } : {}),
           }
         : undefined;
   } else if (stage.kind === "americano") {

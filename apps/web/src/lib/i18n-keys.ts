@@ -6461,6 +6461,7 @@ export type DictionaryKey =
   | "schedule.pairNext"
   | "schedule.pairing.adjacent"
   | "schedule.pairing.default"
+  | "schedule.pairing.drawnAtRandom"
   | "schedule.pairing.error.roundOneOnly"
   | "schedule.pairing.fold"
   | "schedule.pairing.groupLabel"

@@ -195,6 +195,34 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
     expect(swissStage!.config.rounds).toBe(11);
   });
 
+  it("BG-SW-1 the template door stores chess: true on a boardgame Swiss (swiss11), and nothing on a tennis Swiss", async () => {
+    // W3 T8 (SW-H3, RB3-10): chess colours are on by default for a NEW boardgame Swiss, at every door that creates a
+    // stage — the template door included, which inserts its own stages (not through createStages). The catalog's
+    // swiss11 states no `chess`, so the stored `true` is the create-time default's.
+    await seedTemplateSportCatalog();
+    const { auth } = await seedOrg("pro");
+    expect(getTemplate("swiss11")!.divisions[0]!.sportKey, "premise: swiss11 is a boardgame Swiss").toBe("boardgame");
+    expect(getTemplate("swiss11")!.divisions[0]!.stages[0]!.config, "premise: the catalog states no chess").not.toHaveProperty("chess");
+    const swiss = await createFromTemplate(auth, {
+      template_key: "swiss11",
+      name: `swiss11 chess ${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+      visibility: "private",
+    });
+    const [chessStage] = await sql<{ config: Record<string, unknown> }[]>`
+      select config from stages where id = ${swiss.divisions[0]!.stages[0]!.id}`;
+    expect(chessStage!.config.chess, "a boardgame Swiss from the template is a chess Swiss").toBe(true);
+
+    // The negative pair: a Swiss on a sport that is not chess keeps colours off (no key at all).
+    const tennis = await instantiateTemplate(auth, SLAM_STAGE_TEMPLATE({ kind: "swiss", config: { rounds: 3 } }), {
+      name: `tennis swiss ${randomUUID().slice(0, 6)}`,
+      ends_on: "2030-12-31",
+    });
+    const [plainStage] = await sql<{ config: Record<string, unknown> }[]>`
+      select config from stages where id = ${tennis.divisions[0]!.stages[0]!.id}`;
+    expect(plainStage!.config, "a tennis Swiss is not a chess Swiss").not.toHaveProperty("chess");
+  });
+
   it("a stage's PointsRule is written into stages.config.points verbatim", async () => {
     await seedTemplateSportCatalog();
     const { auth } = await seedOrg("pro");

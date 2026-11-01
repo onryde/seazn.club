@@ -10,6 +10,8 @@
 //   R2  fieldSize is the field swissGen pairs (registered/confirmed, and the
 //       qualifier intersection on a stage carrying config.qualified).
 //   R3  no menu when no round is waiting to be paired.
+//   X-SW-22 (W3 T8) an unseeded round 1 is the stage's seeded random draw, so the
+//       round-1 menu says so — only when the field it pairs holds an unseeded entrant.
 import { describe, expect, it } from "vitest";
 import en from "@/dictionaries/en/ui.json";
 import { msgFor } from "@/lib/messages-i18n";
@@ -19,7 +21,9 @@ import { roundOnePairs, SWISS_PAIRINGS } from "@/lib/swiss-pairing";
 import { swissActiveFieldSize } from "@/lib/swiss-legend";
 import { planSwissShells } from "@/lib/swiss-shell";
 import {
+  swissFieldDrawn,
   swissFieldSeedsNumbered,
+  swissPairingDrawNote,
   swissPairingForKey,
   swissPairingHint,
   swissPairingMenuFor,
@@ -114,6 +118,38 @@ describe("swissFieldSeedsNumbered — may the hint print seed NUMBERS? (R1)", ()
   });
 });
 
+describe("swissFieldDrawn — does round 1 draw an unseeded entrant? (X-SW-22)", () => {
+  // Empty case FIRST: nothing known, or nothing to pair, draws nobody.
+  it("an unknown roster or unknown seeds, an empty field, or a field too small to pair ⇒ no draw", () => {
+    expect(swissFieldDrawn({}, undefined, seedsOf([["e1", null], ["e2", null]]))).toBe(false);
+    expect(swissFieldDrawn({}, ids(2), undefined)).toBe(false);
+    expect(swissFieldDrawn({}, [], {})).toBe(false);
+    // The Pair refuses a field under two (STAGE_NOT_READY): there is no round 1 to draw.
+    expect(swissFieldDrawn({}, ids(1), seedsOf([["e1", null]]))).toBe(false);
+  });
+
+  it("a wholly seeded field ⇒ no draw (seed order stands)", () => {
+    expect(swissFieldDrawn({}, ids(6), seeded(6))).toBe(false);
+  });
+
+  it.each([
+    ["one unseeded entrant", seedsOf([["e1", 1], ["e2", 2], ["e3", null], ["e4", 4]])],
+    ["nobody seeded", seedsOf([["e1", null], ["e2", null], ["e3", null], ["e4", null]])],
+    ["a seed the roster map does not carry (read as unseeded, as swissFieldSeedsNumbered does)", seedsOf([["e1", 1], ["e2", 2], ["e3", 3]])],
+  ])("%s ⇒ drawn", (_label, seeds) => {
+    expect(swissFieldDrawn({}, ids(4), seeds)).toBe(true);
+  });
+
+  it("a departed unseeded entrant does not count — only the active field is paired", () => {
+    expect(swissFieldDrawn({}, ["e1", "e2", "e4"], seedsOf([["e1", 1], ["e2", 2], ["e3", null], ["e4", 4]]))).toBe(false);
+  });
+
+  it("a stage drawing from config.qualified ranks by qualification order: never drawn, seeds or none", () => {
+    const config = { qualified: ["e1", "e2", "e3", "e4"] };
+    expect(swissFieldDrawn(config, ids(4), seedsOf([["e1", null], ["e2", null], ["e3", null], ["e4", null]]))).toBe(false);
+  });
+});
+
 describe("swissPairingMenuFor — when the menu exists, and what it carries", () => {
   const base = {
     kind: "swiss",
@@ -150,7 +186,17 @@ describe("swissPairingMenuFor — when the menu exists, and what it carries", ()
       stored: "rank_adjacent",
       fieldSize: 10,
       seedsNumbered: true,
+      unseededDrawn: false,
     });
+  });
+
+  it("X-SW-22 round 1 over a field with an unseeded entrant ⇒ the menu carries the draw; round 2 never does", () => {
+    const seeds = { ...seeded(10), e7: null };
+    const r1 = swissPairingMenuFor({ ...base, entrantSeeds: seeds, fixtures: shells(3, 10) });
+    expect(r1).toMatchObject({ round: 1, choosable: true, seedsNumbered: false, unseededDrawn: true });
+    // The draw is round 1's alone (later rounds rank by score, then the field's order).
+    const r2 = swissPairingMenuFor({ ...base, entrantSeeds: seeds, fixtures: seatRound(shells(3, 10), 1) });
+    expect(r2).toMatchObject({ round: 2, unseededDrawn: false });
   });
 
   it("round 2 waiting ⇒ read-only, default is the stored mode", () => {
@@ -219,6 +265,31 @@ describe("swissPairingHint — the line under each option", () => {
   });
 });
 
+describe("swissPairingDrawNote — the round-1 line when the field is drawn (X-SW-22)", () => {
+  const menu = { choosable: true, unseededDrawn: true };
+  // Empty case FIRST: no draw, no line.
+  it("no unseeded entrant ⇒ no line; a read-only later round ⇒ no line", () => {
+    expect(swissPairingDrawNote({ choosable: true, unseededDrawn: false }, t)).toBeNull();
+    expect(swissPairingDrawNote({ choosable: false, unseededDrawn: true }, t)).toBeNull();
+  });
+
+  it("a drawn round 1 ⇒ the catalog's own line", () => {
+    expect(swissPairingDrawNote(menu, t)).toBe(en["schedule.pairing.drawnAtRandom"]);
+    expect(en["schedule.pairing.drawnAtRandom"]).toBe("Unseeded players are drawn at random.");
+  });
+
+  it("every locale says it in its own words, never the English fallback", () => {
+    let checked = 0;
+    for (const locale of ["es", "fr", "nl"] as const) {
+      const line = swissPairingDrawNote(menu, tFor(locale));
+      expect(line, locale).toBeTruthy();
+      expect(line, `${locale}: not English`).not.toBe(en["schedule.pairing.drawnAtRandom"]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
 describe("swissPairingOptionLabel", () => {
   it("marks the default, and only the default", () => {
     expect(swissPairingOptionLabel("fold", "fold", t)).toBe("Top vs bottom (default)");
@@ -236,6 +307,7 @@ describe("swissPairingOverride — what Pair next sends", () => {
     stored: "rank_adjacent",
     fieldSize: 8,
     seedsNumbered: true,
+    unseededDrawn: false,
   };
 
   // Empty case FIRST.

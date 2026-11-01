@@ -2131,6 +2131,7 @@
   "schedule.pairing.laterAdjacent": "Neighbours on the table (1st v 2nd, 3rd v 4th…)",
   "schedule.pairing.laterFold": "Top vs bottom within each score group",
   "schedule.pairing.roundOneOnly": "Mode is chosen in round 1 only.",
+  "schedule.pairing.drawnAtRandom": "Unseeded players are drawn at random.",
   "schedule.pairing.error.roundOneOnly": "Pairing mode can only be chosen for round 1.",
   "schedule.generate": "Generate fixtures",
   "schedule.complete": "Complete stage",

@@ -2131,6 +2131,7 @@
   "schedule.pairing.laterAdjacent": "Buren in de stand (1e t 2e, 3e t 4e…)",
   "schedule.pairing.laterFold": "Boven tegen onder binnen elke puntengroep",
   "schedule.pairing.roundOneOnly": "De modus kies je alleen in ronde 1.",
+  "schedule.pairing.drawnAtRandom": "Spelers zonder plaatsing worden willekeurig geloot.",
   "schedule.pairing.error.roundOneOnly": "De koppelingsmodus kies je alleen in ronde 1.",
   "schedule.generate": "Wedstrijden genereren",
   "schedule.complete": "Fase afronden",
