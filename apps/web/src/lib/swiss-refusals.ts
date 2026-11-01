@@ -74,9 +74,11 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     message: "The last round has started, so there is no round left to join. Add a round first.",
     key: "swiss.refusal.SWISS_NO_ROUND_LEFT",
   },
-  // W3 T9/T12 (ruling 250): the Swiss is finished or its knockout has started.
+  // W3 T9/T12 (ruling 250): the Swiss is finished or its knockout has started. 422 by the rule above (batch-1 review):
+  // a finished Swiss stays finished, so the request can never succeed as sent — the addFixture "stage complete"
+  // precedent is the same 422.
   SWISS_OVER: {
-    status: 409,
+    status: 422,
     message: "This Swiss is over.",
     key: "swiss.refusal.SWISS_OVER",
   },
@@ -92,9 +94,10 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     message: "A match has started, so the number of rounds is fixed. Finish the Swiss now or add a round.",
     key: "swiss.refusal.SWISS_ROUNDS_LOCKED",
   },
-  // W3 T12 (RB3-5): a round count below a round already paired.
+  // W3 T12 (RB3-5): a round count below a round already paired. 409 by the rule above (batch-1 review): a state of the
+  // stage the organiser resolves another way — Unpair the paired round, then the lower count goes through.
   SWISS_ROUNDS_BELOW_SEATED: {
-    status: 422,
+    status: 409,
     message: "Rounds that are already paired can't be removed.",
     key: "swiss.refusal.SWISS_ROUNDS_BELOW_SEATED",
   },

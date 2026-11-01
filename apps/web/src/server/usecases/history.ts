@@ -35,11 +35,14 @@ import { cancelBoardInvites } from "./external-play/cancel-invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
 import {
+  afterGenerateCommit,
   clearSwissFixtureSeats,
   generateStageFixtures,
+  generateStageFixturesTx,
   lockSwissBoardAppends,
   refoldStageTable,
   wireCrossFeeds,
+  type GenerateWrite,
 } from "./stages";
 import { swissRefusal } from "./swiss-refusal";
 import { DEPARTED_STATUSES } from "./entrants";
@@ -131,6 +134,16 @@ export function invertedStepSeq(direction: "undo" | "redo", payload: Record<stri
 
 /** The rows a Pair next seated (`seated_fixture_ids`, stages.ts `generateStageFixturesTx`): the shells it UPDATED,
  *  which `fixture_ids` — the Undo DELETE list — never names. Empty for every other generation. */
+/** The Pair-next row whose seats a `fixtures_cleared` step takes away. An Undo clears the row it inverts; a Redo
+ *  re-does an Undo, so it clears the row THAT Undo had inverted (`__undo_of`, which a Redo copy keeps). Batch-1 I1: once
+ *  Undo can walk back through a Pair's own Undo, Redo can walk forward over it again, and that step clears seats too. */
+function pairRowClearedBy(ledger: readonly LedgerEvent[], direction: "undo" | "redo", targetSeq: number): LedgerEvent | undefined {
+  const target = ledger.find((e) => e.seq === targetSeq);
+  if (direction === "undo") return target;
+  const of = target?.payload.__undo_of;
+  return typeof of === "number" ? ledger.find((e) => e.seq === of) : undefined;
+}
+
 function pairNextSeatedIds(e: LedgerEvent | undefined): string[] {
   if (e?.type !== "fixtures_generated") return [];
   const ids = e.payload.seated_fixture_ids;
@@ -686,6 +699,10 @@ interface StepWrite {
   scoredFixtureRemoved: boolean;
   /** W3 T5: the stages an Undo of Pair next put back onto their shells, refolded after the commit. */
   unpairedStageIds: string[];
+  /** Batch-1 I1: a Swiss Pair this step re-applied inside its own transaction, for the generate's post-commit work. */
+  repaired?: { stageId: string; write: GenerateWrite };
+  /** Any other regeneration this step asks for (a league's, a Swiss shells pass): run after the commit, as before. */
+  regen?: string;
 }
 
 async function stepWrite(
@@ -758,14 +775,16 @@ async function stepWrite(
     if (barrier !== null) throw swissRefusal(barrier);
     // Undo of Pair next (SW-M2 / #835, RB3-22). A Pair seats a Swiss round by UPDATING shells that already exist, so
     // its `fixtures_generated` names no `fixture_ids` and the engine's inverse deletes nothing: the seats are this
-    // step's to clear, read from the inverted row itself (`seated_fixture_ids`). The round goes back onto its shells
-    // exactly as Unpair puts it (`clearSwissFixtureSeats`: seats, outcome, the bye's frozen cfg; never a slot) — unless
-    // a row of it holds a result, when the whole Undo refuses by name (the bye is no result: `systemByeSql`). A Redo
-    // re-runs the generator instead (`regenerate_stage_id` below), so it re-pairs AND re-freezes the bye through
+    // step's to clear, read from the Pair row the step takes away (`seated_fixture_ids`; `pairRowClearedBy`: the row an
+    // Undo inverts, or the row a Redo-of-an-Undo had inverted). The round goes back onto its shells exactly as Unpair
+    // puts it (`clearSwissFixtureSeats`: seats, outcome, the bye's frozen cfg; never a slot) — unless a row of it holds
+    // a result, when the whole step refuses by name (the bye is no result: `systemByeSql`). A step that puts a Pair BACK
+    // re-pairs in this transaction instead (batch-1 I1, below), so it re-pairs AND re-freezes the bye through
     // `swissGen`'s own seat, under the division lock, with the cfg that stands then.
     const unseated: string[] = [];
     const unpairedStageIds: string[] = [];
-    const seatedIds = direction === "undo" ? pairNextSeatedIds(ledger.find((e) => e.seq === targetSeq)) : [];
+    const seatedIds =
+      result.event.type === "fixtures_cleared" ? pairNextSeatedIds(pairRowClearedBy(ledger, direction, targetSeq)) : [];
     if (seatedIds.length > 0) {
       // Review m1: every seated board's append lock (`fixture:`), sorted, after this step's `division:` lock and
       // before the read below — a scorer's first event is either seen by it or waits and finds the seats gone.
@@ -824,16 +843,36 @@ async function stepWrite(
           : ledger.findLast((e) => DELETE_SIDE_EVENTS.has(e.type) && snapshotIdKey(e.payload.fixtures) === rows);
       if (newest !== undefined) result.event.payload.fixtures = newest.payload.fixtures;
     }
+    // Batch-1 I1. A Swiss Pair this step re-applies — a Redo of it, or an Undo walking back through its own Undo (the
+    // engine's inverse of a seat clear names no rows, `fixture_ids: []`) — is re-paired HERE, in this transaction, and
+    // recorded on THIS step's row: `ledger: "step"` appends no fresh `fixtures_generated` and leaves the watermark to
+    // the engine. As a fresh edit it nulled the watermark to the head, so the next Undos cleared the seats, did nothing,
+    // then walked back through the Undo and re-paired — round and round, never past the Pair, and a Restore across it
+    // ran 500 steps into "did not converge". The seats it re-pairs are stamped on the row (`seated_fixture_ids`), so an
+    // Undo of this row clears them: the inverse the engine hands an Undo-of-an-Undo carries none of its own. Any other
+    // regeneration (a league's, a Swiss shells pass) still runs after the commit, as before.
+    const regenStageId =
+      result.event.type === "fixtures_generated" && result.event.payload.fixtures === undefined
+        ? ((result.event.payload.stage_id as string | undefined) ?? undefined)
+        : undefined;
+    let repaired: StepWrite["repaired"];
+    const namesNoRows = ((result.event.payload.fixture_ids as unknown[] | undefined) ?? []).length === 0;
+    if (regenStageId !== undefined && namesNoRows) {
+      const [stage] = await tx<{ kind: string }[]>`select kind from stages where id = ${regenStageId}`;
+      if (stage?.kind === "swiss") {
+        const write = await generateStageFixturesTx(tx, auth, regenStageId, {}, "step");
+        result.event.payload = { ...result.event.payload, seated_fixture_ids: [], ...write.ledgerPayload };
+        repaired = { stageId: regenStageId, write };
+      }
+    }
     const effects = { scoredFixtureRemoved: false };
     const fixtureIds = await execute(tx, divisionId, result.event, effects);
     fixtureIds.push(...unseated);
+    if (repaired !== undefined) fixtureIds.push(...pairNextSeatedIds(result.event as LedgerEvent));
     const seq = await appendEvent(tx, divisionId, result.event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = ${result.newWatermark}
              where id = ${divisionId}`;
-    const regen =
-      result.event.type === "fixtures_generated" && result.event.payload.fixtures === undefined
-        ? ((result.event.payload.stage_id as string) ?? undefined)
-        : undefined;
+    const regen = repaired === undefined ? regenStageId : undefined;
     // A fixtures_generated with snapshots re-inserts directly — the undo of
     // an undone generation (Undo past a later edit, or a save-point restore).
     // It never routes through execute(); `restoreFixtures` is shared with
@@ -847,19 +886,24 @@ async function stepWrite(
         watermark: result.newWatermark,
         seq,
         applied: { type: result.event.type },
-        ...(regen !== undefined ? { regenerate_stage_id: regen } : {}),
+        ...(regenStageId !== undefined ? { regenerate_stage_id: regenStageId } : {}),
       },
       competitionId: meta.competition_id,
       fixtureIds,
       scoredFixtureRemoved: effects.scoredFixtureRemoved,
       unpairedStageIds,
+      ...(repaired !== undefined ? { repaired } : {}),
+      ...(regen !== undefined ? { regen } : {}),
     };
   });
-  // generator re-run outside the history tx (it takes its own division lock).
-  // It publishes its own write; this step's transaction changed no fixture in
-  // that case (`fixtures_generated` has no executor statement).
-  if (write.out.regenerate_stage_id !== undefined) {
-    await generateStageFixtures(auth, write.out.regenerate_stage_id);
+  // A Swiss Pair re-applied in the step's transaction gets the generate's own post-commit work (table refold,
+  // revalidation); the step's publish names its seats. Any other regeneration still re-runs the generator after the
+  // commit (it takes its own division lock and publishes its own write; this step's transaction changed no fixture
+  // then — `fixtures_generated` has no executor statement).
+  if (write.repaired !== undefined) {
+    await afterGenerateCommit(auth, write.repaired.stageId, write.repaired.write);
+  } else if (write.regen !== undefined) {
+    await generateStageFixtures(auth, write.regen);
   }
   // A bye award (and its removal) never goes through appendEvent, so the stored table would keep the cleared bye's
   // points until the next scored match. Refold from the cleared rows, as Unpair does — `"drop"`: a stage left seating

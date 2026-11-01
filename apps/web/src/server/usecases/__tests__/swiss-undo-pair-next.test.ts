@@ -51,6 +51,7 @@ import {
   undoDivision,
 } from "../history";
 import { moveFixture, startDivision } from "../schedule";
+import { shiftDivisionSchedule } from "../schedule-plus";
 import { scoreEvent } from "../scoring";
 import { putStageRules } from "../stage-rules";
 import { createStages, generateStageFixtures, unpairSwissRound } from "../stages";
@@ -593,6 +594,138 @@ for (const s of SPORTS) {
     }, 120_000);
   });
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Batch-1 review I1: a Pair brought back by a history step (Redo, or an Undo walking back through the Pair's own Undo)
+// is that step's work, not a fresh edit, so Undo keeps walking back past it. The expected walk is the engine's linear
+// timeline (`@seazn/engine/history` `undo`/`redo`, owner ruling 2026-10-11): Undo inverts one ledger step at a time,
+// inverses and Redo copies included, and Redo puts the watermark back on the ORIGINAL row. The league control below is
+// the same walk on a stage whose generation restores from its snapshot, which never had the defect.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Round 1 after a step: its shells deleted, back on its shells, or seated. A partly seated round is neither, so it is
+ *  refused here rather than read as one of them. */
+async function round1State(rig: Rig): Promise<"gone" | "cleared" | "seated"> {
+  const r1 = roundOf(await rowsOf(rig.stageId), 1);
+  if (r1.length === 0) return "gone";
+  if (r1.every((f) => f.home_entrant_id === null && f.away_entrant_id === null)) return "cleared";
+  expectRoundSeated(r1, "round 1 is wholly seated or wholly cleared");
+  return "seated";
+}
+
+async function undoSteps(rig: Rig, n: number): Promise<string[]> {
+  const states: string[] = [];
+  for (let i = 0; i < n; i++) {
+    await undoDivision(rig.auth, rig.divisionId);
+    states.push(await round1State(rig));
+  }
+  return states;
+}
+
+for (const s of SPORTS) {
+  describe.runIf(HAS_DB)(`W3 T5 batch-1 I1: Undo walks back past a re-applied Pair (${s.sport})`, () => {
+    it(`Undo after a Redo clears the Redo's seats, then takes the shells' Generate back; no re-pair (${s.sport})`, async () => {
+      const rig = await swissRig(s, 5, 2, false);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
+      await undoDivision(rig.auth, rig.divisionId);
+      const before = await ledgerState(rig.divisionId);
+      await redoDivision(rig.auth, rig.divisionId);
+      expect(await round1State(rig), "premise: the Redo seated round 1").toBe("seated");
+      const redone = await ledgerState(rig.divisionId);
+      expect(redone.events, "the Redo is ONE ledger row: the re-pair is its work, not a fresh edit").toBe(before.events + 1);
+      expect(redone.watermark, "and the watermark is the engine's, on the Pair (never nulled to the head)").not.toBeNull();
+      expect(await undoSteps(rig, 2)).toEqual(["cleared", "gone"]);
+    }, 120_000);
+
+    it(`Undo after a re-Pair walks the linear timeline: clear, the first Pair back, clear, the shells gone (${s.sport})`, async () => {
+      const rig = await swissRig(s, 5, 2, false);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair
+      await undoDivision(rig.auth, rig.divisionId);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair again: a fresh edit
+      // The second Undo walks back through the first Undo, so the Pair it had undone comes back — the league control's
+      // undone generation does the same — and the walk then goes on past it rather than round again.
+      expect(await undoSteps(rig, 4)).toEqual(["cleared", "seated", "cleared", "gone"]);
+    }, 120_000);
+
+    it(`a restore to a save point before the Pair converges across a Redo, in one step (${s.sport})`, async () => {
+      const rig = await swissRig(s, 5, 2, false);
+      const cp = await createCheckpoint(rig.auth, rig.divisionId, "Before pairing");
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair
+      await undoDivision(rig.auth, rig.divisionId);
+      await redoDivision(rig.auth, rig.divisionId);
+      const out = await restoreCheckpoint(rig.auth, rig.divisionId, cp.id, true);
+      expect(out.steps, "one step stands between the save point and the Redo's Pair").toBe(1);
+      expect(await round1State(rig), "the save point's state: the shells, nobody seated").toBe("cleared");
+    }, 120_000);
+
+    it(`a Pair an Undo brought back is cleared by a later Undo of that step (${s.sport})`, async () => {
+      // The brought-back Pair's row is the step's own inverse, which carries no seats from the engine; the app stamps the
+      // seats it re-paired onto it, or this later Undo would clear nothing.
+      const rig = await swissRig(s, 5, 2, false);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair
+      await undoDivision(rig.auth, rig.divisionId);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair again
+      expect(await undoSteps(rig, 2), "premise: the first Pair is back").toEqual(["cleared", "seated"]);
+      // A fresh edit on top that moves the watermark to the head: a whole-timetable shift (moveFixture leaves the
+      // watermark where it stands). One board gets a time by hand so the shift has something to move.
+      const board = roundOf(await rowsOf(rig.stageId), 1).find((f) => !isBye(f))!;
+      await sql`update fixtures set scheduled_at = ${"2030-06-21T10:00:00.000Z"} where id = ${board.id}`;
+      const shift = await shiftDivisionSchedule(rig.auth, { division_id: rig.divisionId, scope: { excludeLocked: true }, delta_minutes: 60 });
+      expect(shift.shifted, "premise: the shift moved the board").toBe(1);
+      expect((await ledgerState(rig.divisionId)).watermark, "premise: the shift put the watermark at the head").toBeNull();
+      expect(await undoSteps(rig, 2), "the shift goes, then the brought-back Pair's seats").toEqual(["seated", "cleared"]);
+    }, 120_000);
+
+    it(`Redo after the walk-back re-does the Pair's Undo, then the second Pair, and stops (${s.sport})`, async () => {
+      // The mirror of the walk above: Redo moves forward one ledger step at a time, so it first re-does the Undo of
+      // the first Pair (its seats go again), then re-applies the second Pair, then has nothing left to redo.
+      const rig = await swissRig(s, 5, 2, false);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair
+      await undoDivision(rig.auth, rig.divisionId);
+      await generateStageFixtures(rig.auth, rig.stageId); // Pair again
+      expect(await undoSteps(rig, 2), "premise: the first Pair is back").toEqual(["cleared", "seated"]);
+      const states: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        await redoDivision(rig.auth, rig.divisionId);
+        states.push(await round1State(rig));
+      }
+      expect(states).toEqual(["cleared", "seated"]);
+      // The engine's NOTHING_TO_REDO, as history.ts `toEngineError` answers it: 422 with the engine's own sentence.
+      await expect(redoDivision(rig.auth, rig.divisionId)).rejects.toMatchObject({ status: 422, message: "already at the newest edit" });
+    }, 120_000);
+  });
+}
+
+describe.runIf(HAS_DB)("W3 T5 batch-1 I1 control: a league's generation walks the same timeline from its snapshot", () => {
+  it("Generate, Undo, Generate again, then Undo x3: gone, the first generation back, gone", async () => {
+    // single-sport: the league path restores from its snapshot and never reaches the Swiss re-pair
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Undo league " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, {
+      name: "Open",
+      slug: "open-" + randomUUID().slice(0, 6),
+      sport_key: "badminton",
+      variant_key: "bwf",
+      config: {},
+    });
+    await createEntrants(auth, division.id, Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `L${i + 1}`, seed: i + 1, members: [] })));
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "RR", config: {}, progression: null });
+    const idsOf = async () => (await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id} order by id`).map((f) => f.id);
+    await generateStageFixtures(auth, stage!.id);
+    const first = await idsOf();
+    expect(first.length, "premise: the generation made fixtures").toBeGreaterThan(0);
+    await undoDivision(auth, division.id);
+    await generateStageFixtures(auth, stage!.id);
+    const second = await idsOf();
+    expect(second.length).toBe(first.length);
+    const walk: string[][] = [];
+    for (let i = 0; i < 3; i++) {
+      await undoDivision(auth, division.id);
+      walk.push(await idsOf());
+    }
+    expect(walk).toEqual([[], first, []]);
+  }, 120_000);
+});
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Review m3 (W3 T5 fix round 1): the table refold after the Undo commits is best-effort.

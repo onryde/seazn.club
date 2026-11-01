@@ -2289,6 +2289,9 @@ export interface GenerateWrite {
   competitionId: string;
   /** The stage's kind: whether it has a table to refold after the write (`REAL_TABLE_KINDS`). */
   kind: string;
+  /** Only with `ledger: "step"`: the `fixtures_generated` payload this pass did NOT append (`fixture_ids` and, for a
+   *  Swiss seating, its seat audit), for the history step that ran it to record on its own row. */
+  ledgerPayload?: Record<string, unknown>;
 }
 
 /** What a Generate press may ask for beyond "generate". */
@@ -2726,7 +2729,7 @@ async function generateStageFixturesWrite(
 /** What follows a committed generate, outside its transaction: the table refold, the public-page revalidation and the
  *  activation event. Shared by `generateStageFixturesWrite` and `rebuildStageFixtures`, which commits its own
  *  delete-and-regenerate in one transaction and then does exactly this (W3 T1, X-RB-1). */
-async function afterGenerateCommit(auth: AuthCtx, stageId: string, write: GenerateWrite): Promise<void> {
+export async function afterGenerateCommit(auth: AuthCtx, stageId: string, write: GenerateWrite): Promise<void> {
   const outcome = write.outcome;
   // W2d concern 2 (spec §5.7, anti-goal 3; owner 2026-10-27): a table stage's table exists from the generate that
   // created its fixtures — LEVEL, every rank "–", no leader — so a visitor sees the table the organiser's Standings read
@@ -2785,6 +2788,11 @@ export async function generateStageFixturesTx(
   auth: AuthCtx,
   stageId: string,
   opts: GenerateOptions,
+  /** `"record"`: this pass is an organiser's edit — it appends its own `fixtures_generated` and puts the watermark at
+   *  the head. `"step"` (batch-1 I1): a history step re-applying a Swiss Pair runs it — the step's own row records the
+   *  work (`ledgerPayload`) and the step keeps the engine's watermark. A fresh row there made every Undo after a Redo
+   *  re-pair the round three steps later, and a Restore across it never converge. */
+  ledger: "record" | "step" = "record",
 ): Promise<GenerateWrite> {
   const [stage] = await tx<StageRow[]>`
     select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
@@ -3237,7 +3245,7 @@ export async function generateStageFixturesTx(
   // Swiss seat's ids (UPDATEd shells that already existed) ride separately
   // in `seated_fixture_ids`, which Undo of Pair next reads to put exactly
   // those rows back onto their shells (W3 T5, history.ts `stepWrite`).
-  if (created > 0) {
+  if (created > 0 && ledger === "record") {
     const [{ seq: last }] = await tx<{ seq: number }[]>`
       select coalesce(max(seq), 0)::int as seq from division_events
       where division_id = ${stage.division_id}`;
@@ -3260,6 +3268,7 @@ export async function generateStageFixturesTx(
     divisionId: stage.division_id,
     competitionId: division!.competition_id,
     kind: stage.kind,
+    ...(ledger === "step" ? { ledgerPayload: { fixture_ids: createdIds, ...(swissAudit ?? {}) } } : {}),
   };
 }
 

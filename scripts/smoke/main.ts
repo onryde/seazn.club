@@ -1244,7 +1244,8 @@ export async function main() {
   // CRON_SECRET, and a server on YOUTUBE_DRIVER=fake (the smoke-e2e job's first server).
   await suite("youtubeConnect", () => youtubeConnectSuite());
 
-  // Format matrix W3 Swiss app-A: one counted check per task that owes one (T1 X-RB-1: Rebuild keeps times and courts).
+  // Format matrix W3 Swiss app-A: counted checks for the tasks that owe one (T1-T5: Rebuild keeps times and courts, the
+  // pre-Start reshape, the ad-hoc refusal, the frozen bye, Undo of Pair next); the suite's own header lists each.
   // After youtubeConnect only because the plan places every new suite after the last one: it opens no stream session, so
   // youtubeConnect's "last on purpose" still holds. Own fresh owner; keyless.
   await suite("w3SwissA", () => w3SwissASuite());
