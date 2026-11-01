@@ -48,7 +48,8 @@ import {
   SIGNAL_SPONSOR_END,
   SIGNAL_SPONSOR_START,
 } from "../src/lib/overlay-compositor";
-import { OVERLAY_MOMENT_FOLD_MS } from "../src/components/overlay/moment-timing";
+import { OVERLAY_MOMENT_FOLD_MS, OVERLAY_MOMENT_HOLD_MS } from "../src/components/overlay/moment-timing";
+import { CAROUSEL_STYLE } from "../src/components/overlay/sponsor-card";
 import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
 import { SPONSOR_STYLE_BY_SIZE } from "../src/lib/sponsor-plan";
 import { SPONSOR_TIER_WEIGHTS } from "../src/lib/sponsor-tiers";
@@ -1467,6 +1468,7 @@ test("S15 sponsors: Starting soon airs the carousel's scene line; a cricket over
       .toBeGreaterThanOrEqual(1);
     const sceneStart = sponsorLines().find((l) => l.kind === "start" && l.json.source === "scene")!;
     expect(Object.values(ids), "the carousel shows a TICKED card").toContain(sceneStart.json.cardId);
+    expect(sceneStart.json.style, "in the carousel's own style").toBe(CAROUSEL_STYLE);
     // --- Live: the scene leaves; its showing ends (cut short — it left mid-showing).
     script.serve("live");
     await expect
@@ -1499,8 +1501,14 @@ test("S15 sponsors: Starting soon airs the carousel's scene line; a cricket over
       momentId: expect.stringMatching(/^\d+:sponsor\.over_end$/), cardId: heavierId, style: look.style, source: "rotation", breakKind: "over_end", at: expect.any(String),
     });
     expect(end!.json).toEqual({ momentId: start!.json.momentId, at: expect.any(String), cutShort: false });
+    // Time on screen is the declared hold plus the fold out (the seam pins it exactly, on the test's clock). Here the
+    // page runs on real timers, so the band is bounded on both sides: the start line may commit up to one fold late,
+    // and the two timers after it may run late, by less than one ordinary moment's hold. A card held for the ordinary
+    // moment hold, or for the other size's hold, falls outside it.
     const shownMs = Date.parse(String(end!.json.at)) - Date.parse(String(start!.json.at));
-    expect(shownMs, "it held its declared hold, then folded out").toBeGreaterThanOrEqual(look.holdMs);
+    const declaredShownMs = look.holdMs + OVERLAY_MOMENT_FOLD_MS;
+    expect(shownMs, "it held its declared hold, then folded out (not less)").toBeGreaterThanOrEqual(declaredShownMs - OVERLAY_MOMENT_FOLD_MS);
+    expect(shownMs, "and not more than late timers explain").toBeLessThan(declaredShownMs + OVERLAY_MOMENT_HOLD_MS);
 
     // --- SC1's conversion, beaten in on the job token: four lines, two closed rows.
     const sceneEnd = sponsorLines().find((l) => l.kind === "end" && l.json.momentId === sceneStart.json.momentId)!;
@@ -1513,7 +1521,7 @@ test("S15 sponsors: Starting soon airs the carousel's scene line; a cricket over
     const rows = await withDb((sql) => sql<{ sponsor_id: string; source: string; break_kind: string | null; style: string; closed: boolean }[]>`
       select sponsor_id, source, break_kind, style, ended_at is not null as closed from sponsor_airings where session_id = ${c.sid} order by started_at`);
     expect(rows, "proof of play: the carousel's showing, then the break card's").toEqual([
-      { sponsor_id: sceneStart.json.cardId, source: "scene", break_kind: null, style: sceneStart.json.style, closed: true },
+      { sponsor_id: sceneStart.json.cardId, source: "scene", break_kind: null, style: CAROUSEL_STYLE, closed: true },
       { sponsor_id: heavierId, source: "rotation", break_kind: "over_end", style: look.style, closed: true },
     ]);
   } finally {

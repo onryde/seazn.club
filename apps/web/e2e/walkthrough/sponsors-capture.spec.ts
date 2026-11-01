@@ -174,14 +174,28 @@ for (const width of WIDTHS) {
       await capture(page, "hub-packages", width, packages);
     });
 
-    test("Overview › Share report, opened, with its url (S13)", async ({ page }) => {
+    test("Overview › Share report, opened, with its url (S13) — and that url opens the report for a stranger", async ({ page, browser }) => {
       await page.goto(sponsorsUrl(org.slug, "overview"));
       await page.getByTestId(`sponsor-overview-row-${titleId}`).getByTestId("sponsor-overview-share").click();
       const panel = page.getByTestId("sponsor-share");
       await expect(panel, "witness: the panel opened").toBeVisible();
       await panel.getByTestId("sponsor-share-create").click();
-      await expect(panel.getByTestId("sponsor-share-url"), "witness: the link was created and shown").toHaveValue(/\/r\/sponsor\/[A-Za-z0-9_-]{43}$/);
+      const shown = panel.getByTestId("sponsor-share-url");
+      await expect(shown, "witness: the link was created and shown").toHaveValue(/\/r\/sponsor\/[A-Za-z0-9_-]{43}$/);
       await capture(page, "share-open", width, panel);
+
+      // S13's owed item: the url the panel SHOWED, not one the test rebuilt, opens the report with no session at all.
+      const url = new URL(await shown.inputValue());
+      expect(url.origin, "the panel's url is on this site").toBe(new URL(page.url()).origin);
+      const stranger = await browser.newContext({ storageState: EMPTY_JAR, viewport: { width, height: 900 } });
+      try {
+        const viewer = await stranger.newPage();
+        expect((await viewer.goto(url.href))?.status(), "the shown url answers a stranger").toBe(200);
+        await expect(viewer.getByTestId("sponsor-report"), "and it is the sponsor's report").toBeVisible();
+        await expect(viewer.getByRole("heading", { level: 1 }), "the report of the sponsor whose row was shared").toContainText(LONG_SPONSOR);
+      } finally {
+        await stranger.close();
+      }
     });
 
     test("the public report (S14)", async ({ browser }) => {
