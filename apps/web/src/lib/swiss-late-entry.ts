@@ -75,6 +75,27 @@ export function inSwissRoundField(firstRound: number | null | undefined, target:
   return (firstRound ?? 1) <= target;
 }
 
+/** Each entrant's stored first Swiss round and the stage it belongs to (V484/V485), by entrant id. */
+export type EntrantSwissFirstRounds = Readonly<
+  Record<string, { swiss_first_round?: number | null; swiss_first_round_stage_id?: string | null } | undefined>
+>;
+
+/**
+ * The entrants of `activeEntrantIds` in round `round`'s field of stage `stageId` — the two predicates above, composed
+ * once for every desk reader (the round-1 pairing menu, T9 m8; the Swiss legend, T10). No stage id means no stamp can
+ * be read, so everyone plays from round 1, as before any late entry.
+ */
+export function swissRoundField(
+  activeEntrantIds: readonly string[],
+  round: number,
+  stageId: string | undefined,
+  entrantFirstRounds: EntrantSwissFirstRounds | undefined,
+): string[] {
+  return activeEntrantIds.filter((id) =>
+    inSwissRoundField(stageId === undefined ? null : swissFirstRoundIn(entrantFirstRounds?.[id] ?? {}, stageId), round),
+  );
+}
+
 /** A row with its seats filled: a board both sides, a bye its holder. */
 function seated(b: LateEntryBoard): boolean {
   return b.home !== null && (b.isBye || b.away !== null);

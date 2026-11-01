@@ -30,6 +30,7 @@ import {
   SWISS_LEGEND_COMPLETE_STATUSES,
   SWISS_LEGEND_MIN_FIELD,
   swissActiveFieldSize,
+  swissLegendRound,
   swissStageLegend,
   swissLegendText,
 } from "@/lib/swiss-legend";
@@ -471,5 +472,65 @@ describe("the legend's definition of 'active field'", () => {
       "registered",
       "confirmed",
     ]);
+  });
+});
+
+// W3 T10 (T9 concern, routed by the controller): a late player whose first Swiss round is still ahead is not in the
+// field of the round the legend sizes. The legend sizes the round the next Pair seats (`swissLegendRound`): that is the
+// round whose shells can be stale, which is what the line exists to show. Before the fix the whole roster counted, so a
+// round 1 waiting to be paired over 4 players read "2 matches + 1 bye per round" because of a 5th who joins from round
+// 2 — while the pairing menu beside it (same field predicate, T9 m8) offered 2 boards and no bye.
+describe("swissStageLegend — a late player counts from their first round (W3 T10)", () => {
+  const base = { kind: "swiss", status: "active", config: { rounds: 3 }, activeEntrantIds: ids(5), fixtureCount: 6 };
+  const late = { e5: { swiss_first_round: 2, swiss_first_round_stage_id: "s1" } };
+
+  it("round 1 waiting: the latecomer from round 2 is not in its field — 4 entrants, 2 matches, no bye", () => {
+    const legend = swissStageLegend({ ...base, stageId: "s1", entrantFirstRounds: late, round: 1 });
+    expect(legend).toEqual({ rounds: 3, matches: 2, bye: false, fixtures: 6 });
+  });
+
+  it("round 2 waiting: the latecomer is in — 5 entrants, 2 matches + 1 bye", () => {
+    const legend = swissStageLegend({ ...base, stageId: "s1", entrantFirstRounds: late, round: 2 });
+    expect(legend).toEqual({ rounds: 3, matches: 2, bye: true, fixtures: 6 });
+  });
+
+  it("another stage's stamp does not narrow this stage's field (V485 stage scope)", () => {
+    const legend = swissStageLegend({ ...base, stageId: "s2", entrantFirstRounds: late, round: 1 });
+    expect(legend).toEqual({ rounds: 3, matches: 2, bye: true, fixtures: 6 });
+  });
+
+  it("the field threshold reads the narrowed field: a 2-entrant roster with one latecomer has no line in round 1", () => {
+    const legend = swissStageLegend({
+      ...base,
+      activeEntrantIds: ids(2),
+      stageId: "s1",
+      entrantFirstRounds: { e2: { swiss_first_round: 2, swiss_first_round_stage_id: "s1" } },
+      round: 1,
+    });
+    expect(legend).toBeNull();
+  });
+});
+
+describe("swissLegendRound — the round whose field the legend sizes", () => {
+  const row = (round_no: number, seated: boolean) => ({
+    round_no,
+    home_entrant_id: seated ? "a" : null,
+    away_entrant_id: seated ? "b" : null,
+    outcome: null,
+    ext_key: `sw-r${round_no}-b1`,
+  });
+  const TABLE: { name: string; fixtures: ReturnType<typeof row>[]; round: number }[] = [
+    { name: "no fixtures yet (before the first Generate): round 1", fixtures: [], round: 1 },
+    { name: "round 1 waiting", fixtures: [row(1, false), row(2, false)], round: 1 },
+    { name: "round 1 seated, round 2 waiting", fixtures: [row(1, true), row(2, false), row(3, false)], round: 2 },
+    { name: "every round seated: the latest", fixtures: [row(1, true), row(2, true), row(3, true)], round: 3 },
+  ];
+  it("is the round the next Pair seats, else the latest seated round", () => {
+    let checked = 0;
+    for (const t of TABLE) {
+      expect(swissLegendRound(t.fixtures), t.name).toBe(t.round);
+      checked += 1;
+    }
+    expect(checked).toBe(TABLE.length);
   });
 });

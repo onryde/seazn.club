@@ -22,7 +22,8 @@
 //
 // VOCABULARY. `board` is chess heritage and internal code vocabulary; it never
 // reaches a screen. On screen it is "matches".
-import { swissBoardsForField } from "@/lib/swiss-shell";
+import { nextUnseatedSwissRound, swissBoardsForField } from "@/lib/swiss-shell";
+import { swissRoundField, type EntrantSwissFirstRounds } from "@/lib/swiss-late-entry";
 
 export type SwissLegend = {
   /** The round budget the organiser DECLARED (`stage.config.rounds`). Never
@@ -151,8 +152,19 @@ export function swissStageLegend(args: {
   config: Record<string, unknown>;
   activeEntrantIds: readonly string[] | undefined;
   fixtureCount: number;
+  /** W3 T10 (the T9 concern): the round whose field the line sizes (`swissLegendRound`), this stage, and each
+   *  entrant's stored first Swiss round. A late player whose first round is after `round` is not in its field —
+   *  the same field the pairing menu reads (`swissRoundField`). Absent `round`: the whole active field, as before
+   *  any late entry. */
+  round?: number;
+  stageId?: string;
+  entrantFirstRounds?: EntrantSwissFirstRounds;
 }): SwissLegend | null {
-  const { kind, status, config, activeEntrantIds, fixtureCount } = args;
+  const { kind, status, config, fixtureCount } = args;
+  const activeEntrantIds =
+    args.activeEntrantIds !== undefined && args.round !== undefined
+      ? swissRoundField(args.activeEntrantIds, args.round, args.stageId, args.entrantFirstRounds)
+      : args.activeEntrantIds;
   if (kind !== "swiss") return null;
   if (activeEntrantIds === undefined) return null;
   const rounds = config.rounds;
@@ -167,6 +179,18 @@ export function swissStageLegend(args: {
   }
   const { boards, bye } = swissBoardsForField(field);
   return { rounds, matches: boards, bye, fixtures: fixtureCount };
+}
+
+/**
+ * W3 T10 — the round whose field the legend sizes: the round the next Pair seats, else (every round seated) the latest
+ * one, else round 1 (no fixtures yet). The line is there to show shells minted for an old field size, and the shells
+ * that can still be wrong are the next Pair's. A latecomer whose first round is still ahead counts once that round is
+ * the one sized, so the "per round" figure never includes a player who does not play the round being paired.
+ */
+export function swissLegendRound(fixtures: Parameters<typeof nextUnseatedSwissRound>[0]): number {
+  const next = nextUnseatedSwissRound(fixtures);
+  if (next !== null) return next;
+  return fixtures.length === 0 ? 1 : Math.max(...fixtures.map((f) => f.round_no));
 }
 
 /**

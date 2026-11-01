@@ -19,7 +19,7 @@ import {
 } from "@/lib/swiss-pairing";
 import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { swissActiveFieldSize } from "@/lib/swiss-legend";
-import { inSwissRoundField, swissFirstRoundIn } from "@/lib/swiss-late-entry";
+import { swissRoundField, type EntrantSwissFirstRounds } from "@/lib/swiss-late-entry";
 
 /** What the split button's menu needs; `null` when there is no menu. */
 export type SwissPairingMenu = {
@@ -64,10 +64,9 @@ export type SwissPairingT = (key: SwissPairingMessageKey, vars?: Record<string, 
 export const SWISS_PAIRING_HINT_PAIRS = 3;
 
 type EntrantSeeds = Readonly<Record<string, number | null | undefined>>;
-/** W3 T9 (T8 review m8): each entrant's stored first Swiss round and the stage it belongs to (V484/V485), by id. */
-export type EntrantSwissFirstRounds = Readonly<
-  Record<string, { swiss_first_round?: number | null; swiss_first_round_stage_id?: string | null } | undefined>
->;
+/** W3 T9 (T8 review m8): each entrant's stored first Swiss round and the stage it belongs to (V484/V485), by id. The
+ *  type lives beside the field helper both desk readers use (`swissRoundField`, lib/swiss-late-entry.ts). */
+export type { EntrantSwissFirstRounds };
 
 /**
  * R1 — may the hint print seed numbers? `roundOnePairs` returns seed
@@ -147,9 +146,10 @@ export function swissPairingMenuFor(args: {
   const round = nextUnseatedSwissRound(args.fixtures);
   if (round === null) return null;
   const stored = storedSwissPairing(args.config);
-  const firstRoundOf = (id: string): number | null =>
-    args.stageId === undefined ? null : swissFirstRoundIn(args.entrantFirstRounds?.[id] ?? {}, args.stageId);
-  const field = args.activeEntrantIds?.filter((id) => inSwissRoundField(firstRoundOf(id), round));
+  const field =
+    args.activeEntrantIds === undefined
+      ? undefined
+      : swissRoundField(args.activeEntrantIds, round, args.stageId, args.entrantFirstRounds);
   const unseededDrawn = round === 1 && swissFieldDrawn(args.config, field, args.entrantSeeds);
   return {
     round,

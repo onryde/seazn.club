@@ -89,7 +89,7 @@ import {
 // under a swiss stage's title. Pure derivation + copy assembly live there; see
 // that module's header for why the match count is taken from the FIELD and
 // never from a count of the fixture rows.
-import { swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
+import { swissLegendRound, swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
 // `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
@@ -1084,12 +1084,18 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // legend withholds the per-round clause, because a post-event
         // disqualification shrinks the field and would otherwise make a stage
         // that played perfectly correctly read as mis-sized.
+        //
+        // W3 T10 (T9 concern): sized for the round the next Pair seats, over the same round field the pairing menu
+        // above reads — a late player whose first round is still ahead is not counted in it.
         const swissLegend = swissStageLegend({
           kind: stage.kind,
           status: stage.status,
           config: stage.config,
           activeEntrantIds,
           fixtureCount: stageFixtures.length,
+          round: swissLegendRound(swissShellFixtures),
+          stageId: stage.id,
+          entrantFirstRounds: entrantSwissFirstRounds,
         });
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
