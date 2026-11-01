@@ -22,7 +22,7 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./forma
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
 import { swissRefusal } from "./swiss-refusal";
-import { judgeSwissRounds, type SwissRoundsJudgement } from "@/lib/swiss-rounds";
+import { judgeSwissRounds, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
 import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
@@ -1278,9 +1278,10 @@ export type SwissGenResult = {
   /** W3 T8 (BG-SW-1): the colour board 1's upper player took when this pass coloured round 1 by lot (chess on); else
    *  null. */
   colourLot: "white" | "black" | null;
-  /** W3 T11 (X-SW-16): the round count judged against the field this pass minted or paired for (`judgeSwissRoundsAt`) —
-   *  never a refusal (that throws); null when the pass had nothing to pair. A warn rides on the Generate's answer. */
-  swissRounds: SwissRoundsJudgement | null;
+  /** W3 T11 (X-SW-16): the round count judged against the field this pass minted or paired for (`judgeSwissRoundsAt` at
+   *  the mint, `judgeSwissPairAt` at a Pair) — never a refusal (that throws); null when the pass had nothing to pair. A
+   *  warn, or a running Swiss's shrunk-field warning, rides on the Generate's answer. */
+  swissRounds: SwissRoundsJudgement | SwissRoundsShrunk | null;
 };
 
 /**
@@ -1300,6 +1301,38 @@ export function judgeSwissRoundsAt(rounds: number, fieldSize: number, canFinish:
     );
   }
   return judgement;
+}
+
+/**
+ * W3 T11 fix round 1 — a Pair's judgement (controller ruling on review m2: never block a pairable round). Within the hard
+ * maximum it is the plain judgement (ok or warn). Above it:
+ * - before Start, the count as sent can never be played — Start refuses it too — and the organiser can still change it:
+ *   refused as sent (422, `canFinish: false`, `judgeSwissRoundsAt`);
+ * - in a running Swiss (withdrawals shrank the field), only a round this field cannot reach is refused: `target >
+ *   hardMax` (409, `canFinish: true` — `target` is then past round 1, whose decision `swissGen` checked). A round still
+ *   within the shrunk field's hard maximum is paired, and the answer carries the `shrunk` warning: the Swiss can reach at
+ *   most `hardMax` rounds; finish after that one, or now. Blocking it would strand a live event over rounds it has not
+ *   reached; the engine's own no-legal-pairing outcome (SW-H1) stays the backstop.
+ */
+export function judgeSwissPairAt(
+  rounds: number,
+  fieldSize: number,
+  target: number,
+  started: boolean,
+): SwissRoundsJudgement | SwissRoundsShrunk {
+  const judgement = judgeSwissRounds(rounds, fieldSize);
+  if (judgement.verdict !== "refuse") return judgement;
+  if (!started) return judgeSwissRoundsAt(rounds, fieldSize, false);
+  if (target > judgement.hardMax) {
+    const canFinish = target > 1;
+    throw swissRefusal(
+      "SWISS_ROUNDS_ABOVE_MAX",
+      { rounds, field: fieldSize, hardMax: judgement.hardMax, canFinish },
+      { resolvable: canFinish },
+    );
+  }
+  const { recommended, safeMax, hardMax } = judgement;
+  return { verdict: "shrunk", rounds, field: fieldSize, recommended, safeMax, hardMax, canFinish: true };
 }
 
 /**
@@ -1651,8 +1684,9 @@ export async function swissGen(
   // and delete its unseated shells.
   refuseSwissFieldUnderTwo(stageId, field.length);
   // W3 T11 (X-SW-16): this round's field against the round count, before any write — withdrawals since the last Generate
-  // can have shrunk it under the rounds. Past round 1 the previous round is decided (checked above), so Finish resolves it.
-  const swissRounds = judgeSwissRoundsAt(rounds, field.length, target > 1);
+  // can have shrunk it under the rounds. Fix round 1 (ruling on review m2): a running Swiss refuses only a round its
+  // field cannot reach; see `judgeSwissPairAt`.
+  const swissRounds = judgeSwissPairAt(rounds, field.length, target, await divisionHasStarted(tx, divisionId));
   // The division's pinned module: the bye's frozen cfg below, and what "played" means for a forfeit (ruling 118).
   const [division] = await tx<{ config: unknown; sport_key: string; module_version: string }[]>`
     select config, sport_key, module_version from divisions where id = ${divisionId}`;
@@ -2528,9 +2562,10 @@ export interface GenerateOutcome {
    *  zeroes. See `SwissReshape`. */
   reshaped?: SwissReshape;
   /** W3 T11 (X-SW-16): Swiss only, and ABSENT unless the round count is above the safe maximum of the field this pass
-   *  minted or paired for (`verdict: "warn"`, rulebook §3.2 "allowed, with a plain warning"). A count above the hard
-   *  maximum never reaches here — it is refused (SWISS_ROUNDS_ABOVE_MAX). */
-  swiss_rounds?: SwissRoundsJudgement;
+   *  minted or paired for (`verdict: "warn"`, rulebook §3.2 "allowed, with a plain warning"), or a running Swiss's field
+   *  shrank under its count while this round still pairs (`verdict: "shrunk"`, fix round 1). A count above the hard
+   *  maximum is otherwise refused (SWISS_ROUNDS_ABOVE_MAX). */
+  swiss_rounds?: SwissRoundsNotice;
 }
 
 /**
@@ -3179,7 +3214,7 @@ export async function generateStageFixturesTx(
 
   let swissSeatedCount = 0;
   let swissReshaped: SwissReshape | undefined;
-  let swissRoundsWarn: SwissRoundsJudgement | undefined;
+  let swissRoundsWarn: SwissRoundsNotice | undefined;
   // Rides on this pass's `fixtures_generated` row when it seated a round.
   let swissAudit: Record<string, unknown> | undefined;
   let gen: GenFixture[];
@@ -3188,7 +3223,7 @@ export async function generateStageFixturesTx(
     gen = swiss.gen;
     swissSeatedCount = swiss.seatedCount;
     if (!isEmptySwissReshape(swiss.reshaped)) swissReshaped = swiss.reshaped;
-    if (swiss.swissRounds?.verdict === "warn") swissRoundsWarn = swiss.swissRounds;
+    swissRoundsWarn = swissRoundsNoticeOf(swiss.swissRounds);
     // `override` is true only when the body named a mode OTHER than the one
     // this round would have used anyway — picking the default is no override.
     swissAudit =

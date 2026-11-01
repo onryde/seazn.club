@@ -2389,6 +2389,8 @@
   "swiss.rounds.guidance.other": "Pour {n} participants : {count} tours recommandés, au plus {hardMax}.",
   "swiss.rounds.shrunk.one": "Il reste {field} participants, de quoi jouer au plus {count} tour. Vous pouvez terminer la phase suisse avec les tours déjà joués.",
   "swiss.rounds.shrunk.other": "Il reste {field} participants, de quoi jouer au plus {count} tours. Vous pouvez terminer la phase suisse avec les tours déjà joués.",
+  "swiss.rounds.shrunkWarn.one": "Il reste {field} participants : cette phase suisse peut aller au plus jusqu'à {count} tour. Terminez-la après le tour {count}, ou terminez-la maintenant.",
+  "swiss.rounds.shrunkWarn.other": "Il reste {field} participants : cette phase suisse peut aller au plus jusqu'à {count} tours. Terminez-la après le tour {count}, ou terminez-la maintenant.",
   "swiss.rounds.warn.one": "Avec plus de {safeMax} tour, un tour suivant risque de ne pas pouvoir être apparié sans rejouer une rencontre. Dans ce cas, vous pouvez terminer la phase suisse avec les tours déjà joués. Recommandé pour ces participants : {recommended}, au plus {hardMax}.",
   "swiss.rounds.warn.other": "Avec plus de {safeMax} tours, un tour suivant risque de ne pas pouvoir être apparié sans rejouer une rencontre. Dans ce cas, vous pouvez terminer la phase suisse avec les tours déjà joués. Recommandé pour ces participants : {recommended}, au plus {hardMax}.",
   "swiss.lateEntry.repaired.one": "Tour {round} réapparié avec {name} : le match de {count} participant a changé.",

@@ -19,7 +19,7 @@ import { ABANDONED_MATCHES_REASON, heldMatchesOf } from "@/lib/abandoned-matches
 import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
-import { swissRoundsWarnNotice, type SwissRoundsJudgement } from "@/lib/swiss-rounds";
+import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -700,6 +700,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           json: opts?.pairing ? { pairing: opts.pairing } : {},
         });
         setNotice(generateNoticeText(out, msg, msgPlural, locale));
+        // W3 T11 review m1: a caution, not a success — the amber channel.
+        setWarning(generateWarningText(out, msgPlural));
       } else if (action === "unpair") {
         const out = await apiV1<{ cleared: number; round: number }>(
           `/api/v1/stages/${stageId}/unpair`,
@@ -803,7 +805,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         } else if (blocked) {
           setWarning(blocked);
         } else {
-          setError(rebuildErrorText(err, msg));
+          setError(rebuildErrorText(err, msg, msgPlural));
         }
       }
     } finally {
@@ -1830,6 +1832,43 @@ export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, loca
   return a.deviceLinks > 0 ? `${cleared} ${msg("progression.rosterDrift.sheetsStop")}` : cleared;
 }
 
+/** POST /stages/{id}/generate's answer, as far as the desk's notice reads it (`GenerateResult`). */
+export type GenerateNoticeWire = {
+  created: number;
+  existing: number;
+  reshaped?: SwissReshapeWire;
+  swiss_rounds?: SwissRoundsNotice;
+};
+
+/**
+ * The green notice after a Generate — what was minted or paired, then (Swiss) what reshaped. The round-count warning
+ * (W3 T11, X-SW-16) is NOT part of it: it is a caution, so it goes in the panel's amber channel (`generateWarningText`,
+ * review m1). The panel's one composition, exported so the render test and the island read the same lines.
+ */
+export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural: MsgPlural, locale: string): string {
+  return [
+    out.created > 0
+      ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
+      : msg("schedule.notice.nothingNew"),
+    // Swiss pre-Start: this press may also have resized rounds nobody
+    // paired, deleting boards along with the times and courts pinned on
+    // them. Silent before this; `reshapeNotice` returns null when
+    // nothing moved, so the ordinary Pair reads exactly as it did.
+    reshapeNotice(out.reshaped, msg, msgPlural, locale),
+  ]
+    .filter((line): line is string => line !== null)
+    .join(" ");
+}
+
+/**
+ * W3 T11 (X-SW-16): the amber line after a Generate whose answer carries `swiss_rounds` — the count is above the field's
+ * safe maximum (`warn`), or a running Swiss's field shrank under it while this round still paired (`shrunk`). Null for
+ * every other answer, so an ordinary Pair shows no amber line.
+ */
+export function generateWarningText(out: GenerateNoticeWire, msgPlural: MsgPlural): string | null {
+  return swissRoundsWarnNotice(out.swiss_rounds, msgPlural);
+}
+
 /**
  * What a Swiss Generate/Pair-next ALSO did to the rounds nobody paired.
  *
@@ -1854,36 +1893,6 @@ export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, loca
  * Exported (pure) for the same reason `attachmentWarning` is: `apps/web` vitest
  * runs in `environment: "node"`, so this is testable only outside the component.
  */
-/** POST /stages/{id}/generate's answer, as far as the desk's notice reads it (`GenerateResult`). */
-export type GenerateNoticeWire = {
-  created: number;
-  existing: number;
-  reshaped?: SwissReshapeWire;
-  swiss_rounds?: SwissRoundsJudgement;
-};
-
-/**
- * The green notice after a Generate — what was minted or paired, then (Swiss) what reshaped, then (W3 T11, X-SW-16) the
- * round-count warning when the server judged the count above the field's safe maximum. The panel's one composition,
- * exported so the M8 render test and the island read the same lines.
- */
-export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural: MsgPlural, locale: string): string {
-  return [
-    out.created > 0
-      ? msg("schedule.notice.generated", { created: out.created, existing: out.existing })
-      : msg("schedule.notice.nothingNew"),
-    // Swiss pre-Start: this press may also have resized rounds nobody
-    // paired, deleting boards along with the times and courts pinned on
-    // them. Silent before this; `reshapeNotice` returns null when
-    // nothing moved, so the ordinary Pair reads exactly as it did.
-    reshapeNotice(out.reshaped, msg, msgPlural, locale),
-    // W3 T11: null unless the verdict is "warn" — an ordinary Pair reads exactly as it did.
-    swissRoundsWarnNotice(out.swiss_rounds, msgPlural),
-  ]
-    .filter((line): line is string => line !== null)
-    .join(" ");
-}
-
 export function reshapeNotice(
   reshaped: SwissReshapeWire | undefined,
   msg: Msg,
@@ -2046,8 +2055,11 @@ function ruleRefusalOf(err: unknown, msg: Msg): string | null {
 }
 
 /** Rebuild's red line when the refusal is not the amber STAGE_HAS_RESULTS (`rebuildBlockedMessage`). Exported pure for
- *  the reason `classifyActError` is: the panel's tests never fire the handler. */
-export function rebuildErrorText(err: unknown, msg: Msg): string {
+ *  the reason `classifyActError` is: the panel's tests never fire the handler. A Swiss refusal (W3 T11 review I1: a
+ *  Rebuild mints again, so SWISS_ROUNDS_ABOVE_MAX against today's field) is said in the reader's language with what to
+ *  do next — never the server's English sentence. */
+export function rebuildErrorText(err: unknown, msg: Msg, msgPlural: MsgPlural): string {
+  if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) return swissRefusalText(err.code, err.extra, msg, msgPlural);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.failed"));
 }
 

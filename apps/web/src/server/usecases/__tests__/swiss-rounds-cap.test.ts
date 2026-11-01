@@ -24,7 +24,7 @@ import { createEntrants } from "../entrants";
 import { confirmRegistration, putRegistrationSettings } from "../registrations";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { createStages, generateStageFixtures, unpairSwissRound } from "../stages";
+import { createStages, generateStageFixtures, rebuildStageFixtures, unpairSwissRound } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedRegistration } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
@@ -269,16 +269,31 @@ describe.runIf(HAS_DB)("X-SW-16 6 × 5 warns, does not refuse", () => {
 
 describe.runIf(HAS_DB)("X-SW-16 Pair next refuses after withdrawals shrink the field below rounds", () => {
   for (const sport of SPORTS) {
-    it(`X-SW-16 Pair next refuses after withdrawals shrink the field below rounds; recovery details { canFinish: true } (${sport.sport})`, async () => {
-      // 6 × 5 is allowed (hard max 5). Round 1 is played, then two withdraw: round 2's field is 4, whose hard max is 3
-      // (§3.2's table), so 5 rounds can no longer exist. Round 1 is complete, so the Swiss can be finished after it
-      // (Task 13) — the refusal says so, and by the controller's status rule it is a 409 (resolvable another way).
+    it(`X-SW-16 Pair next refuses after withdrawals shrink the field below rounds — only a round the field cannot reach; recovery details { canFinish: true } (${sport.sport})`, async () => {
+      // 6 × 5 is allowed (hard max 5). Round 1 is played, then two withdraw: the field is 4, whose hard max is 3 (§3.2's
+      // table: n = 4 → recommended 2, safe 2, hard 3), so 5 rounds can no longer all be played. Controller ruling on
+      // review m2 ("never block a pairable round"): rounds 2 and 3 are still within the shrunk field's hard max, so they
+      // are paired, each with the shrunk warning; round 4 is beyond it, so its Pair is refused — and by then rounds are
+      // complete, so the Swiss can be finished after round 3 (Task 13): the controller's status rule makes that a 409.
       const rig = await swissRig(sport, 6, 5);
       await startDivision(rig.auth, rig.divisionId);
       await generateStageFixtures(rig.auth, rig.stageId);
       await playRound(rig, 1);
       await withdrawEntrantCascade(rig.auth, rig.entrants[4]!);
       await withdrawEntrantCascade(rig.auth, rig.entrants[5]!);
+      const four = [rig.entrants[0], rig.entrants[1], rig.entrants[2], rig.entrants[3]].sort();
+      const SHRUNK = { verdict: "shrunk", rounds: 5, field: 4, recommended: 2, safeMax: 2, hardMax: 3, canFinish: true };
+
+      // Within the shrunk field's hard max: paired, with the warning.
+      for (const r of [2, 3]) {
+        const paired = await generateStageFixtures(rig.auth, rig.stageId);
+        expect(paired.swiss_rounds, `round ${r} is within the hard max of 4 (3): paired, with the shrunk warning`).toEqual(SHRUNK);
+        const seated = boardsOf(await rowsOf(rig.stageId), r).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]);
+        expect(seated.filter(Boolean).sort(), `round ${r} seats the four left`).toEqual(four);
+        await playRound(rig, r);
+      }
+
+      // Beyond it: round 4 is refused, and nothing is written.
       const rowsBefore = await rowsOf(rig.stageId);
       const ledgerBefore = await ledgerState(rig.divisionId);
       const refusal = { ...ABOVE_MAX_RESOLVABLE, extra: { rounds: 5, field: 4, hardMax: 3, canFinish: true } };
@@ -288,16 +303,7 @@ describe.runIf(HAS_DB)("X-SW-16 Pair next refuses after withdrawals shrink the f
       // The SEQUENCE: pressing it again changes nothing — same refusal, still nothing written.
       await expect(generateStageFixtures(rig.auth, rig.stageId)).rejects.toMatchObject(refusal);
       expect(await rowsOf(rig.stageId)).toEqual(rowsBefore);
-      // Resolvable another way (why it is a 409): an organiser's late player grows round 2's field to 5 (hard max 5),
-      // and the very same Pair next goes through — with the warning, since 5 > the safe max of 2.
-      const [late] = await createEntrants(rig.auth, rig.divisionId, [entrantInput(rig.kind, "Late")]);
-      expect(late!.late_entry, "premise: between rounds a late player joins round 2").toMatchObject({ case: "c", round: 2 });
-      const paired = await generateStageFixtures(rig.auth, rig.stageId);
-      expect(paired.swiss_rounds).toEqual({ verdict: "warn", recommended: 2, safeMax: 2, hardMax: 5 });
-      const r2 = (await rowsOf(rig.stageId)).filter((f) => f.round_no === 2);
-      expect(r2.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter(Boolean).sort(), "round 2 seats the five").toEqual(
-        [rig.entrants[0], rig.entrants[1], rig.entrants[2], rig.entrants[3], late!.id].sort(),
-      );
+      expect(await ledgerState(rig.divisionId)).toEqual(ledgerBefore);
     });
   }
 
@@ -314,6 +320,27 @@ describe.runIf(HAS_DB)("X-SW-16 Pair next refuses after withdrawals shrink the f
     });
     expect(await rowsOf(rig.stageId)).toEqual(before);
   });
+});
+
+describe.runIf(HAS_DB)("X-SW-16 a Rebuild refused by the cap leaves the stage exactly as it was", () => {
+  // Review m4: Rebuild deletes the stage's fixtures and mints again in ONE transaction (`rebuildStageFixtures`); the mint
+  // judges the rounds against today's field. Refused there, the delete must roll back with it — never a stage emptied
+  // of its shells by a press that was refused.
+  for (const sport of SPORTS) {
+    it(`shells minted for 6 × 5, two withdrawn: Rebuild is refused 422 and every row, and the ledger, is as it was (${sport.sport})`, async () => {
+      const rig = await swissRig(sport, 6, 5);
+      await generateStageFixtures(rig.auth, rig.stageId);
+      await withdrawEntrantCascade(rig.auth, rig.entrants[4]!);
+      await withdrawEntrantCascade(rig.auth, rig.entrants[5]!);
+      const rowsBefore = await rowsOf(rig.stageId);
+      expect(rowsBefore.length, "premise: the stage holds its minted shells").toBeGreaterThan(0);
+      const ledgerBefore = await ledgerState(rig.divisionId);
+      const refusal = { ...ABOVE_MAX, extra: { rounds: 5, field: 4, hardMax: 3, canFinish: false } };
+      await expect(rebuildStageFixtures(rig.auth, rig.stageId)).rejects.toMatchObject(refusal);
+      expect(await rowsOf(rig.stageId), "the delete rolled back: same rows, same ids").toEqual(rowsBefore);
+      expect(await ledgerState(rig.divisionId), "no ledger row").toEqual(ledgerBefore);
+    });
+  }
 });
 
 describe.runIf(HAS_DB)("X-SW-16 Start refuses a Swiss above its hard max", () => {

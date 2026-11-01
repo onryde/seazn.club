@@ -2389,6 +2389,8 @@
   "swiss.rounds.guidance.other": "Voor {n} deelnemers: {count} rondes aanbevolen, hoogstens {hardMax}.",
   "swiss.rounds.shrunk.one": "Er zijn nog {field} deelnemers, genoeg voor hoogstens {count} ronde. Je kunt de Zwitserse fase afronden met de al gespeelde rondes.",
   "swiss.rounds.shrunk.other": "Er zijn nog {field} deelnemers, genoeg voor hoogstens {count} rondes. Je kunt de Zwitserse fase afronden met de al gespeelde rondes.",
+  "swiss.rounds.shrunkWarn.one": "Nog {field} deelnemers: deze Zwitserse fase kan hoogstens {count} ronde halen. Rond af na ronde {count}, of rond nu af.",
+  "swiss.rounds.shrunkWarn.other": "Nog {field} deelnemers: deze Zwitserse fase kan hoogstens {count} rondes halen. Rond af na ronde {count}, of rond nu af.",
   "swiss.rounds.warn.one": "Met meer dan {safeMax} ronde kan een latere ronde misschien niet meer gekoppeld worden zonder een wedstrijd te herhalen. Gebeurt dat, dan kun je de Zwitserse fase afronden met de al gespeelde rondes. Aanbevolen voor deze deelnemers: {recommended}, hoogstens {hardMax}.",
   "swiss.rounds.warn.other": "Met meer dan {safeMax} rondes kan een latere ronde misschien niet meer gekoppeld worden zonder een wedstrijd te herhalen. Gebeurt dat, dan kun je de Zwitserse fase afronden met de al gespeelde rondes. Aanbevolen voor deze deelnemers: {recommended}, hoogstens {hardMax}.",
   "swiss.lateEntry.repaired.one": "Ronde {round} opnieuw ingedeeld met {name}: de wedstrijd van {count} deelnemer is gewijzigd.",

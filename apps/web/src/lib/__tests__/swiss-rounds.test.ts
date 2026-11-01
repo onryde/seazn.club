@@ -83,8 +83,10 @@ import {
   swissRoundsDefault,
   swissRoundsGuidance,
   swissRoundsGuidanceLine,
+  swissRoundsNoticeOf,
   swissRoundsWarnNotice,
   type SwissRoundsJudgement,
+  type SwissRoundsShrunk,
 } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
@@ -317,6 +319,41 @@ describe("X-SW-16 the guidance line and the warn notice (4 locales)", () => {
     expect(swissRoundsWarnNotice(undefined, pluralIn("en"))).toBeNull();
     expect(swissRoundsWarnNotice({ ...WARN_6x5, verdict: "ok" }, pluralIn("en"))).toBeNull();
     expect(swissRoundsWarnNotice({ ...WARN_6x5, verdict: "refuse" }, pluralIn("en"))).toBeNull();
+  });
+
+  // Fix round 1 (ruling on review m2): a running Swiss shrank to 4 under 5 rounds and a round within the new hard max
+  // (§3.2: n = 4 → at most 3) still paired.
+  const SHRUNK_6x5_TO_4: SwissRoundsShrunk = {
+    verdict: "shrunk", rounds: 5, field: 4, recommended: 2, safeMax: 2, hardMax: 3, canFinish: true,
+  };
+
+  it("the shrunk notice names the field left and the rounds it can still reach, and both ways to finish", () => {
+    expect(swissRoundsWarnNotice(SHRUNK_6x5_TO_4, pluralIn("en"))).toBe(
+      "4 entrants left: this Swiss can reach at most 3 rounds. Finish after round 3, or finish now.",
+    );
+    // A field of 2 reaches ONE round.
+    expect(swissRoundsWarnNotice({ ...SHRUNK_6x5_TO_4, field: 2, hardMax: 1 }, pluralIn("en"))).toBe(
+      "2 entrants left: this Swiss can reach at most 1 round. Finish after round 1, or finish now.",
+    );
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const line = swissRoundsWarnNotice({ ...SHRUNK_6x5_TO_4, field: 12, hardMax: 11 }, pluralIn(locale))!;
+      expect(line, locale).toMatch(/\b12\b/);
+      expect(line, locale).toMatch(/\b11\b/);
+      expect(line, locale).not.toMatch(/\{/);
+      if (locale !== "en") expect(line, `${locale} is translated`).not.toBe(swissRoundsWarnNotice({ ...SHRUNK_6x5_TO_4, field: 12, hardMax: 11 }, pluralIn("en")));
+      checked++;
+    }
+    expect(checked, "locales").toBe(4);
+  });
+
+  it("the answer's notice: a warn and a shrunk ride on it; ok, a refuse and nothing do not", () => {
+    expect(swissRoundsNoticeOf(WARN_6x5)).toEqual(WARN_6x5);
+    expect(swissRoundsNoticeOf(SHRUNK_6x5_TO_4)).toEqual(SHRUNK_6x5_TO_4);
+    expect(swissRoundsNoticeOf({ ...WARN_6x5, verdict: "ok" })).toBeUndefined();
+    expect(swissRoundsNoticeOf({ ...WARN_6x5, verdict: "refuse" })).toBeUndefined();
+    expect(swissRoundsNoticeOf(null)).toBeUndefined();
+    expect(swissRoundsNoticeOf(undefined)).toBeUndefined();
   });
 });
 

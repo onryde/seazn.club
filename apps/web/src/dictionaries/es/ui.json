@@ -2389,6 +2389,8 @@
   "swiss.rounds.guidance.other": "Para {n} participantes: {count} rondas recomendadas, como máximo {hardMax}.",
   "swiss.rounds.shrunk.one": "Quedan {field} participantes, suficientes para {count} ronda como máximo. Puedes terminar la fase suiza con las rondas ya jugadas.",
   "swiss.rounds.shrunk.other": "Quedan {field} participantes, suficientes para {count} rondas como máximo. Puedes terminar la fase suiza con las rondas ya jugadas.",
+  "swiss.rounds.shrunkWarn.one": "Quedan {field} participantes: esta fase suiza puede llegar como máximo a {count} ronda. Termínala tras la ronda {count} o termínala ahora.",
+  "swiss.rounds.shrunkWarn.other": "Quedan {field} participantes: esta fase suiza puede llegar como máximo a {count} rondas. Termínala tras la ronda {count} o termínala ahora.",
   "swiss.rounds.warn.one": "Con más de {safeMax} ronda, puede que una ronda posterior no se pueda emparejar sin repetir un enfrentamiento. Si ocurre, puedes terminar la fase suiza con las rondas ya jugadas. Recomendado para estos participantes: {recommended}, como máximo {hardMax}.",
   "swiss.rounds.warn.other": "Con más de {safeMax} rondas, puede que una ronda posterior no se pueda emparejar sin repetir un enfrentamiento. Si ocurre, puedes terminar la fase suiza con las rondas ya jugadas. Recomendado para estos participantes: {recommended}, como máximo {hardMax}.",
   "swiss.lateEntry.repaired.one": "Ronda {round} reemparejada con {name}: cambió el partido de {count} participante.",

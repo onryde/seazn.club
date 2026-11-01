@@ -8046,6 +8046,8 @@ export type DictionaryKey =
   | "swiss.rounds.guidance.other"
   | "swiss.rounds.shrunk.one"
   | "swiss.rounds.shrunk.other"
+  | "swiss.rounds.shrunkWarn.one"
+  | "swiss.rounds.shrunkWarn.other"
   | "swiss.rounds.warn.one"
   | "swiss.rounds.warn.other"
   | "table.abbr.boardRatio"

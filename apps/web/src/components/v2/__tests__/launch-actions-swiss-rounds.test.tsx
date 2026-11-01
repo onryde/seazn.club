@@ -3,12 +3,18 @@
 // presses production's own Start (then the confirmation) and reads the red line back: the dictionary's refusal sentence,
 // then the field's guidance (rulebook §3.2 for a field of 4: 2 rounds recommended, at most 3).
 //
+// Runs in English and in French (review m6): the English dictionary sentence equals the server's message, so only a
+// non-English locale tells the localised path from `err.message`.
+//
 // Single-sport by nature: the refusal's details are numbers; no sport field reaches the button.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { SWISS_REFUSALS } from "@/lib/swiss-refusals";
 import enUi from "@/dictionaries/en/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -27,10 +33,30 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   };
 });
 
+type Loc = "en" | "fr";
+const DICTS: Record<Loc, Record<string, string>> = {
+  en: enUi as unknown as Record<string, string>,
+  fr: frUi as unknown as Record<string, string>,
+};
+const active = vi.hoisted(() => ({ locale: "en" as "en" | "fr" }));
+// Stable per-locale functions, as the real hooks' useMemo gives.
+const MSG = {
+  en: (key: string, vars?: Record<string, string | number>) => tRuntime(DICTS.en as unknown as Dict, key, vars),
+  fr: (key: string, vars?: Record<string, string | number>) => tRuntime(DICTS.fr as unknown as Dict, key, vars),
+};
+const PLURAL = {
+  en: (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(DICTS.en as unknown as Dict, key, count, "en", vars),
+  fr: (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(DICTS.fr as unknown as Dict, key, count, "fr", vars),
+};
+vi.mock("@/components/i18n/dict-provider", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  useMsg: () => MSG[active.locale],
+  useMsgPlural: () => PLURAL[active.locale],
+}));
+
 import { LaunchActions } from "../launch-actions";
 import { StartConfirmDialog } from "../start-confirm-dialog";
 
-const EN = enUi as unknown as Record<string, string>;
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const fill = (s: string, v: Record<string, string | number>) => s.replace(/\{(\w+)\}/g, (_m, k: string) => String(v[k]));
 
@@ -67,7 +93,12 @@ async function pressStart() {
   return island;
 }
 
-describe("LaunchActions — Start refused above a Swiss's hard maximum (X-SW-16)", () => {
+describe.each(["en", "fr"] as const)("LaunchActions — Start refused above a Swiss's hard maximum (X-SW-16) [%s]", (locale) => {
+  const D = DICTS[locale];
+  beforeEach(() => {
+    active.locale = locale;
+  });
+
   it("says the refusal and the field's guidance in the reader's language, never the server's English alone", async () => {
     net.answer = {
       status: 422,
@@ -77,8 +108,9 @@ describe("LaunchActions — Start refused above a Swiss's hard maximum (X-SW-16)
     };
     const island = await pressStart();
     expect(redLines(island.tree())).toEqual([
-      `${EN["swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"]} ${fill(EN["swiss.rounds.guidance.other"]!, { n: 4, count: 2, hardMax: 3 })}`,
+      `${D["swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"]} ${fill(D["swiss.rounds.guidance.other"]!, { n: 4, count: 2, hardMax: 3 })}`,
     ]);
+    if (locale !== "en") expect(redLines(island.tree())[0], "never the server's English").not.toContain(SWISS_REFUSALS.SWISS_ROUNDS_ABOVE_MAX.message);
   });
 
   it("the negative pair: a refusal of another code keeps its own message", async () => {
