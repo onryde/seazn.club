@@ -1075,13 +1075,20 @@ describe("planSponsors — refused input (assumptions are guards)", () => {
 // ── client-safe ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 describe("lib/sponsor-plan is client-safe", () => {
-  it("imports only the client-safe tier authority (the console page and the hub preview read it too)", () => {
-    const src = readFileSync(join(import.meta.dirname, "..", "sponsor-plan.ts"), "utf8");
-    const specifiers = [...src.matchAll(/\bfrom\s+["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\brequire\(\s*["']([^"']+)["']/g)].map(
-      (m) => m[1] ?? m[2] ?? m[3],
+  const importsOf = (file: string): string[] => {
+    const src = readFileSync(join(import.meta.dirname, "..", file), "utf8");
+    return [...src.matchAll(/\bfrom\s+["']([^"']+)["']|\bimport\s+["']([^"']+)["']|\brequire\(\s*["']([^"']+)["']/g)].map(
+      (m) => (m[1] ?? m[2] ?? m[3])!,
     );
+  };
+
+  it("imports only the two client-safe authorities - the tier list and the dial's positions (the console page and the hub preview read it too)", () => {
+    const specifiers = importsOf("sponsor-plan.ts");
     expect(specifiers.length, "found the imports").toBeGreaterThan(0);
-    expect(new Set(specifiers)).toEqual(new Set(["@/lib/sponsor-tiers"]));
+    expect(new Set(specifiers)).toEqual(new Set(["@/lib/sponsor-tiers", "@/lib/sponsor-frequencies"]));
+  });
+
+  it("the dial's positions file imports NOTHING (the OpenAPI generator loads schemas.ts under bare node, which cannot resolve `@/`)", () => {
+    expect(importsOf("sponsor-frequencies.ts")).toEqual([]);
   });
 });
-
