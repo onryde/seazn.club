@@ -77,22 +77,42 @@ function row(id: string, round: number, seq: number, home: string | null, away: 
 
 const award = (reason: string) => ({ kind: "award", winner: "a", loser: "b", reason });
 const LEGACY_CHESS_FORFEIT_WIN = { kind: "win", winner: "a", method: "forfeit" }; // legacy replay row: pre-W2b chess, still stored
+const LEGACY_WIN_BY_WALKOVER = { kind: "win", winner: "a", method: "walkover" }; // legacy shape: no current module emits it
 
 /** P-A2, row by row: the board a-v-b's outcome, its ledger's played fact (undefined: an outcome no forfeit decided, so no
- *  fact is read), and whether the RULEBOOK says a and b have met. Never read from the code under test. */
-const P_A2: { name: string; outcome: unknown; fact: boolean | undefined; met: boolean }[] = [
-  { name: "a played win", outcome: { kind: "win", winner: "a" }, fact: undefined, met: true },
-  { name: "a played draw", outcome: { kind: "draw" }, fact: undefined, met: true },
-  { name: "a double walkover", outcome: { kind: "double_walkover" }, fact: undefined, met: false },
-  { name: "a one-sided walkover before play", outcome: award("walkover"), fact: false, met: false },
-  { name: "a one-sided walkover after a chess Start (ruling 118: a no-show is still a walkover)", outcome: award("walkover"), fact: true, met: false },
-  { name: "a retirement after play", outcome: award("retired"), fact: true, met: true },
-  { name: "a withdrawal before play (a forfeit before play)", outcome: award("withdrew"), fact: false, met: false },
-  { name: "a withdrawal after play", outcome: award("withdrew"), fact: true, met: true },
-  { name: "a disqualification before play", outcome: award("disqualified"), fact: false, met: false },
-  { name: "a disqualification after play", outcome: award("disqualified"), fact: true, met: true },
-  { name: "a pre-W2b chess win by forfeit, nothing played", outcome: LEGACY_CHESS_FORFEIT_WIN, fact: false, met: false },
-  { name: "a pre-W2b chess win by forfeit after play", outcome: LEGACY_CHESS_FORFEIT_WIN, fact: true, met: true },
+ *  fact is read), and whether the RULEBOOK says a and b have met. Never read from the code under test. Two more columns,
+ *  each from its own rule:
+ *  - `barred` — P-A4 / FIDE C.04.1(d) (owner-approved 2026-09-24): is the winner a barred from the pairing-allocated
+ *    bye? Only a win WITHOUT play bars it ("a (forfeit) win due to an opponent not appearing"); a retirement, a
+ *    withdrawal or a disqualification won after play is a played game and bars nothing.
+ *  - `colour` — the engine's BG-WO-1/2 (W2b spec §5.2): does the board count in a and b's colour history? Every chess
+ *    forfeit is OUT of colour history (`colorOf` reads `state.forfeited`, which every `core.forfeit` sets and the pre-W2b
+ *    `boardgame.result{forfeit}` sets too), a retirement after play included; a double walkover is a forfeit too. Only a
+ *    game decided at the board counts. (Rulebook R14 says a retirement's colour counts — that conflict is the owner's;
+ *    the table reads as the engine does, so pairing colours and "Games as White/Black" cannot disagree.) */
+const P_A2: { name: string; outcome: unknown; fact: boolean | undefined; met: boolean; barred: boolean; colour: boolean }[] = [
+  { name: "a played win", outcome: { kind: "win", winner: "a" }, fact: undefined, met: true, barred: false, colour: true },
+  { name: "a played draw", outcome: { kind: "draw" }, fact: undefined, met: true, barred: false, colour: true },
+  { name: "a double walkover", outcome: { kind: "double_walkover" }, fact: undefined, met: false, barred: false, colour: false },
+  { name: "a one-sided walkover before play", outcome: award("walkover"), fact: false, met: false, barred: true, colour: false },
+  {
+    name: "a one-sided walkover after a chess Start (ruling 118: a no-show is still a walkover)",
+    outcome: award("walkover"),
+    fact: true,
+    met: false,
+    barred: true,
+    colour: false,
+  },
+  { name: "a retirement after play", outcome: award("retired"), fact: true, met: true, barred: false, colour: false },
+  { name: "a withdrawal before play (a forfeit before play)", outcome: award("withdrew"), fact: false, met: false, barred: true, colour: false },
+  { name: "a withdrawal after play", outcome: award("withdrew"), fact: true, met: true, barred: false, colour: false },
+  { name: "a disqualification before play", outcome: award("disqualified"), fact: false, met: false, barred: true, colour: false },
+  { name: "a disqualification after play", outcome: award("disqualified"), fact: true, met: true, barred: false, colour: false },
+  { name: "a pre-W2b chess win by forfeit, nothing played", outcome: LEGACY_CHESS_FORFEIT_WIN, fact: false, met: false, barred: true, colour: false },
+  { name: "a pre-W2b chess win by forfeit after play", outcome: LEGACY_CHESS_FORFEIT_WIN, fact: true, met: true, barred: false, colour: false },
+  // A walkover is unplayed whatever its ledger reads (P-A2 lists "a one-sided walkover" unqualified) — the one class
+  // where the rule ignores the fact for a `win`.
+  { name: "a legacy win by walkover, even with play on its ledger", outcome: LEGACY_WIN_BY_WALKOVER, fact: true, met: false, barred: true, colour: false },
 ];
 
 describe("W3 T7 buildSwissHistory: X-SW-15 a pair whose match was not played has not met (P-A2)", () => {
@@ -116,6 +136,8 @@ describe("W3 T7 buildSwissHistory: X-SW-15 a pair whose match was not played has
       expect(h.byes.has("b"), "the side that lost or forfeited is not given a bye for the round").toBe(false);
       // FIDE game points: ½ for a draw, else nothing for b — never the implicit bye's +1.
       expect(h.score.get("b"), "nor a point").toBe((c.outcome as { kind: string }).kind === "draw" ? 0.5 : 0);
+      // P-A4 (m1): only a win without play bars the winner from the pairing-allocated bye.
+      expect(h.byes.has("a"), c.barred ? "a won without play: barred from the bye" : "a is still bye-eligible").toBe(c.barred);
       checked++;
     });
   }
@@ -123,6 +145,25 @@ describe("W3 T7 buildSwissHistory: X-SW-15 a pair whose match was not played has
     expect(checked, "rows checked").toBe(P_A2.length);
     expect(P_A2.filter((c) => c.met).length, "rows whose pair met").toBeGreaterThan(0);
     expect(P_A2.filter((c) => !c.met).length, "rows whose pair did not").toBeGreaterThan(0);
+    expect([P_A2.filter((c) => c.barred).length, P_A2.filter((c) => !c.barred).length], "rows on each side of P-A4").not.toContain(0);
+  });
+
+  it("BG-WO-1/2: a forfeit of any kind holds no colour, before or after play; only a game decided at the board does", () => {
+    let coloured = 0;
+    let colourless = 0;
+    for (const c of P_A2) {
+      const h = historyOf(c.outcome, c.fact);
+      const want = c.colour ? [["W"], ["B"]] : [undefined, undefined];
+      expect([h.colours.get("a"), h.colours.get("b")], `${c.name}: ${c.colour ? "a White, b Black" : "no colour"}`).toEqual(want);
+      expect([h.colours.get("c"), h.colours.get("d")], `${c.name}: the played board beside it keeps its colours`).toEqual([["W"], ["B"]]);
+      if (c.colour) coloured++;
+      else colourless++;
+    }
+    expect([coloured, colourless], "anti-vacuity: rows checked on each side").toEqual([
+      P_A2.filter((c) => c.colour).length,
+      P_A2.filter((c) => !c.colour).length,
+    ]);
+    expect(Math.min(coloured, colourless), "both answers asked").toBeGreaterThan(0);
   });
 
   it("X-SW-15 a walkover winner is still never given the bye: not met, yet bye-marked, and the win's point stands (P-A4)", () => {
@@ -327,6 +368,43 @@ async function toRoundTwo(r: Rig): Promise<{ top: Board; bottom: Board }> {
   return { top: await boardWith(r, 2, "S1", "S4"), bottom: await boardWith(r, 2, "S2", "S3") };
 }
 
+/**
+ * The P-A4 rig: five players. Round 1 is the fold (S1 v S3, S2 v S4, S5 bye): S1 beats S3, and `decide` settles S2 v S4
+ * for S4 (S4 1, S2 0 whichever way). Round 2 goes to the better seed on every board. By round 3 S5 and S3 have had byes
+ * and S4 is the bottom-most of the rest, so the engine's own bye rule ("the lowest-ranked entrant not yet byed") gives
+ * the round-3 bye to S4 unless S4 is marked bye-ineligible. Returns what the round-3 Pair handed the engine, and whom
+ * it seated on the bye.
+ */
+async function byeRig(sport: Sport, decide: (r: Rig, board: Board) => Promise<void>) {
+  const r = await pairedRoundOne(sport, 5);
+  expect(await pairsOf(r, 1), "rig: round 1 is the fold").toEqual(["S1-S3", "S2-S4"]);
+  await decide(r, await boardWith(r, 1, "S2", "S4"));
+  const [decided] = (await boardsOf(r.stageId, 1)).filter((f) => r.nameOf(f.home_entrant_id) === "S2" || r.nameOf(f.away_entrant_id) === "S2");
+  expect(decided!.outcome, "rig: S4 won round 1's S2 v S4 by award").toMatchObject({ kind: "award", winner: r.idOf("S4") });
+  await sport.win(r.auth, await boardWith(r, 1, "S1", "S3"), r.idOf("S1"));
+  await generateStageFixtures(r.auth, r.stageId); // Pair round 2
+  // Round 2's boards go to the better seed, so the order below is decided by the results, not by the code.
+  for (const b of await boardsOf(r.stageId, 2)) {
+    if (b.home_entrant_id === null || b.away_entrant_id === null) continue;
+    const better = Number(r.nameOf(b.home_entrant_id).slice(1)) < Number(r.nameOf(b.away_entrant_id).slice(1)) ? b.home_entrant_id : b.away_entrant_id;
+    await sport.win(r.auth, b, better);
+  }
+
+  const { standings, history } = await pairSpied(r); // Pair round 3
+  const byeRows = (await sql<Board[]>`
+    select id, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome from fixtures
+    where stage_id = ${r.stageId} and round_no < 3`).filter((f) => isOneSidedAwardBye(f));
+  const realByes = new Set(byeRows.map((f) => f.home_entrant_id));
+  expect(realByes.size, "rig: rounds 1 and 2 each gave a bye").toBe(2);
+  // The engine's pairing order (score, then rank), bottom up: the first entrant without a REAL bye.
+  const order = [...standings].sort((a, b) => b.score - a.score || a.rank - b.rank);
+  const naive = [...order].reverse().find((s) => !realByes.has(s.entrantId));
+  expect(r.nameOf(naive?.entrantId), "witness: with nothing barring it, the bye goes to S4").toBe("S4");
+  const bye = (await boardsOf(r.stageId, 3)).find((f) => f.away_entrant_id === null && f.home_entrant_id !== null);
+  expect(bye, "round 3 has a bye").toBeDefined();
+  return { r, history, byeName: r.nameOf(bye!.home_entrant_id) };
+}
+
 /** The two round-3 answers, from the opening above (see the header): round 2's pairs again, or the two that never met. */
 const REMATCH = ["S1-S4", "S2-S3"];
 const NO_REMATCH = ["S1-S2", "S3-S4"];
@@ -471,38 +549,23 @@ for (const sport of SPORTS) {
     }
 
     it(`X-SW-15 a walkover winner is still never given the bye (${sport.key})`, async () => {
-      // Five players. Round 1 (fold): S1 v S3, S2 v S4, S5 bye; S2 does not turn up, so S4 wins by walkover. By round 3
-      // S5 and S3 have had byes, and S4 is the bottom-most of the rest — so the engine's own bye rule ("the lowest-ranked
-      // entrant not yet byed") would give it S4, but for the walkover.
-      const r = await pairedRoundOne(sport, 5);
-      expect(await pairsOf(r, 1), "rig: round 1 is the fold").toEqual(["S1-S3", "S2-S4"]);
-      const walkover = await boardWith(r, 1, "S2", "S4");
-      await emit(r.auth, walkover.id, "core.forfeit", { by: r.idOf("S2"), reason: "walkover" });
-      await sport.win(r.auth, await boardWith(r, 1, "S1", "S3"), r.idOf("S1"));
-      await generateStageFixtures(r.auth, r.stageId); // Pair round 2
-      // Round 2's boards go to the better seed, so the order below is decided by the results, not by the code.
-      for (const b of await boardsOf(r.stageId, 2)) {
-        if (b.home_entrant_id === null || b.away_entrant_id === null) continue;
-        const better = Number(r.nameOf(b.home_entrant_id).slice(1)) < Number(r.nameOf(b.away_entrant_id).slice(1)) ? b.home_entrant_id : b.away_entrant_id;
-        await sport.win(r.auth, b, better);
-      }
-
-      const { standings, history } = await pairSpied(r); // Pair round 3
-      const byeRows = (await sql<Board[]>`
-        select id, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome from fixtures
-        where stage_id = ${r.stageId} and round_no < 3`).filter((f) => isOneSidedAwardBye(f));
-      const realByes = new Set(byeRows.map((f) => f.home_entrant_id));
-      expect(realByes.size, "rig: rounds 1 and 2 each gave a bye").toBe(2);
-      // The engine's pairing order (score, then rank), bottom up: the first entrant without a REAL bye.
-      const order = [...standings].sort((a, b) => b.score - a.score || a.rank - b.rank);
-      const naive = [...order].reverse().find((s) => !realByes.has(s.entrantId));
-      expect(r.nameOf(naive?.entrantId), "witness: without P-A4 the bye would go to the walkover winner").toBe("S4");
-
+      const { r, history, byeName } = await byeRig(sport, async (r, board) => {
+        await emit(r.auth, board.id, "core.forfeit", { by: r.idOf("S2"), reason: "walkover" });
+      });
       expect(history.played.has(pairKey(r.idOf("S2"), r.idOf("S4"))), "the walkover is not a meeting (P-A2)").toBe(false);
       expect(history.byes?.has(r.idOf("S4")), "and its winner is bye-ineligible (P-A4)").toBe(true);
-      const bye = (await boardsOf(r.stageId, 3)).find((f) => f.away_entrant_id === null && f.home_entrant_id !== null);
-      expect(bye, "round 3 has a bye").toBeDefined();
-      expect(r.nameOf(bye!.home_entrant_id), "the walkover winner is not the bye").not.toBe("S4");
+      expect(byeName, "the walkover winner is not the bye").not.toBe("S4");
+    }, 180_000);
+
+    it(`X-SW-15 a retirement winner after play keeps the bye: the game was played (P-A4) (${sport.key})`, async () => {
+      // The same rig, but S2 retires AFTER play: S4's point is a played game's, not "a win due to an opponent not
+      // appearing" (FIDE C.04.1(d)), so nothing bars S4 and the engine's own pick stands.
+      const { r, history, byeName } = await byeRig(sport, async (r, board) => {
+        await sport.retireAfterPlay(r.auth, board, r.idOf("S2"));
+      });
+      expect(history.played.has(pairKey(r.idOf("S2"), r.idOf("S4"))), "a retirement after play is a meeting (P-A2)").toBe(true);
+      expect(history.byes?.has(r.idOf("S4")), "and its winner stays bye-eligible (P-A4)").toBe(false);
+      expect(byeName, "the retirement winner takes the bye the engine picks").toBe("S4");
     }, 180_000);
   });
 }

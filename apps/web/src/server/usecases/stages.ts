@@ -41,6 +41,7 @@ import {
 } from "@seazn/engine/scheduling";
 import {
   carryDeltas,
+  forfeitShaped,
   isUnplayedForfeit,
   placementTable,
   progressionSize,
@@ -1300,14 +1301,15 @@ export interface SwissHistoryState {
  * rule: the implicit-bye loop credits and bye-marks an entrant for round r only when r is at or after their first Swiss
  * round. For a stage where every first round is null it is the inline loop it replaced, row for row — proven over real
  * seeded rows against a verbatim copy of that loop (swiss-late-field.test.ts). `swissGen` calls it; Task 7 changes its
- * `played` rule; Task 9 reads it for case (b)'s colours.
+ * `played` rule, keys the P-A4 bye bar on the same "unplayed" reading, and takes every forfeit out of colours as the
+ * engine does (a pre-W2b chess win by forfeit included); Task 9 reads it for case (b)'s colours.
  *
  * `existing` is the stage's rows in ANY order: the colours are a sequence, so the function sorts its own copy into round
  * order (round_no, seq_in_round) rather than trusting its caller's ORDER BY. That precondition is enforced here, not stated
  * (review m1; T3 found a physical-order read handing a later-updated round back after a later round).
  * `entrants` is the field being paired (`swissFieldForRound`). `playedFacts` is fixture id → was anything played, for
- * every two-seated forfeit-decided row (`forfeitPlayedFacts` under the division's module): W3 T7's `played` rule reads it,
- * and a forfeit-decided row it does not cover is refused (`playedFor`), never guessed.
+ * every two-seated forfeit-decided row (`forfeitPlayedFacts` under the division's module): W3 T7's `played` rule and the
+ * P-A4 bye bar read it, and a forfeit-decided row it does not cover is refused (`playedFor`), never guessed.
  */
 export function buildSwissHistory(
   existing: readonly SwissExistingFixture[],
@@ -1348,20 +1350,23 @@ export function buildSwissHistory(
     const forRound = inRound.get(f.round_no) ?? new Set<string>();
     forRound.add(f.home_entrant_id).add(f.away_entrant_id);
     inRound.set(f.round_no, forRound);
-    // A forfeited game takes no colour — the engine's colour history skips
-    // byes and forfeits (`competition/tiebreakers.ts`, boardgame DOMAIN.md).
-    // Loop R M-8: a double walkover is a forfeit too (nobody played; boardgame's
-    // `colorOf` reads `state.forfeited`), so it holds no colour either.
-    if (o?.kind !== "award" && o?.kind !== "double_walkover") {
+    // A forfeit takes no colour, before or after play — as the engine reads it: boardgame's `colorOf` skips
+    // `state.forfeited`, which every `core.forfeit` sets (W2b BG-WO-1/2, a retirement after play included) and so does
+    // the pre-W2b `boardgame.result{forfeit}` (`decideResult`), whose stored row is a `win`, not an award. Loop R M-8:
+    // a double walkover is a forfeit too. Rulebook R14 ("a retirement's colour counts") disagrees for a retirement;
+    // that is the owner's call, and until then pairing colours stay the engine's, so they cannot drift from its
+    // "Games as White/Black" and its colour tie-breaks.
+    if (o?.kind !== "double_walkover" && !(o != null && forfeitShaped(o as MatchOutcome))) {
       (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
       (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
     }
-    // FIDE C.04.1(d) (owner-approved 2026-09-24): a player who has scored a
-    // walkover win may not later receive the pairing-allocated bye. `byes`
-    // feeds ONLY `pairRound`'s bye pick, so this is eligibility and nothing
-    // else — no bye score (the +1 below is the win's). Unchanged by W3 T7
-    // (P-A4): the pair has not met, and the winner is still bye-ineligible.
-    if (o?.kind === "award" && o.winner) byes.add(o.winner);
+    // FIDE C.04.1(d) (owner-approved 2026-09-24; rulebook P-A4): a player who has scored "a (forfeit) win due to an
+    // opponent not appearing" may not later receive the pairing-allocated bye. `byes` feeds ONLY `pairRound`'s bye
+    // pick, so this is eligibility and nothing else — no bye score (the +1 below is the win's). Keyed on the same
+    // `unplayed` as `played` above: a win WITHOUT play bars the bye (a walkover, a forfeit before play, a pre-W2b chess
+    // win by forfeit with nothing played), while a retirement, withdrawal or disqualification won after play is a
+    // played game and bars nothing.
+    if (unplayed && o?.winner) byes.add(o.winner);
     if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
     else if (o?.kind === "draw" || o?.kind === "tie") {
       score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
@@ -1650,8 +1655,9 @@ async function swissGen(
     // append-event.ts freezes at a match's first event — `resolveFixtureCfg` over the division, this stage and the
     // shell's own override, at the division's pinned module — the division read above (W3 T7 hoisted it to serve the
     // played facts too), under the `division:` lock the caller holds, which every format save takes before its
-    // `division-config:` one, so no save lands between that read and this write. Like append-event, a null cfg freezes nothing. The snapshot is not PLAY: `systemByeSql` exempts it in
-    // `fixtureEvidenceSql` and `playedSql`, so Unpair, Rebuild, Undo and the format locks read the bye as before.
+    // `division-config:` one, so no save lands between that read and this write. Like append-event, a null cfg
+    // freezes nothing. The snapshot is not PLAY: `systemByeSql` exempts it in `fixtureEvidenceSql` and `playedSql`,
+    // so Unpair, Rebuild, Undo and the format locks read the bye as before.
     // And a bye is not played, so it takes no slot (SW-M13, X-SW-29): time, court, venue and pin go (`holdsSlot`).
     const [shellCfg] = await tx<{ rules_override: unknown }[]>`select rules_override from fixtures where id = ${byeShell.id}`;
     const frozen = resolveFixtureCfg(

@@ -29,7 +29,8 @@ import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { isSwissBoardSeated, latestSeatedSwissRound } from "@/lib/swiss-shell";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { pairKey, type Colour, type SwissHistory, type SwissStanding } from "@seazn/engine/scheduling";
-import { EngineError } from "@seazn/engine/core";
+import { EngineError, type MatchOutcome } from "@seazn/engine/core";
+import { forfeitShaped } from "@seazn/engine/competition";
 import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
 import { createCompetition } from "../competitions";
@@ -695,7 +696,12 @@ for (const sport of SPORTS) {
         const twoSeated = existing.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
         const got = buildSwissHistory(existing, entrants, await forfeitPlayedFacts(sql, twoSeated, sportModule));
         const [g, w] = [flat(got), flat(want)];
-        // T7 changed one rule and nothing else: score, colours and byes are the legacy loop's, row for row.
+        // T7 changed the `played` rule; its review also keyed the P-A4 bye bar on "won without play" and took every
+        // forfeit out of colours. Those two differ from the legacy loop only on a forfeit that decided a PLAYED board
+        // (its winner keeps the bye, and a pre-W2b chess forfeit win loses its colours), and this rig records none —
+        // a premise, so it is asserted: then score, colours and byes are the legacy loop's, row for row.
+        const playedForfeits = twoSeated.filter((f) => !unplayedBoards.has(f.id) && f.outcome !== null && forfeitShaped(f.outcome as MatchOutcome));
+        expect(playedForfeits.map((f) => f.id), `${label}: premise — no forfeit decided a board this rig records as played`).toEqual([]);
         expect({ score: g.score, colours: g.colours, byes: g.byes }, `${label}: identical {score, colours, byes}`).toEqual({
           score: w.score,
           colours: w.colours,
