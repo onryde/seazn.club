@@ -6234,11 +6234,12 @@ test("W2c stage format row at every width: sections, the deciders notice and the
     await settings.click();
     await expect(settings).toHaveAttribute("aria-expanded", "true");
   }
-  // The same three buttons at every width (one DOM): attached always, tappable once the menu is open.
-  for (const id of ["format", "points", "tiebreaks"]) {
-    await expect(card.getByTestId(`stage-tool-${id}`)).toBeAttached();
-    await assertTapFloor(card.getByTestId(`stage-tool-${id}`), `stage-tool-${id}`);
-  }
+  // A knockout stage has no table to rank: the one button it carries is Match format (Points and Tie-breaks are table stages'
+  // buttons) - present at every width (one DOM), tappable once the menu is open; the other two are absent, not hidden.
+  await expect(card.getByTestId("stage-tool-format")).toBeAttached();
+  await assertTapFloor(card.getByTestId("stage-tool-format"), "stage-tool-format");
+  await expect(card.getByTestId("stage-tool-points"), "a bracket has no Points button").toHaveCount(0);
+  await expect(card.getByTestId("stage-tool-tiebreaks"), "a bracket has no Tie-breaks button").toHaveCount(0);
   await expectNoHorizontalScroll(page);
   // The collapsed row says the stage's format in ONE line (Match Day C3: the chips became the summary), it wraps inside the row, and
   // nothing is clipped.
