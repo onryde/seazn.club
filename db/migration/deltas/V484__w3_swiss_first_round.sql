@@ -16,7 +16,8 @@
 -- An entrant created AFTER its Swiss division started (a payment confirmation, a waitlist promotion, a CSV import) is
 -- credited +1 per round it missed by the old implicit-bye inference. This delta backfills NONE of them, on purpose:
 --   * count 4 below was 0 on stg (2026-10-31, all 17 Swiss divisions);
---   * prod's count 4 has NOT been read yet (asked of the owner, 2026-11-01).
+--   * prod's count 4 is 0 too (read by the owner, 2026-11-01): five entrants created after a first shell generation
+--     were all enrolled before their division's first Pair and seated from round 1.
 -- Count 4, read-only. "Started" = the first Pair (a `fixtures_generated` event that seated fixtures), else the first
 -- `fixtures_generated` of any kind for a division that has never seated one:
 --   with st as (

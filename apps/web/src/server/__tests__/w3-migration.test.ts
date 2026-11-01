@@ -141,7 +141,7 @@ describe.runIf(HAS_DB)("W3 delta: bye shells come off the court", () => {
 });
 
 // W3 Task 6 (spec §4, ruling 251; X-SW-8, X-SW-12) — the delta that gives each entrant a first Swiss round. A schema change
-// only: Task 0's count 4 was 0 on stg and prod's is unread, so it backfills nothing (its LOUD comment block says what is
+// only: Task 0's count 4 was 0 on stg and on prod, so it backfills nothing (its LOUD comment block says what is
 // owed if prod's count 4 is > 0). Read by glob like the delta above; its statement re-run inside a rolled-back transaction.
 // single-sport: badminton — the delta is a column on entrants and reads no sport field.
 const FIRST_ROUND_NAME = /^V\d+__w3_swiss_first_round\.sql$/;
