@@ -16,9 +16,11 @@
 //   6. Who: a pending Play next choice (operator, no position), else the P7 cycle at the org's next position (D14, F9).
 //      Both draw on TICKED cards only. A frozen break still airs after its sponsor is unticked (spec §3.2: an untick
 //      applies only to breaks not yet assigned), through `assignedCards`.
+import { SPONSOR_FREQUENCIES, type SponsorFrequency } from "@/lib/sponsor-frequencies";
 import { SPONSOR_TIER_WEIGHTS, type SponsorTier } from "@/lib/sponsor-tiers";
 
-export type SponsorFrequency = "light" | "normal" | "busy";
+// The dial's positions live in a dependency-free file (the OpenAPI generator imports them); re-exported, never redeclared.
+export { SPONSOR_FREQUENCIES, type SponsorFrequency };
 export type SponsorStyle = "lower_third" | "banner";
 
 /** Structurally the engine's `NaturalBreakDecl` (spec §3.1). Declared here, not imported, so the planner does not

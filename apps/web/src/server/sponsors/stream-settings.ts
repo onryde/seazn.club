@@ -8,10 +8,12 @@ import type { Tx } from "@/lib/db";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { SponsorFrequency } from "@/lib/sponsor-plan";
+import { SPONSOR_FREQUENCIES, type SponsorFrequency } from "@/lib/sponsor-frequencies";
 
-/** V483's `sponsor_stream_settings_frequency_check`, in the planner's vocabulary (`SponsorFrequency`). */
-export const SPONSOR_FREQUENCIES = ["light", "normal", "busy"] as const satisfies readonly SponsorFrequency[];
+/** V483's `sponsor_stream_settings_frequency_check`, in the planner's vocabulary: declared once in the dependency-free
+ *  `lib/sponsor-frequencies.ts` (R4 S12 moved it there so the tab's dial and the PUT's zod enum can read it), re-exported
+ *  for its importers. */
+export { SPONSOR_FREQUENCIES };
 
 export interface StreamSettings {
   enabled: boolean;
@@ -80,4 +82,20 @@ export async function putStreamSettings(
       do update set enabled = excluded.enabled, frequency = excluded.frequency,
                     updated_by = excluded.updated_by, updated_at = excluded.updated_at`;
   });
+}
+
+/**
+ * Ruling R12 / spec D12 (S12): the first sponsor ticked onto the stream turns the organisation's rotation on. Inserts the org
+ * row (`competition_id` null) ENABLED at Normal when the org has none, and does nothing when it has - a tick never overwrites a
+ * row the organiser has set (a switched-off or Busy org stays so), and a competition's row alone does not count as the org's.
+ * `on conflict do nothing` on the scope key is the arbiter: two first ticks racing leave one row.
+ *
+ * Runs in the TICK's transaction (`patchSponsor`), so a tick that is refused (another org's sponsor, a failed update) leaves no
+ * row behind. The caller owns "this was a tick to ON"; unticking, renaming and ticking nothing never come here.
+ */
+export async function ensureOrgStreamSettings(tx: Tx, orgId: string, userId: string | null): Promise<void> {
+  await tx`
+    insert into sponsor_stream_settings (org_id, competition_id, enabled, frequency, updated_by)
+    values (${orgId}, ${null}, true, ${"normal" satisfies SponsorFrequency}, ${userId})
+    on conflict on constraint sponsor_stream_settings_scope_key do nothing`;
 }
