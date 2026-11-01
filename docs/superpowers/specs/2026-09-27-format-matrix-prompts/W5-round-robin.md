@@ -45,6 +45,21 @@ W1d baseline's routing (false premise 21 of W2d); a red on one of them is W2d's.
 
 #840 and FX-G13 (Rebuild) are fixed in W3 — verify them on the round-robin rows; do not re-fix.
 
+## Carry from W3 (late entry, owner 2026-11-01)
+
+The owner wants late entry after Start in **every format and for every entrant kind** (individual, pair, team), not
+only Swiss. W3 shipped the Swiss half (ruling 250); this wave owns the league and groups half. Reuse W3's shape so organisers learn
+one action, and brainstorm only the format-specific rule:
+- One organiser action, **"Add late player"**, in the stage rail's "More" menu, opening the Entrants tab's existing add
+  form (W3 app-A Task 10). Never a second add form.
+- The server decides the case and returns `late_entry` (W3 `LateEntryResult`); the desk shows one notice per case.
+- The client start-lock mirror (`lib/open-entry-stages.ts`) and the Start dialog copy must agree with the server's
+  per-format rule (W3 found them drifted).
+- Automatic arrivals (registration confirm, waitlist, import, Reinstate) never reshape a published round.
+- An undo barrier (`swiss_late_entry`-style ledger row) stops Undo from crossing the arrival.
+- Prove it per format × entrant kind × case, counted, through the real usecases (W3 Task 10c is the template).
+Rule to settle with the owner here: how a late player catches up in a league (all missed matches added as catch-up fixtures, or missed matches scored as losses) and which group a late player joins.
+
 ## Lifecycle (design §10)
 
 1. Rulebook `rulebook-W5-round-robin.md` (drafted when the wave starts; FIFA/UEFA
