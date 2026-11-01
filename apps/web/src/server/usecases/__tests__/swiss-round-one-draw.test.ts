@@ -509,6 +509,8 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
       );
       const d = await roundOneDecided(r, sport);
       expect(d, "premise: round 1 seated the stage's draw").toEqual(swissRoundOneOrder(swissDrawSeed(r.stageId), await activeOrder(r.divisionId)));
+      const r1Rows = await pairAudits(r.divisionId, r.stageId, 1);
+      expect(r1Rows.at(-1), "a post-T8 stage: round 1's row carries the draw marker").toHaveProperty("draw_seed", swissDrawSeed(r.stageId));
       await generateStageFixtures(r.auth, r.stageId); // Pair round 2
       expect(seats(await boards(r.stageId, 2))).toEqual(roundTwoByDraw(d));
     },
@@ -556,6 +558,48 @@ describe.runIf(HAS_DB)("m7 the draw is the stage's pairing numbers: round 2 brea
       foldPairs(d.slice(0, 4)).join(),
     );
   }, 120_000);
+
+  // Ruling (coordinator, fix round 1b): prod holds live Swiss stages whose round 1 was paired before T8, in registration
+  // order. Their round 2+ keeps registration order: the draw is the tie-break only when round 1's own ledger row carries
+  // `draw_seed` (round 1 was paired by the T8 code). The legacy state is built as a pre-T8 Pair left it: round 1 seated
+  // as the fold over registration order, its ledger row without `draw_seed`.
+  it.each(["badminton", "boardgame"] as const)(
+    "m7 a LEGACY stage (round 1's ledger row has no draw_seed) keeps registration order in round 2 (%s)",
+    async (sport) => {
+      const r = await rig({ sport, n: 8, seeded: false, door: "createStages", config: NO_CHESS[sport] });
+      // Premise: the draw would fold a round-2 group differently from registration order, so the gate is witnessed.
+      await restageUntil(r, NO_CHESS[sport], (draw, reg) =>
+        [reg.slice(0, 4), reg.slice(4)].some((g) => foldPairs(inOrder(g, draw)).join() !== foldPairs(g).join()),
+      );
+      await startDivision(r.auth, r.divisionId);
+      await generateStageFixtures(r.auth, r.stageId); // Pair round 1 (today's code draws it)
+      const reg = (await activeOrder(r.divisionId)).map((e) => e.id);
+      // ...re-made as the pre-T8 Pair left it: the fold over registration order, board k = reg_k v reg_k+4, no marker.
+      const r1 = await boards(r.stageId, 1);
+      expect(r1, "eight entrants, four boards").toHaveLength(4);
+      for (const [k, b] of r1.entries()) {
+        await sql`update fixtures set home_entrant_id = ${reg[k]!}, away_entrant_id = ${reg[k + 4]!} where id = ${b.id}`;
+      }
+      const stripped = await sql`
+        update division_events set payload = payload - 'draw_seed'
+         where division_id = ${r.divisionId} and type = 'fixtures_generated'
+           and payload->>'stage_id' = ${r.stageId} and (payload->>'round')::int = 1 and payload ? 'draw_seed'`;
+      expect(stripped.count, "premise: round 1's row lost its marker").toBe(1);
+      const legacy = await boards(r.stageId, 1);
+      expect(seats(legacy), "premise: round 1 is the registration fold").toEqual([0, 1, 2, 3].map((k) => ({ home: reg[k]!, away: reg[k + 4]! })));
+      for (const b of legacy) await win(sport, r.auth, b, b.home); // the upper half wins
+
+      await generateStageFixtures(r.auth, r.stageId); // Pair round 2
+      // Registration order as the tie-break, as before T8: each score group folded by registration.
+      expect(seats(await boards(r.stageId, 2))).toEqual([
+        { home: reg[0]!, away: reg[2]! },
+        { home: reg[1]!, away: reg[3]! },
+        { home: reg[4]!, away: reg[6]! },
+        { home: reg[5]!, away: reg[7]! },
+      ]);
+    },
+    120_000,
+  );
 
   it("m7 a fully seeded field is unchanged: round 2 folds each score group by seed, and no draw is recorded", async () => {
     const r = await rig({ sport: "badminton", n: 8, seeded: true, door: "createStages", config: NO_CHESS.badminton });

@@ -1424,8 +1424,16 @@ export function buildSwissHistory(
 /** Review m7: round 1's drawn order, re-derived for a later round — the stage's seed over round 1's field, read the way
  *  round 1's Pair read it (the active select's `seed nulls last, created_at, id`). Round 1's field is the entrants round 1
  *  SEATED, not today's active list: a withdrawal since would shrink the shuffle and reorder everyone. Null when round 1
- *  drew nobody (every entrant seeded) or seats no one. */
-async function swissRoundOneDrawOrder(tx: Tx, stageId: string, existing: readonly SwissExistingFixture[]): Promise<string[] | null> {
+ *  drew nobody (every entrant seeded) or seats no one — and (ruling, fix round 1b) when round 1 was NOT paired by the
+ *  draw: a stage live at deploy paired its round 1 in registration order, so its later rounds keep that order. The
+ *  marker is round 1's newest Pair row on the ledger carrying `draw_seed` (never a date): every Pair of a drawn round 1
+ *  since T8 records it, a Redo's step row included, and no Pair before T8 did. */
+async function swissRoundOneDrawOrder(
+  tx: Tx,
+  stageId: string,
+  divisionId: string,
+  existing: readonly SwissExistingFixture[],
+): Promise<string[] | null> {
   const seated = new Set(
     existing
       .filter((f) => f.round_no === 1)
@@ -1433,6 +1441,12 @@ async function swissRoundOneDrawOrder(tx: Tx, stageId: string, existing: readonl
       .filter((id): id is string => id !== null),
   );
   if (seated.size === 0) return null;
+  const [roundOnePair] = await tx<{ drawn: boolean }[]>`
+    select payload ? 'draw_seed' as drawn from division_events
+     where division_id = ${divisionId} and type = 'fixtures_generated'
+       and payload->>'stage_id' = ${stageId} and payload->>'round' = '1'
+     order by seq desc limit 1`;
+  if (roundOnePair?.drawn !== true) return null;
   const roundOne = await tx<{ id: string; seed: number | null }[]>`
     select id, seed from entrants where id in ${tx([...seated])} order by seed nulls last, created_at, id`;
   return roundOne.some((e) => e.seed === null) ? swissRoundOneOrder(swissDrawSeed(stageId), roundOne) : null;
@@ -1588,7 +1602,7 @@ async function swissGen(
       ? field.some((e) => e.seed === null)
         ? swissRoundOneOrder(swissDrawSeed(stageId), field)
         : null
-      : await swissRoundOneDrawOrder(tx, stageId, existing);
+      : await swissRoundOneDrawOrder(tx, stageId, divisionId, existing);
   const drawSeed = target === 1 && drawOrder !== null ? swissDrawSeed(stageId) : null;
   const ranked = drawOrder === null ? field : swissDrawnFieldOrder(drawOrder, field);
   const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
