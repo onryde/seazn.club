@@ -74,17 +74,17 @@ describe("Nav › Streaming item", () => {
     expect(at('href="/directory"')).toBeGreaterThan(-1);
     expect(at('href="/directory"'), "after Directory").toBeLessThan(at('data-testid="nav-streaming"'));
     expect(at('data-testid="nav-streaming"'), "before Settings").toBeLessThan(at('href="/o/riverside/settings"'));
-    // The label collapses to the icon exactly like Dashboard / Directory / Settings. With the Sponsors link (R4 S11) a streaming org has FIVE
-    // links, and five wait for `lg` (owner: md for four links, lg for five; at md the chip kept 20-35px of the 61 B3 needs, nav.tsx).
+    // The label collapses to the icon below `md`, exactly like Dashboard / Directory / Sponsors (the dual-role case uses `lg`). Settings is
+    // its icon alone at every width (owner 2026-11-01), so the org nav's labelled links are four again and main's rung holds.
     const label = html.slice(at('data-testid="nav-streaming"')).match(/<span class="([^"]*)">Streaming<\/span>/);
-    expect(label?.[1]).toBe("hidden lg:inline");
+    expect(label?.[1]).toBe("hidden md:inline");
   });
 
-  it("the label follows the link count too: a claimed player makes it SIX links (Sponsors included), which wait for `xl` like every other label does", async () => {
+  it("the label follows the dual-role rule too: a claimed player keeps `lg`, as every other label does", async () => {
     m.hasClaimedProfile.mockResolvedValue(true);
     const html = await render();
     const label = html.slice(html.indexOf('data-testid="nav-streaming"')).match(/<span class="([^"]*)">Streaming<\/span>/);
-    expect(label?.[1]).toBe("hidden xl:inline");
+    expect(label?.[1]).toBe("hidden lg:inline");
   });
 
   it("asks the predicate for the org the chrome is SHOWING (both streaming keys, org-wide), not some other org", async () => {
@@ -234,9 +234,19 @@ describe("Nav › the width budget", () => {
     const nav = html.match(/<nav class="[^"]*">([\s\S]*?)<\/nav>/)?.[1] ?? "";
     return [...nav.matchAll(/<a\b[^>]*\bclass="([^"]*)"/g)].map((x) => tokens(x[1]));
   };
-  const labelClasses = (html: string): string[][] => {
+  /** Each nav link's OWN label-span class tokens, in order, or null for a link with no label (Settings, owner 2026-11-01). Parsed per
+   *  `<a>…</a>`, so a link without a span can never borrow the next link's. */
+  const labelClasses = (html: string): (string[] | null)[] => {
     const nav = html.match(/<nav class="[^"]*">([\s\S]*?)<\/nav>/)?.[1] ?? "";
-    return [...nav.matchAll(/<a\b[^>]*>[\s\S]*?<span class="([^"]*)">/g)].map((x) => tokens(x[1]));
+    return [...nav.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/g)].map((x) => {
+      const cls = x[1]!.match(/<span class="([^"]*)">/)?.[1];
+      return cls === undefined ? null : tokens(cls);
+    });
+  };
+  /** The index of the Settings link in the nav (the one link with no label). */
+  const settingsIndex = (html: string): number => {
+    const nav = html.match(/<nav class="[^"]*">([\s\S]*?)<\/nav>/)?.[1] ?? "";
+    return [...nav.matchAll(/<a\b([^>]*)>/g)].findIndex((x) => /\bdata-testid="nav-settings"/.test(x[1]!));
   };
   /** The Sign-out button as the NAV renders it: its attributes and its label span's classes. */
   const signOut = (html: string) => {
@@ -314,22 +324,29 @@ describe("Nav › the width budget", () => {
     expect(checked, "anti-vacuity: twenty links looked at").toBe(20);
   });
 
-  it("md..lg: where the labels are ON (only the 4-link org nav) the links take 4px of side padding (md:px-1) and get 12px back at lg (lg:px-3), so the org chip keeps room for the club name; every other bar is icon-only at md, keeps its 12px and has no md override", async () => {
+  it("md..lg: where the labels are ON (the org nav) the labelled links take 4px of side padding (md:px-1) and 8px from lg (lg:px-2, R4: the bar has one more link than main), so the org chip keeps room for the club name; the dual-role nav is icon-only at md, keeps its 12px and has no md override", async () => {
     // B3 (CI e2e: the chip showed 37px of a 38-character club name at 768, 8 characters needing 64). Measured in a browser: 8px and 6px
-    // leave fr/nl at 768 short of 8 characters, 4px clears every width x locale cell (the report's table).
+    // leave fr/nl at 768 short of 8 characters, 4px clears every width x locale cell (the report's table). Settings has no label (owner
+    // 2026-11-01) and its own padding rule (nav-sponsors.test.tsx); it is skipped here BY INDEX and counted, never silently.
     let checked = 0;
     let labelsOnAtMd = 0;
+    let settingsSkipped = 0;
     for (const shape of SHAPES) {
       const html = await renderShape(shape);
       const links = linkClasses(html);
       const labels = labelClasses(html);
       expect(links.length, JSON.stringify(shape)).toBe(labels.length);
+      const skip = settingsIndex(html);
+      expect(skip, `${JSON.stringify(shape)}: the Settings link is found`).toBeGreaterThan(-1);
       for (let i = 0; i < links.length; i++) {
         const l = links[i]!;
+        if (i === skip) { expect(labels[i], "Settings has no label").toBeNull(); settingsSkipped++; continue; }
+        expect(labels[i], `${JSON.stringify(shape)} link ${i}: every other link is labelled`).not.toBeNull();
         if (labels[i]!.includes("md:inline")) {
           labelsOnAtMd++;
           expect(l, `link ${i}: labels on at md, so tight padding there`).toContain("md:px-1");
-          expect(l, `link ${i}: 12px returns at lg`).toContain("lg:px-3");
+          expect(l, `link ${i}: 8px at lg`).toContain("lg:px-2");
+          expect(l, `link ${i}: not main's 12px at lg`).not.toContain("lg:px-3");
           // Not the 8px / 6px that measurement showed too wide for fr and nl at 768.
           expect(l, `link ${i}: not md:px-2`).not.toContain("md:px-2");
           expect(l, `link ${i}: not md:px-1.5`).not.toContain("md:px-1.5");
@@ -340,20 +357,22 @@ describe("Nav › the width budget", () => {
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: twenty links looked at").toBe(20);
-    expect(labelsOnAtMd, "anti-vacuity: the md branch ran - the 4 links of the one 4-link shape").toBe(4);
+    expect(checked, "anti-vacuity: sixteen labelled links looked at (twenty links less the four Settings icons)").toBe(16);
+    expect(settingsSkipped, "anti-vacuity: one Settings icon per shape, skipped by name").toBe(SHAPES.length);
+    expect(labelsOnAtMd, "anti-vacuity: the md branch ran - the labelled links of the two org-nav shapes (3 + 4)").toBe(7);
   });
 
-  it("tablets keep their labels where they fit (owner: md for four links, lg for five), and six wait for xl - nothing is dropped, every label is just revealed at the rung its bar can hold", async () => {
-    // With the Sponsors link (R4 S11) a streaming org or a claimed player has FIVE links and waits for lg; both together have six and wait
-    // for xl. Measured, not reasoned (nav.tsx): five labelled links at md leave the chip 20-35px at 768 against the 61 B3 needs (fr overflows);
-    // six at lg overflow 1024-1100 in es/fr/nl.
-    const rung = (links: number) => (links <= 4 ? "md" : links === 5 ? "lg" : "xl");
+  it("tablets KEEP their labels (owner 2026-10-28): md..lg shows every label of the org nav, and the dual-role nav's wait for lg - Settings, its icon alone, has none to show (owner 2026-11-01)", async () => {
     let checked = 0;
     for (const shape of SHAPES) {
-      const labels = labelClasses(await renderShape(shape));
+      const html = await renderShape(shape);
+      const labels = labelClasses(html);
       expect(labels.length, JSON.stringify(shape)).toBe(shape.links);
-      for (const l of labels) expect(l, JSON.stringify(shape)).toEqual(["hidden", `${rung(shape.links)}:inline`]);
+      const skip = settingsIndex(html);
+      labels.forEach((l, i) => {
+        if (i === skip) expect(l, `${JSON.stringify(shape)}: Settings`).toBeNull();
+        else expect(l, JSON.stringify(shape)).toEqual(["hidden", shape.claimed ? "lg:inline" : "md:inline"]);
+      });
       checked++;
     }
     expect(checked).toBe(4);

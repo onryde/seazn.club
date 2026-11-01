@@ -135,9 +135,9 @@ export default async function OrgHomePage({
             <Link href="/directory" className="btn btn-ghost">
               {t(dict, "org.home.directory")}
             </Link>
-            {/* The Sponsors hub (R4 S11, owner ruling 2026-10-31 "a"). The top-bar Sponsors icon is hidden under 350px, so
-                this entry is the way in at EVERY width: no breakpoint hides it, and it is shown to every role (the hub
-                gives a non-editor its read-only Overview and Sponsors, as Settings → Sponsors did). */}
+            {/* The Sponsors hub (R4; owner rulings 2026-10-31 "a" and 2026-11-01). The top bar carries a labelled Sponsors
+                link but hides it under 350px (390px for an org with a logo), so this entry is the way in at EVERY width: no breakpoint hides it, and it is
+                shown to every role (the hub gives a non-editor its read-only Overview and Sponsors, as Settings → Sponsors did). */}
             <Link href={routes.orgSponsors(orgSlug)} data-testid="org-home-sponsors" className="btn btn-ghost">
               {t(dict, "sponsors.title")}
             </Link>
