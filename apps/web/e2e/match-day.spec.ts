@@ -557,6 +557,19 @@ test.describe("Match Day — Find a court on the division's run sheet (B2)", () 
         expect(box, "the link has a box").not.toBeNull();
         expect(box!.x + box!.width, `inside the ${width}px viewport`).toBeLessThanOrEqual(width);
         if (width === 320) expect(box!.height, "tap height at 320").toBeGreaterThanOrEqual(44);
+        // B4 fix round 1b: where it sits beside its row's Set time (read from the live DOM). Below md: a line of its own UNDER
+        // Set time, right edges aligned, so it never widens Set time's line (a stream chip shares that line: stream-relay A12).
+        // From md: the desktop row, on Set time's line and to its right.
+        const st = await link.locator("xpath=ancestor::li[1]").locator('[data-row-action="set_time"]').boundingBox();
+        expect(st, "its row's Set time has a box").not.toBeNull();
+        const mid = box!.y + box!.height / 2;
+        if (width < 768) {
+          expect(box!.y, `@${width}: below Set time`).toBeGreaterThanOrEqual(st!.y + st!.height - 1);
+          expect(Math.abs(box!.x + box!.width - (st!.x + st!.width)), `@${width}: right edge under Set time's`).toBeLessThanOrEqual(1);
+        } else {
+          expect(mid >= st!.y && mid <= st!.y + st!.height, `@${width}: on Set time's line`).toBe(true);
+          expect(box!.x, `@${width}: right of Set time`).toBeGreaterThanOrEqual(st!.x + st!.width - 1);
+        }
       }
       await expectNoHorizontalScroll(page);
     }

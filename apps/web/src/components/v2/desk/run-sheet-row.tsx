@@ -811,8 +811,14 @@ export function RunSheetRow({
                 {actionLabel}
               </Link>
             )}
-            {/* Match Day B2: the quieter sibling of Set time (which stays THE action, filled) - a ghost link, 44px on a phone. */}
-            {findCourtHref !== null && (
+          </div>
+          {/* Match Day B2: the quieter sibling of Set time (which stays THE action, filled) - a ghost link, 44px on a phone.
+              B4 fix round 1b: OUTSIDE the action's group, and below md a line of its own (`max-md:basis-full`), trailing
+              under Set time at the right edge. Inside the group it widened it, and at 320 a stream chip + Set time + this
+              wrapped the whole group under the chip - Set time left the chip's line (stream-relay A12 @320). From md the
+              wrapper is `contents`: the desktop row is unchanged, Set time then this, in source order. */}
+          {findCourtHref !== null && (
+            <div className="flex justify-end max-md:basis-full md:contents">
               <Link
                 href={findCourtHref}
                 data-testid="run-sheet-find-court"
@@ -820,8 +826,8 @@ export function RunSheetRow({
               >
                 {msg(`runsheet.action.findCourt.${venueNoun}`)}
               </Link>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
       {editing && (

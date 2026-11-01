@@ -82,6 +82,21 @@ describe("the run sheet row's Find a court link", () => {
     expect(html).toMatch(/data-testid="run-sheet-find-court"[^>]*class="[^"]*btn-ghost|class="[^"]*btn-ghost[^"]*"[^>]*data-testid="run-sheet-find-court"/);
   });
 
+  it("B4 fix round 1b: below md it is its own trailing line, OUTSIDE the action's group — so a stream chip, Set time and it never wrap Set time off the chip's line (A12 @320); from md the wrapper is `contents`, the desktop row as it was", () => {
+    const html = row(fx(), { matchDayHref: MATCH_DAY });
+    expect(findCourts(html)).toBe(1);
+    // The action's group closes right after Set time; the link sits in a wrapper of its own, next in source order (the
+    // desktop order: Set time, then Find a court). The browser half: stream-relay.spec.ts A12 @320, match-day.spec.ts B2.
+    const m = /data-row-action="set_time"[^>]*>[^<]*<\/button><\/div><div class="([^"]*)"><a [^>]*data-testid="run-sheet-find-court"/.exec(html);
+    expect(m, "Find a court is not a sibling inside the action's group").not.toBeNull();
+    const cls = m![1]!.split(/\s+/);
+    expect(cls).toEqual(expect.arrayContaining(["max-md:basis-full", "justify-end", "md:contents"]));
+    // Not a match day: no empty wrapper is left behind (positive pair: the match-day row above has exactly one).
+    const wrapper = /<div class="(?=[^"]*\bjustify-end\b)(?=[^"]*max-md:basis-full)[^"]*">/g;
+    expect(html.match(wrapper)).toHaveLength(1);
+    expect(row(fx()).match(wrapper)).toBeNull();
+  });
+
   it("a viewer is never handed it (Match Day is the organiser's: it 404s for anyone who cannot edit)", () => {
     const html = row(fx(), { canEdit: false, matchDayHref: MATCH_DAY });
     expect(html).toContain("Alpha");
