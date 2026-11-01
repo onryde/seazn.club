@@ -27,6 +27,9 @@ import {
   setStageStatusSql,
   overflowingIn,
   matchRoomPathBySql,
+  enclosingStageCard,
+  openStagePanel,
+  stageCardOf,
 } from "./helpers";
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
@@ -3587,7 +3590,7 @@ test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, 
   await expectNoHorizontalScroll(page);
 });
 
-test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has fixtures is a plain, unguarded click — no destructive-edit warning", async ({
+test("P6 task B fix round 3 (Critical 1), Match Day C3: a stage that already has fixtures offers no Generate - it is started; Complete waits for the matches and says why", async ({
   page,
 }) => {
   test.skip(p6bDivisionId === "", "P6 task B setup did not run/complete");
@@ -3618,34 +3621,24 @@ test("P6 task B fix round 3 (Critical 1): regenerating a stage that already has 
   await page.goto(await divisionPath(page.request, regenDivisionId, "?tab=fixtures"), { waitUntil: "load" });
 
   const groupCard = page.locator("section.card", { hasText: "Groups" }).first();
-  // Competition desk W3: below `md` the stage's edit controls fold into a
-  // bottom sheet behind `stage-rail-trigger`; at >= 768 the rail is inline and
-  // the trigger itself is `md:hidden`. OPEN the fold rather than weakening the
-  // assertion below — the control still exists and must still be reachable.
-  // Gate the open on the TOGGLE being visible, never on a width literal:
-  // clicking a hidden control throws.
+  // Competition desk W3: below `md` the stage's edit controls fold into a bottom sheet behind `stage-rail-trigger`; at >= 768 the
+  // rail is inline and the trigger itself is `md:hidden`. OPEN the fold rather than weakening the assertion below - gate the open
+  // on the TOGGLE being visible, never on a width literal: clicking a hidden control throws.
   const railTrigger = groupCard.getByTestId("stage-rail-trigger");
   if (await railTrigger.isVisible()) await railTrigger.click();
-  const generateBtn = groupCard.getByRole("button", { name: "Generate fixtures" });
-  await expect(generateBtn).toBeVisible();
 
-  // Regeneration is additive-only — generateStageFixtures never deletes, it
-  // only inserts fixtures missing from the stage's existing set (stages.ts)
-  // — so a re-click on a stage that ALREADY has fixtures (stageFixtures.length
-  // > 0) proceeds immediately: no "are you sure" gate, because there is
-  // nothing at stake to name. The old dialog claimed data loss that could
-  // never happen; it is gone, not replaced with different copy.
-  await generateBtn.click();
+  // Positive pair first: the rail IS rendering its actions (Complete is there, and disabled while the two matches are open),
+  // so the absence of Generate below is about the stage, not an unrendered rail.
+  const complete = groupCard.getByTestId("stage-complete");
+  await expect(complete, "the rail renders its actions").toBeVisible();
+  await expect(complete, "two open matches: Complete waits").toBeDisabled();
+  await expect(groupCard.getByTestId("stage-complete-hint"), "and says why, with the count").toHaveText(/unlocks when all 2 matches are played/);
+  // Owner ruling (Match Day, late entrant): once a stage has started, Generate is gone from the card. Adding to a started stage is
+  // Add match (ad-hoc kinds) or the Settings rebuild - never a second Generate, so there is no "destructive edit" to warn about.
+  await expect(groupCard.getByRole("button", { name: "Generate fixtures" }), "a started stage is not re-generated from the card").toHaveCount(0);
+  await expect(groupCard.getByTestId("stage-generate")).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  await expect(page.getByText(/error/i)).toHaveCount(0);
   await expectNoHorizontalScroll(page);
-
-  // Idempotent: rules didn't change since the API-driven generate above, so
-  // the real outcome is "nothing new" — proven via the notice text the
-  // component itself renders on a landed response (schedule.notice.nothingNew),
-  // which is only reachable once the request actually fired (no gate ate the
-  // click).
-  await expect(page.getByText("Nothing new to generate", { exact: false })).toBeVisible({ timeout: 10_000 });
 });
 
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI — option
@@ -6230,20 +6223,36 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await dismissCookieBanner(page);
   const row = page.getByTestId(`stage-format-row-${fb.stageId}`);
   await expect(row).toBeVisible({ timeout: 20_000 });
-  await assertTapFloor(row.getByTestId("stage-format-edit"), "Edit rules");
+  // Match Day C3: closed, the card is a one-line summary under a header of three buttons; below `md` the three ride in ONE
+  // "Stage settings" menu. Gate the open on the TRIGGER being visible (it is `md:hidden`), never on a width literal.
+  const card = enclosingStageCard(row);
+  const settings = card.getByTestId("stage-settings-trigger");
+  const folded = await settings.isVisible();
+  const toolFormat = card.getByTestId("stage-tool-format");
+  if (folded) {
+    await assertTapFloor(settings, "Stage settings");
+    await settings.click();
+    await expect(settings).toHaveAttribute("aria-expanded", "true");
+  }
+  // The same three buttons at every width (one DOM): attached always, tappable once the menu is open.
+  for (const id of ["format", "points", "tiebreaks"]) {
+    await expect(card.getByTestId(`stage-tool-${id}`)).toBeAttached();
+    await assertTapFloor(card.getByTestId(`stage-tool-${id}`), `stage-tool-${id}`);
+  }
   await expectNoHorizontalScroll(page);
-  // Fix round 1 (I-1): the collapsed row says the stage's format as chips, they wrap inside the row, and none is clipped.
-  const chips = row.getByTestId("stage-format-chips");
-  await expect(chips, `the chips are on the collapsed row at ${projectWidth}`).toBeVisible();
-  expect(await chips.locator("li").count(), "the chips are a list of clauses").toBeGreaterThan(1);
+  // The collapsed row says the stage's format in ONE line (Match Day C3: the chips became the summary), it wraps inside the row, and
+  // nothing is clipped.
+  const summary = row.getByTestId("stage-format-summary");
+  await expect(summary, `the summary is on the collapsed row at ${projectWidth}`).toBeVisible();
+  expect((await summary.innerText()).length, "the summary says something").toBeGreaterThan(10);
   const collapsedClip = await overflowingIn(page, `[data-testid="stage-format-row-${fb.stageId}"]`, "*", "the stage rules row is missing");
   expect(collapsedClip.clipped, `nothing in the collapsed row is clipped at ${projectWidth}`).toEqual([]);
   if (shots) await row.screenshot({ path: `${shots}/collapsed-${projectWidth}.png` });
-  await row.getByTestId("stage-format-edit").click();
+  await toolFormat.click();
   const editor = row.getByTestId("stage-format-editor");
   await expect(editor).toBeVisible();
-  // M-3: while editing, Cancel is the one way out and Edit is gone.
-  await expect(row.getByTestId("stage-format-edit")).toHaveCount(0);
+  // M-3: while editing, Cancel is the one way out and the Match format button reads as pressed.
+  await expect(toolFormat).toHaveAttribute("aria-expanded", "true");
   await assertTapFloor(row.getByTestId("stage-format-cancel"), "football Cancel");
   const interactive = editor.locator("select, input, button");
   const n = await interactive.count();
@@ -6278,7 +6287,7 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   await page.goto(await divisionPath(page.request, chess.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   const crow = page.getByTestId(`stage-format-row-${chess.stageId}`);
   await expect(crow).toBeVisible({ timeout: 20_000 });
-  await crow.getByTestId("stage-format-edit").click();
+  await openStagePanel(enclosingStageCard(crow), "format");
   const list = crow.getByTestId("stage-rule-sequence-tiebreakRungs");
   await expect(list).toBeVisible();
   const items = list.locator("li");
@@ -6382,6 +6391,8 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   const fb = await seed("football", footballVariant, "football", { points: { win: 4, draw: 2, loss: 1 } });
   await page.goto(await divisionPath(page.request, fb.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  // Match Day C3: the Points section opens from the card's header (a phone: from the Stage settings menu).
+  await openStagePanel(stageCardOf(page, fb.stageId), "points");
   const section = page.getByTestId(`stage-points-${fb.stageId}`);
   await expect(section).toBeVisible({ timeout: 20_000 });
   await expectNoHorizontalScroll(page);
@@ -6423,6 +6434,7 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   expect(splitVariant, "premise: the rulebooks split an ice-hockey variant (iihf)").toBeDefined();
   const ih = await seed("icehockey", splitVariant, "icehockey");
   await page.goto(await divisionPath(page.request, ih.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, ih.stageId), "points");
   const card = page.getByTestId(`stage-points-${ih.stageId}`);
   await expect(card).toHaveAttribute("data-stage-points-state", "editor", { timeout: 20_000 });
   await expect(card.getByTestId("stage-points-row-win-ot"), "the overtime row is on the card").toBeVisible();
@@ -6444,6 +6456,7 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
     await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } } })} where id = ${ih.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, ih.stageId), "points");
   const legacy = page.getByTestId(`stage-points-${ih.stageId}`);
   await expect(legacy).toHaveAttribute("data-stage-points-basis", "own", { timeout: 20_000 });
   await expect(legacy.getByTestId("stage-points-refusal"), "the refusal is on the card").toBeVisible();
@@ -6506,6 +6519,7 @@ test("W2d stage Tie-breaks section at every width: the fold opens, the arrows, r
 
   await page.goto(await divisionPath(page.request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, stageId), "tiebreaks");
   const section = page.getByTestId(`stage-tiebreaks-${stageId}`);
   await expect(section).toBeAttached({ timeout: 20_000 });
   await expect(section).toHaveAttribute("data-state", "editor");
@@ -6547,6 +6561,7 @@ test("W2d stage Tie-breaks section at every width: the fold opens, the arrows, r
   const first = await apiJson(request, `/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
   expect(first.status, `start match: ${JSON.stringify(first.error)}`).toBe(201);
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, stageId), "tiebreaks");
   const locked = page.getByTestId(`stage-tiebreaks-${stageId}`);
   await expect(locked).toHaveAttribute("data-state", "locked", { timeout: 20_000 });
   await expect(locked.getByTestId("stage-tiebreaks-locked")).toBeVisible();

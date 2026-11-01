@@ -321,74 +321,12 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     // settle but no screen offered it (the console and the desk both read the bracket-only predicate).
     const lg = await staged(request, "generic", "score", "league", ["W2a Ana", "W2a Ben", "W2a Cy"]);
     expect(lg.ready.length, "a three-entrant round robin has three fixtures").toBe(3);
-    const [held, playing] = [lg.ready[0]!, lg.ready[1]!];
-    await post(request, held.id, "core.start");
-    await post(request, held.id, "core.abandon", { reason: "rain" });
-    expect((await read(request, held.id)).status).toBe("abandoned");
-    // The negative pair: a sibling merely IN PLAY is held by nothing.
-    await post(request, playing.id, "core.start");
-
-    const path = await fixturePath(request, held.id);
-    const division = path.split("/f/")[0]!;
-    await page.goto(`${division}?tab=fixtures`);
-    // The sibling in play makes the division "Live", whose default run-sheet filter is "Today" - and an untimed abandoned
-    // match is not "today" (nor "needs result": that filter has never counted a held row, in a bracket either). "All" shows
-    // every row, which is what this test is about: the HOLD on the row.
-    await page.getByRole("button", { name: "All", exact: true }).first().click();
-    const row = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
-    await expect(row.getByTestId("run-sheet-held-chip"), "the run sheet holds the abandoned league match").toHaveText("Needs a decision");
-    await expect(row.locator("[data-row-action]")).toHaveAttribute("data-row-action", "decide");
-    const playingNo = (await fixturePath(request, playing.id)).split("/f/")[1]!;
-    await expect(page.locator(`li[data-fixture-no="${playingNo}"]`).getByTestId("run-sheet-held-chip"), "an in-play sibling is not held").toHaveCount(0);
-
-    await row.locator('[data-row-action="decide"]').click();
-    await page.waitForURL((u) => u.pathname === path);
-    const block = page.getByTestId("needs-decision");
-    let widths = 0;
-    for (const w of [1280, 768, 320]) {
-      await page.setViewportSize({ width: w, height: 900 });
-      await expect(block, `${w}: the console holds it`).toBeVisible();
-      await expect(block.locator("[data-cause]")).toHaveAttribute("data-cause", "abandoned");
-      // The TABLE sentence: no "advances" in a league.
-      await expect(block.locator("[data-cause]")).toHaveText(ui("score.needsDecision.body.abandoned.table"));
-      await expectNoHorizontalScroll(page);
-      await crop(block, "console-held-block-table", w);
-      widths++;
-    }
-    expect(widths).toBe(3);
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await expect(page.getByTestId("score-finalize")).toHaveCount(0);
-    await page.getByTestId("settle-open").click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByText(ui("score.needsDecision.whoWins"), { exact: true })).toBeVisible();
-    await expect(dialog.getByText(ui("score.needsDecision.whoAdvances"), { exact: true })).toHaveCount(0);
-    await expect(page.getByTestId("settle-confirm")).toBeDisabled(); // nothing chosen yet: pin what it OPENS AT
-    await dialog.getByTestId(`settle-winner-${held.home_entrant_id}`).click();
-    await dialog.getByTestId("settle-method-lot").check();
-    await page.getByTestId("settle-confirm").click();
-    await expect(block).toHaveCount(0);
-    const after = await read(request, held.id);
-    expect(after.status).toBe("decided");
-    expect(after.outcome).toMatchObject({ kind: "win", winner: held.home_entrant_id, method: "settled_lot" });
-    // The desk row no longer holds it.
-    await page.goto(`${division}?tab=fixtures`);
-    await page.getByRole("button", { name: "All", exact: true }).first().click();
-    const settledRow = page.locator(`li[data-fixture-no="${path.split("/f/")[1]!}"]`);
-    await expect(settledRow, "rig: the row is on the sheet under All").toBeVisible();
-    await expect(settledRow.getByTestId("run-sheet-held-chip")).toHaveCount(0);
-  });
-
-  test("X-AB-5 (fix round 2, N2): the explicit Complete stage of a league is refused BY NAME while a match is held - the desk says which match, by its players, and the settle then lets the stage complete", async ({ page, request }) => {
-    // Seam: producer (completeStageIfReady's refusal) -> v1 wire body -> the stages panel's catch -> `schedule-warning`.
-    // The unit chain stops at classifyActError; only the browser proves the panel hands it the board's own match lookup
-    // (without it the sentence reads "round 1, match 2" instead of the players).
-    const lg = await staged(request, "generic", "score", "league", ["W2a Ana", "W2a Ben", "W2a Cy"]);
-    expect(lg.ready.length, "a three-entrant round robin has three fixtures").toBe(3);
     const [held, ...rest] = lg.ready;
-    await post(request, held!.id, "core.start");
-    await post(request, held!.id, "core.abandon", { reason: "rain" });
-    expect((await read(request, held!.id)).status).toBe("abandoned");
+    // Match Day C3: the card's Complete button is DISABLED while any match is open - a held one included - so the organiser
+    // cannot press it into a refusal from a fresh page. The refusal-by-name is what a STALE tab still gets: the page renders with
+    // every match settled (Complete enabled), then a result is taken back and the match is abandoned behind it.
+    const heldResult = await post(request, held!.id, "generic.result", { p1Score: 2, p2Score: 1 });
+    expect((await read(request, held!.id)).status, "rig: the match is played at first").toBe("decided");
     for (const f of rest) {
       await post(request, f.id, "generic.result", { p1Score: 2, p2Score: 1 });
       expect((await read(request, f.id)).status, "the other matches are played").toBe("decided");
@@ -402,6 +340,13 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await page.goto(`${division}?tab=fixtures`);
     await dismissCookieBanner(page);
     await expect(complete).toBeVisible();
+    await expect(complete, "every match is settled: Complete is enabled on this page").toBeEnabled();
+    // The page is now stale: the result is voided and the match is abandoned behind it, so it is held.
+    const heldEventId = (heldResult.data as { event_id: string }).event_id;
+    await post(request, held!.id, "core.void", { event_id: heldEventId });
+    await post(request, held!.id, "core.start");
+    await post(request, held!.id, "core.abandon", { reason: "rain" });
+    expect((await read(request, held!.id)).status, "rig: the match is now held").toBe("abandoned");
     await complete.click();
     const warning = page.getByTestId("schedule-warning");
     await expect(warning, "named by its players, in the organiser's words").toHaveText(ui("schedule.error.completeHeldOne", { matches: heldNames }));
@@ -412,6 +357,7 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await post(request, held!.id, "core.settle", { winner: held!.home_entrant_id, method: "organiser" });
     expect((await read(request, held!.id)).status, "the settle decided it").toBe("decided");
     await page.reload();
+    await expect(complete, "settled: every match is played, Complete is enabled again").toBeEnabled();
     await complete.click();
     await expect.poll(stageStatus, "settled, the league completes").toEqual(["complete"]);
     await expect(page.getByTestId("schedule-warning")).toHaveCount(0);

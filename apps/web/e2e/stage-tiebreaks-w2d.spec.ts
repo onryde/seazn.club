@@ -24,7 +24,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
 import { offerableKeys, reachableOutcomes, validateCascade, type CascadeContext } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll } from "./helpers";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, stageCardOf } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { openPanels } from "./helpers/rules-strip";
 
@@ -100,6 +100,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   // --- inherit -----------------------------------------------------------------------------------------------------------
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   const section = page.getByTestId(`stage-tiebreaks-${rig.stageId}`);
   await expect(section).toBeAttached({ timeout: STEP_MS });
   await expect(section).toHaveAttribute("data-state", "editor");
@@ -115,6 +116,9 @@ test("football league: the order is inherited, overridden (a move, an added step
   await expect(section.getByTestId("stage-tiebreaks-up-0"), "the primary measure is pinned").toHaveCount(0);
   await expect(section.getByTestId("stage-tiebreaks-save"), "nothing changed: nothing to save").toHaveCount(0);
   await axeClean(page, `[data-testid="stage-tiebreaks-${rig.stageId}"]`);
+  // The Points panel is closed until its header button opens it: open it, so the axe pass sees both sections of the card.
+  await openStagePanel(stageCardOf(page, rig.stageId), "points");
+  await expect(page.getByTestId(`stage-points-${rig.stageId}`), "the Points panel opened").toBeAttached({ timeout: STEP_MS });
   await axeClean(page, `[data-testid="stage-points-${rig.stageId}"]`);
   await expectNoHorizontalScroll(page);
 
@@ -143,6 +147,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   await expect.poll(async () => (await servedOrder(request, rig.stageId)).keys, { timeout: STEP_MS }).toEqual(own);
   expect((await servedOrder(request, rig.stageId)).source).toBe("stage");
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await openFold(section);
   await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "overridden", { timeout: STEP_MS });
   expect(await listed(section), "a reload reads the stored order").toEqual(own);
@@ -179,6 +184,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   expect((await clearPut).postDataJSON(), "clear sends the strict body, the order null").toEqual({ tiebreakers: null });
   await expect.poll(async () => (await servedOrder(request, rig.stageId)).source, { timeout: STEP_MS }).toBe("sport");
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await openFold(section);
   await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "inherited", { timeout: STEP_MS });
   await expect(section.getByTestId("stage-tiebreaks-clear"), "nothing of its own to clear").toHaveCount(0);
@@ -199,6 +205,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
   expect((await servedOrder(request, rig.stageId)).pinnedAt, "generating pins the stage").not.toBeNull();
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await expect(section).toHaveAttribute("data-state", "editor", { timeout: STEP_MS });
   await openFold(section);
   // Pinned from the sport's order (the stage and the division hold none): it still reads as inheriting the sport's.
@@ -223,6 +230,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   expect(afterPinSave.source, "the stage's own order").toBe("stage");
   expect(afterPinSave.pinnedAt, "re-pinned, the pin's date kept").toBe(pinnedAt);
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await openFold(section);
   // Its own order now (re-pinned): overridden.
   await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "overridden", { timeout: STEP_MS });
@@ -234,6 +242,7 @@ test("football league: the order is inherited, overridden (a move, an added step
   const first = await apiJson(request, `/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
   expect(first.status, `start match: ${JSON.stringify(first.error)}`).toBe(201);
   await page.reload({ waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "tiebreaks");
   await expect(section).toHaveAttribute("data-state", "locked", { timeout: STEP_MS });
   await expect(section.getByTestId("stage-tiebreaks-locked")).toContainText(L["stageCard.locked"]!);
   await openFold(section);
@@ -272,6 +281,7 @@ test("football group stage with a shoot-out: the points rows are exactly the out
   const expected = reach.filter((k) => k !== "loss.so").map((k) => `stage-points-row-${k.replace(/[.:]/g, "-")}`);
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, rig.stageId), "points");
   const section = page.getByTestId(`stage-points-${rig.stageId}`);
   await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
   const rows = await section

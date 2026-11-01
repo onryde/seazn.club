@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { legacyPointsRule, pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, apiJson, divisionPath } from "./helpers";
+import { TAG, apiJson, divisionPath, openStagePanel, stageCardOf } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { openPanels } from "./helpers/rules-strip";
 import { SPORT_RULES } from "../src/lib/match-rules";
@@ -217,6 +217,7 @@ test("generic: once a match has started the rule fields lock with their own sent
   expect(patched.status, `division points save before the first score: ${JSON.stringify(patched.error)}`).toBe(200);
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, rig.stageId), "points"); // Match Day C3: the card's Points button opens the section
   const editor = page.getByTestId(`stage-points-${rig.stageId}`);
   await expect(editor, "not scored yet: the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
   await expect(editor).toHaveAttribute("data-stage-points-basis", "pin");
@@ -260,6 +261,7 @@ test("generic: once a match has started the rule fields lock with their own sent
   // (Match Day C2) - never the division's new win. The sentence is the public line's own words for the editor's rule.
   expect(sentence(pinned), "premise: the pin and the moved points read differently").not.toBe(sentence({ ...pinned, w: moved }));
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await openStagePanel(stageCardOf(page, rig.stageId), "points");
   const card = page.getByTestId(`stage-points-${rig.stageId}`);
   await expect(card, "a match has started: the card reads").toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
   await expect(card).toHaveAttribute("data-stage-points-basis", "pin");

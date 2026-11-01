@@ -316,7 +316,9 @@ test("the run sheet groups by venue day and prints the day, the time and the pit
   // block (found via the day header it contains) is what makes this
   // assertion mean "these three, in this order", not "at least 3 rows
   // somewhere on the page".
-  const dayBlock = page.locator("section", { has: page.locator("[data-run-sheet-day]") });
+  // Match Day C3: the sheet now sits inside its stage's card, which is itself a <section>, so "a section that has the day header"
+  // matches the card too: the day block is the NEAREST section above the header.
+  const dayBlock = page.locator("[data-run-sheet-day]").locator("xpath=ancestor::section[1]");
   const fixtureNos = await dayBlock
     .locator("[data-fixture-no]")
     .evaluateAll((els) => els.map((el) => el.getAttribute("data-fixture-no")));
@@ -1660,7 +1662,9 @@ test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's shee
   const rail1 = rails.nth(0);
   const rail2 = rails.nth(1);
 
-  const generate1 = rail1.getByTestId("stage-generate");
+  // Match Day C3: a stage that has fixtures has no Generate (it leads with Complete, waiting); a fresh stage leads with Generate.
+  // Each rail's own first control is what folds.
+  const generate1 = rail1.getByTestId("stage-complete");
   const generate2 = rail2.getByTestId("stage-generate");
   const trigger1 = rail1.getByTestId("stage-rail-trigger");
   const trigger2 = rail2.getByTestId("stage-rail-trigger");
@@ -1669,7 +1673,7 @@ test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's shee
   // `toBeAttached`, not `toBeVisible`, on the folded controls (brief) —
   // visibility is exactly what the fold denies; the assertion has to prove
   // the control still EXISTS, hidden, not that it was never built.
-  await expect(generate1, "stage 1's stage-generate never rendered at all — nothing to fold").toBeAttached();
+  await expect(generate1, "stage 1's stage-complete never rendered at all — nothing to fold").toBeAttached();
   await expect(generate2, "stage 2's stage-generate never rendered at all — nothing to fold").toBeAttached();
   await expect(generate1, "stage 1's control is visible before any tap — the fold did not happen").not.toBeVisible();
   await expect(generate2, "stage 2's control is visible before any tap — the fold did not happen").not.toBeVisible();
@@ -1740,7 +1744,7 @@ test("Task 10: the stage rail folds into a bottom sheet at 320, one stage's shee
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   await dismissCookieBanner(page);
   const rail1desktop = page.getByTestId("stage-rail").nth(0);
-  await expect(rail1desktop.getByTestId("stage-generate"), "stage 1's control is not visible at 1280 with no tap").toBeVisible();
+  await expect(rail1desktop.getByTestId("stage-complete"), "stage 1's control is not visible at 1280 with no tap").toBeVisible();
   const set1280 = await railControlSet(rail1desktop);
   console.log("Task 10 stage-rail control set at 320px (open):", JSON.stringify(set320));
   console.log("Task 10 stage-rail control set at 1280px:      ", JSON.stringify(set1280));
@@ -1781,9 +1785,9 @@ test("Task 10: at md and up the Stage tools trigger is absent and the rail is vi
     await expect(sheet, `stage-sheet did not render at ${width}px`).toBeVisible();
     await expect(rail, `stage-rail did not render at ${width}px`).toBeVisible();
     const trigger = rail.getByTestId("stage-rail-trigger");
-    const generate = rail.getByTestId("stage-generate");
+    const generate = rail.getByTestId("stage-complete"); // C3: the seeded stage has fixtures, so its first control is Complete
     await expect(trigger, `Stage tools trigger is visible at ${width}px — should be md:hidden`).not.toBeVisible();
-    await expect(generate, `stage-generate is not visible at ${width}px with no tap`).toBeVisible();
+    await expect(generate, `stage-complete is not visible at ${width}px with no tap`).toBeVisible();
 
     // Option B: stacked (rail below sheet), never side by side, at both
     // widths — the grid this used to check for is gone entirely, not just
@@ -1884,14 +1888,14 @@ test("Task 10 controller round: the rail's direct children share one left edge, 
     // fresh seeded league stage actually renders (no synthetic state
     // needed: unscheduled fixtures by default -> the link renders;
     // `StageCourtTagsEditor`'s trigger always renders).
-    const generate = rail.getByTestId("stage-generate");
+    const generate = rail.getByTestId("stage-complete"); // C3: the seeded stage has fixtures, so its first control is Complete
     const courtTagsTrigger = rail.getByTestId("stage-court-tags").getByRole("button").first();
     // The testid sits on the inner count `<span>`; `..` climbs to the `<a>`
     // itself — the actual flex item whose own left edge the row's `px-4`
     // positions, matching how `generate`/`courtTagsTrigger` above are also
     // measured on the interactive element itself, not an outer wrapper.
     const unscheduledLink = rail.getByTestId("stage-unscheduled-count").locator("..");
-    await expect(generate, `stage-generate not visible at ${width}px`).toBeVisible();
+    await expect(generate, `stage-complete not visible at ${width}px`).toBeVisible();
     await expect(courtTagsTrigger, `court-tags trigger not visible at ${width}px`).toBeVisible();
     await expect(unscheduledLink, `stage-unscheduled-count link not visible at ${width}px`).toBeVisible();
 
@@ -1921,7 +1925,7 @@ test("Task 10 controller round: the rail's direct children share one left edge, 
 
     // D4 — every one of the three clears the 44px floor.
     for (const [name, box] of [
-      ["stage-generate", generateBox],
+      ["stage-complete", generateBox],
       ["court-tags trigger", courtTagsBox],
       ["stage-unscheduled-count link", unscheduledBox],
     ] as const) {
@@ -2246,30 +2250,25 @@ test("court-tags trigger opens a modal containing the editor body, and clears th
 });
 
 // ---------------------------------------------------------------------------
-// Review finding M2 — "View N fixtures" must make its own label true.
+// Review finding M2 (rewritten for Match Day C3) - a stage's fixtures live IN its card, and the Today filter must not strand them.
 //
-// The control set ONLY the stage filter. The type filter is separate state and
-// initialises to "today" on a match-day division, and run-sheet.tsx's keep()
-// ANDs the two. So a stage whose fixtures are NOT today advertised "View 3
-// fixtures", the organiser tapped it, and the sheet said "No fixtures match
-// Today": promised 3, delivered 0. Sending someone somewhere empty is worse
-// than not offering the trip.
-//
-// This is invisible to the unit suite twice over: apps/web vitest is
-// environment:"node" so the onClick never runs, and the existing
-// run-sheet-stage-filter.test.tsx drives <RunSheet> directly with an explicit
-// `filter` prop, which is precisely the coupling the defect lives in.
+// Before C3 the stage card offered a "View N fixtures" trip to a division-wide sheet below; M2 was that label promising N rows and
+// the type filter (initialised to "today" on a match-day division) delivering fewer. The trip is gone - the rows are in the card -
+// but the same coupling stays: the sheet opens on Today, a stage's other fixtures are not today, and the organiser must (a) be told
+// the filter hides them and (b) reach every one of them, in THEIR stage's card, with one tap. Invisible to the unit suite twice
+// over: apps/web vitest is environment:"node" so the filter's onClick never runs, and the run-sheet unit tests drive <RunSheet>
+// with an explicit `filter` prop, which is precisely the coupling this lives in.
 // ---------------------------------------------------------------------------
-test("Review M2: tapping 'View N fixtures' shows N fixtures, even when the sheet opened on Today", async ({
+test("Review M2 (C3): the stage card holds its rows - no 'View N fixtures' - and 'All' brings every fixture into it, even when the sheet opened on Today", async ({
   page,
   request,
 }) => {
   const { divisionId, fixtureIds } = await seedRunSheetDivision(request);
-  expect(fixtureIds.length, "seed produced no fixtures — setup failed, not the filter").toBeGreaterThanOrEqual(2);
+  expect(fixtureIds.length, "seed produced no fixtures - setup failed, not the filter").toBeGreaterThanOrEqual(2);
 
   // The division must be STARTED, or `resolvePhase`'s rung 1
-  // (`divisionStatus === "setup"` ⇒ setting_up, division-phase.ts) short-
-  // circuits every later rung and the sheet opens on "All" — which is
+  // (`divisionStatus === "setup"` => setting_up, division-phase.ts) short-
+  // circuits every later rung and the sheet opens on "All" - which is
   // exactly how the first run of this test failed, at its own guard below
   // rather than by passing vacuously.
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
@@ -2278,7 +2277,7 @@ test("Review M2: tapping 'View N fixtures' shows N fixtures, even when the sheet
   // One fixture TODAY: that is what puts the division in the match_day phase,
   // which is what makes the type filter initialise to "today". Every other
   // fixture is pushed to a date that filter excludes, so an un-cleared type
-  // filter can only ever show fewer than the label promises.
+  // filter can only ever show fewer than the stage holds.
   const today = new Date();
   today.setUTCHours(12, 0, 0, 0);
   await setFixtureScheduledAtSql(fixtureIds[0]!, today.toISOString());
@@ -2289,36 +2288,35 @@ test("Review M2: tapping 'View N fixtures' shows N fixtures, even when the sheet
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   await dismissCookieBanner(page);
 
-  // The sheet really did open filtered — without this the test proves nothing,
+  // The sheet really did open filtered - without this the test proves nothing,
   // because a sheet that opened on "All" would pass the assertions below in
   // both the fixed and the broken build.
   const todayChip = page.getByTestId("run-sheet-filter").locator('[data-filter="today"]');
-  await expect(todayChip, "no Today chip — this division is not in the match-day phase").toBeVisible();
+  await expect(todayChip, "no Today chip - this division is not in the match-day phase").toBeVisible();
   await expect(
     todayChip,
     "the run sheet did not open on Today, so this test cannot witness the defect",
   ).toHaveAttribute("aria-pressed", "true");
 
-  const viewFixtures = page.getByTestId("stage-view-fixtures").first();
-  await expect(viewFixtures, "the View N fixtures control did not render").toBeVisible();
-  const label = (await viewFixtures.textContent()) ?? "";
-  const promised = Number(/(\d+)/.exec(label)?.[1]);
-  expect(promised, `could not read a count out of "${label}"`).toBeGreaterThanOrEqual(2);
+  // The retired trip is gone, and its words with it.
+  await expect(page.getByTestId("stage-view-fixtures"), "the View N fixtures control is retired").toHaveCount(0);
+  await expect(page.getByText(/View \d+ fixtures?/)).toHaveCount(0);
 
-  await viewFixtures.click();
+  // Today keeps exactly the one fixture that is today, and it sits in its stage's card.
+  const inCards = page.locator('[data-testid="stage-run-sheet"] li[data-fixture-no]');
+  await expect.poll(async () => inCards.count(), { message: "Today did not keep the one fixture that is today" }).toBe(1);
 
-  // The label's promise, kept: N rows, and not the empty state.
-  const runSheet = page.getByTestId("run-sheet");
-  await expect(
-    runSheet.getByTestId("run-sheet-empty"),
-    `"View ${promised} fixtures" landed the organiser on an empty run sheet`,
-  ).toHaveCount(0);
+  // 'All': every fixture the stage holds, in the card - not on a sheet elsewhere.
+  await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
   await expect
-    .poll(
-      async () => runSheet.locator("li[data-fixture-no]").count(),
-      { message: `the sheet shows fewer rows than the "${label.trim()}" control promised` },
-    )
-    .toBe(promised);
+    .poll(async () => inCards.count(), { message: "'All' did not bring every fixture into its stage's card" })
+    .toBe(fixtureIds.length);
+  // Every row on the page is one of the cards' rows: there is no second, division-wide copy.
+  await expect(page.locator('[data-testid="run-sheet"] li[data-fixture-no]')).toHaveCount(fixtureIds.length);
+  await expect(
+    page.getByTestId("run-sheet-empty"),
+    "the 'no fixtures match' state outlived the filter that caused it",
+  ).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -2343,7 +2341,7 @@ test("Review M4: the phone Stage tools sheet closes on Escape and gives focus ba
 
   const trigger = page.getByTestId("stage-rail-trigger").first();
   const sheet = page.getByTestId("stage-rail-sheet").first();
-  const generate = page.getByTestId("stage-generate").first();
+  const generate = page.getByTestId("stage-complete").first(); // C3: the seeded stage has fixtures, so its control is Complete
   await expect(trigger, "no Stage tools trigger at 320").toBeVisible();
 
   await trigger.click();
@@ -2404,7 +2402,7 @@ test("Review M4: the phone Stage tools sheet closes on Escape and gives focus ba
 // leaves one day block, no unscheduled pile, no settled-untimed pile, and
 // therefore a day block that is the last thing in the card.
 // ---------------------------------------------------------------------------
-test("Review m1: the NOW rule does not square off the run sheet's bottom corners", async ({ page, request }) => {
+test("Review m1 (C3): the NOW rule that ends a stage's sheet stays square while the stage's rail sits under it, and the card keeps its own corners", async ({ page, request }) => {
   // Same zone trick the day-grouping case uses: real "now" is local midday
   // there, so "an hour ago" is unambiguously the SAME local day and this
   // case behaves identically at every hour of the real clock.
@@ -2422,51 +2420,42 @@ test("Review m1: the NOW rule does not square off the run sheet's bottom corners
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   await dismissCookieBanner(page);
 
-  const sheet = page.getByTestId("run-sheet");
-  const now = sheet.getByTestId("run-sheet-now");
+  // Match Day C3: the sheet is one stage's rows INSIDE that stage's card, and an editor's card carries the stage rail UNDER the
+  // sheet - so a NOW rule that ends the sheet is mid-card, and (as with a NOW rule that ends a day block with later days to come)
+  // it must stay SQUARE: a rounded lime bar in the middle of a card is the defect. A viewer's card has no rail, the sheet ends
+  // the card, and the rule takes the card's radius (`endsCard`; the unit suite pins that half - a viewer is not this spec's user).
+  const stageSheet = page.getByTestId("run-sheet").getByTestId("stage-run-sheet");
+  const now = stageSheet.getByTestId("run-sheet-now");
   await expect(now, "no NOW rule rendered — nothing was measured").toHaveCount(1);
 
-  // The state this test exists for, asserted rather than assumed: the rule
-  // really is the last element in the sheet. Without this the radius check
-  // below passes vacuously on a mid-sheet rule that was never supposed to
-  // be rounded.
-  const isLast = await now.evaluate((el) => {
-    const card = el.closest('[data-testid="run-sheet"]');
-    const all = card ? Array.from(card.querySelectorAll("li, section")) : [];
-    return all.length > 0 && all[all.length - 1] === el;
+  // The state this test exists for, asserted rather than assumed: the rule really is the last element in the stage's sheet, and the
+  // stage's rail really does follow it inside the same card. Without both, the radius check below passes on a state that was never set up.
+  const placed = await now.evaluate((el) => {
+    const sheet = el.closest('[data-testid="stage-run-sheet"]');
+    const all = sheet ? Array.from(sheet.querySelectorAll("li, section")) : [];
+    const card = el.closest("section[data-stage-id]");
+    const rail = card?.querySelector('[data-testid="stage-rail"]') ?? null;
+    return {
+      isLast: all.length > 0 && all[all.length - 1] === el,
+      railFollows: rail !== null && (el.compareDocumentPosition(rail) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    };
   });
-  expect(isLast, "the NOW rule is not the last element in the sheet — this case did not set up").toBe(true);
+  expect(placed.isLast, "the NOW rule is not the last element in the sheet — this case did not set up").toBe(true);
+  expect(placed.railFollows, "the stage's rail does not follow the sheet inside its card — this case did not set up").toBe(true);
 
   const radii = await now.evaluate((el) => {
-    const cs = getComputedStyle(el);
-    const card = el.closest('[data-testid="run-sheet"]') as HTMLElement;
+    const card = el.closest("section[data-stage-id]") as HTMLElement;
     return {
-      ruleLeft: cs.borderBottomLeftRadius,
-      ruleRight: cs.borderBottomRightRadius,
+      ruleLeft: getComputedStyle(el).borderBottomLeftRadius,
+      ruleRight: getComputedStyle(el).borderBottomRightRadius,
       cardLeft: getComputedStyle(card).borderBottomLeftRadius,
-      cardRight: getComputedStyle(card).borderBottomRightRadius,
     };
   });
   console.log("m1 NOW-rule corner radii:", JSON.stringify(radii));
-  // Held to the CARD's own radius, read live — not to a literal, so changing
-  // `.card` moves this expectation with it instead of leaving it pinning
-  // yesterday's 16px.
-  expect(parseFloat(radii.cardLeft), "the run-sheet card has no rounded corners to protect").toBeGreaterThan(0);
-  expect(radii.ruleLeft, "the NOW rule squares off the card's bottom-left corner").toBe(radii.cardLeft);
-  expect(radii.ruleRight, "the NOW rule squares off the card's bottom-right corner").toBe(radii.cardRight);
-
-  // The DIFFERENTIAL half, and the reason this is a CSS descendant rule
-  // rather than a `last:` utility on `NowRule` itself: a row in the middle of
-  // the same list must stay SQUARE. Without this the assertions above would
-  // also pass on a blanket "round every row", which would put a rounded step
-  // into every day block on the sheet — and it is what proves the radius
-  // above comes from this rule rather than from something ambient.
-  const midRadius = await sheet
-    .locator("li[data-fixture-no]")
-    .first()
-    .evaluate((el) => getComputedStyle(el).borderBottomLeftRadius);
-  console.log("m1 mid-list row radius:", midRadius);
-  expect(parseFloat(midRadius), "a mid-list row must stay square — the rounding is scoped to the last block").toBe(0);
+  // The card has corners to protect (read live, never a literal) - and the rule, mid-card, takes none of them.
+  expect(parseFloat(radii.cardLeft), "the stage card has no rounded corners - the differential below proves nothing").toBeGreaterThan(0);
+  expect(parseFloat(radii.ruleLeft), "a mid-card NOW rule is rounded at the bottom-left").toBe(0);
+  expect(parseFloat(radii.ruleRight), "a mid-card NOW rule is rounded at the bottom-right").toBe(0);
 });
 
 // Competition desk W4, review finding m2 — the bracket round header's sticky
@@ -2486,7 +2475,7 @@ test("Review m1: the NOW rule does not square off the run sheet's bottom corners
 // `environment: "node"` — the unit suite pins the static half (the sheet
 // publishes `--desk-day-h`, the header derives its offset from it) and cannot
 // run the `ResizeObserver` that supplies the real number.
-test("a wrapped day header pushes the bracket round header down with it, at 320 (finding m2)", async ({
+test("a wrapped day header and a bracket round header, each in its own stage card, each pin right under the nav, at 320 (finding m2, C3)", async ({
   page,
   request,
 }) => {
@@ -2564,44 +2553,49 @@ test("a wrapped day header pushes the bracket round header down with it, at 320 
   await expect(dayHeader, "no day block — the mixed state this test needs never rendered").toBeVisible();
   await expect(bracketHeader, "no bracket block — the mixed state this test needs never rendered").toBeVisible();
 
+  // Match Day C3: each stage's rows sit in that stage's own card, so the League's day block and the Cup's bracket block are in two
+  // different sheets - the bracket header no longer stacks under a day header (it has none above it in its own sheet), and the
+  // offset the old test pinned (the day header's measured height) is published per sheet: the League's wrapped header, the Cup's zero.
   const measured = await page.evaluate(() => {
     const day = document.querySelector<HTMLElement>("[data-run-sheet-day]")!;
     const bracket = document.querySelector<HTMLElement>(
       '[data-run-sheet-block="bracket"] header',
     )!;
+    const sheetOf = (el: HTMLElement) => el.closest<HTMLElement>('[data-testid="stage-run-sheet"]')!;
+    const published = (el: HTMLElement) =>
+      getComputedStyle(sheetOf(el).querySelector<HTMLElement>(".space-y-6")!).getPropertyValue("--desk-day-h");
     return {
       dayText: day.textContent ?? "",
       dayHeight: day.getBoundingClientRect().height,
       dayTop: getComputedStyle(day).top,
       bracketTop: getComputedStyle(bracket).top,
-      published: getComputedStyle(
-        document.querySelector<HTMLElement>('[data-testid="run-sheet"] .space-y-6')!,
-      ).getPropertyValue("--desk-day-h"),
+      dayStage: sheetOf(day).getAttribute("data-stage-id"),
+      bracketStage: sheetOf(bracket).getAttribute("data-stage-id"),
+      dayPublished: published(day),
+      bracketPublished: published(bracket),
     };
   });
-  // Print what was seen beside the gate (`_RULES.md`) — a green gate on the
-  // wrong state is worse than a red one.
-  console.log("m2 sticky offsets at 320:", JSON.stringify(measured));
+console.log("m2 sticky offsets at 320:", JSON.stringify(measured));
 
-  // The premise: the day header really did wrap past the 30px the old
-  // literal assumed. Without this the assertion below passes on a header
-  // that never needed a bigger offset in the first place.
+  // The premise: the day header really did wrap past the 30px the old literal assumed. Without this the assertions below pass
+  // on a header that never needed a bigger offset in the first place.
   expect(
     measured.dayHeight,
     `day header did not wrap at 320 — this test proves nothing (text: ${measured.dayText})`,
   ).toBeGreaterThan(30);
+  // The state: the two headers really are in two different stage sheets, the League's and the Cup's.
+  expect(measured.dayStage, "the day header is in the League's sheet").toBe(league.data!.id);
+  expect(measured.bracketStage, "the bracket header is in the Cup's sheet").toBe(cup.data!.id);
 
   const dayTopPx = Number.parseFloat(measured.dayTop);
   const bracketTopPx = Number.parseFloat(measured.bracketTop);
   expect(dayTopPx, "the day header still pins at 56px").toBeCloseTo(56, 0);
-  // The claim: the bracket header clears nav AND the whole day header.
-  expect(
-    bracketTopPx,
-    "bracket header would overlap the day header it stacks under",
-  ).toBeGreaterThanOrEqual(dayTopPx + measured.dayHeight - 1);
-  // …and the differential against the shipped constant, so this cannot pass
-  // against `top-[86px]` coming back.
-  expect(bracketTopPx, "offset is back to the assumed-height literal").toBeGreaterThan(86);
+  // The bracket header has no day header above it in its own sheet: it pins right under the nav - not 30px lower for a day header
+  // that is in another card (and not at the old `top-[86px]` literal either).
+  expect(bracketTopPx, "the bracket header pins under the nav, with no phantom day-header offset").toBeCloseTo(56, 0);
+  expect(Number.parseFloat(measured.bracketPublished), "the Cup's sheet publishes no day-header height").toBe(0);
+  // And the League's sheet publishes its day header's REAL (wrapped) height: the ResizeObserver half still runs.
+  expect(Number.parseFloat(measured.dayPublished), "the League's sheet publishes the wrapped day header's height").toBeGreaterThan(30);
 });
 
 // ---------------------------------------------------------------------------

@@ -2646,3 +2646,39 @@ export async function setDateTime(scope: Page | Locator, value: string): Promise
   // label happens to contain the word) and throws a strict-mode violation.
   await scope.getByLabel("Time", { exact: true }).selectOption(time);
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Match Day C3 - the stage card's three settings panels (Match format / Points / Tie-breaks) open from buttons in the card's
+// header; closed, the card is a one-line summary. On a phone the three buttons ride inside ONE "Stage settings" menu
+// (`max-md:hidden` while closed), so a test that needs a panel opens the menu first - gated on the trigger being VISIBLE
+// (it is `md:hidden`), never on a width literal (AGENTS.md rule 22) - and waits on `toBeAttached`, not `toBeVisible`.
+// ---------------------------------------------------------------------------------------------------------------------
+export type StagePanel = "format" | "points" | "tiebreaks";
+
+/** The stage's card (`<section class="card" data-stage-id>`). */
+export const stageCardOf = (scope: Page | Locator, stageId: string): Locator => scope.locator(`section[data-stage-id="${stageId}"]`);
+
+/** The card a locator sits inside (a row, a section, a rail button). */
+export const enclosingStageCard = (inside: Locator): Locator => inside.locator("xpath=ancestor-or-self::section[@data-stage-id][1]");
+
+/** Open one panel of one stage card, and wait until it says it is open. A no-op when it is already open (a second call is safe). */
+export async function openStagePanel(card: Locator, panel: StagePanel): Promise<void> {
+  const tool = card.getByTestId(`stage-tool-${panel}`);
+  await expect(tool, `the card has a ${panel} button`).toBeAttached();
+  if ((await tool.getAttribute("aria-expanded")) === "true") return;
+  const trigger = card.getByTestId("stage-settings-trigger");
+  if ((await trigger.isVisible()) && (await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+  await tool.click();
+  await expect(tool, `the ${panel} panel did not open`).toHaveAttribute("aria-expanded", "true");
+}
+
+/** Close one panel through its own header button (the toggle), and wait until it says it is closed. */
+export async function closeStagePanel(card: Locator, panel: StagePanel): Promise<void> {
+  const tool = card.getByTestId(`stage-tool-${panel}`);
+  await expect(tool, `the card has a ${panel} button`).toBeAttached();
+  if ((await tool.getAttribute("aria-expanded")) !== "true") return;
+  const trigger = card.getByTestId("stage-settings-trigger");
+  if ((await trigger.isVisible()) && (await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+  await tool.click();
+  await expect(tool, `the ${panel} panel did not close`).toHaveAttribute("aria-expanded", "false");
+}

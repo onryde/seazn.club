@@ -29,7 +29,7 @@ import { DERIVED_METRICS, LEVEL_RANK, isHeadToHeadKey, validateCascade, type Cas
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, fixturePath } from "../helpers";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, fixturePath, openStagePanel, stageCardOf } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { openPanels } from "../helpers/rules-strip";
 import { closeOpenContexts } from "../spectator-public-helpers";
@@ -291,6 +291,7 @@ async function openFold(section: Locator): Promise<void> {
 async function openEditor(page: Page, request: APIRequestContext, divisionId: string, stageId: string, state = "editor"): Promise<Locator> {
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, stageId), "tiebreaks"); // Match Day C3: opened from the card's Tie-breaks button
   const section = page.getByTestId(`stage-tiebreaks-${stageId}`);
   await expect(section).toBeAttached({ timeout: STEP_MS });
   await expect(section).toHaveAttribute("data-state", state, { timeout: STEP_MS });
@@ -371,6 +372,7 @@ async function savePoints(page: Page, request: APIRequestContext, r: Rig, stageI
   expect([before.points.source, before.points.pinnedAt], "before the save the pending stage plays the sport's rule").toEqual(["sport", null]);
   await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, stageId), "points"); // Match Day C3: opened from the card's Points button
   const section = page.getByTestId(`stage-points-${stageId}`);
   await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
   const useDivision = section.getByTestId("stage-points-use-division");
@@ -716,6 +718,7 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
     // Saved, the stage plays its own bonus of 2. The chip would now pay the shoot-out winner 2 rather than 3, so it is
     // offered, not pressed.
     await page.reload({ waitUntil: "load" });
+    await openStagePanel(stageCardOf(page, stageId), "points");
     const saved = page.getByTestId(`stage-points-${stageId}`);
     await expect(saved, "the pending stage's editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
     await expect(saved.getByTestId("stage-points-preset-pro_league"), "the own bonus differs from the chip's: it is offered, not pressed").toHaveAttribute("aria-pressed", "false", { timeout: STEP_MS });

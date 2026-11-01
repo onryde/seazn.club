@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
-import { TAG, apiJson, divisionPath, seedRosteredFixture } from "./helpers";
+import { TAG, apiJson, divisionPath, enclosingStageCard, openStagePanel, seedRosteredFixture } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPORT_RULES, type RuleField } from "../src/lib/match-rules";
 
@@ -117,7 +117,8 @@ async function openRow(page: Page, request: APIRequestContext, divisionId: strin
 }
 
 async function openEditor(row: Locator): Promise<void> {
-  await row.getByTestId("stage-format-edit").click();
+  // Match Day C3: the editor opens from the "Match format" button in the card's header (a phone: from the Stage settings menu).
+  await openStagePanel(enclosingStageCard(row), "format");
   await expect(row.getByTestId("stage-format-editor")).toBeVisible({ timeout: STEP_MS });
 }
 
@@ -221,9 +222,7 @@ for (const c of CASES) {
     await expect(controlOf(row2, c), `${c.key} reopens as saved`).toHaveValue(c.set);
     await expect(blockOf(row2, c)).toHaveAttribute("data-source", "stage");
 
-    // Use division rules: the stage inherits again and the key is gone. (Cancel closes the editor; the button lives on the collapsed row.)
-    await row2.getByTestId("stage-format-cancel").click();
-    await expect(row2.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
+    // Use division rules: the stage inherits again and the key is gone. (The button sits beside Save in the open panel, and closing it is part of the reset.)
     const clear = row2.getByTestId("stage-format-clear");
     await expect(clear).toBeVisible({ timeout: STEP_MS });
     await clear.click();
@@ -263,10 +262,12 @@ for (const c of CASES) {
     // Match Day C2: a started stage's Match format is the shared editor's locked mode - the lock line and the format as chips,
     // with no form at all (the old "View" form of disabled inputs is gone), so nothing can reach the field.
     const row = await openRow(page, request, seeded.divisionId, stageId);
-    await expect(row.getByTestId("stage-format-locked"), "the row says the stage has started").toBeVisible();
+    await expect(row.getByTestId("stage-locked"), "closed, the summary says the stage has started").toBeVisible();
+    await openStagePanel(enclosingStageCard(row), "format");
+    await expect(row.getByTestId("stage-format-locked"), "the panel says the stage has started").toBeVisible();
     await expect(row.getByTestId("stage-format-locked")).toContainText(L["stageCard.locked"]!);
     await expect(row.getByTestId("stage-format-chips"), "the format is still read, as chips").toBeVisible();
-    await expect(row.getByTestId("stage-format-edit"), "no way to open an editor").toHaveCount(0);
+    await expect(row.getByTestId("stage-format-save"), "no way to change it: no Save").toHaveCount(0);
     await expect(blockOf(row, c), `${c.key} has no control on a started stage`).toHaveCount(0);
     await expect(row.locator("input, select, textarea"), "the locked row holds no control").toHaveCount(0);
 
