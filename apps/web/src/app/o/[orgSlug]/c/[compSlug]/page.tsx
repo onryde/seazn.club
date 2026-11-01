@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 // Competition overview: divisions as match-day cards (v3/03 §2); settings
 // live on their own page.
 import Link from "@/components/ui/console-link";
-import { CalendarRange, Globe, MonitorPlay, Printer, Radio, Settings } from "lucide-react";
+import { CalendarRange, Radio, Settings } from "lucide-react";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listDivisions } from "@/server/usecases/divisions";
@@ -28,6 +28,7 @@ import { ledgerRank, leadingAttention } from "@/lib/division-phase";
 import { ledgerQueryOf } from "@/lib/ledger-page";
 import { PhasePill, AttentionChip } from "@/components/v2/desk/phase-pill";
 import { DeskToolsMore } from "@/components/v2/desk/desk-tools-more";
+import { DeskOpenMenu, type DeskOpenItem } from "@/components/v2/desk/desk-open-menu";
 import {
   NeedsYou,
   NeedsYouInMatchDay,
@@ -155,6 +156,47 @@ export default async function CompetitionPage({
   const mastheadAttention = leadingAttention(ledgerRows.map((r) => r.desk));
   const publicPath =
     competition.visibility !== "private" ? routes.shared(orgSlug, competition.slug) : null;
+  // Match Day C5 (owner request 2026-11-01): the "Open" menu in the tool row. Gated exactly as the three buttons it replaced were
+  // — Slideshow always; View Public Page and the QR poster only with a public page (a private competition has none) — and none
+  // of it on `canEdit`, so a view-only member sees what they always saw. The QR poster is v3/10 #3: an A4 PDF with a big QR to
+  // the dashboard, to print and tape to the venue door.
+  //
+  // Owner addition (same day): OFF a match day the menu LEADS with "Match Day", the door that is the filled Open Match Day
+  // button on the day (`onMatchDay`, B1). One door in two shapes, never both; offered to everyone who is offered the button
+  // (B4, owner ruling Q1b: a view-only member opens it read-only), so it is not gated on `canEdit` either. Same tab, no ↗.
+  const openItems: DeskOpenItem[] = [
+    ...(onMatchDay
+      ? []
+      : [{ id: "matchday" as const, label: t(dict, "desk.tools.matchDay"), href: routes.competitionMatchDay(orgSlug, compSlug), newTab: false }]),
+    {
+      id: "slideshow",
+      label: t(dict, "action.slideshow"),
+      ariaLabel: t(dict, "aria.slideshowNewTab"),
+      href: routes.slideshowCompetition(competition.id),
+      newTab: true,
+      arrow: true,
+    },
+    ...(publicPath
+      ? [
+          {
+            id: "public" as const,
+            label: t(dict, "action.viewPublic"),
+            ariaLabel: t(dict, "aria.viewPublicNewTab"),
+            href: publicPath,
+            newTab: true,
+            arrow: true,
+          },
+          {
+            id: "qr" as const,
+            label: t(dict, "action.qr"),
+            ariaLabel: t(dict, "aria.qrPoster"),
+            href: `${publicPath}/poster.pdf`,
+            newTab: true,
+            plainAnchor: true,
+          },
+        ]
+      : []),
+  ];
   // RS004 W2 scope item 2: the Registration hub's nav entry carries live
   // counts, computed from the SAME card-stats query this page already runs
   // above — no second query, no client fetch, no N+1 per division.
@@ -328,15 +370,10 @@ export default async function CompetitionPage({
                 <span>{t(dict, "desk.tools.openMatchDay")}</span>
               </Link>
             )}
-            <Link
-              href={routes.slideshowCompetition(competition.id)}
-              target="_blank"
-              aria-label={t(dict, "aria.slideshowNewTab")}
-              className="btn btn-ghost gap-1.5 max-md:hidden"
-            >
-              <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden md:inline">{t(dict, "action.slideshow")} ↗</span>
-            </Link>
+            {/* Match Day C5 (owner request 2026-11-01): Slideshow, View Public Page and QR were three buttons here; they are ONE
+                "Open" menu, in the place Slideshow sat. Same labels, icons, hrefs, new tabs and ↗ marks as the buttons — see
+                `openItems` above. Desktop only: below `md` the More fold below already carries these same destinations. */}
+            <DeskOpenMenu className="max-md:hidden" label={t(dict, "desk.tools.open")} items={openItems} />
             {/* The organiser's most likely action at a venue, so on a phone it
                 is THE action: first, full width, filled, and labelled — except
                 on a match day (B1), when Open Match Day above is, and this
@@ -366,30 +403,6 @@ export default async function CompetitionPage({
               <CalendarRange className="h-4 w-4" strokeWidth={1.75} />
               <span className="md:inline">{t(dict, "action.scheduleBoard")}</span>
             </Link>
-            {publicPath && (
-              <Link
-                href={publicPath}
-                target="_blank"
-                aria-label={t(dict, "aria.viewPublicNewTab")}
-                className="btn btn-ghost gap-1.5 max-md:hidden"
-              >
-                <Globe className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden md:inline">{t(dict, "action.viewPublic")} ↗</span>
-              </Link>
-            )}
-            {publicPath && (
-              // v3/10 #3: A4 PDF with a big QR to the dashboard — print it,
-              // tape it to the venue door.
-              <a
-                href={`${publicPath}/poster.pdf`}
-                target="_blank"
-                aria-label={t(dict, "aria.qrPoster")}
-                className="btn btn-ghost gap-1.5 max-md:hidden"
-              >
-                <Printer className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden md:inline">{t(dict, "action.qr")}</span>
-              </a>
-            )}
             {(
               // NOT gated on canEdit. RS004 shipped this as owner/admin-only
               // to match the hub page's own `if (!canEdit) notFound()`; the
@@ -441,6 +454,9 @@ export default async function CompetitionPage({
               className="max-md:order-3 md:hidden"
               label={t(dict, "desk.tools.more")}
               items={[
+                // C5 (owner addition): the off-day Match Day door, here because the Open menu is not on a phone. On the day
+                // it is the filled button above instead (never both).
+                ...(onMatchDay ? [] : [{ label: t(dict, "desk.tools.matchDay"), href: routes.competitionMatchDay(orgSlug, compSlug) }]),
                 { label: t(dict, "action.slideshow"), href: routes.slideshowCompetition(competition.id), external: true },
                 ...(publicPath
                   ? [
