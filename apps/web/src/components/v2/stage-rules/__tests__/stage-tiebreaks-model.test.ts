@@ -24,6 +24,7 @@ import {
   stagePooled,
   takesBestNthFrom,
   tiebreakBadge,
+  tiebreaksDiffer,
   tiebreakRows,
   type StageLike,
 } from "../stage-tiebreaks-model";
@@ -198,6 +199,72 @@ describe("X-TB-1 the badge", () => {
     const rules = tableRulesOf(football, "league");
     const broken: StageTableRules = { ...rules, tiebreakers: { ...rules.tiebreakers, source: "migrated" } };
     expect(tiebreakBadge(broken)).toEqual({ kind: "unknown" });
+  });
+});
+
+describe("Match Day C3 (spec §12 item 12, C2 deferred M4): a pinned stage says when it no longer follows the division", () => {
+  const pinFrom = (m: AnySportModule, order: readonly TiebreakerKey[], from: TableRulesPin["sources"]["tiebreakers"]): TableRulesPin => ({
+    points: m.tablePointsRule(cfgOf(m), "league"),
+    tiebreakers: [...order],
+    crossGroup: ["points", "diff", "for", "lots"],
+    sources: { points: "sport", tiebreakers: from, crossGroup: "derived" },
+  });
+
+  it("a stage pinned from the division's order reads 'differs' once the division's order changes, and 'pinned' while it still matches", () => {
+    const started: TiebreakerKey[] = ["points", "diff", "for", "lots"];
+    const changed: TiebreakerKey[] = ["points", "for", "diff", "lots"];
+    const rules = tableRulesOf(football, "league", { pinned: pinFrom(football, started, "division") });
+    expect(rules.tiebreakers.keys, "premise: the stage keeps the order it started with").toEqual(started);
+    expect(tiebreakBadge(rules, started), "the division still ranks the same way").toEqual({ kind: "pinned", from: "division" });
+    expect(tiebreakBadge(rules, changed), "the division has moved on").toEqual({ kind: "differs" });
+    expect(tiebreaksDiffer(rules, started)).toBe(false);
+    expect(tiebreaksDiffer(rules, changed)).toBe(true);
+  });
+
+  it("a stage pinned from the SPORT's order reads 'differs' once the division sets its own order", () => {
+    const sportOrder = football.defaultTiebreakers("league", cfgOf(football));
+    const division: TiebreakerKey[] = ["points", "for", "diff", "lots"];
+    expect(division, "premise: the division's order is not the sport's").not.toEqual(sportOrder);
+    const rules = tableRulesOf(football, "league", { pinned: pinFrom(football, sportOrder, "sport") });
+    expect(tiebreakBadge(rules, sportOrder)).toEqual({ kind: "pinned", from: "sport" });
+    expect(tiebreakBadge(rules, division)).toEqual({ kind: "differs" });
+  });
+
+  it("a stage's OWN order is its own whatever the division does; an unpinned stage follows the layer it reads", () => {
+    const own: TiebreakerKey[] = ["points", "diff", "for", "lots"];
+    const division: TiebreakerKey[] = ["points", "for", "diff", "lots"];
+    const pinnedOwn = tableRulesOf(football, "league", { pinned: pinFrom(football, own, "stage") });
+    expect(tiebreakBadge(pinnedOwn, division), "pinned from the stage's own override").toEqual({ kind: "pinned", from: "stage" });
+    expect(tiebreaksDiffer(pinnedOwn, division), "an own order differs from the division's").toBe(true);
+    const liveOwn = tableRulesOf(football, "league", { own });
+    expect(tiebreaksDiffer(liveOwn, division)).toBe(true);
+    const live = tableRulesOf(football, "league", { division });
+    expect(tiebreakBadge(live, division), "unpinned: reads the division now").toEqual({ kind: "inherited", from: "division" });
+    expect(tiebreaksDiffer(live, division)).toBe(false);
+  });
+
+  it("without the current inherited order the badge is the one it always was (no guess)", () => {
+    const rules = tableRulesOf(football, "league", { pinned: pinFrom(football, ["points", "diff", "for", "lots"], "division") });
+    expect(tiebreakBadge(rules)).toEqual({ kind: "pinned", from: "division" });
+    expect(tiebreaksDiffer(rules, undefined)).toBe(false);
+  });
+
+  it("sweeps every sport and table kind: a pinned stage matching the inherited order never differs, a reordered one always does", () => {
+    let visited = 0;
+    const kinds: TableStageKind[] = ["league", "group", "swiss"];
+    forEachSport(({ module: m }) => {
+      for (const kind of kinds) {
+        const order = m.defaultTiebreakers(kind, cfgOf(m));
+        const rules = tableRulesOf(m, kind, { pinned: { ...pinFrom(m, order, "sport"), points: m.tablePointsRule(cfgOf(m), kind) } });
+        const moved = [...order].reverse();
+        expect(moved, `${m.key} ${kind}: premise: the reversed order is a different order`).not.toEqual(order);
+        expect(tiebreaksDiffer(rules, order), `${m.key} ${kind}: matches`).toBe(false);
+        expect(tiebreaksDiffer(rules, moved), `${m.key} ${kind}: reordered`).toBe(true);
+        visited++;
+      }
+    });
+    expect(visited).toBe(builtinModules.length * kinds.length);
+    expect(visited).toBeGreaterThan(0);
   });
 });
 

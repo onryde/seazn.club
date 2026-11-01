@@ -37,6 +37,10 @@ export type TiebreakBadge =
   | { kind: "inherited"; from: "division" | "sport" }
   | { kind: "overridden" }
   | { kind: "pinned"; from: TableRulesSource }
+  /** Match Day C3 (C2's deferred M4): a stage pinned from the division's (or the sport's) order that no longer ranks as the
+   *  division would now - the division's order changed after the stage started. It keeps the order it started with, so it is
+   *  not "inherited" any more, and it says so. */
+  | { kind: "differs" }
   | { kind: "unknown" };
 
 /** One step of the order as the list shows it. */
@@ -113,14 +117,33 @@ export function removeStep(keys: readonly TiebreakerKey[], index: number): Tiebr
   return keys.filter((_, i) => i !== index);
 }
 
+const sameKeys = (a: readonly TiebreakerKey[], b: readonly TiebreakerKey[]): boolean => a.length === b.length && a.every((k, i) => k === b[i]);
+
 /** X-TB-1: Pinned at start once the stage is active (OC2: `pinnedAt`), with the layer it was pinned from; else Overridden
- *  for the stage's own order, Inherited from the division or the sport default. */
-export function tiebreakBadge(tableRules: StageTableRules): TiebreakBadge {
-  const { source, pinnedAt } = tableRules.tiebreakers;
-  if (pinnedAt !== null) return { kind: "pinned", from: source };
+ *  for the stage's own order, Inherited from the division or the sport default.
+ *
+ *  `inheritedNow` (Match Day C3) is the order the stage would rank by if it followed the division TODAY: the division's own
+ *  order, else the sport's. A stage pinned from the division or the sport that now ranks differently is `differs`, not
+ *  "inherited from the division": the pin is why, and the badge must not claim a link the pin cut. A pin from the stage's own
+ *  order is the stage's whatever the division does. Absent, the badge claims nothing it was not given. */
+export function tiebreakBadge(tableRules: StageTableRules, inheritedNow?: readonly TiebreakerKey[]): TiebreakBadge {
+  const { source, pinnedAt, keys } = tableRules.tiebreakers;
+  if (pinnedAt !== null) {
+    if (source !== "stage" && inheritedNow !== undefined && !sameKeys(keys, inheritedNow)) return { kind: "differs" };
+    return { kind: "pinned", from: source };
+  }
   if (source === "stage") return { kind: "overridden" };
   if (source === "division" || source === "sport") return { kind: "inherited", from: source };
   return { kind: "unknown" };
+}
+
+/** Spec §12 item 12, "a stage that differs says so": does this stage rank by something other than the division's order
+ *  today? Its own order always; a pinned or live order when it is not the order the division would give it now
+ *  (`inheritedNow`). Absent `inheritedNow`, only an own order differs - never a guess. */
+export function tiebreaksDiffer(tableRules: StageTableRules, inheritedNow: readonly TiebreakerKey[] | undefined): boolean {
+  const { source, keys } = tableRules.tiebreakers;
+  if (source === "stage") return true;
+  return inheritedNow !== undefined && !sameKeys(keys, inheritedNow);
 }
 
 /** X-TB-2 (D3, OC2; PF-9, PS-6): the stage's own order is locked exactly when the SERVER lists the stage — W2c's monotonic

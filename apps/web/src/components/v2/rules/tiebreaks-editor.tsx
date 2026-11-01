@@ -59,6 +59,7 @@ const BUTTON =
 const BADGE_CLASS = {
   inherited: "border-slate-200 bg-slate-100 text-slate-700",
   overridden: "border-purple-200 bg-purple-50 text-purple-800",
+  differs: "border-purple-200 bg-purple-50 text-purple-800",
 } as const;
 
 type Msg = ReturnType<typeof useMsg>;
@@ -66,9 +67,9 @@ type Msg = ReturnType<typeof useMsg>;
 /** The badge the editor shows: where the order comes from, in organiser words. A stage pinned at generate ranks by the layer
  *  it was pinned from, so its badge says THAT layer (item 4: "Pinned at start · from before this update" is internals); a pin
  *  from before the W2d migration names no layer the organiser knows, and says nothing. */
-export type ShownBadge = { kind: "inherited"; from: "division" | "sport" } | { kind: "overridden" } | null;
+export type ShownBadge = { kind: "inherited"; from: "division" | "sport" } | { kind: "overridden" } | { kind: "differs" } | null;
 export function shownBadge(badge: TiebreakBadge): ShownBadge {
-  if (badge.kind === "overridden" || badge.kind === "inherited") return badge;
+  if (badge.kind === "overridden" || badge.kind === "inherited" || badge.kind === "differs") return badge;
   if (badge.kind === "pinned") {
     if (badge.from === "stage") return { kind: "overridden" };
     if (badge.from === "division" || badge.from === "sport") return { kind: "inherited", from: badge.from };
@@ -256,11 +257,12 @@ function BadgeChip({ badge }: { badge: ShownBadge }) {
         className={`rounded-full border px-2 py-0.5 font-medium ${BADGE_CLASS[badge.kind]}`}
         data-testid="stage-tiebreaks-badge"
         data-badge={badge.kind}
-        data-source={badge.kind === "overridden" ? "stage" : badge.from}
+        data-source={badge.kind === "inherited" ? badge.from : "stage"}
       >
         {msg(`stageTiebreaks.badge.${badge.kind}` as MessageKey)}
       </span>
       {badge.kind === "inherited" && <span className="text-slate-600">{msg(`stageTiebreaks.source.${badge.from}` as MessageKey)}</span>}
+      {badge.kind === "differs" && <span className="text-slate-600">{msg("stageTiebreaks.source.started")}</span>}
     </span>
   );
 }
@@ -287,6 +289,10 @@ export interface StageTiebreaksProps {
   module: AnySportModule;
   divisionConfig: Record<string, unknown>;
   stageConfig: Record<string, unknown>;
+  /** Match Day C3 (C2's deferred M4): the order the stage would rank by if it followed the division TODAY - the division's own
+   *  order, else the sport's. A pinned stage that keeps a different order says it differs instead of "inherited". Absent, the
+   *  badge claims only what the server gave it. */
+  inheritedOrder?: readonly TiebreakerKey[];
   onSaved: () => void;
 }
 
@@ -318,7 +324,7 @@ export function TiebreaksEditor(props: TiebreaksEditorProps) {
   return props.scope === "stage" ? <StageTiebreaks {...props} /> : <DivisionTiebreaks {...props} />;
 }
 
-export function StageTiebreaks({ mode, started, stage, module, divisionConfig, stageConfig, onSaved }: StageTiebreaksProps) {
+export function StageTiebreaks({ mode, started, stage, module, divisionConfig, stageConfig, inheritedOrder, onSaved }: StageTiebreaksProps) {
   const msg = useMsg();
   const name = stepNameOf(msg, module.key);
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -404,7 +410,7 @@ export function StageTiebreaks({ mode, started, stage, module, divisionConfig, s
       <div className="space-y-2">
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <span className="text-xs font-semibold text-slate-800">{msg("stageTiebreaks.title")}</span>
-          {!readOnly && <BadgeChip badge={shownBadge(tiebreakBadge(rules))} />}
+          {!readOnly && <BadgeChip badge={shownBadge(tiebreakBadge(rules, inheritedOrder))} />}
         </div>
         {started && <LockLine testId="stage-tiebreaks-locked" />}
         <PhoneDisclosure summary={foldedSummary(readOnly ? stored : draft, name)} showLabel={msg("stageTiebreaks.show")} hideLabel={msg("stageTiebreaks.hide")}>

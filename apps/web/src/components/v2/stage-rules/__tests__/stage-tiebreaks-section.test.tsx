@@ -28,7 +28,7 @@ function render(
   m: AnySportModule,
   kind: TableStageKind,
   tableRules: StageTableRules,
-  over: { locked?: boolean; canEdit?: boolean; pooled?: boolean; bestNth?: boolean; divisionConfig?: Record<string, unknown> } = {},
+  over: { locked?: boolean; canEdit?: boolean; pooled?: boolean; bestNth?: boolean; divisionConfig?: Record<string, unknown>; inheritedOrder?: readonly TiebreakerKey[] } = {},
 ): string {
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
@@ -40,6 +40,7 @@ function render(
         module={m}
         divisionConfig={over.divisionConfig ?? (cfgOf(m) as Record<string, unknown>)}
         stageConfig={{}}
+        inheritedOrder={over.inheritedOrder}
         onSaved={() => undefined}
       />
     </DictProvider>,
@@ -163,6 +164,28 @@ describe("the badge (X-TB-1)", () => {
     expect(tagOf(pinned, "stage-tiebreaks-badge")).toContain('data-badge="inherited"');
     expect(text(pinned)).toContain(UI["stageTiebreaks.source.division"]!);
     expect(text(pinned), "internals copy is gone").not.toContain("Pinned at start");
+  });
+
+  it("Match Day C3 (C2's M4): a stage pinned from the division's order says it DIFFERS once the division's order has changed, and 'Inherited' while it still matches", () => {
+    const moved: TiebreakerKey[] = ["points", "for", "diff", "lots"];
+    const pin: TableRulesPin = {
+      tiebreakers: DIV,
+      crossGroup: DIV,
+      points: tableRulesOf(football, "league").points.rule,
+      sources: { tiebreakers: "division", points: "sport", crossGroup: "derived" },
+    };
+    const rules = tableRulesOf(football, "league", { division: DIV, pinned: pin });
+    const same = render(football, "league", rules, { inheritedOrder: DIV });
+    expect(tagOf(same, "stage-tiebreaks-badge"), "the division still ranks the same way").toContain('data-badge="inherited"');
+    const differs = render(football, "league", rules, { inheritedOrder: moved });
+    const badge = tagOf(differs, "stage-tiebreaks-badge");
+    expect(badge, "the division has moved on").toContain('data-badge="differs"');
+    expect(text(differs)).toContain(UI["stageTiebreaks.badge.differs"]!);
+    expect(badge, "it does not claim the division's order as its source").not.toContain('data-source="division"');
+    expect(text(differs), "nor say it is inherited").not.toContain(UI["stageTiebreaks.badge.inherited"]!);
+    expect(text(differs)).toContain(UI["stageTiebreaks.source.started"]!);
+    // Second call, same props: same answer (nothing the render keeps changes it).
+    expect(tagOf(render(football, "league", rules, { inheritedOrder: moved }), "stage-tiebreaks-badge")).toBe(badge);
   });
 
   it("'Use the division's order' only for a stage with its own", () => {
