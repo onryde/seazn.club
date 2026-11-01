@@ -22,12 +22,15 @@
 // stage's Points section owns). `soBonus` stays in these fixtures as the saved points key NO box here edits: every save
 // must carry it through untouched, which is what bug 2 broke.
 //
-// Same harness as division-settings-paywall.test.tsx (DivisionSettings is a
-// stateful island; renderToStaticMarkup can't drive a save). MatchRuleFields
-// is a CHILD function component, so its own <input>s never appear in
-// tree() (see typeRuleField's comment) — this suite reaches through its
-// `values`/`onChange` props directly instead, exactly what a real keystroke
-// inside it would do one level down.
+// Match Day C2: the match rules and the standings points left Settings for the Division rules strip on the Fixtures tab
+// (`rules/division-rules-strip.tsx`), each with its own Save - the Match format panel's "Save match format" sends the rules
+// and leaves the points as stored; the Points panel's Save sends the points. The three bugs below are the strip's to keep
+// fixed, so this suite now drives the strip (`_rules-strip.tsx` opens its two child editors the way a browser renders them).
+//
+// Same harness as division-settings-paywall.test.tsx (a stateful island; renderToStaticMarkup can't drive a save).
+// MatchRuleFields is a CHILD function component, so its own <input>s never appear in tree() (see typeRuleField's comment) —
+// this suite reaches through its `values`/`onChange` props directly instead, exactly what a real keystroke inside it would
+// do one level down.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
@@ -58,61 +61,35 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   };
 });
 
-import { DivisionSettings } from "@/components/v2/division-settings";
-import { MatchRuleFields } from "@/components/v2/match-rules";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
-
-const ENTRANT_MODEL: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
+import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 
 const FOOTBALL_POINTS = { win: 3, draw: 1, loss: 0, soBonus: 1 };
 
 function baseProps(config: Record<string, unknown>, sportKey = "football", variantKey = "standard") {
-  return {
-    division: {
-      id: "d1",
-      name: "Open",
-      sport_key: sportKey,
-      variant_key: variantKey,
-      config,
-      logo_url: null,
-      logo_storage_path: null,
-    },
-    orgId: "org1",
+  return stripPropsOf({
+    division: { id: "d1", sport_key: sportKey, variant_key: variantKey, config },
     variants: [{ key: variantKey, name: "Standard" }],
-    structureLocked: false,
-    lockedFields: [],
-    stages: [],
-    canEdit: true,
-    divisionPathPrefix: "/o/org/c/comp/d/",
-    fixturesHref: "/o/org/c/comp/d/div/fixtures",
-    embed: null,
-    danger: null,
-    entrantModel: ENTRANT_MODEL,
-    entrantModelSource: "sport",
-    autoPosts: false,
-    canAutoPost: false,
-  } as unknown as Parameters<typeof DivisionSettings>[0];
+  });
 }
 
 function mount(config: Record<string, unknown>, sportKey = "football", variantKey = "standard") {
-  return renderIsland(DivisionSettings, baseProps(config, sportKey, variantKey));
+  return renderIsland(DivisionRulesStrip, baseProps(config, sportKey, variantKey), expandRules);
 }
+
+/** The Match format panel's Save (rules only) and the Points panel's Save (points only, offered once a box differs). */
+const SAVE_RULES = "division-rules-format-save";
+const SAVE_POINTS = "division-points-save";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /** Same idiom as division-settings-paywall.test.tsx's clickButton: invoke the
  *  handler the harness found rather than simulate a DOM click — there is no
  *  DOM here (`environment: "node"`). */
-function clickButton(tree: ReactElement[], text: string): void {
-  const btn = tree.find((n) => n.type === "button" && textOf(n).trim() === text);
+function clickButton(tree: ReactElement[], testId: string): void {
+  const btn = tree.find((n) => n.type === "button" && propsOf(n)["data-testid"] === testId);
   if (!btn) {
-    throw new Error(`no <button> with text "${text}" — rendered: ${tree.map((n) => textOf(n)).join(" | ")}`);
+    throw new Error(`no <button> "${testId}" — rendered: ${tree.map((n) => textOf(n)).join(" | ")}`);
   }
   (propsOf(btn).onClick as () => void)();
 }
@@ -207,7 +184,7 @@ describe("division settings save path — the standings-points editor must not s
   it("case 1: saving an unrelated rule change leaves every points key intact (soBonus, which no box owns, included)", async () => {
     const island = mount({ points: { ...FOOTBALL_POINTS } });
     typeRuleField(island.tree(), "halfMinutes", "50");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_RULES);
     await flush();
     expect(lastPatchConfig().points).toEqual(FOOTBALL_POINTS);
   });
@@ -215,7 +192,7 @@ describe("division settings save path — the standings-points editor must not s
   it("case 2: retyping only the win box still keeps soBonus (and draw/loss) intact", async () => {
     const island = mount({ points: { ...FOOTBALL_POINTS } });
     typePointsField(island.tree(), 0, "5");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_POINTS);
     await flush();
     const points = lastPatchConfig().points as Record<string, unknown>;
     expect(points.win, "the just-retyped value").toBe(5);
@@ -229,7 +206,7 @@ describe("division settings save path — the standings-points editor must not s
     typePointsField(island.tree(), 0, "4");
     typePointsField(island.tree(), 1, "2");
     typePointsField(island.tree(), 2, "0");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_POINTS);
     await flush();
     const points = lastPatchConfig().points as Record<string, unknown>;
     expect(points.win).toBe(4);
@@ -245,7 +222,7 @@ describe("division settings save path — the standings-points editor must not s
     typePointsField(island.tree(), 0, "5");
     typePointsField(island.tree(), 1, "2");
     typePointsField(island.tree(), 2, "1");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_POINTS);
     await flush();
     const points = lastPatchConfig().points as Record<string, unknown>;
     expect(points.w).toBe(5);
@@ -257,7 +234,7 @@ describe("division settings save path — the standings-points editor must not s
   it("does not disturb an unrelated rule field saved in the same request", async () => {
     const island = mount({ points: { ...FOOTBALL_POINTS } });
     typeRuleField(island.tree(), "halfMinutes", "50");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_RULES);
     await flush();
     expect(lastPatchConfig().halfMinutes).toBe(50);
   });
@@ -271,7 +248,7 @@ describe("division settings — the points editor renders exactly the boxes a sp
 
   it("never writes a spurious draw key for a division whose schema has none (tennis)", async () => {
     const island = mount({ points: { win: 3, loss: 0 } }, "tennis", "standard");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_RULES);
     await flush();
     const points = lastPatchConfig().points as Record<string, unknown>;
     expect(points.win).toBe(3);
@@ -283,7 +260,7 @@ describe("division settings — the points editor renders exactly the boxes a sp
     const island = mount({ points: { win: 3, loss: 0 } }, "tennis", "standard");
     typeAnyPointsField(island.tree(), 0, "4");
     typeAnyPointsField(island.tree(), 1, "1");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_POINTS);
     await flush();
     const points = lastPatchConfig().points as Record<string, unknown>;
     expect(points.win).toBe(4);
@@ -298,7 +275,7 @@ describe("division settings — the points editor renders exactly the boxes a sp
 
   it("saving a T20-shaped cricket division leaves tie/noResult untouched and writes no draw", async () => {
     const island = mount({ points: { win: 2, tie: 1, noResult: 1, loss: 0 } }, "cricket", "standard");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_RULES);
     await flush();
     const points = lastPatchConfig().points as Record<string, unknown>;
     expect(points.win).toBe(2);
@@ -323,7 +300,7 @@ describe("division settings — no football field writes shoot-out points any mo
     const island = mount({ points: { ...FOOTBALL_POINTS } });
     typeRuleField(island.tree(), "shootoutWin", "2");
     typeRuleField(island.tree(), "shootoutLoss", "1");
-    clickButton(island.tree(), "Save match rules");
+    clickButton(island.tree(), SAVE_RULES);
     await flush();
     expect(lastPatchConfig().points, "exactly the saved points: no retired key gained, soBonus kept").toEqual(FOOTBALL_POINTS);
   });
@@ -363,5 +340,20 @@ describe("division settings — the rules/points panel re-syncs with a refreshed
       ruleValuesOf(island.tree()).halfMinutes,
       "an unrelated refresh must not discard a field the organiser is mid-typing",
     ).toBe("77");
+  });
+});
+
+describe("the Points panel's own Save (Match Day C2: the points left the rules' Save)", () => {
+  it("is offered only once a box differs from what is stored; typed back, it goes again (and the rules' Save never sends a typed box)", async () => {
+    const island = mount({ points: { ...FOOTBALL_POINTS } });
+    const offered = () => island.tree().some((e) => propsOf(e)["data-testid"] === SAVE_POINTS);
+    expect(offered(), "untouched: nothing to save").toBe(false);
+    typePointsField(island.tree(), 0, "5");
+    expect(offered(), "a box differs").toBe(true);
+    clickButton(island.tree(), SAVE_RULES);
+    await flush();
+    expect(lastPatchConfig().points, "the rules' Save leaves the points as stored").toEqual(FOOTBALL_POINTS);
+    typePointsField(island.tree(), 0, "3");
+    expect(offered(), "typed back: nothing to save").toBe(false);
   });
 });

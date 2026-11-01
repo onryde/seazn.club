@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from "vitest";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
-import { MatchRuleFields } from "@/components/v2/match-rules";
+import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
 import { sportOptionsFrom } from "@/lib/sport-options";
 import uiEn from "@/dictionaries/en/ui.json";
 
@@ -59,9 +59,10 @@ function pickVariant(h: H, from: string, to: string): void {
   if (!select) throw new Error(`no variant select showing ${from}`);
   (propsOf(select).onChange as (e: { target: { value: string } }) => void)({ target: { value: to } });
 }
-/** The organiser types `overs` into the rule grid: the grid's own onChange, as RuleFieldControl calls it. */
+/** The organiser types `overs` into the rule grid: the grid's own onChange, as RuleFieldControl calls it. The grid is the ONE
+ *  Match format editor (Match Day C2), division scope, in edit mode. */
 function typeOvers(h: H, overs: string): void {
-  const grid = h.tree().find((e) => e.type === MatchRuleFields);
+  const grid = h.tree().find((e) => e.type === MatchFormatEditor && propsOf(e).scope === "division" && propsOf(e).mode === "edit");
   if (!grid) throw new Error("no rule grid on screen");
   const onChange = propsOf(grid).onChange as (next: Record<string, string>) => void;
   onChange({ ...(propsOf(grid).values as Record<string, string>), overs });

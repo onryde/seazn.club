@@ -59,6 +59,14 @@ describe.skipIf(!HAS_DB)("/api/v1/competitions/{id}/match-day", () => {
     expect(view.competition_id).toBe(day.comp.id);
     expect(view.courts.map((c) => c.court_id)).toEqual([day.courts.c1, day.courts.c2, day.courts.c3]);
     expect(view.fixtures_today).toBe(1);
+    // Every key the answer carries for a match is one the published schema declares: zod strips an undeclared key on parse, so
+    // a field the read model gains (Match Day C2's `format_line`) without a schema line is served but missing from the API docs.
+    const declared = new Set([...Object.keys(MatchDayFixture.shape), "planned_at", "estimated_at"]);
+    type Raw = Record<string, unknown>;
+    const raw = res.body.data as { courts: { current: Raw | null; queue: Raw[] }[]; playing_no_court: Raw[] };
+    const matches = [...raw.courts.flatMap((c) => [...(c.current === null ? [] : [c.current]), ...c.queue]), ...raw.playing_no_court];
+    expect(matches.length, "matches checked").toBeGreaterThan(0);
+    for (const m of matches) expect(Object.keys(m).filter((k) => !declared.has(k))).toEqual([]);
   });
 
   it("GET candidates → 200 with the published list; no court_id or a malformed one → 400; a court not the org's → 404", async () => {

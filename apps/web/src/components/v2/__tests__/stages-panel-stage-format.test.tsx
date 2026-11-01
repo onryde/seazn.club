@@ -17,8 +17,8 @@ import {
   stageFormatSaveFragment,
   stageRulesInForce,
 } from "@/components/v2/stages-panel";
-import { MatchRuleFields } from "@/components/v2/match-rules";
-import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
+import { StageRuleFields } from "@/components/v2/rules/match-format-editor";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
@@ -142,11 +142,12 @@ describe("the three states of the Match format row", () => {
     expect(html).toContain('data-stage-format-state="locked"');
     const row = formatRow(html);
     expect(row).toContain("Best of 1");
-    // M-2: the lock is stated ONCE, in the lock line; the header carries the format alone, no state clause.
-    expect(row).not.toContain("Stage override");
-    expect(row).not.toContain("Same as division");
-    expect(row).not.toContain("Locked");
-    expect(html.match(/has started/g)?.length, "one statement of the lock").toBe(1);
+    // M-2 / Match Day item 4: the lock is stated ONCE, in the section's lock line; the header carries the heading alone.
+    const header = html.slice(html.indexOf('data-testid="stage-format"'), html.indexOf("</div>", html.indexOf('data-testid="stage-format"')));
+    expect(header).not.toContain("Stage override");
+    expect(header).not.toContain("Same as division");
+    expect(header).not.toContain("Locked");
+    expect(html.split('data-testid="stage-format-locked"').length - 1, "one statement of the lock in the format section").toBe(1);
     expect(row).not.toContain('data-testid="stage-format-edit"');
     expect(row).not.toContain('data-testid="stage-format-clear"');
   });
@@ -257,21 +258,24 @@ describe("the row is offered for EVERY sport (W2c Task 17: the STAGE_RULES_SPORT
 });
 
 describe("the lock line (S4) and the read-only view", () => {
-  it("a locked stage says so BEFORE anyone tries: one line, a link to the fixtures, no edit control", () => {
-    const html = panel({ stages: stageWith({ bestOf: 1 }), formatLockedStageIds: [STAGE_ID] });
+  it("a locked stage says so BEFORE anyone tries: one line in organiser words, no link to the tab it is on, no edit control; the format stays readable", () => {
+    const html = panel({ stages: stageWith({ bestOf: 1 }), formatLockedStageIds: [STAGE_ID], ruleDict: rulesLineDict(enPublic as Dict) });
+    const UI = enUi as Record<string, string>;
     expect(html).toContain('data-testid="stage-format-locked"');
-    expect(html).toContain("This stage has started");
-    expect(html.match(/has started/g)?.length, "one statement of the lock (M-2)").toBe(1);
-    expect(html).toContain("See the fixtures");
-    expect(html).toContain('data-testid="stage-format-view"'); // read the rules without being able to change them
+    const line = html.slice(html.indexOf('data-testid="stage-format-locked"'), html.indexOf("</p>", html.indexOf('data-testid="stage-format-locked"')));
+    expect(line, "Match Day item 4: 'Locked: the stage has started'").toContain(UI["stageCard.locked"]!);
+    expect(line, "Match Day item 3: the lock line links nowhere").not.toMatch(/<(a|button)\b/);
+    expect(html).not.toContain('data-testid="stage-format-view"'); // the chips ARE the read-only view (item 2: said once)
+    expect(formatRow(html)).toContain('data-testid="stage-format-chips"');
     expect(html).not.toContain('data-testid="stage-format-edit"');
   });
 
-  it("an unlocked stage shows no lock line, and a viewer gets the read-only view but not the lock line", () => {
+  it("an unlocked stage shows no lock line, and a viewer reads the format (chips) but gets no lock line and no edit", () => {
     expect(panel({ stages: stageWith({ bestOf: 1 }) })).not.toContain('data-testid="stage-format-locked"');
-    const viewer = panel({ canEdit: false, stages: stageWith({ bestOf: 1 }) });
+    const viewer = panel({ canEdit: false, stages: stageWith({ bestOf: 1 }), ruleDict: rulesLineDict(enPublic as Dict) });
     expect(viewer).not.toContain('data-testid="stage-format-locked"');
-    expect(viewer).toContain('data-testid="stage-format-view"');
+    expect(viewer).toContain('data-testid="stage-format-chips"');
+    expect(formatRow(viewer)).toContain("Best of 1");
     expect(viewer).not.toContain('data-testid="stage-format-edit"');
   });
 });
@@ -792,5 +796,33 @@ describe("the card keeps its property of having no phone branch", () => {
     const row = formatRow(html);
     expect(row).not.toMatch(/\smax-md:/);
     expect(row).not.toMatch(/\smd:hidden"/);
+  });
+});
+
+describe("Match Day C2 — the Division rules strip heads the Fixtures tab, with or without a stage", () => {
+  const strip = {
+    divisionId: "d1",
+    sportKey: "badminton",
+    variantKey: null,
+    divisionConfig: { bestOf: 3 },
+    divisionTiebreakers: null,
+    tableKinds: [],
+    canEdit: true,
+    variants: [],
+    lockedFields: [],
+    onlineChessOffered: false,
+  };
+  it("no stage yet: the strip is still there (the division's rules are edited nowhere else), above the empty line", () => {
+    const html = panel({ stages: [], rulesStrip: strip });
+    expect(html).toContain('data-testid="division-rules-strip"');
+    expect(html.indexOf('data-testid="division-rules-strip"')).toBeLessThan(html.indexOf(enUi["schedule.noStages"] as string));
+    // The empty case's own line is unchanged, and no strip prop means no strip.
+    const bare = panel({ stages: [] });
+    expect(bare).toContain(enUi["schedule.noStages"] as string);
+    expect(bare).not.toContain('data-testid="division-rules-strip"');
+  });
+  it("with a stage: the strip, once", () => {
+    const html = panel({ rulesStrip: strip });
+    expect(html.split('data-testid="division-rules-strip"').length - 1).toBe(1);
   });
 });

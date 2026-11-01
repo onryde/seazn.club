@@ -53,6 +53,7 @@ import {
   whoIsBusy,
 } from "./match-day-call";
 import { courtNamesById, loadSettings, MOVABLE_STATUS } from "./schedule";
+import { fixtureFormatLines } from "./fixtures";
 import { openStreamStates } from "./stream-sessions";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
 import { log } from "@/server/logger";
@@ -453,8 +454,9 @@ interface PlayingExtras {
   serving: Serving;
   scorer_attention: MatchDayFixture["scorer_attention"];
   live_video: MatchDayFixture["live_video"];
+  format_line: MatchDayFixture["format_line"];
 }
-const NO_EXTRAS: PlayingExtras = { serving: null, scorer_attention: null, live_video: null };
+const NO_EXTRAS: PlayingExtras = { serving: null, scorer_attention: null, live_video: null, format_line: null };
 
 function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">, extras: PlayingExtras = NO_EXTRAS): MatchDayFixture {
   return {
@@ -477,6 +479,7 @@ function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">,
     stream: streams[r.id] ?? null,
     scorer_attention: extras.scorer_attention,
     live_video: extras.live_video,
+    format_line: extras.format_line,
   };
 }
 
@@ -576,7 +579,15 @@ export async function getMatchDay(
     ...board.courts.flatMap((c) => (c.state === "playing" && c.current !== null ? [c.current.id] : [])),
     ...board.playingNoCourt.map((r) => r.id),
   ].filter((id) => streams[id] === "live");
-  const videos = await liveSessionVideos(auth.orgId, liveIds);
+  const playingIds = [
+    ...board.courts.flatMap((c) => (c.state === "playing" && c.current !== null ? [c.current.id] : [])),
+    ...board.playingNoCourt.map((r) => r.id),
+  ];
+  // The playing matches' formats (C2), in the public line's words: the fixture page's own reader, in the reader's language.
+  const [videos, formatLines] = await Promise.all([
+    liveSessionVideos(auth.orgId, liveIds),
+    getDictionary(locale, "public").then((publicDict) => fixtureFormatLines(auth, playingIds, publicDict)),
+  ]);
   const extras = (fixtureId: string): PlayingExtras => {
     const video = videos[fixtureId];
     return {
@@ -584,6 +595,7 @@ export async function getMatchDay(
       scorer_attention: scorerAttention.get(fixtureId) ?? null,
       // Fails closed, as `mayEmbedReplay` does: only a broadcast positively NOT made for kids reads false.
       live_video: video === undefined ? null : { url: video.url, made_for_kids: video.madeForKids !== false },
+      format_line: formatLines.get(fixtureId) ?? null,
     };
   };
   return {

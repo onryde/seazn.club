@@ -89,7 +89,6 @@ function mount() {
       logo_storage_path: null,
     },
     orgId: "org1",
-    variants: [{ key: "standard", name: "Standard" }],
     structureLocked: false,
     lockedFields: [],
     stages: [],

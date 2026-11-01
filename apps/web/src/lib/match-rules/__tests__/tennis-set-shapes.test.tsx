@@ -20,7 +20,7 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   return { ...actual, useMsg: () => (key: string) => (enUi as Record<string, string>)[key] ?? key };
 });
 
-import { MatchRuleFields } from "@/components/v2/match-rules";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 
 type Cfg = Record<string, unknown>;
 type SetCfg = { gamesTo: number; winBy: number; tiebreakAt: number | null; tiebreakTo: number; tiebreakWinBy?: number };

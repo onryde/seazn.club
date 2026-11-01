@@ -13,7 +13,8 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { StageTableRules } from "@/server/api-v1/schemas";
-import { StageTiebreaksSection } from "../stage-tiebreaks-section";
+import { TiebreaksEditor } from "../../rules/tiebreaks-editor";
+import { foldTiebreaks, unitLabelKey } from "@/lib/stage-card/summaries";
 import { cfgOf, tableRulesOf } from "./_table-rules-fixture";
 
 const sport = (key: string): AnySportModule => builtinModules.find((m) => m.key === key)!;
@@ -31,14 +32,14 @@ function render(
 ): string {
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
-      <StageTiebreaksSection
+      <TiebreaksEditor
+        scope="stage"
+        mode={over.locked === true || over.canEdit === false ? "locked" : "edit"}
+        started={over.locked === true}
         stage={{ id: ID, kind, pooled: over.pooled ?? false, bestNth: over.bestNth ?? false, tableRules }}
-        stageName="Pool A"
         module={m}
         divisionConfig={over.divisionConfig ?? (cfgOf(m) as Record<string, unknown>)}
         stageConfig={{}}
-        formatLockedStageIds={over.locked === true ? [ID] : []}
-        canEdit={over.canEdit ?? true}
         onSaved={() => undefined}
       />
     </DictProvider>,
@@ -56,7 +57,8 @@ const text = (html: string): string => html.replace(/<[^>]*>/g, " ").replace(/&#
 const listed = (html: string): string[] => [...html.matchAll(/data-testid="stage-tiebreaks-row-\d+" data-key="([a-z_0-9]+)"/g)].map((x) => x[1]!);
 const options = (html: string, testId: string): string[] =>
   [...html.slice(html.indexOf(`data-testid="${testId}"`)).split("</select>")[0]!.matchAll(/<option value="([a-z_0-9]+)"/g)].map((x) => x[1]!);
-const stepWord = (key: string) => UI[`div.detail.tiebreak.rule.${key}`]!;
+/** A step in the sport's own unit (Match Day C1 `unitLabelKey`, spec §12 Phase C item 7: badminton's "game difference"). */
+const stepWord = (key: string, sportKey: string) => UI[unitLabelKey(key, sportKey)]!;
 
 describe("the list (X-TB-3, D11, OC1)", () => {
   it("football league, inherited from the sport: the order as served, the primary measure 'always first' and lots 'always last' with no arrows; the middle steps move", () => {
@@ -101,7 +103,7 @@ describe("the list (X-TB-3, D11, OC1)", () => {
       if (want.length === 0) expect(has(html, "stage-tiebreaks-add"), m.key).toBe(false);
       else {
         expect(options(html, "stage-tiebreaks-add"), m.key).toEqual([...want]);
-        for (const k of want) expect(text(html), `${m.key}: ${k} said`).toContain(stepWord(k));
+        for (const k of want) expect(text(html), `${m.key}: ${k} said`).toContain(stepWord(k, m.key));
         offered += want.length;
       }
       checked++;
@@ -141,7 +143,7 @@ describe("Reset (PS-7b, D5)", () => {
 describe("the badge (X-TB-1)", () => {
   const DIV: TiebreakerKey[] = ["points", "diff", "for", "lots"];
 
-  it("Inherited from the sport default, from the division; Overridden for the stage's own; Pinned at start with its source", () => {
+  it("Inherited from the sport default, from the division; Overridden for the stage's own; a pin says the layer it was pinned from, never 'Pinned at start' (Match Day item 4)", () => {
     const sportRules = render(football, "league", tableRulesOf(football, "league"));
     expect(tagOf(sportRules, "stage-tiebreaks-badge")).toContain('data-badge="inherited"');
     expect(tagOf(sportRules, "stage-tiebreaks-badge")).toContain('data-source="sport"');
@@ -158,8 +160,9 @@ describe("the badge (X-TB-1)", () => {
     };
     const pinned = render(football, "league", tableRulesOf(football, "league", { division: DIV, pinned: pin }));
     expect(tagOf(pinned, "stage-tiebreaks-badge")).toContain('data-source="division"');
-    expect(tagOf(pinned, "stage-tiebreaks-badge")).toContain('data-badge="pinned"');
-    expect(text(pinned)).toContain(UI["stageTiebreaks.badge.pinned"]!);
+    expect(tagOf(pinned, "stage-tiebreaks-badge")).toContain('data-badge="inherited"');
+    expect(text(pinned)).toContain(UI["stageTiebreaks.source.division"]!);
+    expect(text(pinned), "internals copy is gone").not.toContain("Pinned at start");
   });
 
   it("'Use the division's order' only for a stage with its own", () => {
@@ -177,12 +180,13 @@ describe("the lock (X-TB-2, OC2, PF-9)", () => {
     expect(has(html, "stage-tiebreaks-add") || has(html, "stage-tiebreaks-reset")).toBe(true);
   });
 
-  it("listed by the server (a first score): the 🔒 line naming the stage, the order still listed, and no control at all", () => {
+  it("listed by the server (a first score): the ONE lock line in organiser words, the order still listed (folded), and no control at all", () => {
     const rules = tableRulesOf(football, "league", { pinnedAt: "2026-10-27T10:00:00.000Z" });
     const html = render(football, "league", rules, { locked: true });
     expect(html).toContain('data-state="locked"');
-    expect(text(html)).toContain(UI["stageTiebreaks.locked"]!.replace("{stage}", "Pool A"));
-    expect(listed(html)).toEqual(rules.tiebreakers.keys);
+    expect(text(html)).toContain(UI["stageCard.locked"]!);
+    expect(html.split('data-testid="stage-tiebreaks-locked"').length - 1, "said once").toBe(1);
+    expect(listed(html)).toEqual(foldTiebreaks(rules.tiebreakers.keys).steps);
     expect(html).not.toMatch(/<(select|button)[^>]*data-testid="stage-tiebreaks-/);
   });
 
@@ -199,7 +203,7 @@ describe("errors inline (spec §9 Errors)", () => {
     // Buchholz needs a Swiss stage (§5.5 rule 3): a chess division order carrying it is refused on a league stage.
     const rules = tableRulesOf(boardgame, "league", { division: ["points", "buchholz", "lots"] });
     const html = render(boardgame, "league", rules);
-    const why = UI["rules.err.tiebreakKeyInvalid"]!.replace("{step}", stepWord("buchholz")).replace("{reason}", UI["rules.err.tiebreak.reason.stage_format"]!);
+    const why = UI["rules.err.tiebreakKeyInvalid"]!.replace("{step}", stepWord("buchholz", "boardgame")).replace("{reason}", UI["rules.err.tiebreak.reason.stage_format"]!);
     expect(text(tagOf(html, "stage-tiebreaks-refusal-1") + html.slice(html.indexOf('data-testid="stage-tiebreaks-refusal-1"')))).toContain(why);
     expect(has(html, "stage-tiebreaks-refusal-0") || has(html, "stage-tiebreaks-refusal-2"), "only the refused step").toBe(false);
     expect(text(html)).toContain(UI["stageTiebreaks.inheritedHint"]!);
@@ -217,7 +221,7 @@ describe("the cross-group line (§5.9)", () => {
     const line = text(tagOf(html, "stage-tiebreaks-cross-group") + html.slice(html.indexOf('data-testid="stage-tiebreaks-cross-group"')));
     const steps = rules.crossGroup.keys.filter((k) => !isHeadToHeadKey(k));
     expect(steps.length, "premise: football's cross-group order has steps").toBeGreaterThan(0);
-    expect(line).toContain(UI["stageTiebreaks.crossGroup"]!.replace("{steps}", steps.map(stepWord).join(", ")));
+    expect(line).toContain(UI["stageTiebreaks.crossGroup"]!.replace("{steps}", steps.map((k) => stepWord(k, "football")).join(", ")));
     expect(has(render(football, "group", rules, { pooled: true, bestNth: false }), "stage-tiebreaks-cross-group")).toBe(false);
     expect(has(render(football, "league", tableRulesOf(football, "league"), { pooled: false, bestNth: true }), "stage-tiebreaks-cross-group")).toBe(false);
   });

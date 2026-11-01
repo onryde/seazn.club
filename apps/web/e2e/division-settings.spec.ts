@@ -3,6 +3,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { TAG, apiJson, activeOrg, expectNoHorizontalScroll, linkPersonToUserBySql, withDb } from "./helpers";
 import { seedOnlineRound, seedUser } from "./match-room-kit";
 import { closeOpenContexts } from "./spectator-public-helpers";
+import { openDivisionRules, saveFormat, savePoints } from "./helpers/rules-strip";
 import { dictString, publicJson, spectator, uiString, type W2Locale } from "./spectator-w2-kit";
 
 // v8 acceptance (spec 2026-07-13): the division Settings tab collects
@@ -69,10 +70,18 @@ test("settings tab: sections render, rename works, structure locks with fixtures
   await expect(page.getByTestId("stage-structure")).toContainText("Group stage");
   await expect(page.getByTestId("stage-structure")).toContainText("Knockout");
 
-  // Match rules still apply independently.
-  await page.getByRole("spinbutton", { name: "Win" }).fill("5");
-  await page.getByRole("button", { name: "Save match rules" }).click();
-  await expect(page.getByText("Match rules saved.")).toBeVisible();
+  // Match Day C2: the match rules left Settings for the Division rules strip on the Fixtures tab; Settings says where.
+  await expect(page.getByTestId("division-rules-moved")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save match rules" }), "no rules Save left in Settings").toHaveCount(0);
+  // The points still apply independently of the structure - from the strip's Points panel.
+  const renamedBase = page.url().split("?")[0]!;
+  const rules = await openDivisionRules(page, renamedBase, "points");
+  await rules.getByTestId("division-rules-panel-points").getByRole("spinbutton", { name: "Win", exact: true }).fill("5");
+  await savePoints(rules).click();
+  await expect(rules.getByTestId("division-rules-saved")).toHaveText(uiString("en", "divset.notice.rulesSaved"), { timeout: 15_000 });
+  // generic stores its points as w/d/l (the seed's own shape).
+  const pointsNow = await apiJson<{ config: { points?: { w?: number } } }>(request, `/api/v1/divisions/${rig.divisionId}`);
+  expect(pointsNow.data!.config.points?.w, "the typed win landed").toBe(5);
 
   // The strays moved: no embed snippet / danger zone under other tabs.
   await page.goto(`${base}?tab=entrants`);
@@ -95,7 +104,8 @@ test("settings tab: sections render, rename works, structure locks with fixtures
 
   // Renames regenerate the slug - resolve the current one before navigating.
   const fresh = await apiJson<{ slug: string }>(request, `/api/v1/divisions/${rig.divisionId}`);
-  const settingsUrl = `/o/${org.slug}/c/${rig.compSlug}/d/${fresh.data!.slug}?tab=settings`;
+  const divisionUrl = `/o/${org.slug}/c/${rig.compSlug}/d/${fresh.data!.slug}`;
+  const settingsUrl = `${divisionUrl}?tab=settings`;
   const lockLines = page.locator('[data-testid^="division-locked-"]');
   await page.goto(settingsUrl);
   await page.getByRole("button", { name: /Format/ }).click();
@@ -103,14 +113,15 @@ test("settings tab: sections render, rename works, structure locks with fixtures
   await expect(page.getByTestId("format-locked")).toBeVisible();
   await expect(page.getByTestId("format-locked")).toContainText(uiString("en", "divset.lockedNotePre").split("(")[0]!.trim());
   await expect(page.getByTestId("format-template")).toHaveCount(0);
-  // Fixtures exist but no stage has started: the RULES are open - no lock line, the variant is editable...
+  // Fixtures exist but no stage has started: the RULES are open (on the strip) - no lock line, the variant is editable...
+  const strip = await openDivisionRules(page, divisionUrl, "format", "points");
   await expect(lockLines, "no stage has started: nothing is locked").toHaveCount(0);
-  const variant = page.getByRole("combobox", { name: new RegExp(`^${uiString("en", "divset.variant")}`) });
+  const variant = strip.getByRole("combobox", { name: new RegExp(`^${uiString("en", "divset.variant")}`) });
   await expect(variant).toBeEnabled();
   // ...and a DIFFERENT variant saves (a no-op re-send of the stored one would pass on a lock that refuses nothing).
   await variant.selectOption("win_loss");
-  await page.getByRole("button", { name: "Save match rules" }).click();
-  await expect(page.getByText("Match rules saved.")).toBeVisible();
+  await saveFormat(strip).click();
+  await expect(strip.getByTestId("division-rules-saved")).toHaveText(uiString("en", "divset.notice.rulesSaved"));
   const afterSave = await apiJson<{ variant_key: string }>(request, `/api/v1/divisions/${rig.divisionId}`);
   expect(afterSave.data!.variant_key, "the new variant landed").toBe("win_loss");
 
@@ -130,12 +141,11 @@ test("settings tab: sections render, rename works, structure locks with fixtures
     payload: {},
   });
   expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
-  await page.goto(settingsUrl);
-  await page.getByRole("button", { name: /Format/ }).click();
-  const variantLine = page.getByTestId("division-locked-variant_key");
+  const lockedStrip = await openDivisionRules(page, divisionUrl, "format");
+  const variantLine = lockedStrip.getByTestId("division-locked-variant_key");
   await expect(variantLine).toBeVisible();
   await expect(variantLine).toContainText(uiString("en", "ruleLock.DIVISION_FORMAT_LOCKED", { stage: firstStage.name }));
-  await expect(page.getByRole("combobox", { name: new RegExp(`^${uiString("en", "divset.variant")}`) })).toBeDisabled();
+  await expect(lockedStrip.getByRole("combobox", { name: new RegExp(`^${uiString("en", "divset.variant")}`) })).toBeDisabled();
   // ...and the server agrees: the same variant change that landed above is now refused, naming the field.
   const refused = await page.request.patch(`/api/v1/divisions/${rig.divisionId}`, { data: { variant_key: "score" } });
   expect(refused.status()).toBe(409);
@@ -408,17 +418,20 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     await expect(page.getByTestId("division-camera-save")).toBeDisabled();
     await expect(page.getByTestId("division-camera-needs-online")).toHaveText(uiString("en", "divset.camera.needsOnlinePlay"));
 
-    // An unsaved Online play choice does not unlock it: the camera follows the SAVED value.
-    await page.getByRole("button", { name: /Format/ }).click();
-    await page.getByTestId("division-online-play").selectOption("lichess");
-    await expect(page.getByTestId("division-camera-policy"), "an unsaved choice unlocked the camera").toBeDisabled();
-    // Saving the rules turns it on — and (M-6) the refreshed config re-syncs the form without crashing the tab: the
-    // enabled select below can only come from the NEW config having rendered.
-    await page.getByRole("button", { name: uiString("en", "divset.saveRules") }).click();
-    await expect(page.getByText("Match rules saved.")).toBeVisible({ timeout: 15_000 });
+    // Online play moved with the match rules to the Division rules strip (Match Day C2). An unsaved choice there does not
+    // unlock the camera: the camera follows the SAVED value.
+    const divisionUrl = rig.settings.split("?")[0]!;
+    const strip = await openDivisionRules(page, divisionUrl, "format");
+    await strip.getByTestId("division-online-play").selectOption("lichess");
+    // Saving the rules turns it on — and (M-6) the refreshed config re-syncs the strip without crashing the tab.
+    await saveFormat(strip).click();
+    await expect(strip.getByTestId("division-rules-saved")).toHaveText(uiString("en", "divset.notice.rulesSaved"), { timeout: 15_000 });
+    await expect(strip.getByTestId("division-online-play"), "M-6: re-synced to the saved value").toHaveValue("lichess");
+    await expect(page.getByTestId("division-rules-strip"), "M-6: the tab still renders after a rules save").toBeVisible();
+    await gotoSettings(page, rig.settings);
+    await openCameraGroup(page);
     await expect(page.getByTestId("division-camera-policy")).toBeEnabled({ timeout: 15_000 });
     await expect(page.getByTestId("division-camera-needs-online")).toHaveCount(0);
-    await expect(page.getByTestId("division-settings"), "M-6: the tab still renders after a rules save").toBeVisible();
     expect(errors, "M-6: no page error from the post-save re-sync").toEqual([]);
 
     // 3. Nothing pinned: the competition's setting applies, and the hint says which (the competition default, Off).
@@ -518,12 +531,12 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     const rig = await seedChessDivision(request, page, { online: false });
     await gotoSettings(page, rig.settings);
     await setLocaleCookie(page, "fr");
-    await gotoSettings(page, rig.settings);
-    // The Format group's title in French, then the clock fields. The fields' names are drawn from the dictionary in every locale
-    // (W2e PR B localized ALL rule-field labels, not only the five ruling-157 ones), so each is looked up through the key the
-    // product renders (`RuleField.labelKey`) rather than typed in English - an English literal here is a name that only the
-    // `en` page has.
-    await page.getByRole("button", { name: new RegExp(escapeRe(uiString("fr", "divset.format"))) }).first().click();
+    // The Division rules strip's Match format panel (Match Day C2: the clock moved there from Settings), then the clock fields.
+    // The fields' names are drawn from the dictionary in every locale (W2e PR B localized ALL rule-field labels, not only the
+    // five ruling-157 ones), so each is looked up through the key the product renders (`RuleField.labelKey`) rather than typed
+    // in English - an English literal here is a name that only the `en` page has.
+    const strip = await openDivisionRules(page, rig.settings.split("?")[0]!, "format");
+    await expect(strip.getByTestId("division-rules-toggle-format")).toHaveText(uiString("fr", "rulesStrip.format"));
     // Online play is still Off, so the free clock fields are there: type a 1+0 the server will refuse. THEN turn
     // Lichess on — the picker takes the fields' place, finds none of the supported controls in the typed clock, and
     // says so (item 2, 2026-10-19: with Lichess the clock is a picker, not three free inputs).
@@ -532,7 +545,7 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     await page.getByTestId("division-online-play").selectOption("lichess");
     await expect(page.getByTestId("division-time-control"), "a typed 1+0 is none of the supported controls").toHaveValue("");
     await expect(page.getByText(uiString("fr", "divset.timeControl.unsupported"))).toBeVisible();
-    await page.getByRole("button", { name: uiString("fr", "divset.saveRules") }).click();
+    await saveFormat(strip).click();
     await expect(page.getByText(uiString("fr", "divset.err.timeControlUnsupported", { controls: SHIP_1_CLOCKS.join(", ") }))).toBeVisible({
       timeout: 15_000,
     });
@@ -549,8 +562,8 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     const errors = pageErrors(page);
     // 10+5 stored, online play OFF: the free fields are there to begin with.
     const rig = await seedChessDivision(request, page, { online: false });
-    await gotoSettings(page, rig.settings);
-    await page.getByRole("button", { name: /Format/ }).click();
+    const divisionUrl = rig.settings.split("?")[0]!;
+    const strip = await openDivisionRules(page, divisionUrl, "format");
     const freeFields = ["Time per side (minutes)", "Increment per move (seconds, Fischer)", "Move delay (seconds, Bronstein/US delay)"];
     for (const name of freeFields) await expect(page.getByRole("spinbutton", { name }), `Off: ${name}`).toBeVisible();
     await expect(page.getByTestId("division-time-control"), "Off: no picker").toHaveCount(0);
@@ -579,8 +592,8 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     await expect(page.getByTestId("division-time-control")).toHaveValue("5+3");
 
     // Save: the same fields the free inputs write (seconds), the family follows, Lichess on.
-    await page.getByRole("button", { name: uiString("en", "divset.saveRules") }).click();
-    await expect(page.getByText("Match rules saved.")).toBeVisible({ timeout: 15_000 });
+    await saveFormat(strip).click();
+    await expect(strip.getByTestId("division-rules-saved")).toBeVisible({ timeout: 15_000 });
     const stored = await apiJson<{ config: { onlinePlay?: string; variant?: string; clock?: unknown } }>(
       request,
       `/api/v1/divisions/${rig.divisionId}`,
@@ -590,9 +603,8 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     expect(stored.data?.config.onlinePlay).toBe("lichess");
 
     // Reopen: the saved control is the one selected.
-    await gotoSettings(page, rig.settings);
-    await page.getByRole("button", { name: /Format/ }).click();
-    await expect(page.getByTestId("division-time-control")).toHaveValue("5+3");
+    const reopened = await openDivisionRules(page, divisionUrl, "format");
+    await expect(reopened.getByTestId("division-time-control")).toHaveValue("5+3");
     expect(errors).toEqual([]);
   });
 
@@ -678,17 +690,11 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     const reconnect = page.getByTestId("division-online-reconnect");
     const empty = page.getByTestId("division-online-empty");
     const gaps = page.getByTestId("division-online-link-gaps");
-    const openFormat = async (locale: W2Locale = "en") => {
-      const group = page.getByRole("button", { name: new RegExp(escapeRe(uiString(locale, "divset.format"))) }).first();
-      // A click before hydration is a no-op: retry click + check, clicking only a group still closed.
-      await expect(async () => {
-        if ((await group.getAttribute("aria-expanded")) !== "true") await group.click();
-        await expect(group).toHaveAttribute("aria-expanded", "true", { timeout: 1_000 });
-      }).toPass({ timeout: 15_000 });
-    };
+    // Online play and its warning moved with the match rules to the Division rules strip on the Fixtures tab (Match Day C2).
+    const divisionUrl = rig.settings.split("?")[0]!;
+    const openFormat = () => openDivisionRules(page, divisionUrl, "format");
 
     // Empty case first: a roster of nobody has nobody to warn about.
-    await gotoSettings(page, rig.settings);
     await openFormat();
     await page.getByTestId("division-online-play").selectOption("lichess");
     await expect(warning, "no entrants: nothing to warn about").toHaveCount(0);
@@ -756,7 +762,6 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     };
 
     // The switch moment: Off is silent, Lichess warns - before anything is saved - and nothing is disabled.
-    await gotoSettings(page, rig.settings);
     await openFormat();
     await page.getByTestId("division-online-play").selectOption("off");
     await expect(gaps).toHaveCount(0);
@@ -773,12 +778,12 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     const stillOff = await apiJson<{ config: { onlinePlay?: string } }>(request, `/api/v1/divisions/${rig.divisionId}`);
     expect(stillOff.data?.config.onlinePlay, "choosing it saved nothing").toBeUndefined();
     await expect(page.getByTestId("division-online-play")).toBeEnabled();
-    const save = page.getByRole("button", { name: uiString("en", "divset.saveRules") });
+    const save = page.getByTestId("division-rules-format-save");
     await expect(save, "the warning does not block the save").toBeEnabled();
 
     // The save lands - 200, stored - and all three sentences are still there on the refreshed page.
     await save.click();
-    await expect(page.getByText("Match rules saved.")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("division-rules-saved")).toBeVisible({ timeout: 15_000 });
     const stored = await apiJson<{ config: { onlinePlay?: string } }>(request, `/api/v1/divisions/${rig.divisionId}`);
     expect(stored.data?.config.onlinePlay, "the switch was saved with three unlinked, one to reconnect and one empty").toBe("lichess");
     await expect(warning, "still warned after the save").toHaveText(sentence("en"));
@@ -792,8 +797,7 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
       await setLocaleCookie(page, locale);
       for (const width of [1280, 768, 320]) {
         await page.setViewportSize({ width, height: 900 });
-        await gotoSettings(page, rig.settings);
-        await openFormat(locale);
+        await openFormat();
         await expect(warning, `${locale} ${width}`).toBeVisible();
         await expect(warning, `${locale} ${width}`).toHaveText(sentence(locale));
         await expect(reconnect, `${locale} ${width}`).toBeVisible();
@@ -818,19 +822,16 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
       expect(res.status, `withdraw ${name}: ${JSON.stringify(res.error)}`).toBeLessThan(300);
     };
     for (const name of ["Ann Unlinked", "Ben Unlinked", LONG]) await withdraw(name);
-    await gotoSettings(page, rig.settings);
     await openFormat();
     await expect(warning, "nobody is unlinked now: that sentence is gone").toHaveCount(0);
     await expect(reconnect, "Cat is still to reconnect").toHaveText(reconnectSentence("en"));
     await expect(empty, "the empty entrant is still empty").toHaveText(emptySentence("en"));
     await withdraw("Board 3 (nobody yet)");
-    await gotoSettings(page, rig.settings);
     await openFormat();
     await expect(empty, "the empty entrant left the field: its sentence is gone").toHaveCount(0);
     await expect(reconnect, "only Cat is left to reconnect").toHaveText(reconnectSentence("en"));
     await expect(gaps).toBeVisible();
     await withdraw("Cat Reconnect");
-    await gotoSettings(page, rig.settings);
     await openFormat();
     await expect(page.getByTestId("division-online-play"), "premise: the Online play control is still there").toBeVisible();
     await expect(gaps, "nobody left: no box").toHaveCount(0);

@@ -26,6 +26,8 @@ const spies = vi.hoisted(() => ({
   openStreams: vi.fn(),
   // W2c Task 19: the match rules block's facts. A spy, so what pins the page is WHO it reads them for, not the loader.
   matchRules: vi.fn(),
+  // Match Day C2: everyone who is not offered the block reads the match's format line alone.
+  formatLines: vi.fn(async (_auth: unknown, ids: readonly string[]) => new Map(ids.map((i) => [i, `line of ${i}`]))),
 }));
 
 vi.mock("@/server/page-auth", () => ({
@@ -59,6 +61,7 @@ vi.mock("@/server/usecases/fixtures", () => ({
   loadFixturePadCfg: vi.fn(async () => ({ cfg: {}, stageKind: scene.stageKind })),
   fixtureFeedsNextMatch: vi.fn(async (_auth: unknown, id: string) => (id === "fx-7" ? scene.feedsNext : !scene.feedsNext)),
   loadFixtureMatchRules: spies.matchRules,
+  fixtureFormatLines: spies.formatLines,
 }));
 vi.mock("@/server/usecases/divisions", () => ({
   getDivision: vi.fn(async () => ({
@@ -159,6 +162,7 @@ beforeEach(() => {
   });
   spies.loader.mockReset();
   spies.loader.mockImplementation(async () => CONTEXT);
+  spies.formatLines.mockClear();
   spies.openStreams.mockReset();
   spies.openStreams.mockImplementation(async () => Object.fromEntries(scene.open.map((id) => [id, "live"])));
   spies.matchRules.mockReset();
@@ -309,6 +313,9 @@ describe("the organiser fixture page mounts the match rules block (W2c Task 19, 
     const facts = Object.fromEntries(Object.entries(MATCH_RULES).filter(([k]) => k !== "fields"));
     expect(props.matchRules).toEqual({ fixtureId: "fx-7", ...facts });
     expect(JSON.parse(JSON.stringify(props.matchRules)), "what crosses the RSC boundary survives JSON").toEqual(props.matchRules);
+    // Match Day C2: the block carries the format; the read-only line is not read twice.
+    expect(spies.formatLines).not.toHaveBeenCalled();
+    expect(props.matchFormatLine).toBeUndefined();
   });
 
   it("organisers only: a scorer without canEdit is not offered the block, and its facts are not read", async () => {
@@ -316,6 +323,10 @@ describe("the organiser fixture page mounts the match rules block (W2c Task 19, 
     const props = await consoleProps();
     expect(props.matchRules, "the writer is organiser auth: a block shown to a scorer would only earn a 403").toBeUndefined();
     expect(spies.matchRules, "nothing is read for a scorer").not.toHaveBeenCalled();
+    // Match Day C2: the scorer reads the match's format, read-only - its line alone, for THIS fixture.
+    expect(spies.formatLines).toHaveBeenCalledTimes(1);
+    expect(spies.formatLines.mock.calls[0]![1]).toEqual(["fx-7"]);
+    expect(props.matchFormatLine).toBe("line of fx-7");
   });
 
   it("a billing-frozen competition is offered no block, and nothing is read", async () => {
@@ -323,6 +334,7 @@ describe("the organiser fixture page mounts the match rules block (W2c Task 19, 
     const props = await consoleProps();
     expect(props.matchRules).toBeUndefined();
     expect(spies.matchRules).not.toHaveBeenCalled();
+    expect(props.matchFormatLine, "the read-only format is still said").toBe("line of fx-7");
   });
 
   it("a sport with nothing to change for one match (the loader answers no fields) gets no block", async () => {

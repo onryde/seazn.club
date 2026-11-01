@@ -265,6 +265,44 @@ function parsedCfg(m: AnySportModule, cfg: unknown): Record<string, unknown> {
   return isCfgObject(out) ? out : {};
 }
 
+/**
+ * Match Day C2: the format each of `fixtureIds` plays, in the public line's words — the SAME `effectiveLine` the fixture page's
+ * Match format says (`loadFixtureMatchRules` below: the match's own rules over its stage's over its division's, parsed), for the
+ * Match Day court's read-only Match format. One query for all of them; a match whose line says nothing is absent. Tenant-scoped
+ * by `withTenant`, so another org's id reads nothing.
+ */
+export async function fixtureFormatLines(auth: AuthCtx, fixtureIds: readonly string[], dict: Dict): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (fixtureIds.length === 0) return out;
+  return withTenant(auth.orgId, async (tx) => {
+    const rows = await tx<
+      {
+        id: string;
+        config_snapshot: unknown;
+        rules_override: unknown;
+        division_config: unknown;
+        sport_key: string;
+        module_version: string;
+        stage_config: Record<string, unknown> | null;
+        stage_kind: string | null;
+      }[]
+    >`
+      select f.id, f.config_snapshot, f.rules_override, d.config as division_config, d.sport_key, d.module_version,
+             s.config as stage_config, s.kind as stage_kind
+        from fixtures f
+        join divisions d on d.id = f.division_id
+        left join stages s on s.id = f.stage_id
+       where f.id = any(${fixtureIds as string[]})`;
+    for (const row of rows) {
+      const sportModule = resolveModule(row.sport_key, row.module_version);
+      const effective = parsedCfg(sportModule, resolveFixtureCfg(row, row.division_config, { kind: row.stage_kind, config: row.stage_config }, sportModule));
+      const line = formatLineOf(row.sport_key, sportModule, effective, row.stage_kind, row.division_config, dict) ?? "";
+      if (line !== "") out.set(row.id, line);
+    }
+    return out;
+  });
+}
+
 export async function loadFixtureMatchRules(auth: AuthCtx, fixtureId: string, dict: Dict): Promise<FixtureMatchRules> {
   return withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<

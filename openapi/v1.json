@@ -3401,6 +3401,16 @@
                                             "type": "null"
                                           }
                                         ]
+                                      },
+                                      "format_line": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
                                       }
                                     },
                                     "required": [
@@ -3422,7 +3432,8 @@
                                       "called_at",
                                       "stream",
                                       "scorer_attention",
-                                      "live_video"
+                                      "live_video",
+                                      "format_line"
                                     ],
                                     "additionalProperties": false
                                   },
@@ -3664,6 +3675,16 @@
                                         }
                                       ]
                                     },
+                                    "format_line": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
                                     "planned_at": {
                                       "type": "string",
                                       "format": "date-time",
@@ -3695,6 +3716,7 @@
                                     "stream",
                                     "scorer_attention",
                                     "live_video",
+                                    "format_line",
                                     "planned_at",
                                     "estimated_at"
                                   ],
@@ -3926,6 +3948,16 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "format_line": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -3947,7 +3979,8 @@
                               "called_at",
                               "stream",
                               "scorer_attention",
-                              "live_video"
+                              "live_video",
+                              "format_line"
                             ],
                             "additionalProperties": false
                           }
@@ -4104,7 +4137,8 @@
                           "live_video": {
                             "url": null,
                             "made_for_kids": null
-                          }
+                          },
+                          "format_line": "example"
                         },
                         "in_use_by": "example",
                         "free_since": "2026-08-01T09:00:00Z",
@@ -4136,6 +4170,7 @@
                               "url": null,
                               "made_for_kids": null
                             },
+                            "format_line": "example",
                             "planned_at": "2026-08-01T09:00:00Z",
                             "estimated_at": "2026-08-01T09:00:00Z"
                           }
@@ -4174,7 +4209,8 @@
                         "live_video": {
                           "url": "example",
                           "made_for_kids": true
-                        }
+                        },
+                        "format_line": "example"
                       }
                     ],
                     "needs_you": [
@@ -4598,6 +4634,16 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "format_line": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -4619,7 +4665,8 @@
                               "called_at",
                               "stream",
                               "scorer_attention",
-                              "live_video"
+                              "live_video",
+                              "format_line"
                             ],
                             "additionalProperties": false
                           },
@@ -4739,7 +4786,8 @@
                         "live_video": {
                           "url": "example",
                           "made_for_kids": true
-                        }
+                        },
+                        "format_line": "example"
                       },
                       "source": "this_court",
                       "from_court_name": "example",

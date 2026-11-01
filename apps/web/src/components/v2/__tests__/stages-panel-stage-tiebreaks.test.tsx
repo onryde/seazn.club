@@ -95,11 +95,12 @@ describe("the Tie-breaks section is on a TABLE stage's card, after Points, and o
 });
 
 describe("the lock is the server's list (OC2)", () => {
-  it("listed in formatLockedStageIds: locked, the 🔒 line naming the stage; not listed: the editor; a viewer: read-only", () => {
+  it("listed in formatLockedStageIds: locked, ONE 🔒 line in organiser words; not listed: the editor; a viewer: read-only", () => {
     const rules = rulesFor("league");
     const locked = panel({ stages: stageOf("league", "Spring League"), stageTableRules: rules, formatLockedStageIds: [A] });
     expect(stateOf(locked)).toBe("locked");
-    expect(locked).toContain(UI["stageTiebreaks.locked"]!.replace("{stage}", "Spring League"));
+    expect(locked).toContain(UI["stageCard.locked"]!);
+    expect(locked.split('data-testid="stage-tiebreaks-locked"').length - 1, "one lock line").toBe(1);
     expect(stateOf(panel({ stageTableRules: rules }))).toBe("editor");
     expect(stateOf(panel({ stageTableRules: rules, formatLockedStageIds: [B] })), "another stage's lock").toBe("editor");
     expect(stateOf(panel({ stageTableRules: rules, canEdit: false }))).toBe("readonly");

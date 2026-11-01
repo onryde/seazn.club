@@ -25,7 +25,6 @@ function mount(sport_key: string, variant_key: string, stages: Stage[]) {
   return renderIsland(DivisionSettings, {
     division: { id: "d1", name: "Open", sport_key, variant_key, config: {}, logo_url: null, logo_storage_path: null },
     orgId: "org1",
-    variants: [{ key: variant_key, name: variant_key }],
     structureLocked: false,
     lockedFields: [],
     stages,

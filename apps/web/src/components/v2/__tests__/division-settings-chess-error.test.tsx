@@ -28,15 +28,16 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 
 import { ApiV1Error } from "@/lib/client-v1";
 import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
-import { DivisionSettings } from "@/components/v2/division-settings";
+import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 
 const LOCALES = ["en", "es", "fr", "nl"] as const;
 const DICTS = Object.fromEntries(
   LOCALES.map((l) => [l, JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", l, "ui.json"), "utf8")) as Dict]),
 ) as Record<(typeof LOCALES)[number], Dict>;
 
-type SettingsProps = Parameters<typeof DivisionSettings>[0];
-const props = {
+// Match Day C2: the match rules' Save moved to the Division rules strip (Fixtures tab); it re-sends the config, entrants
+// override included, so the refusal is met there.
+const settings = {
   division: {
     id: "d1",
     name: "Blitz Open",
@@ -65,19 +66,20 @@ const props = {
   showSeeds: true,
   viewerPlan: "community",
   onlineChessOffered: true,
-} as SettingsProps;
+};
+const props = stripPropsOf(settings);
 
 beforeEach(() => {
   net.refuse = null;
 });
 
-describe("division Settings: a save refused because chess takes individual players only", () => {
+describe("the division rules' Save refused because chess takes individual players only", () => {
   const SERVER_SENTENCE = "Chess divisions take individual players only (server English)";
 
   it("renders the localised refusal, never the server's English text", async () => {
     net.refuse = new ApiV1Error(SERVER_SENTENCE, 422, CHESS_INDIVIDUAL_ONLY);
-    const island = renderIsland(DivisionSettings, props);
-    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
+    const island = renderIsland(DivisionRulesStrip, props, expandRules);
+    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === (DICTS.en["rulesStrip.format.save"] as string));
     expect(save, "premise: the save is there").toBeDefined();
     (propsOf(save!).onClick as () => void)();
     const want = DICTS.en["divset.err.chessIndividualOnly"] as string;
@@ -88,8 +90,8 @@ describe("division Settings: a save refused because chess takes individual playe
 
   it("a different refusal is not mistaken for it (control): it falls through to the generic failure", async () => {
     net.refuse = new ApiV1Error("something else", 422, "SOME_OTHER_CODE");
-    const island = renderIsland(DivisionSettings, props);
-    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
+    const island = renderIsland(DivisionRulesStrip, props, expandRules);
+    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === (DICTS.en["rulesStrip.format.save"] as string));
     (propsOf(save!).onClick as () => void)();
     await vi.waitFor(() => expect(island.text()).toContain("something else"));
     expect(island.text()).not.toContain(DICTS.en["divset.err.chessIndividualOnly"] as string);

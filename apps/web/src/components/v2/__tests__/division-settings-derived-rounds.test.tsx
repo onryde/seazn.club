@@ -78,7 +78,6 @@ function mount(stages: StageProp[], locked: boolean) {
       logo_storage_path: null,
     },
     orgId: "org1",
-    variants: [{ key: "bwf", name: "BWF" }],
     structureLocked: locked,
     lockedFields: [],
     stages,

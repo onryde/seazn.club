@@ -1,39 +1,43 @@
 "use client";
 
-// W2c Task 18 (S3, ST-G8; owner pick A on mockup S3) - a table stage's OWN points, with the walkover row and bonuses behind
-// "More" and a live preview in the public line's words. It sits beside the stage format row (its own PUT arm, `{points}`)
-// and follows the same lock: a started stage, or a viewer, reads it and cannot change it.
+// Match Day C2 (spec 2026-10-31 §12 Phase C items 4, 5, 10) — THE Points component: one editor for what a table pays, reused
+// wherever those points are set or read (owner, 2026-10-31: "single component for each and reuse in builder, fixture and match
+// pages"). Two scopes, one set of modes:
 //
-// W2d Task 16 (spec §9 "Points section, widened"): ONE ROW PER OUTCOME THE STAGE CAN REACH (`pointsRows` over the engine's
-// `reachableOutcomes`) — overtime and shoot-out rows, B2's "after a shoot-out: counts as a draw; the winner gets +[1]",
-// a row per set score where the rule pays a set table, a loss not played (ITTF), a tie and a no result (ICC) — and the
-// sport's preset chips (`tablePresets`). The editor says every split, so W2d Task 10 fix round 1 I2's "can't be set per
-// stage yet" state is gone: what the server would refuse (POINTS_OUTCOME_UNCOVERED, POINTS_SPLIT_FLATTENED) is said
-// inline, in its own words, before Save (`draftRefusal`). Only a stage whose sport rule cannot be read at all (a cfg the
-// sport refuses) is fail-closed, with no inputs.
+//   - scope "stage"    — a table stage's OWN points on the stage card (absorbed from `stage-points-section.tsx`, W2c Task 18 /
+//                        W2d Task 16): one row per outcome the stage can reach, the sport's preset chips, the walkover row and
+//                        bonuses behind "More". Save sends ONLY `{points}` to the stage rules PUT (strict body; an omitted
+//                        `rules` arm is left as stored). A stage PINNED at generate with no rule of its own plays its pin (W2d
+//                        final review I1): its checkbox reads "Keep the points it started with".
+//   - scope "division" — the division's default points: the win / draw / loss the sport's config keeps (`config.points`;
+//                        absorbed from Settings' "Standings points", R3.5 F7: which boxes show is read off the config's OWN
+//                        points shape, never the sport key). The division builder's Format tab (controlled, sent with the
+//                        create) and the Division rules strip on the Fixtures tab (saved with `PATCH /divisions/{id}`). A sport
+//                        whose config keeps no such points (a set sport: badminton pays per game score) shows what the sport
+//                        pays, read-only.
+//   - there is no "fixture" scope: one match has no table (`PointsEditorProps` refuses it at the type level).
 //
-// WHAT IT OFFERS IS WHAT THE SERVER TAKES (every question is `stage-points-model.ts`'s, which asks the engine):
-//   - scoring is free on every plan (owner, 2026-10-19), so the section asks no plan question; a 402 is said in the
-//     server's own words;
-//   - the walkover SCORE is shown only where the sport's table reads it (batch-3 I3);
-//   - bonus kinds are those the sport's metrics can feed.
-// Save sends ONLY `{points}`: the endpoint's body is strict, and an omitted `rules` arm is left as stored.
+// Modes: "edit" as above; "locked" — read-only, said ONCE (item 5): "Win 2 · Loss 0" when every set score pays the same, the
+// per-score rows only when they differ (C1 `summarisePoints`, a SET-TABLE summary only), and a sport that can draw keeps its
+// own outcome rows ("A win: 3", "A draw: 1"). A started stage says one lock line (item 4), never "Changes to the division's
+// points don't reach it".
 //
-// W2d final review I1 (controller ruling, 2026-10-26): a stage PINNED at generate pays its pin, and a division points save
-// after that lands but never reaches it. With no rule of its own, such a stage's card says and previews the PIN's points,
-// in words that say they were fixed when it started ("stagePoints.startedPoints"), its checkbox reads "Keep the points it
-// started with" (PR B carry: never "Use the division's points" over a number the table does not pay), and its editor
-// prefills from the pin. An unpinned stage reads the live layers.
+// WHAT IT OFFERS IS WHAT THE SERVER TAKES (every question is `stage-points-model.ts`'s, which asks the engine): scoring is free
+// on every plan (owner, 2026-10-19), so the editor asks no plan question; a 402 is said in the server's own words.
 import { Fragment, useState, type ReactNode } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
-import type { OutcomeKey } from "@seazn/engine/competition";
-import type { AnySportModule } from "@seazn/engine/sport";
+import type { OutcomeKey, PointsRule } from "@seazn/engine/competition";
+import type { AnySportModule, TableStageKind } from "@seazn/engine/sport";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
 import { ruleRefusalText } from "@/lib/rule-errors";
 import { rulesLineText } from "@/lib/rules-line";
+import { summarisePoints } from "@/lib/stage-card/summaries";
+import { pointsLine, type PointsClause } from "@/lib/points-line";
+import { rulesFor } from "@/lib/match-rules";
+import { LockLine, type RulesMode } from "./lock-line";
 import {
   PARAM_BONUS_KINDS,
   draftFromStored,
@@ -55,7 +59,7 @@ import {
   type BonusWhen,
   type PointsDraft,
   type PointsRow,
-} from "./stage-points-model";
+} from "@/components/v2/stage-rules/stage-points-model";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -159,6 +163,70 @@ function RowsList({ rows, unit, msg }: { rows: readonly PointsRow[]; unit: "whol
   );
 }
 
+/** The set-table clauses (`pointsLine`'s per-score sentences): what `summarisePoints` says instead. */
+const SET_CLAUSE = new Set(["format.points.setScore", "format.points.setScoreOther"]);
+
+/**
+ * What a points rule pays, said ONCE (item 5). A set table that pays every reachable score the same is one line, "Win 2 · Loss 0"
+ * (C1 `summarisePoints`), never "pays 2-0 points"; a set table whose scores differ keeps a row per score. A rule with no set
+ * table (a sport that can draw, an overtime split) is the public line's own sentence (`pointsLine`). Either way the rest of the
+ * line — a walkover, bonuses — follows in the same words. Without the public dictionary (the builder) the outcome rows say it.
+ * Numbers in points (a half-point rule shows "1½").
+ */
+export function PointsSummary({
+  rule,
+  reachable,
+  clauses,
+  pointsDict,
+}: {
+  rule: PointsRule;
+  reachable: readonly OutcomeKey[];
+  /** `pointsLine` of the rule (or the stage's `previewClauses`): the words, and the tail after the table. */
+  clauses: readonly PointsClause[];
+  pointsDict: Dict | undefined;
+}) {
+  const msg = useMsg();
+  const rows = pointsRows(reachable, rule);
+  const pts = (n: number) => pointsText(rule.unit === "half" ? n / 2 : n);
+  const map = rule.bySetScore;
+  const words = (cs: readonly PointsClause[]) => (pointsDict === undefined || cs.length === 0 ? "" : rulesLineText(pointsDict, [...cs]));
+  if (map === undefined) {
+    const line = words(clauses);
+    if (line === "") return <RowsList rows={rows} unit={rule.unit} msg={msg} />;
+    return (
+      <p className="text-sm text-slate-800" data-testid="stage-points-preview">
+        {line}
+      </p>
+    );
+  }
+  const tail = words(clauses.filter((c) => !SET_CLAUSE.has(c.key)));
+  const payouts = rows.flatMap((r) => (r.pair === null ? [] : [{ score: setScore(r.key as `set:${number}-${number}`), winner: r.pair[0], loser: r.pair[1] }]));
+  const star = Object.hasOwn(map, "*") ? map["*"]! : null;
+  const summary = summarisePoints(payouts, star === null ? null : { winner: star[0], loser: star[1] });
+  if (summary.kind === "uniform") {
+    const head = msg("stageCard.points.uniform", { w: pts(summary.win), l: pts(summary.loss) });
+    return (
+      <p className="text-sm text-slate-800" data-testid="stage-points-summary" data-kind="uniform">
+        {tail === "" ? head : `${head} · ${tail}`}
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-1.5" data-testid="stage-points-summary" data-kind="table">
+      {summary.rows.length > 0 && (
+        <ul className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-sm text-slate-800">
+          {summary.rows.map((r) => (
+            <li key={r.score} className="px-3 py-2" data-testid={`stage-points-row-set-${r.score.replace(/[.:]/g, "-")}`}>
+              {msg("stagePoints.row.set", { score: r.score, w: pts(r.winner), l: pts(r.loser) })}
+            </li>
+          ))}
+        </ul>
+      )}
+      {tail !== "" && <p className="text-xs text-slate-700">{tail}</p>}
+    </div>
+  );
+}
+
 interface Saved {
   /** The row's `stage.config.points` prop when the save landed: while the prop is still this value the page has not
    *  re-read the stage since, and `points` is newer than it (the stage rules row's `SavedStageRules` pattern). */
@@ -166,18 +234,12 @@ interface Saved {
   readonly points: unknown;
 }
 
-export function StagePointsSection({
-  stageId,
-  module,
-  kind,
-  stageConfig,
-  divisionConfig,
-  stored,
-  pointsDict,
-  readOnly,
-  pinned = null,
-  onSaved,
-}: {
+export interface StagePointsProps {
+  scope: "stage";
+  /** "locked": a started stage (the S4 lock) or a viewer — the section reads, nothing writes. */
+  mode: RulesMode;
+  /** The server's lock (`formatLockedStageIds`): the section says it once. */
+  started: boolean;
   stageId: string;
   module: AnySportModule;
   /** The stage's kind and its own config (its `rules` move the outcomes it reaches): the rows the editor shows. */
@@ -188,13 +250,43 @@ export function StagePointsSection({
   stored: unknown;
   /** The public dictionary's `format.points.*` slice (`pointsLineDict`); absent, the section shows no preview. */
   pointsDict: Dict | undefined;
-  /** A started stage (the S4 lock) or a viewer: the section reads, nothing writes. */
-  readOnly: boolean;
   /** I1: the points the stage's PIN pays (`listPinnedStagePoints`, the one loader's pin), or null/absent for a stage still
    *  reading the live layers. */
   pinned?: unknown;
   onSaved: () => void;
-}) {
+}
+
+export interface DivisionPointsProps {
+  scope: "division";
+  mode: RulesMode;
+  module: AnySportModule;
+  /** The division's config as it stands (the builder: the variant's preset; the strip: the stored config). Its `points` shape
+   *  decides which boxes show (`divisionPointsKeys`). */
+  divisionConfig: Record<string, unknown>;
+  /** The boxes' raw values, by points key (`hydrateDivisionPoints`). */
+  value: Record<string, string>;
+  onChange: (next: Record<string, string>) => void;
+  /** The table kinds that will play these points; the first decides the outcomes said in read-only. Empty: a league. */
+  kinds: readonly TableStageKind[];
+  /** The strip's Save, offered while `dirty`; absent (the builder) the value is the parent's to send. */
+  onSave?: () => void;
+  dirty?: boolean;
+  saving?: boolean;
+  error?: string | null;
+  /** A started stage that plays these points (`lockLineFor("points", …)`): its sentence, said once, and no box. */
+  lockText?: string | null;
+  /** The public dictionary's `format.points.*` slice (`pointsLineDict`): the read-only words. Absent (the builder), the rows. */
+  pointsDict?: Dict;
+}
+
+export type PointsEditorProps = StagePointsProps | DivisionPointsProps;
+
+export function PointsEditor(props: PointsEditorProps) {
+  return props.scope === "stage" ? <StagePoints {...props} /> : <DivisionPoints {...props} />;
+}
+
+export function StagePoints({ mode, started, stageId, module, kind, stageConfig, divisionConfig, stored, pointsDict, pinned = null, onSaved }: StagePointsProps) {
+  const readOnly = mode === "locked";
   const msg = useMsg();
   const stage = { kind, config: stageConfig };
   const [saved, setSaved] = useState<Saved | null>(null);
@@ -307,23 +399,28 @@ export function StagePointsSection({
 
   /** What the stage plays now: its own rule, its pin's, else the sport's own for the stage. */
   const playing = ownRule ?? pin ?? ctx.rule;
-  const playingRows = pointsRows(ctx.reachable, playing);
 
-  // A started stage, or a viewer: what the stage plays, in words. No control.
+  // A started stage, or a viewer: what the stage plays, said ONCE (item 5: no preview line repeating the rows). No control. A
+  // started stage says its one lock line (item 4). Whose points it plays is said where it is true going forward - its own,
+  // or the division's (an unpinned stage follows a division save) - and never for a pin ("Changes to the division's points
+  // don't reach it" is internals: the lock line already says the stage is fixed).
   if (readOnly) {
-    const text = preview(draftFromStored(module, divisionConfig, inForce, pin, stage));
+    const source = basis === "pin" ? null : basis === "own" ? "stagePoints.ownPoints" : "stagePoints.divisionPoints";
     return shell(
-      <div className="space-y-2">
+      <div className="space-y-2" data-testid="stage-points-readonly">
         {heading}
-        <p className="text-xs text-slate-600" data-testid="stage-points-readonly">
-          {msg(basis === "own" ? "stagePoints.ownPoints" : basis === "pin" ? "stagePoints.startedPoints" : "stagePoints.divisionPoints")}
-        </p>
-        <RowsList rows={playingRows} unit={playing.unit} msg={msg} />
-        {text !== "" && (
-          <p className="text-xs text-slate-700" data-testid="stage-points-preview">
-            {text}
+        {started && <LockLine testId="stage-points-locked" />}
+        {source !== null && (
+          <p className="text-xs text-slate-600" data-testid="stage-points-source">
+            {msg(source)}
           </p>
         )}
+        <PointsSummary
+          rule={playing}
+          reachable={ctx.reachable}
+          clauses={previewClauses(module, divisionConfig, draftFromStored(module, divisionConfig, inForce, pin, stage), pin, stage)}
+          pointsDict={pointsDict}
+        />
       </div>,
     );
   }
@@ -553,13 +650,7 @@ export function StagePointsSection({
         </label>
       </div>
 
-      {basis === "pin" && draft.useDivision && (
-        <p className="text-xs text-slate-600" data-testid="stage-points-started">
-          {msg("stagePoints.startedPoints")}
-        </p>
-      )}
-
-      {draft.useDivision && <RowsList rows={playingRows} unit={playing.unit} msg={msg} />}
+      {draft.useDivision && <RowsList rows={pointsRows(ctx.reachable, playing)} unit={playing.unit} msg={msg} />}
 
       {previewText !== "" && (
         <p
@@ -615,5 +706,142 @@ export function StagePointsSection({
         </p>
       )}
     </div>,
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The division's default points (absorbed from Settings' "Standings points", R3.5 review F7).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The win / draw / loss concepts a division's `config.points` may spell (generic writes w/d/l, the rest win/draw/loss), in
+ *  display order with their labels. Cricket's tie / no result, ice hockey's overtime pair and the rest are deliberately NOT
+ *  boxes here (owner, R3.5 review: making them editable is its own capability, with its own copy) — a stage's own points edit
+ *  every outcome it reaches. */
+const POINTS_KEY_CONCEPT: Record<string, { order: number; labelKey: MessageKey }> = {
+  w: { order: 0, labelKey: "divset.win" },
+  win: { order: 0, labelKey: "divset.win" },
+  d: { order: 1, labelKey: "divset.draw" },
+  draw: { order: 1, labelKey: "divset.draw" },
+  l: { order: 2, labelKey: "divset.loss" },
+  loss: { order: 2, labelKey: "divset.loss" },
+};
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** The division's own points as its config holds them, else as the sport's schema defaults them (the builder: no config yet). */
+export function divisionPointsOf(module: AnySportModule, divisionConfig: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (isObj(divisionConfig.points)) return divisionConfig.points;
+  const parsed = module.configSchema.safeParse(divisionConfig);
+  const points = parsed.success ? (parsed.data as Record<string, unknown>).points : undefined;
+  return isObj(points) ? points : undefined;
+}
+
+/** The boxes this division shows: the keys its OWN points shape has that name a win, a draw or a loss — read off the config,
+ *  never the sport key (R3.5 F7: generic's w/d/l, football's win/draw/loss, a set sport none). */
+export function divisionPointsKeys(sportKey: string, points: Record<string, unknown> | undefined): string[] {
+  if (points === undefined) return [];
+  // A key a match-rules field already edits (none today) stays that field's, so the two editors never double up on one key.
+  const dedicated = new Set(rulesFor(sportKey).map((f) => f.key));
+  return Object.keys(points)
+    .filter((k) => Object.hasOwn(POINTS_KEY_CONCEPT, k) && !dedicated.has(k) && typeof points[k] === "number")
+    .sort((a, b) => POINTS_KEY_CONCEPT[a]!.order - POINTS_KEY_CONCEPT[b]!.order);
+}
+
+/** The boxes' starting values: the numbers the points hold, as text. */
+export function hydrateDivisionPoints(sportKey: string, points: Record<string, unknown> | undefined): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const key of divisionPointsKeys(sportKey, points)) values[key] = String(points![key]);
+  return values;
+}
+
+/** The `points` a save sends: the stored map with the boxes laid over it (a blank box keeps the stored number), every other
+ *  key the map holds (a shoot-out pair, cricket's tie) kept as it is. Undefined when the division keeps no points. */
+export function divisionPointsPatch(
+  sportKey: string,
+  points: Record<string, unknown> | undefined,
+  values: Record<string, string>,
+): Record<string, unknown> | undefined {
+  if (points === undefined) return undefined;
+  const out: Record<string, unknown> = { ...points };
+  for (const key of divisionPointsKeys(sportKey, points)) {
+    const raw = values[key];
+    if (raw !== undefined && raw.trim() !== "" && Number.isFinite(Number(raw))) out[key] = Number(raw);
+  }
+  return out;
+}
+
+/** The boxes differ from what the config holds. */
+export function divisionPointsDirty(sportKey: string, points: Record<string, unknown> | undefined, values: Record<string, string>): boolean {
+  return JSON.stringify(divisionPointsPatch(sportKey, points, values)) !== JSON.stringify(points);
+}
+
+function DivisionPoints({ mode, module, divisionConfig, value, onChange, kinds, onSave, dirty = false, saving = false, error = null, lockText = null, pointsDict }: DivisionPointsProps) {
+  const msg = useMsg();
+  const points = divisionPointsOf(module, divisionConfig);
+  const keys = divisionPointsKeys(module.key, points);
+  const kind = kinds[0] ?? "league";
+  // What the division pays as the boxes stand: the config with the boxes laid over it, through the sport's own rule.
+  const patched = divisionPointsPatch(module.key, points, value);
+  const cfg = patched === undefined ? divisionConfig : { ...divisionConfig, points: patched };
+  const ctx = stagePointsContext(module, cfg, { kind, config: {} });
+  const readOnly = mode === "locked" || keys.length === 0;
+  return (
+    <section
+      aria-label={msg("stagePoints.title")}
+      data-testid="division-points"
+      data-state={mode === "locked" ? "readonly" : keys.length === 0 ? "sport" : "editor"}
+      className="min-w-0 space-y-2"
+    >
+      {lockText !== null && (
+        <p className="text-[11px] leading-snug text-slate-700" data-testid="division-locked-points">
+          <span aria-hidden="true">🔒 </span>
+          {lockText}
+        </p>
+      )}
+      {readOnly ? (
+        ctx === null ? null : (
+          <PointsSummary
+            rule={ctx.rule}
+            reachable={ctx.reachable}
+            clauses={pointsLine(ctx.rule, { awardReaches: offersWalkoverScore(module) })}
+            pointsDict={pointsDict}
+          />
+        )
+      ) : (
+        <div className="grid grid-cols-3 gap-2 sm:max-w-sm">
+          {keys.map((key) => (
+            <label key={key} className="block min-w-0 text-xs text-slate-600">
+              {msg(POINTS_KEY_CONCEPT[key]!.labelKey)}
+              <input
+                type="number"
+                min={0}
+                max={99}
+                inputMode="numeric"
+                data-testid={`division-points-${key}`}
+                disabled={saving}
+                value={value[key] ?? ""}
+                onChange={(e) => onChange({ ...value, [key]: e.target.value })}
+                className="input mt-1 min-h-11 w-full"
+              />
+            </label>
+          ))}
+        </div>
+      )}
+      {keys.length === 0 && mode === "edit" && (
+        <p className="text-xs text-slate-600" data-testid="division-points-per-stage">
+          {msg("rulesStrip.points.perStage")}
+        </p>
+      )}
+      {!readOnly && onSave !== undefined && dirty && (
+        <button type="button" className="btn btn-primary min-h-11 px-3 py-1.5 text-xs" data-testid="division-points-save" disabled={saving} onClick={onSave}>
+          {saving ? msg("schedule.working") : msg("stagePoints.save")}
+        </button>
+      )}
+      {error !== null && (
+        <p role="alert" className="text-xs text-red-600" data-testid="division-points-error">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }

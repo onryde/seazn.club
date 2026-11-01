@@ -7,6 +7,12 @@
 // `renderToStaticMarkup`; the island's own markup and its Save are driven through the hook harness (the standings-points
 // suite's idiom: invoke the handler the harness found, with the PATCH stubbed at `apiV1`).
 //
+// Match Day C2: the match rules, the variant and the standings points moved from Settings to the Division rules strip on the
+// Fixtures tab (`rules/division-rules-strip.tsx`). The lock lines, the partial save and the refusal lists moved with them,
+// so the field-level halves drive the strip (`mount`, through `_rules-strip.tsx`); the structure lock and the Format group's
+// summary stay in Settings and drive it (`mountSettings`). The rules Save is the strip's "Save match format"; the points have
+// their own Save on the Points panel.
+//
 // Where each expected value comes from: the fields and the keys they edit are SPORT_RULES, every sentence is read from the
 // dictionaries on disk (en, es), the refusals are `RefusedField`'s own shape - none is typed here.
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -65,7 +71,9 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { DivisionSettings } from "@/components/v2/division-settings";
-import { MatchRuleFields } from "@/components/v2/match-rules";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
+import { PointsEditor } from "@/components/v2/rules/points-editor";
+import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
 const L = (key: string, vars: Record<string, string | number> = {}, dict: Record<string, string> = enUi as Record<string, string>): string =>
@@ -106,8 +114,23 @@ function props(over: Record<string, unknown> = {}, sportKey = "badminton", varia
   } as unknown as Parameters<typeof DivisionSettings>[0];
 }
 
-const mount = (over: Record<string, unknown> = {}, sportKey = "badminton", variantKey = "short", config: Record<string, unknown> = BADMINTON_CONFIG) =>
+/** Settings: the structure lock and the Format group's summary. */
+const mountSettings = (over: Record<string, unknown> = {}, sportKey = "badminton", variantKey = "short", config: Record<string, unknown> = BADMINTON_CONFIG) =>
   renderIsland(DivisionSettings, props(over, sportKey, variantKey, config));
+/** The same division, as the Division rules strip takes it. */
+function stripProps(over: Record<string, unknown> = {}, sportKey = "badminton", variantKey = "short", config: Record<string, unknown> = BADMINTON_CONFIG) {
+  const p = props(over, sportKey, variantKey, config) as unknown as Parameters<typeof stripPropsOf>[0];
+  return stripPropsOf({ division: p.division, variants: p.variants, lockedFields: p.lockedFields, canEdit: p.canEdit });
+}
+/** The Division rules strip: the match rules, the variant, the points - every panel open. */
+const mount = (over: Record<string, unknown> = {}, sportKey = "badminton", variantKey = "short", config: Record<string, unknown> = BADMINTON_CONFIG) =>
+  renderIsland(DivisionRulesStrip, stripProps(over, sportKey, variantKey, config), expandRules);
+/** The Points panel's editor (its `value` is what the boxes hold, its `mode` whether they are offered at all). */
+const pointsEl = (tree: ReactElement[]): ReactElement => {
+  const el = tree.find((e) => e.type === PointsEditor);
+  if (!el) throw new Error("<PointsEditor> not found in tree");
+  return el;
+};
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const byTestId = (tree: ReactElement[], id: string): ReactElement | undefined => tree.find((e) => propsOf(e)["data-testid"] === id);
@@ -208,9 +231,10 @@ describe("the match rule fields: a locked field is read-only, with its lock line
 
 describe("the settings island: what is locked, before the organiser types", () => {
   it("a division with fixtures and NO started stage: the structure is locked (the stage-graph door), the match rules are not", () => {
+    const settings = mountSettings({ structureLocked: true, lockedFields: [] }).tree();
+    expect(byTestId(settings, "format-locked"), "the structure note").toBeDefined();
+    expect(byTestId(settings, "format-template"), "the structure controls are gone").toBeUndefined();
     const tree = mount({ structureLocked: true, lockedFields: [] }).tree();
-    expect(byTestId(tree, "format-locked"), "the structure note").toBeDefined();
-    expect(byTestId(tree, "format-template"), "the structure controls are gone").toBeUndefined();
     const rules = propsOf(ruleFieldsEl(tree));
     expect(rules.disabled, "the rule fields are editable").toBe(false);
     expect(rules.lockedFields).toEqual([]);
@@ -219,7 +243,7 @@ describe("the settings island: what is locked, before the organiser types", () =
   });
 
   it("nothing locked, structure open: the structure controls are there and no note", () => {
-    const tree = mount().tree();
+    const tree = mountSettings().tree();
     expect(byTestId(tree, "format-template")).toBeDefined();
     expect(byTestId(tree, "format-locked")).toBeUndefined();
   });
@@ -230,7 +254,7 @@ describe("the settings island: what is locked, before the organiser types", () =
     const line = byTestId(tree, "division-locked-variant_key");
     expect(line).toBeDefined();
     expect(textOf(line)).toContain(L("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
-    const group = tree.find((e) => propsOf(e).title === L("divset.format"))!;
+    const group = mountSettings({ lockedFields: [lock("variant_key")] }).tree().find((e) => propsOf(e).title === L("divset.format"))!;
     // The summary names the variant in words (main's #986 summary), so the lock wraps that word, never the stored key.
     const wordKey = variantWordKey("badminton", "short");
     expect(wordKey, "premise: the variant has a word in the label table").toBeDefined();
@@ -245,20 +269,23 @@ describe("the settings island: what is locked, before the organiser types", () =
     const tree = mount({ lockedFields: [lock("setTo")] }).tree();
     expect(propsOf(variantSelect(tree)).disabled).toBe(false);
     expect(byTestId(tree, "division-locked-variant_key")).toBeUndefined();
-    const group = tree.find((e) => propsOf(e).title === L("divset.format"))!;
+    const group = mountSettings({ lockedFields: [lock("setTo")] }).tree().find((e) => propsOf(e).title === L("divset.format"))!;
     expect(String(propsOf(group).summary)).not.toContain("locked");
   });
 
-  it("the standings points boxes are read-only with a line when the table is locked (football), and open otherwise", () => {
+  it("the standings points are read-only with a line when the table is locked (football) - what it pays, no box, no Save - and open otherwise", () => {
     const points = { win: 3, draw: 1, loss: 0 };
+    const isBox = (e: ReactElement) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99;
     const locked = mount({ lockedFields: [lock("points", { code: "DIVISION_TABLE_RULES_LOCKED" })] }, "football", "standard", { points }).tree();
-    const boxes = locked.filter((e) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99);
-    expect(boxes.length, "football shows win/draw/loss boxes").toBe(3);
-    for (const b of boxes) expect(propsOf(b).disabled).toBe(true);
+    expect(propsOf(pointsEl(locked)).mode, "the Points editor is locked").toBe("locked");
+    expect(locked.filter(isBox), "no box to type into").toEqual([]);
+    expect(byTestId(locked, "division-points-save")).toBeUndefined();
     expect(textOf(byTestId(locked, "division-locked-points"))).toContain(L("ruleLock.DIVISION_TABLE_RULES_LOCKED", { stage: "Pool A" }));
 
     const open = mount({}, "football", "standard", { points }).tree();
-    for (const b of open.filter((e) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99)) expect(propsOf(b).disabled).toBe(false);
+    const boxes = open.filter(isBox);
+    expect(boxes.length, "the positive pair: football shows win/draw/loss boxes").toBe(3);
+    for (const b of boxes) expect(propsOf(b).disabled).toBe(false);
     expect(byTestId(open, "division-locked-points")).toBeUndefined();
   });
 
@@ -275,16 +302,18 @@ describe("the settings island: what is locked, before the organiser types", () =
     expect(byTestId(tree, "division-locked-tiebreakers"), "no line for the tie-break order").toBeUndefined();
     expect(propsOf(variantSelect(tree)).disabled, "the contrast: the variant stays locked").toBe(true);
     net.patch.body = { id: "d1", refused: [], stagesKeptPinned: [{ stageId: "stage-a", name: "Pool A" }] };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(byTestId(island.tree(), "division-partial-save"), "a kept pin is not a refusal").toBeUndefined();
     expect(testIdsStartingWith(island.tree(), "division-refused-")).toEqual([]);
   });
 
-  it("a viewer who cannot edit keeps every control disabled whatever the locks say (the lock does not re-open anything)", () => {
+  it("a viewer who cannot edit reads the rules with no control at all, whatever the locks say (the lock does not re-open anything)", () => {
     const tree = mount({ canEdit: false, lockedFields: [] }).tree();
-    expect(propsOf(ruleFieldsEl(tree)).disabled).toBe(true);
-    expect(propsOf(variantSelect(tree)).disabled).toBe(true);
+    expect(tree.find((e) => e.type === MatchRuleFields), "no rule grid").toBeUndefined();
+    expect(tree.filter((e) => e.type === "select" || e.type === "input" || e.type === "textarea"), "no field").toEqual([]);
+    expect(byTestId(tree, "division-rules-format-save"), "no Save").toBeUndefined();
+    expect(byTestId(tree, "match-format-readonly"), "the rules, read-only").toBeDefined();
   });
 });
 
@@ -294,7 +323,7 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
   it("names EACH refused field with its stage and the partial-save line, and does not say the rules were saved", async () => {
     net.patch.body = { id: "d1", refused: refusedTwo };
     const island = mount();
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     const tree = island.tree();
     const partial = byTestId(tree, "division-partial-save");
@@ -317,7 +346,7 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
     net.patch.body = { id: "d1", refused: refusedTwo };
     const island = mount({ lockedFields: [] });
     expect(testIdsStartingWith(island.tree(), "division-locked-"), "premise: nothing locked on load").toEqual([]);
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(propsOf(ruleFieldsEl(island.tree())).lockedFields).toEqual(refusedTwo);
   });
@@ -326,7 +355,7 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
     for (const body of [{ id: "d1", refused: [] }, { id: "d1" }]) {
       net.patch.body = body;
       const island = mount();
-      clickButton(island.tree(), L("divset.saveRules"));
+      clickButton(island.tree(), L("rulesStrip.format.save"));
       await flush();
       const tree = island.tree();
       expect(byTestId(tree, "division-partial-save")).toBeUndefined();
@@ -337,18 +366,18 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
   it("the sequence: a clean save after a partial one clears the block (nothing stale), and the next partial save is a fresh list", async () => {
     const island = mount();
     net.patch.body = { id: "d1", refused: refusedTwo };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(byTestId(island.tree(), "division-partial-save")).toBeDefined();
 
     net.patch.body = { id: "d1", refused: [] };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(byTestId(island.tree(), "division-partial-save"), "cleared by the clean save").toBeUndefined();
     expect(byTestId(island.tree(), "division-refused-setTo")).toBeUndefined();
 
     net.patch.body = { id: "d1", refused: [lock("winBy")] };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(textOf(byTestId(island.tree(), "division-partial-save"))).toContain(L("ruleLock.partialSave", { n: 1 }));
     expect(byTestId(island.tree(), "division-refused-setTo"), "the earlier list is gone").toBeUndefined();
@@ -357,12 +386,12 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
   it("the sequence: after a partial save, a later 409 is a refusal and not a second partly saved - the flag belongs to ONE save", async () => {
     const island = mount();
     net.patch.body = { id: "d1", refused: refusedTwo };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(byTestId(island.tree(), "division-partial-save"), "premise: the first save was partial").toBeDefined();
 
     net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock("winBy")] } };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     const tree = island.tree();
     expect(byTestId(tree, "division-partial-save"), "nothing landed in the second save: it is not 'partly saved'").toBeUndefined();
@@ -372,12 +401,12 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
   it("the sequence: after a partial save, a later failure that names no field shows its error alone - the earlier list is not carried over", async () => {
     const island = mount();
     net.patch.body = { id: "d1", refused: refusedTwo };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(testIdsStartingWith(island.tree(), "division-refused-"), "premise: the first save listed its fields").not.toEqual([]);
 
     net.patch.fail = { status: 500, code: "INTERNAL", message: "an unrelated server failure", extra: {} };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     const tree = island.tree();
     expect(tree.map((e) => textOf(e)).join("\n"), "premise: the failure shows its own error").toContain("an unrelated server failure");
@@ -388,7 +417,7 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
   it("another sport family: generic's abandon field is named by its label though the refusal names the config key", async () => {
     net.patch.body = { id: "d1", refused: [lock("abandonPolicy")] };
     const island = mount({}, "generic", "score", { resultMode: "score", allowDraws: true });
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     const abandon = SPORT_RULES.generic!.find((f) => f.key === "abandon")!;
     expect(textOf(byTestId(island.tree(), "division-refused-abandonPolicy"))).toContain(abandon.label);
@@ -398,7 +427,7 @@ describe("a save that keeps part of what was sent says so (the 200 with refused[
     activeDict.current = esUi as Record<string, string>;
     net.patch.body = { id: "d1", refused: [lock("setTo", { stageName: "Grupo A" })] };
     const island = mount();
-    clickButton(island.tree(), L("divset.saveRules", {}, esUi as Record<string, string>));
+    clickButton(island.tree(), L("rulesStrip.format.save", {}, esUi as Record<string, string>));
     await flush();
     const tree = island.tree();
     expect(textOf(byTestId(tree, "division-partial-save"))).toContain(L("ruleLock.partialSave", { n: 1 }, esUi as Record<string, string>));
@@ -410,16 +439,16 @@ describe("what the form learned from a save is dropped once the page knows bette
   it("a fresh page list that CHANGES replaces it (a stage deleted since: the learned lock must not outlive it), and one that only re-arrives does not", async () => {
     net.patch.body = { id: "d1", refused: [lock("setTo")] };
     const island = mount();
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(propsOf(ruleFieldsEl(island.tree())).lockedFields, "learned from the save").toEqual([lock("setTo")]);
 
     // router.refresh() hands the form a NEW array with the same content: the learned lock stands.
-    island.rerender(props({ lockedFields: [] }));
+    island.rerender(stripProps({ lockedFields: [] }));
     expect(propsOf(ruleFieldsEl(island.tree())).lockedFields, "same content, new identity: nothing dropped").toEqual([lock("setTo")]);
 
     // The page now says something else is locked (and not setTo): its list stands alone, the learned one is gone.
-    island.rerender(props({ lockedFields: [lock("cap")] }));
+    island.rerender(stripProps({ lockedFields: [lock("cap")] }));
     expect(propsOf(ruleFieldsEl(island.tree())).lockedFields).toEqual([lock("cap")]);
     expect(byTestId(island.tree(), "division-locked-setTo")).toBeUndefined();
   });
@@ -427,7 +456,7 @@ describe("what the form learned from a save is dropped once the page knows bette
   it("the page's own lock wins over a learned one for the same field (the stage it names stands)", async () => {
     net.patch.body = { id: "d1", refused: [lock("setTo", { stageName: "Pool Learned", stageId: "stage-z" })] };
     const island = mount({ lockedFields: [lock("setTo", { stageName: "Pool Page" })] });
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(propsOf(ruleFieldsEl(island.tree())).lockedFields).toEqual([lock("setTo", { stageName: "Pool Page" })]);
   });
@@ -438,7 +467,7 @@ describe("a save refused outright (the 409) names every refused field too", () =
     const refused = [lock("setTo"), lock("variant_key", { stageName: "Pool B", stageId: "stage-b" })];
     net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "Pool A has started; ENGLISH SERVER TEXT", extra: { refused } };
     const island = mount();
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     const tree = island.tree();
     const text = tree.map((e) => textOf(e)).join("\n");
@@ -457,22 +486,26 @@ describe("a save refused outright (the 409) names every refused field too", () =
   it("a 409 that carries no refused list (an older server) still shows the error and no field lines", async () => {
     net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: {} };
     const island = mount();
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(testIdsStartingWith(island.tree(), "division-refused-")).toEqual([]);
     expect(byTestId(island.tree(), "division-partial-save")).toBeUndefined();
   });
 });
 
-describe("where a save says what it did: inside the Format group, directly under its Save button (I-1)", () => {
+describe("where a save says what it did: inside the Match format panel, directly under its Save button (I-1)", () => {
   const formatGroup = (tree: ReactElement[]): ReactElement => {
+    const g = tree.find((e) => propsOf(e)["data-testid"] === "division-rules-panel-format");
+    if (!g) throw new Error("the Match format panel is not in the tree");
+    return g;
+  };
+  const settingsFormatGroup = (tree: ReactElement[]): ReactElement => {
     const g = tree.find((e) => propsOf(e).title === L("divset.format"));
     if (!g) throw new Error("the Format <Group> is not in the tree");
     return g;
   };
   const subtreeOf = (group: ReactElement): ReactElement[] => walk(propsOf(group).children as ReactNode);
-  const saveIndex = (sub: ReactElement[]): number => sub.findIndex((n) => n.type === "button" && textOf(n).trim() === L("divset.saveRules"));
-  const noteIndex = (sub: ReactElement[]): number => sub.findIndex((n) => n.type === "p" && textOf(n).trim() === L("divset.rulesNote"));
+  const saveIndex = (sub: ReactElement[]): number => sub.findIndex((n) => n.type === "button" && textOf(n).trim() === L("rulesStrip.format.save"));
 
   const scenarios: { name: string; setup: () => void; find: (e: ReactElement) => boolean; role: string }[] = [
     {
@@ -501,26 +534,23 @@ describe("where a save says what it did: inside the Format group, directly under
     },
   ];
 
-  it("each of a rules save's four outcomes renders ONCE, between the Save button and the note under it, as a live region", async () => {
+  it("each of a rules save's four outcomes renders ONCE, in the panel after its Save button, as a live region", async () => {
     let judged = 0;
     for (const sc of scenarios) {
       net.patch.body = {};
       net.patch.fail = null;
       sc.setup();
       const island = mount();
-      clickButton(island.tree(), L("divset.saveRules"));
+      clickButton(island.tree(), L("rulesStrip.format.save"));
       await flush();
       const tree = island.tree();
       expect(tree.filter(sc.find), `${sc.name}: rendered once on the whole page`).toHaveLength(1);
       const sub = subtreeOf(formatGroup(tree));
       const save = saveIndex(sub);
-      const note = noteIndex(sub);
       const at = sub.findIndex(sc.find);
-      expect(save, `${sc.name}: the Save button is in the group`).toBeGreaterThanOrEqual(0);
-      expect(note, `${sc.name}: the note is in the group`).toBeGreaterThan(save);
-      expect(at, `${sc.name}: inside the group`).toBeGreaterThanOrEqual(0);
+      expect(save, `${sc.name}: the Save button is in the panel`).toBeGreaterThanOrEqual(0);
+      expect(at, `${sc.name}: inside the panel`).toBeGreaterThanOrEqual(0);
       expect(at, `${sc.name}: after Save`).toBeGreaterThan(save);
-      expect(at, `${sc.name}: before the note`).toBeLessThan(note);
       expect(propsOf(sub[at]!).role, `${sc.name}: announced`).toBe(sc.role);
       judged++;
     }
@@ -529,13 +559,13 @@ describe("where a save says what it did: inside the Format group, directly under
 
   it("a save from anywhere else keeps its error at the foot of the page, outside the Format group (the rename)", async () => {
     net.patch.fail = { status: 500, code: "INTERNAL", message: "an unrelated server failure", extra: {} };
-    const island = mount();
+    const island = mountSettings();
     clickButton(island.tree(), L("divset.saveName"));
     await flush();
     const tree = island.tree();
     const find = (e: ReactElement) => e.type === "p" && textOf(e).trim() === "an unrelated server failure";
     expect(tree.filter(find), "the error is on the page, once").toHaveLength(1);
-    expect(subtreeOf(formatGroup(tree)).filter(find), "and not in the Format group").toEqual([]);
+    expect(subtreeOf(settingsFormatGroup(tree)).filter(find), "and not in the Format group").toEqual([]);
   });
 });
 
@@ -555,7 +585,7 @@ describe("a refusal keeps the STORED value, and the locked control shows it agai
       const values = typed(island, { setTo: "13", cap: "20" });
       expect(values().setTo, "premise: the typed value is on screen").toBe("13");
       answer();
-      clickButton(island.tree(), L("divset.saveRules"));
+      clickButton(island.tree(), L("rulesStrip.format.save"));
       await flush();
       expect(values().setTo, "the refused field is back to the stored value").toBe(String(BADMINTON_CONFIG.setTo));
       expect(values().cap, "an unrefused field keeps what was typed").toBe("20");
@@ -571,7 +601,7 @@ describe("a refusal keeps the STORED value, and the locked control shows it agai
     const values = typed(island, { abandon: "replay" });
     expect(values().abandon, "premise: the typed choice is on screen").toBe("replay");
     net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock("abandonPolicy")] } };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(values().abandon, "back to the stored choice").toBe("share");
   });
@@ -581,19 +611,19 @@ describe("a refusal keeps the STORED value, and the locked control shows it agai
     (propsOf(variantSelect(island.tree())).onChange as (e: { target: { value: string } }) => void)({ target: { value: "other" } });
     expect(propsOf(variantSelect(island.tree())).value, "premise: the chosen variant is on screen").toBe("other");
     net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock("variant_key")] } };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(propsOf(variantSelect(island.tree())).value).toBe("short");
 
     const other = mount();
     (propsOf(variantSelect(other.tree())).onChange as (e: { target: { value: string } }) => void)({ target: { value: "other" } });
     net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock("setTo")] } };
-    clickButton(other.tree(), L("divset.saveRules"));
+    clickButton(other.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(propsOf(variantSelect(other.tree())).value, "a refusal of another field leaves the variant as chosen").toBe("other");
   });
 
-  it("the standings points boxes go back to the stored points when `points` was refused (football)", async () => {
+  it("the standings points go back to the stored points when `points` was refused (football), and lock from then on", async () => {
     const points = { win: 3, draw: 1, loss: 0 };
     const island = mount({}, "football", "standard", { points });
     const boxes = () => island.tree().filter((e) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99);
@@ -601,21 +631,23 @@ describe("a refusal keeps the STORED value, and the locked control shows it agai
     (propsOf(boxes()[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "9" } });
     expect(propsOf(boxes()[0]!).value, "premise: the typed value is on screen").toBe("9");
     net.patch.fail = { status: 409, code: "DIVISION_TABLE_RULES_LOCKED", message: "x", extra: { refused: [lock("points", { code: "DIVISION_TABLE_RULES_LOCKED" })] } };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("stagePoints.save"));
     await flush();
-    expect(boxes().map((b) => propsOf(b).value), "the three stored values, in the form's order").toEqual(["3", "1", "0"]);
+    expect(propsOf(pointsEl(island.tree())).value, "the three stored values").toEqual({ win: "3", draw: "1", loss: "0" });
+    expect(propsOf(pointsEl(island.tree())).mode, "the points are locked from then on").toBe("locked");
+    expect(byTestId(island.tree(), "division-locked-points"), "with their line").toBeDefined();
     // and the list names the boxes as the group the organiser sees, not by the raw `points` key
     expect(textOf(byTestId(island.tree(), "division-refused-points"))).toContain(L("divset.standingsPoints"));
   });
 
-  it("a refusal of another field leaves the typed points as they are (football)", async () => {
+  it("a refusal of another field (the rules' Save) leaves the typed points as they are (football)", async () => {
     const points = { win: 3, draw: 1, loss: 0 };
     const other = SPORT_RULES.football!.find((f) => f.key !== "points" && !f.edits.map(topOf).includes("points"))!;
     const island = mount({}, "football", "standard", { points });
     const boxes = () => island.tree().filter((e) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99);
     (propsOf(boxes()[0]!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "9" } });
     net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock(topOf(other.edits[0]!))] } };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(testIdsStartingWith(island.tree(), "division-refused-"), "premise: the refusal was heard").not.toEqual([]);
     expect(propsOf(boxes()[0]!).value, "the typed points stand").toBe("9");
@@ -628,7 +660,7 @@ describe("a refusal keeps the STORED value, and the locked control shows it agai
     const values = typed(island, { cap: "20" });
     expect(values().cap, "premise: the typed value is on screen").toBe("20");
     net.patch.fail = { status: 409, code: "DIVISION_FORMAT_LOCKED", message: "x", extra: { refused: [lock("cap")] } };
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     expect(values()).not.toHaveProperty("cap");
   });
@@ -639,7 +671,7 @@ describe("what a save kept is counted in controls and never named by a raw key (
     const cascade = [lock("variant_key"), lock("setTo"), lock("cap"), lock("pointsMap"), lock("tiebreakers", { code: "DIVISION_TABLE_RULES_LOCKED" })];
     net.patch.body = { id: "d1", refused: cascade };
     const island = mount();
-    clickButton(island.tree(), L("divset.saveRules"));
+    clickButton(island.tree(), L("rulesStrip.format.save"));
     await flush();
     const tree = island.tree();
     const partial = byTestId(tree, "division-partial-save");

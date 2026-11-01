@@ -53,6 +53,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import { onlineChessDisabled } from "@/server/usecases/external-play/online-chess-flag";
 import { DivisionSettings } from "@/components/v2/division-settings";
+import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
 import { LichessLinkCard } from "@/components/lichess-link-card";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
@@ -99,6 +100,10 @@ function settingsProps(sportKey: string, config: Record<string, unknown>, online
   } as SettingsProps;
 }
 const byTestId = (tree: ReactElement[], id: string) => tree.filter((n) => propsOf(n)["data-testid"] === id);
+/** Match Day C2: Online play moved with the match rules to the Division rules strip (Fixtures tab); the camera stays in Settings. */
+const strip = (sportKey: string, config: Record<string, unknown>, onlineChessOffered: boolean) =>
+  renderIsland(DivisionRulesStrip, stripPropsOf(settingsProps(sportKey, config, onlineChessOffered) as unknown as Parameters<typeof stripPropsOf>[0]), expandRules);
+const SAVE_RULES = "Save match format";
 
 beforeEach(() => {
   net.calls.length = 0;
@@ -110,10 +115,11 @@ describe("division Settings: the online-play controls follow the club's flag", (
     let checked = 0;
     for (const offered of [true, false]) {
       const tree = renderIsland(DivisionSettings, settingsProps("boardgame", { variant: "classical" }, offered)).tree();
-      // Anti-vacuity: the Format group's other controls are in the same tree, so an absence is the gate's doing.
-      expect(tree.some((n) => n.type === "button" && textOf(n).trim() === "Save match rules"), `offered ${offered}`).toBe(true);
+      const rules = strip("boardgame", { variant: "classical" }, offered).tree();
+      // Anti-vacuity: the panel's other controls are in the same tree, so an absence is the gate's doing.
+      expect(rules.some((n) => n.type === "button" && textOf(n).trim() === SAVE_RULES), `offered ${offered}`).toBe(true);
       const want = offered ? 1 : 0;
-      expect(byTestId(tree, "division-online-play"), `offered ${offered}: online play select`).toHaveLength(want);
+      expect(byTestId(rules, "division-online-play"), `offered ${offered}: online play select`).toHaveLength(want);
       expect(byTestId(tree, "division-camera-policy"), `offered ${offered}: camera select`).toHaveLength(want);
       checked++;
     }
@@ -122,18 +128,16 @@ describe("division Settings: the online-play controls follow the club's flag", (
 
   it("another sport never shows them, whatever the flag (the sport gate is unchanged)", () => {
     const tree = renderIsland(DivisionSettings, settingsProps("football", {}, true)).tree();
-    expect(tree.some((n) => n.type === "button" && textOf(n).trim() === "Save match rules")).toBe(true);
-    expect(byTestId(tree, "division-online-play")).toHaveLength(0);
+    const rules = strip("football", {}, true).tree();
+    expect(rules.some((n) => n.type === "button" && textOf(n).trim() === SAVE_RULES)).toBe(true);
+    expect(byTestId(rules, "division-online-play")).toHaveLength(0);
     expect(byTestId(tree, "division-camera-policy")).toHaveLength(0);
   });
 
   it("flag OFF on a division already online: saving the match rules keeps it online — the hidden control drops nothing", async () => {
-    const island = renderIsland(
-      DivisionSettings,
-      settingsProps("boardgame", { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } }, false),
-    );
+    const island = strip("boardgame", { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } }, false);
     expect(byTestId(island.tree(), "division-online-play"), "premise: hidden").toHaveLength(0);
-    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
+    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === SAVE_RULES);
     // Mount-time reads (tag suggestions) go through the same client; only the division PATCH is the save.
     const saves = () => net.calls.filter((c) => c.url === "/api/v1/divisions/d1");
     expect(saves(), "premise: nothing saved yet").toHaveLength(0);
@@ -180,11 +184,8 @@ describe("division Settings: a save refused because the club is not offered onli
 
   it("renders the localised refusal, never the server's English text", async () => {
     net.refuseDivisionPatch = new ApiV1Error(SERVER_SENTENCE, 403, ONLINE_CHESS_DISABLED_CODE);
-    const island = renderIsland(
-      DivisionSettings,
-      settingsProps("boardgame", { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } }, true),
-    );
-    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
+    const island = strip("boardgame", { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } }, true);
+    const save = island.tree().find((n) => n.type === "button" && textOf(n).trim() === SAVE_RULES);
     expect(save, "premise: the save is there").toBeDefined();
     (propsOf(save!).onClick as () => void)();
     // useMsg falls back to the English catalog outside a provider: the sentence a customer reads in English.

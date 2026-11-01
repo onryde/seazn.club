@@ -24,7 +24,7 @@
 // this panel family's markup (division-settings-entrants.test.tsx).
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MatchRuleFields, buildRuleOverride } from "@/components/v2/match-rules";
+import { MatchRuleFields, buildRuleOverride } from "@/components/v2/rules/match-format-editor";
 import { SPORT_RULES, ruleOptionLabel } from "@/lib/match-rules";
 
 function render(sportKey: string, values: Record<string, string>): string {

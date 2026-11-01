@@ -6,7 +6,12 @@
 // override object, validated server-side by the pinned module's configSchema.
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MatchRuleFields, buildRuleOverride, rulesFor } from "./match-rules";
+import { MatchFormatEditor, buildRuleOverride, rulesFor } from "./rules/match-format-editor";
+import { PointsEditor, divisionPointsDirty, divisionPointsOf, divisionPointsPatch, hydrateDivisionPoints } from "./rules/points-editor";
+import { TiebreaksEditor } from "./rules/tiebreaks-editor";
+import { stageTakesPoints } from "./stage-rules/stage-points-model";
+import { moduleFor } from "@/lib/rule-scope";
+import type { TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import { ruleFormState } from "./match-rules-state";
 import { ruleContextFor } from "@/lib/match-rules";
 import {
@@ -269,6 +274,10 @@ export function DivisionBuilder({
   );
   // Match-rule values keyed by RuleField.key; "" = keep the variant default.
   const [ruleValues, setRuleValues] = useState<Record<string, string>>({});
+  // Match Day C2: the division's points and tie-break order, set on the Format tab with the same editors the Division rules
+  // strip shows. null = untouched: the create sends the variant's own points and no order (the sport's).
+  const [pointsValues, setPointsValues] = useState<Record<string, string> | null>(null);
+  const [tiebreakOrder, setTiebreakOrder] = useState<TiebreakerKey[] | null>(null);
 
   // Eligibility template (doc 06 §2): age cutoff + category + note. RS007/
   // V380: these map onto the first-class columns (category/age_max/
@@ -332,6 +341,8 @@ export function DivisionBuilder({
     const firstVariant = next ? pickVariant(next.key, next.variants) : "";
     setVariantKey(firstVariant);
     setRuleValues({}); // rules are sport-specific
+    setPointsValues(null);
+    setTiebreakOrder(null);
     // Chess is offered no americano/mexicano (templatesForSport): a pick the new sport is not offered falls back to
     // league rather than staying selected behind a card that is no longer rendered.
     setTemplate((t) => templateAfterSportChange(t, key));
@@ -423,8 +434,11 @@ export function DivisionBuilder({
     // Only rules the user actually set become overrides; the rest stay on
     // the variant's defaults. The variant's preset hands a scaled field its scale (`ruleContextFor`: cricket's overs
     // count in the variant's over length, five on The Hundred) - and only that: no best-of or "Default" reads it.
-    const variant = sport?.variants.find((v) => v.key === variantKey);
-    const overrides = buildRuleOverride(sportKey, ruleValues, ruleContextFor(sportKey, variant?.config));
+    const overrides: Record<string, unknown> = { ...ruleOverrides };
+    // The Format tab's points, laid over the points the config keeps (only once the organiser touched a box).
+    if (pointsValues !== null && divisionPointsDirty(sportKey, builderPoints, pointsValues)) {
+      overrides.points = divisionPointsPatch(sportKey, builderPoints, pointsValues);
+    }
 
     setBusy(true);
     // Declared here, outside try{}, purely so the catch block below can
@@ -444,6 +458,9 @@ export function DivisionBuilder({
             sport_key: sportKey,
             variant_key: variantKey,
             config: overrides,
+            // The Format tab's tie-break order: the division's own (`divisions.tiebreakers`), the field every stage on
+            // "Use the division's order" reads. Absent while untouched: the sport's.
+            ...(tiebreakOrder === null ? {} : { tiebreakers: tiebreakOrder }),
             ...eligibilityPatch(),
           },
         },
@@ -508,6 +525,17 @@ export function DivisionBuilder({
   }
 
   const hint = variantHint(sportKey, variantKey, locale);
+  // What the division will be created with (the variant's preset under the rules typed on Basics): the Format tab's points
+  // and tie-breaks read it, and the create sends the same overrides.
+  const sportModule = moduleFor(sportKey);
+  const variantPreset = sport?.variants.find((v) => v.key === variantKey)?.config;
+  const ruleOverrides = buildRuleOverride(sportKey, ruleValues, ruleContextFor(sportKey, variantPreset));
+  const builderCfg: Record<string, unknown> = {
+    ...(variantPreset ?? {}),
+    ...Object.fromEntries(Object.entries(ruleOverrides).filter(([, v]) => v !== undefined)),
+  };
+  const builderPoints = sportModule === null ? undefined : divisionPointsOf(sportModule, builderCfg);
+  const draftTableKinds = [...new Set(buildStages().map((s) => s.kind).filter(stageTakesPoints))] as TableStageKind[];
   // W2e Task 29: what the rule grid knows before Create - the write doors' refusals beside their fields, the fields this variant
   // has no use for, the detail a switch holds. The values are laid over the variant's own preset, as the server will lay them.
   const ruleState = ruleFormState({
@@ -676,6 +704,7 @@ export function DivisionBuilder({
               value={variantKey}
               onChange={(e) => {
                 setVariantKey(e.target.value);
+                setPointsValues(null);
                 if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(sportKey, e.target.value));
               }}
               aria-describedby={hint === undefined ? undefined : "division-variant-hint"}
@@ -703,7 +732,9 @@ export function DivisionBuilder({
             </h3>
             <p className="mt-0.5 text-xs text-slate-400">{msg("wizard.matchRulesHint")}</p>
             <div className="mt-3">
-              <MatchRuleFields sportKey={sportKey} values={ruleValues} onChange={setRuleValues} state={ruleState} />
+              {sportModule !== null && (
+                <MatchFormatEditor scope="division" mode="edit" sportKey={sportKey} module={sportModule} values={ruleValues} onChange={setRuleValues} state={ruleState} />
+              )}
             </div>
           </div>
         )}
@@ -1026,6 +1057,36 @@ export function DivisionBuilder({
             </div>
           )}
         </div>
+        {/* Match Day C2: the division's points and tie-break order, with the editors the Division rules strip and the stage
+            cards use. Offered while the structure keeps a table (a bracket ranks nobody). */}
+        {sportModule !== null && draftTableKinds.length > 0 && (
+          <div className="space-y-5 border-t border-slate-100 pt-4" data-testid="division-builder-rules">
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold text-slate-700">{msg("stagePoints.title")}</h3>
+              <PointsEditor
+                scope="division"
+                mode="edit"
+                module={sportModule}
+                divisionConfig={builderCfg}
+                value={pointsValues ?? hydrateDivisionPoints(sportKey, builderPoints)}
+                onChange={setPointsValues}
+                kinds={draftTableKinds}
+              />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold text-slate-700">{msg("stageTiebreaks.title")}</h3>
+              <TiebreaksEditor
+                scope="division"
+                mode="edit"
+                module={sportModule}
+                value={tiebreakOrder}
+                onChange={setTiebreakOrder}
+                divisionConfig={builderCfg}
+                kinds={draftTableKinds}
+              />
+            </div>
+          </div>
+        )}
       </section>
 
       <section className={`card space-y-4 p-6 ${tab === "scheduling" ? "" : "hidden"}`}>

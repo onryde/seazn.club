@@ -1,5 +1,9 @@
-// W2c Task 20 (S4, X-SR-4 UI half) - the division settings tab says what a STARTED stage locks, before the organiser
+// W2c Task 20 (S4, X-SR-4 UI half) - the division's rules say what a STARTED stage locks, before the organiser
 // types, and says what a save kept, instead of reading "saved" over a value that snapped back.
+//
+// Match Day C2: the match rules and the standings points moved from Settings' Match rules block to the Division rules strip on
+// the Fixtures tab (`components/v2/rules/division-rules-strip.tsx`) - the same form, the same lock lines and notices, each
+// panel with its own Save. The STRUCTURE note (`format-locked`) stays in Settings' Format group.
 //
 // What a node-env vitest cannot see (AGENTS.md class 2): that the page really hands the form the lock the server will
 // enforce, that a locked control is truly inert in a browser, and that the stale-page route (a stage starts AFTER the page
@@ -15,6 +19,7 @@ import { legacyPointsRule, pointsRuleAwardReachesTable } from "@seazn/engine/com
 import { builtinModules } from "@seazn/engine/sports";
 import { TAG, apiJson, divisionPath } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { openPanels } from "./helpers/rules-strip";
 import { SPORT_RULES } from "../src/lib/match-rules";
 import { pointsLine } from "../src/lib/points-line";
 import { rulesLineText } from "../src/lib/rules-line";
@@ -92,18 +97,33 @@ async function startMatch(request: APIRequestContext, fixtureId: string): Promis
   expect(res.status, `start match: ${JSON.stringify(res.error)}`).toBe(201);
 }
 
+/** The Division rules strip on the Fixtures tab, its Match format and Points panels open. */
 async function openFormat(page: Page, request: APIRequestContext, divisionId: string): Promise<void> {
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: STEP_MS });
+  await openPanels(strip, "format", "points");
+}
+
+/** Settings' Format group still says the STRUCTURE is locked once fixtures exist (that note did not move). */
+async function expectStructureLocked(page: Page, request: APIRequestContext, divisionId: string): Promise<void> {
   await page.goto(await divisionPath(request, divisionId, "?tab=settings"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
   await page.getByRole("button", { name: /^Format/ }).click();
+  await expect(page.getByTestId("format-locked")).toBeVisible();
+  await expect(page.getByTestId("division-rules-moved"), "Settings points at the strip for the rules").toBeVisible();
 }
+
+/** The Match format panel's Save. */
+const saveRules = (page: Page) => page.getByTestId("division-rules-format-save");
 
 /** The variant picker. By role and a leading name: `getByLabel("Variant")` also matches a rule field whose help text says "variant". */
 const variantPicker = (page: Page) => page.getByRole("combobox", { name: new RegExp(`^${L["divset.variant"]!}`) });
 
-/** The Format card: what a rules save says renders inside it, directly under its Save button (T20 review I-1). */
-const formatCard = (page: Page) => page.getByRole("button", { name: /^Format/ }).locator("xpath=ancestor::section[1]");
+/** The Match format panel: what a rules save says renders inside it, directly under its Save button (T20 review I-1). */
+const formatCard = (page: Page) => page.getByTestId("division-rules-panel-format");
 
 /** The control of one rule field of a sport, by the label the form prints. */
 const fieldControl = (page: Page, sport: string, key: string) => {
@@ -133,16 +153,16 @@ test("badminton: a started stage's fields and variant are read-only with their l
   const lockLines = page.locator('[data-testid^="division-locked-"]');
 
   // Fixtures exist, nothing has started: the structure note is up, every rule is open.
+  await expectStructureLocked(page, request, rig.divisionId);
   await openFormat(page, request, rig.divisionId);
-  await expect(page.getByTestId("format-locked")).toBeVisible();
   await expect(lockLines, "generated but not started: nothing is locked").toHaveCount(0);
   for (const f of SPORT_RULES.badminton!) await expect(fieldControl(page, "badminton", f.key), `${f.key} is editable`).toBeEnabled();
   await expect(variantPicker(page), "the variant is editable").toBeEnabled();
 
   // The division starts and a match starts.
   await startDivision(request, rig.divisionId);
+  await expectStructureLocked(page, request, rig.divisionId);
   await openFormat(page, request, rig.divisionId);
-  await expect(page.getByTestId("format-locked")).toBeVisible();
   await expect(lockLines, "starting the DIVISION locks no rule: only a started stage does").toHaveCount(0);
   await startMatch(request, rig.fixtureIds[0]!);
   await openFormat(page, request, rig.divisionId);
@@ -158,8 +178,8 @@ test("badminton: a started stage's fields and variant are read-only with their l
   const variantLine = page.getByTestId("division-locked-variant_key");
   await expect(variantLine).toContainText(sentence);
   await expect(variantPicker(page)).toBeDisabled();
-  // The lock is a per-field one: the rest of the tab stays editable (the name, the Save button).
-  await expect(page.getByRole("button", { name: L["divset.saveRules"]! })).toBeEnabled();
+  // The lock is a per-field one: the rest of the panel stays editable (its Save button).
+  await expect(saveRules(page)).toBeEnabled();
   expect(await lockLines.count(), "one line per field plus the variant, no more").toBe(SPORT_RULES.badminton!.length + 1);
 
   // The server agrees, field by field: the page's lock list is the writer's refusal list.
@@ -199,12 +219,12 @@ test("generic: once a match has started the rule fields lock with their own sent
   const editor = page.getByTestId(`stage-points-${rig.stageId}`);
   await expect(editor, "not scored yet: the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
   await expect(editor).toHaveAttribute("data-stage-points-basis", "pin");
-  await expect(editor.getByTestId("stage-points-started")).toHaveText(L["stagePoints.startedPoints"]!);
+  // Match Day C2: the pinned stage's checkbox says it keeps what it started with (no separate started line).
+  await expect(editor.getByText(L["stagePoints.keepStarted"]!, { exact: true })).toBeVisible();
   await expect(editor.getByTestId("stage-points-preview")).toHaveText(sentence(pinned));
   await editor.getByTestId("stage-points-use-division").uncheck();
   await expect(editor.getByTestId("stage-points-win"), "the boxes start at the pin's win, not the division's new one").toHaveValue(String(pinned.w));
   await expect(editor.getByTestId("stage-points-loss")).toHaveValue(String(pinned.l));
-  await expect(editor.getByTestId("stage-points-started"), "own points being typed: no started line").toHaveCount(0);
   await editor.getByTestId("stage-points-use-division").check(); // nothing saved: the stage keeps its pin
 
   await startMatch(request, rig.fixtureIds[0]!);
@@ -223,24 +243,25 @@ test("generic: once a match has started the rule fields lock with their own sent
   await expect(page.getByTestId("division-locked-points"), "no points lock line once a match has started").toHaveCount(0);
   await expect(page.getByText(say("ruleLock.DIVISION_TABLE_RULES_LOCKED", { stage: "Pool A" })), "the table sentence is said nowhere").toHaveCount(0);
   for (const box of [L["divset.win"]!, L["divset.draw"]!, L["divset.loss"]!]) {
-    await expect(page.getByRole("spinbutton", { name: box }), `${box} is editable`).toBeEnabled();
+    await expect(page.getByTestId("division-rules-panel-points").getByRole("spinbutton", { name: box }), `${box} is editable`).toBeEnabled();
   }
 
-  // ...and a save of them lands: "saved" is said, and the division stores the new win.
+  // ...and a save of them lands (the Points panel's own Save): "saved" is said, and the division stores the new win.
   const moved = pinned.w + 2;
-  await page.getByRole("spinbutton", { name: L["divset.win"]! }).fill(String(moved));
-  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+  await page.getByTestId("division-rules-panel-points").getByRole("spinbutton", { name: L["divset.win"]! }).fill(String(moved));
+  await page.getByTestId("division-points-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"]!)).toBeVisible({ timeout: STEP_MS });
   await expect.poll(async () => ((await storedConfig(request, rig.divisionId)).points as { w: number }).w, { timeout: STEP_MS }).toBe(moved);
 
-  // I1: the pinned stage's points card says what its TABLE pays - the pin's points, in the words that say they were fixed
-  // when it started - never the division's new win. The sentence is the public line's own words for the editor's rule.
+  // I1: the pinned stage's points card says what its TABLE pays - the pin's points, under the stage card's one lock line
+  // (Match Day C2) - never the division's new win. The sentence is the public line's own words for the editor's rule.
   expect(sentence(pinned), "premise: the pin and the moved points read differently").not.toBe(sentence({ ...pinned, w: moved }));
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   const card = page.getByTestId(`stage-points-${rig.stageId}`);
   await expect(card, "a match has started: the card reads").toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
   await expect(card).toHaveAttribute("data-stage-points-basis", "pin");
-  await expect(card.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.startedPoints"]!);
+  await expect(card.getByTestId("stage-points-locked")).toContainText(L["stageCard.locked"]!);
+  await expect(card.getByTestId("stage-points-source"), "a pin says no source line").toHaveCount(0);
   await expect(card.getByTestId("stage-points-preview")).toHaveText(sentence(pinned));
   await expect(card.getByText(L["stagePoints.divisionPoints"]!), "never 'the division's points'").toHaveCount(0);
 });
@@ -265,7 +286,7 @@ test("a stage starts after the page loaded: a mixed save says what landed and na
 
   await fieldControl(page, "badminton", "setTo").fill(String(newSetTo));
   await fieldControl(page, "badminton", "cap").fill(String(newCap));
-  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+  await saveRules(page).click();
 
   // The notice: some landed, which were kept and why - and it does NOT say the rules were saved.
   const partial = page.getByTestId("division-partial-save");
@@ -308,7 +329,7 @@ test("a stage starts after the page loaded: a mixed save says what landed and na
 
   // The sequence: a save AFTER the partial one is clean - the notice is gone, "saved" is said, the cap lands again.
   await fieldControl(page, "badminton", "cap").fill(String(newCap + 1));
-  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+  await saveRules(page).click();
   await expect(page.getByText(L["divset.notice.rulesSaved"]!)).toBeVisible({ timeout: STEP_MS });
   await expect(page.getByTestId("division-partial-save")).toHaveCount(0);
   expect((await storedConfig(request, rig.divisionId)).cap).toBe(newCap + 1);
@@ -325,7 +346,7 @@ test("a stage starts after the page loaded: a save of ONLY locked fields is refu
 
   await fieldControl(page, "badminton", "setTo").fill(String(Number(before.setTo) + 2));
   await fieldControl(page, "badminton", "finalSetTo").fill(String(Number(before.finalSetTo) + 2));
-  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+  await saveRules(page).click();
 
   // The refusal is said in the reader's words, naming the stage; BOTH refused fields are listed - in the viewport, inside the card.
   const refusal = page.getByText(say("rules.err.divisionFormatLocked", { stage: "Pool A" }));
@@ -365,7 +386,7 @@ test("a stage starts after the page loaded: a changed variant is refused, the pi
 
   await picker.selectOption(other!);
   await expect(picker, "premise: the chosen variant is on screen").toHaveValue(other!);
-  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+  await saveRules(page).click();
 
   const list = page.getByTestId("division-refused-list");
   await expect(list).toBeVisible({ timeout: STEP_MS });

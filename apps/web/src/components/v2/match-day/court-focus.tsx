@@ -40,6 +40,7 @@ import { failureMessage } from "./call-sheet";
 import { CourtScoreboard } from "./court-scoreboard";
 import { CourtStreamPreview } from "./court-stream-preview";
 import { ScorerMark } from "./scorer-mark";
+import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
 
 /** What every Match Day panel reads: where it is, who reads it, and in which zone its times print. */
 export interface MatchDayCtx {
@@ -291,7 +292,8 @@ function OpenPadLink({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixt
   );
 }
 
-/** The match on court: who, which division and stage, and when it started. */
+/** The match on court: who, which division and stage, when it started, and the format it plays (Match Day C2: the one Match
+ *  format component, read-only — the fixture page's own line, set on a playing match). */
 function MatchLine({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixture }) {
   const { dict } = ctx;
   return (
@@ -303,6 +305,11 @@ function MatchLine({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixtur
           <> · {t(dict, "matchDay.focus.started", { time: fmtPublicTime(ctx.locale, ctx.tz, fixture.started_at) })}</>
         )}
       </p>
+      {fixture.format_line !== null && (
+        <div className="mt-2" data-testid="md-match-format">
+          <MatchFormatEditor scope="fixture" mode="locked" line={fixture.format_line} />
+        </div>
+      )}
     </div>
   );
 }

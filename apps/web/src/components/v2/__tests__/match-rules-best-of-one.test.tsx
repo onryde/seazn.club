@@ -10,7 +10,7 @@
 // and driven in the browser (e2e/walkthrough/stage-rules-start-promotion).
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MatchRuleFields } from "@/components/v2/match-rules";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 import { SINGLE_SET_POINTS_LABEL, SPORT_RULES } from "@/lib/match-rules";
 
 function render(

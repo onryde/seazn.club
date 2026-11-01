@@ -79,7 +79,6 @@ function renderChess(own: CameraPolicy | null, inherited: CameraPolicy, dict = E
         inherited_camera_policy: inherited,
       }}
       orgId="org1"
-      variants={[{ key: "classical", name: "Classical" }]}
       structureLocked={false}
       lockedFields={[]}
       stages={[]}

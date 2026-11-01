@@ -41,6 +41,13 @@ const EXEMPT: readonly { file: string; pattern: RegExp; text: string; reason: st
     reason: "reads the preset catalogue for the editor's Reset menu, not a stage's order",
   },
   {
+    file: "components/v2/rules/tiebreaks-editor.tsx",
+    pattern: READS[0]!,
+    text: "return parsed.success ? module.defaultTiebreakers(kind, parsed.data) : null;",
+    reason:
+      "Match Day C2 `divisionSportOrder`: the DIVISION default's editor (the Division rules strip, the division builder) shows what a NULL division order means - the sport's order, the loader's last layer - as the list the organiser starts editing from. A division-level read (no stage, no pin): the builder has no loader to ask (the division does not exist yet), and nothing is ranked, captioned or paid from it; every stage still reads the loader (`division-rules-seam.test.ts` drives the save through it)",
+  },
+  {
     file: "server/slideshow-data.ts",
     pattern: READS[1]!,
     text: "cascade: rules?.tiebreakers ?? [],",

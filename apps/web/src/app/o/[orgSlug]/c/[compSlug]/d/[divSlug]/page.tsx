@@ -53,7 +53,7 @@ import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
 import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
-import { effectiveEntrantModel } from "@seazn/engine/sport";
+import { effectiveEntrantModel, type TableStageKind, type TiebreakerKey } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
 import { withTenant } from "@/lib/db";
@@ -615,8 +615,10 @@ export default async function DivisionPage({
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
   // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
   // (The queue no longer offers the invite resend: the server refuses it for every held board - 409 BOARD_HELD.)
+  // Match Day C2: the Online play select moved with the match format into the Division rules strip (the fixtures tab); the
+  // camera policy it gates stays in Settings - so both tabs ask.
   const onlineChessOn =
-    division.sport_key === "boardgame" && tab === "settings" && canEdit ? await onlineChessOffered(auth) : false;
+    division.sport_key === "boardgame" && ((tab === "settings" && canEdit) || (tab === "fixtures" && editable)) ? await onlineChessOffered(auth) : false;
   // The warning under the Online play select (owner ruling 2026-10-25: switching to online with players who cannot be paired
   // WARNS, it never blocks) names whoever in the field holds no Lichess link, and, in a sentence of its own, whoever holds one
   // that cannot play and must be reconnected. Read wherever that select renders - the SAME gate as `onlineChessOn`, so a club
@@ -624,7 +626,7 @@ export default async function DivisionPage({
   // exactly when it is not. A courtesy beside the form, not the form: a reader that throws is logged and the tab renders without
   // the warning, rather than the whole Settings tab answering 500 over a hint.
   let lichessGaps: ReturnType<typeof summariseLinkGaps> | undefined;
-  if (onlineChessOn) {
+  if (onlineChessOn && tab === "fixtures") {
     try {
       lichessGaps = summariseLinkGaps(await listLichessLinkGaps(auth, id));
     } catch (err) {
@@ -959,6 +961,23 @@ export default async function DivisionPage({
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
               matchDayHref={matchDayHref}
+              rulesStrip={{
+                divisionId: id,
+                sportKey: division.sport_key,
+                variantKey: division.variant_key,
+                divisionConfig: (division.config ?? {}) as Record<string, unknown>,
+                // The stored division order as is (`DivisionRow.tiebreakers` is already `string[] | null`): null is "the sport's".
+                divisionTiebreakers: division.tiebreakers as TiebreakerKey[] | null,
+                tableKinds: [...new Set(stages.map((s) => s.kind).filter(stageTakesPoints))] as TableStageKind[],
+                canEdit: editable,
+                ruleDict,
+                pointsDict,
+                // The variant select and the started-stage locks are an editor's: a reader sees the format read-only.
+                variants: editable ? await listVariantOptions(auth, division.sport_key) : [],
+                lockedFields: editable ? await divisionLockedFields(auth, id) : [],
+                onlineChessOffered: onlineChessOn,
+                lichessGaps,
+              }}
             />
           </>
         )}
@@ -1145,8 +1164,6 @@ export default async function DivisionPage({
             }}
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
-            lichessGaps={lichessGaps}
-            variants={await listVariantOptions(auth, division.sport_key)}
             // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
             // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).
             structureLocked={formatAlreadyLocked(fixtures.length)}

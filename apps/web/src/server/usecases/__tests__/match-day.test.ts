@@ -36,6 +36,7 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
+import enPublic from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { venueNoun } from "@/lib/venue";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
@@ -72,6 +73,7 @@ import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { countFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
+import { loadFixtureMatchRules } from "../fixtures";
 import { putScheduleSettings } from "../schedule";
 import { createCourt } from "../venues";
 import {
@@ -404,6 +406,9 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     // Its console address (task A3: Open pad, the stream panel), read off the rows themselves — never off the read model.
     const [address] = await sql<{ slug: string; fixture_no: number }[]>`
       select d.slug, f.fixture_no from fixtures f join divisions d on d.id = f.division_id where f.id = ${f12.id}`;
+    // C2: the match's format, the organiser's match block's own line (the fixture page's reader), not a copy of it.
+    const block = await loadFixtureMatchRules(day.auth, f12.id, enPublic as Dict);
+    expect(block.effectiveLine, "premise: generic says a format").not.toBe("");
     expect(c1.current).toEqual({
       id: f12.id,
       division_id: day.comp.divisionId,
@@ -426,6 +431,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       // ledger, so no scorer attention.
       scorer_attention: null,
       live_video: null,
+      format_line: block.effectiveLine,
     });
     // Held until max(now 20, kick-off 5 + 30) = 35. f13: max(30, 35) = 35, ends 65; f24: max(90, 65) = 90.
     expect(queueOf(c1)).toEqual([
@@ -887,8 +893,9 @@ describe.skipIf(!HAS_DB)("B4 — playing, no court", () => {
     expect(view.playing_no_court.map((f) => [f.id, f.sport_key])).toEqual([[seed.fixtureId, "boardgame"]]);
   });
 
-  it("every registered sport: a match in play with no court is in the group, on an organisation with no courts — and nothing at all is the empty case", async () => {
+  it("every registered sport: a match in play with no court is in the group, on an organisation with no courts — and nothing at all is the empty case; it carries the match's format line, the organiser's match block's own (Match Day C2)", async () => {
     let checked = 0;
+    let withLine = 0;
     for (const sportModule of builtinModules) {
       const rig = await makeCommunityRig(sportModule.key);
       const [row] = await sql<{ competition_id: string }[]>`
@@ -902,9 +909,14 @@ describe.skipIf(!HAS_DB)("B4 — playing, no court", () => {
       const view = await getMatchDay(rig.auth, competitionId);
       expect(view.courts, sportModule.key).toEqual([]);
       expect(view.playing_no_court.map((f) => [f.id, f.sport_key]), sportModule.key).toEqual([[rig.fixtureId, sportModule.key]]);
+      // C2: the court focus's read-only Match format says what the fixture page's match block says (its `effectiveLine`).
+      const block = await loadFixtureMatchRules(rig.auth, rig.fixtureId, enPublic as Dict);
+      expect(view.playing_no_court[0]!.format_line, `${sportModule.key}: the match block's line`).toBe(block.effectiveLine === "" ? null : block.effectiveLine);
+      if (view.playing_no_court[0]!.format_line !== null) withLine++;
       checked++;
     }
     expect(checked, "sports swept").toBe(builtinModules.length);
+    expect(withLine, "sports whose match says a format line").toBeGreaterThan(5);
     expect(checked).toBeGreaterThan(5);
   });
 });

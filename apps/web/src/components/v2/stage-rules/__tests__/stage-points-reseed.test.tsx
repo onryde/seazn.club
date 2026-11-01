@@ -15,7 +15,7 @@ import { reachableOutcomes } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { liveStageCfg } from "@/lib/stage-decider-off";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
-import { StagePointsSection } from "../stage-points-section";
+import { StagePoints, type StagePointsProps } from "../../rules/points-editor";
 
 vi.mock("@/lib/client-v1", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/client-v1")>()),
@@ -25,7 +25,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => ({
 const volleyball = builtinModules.find((m) => m.key === "volleyball") as AnySportModule;
 const ID = "11111111-1111-4111-8111-111111111111";
 const DIVISION = volleyball.configSchema.parse(volleyball.variants.indoor) as Record<string, unknown>;
-type Props = Parameters<typeof StagePointsSection>[0];
+type Props = StagePointsProps;
 
 const props = (stageConfig: Record<string, unknown>, over: Partial<Props> = {}): Props => ({
   stageId: ID,
@@ -35,7 +35,9 @@ const props = (stageConfig: Record<string, unknown>, over: Partial<Props> = {}):
   divisionConfig: DIVISION,
   stored: (stageConfig as { points?: unknown }).points ?? null,
   pointsDict: undefined,
-  readOnly: false,
+  scope: "stage",
+  mode: "edit",
+  started: false,
   onSaved: () => undefined,
   ...over,
 });
@@ -76,7 +78,7 @@ describe("review I1: the points draft re-seeds when the stage's rows change unde
   });
 
   it("a format save (best of 5 → 3) then the untick: the boxes hold the engine's 2-0 / 2-1 points, never blank, and no 3-x box is left", () => {
-    const island = renderIsland(StagePointsSection, props({}));
+    const island = renderIsland(StagePoints, props({}));
     untick(island);
     expect(setBoxes(island.tree()), "best of 5: its own set scores").toEqual(boxesFor(engineSets({})));
     // Back to inheriting, then the stage's format row saves best of 3: the page refreshes, the card is not re-keyed.
@@ -92,7 +94,7 @@ describe("review I1: the points draft re-seeds when the stage's rows change unde
   });
 
   it("the second direction: a refresh that changes nothing the draft reads (a fresh but equal props object) keeps a typed, dirty draft", () => {
-    const island = renderIsland(StagePointsSection, props(BO3));
+    const island = renderIsland(StagePoints, props(BO3));
     untick(island);
     const [first] = Object.keys(engineSets(BO3));
     const id = `stage-points-set-${first}-w`;
@@ -104,7 +106,7 @@ describe("review I1: the points draft re-seeds when the stage's rows change unde
   });
 
   it("a points save elsewhere (a new stored rule) re-seeds the draft to it", () => {
-    const island = renderIsland(StagePointsSection, props(BO3));
+    const island = renderIsland(StagePoints, props(BO3));
     const own = { ...volleyball.tablePointsRule(volleyball.configSchema.parse(liveStageCfg(DIVISION, { kind: "league", config: BO3 }, volleyball)), "league") };
     const sets = engineSets(BO3);
     const [first] = Object.keys(sets);

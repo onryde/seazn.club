@@ -43,6 +43,7 @@ import {
 import { V3_SKIN_CASES, type V3SkinRosterSlot } from "./v3-skin-catalog";
 import { WIDTH_MATRIX_CLOCK_SPORTS } from "./v3-width-matrix-coverage";
 import { SPORT_RULES } from "../src/lib/match-rules";
+import { openPanels } from "./helpers/rules-strip";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { FLOOR_MS, ROUTE_CHECK_MS } from "./spectator-w2-kit";
 import { withDb } from "./rs007-money-kit";
@@ -6305,7 +6306,8 @@ test("W2c stage format row at every width: sections, the deciders notice and the
   expect(chessHere, `the chess editor's control set at ${projectWidth} vs 1280`).toEqual(await editorControls(crow));
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 
-  // --- the DIVISION door: the same ordered list in the division's Settings (review I-2), phone-first too ---------------------
+  // --- the DIVISION door: the same ordered list on the division's rules strip (review I-2; Match Day C2 moved it out of
+  // Settings into the Fixtures tab's Division rules strip), phone-first too ----------------------------------------------
   const dcomp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
     ends_on: "2030-12-31",
     name: `W2c T17 division-seq ${TAG}-${testInfo.project.name}`,
@@ -6319,9 +6321,11 @@ test("W2c stage format row at every width: sections, the deciders notice and the
     config: { tiebreakRungs: ["rapid", "blitz"] },
   });
   expect(ddiv.status, `division: ${JSON.stringify(ddiv.error)}`).toBeLessThan(300);
-  await page.goto(await divisionPath(page.request, ddiv.data!.id, "?tab=settings"), { waitUntil: "load" });
-  await page.getByRole("button", { name: /Format/ }).click();
-  const dlist = page.getByTestId("stage-rule-sequence-tiebreakRungs");
+  await page.goto(await divisionPath(page.request, ddiv.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  const dstrip = page.getByTestId("division-rules-strip");
+  await expect(dstrip).toBeVisible({ timeout: 20_000 });
+  await openPanels(dstrip, "format");
+  const dlist = dstrip.getByTestId("stage-rule-sequence-tiebreakRungs");
   await expect(dlist).toBeVisible({ timeout: 20_000 });
   const ditems = dlist.locator("li");
   expect(await ditems.count(), "the division's stored list, two rungs").toBe(2);
@@ -6694,7 +6698,8 @@ test("W2c match rules block at every width: the fold opens, the controls hold th
   await fits("locked");
 });
 
-// W2c Task 20 (S4): the division settings' lock lines at every width. A started stage makes the match-rule fields read-only and
+// W2c Task 20 (S4): the division's rule lock lines at every width (Match Day C2: on the Division rules strip's Match format
+// panel, on the Fixtures tab - they left Settings with the match rules). A started stage makes the match-rule fields read-only and
 // puts one line under each ("Locked: Pool A has started and plays this format"). The lines are plain text in the existing
 // field grid - no second phone tree - so the evidence is that every line is on screen, readable (its text is not clipped by its
 // own box), inside the viewport, that nothing scrolls the page sideways, and that the SET of lines (membership, order, repeats)
@@ -6727,10 +6732,11 @@ test("W2c division lock lines at every width: each line is on screen and readabl
   const started = await apiJson(request, `/api/v1/fixtures/${fixtureIds[0]!}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
   expect(started.status, JSON.stringify(started.error)).toBe(201);
 
-  await page.goto(await divisionPath(request, div.data!.id, "?tab=settings"), { waitUntil: "load" });
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: 20_000 });
-  await page.getByRole("button", { name: /^Format/ }).click();
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await openPanels(strip, "format");
 
   const lines = page.locator('[data-testid^="division-locked-"]');
   // One per badminton field plus the variant (the fields are the form's own table, not a number typed here).

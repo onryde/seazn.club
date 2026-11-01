@@ -19,7 +19,7 @@ import { pointsLine } from "@/lib/points-line";
 import { pointsLineDict, rulesLineText } from "@/lib/rules-line";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg as enMsg } from "@/lib/messages";
-import { StagePointsSection, failureText } from "../stage-points-section";
+import { PointsEditor, failureText } from "../../rules/points-editor";
 import { offeredBonusKinds, pointsRows, stagePointsContext } from "../stage-points-model";
 import { RULEBOOK_SPLITS } from "./_points-split-rulebook";
 
@@ -37,11 +37,14 @@ function render(
   m: AnySportModule,
   variant: string,
   stored: unknown,
-  over: { readOnly?: boolean; pointsDict?: Dict; kind?: string; stageConfig?: Record<string, unknown>; divisionConfig?: Record<string, unknown>; pinned?: unknown } = {},
+  over: { readOnly?: boolean; started?: boolean; pointsDict?: Dict; kind?: string; stageConfig?: Record<string, unknown>; divisionConfig?: Record<string, unknown>; pinned?: unknown } = {},
 ): string {
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
-      <StagePointsSection
+      <PointsEditor
+        scope="stage"
+        mode={over.readOnly === true || over.started === true ? "locked" : "edit"}
+        started={over.started ?? false}
         stageId={ID}
         module={m}
         kind={over.kind ?? "league"}
@@ -49,7 +52,6 @@ function render(
         divisionConfig={over.divisionConfig ?? (m.variants[variant] as Record<string, unknown>)}
         stored={stored}
         pointsDict={"pointsDict" in over ? over.pointsDict : POINTS_DICT}
-        readOnly={over.readOnly ?? false}
         pinned={over.pinned}
         onSaved={() => undefined}
       />
@@ -281,12 +283,13 @@ describe("W2d T16: a flat rule STORED on a division the rulebooks split opens in
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("a locked stage or a viewer: the stored rule is read, row by row, and there is no control at all", () => {
+  it("a locked stage or a viewer: the stored rule is read ONCE, in the public line's words, and there is no control at all (Match Day item 5)", () => {
     const m = sport("icehockey");
     const html = render(m, "iihf", OWN, { readOnly: true });
     expect(html).toContain('data-stage-points-state="readonly"');
-    expect(has(html, "stage-points-readonly") && has(html, "stage-points-preview") && has(html, "stage-points-rows"), "the rule is read").toBe(true);
-    expect(text(html)).toContain(`${UI["stagePoints.row.winOt"]!}: 4`);
+    expect(has(html, "stage-points-readonly") && has(html, "stage-points-preview"), "the rule is read").toBe(true);
+    expect(has(html, "stage-points-rows"), "said once: no row list repeating the line").toBe(false);
+    expect(text(html)).toContain(rulesLineText(POINTS_DICT, pointsLine(OWN, { awardReaches: pointsRuleAwardReachesTable(m) })));
     expect(html).not.toMatch(/<(input|select|button)/);
   });
 });
@@ -451,20 +454,21 @@ describe("W2d final review I1: a pinned stage's card says the pin's points and t
     expect(PIN_WORDS).not.toBe(LIVE_WORDS);
   });
 
-  it("read-only (a started stage): the pin's 3 under the started wording - never 2, never the division wording; unpinned it is the live 2 under the division wording", () => {
-    const pinned = render(football, "11-a-side", null, { readOnly: true, divisionConfig: LIVE, pinned: PIN });
+  it("read-only (a started stage): the pin's 3 under the ONE lock line - never 2, never the division wording, no internals; a viewer of an open, unpinned stage reads the live 2 under the division wording", () => {
+    const pinned = render(football, "11-a-side", null, { started: true, divisionConfig: LIVE, pinned: PIN });
     expect(pinned).toContain('data-stage-points-basis="pin"');
-    expect(text(tagOf(pinned, "stage-points-readonly") + pinned.slice(pinned.indexOf('data-testid="stage-points-readonly"')))).toContain(UI["stagePoints.startedPoints"]!);
+    expect(text(pinned)).toContain(UI["stageCard.locked"]!);
+    expect(text(pinned), "Match Day item 4: internals copy is gone").not.toContain("don't reach it");
     expect(text(pinned)).not.toContain(UI["stagePoints.divisionPoints"]!);
     expect(previewOf(pinned)).toBe(PIN_WORDS);
     const unpinned = render(football, "11-a-side", null, { readOnly: true, divisionConfig: LIVE });
     expect(unpinned, "the positive pair").toContain('data-stage-points-basis="division"');
     expect(text(unpinned)).toContain(UI["stagePoints.divisionPoints"]!);
-    expect(text(unpinned)).not.toContain(UI["stagePoints.startedPoints"]!);
+    expect(has(unpinned, "stage-points-locked"), "an open stage has no lock line").toBe(false);
     expect(previewOf(unpinned)).toBe(LIVE_WORDS);
   });
 
-  it("the editor (pinned, not yet scored): the inheriting preview is the pin's 3 with the started line; unpinned it is the live 2 with none", () => {
+  it("the editor (pinned, not yet scored): the inheriting preview is the pin's 3 under 'Keep the points it started with' (no internals line); unpinned it is the live 2", () => {
     const pinned = render(football, "11-a-side", null, { divisionConfig: LIVE, pinned: PIN });
     expect(pinned).toContain('data-stage-points-state="editor"');
     expect(tagOf(pinned, "stage-points-use-division")).toContain('checked=""');
@@ -472,7 +476,7 @@ describe("W2d final review I1: a pinned stage's card says the pin's points and t
     const label = (html: string) => text(html.slice(html.indexOf('data-testid="stage-points-use-division"'), html.indexOf("</label>", html.indexOf('data-testid="stage-points-use-division"'))));
     expect(label(pinned)).toContain(UI["stagePoints.keepStarted"]!);
     expect(label(pinned)).not.toContain(UI["stagePoints.useDivision"]!);
-    expect(text(tagOf(pinned, "stage-points-started") + pinned.slice(pinned.indexOf('data-testid="stage-points-started"')))).toContain(UI["stagePoints.startedPoints"]!);
+    expect(has(pinned, "stage-points-started"), "Match Day item 4: no 'don't reach it' line").toBe(false);
     expect(previewOf(pinned)).toBe(PIN_WORDS);
     expect(has(pinned, "stage-points-save"), "inheriting the pin: nothing to save").toBe(false);
     const unpinned = render(football, "11-a-side", null, { divisionConfig: LIVE });

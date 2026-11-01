@@ -1,7 +1,7 @@
 // Owner ruling 2026-10-25 ("apply rec", older item 6): switching a chess division to online play while players cannot be
 // paired online must WARN, naming who, and must NOT block - clubs switch first and collect links later. Fix rounds 1 and 2
 // (controller): "cannot be paired" covers three kinds, each in its OWN sentence - players with no Lichess link, players whose
-// link must be reconnected, and entrants with no player on them. This drives the real DivisionSettings island: the warning sits under the Online
+// link must be reconnected, and entrants with no player on them. This drives the real Division rules strip (Match Day C2 moved Online play there from Settings): the warning sits under the Online
 // play select the moment Lichess is chosen (before any save), stays while the SAVED division is online, is absent when
 // nobody is short, each sentence shows independently of the other, and the select and the save stay usable.
 //
@@ -10,10 +10,9 @@
 // dictionary-shape cases at the end, and by the parity check.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
-import { DivisionSettings } from "@/components/v2/division-settings";
+import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import { BANNED_RE } from "@/components/v2/arbiter/__tests__/_banned-copy";
 import { LINK_GAP_NAMES_SHOWN } from "@/lib/online-link-gaps";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
@@ -39,53 +38,22 @@ beforeEach(() => {
 });
 
 const EN = uiEn as Record<string, string>;
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
 
 type Cfg = Record<string, unknown>;
 type List = { count: number; names: string[] };
 type Gaps = { unlinked: List; reconnect: List; empty: List };
 const NONE: List = { count: 0, names: [] };
 const NO_GAPS: Gaps = { unlinked: NONE, reconnect: NONE, empty: NONE };
+// Match Day C2: Online play moved with the match rules to the Division rules strip (Fixtures tab), its warning with it.
 const propsFor = (config: Cfg, gaps: Gaps | undefined, onlineChessOffered = true, sport = "boardgame") =>
-  ({
-    division: {
-      id: "d1",
-      name: "Open",
-      sport_key: sport,
-      variant_key: sport === "boardgame" ? "classical" : "standard",
-      config,
-      logo_url: null,
-      logo_storage_path: null,
-      camera_policy: null,
-      inherited_camera_policy: "off",
-    },
-    orgId: "org1",
+  stripPropsOf({
+    division: { id: "d1", sport_key: sport, variant_key: sport === "boardgame" ? "classical" : "standard", config },
     variants: [{ key: sport === "boardgame" ? "classical" : "standard", name: "Standard" }],
-    structureLocked: false,
-    lockedFields: [],
-    stages: [],
-    canEdit: true,
-    divisionPathPrefix: "/o/org/c/comp/d/",
-    fixturesHref: "/o/org/c/comp/d/div/fixtures",
-    embed: null,
-    danger: null,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
-    autoPosts: false,
-    canAutoPost: true,
-    showSeeds: true,
-    viewerPlan: "community",
     onlineChessOffered,
     lichessGaps: gaps,
-  }) as Parameters<typeof DivisionSettings>[0];
+  });
 const mount = (config: Cfg, gaps: Gaps | undefined, onlineChessOffered = true, sport = "boardgame") =>
-  renderIsland(DivisionSettings, propsFor(config, gaps, onlineChessOffered, sport));
+  renderIsland(DivisionRulesStrip, propsFor(config, gaps, onlineChessOffered, sport), expandRules);
 type Island = ReturnType<typeof mount>;
 
 const byTestId = (island: Island, id: string) => island.tree().filter((n) => propsOf(n)["data-testid"] === id);
@@ -195,8 +163,8 @@ describe("the online-play switch warns about players who cannot be paired online
     setOnline(island, "lichess");
 
     expect(propsOf(select(island)).disabled, "the select is not disabled by the warning").toBe(false);
-    const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
-    expect(button, "premise: the Save match rules button is there").toBeDefined();
+    const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === EN["rulesStrip.format.save"]);
+    expect(button, "premise: the Save match format button is there").toBeDefined();
     expect(propsOf(button!).disabled, "the save button is not disabled by the warning").toBe(false);
 
     (propsOf(button!).onClick as () => void)();
@@ -312,7 +280,7 @@ describe("three sentences, each shown on its own account (controller rulings, fi
 
     expect(emptyWarning(island)).toHaveLength(1);
     expect(propsOf(select(island)).disabled).toBe(false);
-    const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
+    const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === EN["rulesStrip.format.save"]);
     expect(button).toBeDefined();
     expect(propsOf(button!).disabled).toBe(false);
     setOnline(island, "off");
@@ -359,7 +327,7 @@ describe("three sentences, each shown on its own account (controller rulings, fi
 
     expect(reconnectWarning(island)).toHaveLength(1);
     expect(propsOf(select(island)).disabled).toBe(false);
-    const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
+    const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === EN["rulesStrip.format.save"]);
     expect(button).toBeDefined();
     expect(propsOf(button!).disabled).toBe(false);
   });

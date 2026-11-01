@@ -111,7 +111,9 @@ describe("the state the section opens in follows the division (scoring is free o
     expect(stored, "the flat rule, refused inline before any Save").toContain('data-testid="stage-points-refusal"');
     const locked = panel({ sportKey: "icehockey", divisionConfig: iihf, stages: stageOf("league", { points: OWN }), pointsDict: POINTS_DICT, formatLockedStageIds: [STAGE_ID] });
     expect(stateOf(locked)).toBe("readonly");
-    expect(locked).toContain('data-testid="stage-points-row-win-ot"');
+    // Match Day item 5: a started stage says what it pays ONCE, in the public line's words (no row list repeating it).
+    expect(text(locked)).toContain(rulesLineText(POINTS_DICT, pointsLine(OWN as never)));
+    expect(locked, "said once: no rows").not.toContain('data-testid="stage-points-row-win-ot"');
     expect(locked, "a started stage: no box").not.toContain('data-testid="stage-points-win-ot"');
     expect(stateOf(panel({ sportKey: "icehockey", divisionConfig: m.variants.recreational })), "the positive pair").toBe("editor");
   });
@@ -175,7 +177,7 @@ describe("I1: the page's pinned points reach the pinned stage's section, and onl
     expect(words(4, 2, 1)).not.toBe(words(2, 2, 1));
   });
 
-  it("a started pinned stage reads the pin's 4 under the started wording; the panel's other stage (no pin) reads the live 2 under the division's", () => {
+  it("a started pinned stage reads the pin's 4 under the ONE lock line (no internals); the panel's other stage (no pin) reads the live 2 under the division's", () => {
     const html = panel({
       stages: [...stageOf("league"), { id: OTHER, seq: 2, kind: "league", name: "Other", config: {}, progression: null, status: "pending" }],
       divisionConfig: LIVE,
@@ -190,7 +192,10 @@ describe("I1: the page's pinned points reach the pinned stage's section, and onl
     };
     const pinned = sectionOf(STAGE_ID);
     expect(pinned).toContain('data-stage-points-basis="pin"');
-    expect(text(pinned)).toContain(UI_EN["stagePoints.startedPoints"]!);
+    expect(text(pinned)).toContain(UI_EN["stageCard.locked"]!);
+    expect(pinned.split('data-testid="stage-points-locked"').length - 1, "one lock line").toBe(1);
+    expect(text(pinned), "Match Day item 4: no internals").not.toContain("don't reach it");
+    expect(text(pinned)).not.toContain(UI_EN["stagePoints.divisionPoints"]!);
     expect(text(pinned)).toContain(words(4, 2, 1));
     expect(text(pinned), "never the division's new number").not.toContain(words(2, 2, 1));
     const other = sectionOf(OTHER);

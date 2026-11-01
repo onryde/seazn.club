@@ -24,6 +24,7 @@ import { stageFieldsFor } from "../src/lib/rule-scope";
 import { pointsLine } from "../src/lib/points-line";
 import { rulesChipText, rulesLineText } from "../src/lib/rules-line";
 import { RULEBOOK_SPLITS } from "../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
+import { openPanels } from "./helpers/rules-strip";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
 
@@ -337,27 +338,25 @@ test("generic: 'share the points' is offered only where draws are allowed, and a
 // S4: a started stage says so before anyone tries, reads its rules without being able to change them, and the server still
 // refuses a write (the 16b rule stands).
 // ---------------------------------------------------------------------------------------------------------------------
-test("a stage whose first match is scored: the lock line, a read-only view, a link to the fixtures; the API still refuses with STAGE_FORMAT_LOCKED", async ({ page, request }) => {
+// Match Day C2: the locked stage's Match format is the shared editor's locked mode - one lock line ("Locked: the stage has
+// started") and the format as chips, read-only. No "View" form of disabled inputs and no link (the row is on the Fixtures tab).
+test("a stage whose first match is scored: the lock line, the format read-only as chips, no control; the API still refuses with STAGE_FORMAT_LOCKED", async ({ page, request }) => {
   test.setTimeout(150_000);
   const { divisionId, stageId } = await seedScoredDivision(request);
   const row = await openRow(page, request, divisionId, stageId);
   const line = row.getByTestId("stage-format-locked");
   await expect(line).toBeVisible();
-  await expect(line).toContainText(L["stageRules.locked"]!);
+  await expect(line).toContainText(L["stageCard.locked"]!);
   await expect(row.getByTestId("stage-format-edit"), "no way to start an edit").toHaveCount(0);
   await expect(row.getByTestId("stage-format-clear")).toHaveCount(0);
-  // The read-only view: the fields show the stage's rules and none of them can be changed; there is no Save.
-  await row.getByTestId("stage-format-view").click();
-  const editor = row.getByTestId("stage-format-editor");
-  await expect(editor).toBeVisible();
-  const controls = editor.locator("input, select");
-  const n = await controls.count();
-  expect(n, "the read-only view shows controls to be read").toBeGreaterThan(0);
-  for (let i = 0; i < n; i++) await expect(controls.nth(i), `control ${i} is disabled`).toBeDisabled();
-  await expect(editor.getByTestId("stage-format-save")).toHaveCount(0);
-  // The link takes the organiser to this stage's fixtures.
-  await line.getByRole("button", { name: L["stageRules.lockedLink"]! }).click();
-  await expect(page.getByTestId("run-sheet")).toBeVisible();
+  // Read-only: the format is said as chips, and the row holds no control and no editor - nothing to change, no Save.
+  const chips = row.getByTestId("stage-format-chips");
+  await expect(chips).toBeVisible();
+  expect((await chips.innerText()).trim().length, "the chips say the format").toBeGreaterThan(0);
+  await expect(row.getByTestId("stage-format-editor")).toHaveCount(0);
+  await expect(row.locator("input, select, textarea")).toHaveCount(0);
+  await expect(row.getByTestId("stage-format-save")).toHaveCount(0);
+  await expect(line.getByRole("button"), "the lock line is words, not a link").toHaveCount(0);
   // The server says no regardless of what the page showed (a stale tab, the API).
   const put = await apiJson(request, `/api/v1/stages/${stageId}/rules`, "PUT", { rules: { allowDraws: false } });
   expect(put.status, "a started stage's rules are refused").toBe(409);
@@ -444,7 +443,7 @@ test("a locked stage says it is locked once; an open editor has one Cancel and f
   test.setTimeout(150_000);
   const { divisionId, stageId } = await seedScoredDivision(request);
   const row = await openRow(page, request, divisionId, stageId);
-  const sentence = L["stageRules.locked"]!;
+  const sentence = L["stageCard.locked"]!;
   const said = (await row.innerText()).split(sentence).length - 1;
   expect(said, "the lock sentence appears once in the row").toBe(1);
   for (const text of await row.getByTestId("stage-format-summary").allInnerTexts()) expect(text, "the header carries the format alone").not.toMatch(/locked/i);
@@ -495,14 +494,17 @@ test("chess division Settings: 'Use the default order' removes the stored tie-br
   };
   expect((await configOf()).tiebreakRungs, "premise: the division stores its own list").toEqual(stored);
 
-  await page.goto(await divisionPath(request, div.data!.id, "?tab=settings"), { waitUntil: "load" });
+  // Match Day C2: the division's door is the Division rules strip's Match format panel (it left Settings).
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  await page.getByRole("button", { name: /Format/ }).click();
-  const list = page.getByTestId(`stage-rule-sequence-${seq.key}`);
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: STEP_MS });
+  await openPanels(strip, "format");
+  const list = strip.getByTestId(`stage-rule-sequence-${seq.key}`);
   await expect(list, "the division door shows the ordered list").toBeVisible({ timeout: STEP_MS });
   await expect(page.getByTestId(`stage-rule-sequence-${seq.key}-item-0`)).toContainText(seq.options!.find((o) => o.value === stored[0])!.label);
   await page.getByTestId(`stage-rule-sequence-${seq.key}-reset`).click();
-  await page.getByRole("button", { name: L["divset.saveRules"]!, exact: true }).click();
+  await strip.getByTestId("division-rules-format-save").click();
   await expect.poll(async () => Object.hasOwn(await configOf(), "tiebreakRungs"), { timeout: STEP_MS, message: "the saved list is gone from the division" }).toBe(false);
   // The positive pair: nothing else was lost by the save.
   const after = await configOf();
@@ -782,7 +784,8 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   const locked = sectionOf(page, rig.stageId);
   await expect(locked).toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
   await expect(locked.locator("input, select, button:not([data-role='phone-disclosure-toggle'])")).toHaveCount(0);
-  await expect(locked.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.ownPoints"]!);
+  await expect(locked.getByTestId("stage-points-locked")).toContainText(L["stageCard.locked"]!);
+  await expect(locked.getByTestId("stage-points-source")).toHaveText(L["stagePoints.ownPoints"]!);
   await expect(locked.getByTestId("stage-points-preview")).toHaveText(words2);
   const refused = await apiJson(request, `/api/v1/stages/${rig.stageId}/rules`, "PUT", { points: null });
   expect(refused.status, "the server holds the same lock").toBe(409);

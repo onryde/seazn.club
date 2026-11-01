@@ -60,6 +60,7 @@ import {
 import { SINGLE_SET_POINTS_LABEL, SPORT_RULES, ruleOptionLabel } from "../../src/lib/match-rules";
 // The dictionary key of a variant label is the map's, not `variant.<sport>.<key>`: `bwf-3x15` is `variant.badminton.bwf3x15`.
 import { variantWordKey } from "../../src/lib/variant-label-keys";
+import { openPanels } from "../helpers/rules-strip";
 
 /** Every user-facing string this file asserts comes from the dictionary the
  *  product renders — never retyped here (house pattern: run-sheet.spec.ts,
@@ -818,22 +819,24 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
     config: { bestOf: 1, setTo: dead, finalSetTo: played },
   });
   expect(divSeed.status, `seeding the division's mismatched pair → ${JSON.stringify(divSeed.error)}`).toBe(200);
+  // Match Day C2: the division's match format is edited on the Division rules strip (Fixtures tab), not in Settings.
+  const rules = page.getByTestId("division-rules-strip");
   const openSettingsFormat = async () => {
-    await page.goto(await divisionPath(request, bo1DivId, "?tab=settings"));
-    await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-    await page.getByRole("button", { name: /Format/ }).click();
+    await page.goto(await divisionPath(request, bo1DivId, "?tab=fixtures"));
+    await expect(rules).toBeVisible({ timeout: STEP_MS });
+    await openPanels(rules, "format");
   };
   await openSettingsFormat();
-  const settingsSingle = page.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true });
+  const settingsSingle = rules.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true });
   await expect(settingsSingle).toHaveValue(String(played), { timeout: STEP_MS });
 
   // 3a. "Default" on the best-of picker with the points left UNTOUCHED: the
   // save must still align the stored pair to the number played. Typing first
   // (3b) would copy the value to both keys on its own and hide whether the
   // save path is told what a blank best-of falls back to (review, 2026-09-25).
-  await page.getByLabel(BEST_OF_LABEL).selectOption("");
+  await rules.getByLabel(BEST_OF_LABEL).selectOption("");
   await expect(settingsSingle).toHaveValue(String(played));
-  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await rules.getByTestId("division-rules-format-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
   await expect
     .poll(
@@ -847,13 +850,13 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   // 3b. Typing a new number writes both keys.
   await openSettingsFormat();
   await expect(settingsSingle).toHaveValue(String(played), { timeout: STEP_MS });
-  await expect(page.getByRole("spinbutton", { name: ANY_POINTS_FIELD })).toHaveCount(1);
+  await expect(rules.getByRole("spinbutton", { name: ANY_POINTS_FIELD })).toHaveCount(1);
   await settingsSingle.fill(String(BO1_SETTINGS_POINTS));
   // "Default" on the picker keeps the SAVED best-of here, so the single field
   // must survive it — the grid is told what a blank falls back to.
-  await page.getByLabel(BEST_OF_LABEL).selectOption("");
+  await rules.getByLabel(BEST_OF_LABEL).selectOption("");
   await expect(settingsSingle).toHaveValue(String(BO1_SETTINGS_POINTS));
-  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await rules.getByTestId("division-rules-format-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
   await expect
     .poll(

@@ -14,13 +14,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { expandWithHooks, propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
-import { MatchRuleFields } from "@/components/v2/match-rules";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 import { RuleFieldControl } from "@/components/v2/stage-rules/rule-field-control";
-import { DivisionSettings } from "@/components/v2/division-settings";
+import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
 import { SPORT_RULES } from "@/lib/match-rules";
 import { HttpError } from "@/lib/errors";
 import { assertTimeControl, SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
@@ -42,48 +41,17 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 const EN = uiEn as Record<string, string>;
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
 
 type Cfg = Record<string, unknown>;
+// Match Day C2: Online play and the clock moved with the match rules to the Division rules strip (Fixtures tab).
 const propsFor = (config: Cfg, onlineChessOffered = true, sport = "boardgame") =>
-  ({
-    division: {
-      id: "d1",
-      name: "Open",
-      sport_key: sport,
-      variant_key: sport === "boardgame" ? "classical" : "standard",
-      config,
-      logo_url: null,
-      logo_storage_path: null,
-      camera_policy: null,
-      inherited_camera_policy: "off",
-    },
-    orgId: "org1",
+  stripPropsOf({
+    division: { id: "d1", sport_key: sport, variant_key: sport === "boardgame" ? "classical" : "standard", config },
     variants: [{ key: sport === "boardgame" ? "classical" : "standard", name: "Standard" }],
-    structureLocked: false,
-    lockedFields: [],
-    stages: [],
-    canEdit: true,
-    divisionPathPrefix: "/o/org/c/comp/d/",
-    fixturesHref: "/o/org/c/comp/d/div/fixtures",
-    embed: null,
-    danger: null,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
-    autoPosts: false,
-    canAutoPost: true,
-    showSeeds: true,
-    viewerPlan: "community",
     onlineChessOffered,
-  }) as Parameters<typeof DivisionSettings>[0];
+  });
 const mount = (config: Cfg, onlineChessOffered = true, sport = "boardgame") =>
-  renderIsland(DivisionSettings, propsFor(config, onlineChessOffered, sport));
+  renderIsland(DivisionRulesStrip, propsFor(config, onlineChessOffered, sport), expandRules);
 type Island = ReturnType<typeof mount>;
 
 const byTestId = (island: Island, id: string) => island.tree().filter((n) => propsOf(n)["data-testid"] === id);
@@ -123,8 +91,8 @@ const FAMILY_LABEL = "Clock family";
 const RUNGS_LABEL = "Tie-break games, in order";
 
 async function save(island: Island) {
-  const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === "Save match rules");
-  expect(button, "premise: the Save match rules button is there").toBeDefined();
+  const button = island.tree().find((n) => n.type === "button" && textOf(n).trim() === EN["rulesStrip.format.save"]);
+  expect(button, "premise: the Save match format button is there").toBeDefined();
   const before = net.calls.filter((c) => c.url === "/api/v1/divisions/d1").length;
   (propsOf(button!).onClick as () => void)();
   await vi.waitFor(() => expect(net.calls.filter((c) => c.url === "/api/v1/divisions/d1")).toHaveLength(before + 1));

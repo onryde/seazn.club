@@ -126,6 +126,18 @@ export function stageSummaryClauses(
   ];
 }
 
+/**
+ * Match Day C2: the DIVISION's format as clauses, for the Division rules strip's read-only Match format (a viewer, or a
+ * division whose every rule a started stage locks). The same describers as a stage's chips, less the deciders: how a tied
+ * match ends is a stage's question (it depends on the stage kind), so the division says only its format and its abandon
+ * policy. Nothing for a cfg the schema refuses.
+ */
+export function divisionSummaryClauses(sportKey: string, module: AnySportModule, divisionConfig: Record<string, unknown>): RulesClause[] {
+  const parsed = module.configSchema.safeParse(divisionConfig);
+  const resolved = parsed.success ? (parsed.data as Record<string, unknown>) : null;
+  return [...(describeMatchRules(sportKey, module, resolved) ?? []), ...describeAbandon(module, resolved)];
+}
+
 // ---------------------------------------------------------------------------
 // The deciders notice (X-SR-6, review M-3).
 // ---------------------------------------------------------------------------

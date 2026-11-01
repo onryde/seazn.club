@@ -20,8 +20,8 @@ import { stageFieldsFor } from "@/lib/rule-scope";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { deciderOfDetail, resolvedStageCfg } from "../stage-row-model";
 import { ruleFormState } from "../../match-rules-state";
-import { MatchRuleFields } from "../../match-rules";
-import { StageRuleFields } from "../stage-rule-fields";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
+import { StageRuleFields } from "@/components/v2/rules/match-format-editor";
 
 const KINDS = ["league", ...BRACKET_KINDS] as StageKind[];
 const render = (

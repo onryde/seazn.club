@@ -260,11 +260,15 @@ for (const c of CASES) {
     const started = await apiJson(request, `/api/v1/fixtures/${seeded.fixtureId}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
     expect(started.status, `core.start: ${JSON.stringify(started.error)}`).toBe(201);
 
+    // Match Day C2: a started stage's Match format is the shared editor's locked mode - the lock line and the format as chips,
+    // with no form at all (the old "View" form of disabled inputs is gone), so nothing can reach the field.
     const row = await openRow(page, request, seeded.divisionId, stageId);
     await expect(row.getByTestId("stage-format-locked"), "the row says the stage has started").toBeVisible();
-    await row.getByTestId("stage-format-view").click();
-    await expect(blockOf(row, c), `${c.key} is shown in the read-only view`).toBeVisible();
-    await expect(controlOf(row, c), `${c.key} is held`).toBeDisabled();
+    await expect(row.getByTestId("stage-format-locked")).toContainText(L["stageCard.locked"]!);
+    await expect(row.getByTestId("stage-format-chips"), "the format is still read, as chips").toBeVisible();
+    await expect(row.getByTestId("stage-format-edit"), "no way to open an editor").toHaveCount(0);
+    await expect(blockOf(row, c), `${c.key} has no control on a started stage`).toHaveCount(0);
+    await expect(row.locator("input, select, textarea"), "the locked row holds no control").toHaveCount(0);
 
     // The server says no regardless of what the page showed.
     const put = await apiJson(request, `/api/v1/stages/${stageId}/rules`, "PUT", { rules: { [c.key]: c.stored } });

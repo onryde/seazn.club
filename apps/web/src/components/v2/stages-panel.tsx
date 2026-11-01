@@ -28,7 +28,6 @@ import { useNow } from "@/components/public-site/match-centre/use-now";
 import { seedingErrorMessage } from "@/lib/seeding-error";
 import { scoringErrorText } from "@/lib/scoring-vocab";
 import type { Dict, Locale } from "@/lib/i18n-constants";
-import { rulesChipText } from "@/lib/rules-line";
 import type { MessageKey } from "@/lib/messages";
 import {
   DEFAULT_MATCH_MINUTES,
@@ -40,22 +39,23 @@ import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
 import { parseRoundRoleKey, type PointsRule } from "@seazn/engine/competition";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
-// Per-stage rules row (design §T5, D7; W2c Task 17). The fields come from the engine's `ruleKeys` through
-// `stage-rules/stage-rule-fields.tsx`, which renders the SAME `RuleFieldControl` the division builder and Settings tab
-// do, so the format editors cannot drift. The table itself comes from `@/lib/match-rules`.
+// Per-stage rules row (design §T5, D7; W2c Task 17). Match Day C2: the format, points and tie-breaks are the ONE component
+// each (`components/v2/rules/`), the same the division builder and the Division rules strip render, so the editors cannot
+// drift. The table itself comes from `@/lib/match-rules`.
 import { hydrateRuleValues, ruleOptionText, type RuleMsg } from "@/lib/match-rules";
 import { moduleFor } from "@/lib/rule-scope";
 import { mergedStageRules } from "@/lib/stage-decider-off";
 import { sportLabel } from "@/lib/scoring-vocab";
 import type { StageKind } from "@seazn/engine/core";
 import { DecidersNotice } from "@/components/v2/stage-rules/deciders-off-notice";
-import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
-import { StagePointsSection } from "@/components/v2/stage-rules/stage-points-section";
+import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
+import { PointsEditor } from "@/components/v2/rules/points-editor";
 import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
-import { StageTiebreaksSection, stageLikeOf } from "@/components/v2/stage-rules/stage-tiebreaks-section";
+import { TiebreaksEditor, stageLikeOf } from "@/components/v2/rules/tiebreaks-editor";
+import { DivisionRulesStrip, type DivisionRulesStripProps } from "@/components/v2/rules/division-rules-strip";
 import { stagePooled, takesBestNthFrom } from "@/components/v2/stage-rules/stage-tiebreaks-model";
 import type { StageTableRules } from "@/server/api-v1/schemas";
-import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment, stageSummaryClauses } from "@/components/v2/stage-rules/stage-row-model";
+import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment } from "@/components/v2/stage-rules/stage-row-model";
 import { Modal } from "@/components/modal";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { DocumentsMenu } from "@/components/v2/board/documents-menu";
@@ -397,6 +397,9 @@ interface Props {
    *  division page asks the one `needsYouHome` rule the competition page's Open Match Day asks). The run sheet's unscheduled
    *  rows then carry "Find a court" (the word follows `sportKey`: pitch, table, board, rink). null/absent ⇒ not a match day: no link. */
   matchDayHref?: string | null;
+  /** Match Day C2: the Division rules strip at the top of the tab (the division's match format, points and tie-break order).
+   *  Built by the page, which reads what it needs; absent, no strip. */
+  rulesStrip?: DivisionRulesStripProps;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -511,7 +514,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -815,11 +818,18 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   }
 
   if (stages.length === 0) {
-    return <p className="text-sm text-slate-500">{msg("schedule.noStages")}</p>;
+    // The division's rules stay reachable with no stage yet (Match Day C2: the strip is their one editor).
+    return (
+      <div className="space-y-6">
+        {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
+        <p className="text-sm text-slate-500">{msg("schedule.noStages")}</p>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
+      {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
       {/* L1 (fix round H, Critical — instance ELEVEN): gated on PROGRESS, not
           on the phase WORD, exactly as the pill (phase-pill.tsx: a red
           attention outranks the phase) and the masthead (competition-desk.ts's
@@ -1267,11 +1277,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         ? null
                         : stageLikeOf(stage, stageTableRules[stage.id]!, stagePooled(stage), takesBestNthFrom(stage, stages))
                     }
-                    stageName={stage.name}
-                    formatLockedStageIds={formatLockedStageIds}
                     canEdit={canEdit}
                     onSaved={() => router.refresh()}
-                    onSeeFixtures={() => showStageFixtures(stage.id)}
                   />
                 )}
 
@@ -2249,11 +2256,8 @@ function StageFormatRow({
   locked,
   pinnedPoints,
   tiebreaks,
-  stageName,
-  formatLockedStageIds,
   canEdit,
   onSaved,
-  onSeeFixtures,
 }: {
   msg: Msg;
   stageId: string;
@@ -2269,12 +2273,8 @@ function StageFormatRow({
   pinnedPoints: PointsRule | null;
   /** W2d Task 15: the stage as the Tie-breaks section reads it, null where its table rules do not read. */
   tiebreaks: ReturnType<typeof stageLikeOf> | null;
-  stageName: string;
-  formatLockedStageIds: readonly string[];
   canEdit: boolean;
   onSaved: () => void;
-  /** The lock line's link: show this stage's fixtures in the run sheet. */
-  onSeeFixtures: () => void;
 }) {
   const sportModule = useMemo(() => moduleFor(sportKey), [sportKey]);
   const [open, setOpen] = useState(false);
@@ -2310,12 +2310,6 @@ function StageFormatRow({
     () => (sportModule === null ? null : resolvedStageCfg(sportModule, divisionConfig, kind, noticeRules)),
     [sportModule, divisionConfig, kind, noticeRules],
   );
-  // The chips say what the stage plays: with the editor closed that is its saved rules, and while it is open they preview
-  // what Save will store - the SAME `resolved` as the notice and the held fields, so the row never contradicts its editor.
-  const chips = useMemo(
-    () => (sportModule === null || ruleDict === undefined ? [] : stageSummaryClauses(sportKey, sportModule, kind, resolved)),
-    [sportModule, ruleDict, sportKey, kind, resolved],
-  );
   // Focus follows the editor: it lands on the editor when it opens (the Edit button it came from is gone while editing)
   // and returns to the Edit button when it closes.
   const editorRef = useRef<HTMLDivElement>(null);
@@ -2330,6 +2324,7 @@ function StageFormatRow({
   if (sportModule === null) return null;
 
   const readOnly = locked || !canEdit;
+  const mode = readOnly ? "locked" : "edit";
   const state = locked ? "locked" : overridden ? "overridden" : "inherited";
   // A locked stage states it ONCE, in the lock line below (S4): the header then carries the format alone.
   const clause = locked ? null : msg(overridden ? "schedule.stageFormat.overridden" : "schedule.stageFormat.inherited");
@@ -2424,16 +2419,6 @@ function StageFormatRow({
               {msg("schedule.stageFormat.edit")}
             </button>
           )}
-          {readOnly && (
-            <button
-              type="button"
-              className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
-              data-testid="stage-format-view"
-              onClick={() => (open ? setOpen(false) : openEditor())}
-            >
-              {msg(open ? "schedule.close" : "stageRules.view")}
-            </button>
-          )}
           {canEdit && !locked && overridden && !open && (
             <button
               type="button"
@@ -2446,29 +2431,24 @@ function StageFormatRow({
             </button>
           )}
         </div>
-        {chips.length > 0 && ruleDict !== undefined && (
-          <ul className="mt-2 flex min-w-0 flex-wrap gap-1.5" aria-label={msg("schedule.stageFormat.heading")} data-testid="stage-format-chips">
-            {chips.map((chip, i) => (
-              <li
-                key={`${chip.key}:${i}`}
-                className="max-w-full break-words rounded-xl border border-slate-300 bg-white px-2.5 py-0.5 text-[11.5px] leading-snug text-slate-700"
-              >
-                {rulesChipText(ruleDict, chip)}
-              </li>
-            ))}
-          </ul>
-        )}
-        {locked && (
-          // S4 (owner pick A on the locks mockup): say it before they try. The server still refuses if anyone gets past
-          // it (STAGE_FORMAT_LOCKED), and the scorer can still change one unstarted match.
-          <p className="mt-2 text-xs text-slate-700" data-testid="stage-format-locked">
-            <span aria-hidden="true">🔒 </span>
-            {msg("stageRules.locked")}.{" "}
-            <button type="button" className="font-semibold text-purple-700 underline underline-offset-2" onClick={onSeeFixtures}>
-              {msg("stageRules.lockedLink")}
-            </button>
-          </p>
-        )}
+        {/* What the stage plays, read-only (C1's words: the format said once, one lock line when it has started). While the
+            editor is open the chips preview what Save will store - the SAME `resolved` as the notice and the held fields. */}
+        <div className="mt-2">
+          <MatchFormatEditor
+            scope="stage"
+            mode="locked"
+            started={locked}
+            sportKey={sportKey}
+            module={sportModule}
+            kind={kind}
+            variant={variantKey}
+            values={values}
+            onChange={setValues}
+            divisionConfig={divisionConfig}
+            resolved={resolved}
+            ruleDict={ruleDict}
+          />
+        </div>
         {error !== null && !open && <p className="mt-1 text-xs text-red-600">{error}</p>}
         {!open && (
           <div className="mt-2">
@@ -2488,16 +2468,20 @@ function StageFormatRow({
         >
           {/* `inherited`: the fragment's blanks fall back to the DIVISION, so a stage that names no best-of but
               inherits best of 1 still gets the single "Points to win" field (owner ruling 2026-09-25). */}
-          <StageRuleFields
+          <MatchFormatEditor
+            scope="stage"
+            mode={mode}
+            started={locked}
             sportKey={sportKey}
             module={sportModule}
             kind={kind}
             variant={variantKey}
             values={values}
             onChange={setValues}
-            disabled={saving || readOnly}
+            disabled={saving}
             divisionConfig={divisionConfig}
             resolved={resolved}
+            ruleDict={ruleDict}
           />
           <DecidersNotice module={sportModule} kind={kind} resolved={resolved} />
           {!readOnly && (
@@ -2531,7 +2515,10 @@ function StageFormatRow({
         its own lock: the same `readOnly` the format row uses (a started stage, or a viewer). A sibling of the format row,
         not inside it, so the row's controls and its tests are untouched. */}
     {stageTakesPoints(kind) && (
-      <StagePointsSection
+      <PointsEditor
+        scope="stage"
+        mode={mode}
+        started={locked}
         stageId={stageId}
         module={sportModule}
         kind={kind}
@@ -2539,7 +2526,6 @@ function StageFormatRow({
         divisionConfig={divisionConfig}
         stored={stageConfig.points}
         pointsDict={pointsDict}
-        readOnly={readOnly}
         pinned={pinnedPoints}
         onSaved={onSaved}
       />
@@ -2547,14 +2533,14 @@ function StageFormatRow({
     {/* W2d Task 15 (spec §9): the stage's tie-break order, after the Points section, on a table stage whose rules read. Its
         lock is the server's own (`formatLockedStageIds`): editable from generate until the first score (OC2). */}
     {stageTakesPoints(kind) && tiebreaks !== null && (
-      <StageTiebreaksSection
+      <TiebreaksEditor
+        scope="stage"
+        mode={mode}
+        started={locked}
         stage={tiebreaks}
-        stageName={stageName}
         module={sportModule}
         divisionConfig={divisionConfig}
         stageConfig={stageConfig}
-        formatLockedStageIds={formatLockedStageIds}
-        canEdit={canEdit}
         onSaved={onSaved}
       />
     )}

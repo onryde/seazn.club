@@ -1665,6 +1665,9 @@ export const MatchDayFixture = z.object({
   scorer_attention: z.enum(["no_scorer", "not_recording"]).nullable(),
   // While its stream is live: the YouTube video the stream goes into and that broadcast's made-for-kids stamp; null otherwise.
   live_video: z.object({ url: z.string(), made_for_kids: z.boolean() }).nullable(),
+  // Match Day C2: the format a playing match plays, in the fixture page's own rules line (the court's read-only Match format);
+  // null for a match not in play, and for a format the line has no words for.
+  format_line: z.string().nullable(),
 });
 
 export const MatchDayCourt = z.object({

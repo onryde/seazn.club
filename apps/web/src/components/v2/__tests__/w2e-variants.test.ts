@@ -67,7 +67,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { DivisionBuilder, type SportOption } from "@/components/v2/division-builder";
-import { DivisionSettings } from "@/components/v2/division-settings";
+import { DivisionRulesStrip, stripPropsOf, type DivisionShape } from "./_rules-strip";
 import { sportOptionsFrom } from "@/lib/sport-options";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 
@@ -311,7 +311,7 @@ describe("variant switch applies the target variant's fields (Review Focus 3)", 
   });
 });
 
-describe("the Settings island: choosing a variant shows its numbers and saves them", () => {
+describe("the Division rules strip (was Settings' Match rules): choosing a variant shows its numbers and saves them", () => {
   const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
   const variantsOf = (m: AnySportModule) => Object.keys(presetsOf(m)).map((key) => ({ key, name: key.toUpperCase(), system: true, config: presetsOf(m)[key]! }));
   const props = (variant: string, m: AnySportModule = BADMINTON) =>
@@ -320,8 +320,9 @@ describe("the Settings island: choosing a variant shows its numbers and saves th
       orgId: "org1", variants: variantsOf(m), structureLocked: false, lockedFields: [], stages: [], canEdit: true,
       divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
       entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
-    }) as unknown as Parameters<typeof DivisionSettings>[0];
-  const mount = (variant: string, m: AnySportModule = BADMINTON) => renderIsland(DivisionSettings, props(variant, m));
+    }) as unknown as DivisionShape;
+  // Match Day C2: the variant and the match rules moved from Settings to the Division rules strip (Fixtures tab).
+  const mount = (variant: string, m: AnySportModule = BADMINTON) => renderIsland(DivisionRulesStrip, stripPropsOf(props(variant, m)));
   type H = ReturnType<typeof mount>;
   const variantSelect = (h: H): ReactElement => {
     const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-settings-variant");
@@ -331,7 +332,7 @@ describe("the Settings island: choosing a variant shows its numbers and saves th
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
   const rulesPatch = async (h: H): Promise<{ variant_key: string; config: Cfg }> => {
     net.calls.length = 0;
-    const save = h.tree().find((n) => n.type === "button" && textOf(n).trim() === enUi["divset.saveRules"]);
+    const save = h.tree().find((n) => n.type === "button" && textOf(n).trim() === enUi["rulesStrip.format.save"]);
     if (!save) throw new Error("no save-rules button");
     (propsOf(save).onClick as () => void)();
     await flush();
@@ -483,17 +484,17 @@ describe("TN-CF-1 the tennis fields refuse best of 1 with a match tie-break in t
 
   it("TN-CF-1 Settings: Save is refused before any PATCH, in the reader's language; the pair mended, the PATCH goes", async () => {
     const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
-    const h = renderIsland(DivisionSettings, {
+    const h = renderIsland(DivisionRulesStrip, stripPropsOf({
       division: { id: "d1", name: "Open", sport_key: "tennis", variant_key: "tour", config: storedFor(tennisModule, "tour"), logo_url: null, logo_storage_path: null },
       orgId: "org1", variants: rows(tennisModule), structureLocked: false, lockedFields: [], stages: [], canEdit: true,
       divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
       entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
-    } as unknown as Parameters<typeof DivisionSettings>[0]);
+    } as unknown as DivisionShape));
     const grid = () => h.tree().find((e) => typeof propsOf(e).sportKey === "string" && typeof propsOf(e).onChange === "function" && propsOf(e).values !== undefined)!;
     const typeIt = (next: Record<string, string>) => (propsOf(grid()).onChange as (v: Record<string, string>) => void)({ ...(propsOf(grid()).values as Record<string, string>), ...next });
     const save = async () => {
       net.calls.length = 0;
-      const btn = h.tree().find((n) => n.type === "button" && textOf(n).trim() === enUi["divset.saveRules"])!;
+      const btn = h.tree().find((n) => n.type === "button" && textOf(n).trim() === enUi["rulesStrip.format.save"])!;
       (propsOf(btn).onClick as () => void)();
       await new Promise((resolve) => setTimeout(resolve, 0));
       return net.calls.filter((c) => c.options?.method === "PATCH");
@@ -509,16 +510,16 @@ describe("TN-CF-1 the tennis fields refuse best of 1 with a match tie-break in t
   it("VB-CF-1 Settings: a set target below the floor is refused before any PATCH (volleyball)", async () => {
     const volleyball = moduleOf("volleyball");
     const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
-    const h = renderIsland(DivisionSettings, {
+    const h = renderIsland(DivisionRulesStrip, stripPropsOf({
       division: { id: "d1", name: "Open", sport_key: "volleyball", variant_key: "indoor", config: storedFor(volleyball, "indoor"), logo_url: null, logo_storage_path: null },
       orgId: "org1", variants: rows(volleyball), structureLocked: false, lockedFields: [], stages: [], canEdit: true,
       divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
       entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
-    } as unknown as Parameters<typeof DivisionSettings>[0]);
+    } as unknown as DivisionShape));
     const grid = h.tree().find((e) => typeof propsOf(e).sportKey === "string" && typeof propsOf(e).onChange === "function" && propsOf(e).values !== undefined)!;
     (propsOf(grid).onChange as (v: Record<string, string>) => void)({ ...(propsOf(grid).values as Record<string, string>), setTo: "3" });
     net.calls.length = 0;
-    const btn = h.tree().find((n) => n.type === "button" && textOf(n).trim() === enUi["divset.saveRules"])!;
+    const btn = h.tree().find((n) => n.type === "button" && textOf(n).trim() === enUi["rulesStrip.format.save"])!;
     (propsOf(btn).onClick as () => void)();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(net.calls.filter((c) => c.options?.method === "PATCH")).toEqual([]);
@@ -662,12 +663,12 @@ describe("pickers print the localised variant label, with the raw name as fallba
       const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
       const settingsFor = () => {
         const variants = [...sportWith([])[0]!.variants];
-        return renderIsland(DivisionSettings, {
+        return renderIsland(DivisionRulesStrip, stripPropsOf({
           division: { id: "d1", name: "Open", sport_key: "badminton", variant_key: "bwf-3x15", config: storedFor(BADMINTON, "bwf-3x15"), logo_url: null, logo_storage_path: null },
           orgId: "org1", variants, structureLocked: false, lockedFields: [], stages: [], canEdit: true,
           divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
           entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
-        } as unknown as Parameters<typeof DivisionSettings>[0]);
+        } as unknown as DivisionShape));
       };
       let checked = 0;
       for (const [when, shown] of [[BEFORE, true], [DAY, false], [DAY + 86_400_000 * 400, false]] as const) {
@@ -710,12 +711,12 @@ describe("pickers print the localised variant label, with the raw name as fallba
       for (const [dict, label] of [[enUi, "en"], [esUi, "es"]] as const) {
         activeDict.current = dict as Record<string, string>;
         activeLocale.current = label;
-        const h = renderIsland(DivisionSettings, {
+        const h = renderIsland(DivisionRulesStrip, stripPropsOf({
           division: { id: "d1", name: "Open", sport_key: "badminton", variant_key: "bwf-3x15", config: storedFor(BADMINTON, "bwf-3x15"), logo_url: null, logo_storage_path: null },
           orgId: "org1", variants, structureLocked: false, lockedFields: [], stages: [], canEdit: true,
           divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
           entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
-        } as unknown as Parameters<typeof DivisionSettings>[0]);
+        } as unknown as DivisionShape));
         const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-settings-variant")!;
         const text = Object.fromEntries(optionsOf(sel).map((o) => [o.value, o.text]));
         expect(text.bwf, label).toBe(dict["variant.badminton.bwf"]);

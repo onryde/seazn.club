@@ -130,6 +130,7 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
   stream: null,
   scorer_attention: null,
   live_video: null,
+  format_line: null,
   ...o,
 });
 

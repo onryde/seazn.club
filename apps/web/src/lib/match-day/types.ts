@@ -69,6 +69,10 @@ export interface MatchDayFixture {
    *  broadcast's own made-for-kids stamp — the Match Day preview's source (spec §6.2). Null for any match whose stream is not live,
    *  and for a live stream that names no YouTube video (a pasted key). Set on a playing court's match only. */
   live_video: { url: string; made_for_kids: boolean } | null;
+  /** Match Day C2: the format this match plays, in the public line's words (`fixtureFormatLines`, the fixture page's own
+   *  `effectiveLine`) — the court's read-only Match format. Set on a playing match only; null for any other, and for a format
+   *  the line has no words for. */
+  format_line: string | null;
 }
 
 /** A match waiting in a court's queue. `planned_at` is its planned time, which a call never changes (owner ruling B);

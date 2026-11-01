@@ -246,6 +246,7 @@ describe("B4 — a match on no court, opened, ended; Needs you's Find a court; a
     stream: null,
     scorer_attention: null,
     live_video: null,
+    format_line: null,
   });
   const M1 = match("m-1", "Ana", "Ben");
   const M2 = match("m-2", "Cleo", "Dan");
