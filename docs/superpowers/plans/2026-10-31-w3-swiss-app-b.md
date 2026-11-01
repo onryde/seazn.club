@@ -562,6 +562,21 @@ type TiebreakerKey = /* … */ | "opp_diff";
 - [ ] **Step 5: E2E + smoke.** E2E describe in the Task 10 spec: Pair round 1, auto-schedule, and round 2 lands after round 1's last board. Smoke check: the auto-schedule proposal for a Swiss round 2 has min start ≥ max end of round 1.
 - [ ] **Step 6: Commit** `feat(w3): a Swiss round is scheduled only after the previous round ends (X-SW-31)`.
 
+**Addendum (owner ruling 255, 2026-11-01): unpaired Swiss round slots reach the solver.** Today a Swiss TBD shell goes
+to placement with empty `entrant_indices` AND `person_indices` (`schedule.ts` `peopleOf`), the service refuses
+(`INVALID_REQUEST "fixtures[k] has neither entrant_indices nor person_indices set"`) and every Swiss auto-schedule falls
+back to greedy, so the round end barrier above never reaches the solver. Found by the Match Day session (5 local
+divisions). Fix, in this task's re-vendor:
+- The placement service ships an additive `Fixture` flag for an **unpaired round slot** (a placement PR, merged before
+  this task): no person constraints (nobody is in it yet), but courts, windows, day caps and the round end barrier all
+  apply. Never give a shell the whole field's people — every shell of a round would then clash with every other and the
+  round would serialise onto one court.
+- `toRequest` sets the flag on exactly the Swiss shells that carry no entrant (bye shells never reach placement, X-SW-29).
+- Tests: `X-SW-31 auto-schedule of a Swiss stage with unpaired rounds is solved, not refused` (the request carries the
+  flag, the solver path returns a placement, no `solver_unavailable` fallback); a counted contract test that `toRequest`
+  never emits a fixture with both index lists empty AND no flag (fails at 0 checked); `round_no` is stamped on every
+  Swiss fixture.
+
 ## Task 10: The full e2e — an odd field, a bye, a Buchholz tie, late players (a)/(b)/(c), into the KO cut (SW-L10)
 
 **Rules:** proves X-SW-12 (late entry), X-SW-5 (bye), X-SW-8, X-SW-9 / BD-TB-2 (a tie broken on Buchholz), X-SW-19 (groups), X-SW-24 (cut-line flag), and X-SW-3/X-SW-26 (Task 4's describe).
