@@ -361,7 +361,7 @@ export function DivisionLedger({
               {t(dict, "desk.ledger.pager.prev")}
             </Link>
           ) : (
-            <span aria-disabled="true" data-testid="desk-ledger-prev" className="btn btn-ghost pointer-events-none px-3 py-1.5 text-xs opacity-40 max-md:min-h-11">
+            <span aria-disabled="true" data-testid="desk-ledger-prev" className="btn pointer-events-none border border-transparent bg-transparent px-3 py-1.5 text-xs text-slate-500 max-md:min-h-11">
               {t(dict, "desk.ledger.pager.prev")}
             </span>
           )}
@@ -378,7 +378,7 @@ export function DivisionLedger({
               {t(dict, "desk.ledger.pager.next")}
             </Link>
           ) : (
-            <span aria-disabled="true" data-testid="desk-ledger-next" className="btn btn-ghost pointer-events-none px-3 py-1.5 text-xs opacity-40 max-md:min-h-11">
+            <span aria-disabled="true" data-testid="desk-ledger-next" className="btn pointer-events-none border border-transparent bg-transparent px-3 py-1.5 text-xs text-slate-500 max-md:min-h-11">
               {t(dict, "desk.ledger.pager.next")}
             </span>
           )}
