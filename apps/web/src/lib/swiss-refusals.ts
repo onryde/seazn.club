@@ -79,10 +79,11 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
     message: "A change to the number of rounds can't be undone.",
     key: "swiss.refusal.SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
   },
-  // W3 T9 (ruling 250): a late player with the last round started — the desk offers "Add a round".
+  // W3 T9 (ruling 250): a late player with the last round started — the desk offers "Add a round" when `canAddRound`
+  // says it goes through; the sentence names no recovery, `swissRefusalText` adds it only then (T12 Fix round 1, I1).
   SWISS_NO_ROUND_LEFT: {
     status: 409,
-    message: "The last round has started, so there is no round left to join. Add a round first.",
+    message: "The last round has started, so there is no round left to join.",
     key: "swiss.refusal.SWISS_NO_ROUND_LEFT",
   },
   // W3 T9/T12 (ruling 250): the Swiss is finished or its knockout has started. 422 by the rule above (batch-1 review):

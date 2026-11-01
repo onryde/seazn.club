@@ -264,9 +264,10 @@ describe("EntrantsPanel — the late-entry notice after an add (W3 T10)", () => 
 
   it("says each refusal in the organiser's words, by its code, and drops the previous notice", async () => {
     let checked = 0;
-    for (const [code, status] of [
-      ["SWISS_NO_ROUND_LEFT", 409],
-      ["SWISS_OVER", 422],
+    // T12 Fix round 1 (I1): NO_ROUND_LEFT with canAddRound true adds the recovery the button under it offers.
+    for (const [code, status, said] of [
+      ["SWISS_NO_ROUND_LEFT", 409, `${EN["swiss.refusal.SWISS_NO_ROUND_LEFT"]} ${EN["swiss.rounds.noRoundLeft.add"]}`],
+      ["SWISS_OVER", 422, EN["swiss.refusal.SWISS_OVER"]],
     ] as const) {
       const p = mount();
       await p.submit(
@@ -278,7 +279,7 @@ describe("EntrantsPanel — the late-entry notice after an add (W3 T10)", () => 
           canAddRound: true,
         });
       });
-      expect(p.error(), code).toBe(EN[`swiss.refusal.${code}`]);
+      expect(p.error(), code).toBe(said);
       expect(p.lines(), `${code}: no stale notice beside the refusal`).toEqual(
         [],
       );
@@ -384,7 +385,7 @@ describe("EntrantsPanel — Add a round on SWISS_NO_ROUND_LEFT (W3 T12 Phase 2)"
     api.addRoundUrls = [];
     const p = mount();
     await p.submit(noRoundLeft({ canAddRound: true, stageId: "s1" }));
-    expect(p.error()).toBe(EN["swiss.refusal.SWISS_NO_ROUND_LEFT"]);
+    expect(p.error()).toBe(`${EN["swiss.refusal.SWISS_NO_ROUND_LEFT"]} ${EN["swiss.rounds.noRoundLeft.add"]}`);
     expect(button(p), "the recovery the sentence names").toBeDefined();
     expect(textOf([button(p)!])).toBe(EN["stage.more.addRound"]);
     api.addRound = () => ({ rounds: 4, shells_added: 3 });
@@ -401,19 +402,25 @@ describe("EntrantsPanel — Add a round on SWISS_NO_ROUND_LEFT (W3 T12 Phase 2)"
 
   it("not offered when it would only be refused, nor without the Swiss it names, nor for another refusal", async () => {
     let checked = 0;
-    for (const [name, answer] of [
-      ["canAddRound false", noRoundLeft({ canAddRound: false, stageId: "s1" })],
-      ["no stageId", noRoundLeft({ canAddRound: true })],
+    const base = EN["swiss.refusal.SWISS_NO_ROUND_LEFT"];
+    for (const [name, answer, said] of [
+      // T12 Fix round 1 (review I1): no button, so the text names no Add a round — it says no more rounds fit.
+      ["canAddRound false", noRoundLeft({ canAddRound: false, stageId: "s1" }), `${base} ${EN["swiss.rounds.noRoundLeft.none"]}`],
+      ["no stageId", noRoundLeft({ canAddRound: true }), `${base} ${EN["swiss.rounds.noRoundLeft.add"]}`],
       [
         "SWISS_OVER",
         () => {
           throw new ApiV1Error("English", 422, "SWISS_OVER", { canAddRound: true, stageId: "s1" });
         },
+        EN["swiss.refusal.SWISS_OVER"],
       ],
     ] as const) {
       const p = mount();
       await p.submit(answer);
-      expect(p.error(), `${name}: the refusal is said`).not.toBeNull();
+      expect(p.error(), `${name}: the refusal is said`).toBe(said);
+      expect(/add a round/i.test(p.error() ?? ""), `${name}: names Add a round only beside the Swiss it can add to`).toBe(
+        name === "no stageId",
+      );
       expect(button(p), name).toBeUndefined();
       checked++;
     }
@@ -437,7 +444,11 @@ describe("EntrantsPanel — Add a round on SWISS_NO_ROUND_LEFT (W3 T12 Phase 2)"
     };
     (propsOf(button(p)!).onClick as () => void)();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(p.error()).toBe(EN["swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"]);
+    // Said as the desk says it (T12 Fix round 1): the sentence, then the field's line — rulebook §3.1 for 4 players:
+    // 2 rounds recommended (⌈log2 4⌉, within the safe max 2), at most 3 (an even field: n − 1).
+    expect(p.error()).toBe(
+      `${EN["swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"]} ${fill("swiss.rounds.guidance.other", { n: 4, count: 2, hardMax: 3 })}`,
+    );
     expect(button(p)).toBeUndefined();
     expect(added(p)).toBeNull();
   });

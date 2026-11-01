@@ -466,3 +466,38 @@ describe("W3 T12 swissRefusalText — SWISS_ROUNDS_LOCKED names only the recover
     expect(locked("fr", { field: 4 })).toBe(fr["swiss.refusal.SWISS_ROUNDS_LOCKED"]);
   });
 });
+
+// W3 T12 Fix round 1 (review I1): SWISS_NO_ROUND_LEFT — a late player refused because the last round has started —
+// names Add a round only when the refusal says it goes through (`canAddRound`, the one C11 predicate), and has its own
+// sentence when it does not (e.g. 4 players × 3 rounds, at the hard max). Same shape as the LOCKED fix above.
+describe("W3 T12 swissRefusalText — SWISS_NO_ROUND_LEFT names Add a round only when it is offered (4 locales)", () => {
+  const CASES = [
+    { canAddRound: true, key: "swiss.rounds.noRoundLeft.add" },
+    { canAddRound: false, key: "swiss.rounds.noRoundLeft.none" },
+  ] as const;
+  const noRound = (locale: Locale, details: Record<string, unknown> | undefined) =>
+    swissRefusalText("SWISS_NO_ROUND_LEFT", details, msgIn(locale), pluralIn(locale));
+
+  it("both polarities: the no-round sentence, then that branch's own, in every locale", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const D = DICTS[locale];
+      for (const c of CASES) {
+        expect(D[c.key], `${locale}: ${c.key} has copy`).toBeTruthy();
+        const text = noRound(locale, { canAddRound: c.canAddRound, stageId: "s1" });
+        expect(text, `${locale} ${c.key}`).toBe(`${D["swiss.refusal.SWISS_NO_ROUND_LEFT"]} ${D[c.key]}`);
+        checked++;
+      }
+      expect(noRound(locale, { canAddRound: true }), `${locale}: the two differ`).not.toBe(noRound(locale, { canAddRound: false }));
+    }
+    expect(checked, "anti-vacuity: 2 branches x 4 locales").toBe(8);
+  });
+
+  it("in English Add a round is named only when canAddRound; the base sentence (the server's English) names none", () => {
+    expect(/add a round/i.test(noRound("en", { canAddRound: true }))).toBe(true);
+    expect(/add a round/i.test(noRound("en", { canAddRound: false }))).toBe(false);
+    expect(SWISS_REFUSALS.SWISS_NO_ROUND_LEFT.message).not.toMatch(/add a round/i);
+    expect(noRound("en", undefined), "no details: the sentence alone").toBe(SWISS_REFUSALS.SWISS_NO_ROUND_LEFT.message);
+    expect(noRound("nl", { stageId: "s1" })).toBe(nl["swiss.refusal.SWISS_NO_ROUND_LEFT"]);
+  });
+});

@@ -17,6 +17,8 @@ export type SwissRefusalMsg = (key: MessageKey, vars?: Record<string, string | n
  * count is fixed once a match has started (T12), so "recommended" would mislead there. For `SWISS_ROUNDS_LOCKED`
  * (`{ canFinish, canAddRound }`), a second sentence names only the recoveries actually offered — Finish now, Add a round,
  * both, or (neither) that the Swiss keeps its rounds; with neither detail sent, the sentence alone (W3 T12 Phase 2 fix).
+ * `SWISS_NO_ROUND_LEFT` (`{ canAddRound, stageId }`) the same way: Add a round named only when it goes through, else
+ * that no more rounds fit (T12 Fix round 1, review I1).
  */
 export function swissRefusalText(
   code: SwissRefusalCode,
@@ -38,6 +40,11 @@ export function swissRefusalText(
             ? "swiss.rounds.locked.add"
             : "swiss.rounds.locked.none";
     return `${sentence} ${msg(offered)}`;
+  }
+  if (code === "SWISS_NO_ROUND_LEFT") {
+    const add = details?.canAddRound;
+    if (typeof add !== "boolean") return sentence;
+    return `${sentence} ${msg(add ? "swiss.rounds.noRoundLeft.add" : "swiss.rounds.noRoundLeft.none")}`;
   }
   if (code !== "SWISS_ROUNDS_ABOVE_MAX") return sentence;
   const field = details?.field;

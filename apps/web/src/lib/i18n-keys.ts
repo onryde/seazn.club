@@ -8079,6 +8079,8 @@ export type DictionaryKey =
   | "swiss.rounds.locked.finish"
   | "swiss.rounds.locked.finishOrAdd"
   | "swiss.rounds.locked.none"
+  | "swiss.rounds.noRoundLeft.add"
+  | "swiss.rounds.noRoundLeft.none"
   | "swiss.rounds.shrunk.one"
   | "swiss.rounds.shrunk.other"
   | "swiss.rounds.shrunkWarn.one"
