@@ -7201,5 +7201,17 @@
   "matchDay.needsYou.findCourt.table": "Tafel zoeken",
   "matchDay.needsYou.findCourt.board": "Bord zoeken",
   "matchDay.needsYou.findCourt.rink": "IJsbaan zoeken",
-  "matchDay.refusal.NOT_CANDIDATE_COURT": "Deze divisie speelt niet op {court}. Haar planningsinstellingen bepalen waar ze kan spelen."
+  "matchDay.refusal.NOT_CANDIDATE_COURT": "Deze divisie speelt niet op {court}. Haar planningsinstellingen bepalen waar ze kan spelen.",
+  "stageCard.points.uniform": "Winst {w} · Verlies {l}",
+  "stageCard.tiebreaks.h2hTwo": "Als er bij een stap nog maar twee gelijk staan, beslist hun onderling resultaat.",
+  "stageCard.locked": "Vergrendeld: de fase is begonnen",
+  "div.detail.tiebreak.rule.set_diff.badminton": "gamesaldo",
+  "div.detail.tiebreak.rule.set_diff.tabletennis": "gamesaldo",
+  "div.detail.tiebreak.rule.set_diff.carrom": "gamesaldo",
+  "div.detail.tiebreak.rule.set_ratio.badminton": "gameratio",
+  "div.detail.tiebreak.rule.set_ratio.tabletennis": "gameratio",
+  "div.detail.tiebreak.rule.set_ratio.carrom": "gameratio",
+  "div.detail.tiebreak.rule.h2h_set_ratio.badminton": "gameratio in onderling resultaat",
+  "div.detail.tiebreak.rule.h2h_set_ratio.tabletennis": "gameratio in onderling resultaat",
+  "div.detail.tiebreak.rule.h2h_set_ratio.carrom": "gameratio in onderling resultaat"
 }

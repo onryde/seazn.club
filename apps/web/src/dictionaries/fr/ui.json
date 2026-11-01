@@ -7201,5 +7201,17 @@
   "matchDay.needsYou.findCourt.table": "Trouver une table",
   "matchDay.needsYou.findCourt.board": "Trouver un plateau",
   "matchDay.needsYou.findCourt.rink": "Trouver une patinoire",
-  "matchDay.refusal.NOT_CANDIDATE_COURT": "Cette division ne joue pas sur {court}. Ses paramètres de calendrier indiquent où elle peut jouer."
+  "matchDay.refusal.NOT_CANDIDATE_COURT": "Cette division ne joue pas sur {court}. Ses paramètres de calendrier indiquent où elle peut jouer.",
+  "stageCard.points.uniform": "Victoire {w} · Défaite {l}",
+  "stageCard.tiebreaks.h2hTwo": "Si seulement deux sont encore à égalité à une étape, leur confrontation directe les départage.",
+  "stageCard.locked": "Verrouillé : la phase a commencé",
+  "div.detail.tiebreak.rule.set_diff.badminton": "différence de jeux",
+  "div.detail.tiebreak.rule.set_diff.tabletennis": "différence de jeux",
+  "div.detail.tiebreak.rule.set_diff.carrom": "différence de jeux",
+  "div.detail.tiebreak.rule.set_ratio.badminton": "ratio de jeux",
+  "div.detail.tiebreak.rule.set_ratio.tabletennis": "ratio de jeux",
+  "div.detail.tiebreak.rule.set_ratio.carrom": "ratio de jeux",
+  "div.detail.tiebreak.rule.h2h_set_ratio.badminton": "ratio de jeux en confrontation directe",
+  "div.detail.tiebreak.rule.h2h_set_ratio.tabletennis": "ratio de jeux en confrontation directe",
+  "div.detail.tiebreak.rule.h2h_set_ratio.carrom": "ratio de jeux en confrontation directe"
 }

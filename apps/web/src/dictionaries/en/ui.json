@@ -7201,5 +7201,17 @@
   "matchDay.needsYou.findCourt.table": "Find a table",
   "matchDay.needsYou.findCourt.board": "Find a board",
   "matchDay.needsYou.findCourt.rink": "Find a rink",
-  "matchDay.refusal.NOT_CANDIDATE_COURT": "This division doesn't play on {court}. Its schedule settings say where it can."
+  "matchDay.refusal.NOT_CANDIDATE_COURT": "This division doesn't play on {court}. Its schedule settings say where it can.",
+  "stageCard.points.uniform": "Win {w} · Loss {l}",
+  "stageCard.tiebreaks.h2hTwo": "If only two are still level at any step, their head-to-head result decides.",
+  "stageCard.locked": "Locked: the stage has started",
+  "div.detail.tiebreak.rule.set_diff.badminton": "game difference",
+  "div.detail.tiebreak.rule.set_diff.tabletennis": "game difference",
+  "div.detail.tiebreak.rule.set_diff.carrom": "game difference",
+  "div.detail.tiebreak.rule.set_ratio.badminton": "game ratio",
+  "div.detail.tiebreak.rule.set_ratio.tabletennis": "game ratio",
+  "div.detail.tiebreak.rule.set_ratio.carrom": "game ratio",
+  "div.detail.tiebreak.rule.h2h_set_ratio.badminton": "head-to-head game ratio",
+  "div.detail.tiebreak.rule.h2h_set_ratio.tabletennis": "head-to-head game ratio",
+  "div.detail.tiebreak.rule.h2h_set_ratio.carrom": "head-to-head game ratio"
 }
