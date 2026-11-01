@@ -697,11 +697,15 @@ for (const sport of SPORTS) {
         const got = buildSwissHistory(existing, entrants, await forfeitPlayedFacts(sql, twoSeated, sportModule));
         const [g, w] = [flat(got), flat(want)];
         // T7 changed the `played` rule; its review also keyed the P-A4 bye bar on "won without play" and took every
-        // forfeit out of colours. Those two differ from the legacy loop only on a forfeit that decided a PLAYED board
-        // (its winner keeps the bye, and a pre-W2b chess forfeit win loses its colours), and this rig records none —
-        // a premise, so it is asserted: then score, colours and byes are the legacy loop's, row for row.
+        // forfeit out of colours. Those two differ from the legacy loop on two shapes, and this rig records neither —
+        // premises, so both are asserted: then score, colours and byes are the legacy loop's, row for row.
+        //  - a forfeit that decided a PLAYED board (its winner keeps the bye);
+        //  - a forfeit-shaped `win` (a legacy `method: "forfeit"` or `"walkover"` row), played or not: it loses its
+        //    colours, and unplayed it bars its winner from the bye, where the legacy loop did neither.
         const playedForfeits = twoSeated.filter((f) => !unplayedBoards.has(f.id) && f.outcome !== null && forfeitShaped(f.outcome as MatchOutcome));
         expect(playedForfeits.map((f) => f.id), `${label}: premise — no forfeit decided a board this rig records as played`).toEqual([]);
+        const forfeitWins = twoSeated.filter((f) => (f.outcome as { kind?: string } | null)?.kind === "win" && forfeitShaped(f.outcome as MatchOutcome));
+        expect(forfeitWins.map((f) => f.id), `${label}: premise — no board is a forfeit-shaped win (legacy forfeit / walkover)`).toEqual([]);
         expect({ score: g.score, colours: g.colours, byes: g.byes }, `${label}: identical {score, colours, byes}`).toEqual({
           score: w.score,
           colours: w.colours,
