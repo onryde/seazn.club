@@ -130,6 +130,7 @@ export function RunSheet({
   venueNoun,
   embedded = false,
   quietEmpty = false,
+  endsCard = true,
 }: {
   blocks: RunSheetBlock[];
   stages: RunSheetStageInfo[];
@@ -217,6 +218,11 @@ export function RunSheet({
   /** Embedded only: the panel already says "nothing matches" once for the whole division (no stage has a row under the filter),
    *  so this stage's sheet stays silent instead of repeating it. */
   quietEmpty?: boolean;
+  /** Embedded only: this sheet is the LAST thing in its stage's card (the card has no rail under it - a viewer's), so a NOW rule
+   *  that ends the sheet carries the card's own bottom radius. With the stage's rail below (an editor's) the rule is mid-card and
+   *  stays square, like a NOW rule that ends a day block with later days to come (review m1). The division-wide sheet is its own
+   *  card and always ends it. */
+  endsCard?: boolean;
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -656,7 +662,7 @@ export function RunSheet({
         <div
           ref={sheetRef}
           style={{ "--desk-day-h": hasDayBlock ? "30px" : "0px" } as React.CSSProperties}
-          className="space-y-6 [&>section:last-child>ul>li:last-child]:rounded-b-2xl"
+          className={endsCard ? "space-y-6 [&>section:last-child>ul>li:last-child]:rounded-b-2xl" : "space-y-6"}
         >
           {renderedBlocks}
         </div>

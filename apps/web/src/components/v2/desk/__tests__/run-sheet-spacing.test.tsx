@@ -91,6 +91,56 @@ function sheetHtml(fixtures: RunSheetFixture[]): string {
   );
 }
 
+/** The rounding class a NOW rule that ends the LAST block takes (review m1): the card's own bottom radius. */
+const ROUND_LAST = "[&amp;&gt;section:last-child&gt;ul&gt;li:last-child]:rounded-b-2xl"; // as serialised: React escapes & and >
+
+function embeddedHtml(endsCard: boolean | undefined): string {
+  const blocks = buildRunSheet({ fixtures: [fx(1, "s1", { scheduled_at: DAY_ISO })], stages: STAGES, tz: TZ, nowMs: NOW_MS });
+  return renderToStaticMarkup(
+    <RunSheet
+      blocks={blocks}
+      stages={STAGES}
+      tz={TZ}
+      orgTz={TZ}
+      nowMs={NOW_MS}
+      matchMinutes={60}
+      entrantNames={{ e1: "Alpha", e2: "Bravo" }}
+      canEdit
+      hrefFor={(f) => `/f/${f.fixture_no}`}
+      filter="all"
+      onFilter={() => {}}
+      stageId="s1"
+      onStageFilter={() => {}}
+      embedded
+      {...(endsCard === undefined ? {} : { endsCard })}
+    />,
+  );
+}
+
+// Match Day C3: the sheet is one stage's rows inside that stage's card. An editor's card carries the stage rail UNDER the sheet, so
+// a NOW rule that ends the sheet is mid-card and must stay square; a viewer's card has no rail, so the sheet ends the card and the
+// rule takes the card's radius. This is the static half (apps/web vitest is `environment: "node"`); the computed half - the rule
+// square under a rail, in a browser - is `e2e/run-sheet.spec.ts` "Review m1 (C3)".
+describe("run sheet - the NOW rule's bottom corners follow whether the sheet ends its card (review m1, C3)", () => {
+  it("an embedded sheet that ends its card (a viewer's: no rail under it) carries the rounding on its last block", () => {
+    const html = embeddedHtml(true);
+    expect(html).toContain('data-testid="stage-run-sheet"');
+    expect(html).toContain(ROUND_LAST);
+  });
+
+  it("an embedded sheet with the stage rail under it (an editor's) does NOT round the last block - the rule is mid-card", () => {
+    const html = embeddedHtml(false);
+    expect(html, "premise: it is the embedded sheet that rendered").toContain('data-testid="stage-run-sheet"');
+    expect(html).not.toContain(ROUND_LAST);
+    expect(html, "and the block rhythm is still there").toMatch(/class="space-y-6"/);
+  });
+
+  it("the default is 'ends the card': a division-wide sheet is its own card and always ends it", () => {
+    expect(embeddedHtml(undefined)).toContain(ROUND_LAST);
+    expect(sheetHtml(FIXTURES)).toContain(ROUND_LAST);
+  });
+});
+
 describe("run sheet — internal block spacing", () => {
   it("guards the guard: this scenario really does produce two DIFFERENT block kinds (day, then bracket)", () => {
     expect(FIXTURES.length).toBe(2);

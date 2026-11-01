@@ -1519,6 +1519,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     embedded
                     quietEmpty={!anyRowsKept}
                     stageId={stage.id}
+                    endsCard={!canEdit /* an editor's card carries the stage rail under the sheet; a viewer's has none */}
                   />
                 )}
 
