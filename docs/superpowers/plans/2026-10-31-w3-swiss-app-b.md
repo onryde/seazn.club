@@ -533,6 +533,35 @@ type TiebreakerKey = /* … */ | "opp_diff";
   - Smoke check 8: the public slides doc of a Swiss stage carries `tiebreakColumns` with 2 keys.
 - [ ] **Step 7: Commit** `feat(w3): Swiss tie-break columns on the slideshow and the public table (ST-G21)`.
 
+## Task 9b: A Swiss round starts only after the previous round ends (X-SW-31; controller addition 11-01, engine T10b)
+
+**Rules (§12):** X-SW-31 (engine row; the app half is the producer and the copy).
+
+**Engine facts (T10b + fix round):**
+- `roundBarrier?: "start" | "end"` lives on the scheduling `Assignment`, the build input fixture and the solver-port fixture. Absent means today's start floor.
+- A sequence carrying mixed values → CONFIG_INVALID. The engine never reads `existing` for this guard.
+- The placer seeds the floor from `existing` boards of the same sequence.
+- New conflict kind `round_order_end`, with the gap in `shortfallMinutes` (not part of identity).
+- New refusal detail `no_slot_round_barrier`.
+
+**Files:** every app producer of a scheduling `Assignment` or build fixture. Sweep them all by behaviour: `grep -a` for `roundNo:` in the producers under `apps/web/src/server/**` and `packages/scheduler/src/**`. That includes BOTH widening callers (`roundRobinSequenceSiblings` and the delta-gate seam), the apply gate, auto-schedule, move/drag, and the pins path. Also: `packages/scheduler/src/placement-client.ts` (`toRequest`), the conflict copy, and the 4 locale dictionaries.
+
+**Interfaces:**
+- ONE helper, `roundBarrierFor(stageKind): "end" | undefined` (swiss → "end"), read by every producer. A missed producer makes every Swiss edit fail with CONFIG_INVALID (422), so the sweep is the task.
+- `toRequest` forwards `round_barrier` on `Fixture` and `PinnedRow`. **Gate:** the placement service (onryde/seazn.club.placement) must ship the `round_barrier` field and the end constraint in `model.py` §10 first. Until it does, the build gate discards a solver board that breaches, and greedy ships (`verifier_rejected` is logged). That is correct but noisy. Opening that repo's PR needs the owner's go (third repo).
+
+**Steps:**
+- [ ] **Step 1: Failing tests.**
+  - `X-SW-31 every Assignment producer sets roundBarrier "end" for a Swiss stage and nothing for league/group`: counted over the producers found by the sweep, failing at 0.
+  - `X-SW-31 auto-schedule after Pair: round 2 is proposed after round 1's last board ends, and the apply accepts it`: the proposal-vs-apply parity, driven through the real auto-schedule and apply usecases with round 1 played (as obstacles).
+  - `X-SW-31 a manual move of a round-2 board before round 1 ends is refused with the round_order_end copy` (4 locales).
+  - `X-SW-31 a league keeps the start floor`: the control.
+- [ ] **Step 2: Implement.** Copy for `round_order_end` and `no_slot_round_barrier` in all 4 locales; regenerate i18n-keys.
+- [ ] **Step 3: Contract test** for `toRequest`. A Swiss build's request carries `round_barrier: "end"` on every Swiss fixture and pinned row. Only after the placement service ships the field.
+- [ ] **Step 4: Mutate.** Drop the helper from one producer → the counted sweep test goes red. Drop the `toRequest` forward → the contract test goes red.
+- [ ] **Step 5: E2E + smoke.** E2E describe in the Task 10 spec: Pair round 1, auto-schedule, and round 2 lands after round 1's last board. Smoke check: the auto-schedule proposal for a Swiss round 2 has min start ≥ max end of round 1.
+- [ ] **Step 6: Commit** `feat(w3): a Swiss round is scheduled only after the previous round ends (X-SW-31)`.
+
 ## Task 10: The full e2e — an odd field, a bye, a Buchholz tie, late players (a)/(b)/(c), into the KO cut (SW-L10)
 
 **Rules:** proves X-SW-12 (late entry), X-SW-5 (bye), X-SW-8, X-SW-9 / BD-TB-2 (a tie broken on Buchholz), X-SW-19 (groups), X-SW-24 (cut-line flag), and X-SW-3/X-SW-26 (Task 4's describe).
