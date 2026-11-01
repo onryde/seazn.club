@@ -7,8 +7,9 @@
 // it checked (TEST-STRATEGY: zero is a failure).
 //
 // Sequence (rule 1): no finished fixture (static line) -> one (sample) -> a newer one (it replaces the older) ; an unfinished,
-// abandoned, forfeited, archived-division or foreign-org fixture is never the sample ; a fold the ENGINE refuses costs that
-// candidate only, anything else (an SQL error in the one transaction) propagates. Sports: cricket,
+// abandoned, forfeited, archived-division or foreign-org fixture is never the sample ; a fold or replay that THROWS, for any
+// reason (the engine refusing it, or a TypeError from an odd legacy ledger), costs that candidate only and is reported, while an
+// SQL error from the one read that touches the transaction (`loadFoldInputs`) propagates (final review I2). Sports: cricket,
 // football and badminton fold; generic (and chess) declare no breaks and have nothing to count. The seam to the planner is last.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
@@ -18,9 +19,21 @@ vi.mock("@/server/overlay/recent", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/overlay/recent")>();
   return { ...actual, replayDerived: vi.fn(actual.replayDerived) };
 });
+// The fold's ledger read, passed through untouched - one test makes it fail the way an SQL error does, the one failure that
+// must reach the caller (the transaction is dead).
+vi.mock("@/server/engine-db/fold", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/engine-db/fold")>();
+  return { ...actual, loadFoldInputs: vi.fn(actual.loadFoldInputs) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn() };
+});
 
 import { builtinModules } from "@seazn/engine/sports";
 import { replayDerived } from "@/server/overlay/recent";
+import { loadFoldInputs } from "@/server/engine-db/fold";
+import { captureError } from "@/lib/sentry";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { SPONSOR_FREQUENCIES, type SponsorCard } from "@/lib/sponsor-plan";
@@ -178,16 +191,41 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     expect(PREVIEW_CANDIDATES, "the bound on how far back the loader looks").toBeGreaterThan(1);
   });
 
-  it("only an EngineError is a skip: any other failure while folding a candidate propagates (an SQL error aborts the one transaction and must not read as 'no sample'), and the next call is whole again", async () => {
+  it("an SQL error from the ledger read propagates (it has aborted the one transaction and must not read as 'no sample'), and the next call is whole again", async () => {
+    const o = await org();
+    const rig = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football div");
+    const walk = chooseWalk("football", rig.cfg);
+    await finishWith(o.orgId, rig, walk, daysAgo(1));
+    vi.mocked(loadFoldInputs).mockImplementationOnce(() => {
+      throw Object.assign(new Error("current transaction is aborted, commands ignored until end of transaction block"), { code: "25P02" });
+    });
+    await expect(loadOnStreamScope(o.orgId, null), "an SQL failure is not swallowed").rejects.toMatchObject({ code: "25P02" });
+    // The positive pair: with the failure gone the same fixture is the sample again (nothing was left half-done).
+    expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample).toEqual(sampleOf(walk));
+  });
+
+  it("I2: a replay that throws something that is NOT an EngineError (a TypeError from an odd legacy ledger) costs that candidate only: the tab still loads, with sample null, the skip is warned and reported once; the next call is whole again", async () => {
     const o = await org();
     const rig = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football div");
     const walk = chooseWalk("football", rig.cfg);
     await finishWith(o.orgId, rig, walk, daysAgo(1));
     vi.mocked(replayDerived).mockImplementationOnce(() => {
-      throw Object.assign(new Error("current transaction is aborted, commands ignored until end of transaction block"), { code: "25P02" });
+      throw new TypeError("Cannot read properties of undefined (reading 'sets')");
     });
-    await expect(loadOnStreamScope(o.orgId, null), "a non-engine failure is not swallowed").rejects.toMatchObject({ code: "25P02" });
-    // The positive pair: with the failure gone the same fixture is the sample again (nothing was left half-done).
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
+    const reports = vi.mocked(captureError).mock.calls.length;
+    try {
+      const scope = await loadOnStreamScope(o.orgId, null);
+      expect(scope.sports.map((s) => [s.sportKey, s.sample]), "the tab loads; the one candidate is skipped").toEqual([["football", null]]);
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ fixtureId: rig.fixtureId }), expect.stringContaining("preview fixture skipped"));
+      const mine = vi.mocked(captureError).mock.calls.slice(reports);
+      expect(mine, "reported once").toHaveLength(1);
+      expect(mine[0]![0]).toBeInstanceOf(TypeError);
+      expect(mine[0]![1]).toMatchObject({ orgId: o.orgId, route: "sponsors.on_stream.preview_fixture" });
+    } finally {
+      warn.mockRestore();
+    }
+    // The positive pair: the same fixture is the sample once the replay stops throwing.
     expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample).toEqual(sampleOf(walk));
   });
 
@@ -206,12 +244,12 @@ describe.skipIf(!HAS_DB)("loadOnStreamScope - the preview's facts (R11)", () => 
     }
 
     // The same sport in two divisions: the NEWER fixture is in the archived one, so the older live one is the sample.
-    const older = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football archived newer");
-    const olderWalk = chooseWalk("football", older.cfg, 1);
-    expect(sampleOf(olderWalk), "premise: the two matches differ").not.toEqual(sampleOf(liveWalk));
-    await finishWith(o.orgId, older, olderWalk, daysAgo(0));
-    expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample, "live: the newest of the two").toEqual(sampleOf(olderWalk));
-    await sql`update divisions set archived_at = now() where id = ${older.divisionId}`;
+    const newer = await seedDivision(o.auth, o.competitionId, "football", VARIANT.football!, "football archived newer");
+    const newerWalk = chooseWalk("football", newer.cfg, 1);
+    expect(sampleOf(newerWalk), "premise: the two matches differ").not.toEqual(sampleOf(liveWalk));
+    await finishWith(o.orgId, newer, newerWalk, daysAgo(0));
+    expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample, "live: the newest of the two").toEqual(sampleOf(newerWalk));
+    await sql`update divisions set archived_at = now() where id = ${newer.divisionId}`;
     expect((await loadOnStreamScope(o.orgId, null)).sports[0]!.sample, "archived: its newer fixture is not the sample").toEqual(sampleOf(liveWalk));
   });
 
