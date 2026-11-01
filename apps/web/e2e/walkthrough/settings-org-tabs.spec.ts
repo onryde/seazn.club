@@ -12,8 +12,9 @@ import { apiJson, TAG } from "../helpers";
 import { BRAND_PALETTE } from "../../src/lib/brand-palette";
 
 /**
- * W2 of the settings walkthrough programme — the organisation, news and
- * sponsor-CRUD tabs of `/o/{org}/settings`, driven the way an organiser drives
+ * W2 of the settings walkthrough programme — the organisation and news tabs of
+ * `/o/{org}/settings` and the sponsor-CRUD tab (moved to the Sponsors hub,
+ * `/o/{org}/sponsors?tab=sponsors`, by R4 S11), driven the way an organiser drives
  * them and then read back through an API that is not the writer's own echo.
  *
  * This surface had NO behavioural e2e before this file: `tab=sponsors` appeared
@@ -454,7 +455,7 @@ test("news tab: compose a draft, publish it, archive it, then delete only it", a
 // SPONSORS (CRUD half)
 // ---------------------------------------------------------------------------
 
-test("sponsors tab: add three, reorder, edit tier and scope, delete only one", async ({ page }) => {
+test("Sponsors hub, Sponsors tab: add three, reorder, edit tier and scope, delete only one", async ({ page }) => {
   test.setTimeout(budget(2, 6));
 
   const A = `Alpha Tools ${TAG}`;

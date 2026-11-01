@@ -455,7 +455,6 @@
   "sponsors.save": "Opslaan",
   "sponsors.clicks": "{count} klikken",
   "sponsors.urlInvalid": "Voer een geldige link in — example.com of https://example.com.",
-  "sponsors.sell.title": "Sponsoring verkopen",
   "sponsors.sell.hint": "Maak pakketten met een prijs en verstuur kaartfacturen. Het geld komt op je Stripe-account met dezelfde platformkosten als inschrijfgelden; de plek wordt automatisch actief zodra de betaling is voltooid.",
   "sponsors.sell.upsell": "Sponsorpakketten verkopen vereist",
   "sponsors.sell.empty": "Nog geen pakketten. Maak er hierboven een om te beginnen met verkopen.",

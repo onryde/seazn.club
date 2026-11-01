@@ -7132,7 +7132,6 @@ export type DictionaryKey =
   | "sponsors.scopeLabel"
   | "sponsors.sell.empty"
   | "sponsors.sell.hint"
-  | "sponsors.sell.title"
   | "sponsors.sell.upsell"
   | "sponsors.tier.gold"
   | "sponsors.tier.partner"

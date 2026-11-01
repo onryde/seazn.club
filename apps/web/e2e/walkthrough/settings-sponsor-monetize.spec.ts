@@ -413,7 +413,7 @@ test.afterAll(async ({ request }: { request: APIRequestContext }) => {
 // Leg 1 — SELL
 // ---------------------------------------------------------------------------
 
-test("sell: the sponsors tab creates a priced package, at the values its own controls open at", async ({
+test("sell: the Sponsors hub's Packages and orders tab creates a priced package, at the values its own controls open at", async ({
   page,
   request,
 }: {

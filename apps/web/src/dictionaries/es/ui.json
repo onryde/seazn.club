@@ -455,7 +455,6 @@
   "sponsors.save": "Guardar",
   "sponsors.clicks": "{count} clics",
   "sponsors.urlInvalid": "Introduce un enlace válido — example.com o https://example.com.",
-  "sponsors.sell.title": "Vender patrocinio",
   "sponsors.sell.hint": "Crea paquetes con precio y envía facturas con tarjeta. Los fondos llegan a tu cuenta de Stripe con la misma comisión que las cuotas de inscripción; el espacio se activa automáticamente al completarse el pago.",
   "sponsors.sell.upsell": "Vender paquetes de patrocinio requiere",
   "sponsors.sell.empty": "Aún no hay paquetes. Crea uno arriba para empezar a vender.",

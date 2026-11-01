@@ -455,7 +455,6 @@
   "sponsors.save": "Enregistrer",
   "sponsors.clicks": "{count} clics",
   "sponsors.urlInvalid": "Saisissez un lien valide — example.com ou https://example.com.",
-  "sponsors.sell.title": "Vendre du sponsoring",
   "sponsors.sell.hint": "Créez des offres tarifées et envoyez des factures par carte. Les fonds arrivent sur votre compte Stripe avec la même commission que les frais d'inscription ; l'emplacement s'active automatiquement une fois le paiement effectué.",
   "sponsors.sell.upsell": "La vente d'offres de sponsoring nécessite",
   "sponsors.sell.empty": "Aucune offre pour l'instant. Créez-en une ci-dessus pour commencer à vendre.",

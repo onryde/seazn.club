@@ -23,7 +23,7 @@ import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { resolveSponsorsTab, sponsorsTabsFor } from "@/lib/sponsors-hub";
-import { HubPanel, SponsorsHubTabs, tabLabel } from "./_components/hub-chrome";
+import { HubPanel, SponsorsHubTabs } from "./_components/hub-chrome";
 
 /** The org's competitions, newest first: the composer's and the package form's scope PICKER (not a scope - there is no
  *  one competition to thread on an org-level page). Same query, same cap, as Settings -> Sponsors had. */
@@ -62,7 +62,7 @@ export default async function SponsorsHubPage({
       orgCompetitions(active.id),
     ]);
     body = (
-      <HubPanel tab="sponsors" icon={Handshake} title={t(dict, "sponsors.title")}>
+      <HubPanel tab="sponsors" icon={Handshake} dict={dict}>
         <OrgSponsors
           orgId={active.id}
           initialSponsors={sponsorRows}
@@ -79,7 +79,7 @@ export default async function SponsorsHubPage({
       orgCompetitions(active.id),
     ]);
     body = (
-      <HubPanel tab="packages" icon={Banknote} title={t(dict, "sponsors.sell.title")}>
+      <HubPanel tab="packages" icon={Banknote} dict={dict}>
         <SponsorPackages
           orgId={active.id}
           competitions={competitions}
@@ -89,9 +89,9 @@ export default async function SponsorsHubPage({
       </HubPanel>
     );
   } else if (tab === "on_stream") {
-    body = <HubPanel tab="on_stream" icon={Radio} title={tabLabel(dict, "on_stream")} />;
+    body = <HubPanel tab="on_stream" icon={Radio} dict={dict} />;
   } else {
-    body = <HubPanel tab="overview" icon={LayoutGrid} title={tabLabel(dict, "overview")} />;
+    body = <HubPanel tab="overview" icon={LayoutGrid} dict={dict} />;
   }
 
   return (
