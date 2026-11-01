@@ -26,9 +26,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SignJWT } from "jose";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll, overflowingIn } from "./helpers";
+import { builtinModules } from "@seazn/engine/sports";
 import {
   grantRigPackCredits,
   seedCricketOverlayFixture,
+  seedCricketOverlayFreshOver,
   seedOverlayFixture,
   sendEvent,
   signInAs,
@@ -43,7 +45,13 @@ import {
   SCORE_STALE_AFTER_MS,
   SIGNAL_ALIVE,
   SIGNAL_READY,
+  SIGNAL_SPONSOR_END,
+  SIGNAL_SPONSOR_START,
 } from "../src/lib/overlay-compositor";
+import { OVERLAY_MOMENT_FOLD_MS } from "../src/components/overlay/moment-timing";
+import { END_OF_OVER_HOLD_MS } from "../src/lib/overlay-end-of-over";
+import { SPONSOR_STYLE_BY_SIZE } from "../src/lib/sponsor-plan";
+import { SPONSOR_TIER_WEIGHTS } from "../src/lib/sponsor-tiers";
 
 /** Compositor spec 2026-10-15 §4.2: Final holds the programme `FINAL_HOLD_MS` = 10 000 ms before EOS. */
 const FINAL_HOLD_MS = 10_000;
@@ -1401,5 +1409,114 @@ test("I3: a person pair's thumbnail codes are the codes the overlay page airs, n
     expect(previewed, "the thumbnail's codes are the aired codes").toEqual(aired);
   } finally {
     await obs.close();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// R4 sponsors on stream, S15 — the compositor host's sponsor lines (spec 2026-10-27 §3.6.1), on a REAL composed session:
+// the Starting soon scene's carousel, then a cricket over's break card. The page prints each showing's start and end
+// on the console (`sponsorQueueLines`, `carouselLines`), the compositor converts them (SC1) and beats them in — done here
+// with the job token, then the `sponsor_airings` rows are read back. Expected values are declarations: the break's size
+// is the cricket module's `naturalBreaks`, its style `SPONSOR_STYLE_BY_SIZE[size]`, the first card the heavier tier.
+// ---------------------------------------------------------------------------------------------------------------------
+test("S15 sponsors: Starting soon airs the carousel's scene line; a cricket over airs ONE start and ONE end line for the heavier tier's lower third; beaten in, they are two closed airing rows", async ({ page, browser }) => {
+  const declared = builtinModules.find((m) => m.key === "cricket")?.naturalBreaks?.kinds.find((k) => k.kind === "over_end");
+  if (declared === undefined) throw new Error("cricket declares no over_end break");
+  const look = SPONSOR_STYLE_BY_SIZE[declared.size];
+  const EOO_CYCLE_MS = (OVERLAY_MOMENT_FOLD_MS * 2 + END_OF_OVER_HOLD_MS) * 2;
+  const BREAK_LINES_MS = STREAM_POLL_MS + EOO_CYCLE_MS + OVERLAY_MOMENT_FOLD_MS * 2 + look.holdMs + 10_000;
+  test.setTimeout(240_000 + cycleMs(FAKE_CONNECT_MS) + BREAK_LINES_MS + HOLD_MS * 2);
+
+  const { rig, striker, nonStriker, bowler } = await seedCricketOverlayFreshOver(page);
+  const ids: Record<string, string> = {};
+  for (const s of [
+    { name: "Harbourside Building Supplies and Timber Co", tier: "title", url: "https://harbourside.example/" },
+    { name: `Ridge Gold ${rig.fixtureId.slice(0, 6)}`, tier: "gold", url: "https://ridge-gold.example/" },
+  ]) {
+    const made = await apiJson<{ id: string }>(page.request, `/api/v1/orgs/${rig.orgId}/sponsors`, "POST", s);
+    expect(made.status, `create ${s.tier}: ${JSON.stringify(made.error)}`).toBe(201);
+    expect((await apiJson(page.request, `/api/v1/orgs/${rig.orgId}/sponsors/${made.data!.id}`, "PATCH", { on_stream: true })).status).toBe(200);
+    ids[s.tier] = made.data!.id;
+  }
+  expect((await apiJson(page.request, `/api/v1/orgs/${rig.orgId}/sponsor-stream-settings`, "PUT", { competitionId: null, enabled: true, frequency: "busy" })).status).toBe(200);
+  expect(SPONSOR_TIER_WEIGHTS.title, "premise (D9): the tiers are not tied").not.toBe(SPONSOR_TIER_WEIGHTS.gold);
+  const heavierId = SPONSOR_TIER_WEIGHTS.title > SPONSOR_TIER_WEIGHTS.gold ? ids.title : ids.gold;
+
+  const c = await composedSession(page, rig);
+  const cef = await cefBrowser(browser);
+  type Line = { kind: "start" | "end"; json: Record<string, unknown> };
+  const sponsorLines = (): Line[] =>
+    cef.lines.flatMap((l) => {
+      for (const [signal, kind] of [[SIGNAL_SPONSOR_START, "start"], [SIGNAL_SPONSOR_END, "end"]] as const) {
+        if (l.text.startsWith(`${signal} `)) return [{ kind, json: JSON.parse(l.text.slice(signal.length + 1)) as Record<string, unknown> }];
+      }
+      return [];
+    });
+  try {
+    const script = await scriptPhase(cef.context, c.overlayUrl.origin, "waiting");
+    const res = await cef.page.goto(pathOf(c.overlayUrl));
+    expect(res?.status(), "the compositor's page loads through the relay door").toBe(200);
+    await expect.poll(() => cef.linesOf(SIGNAL_READY).length, { message: "the page signals ready" }).toBe(1);
+
+    // --- Starting soon (phase `waiting`): the carousel airs a ticked card — a `scene` start line.
+    await expect
+      .poll(() => sponsorLines().filter((l) => l.kind === "start" && l.json.source === "scene").length, {
+        message: "Starting soon airs the carousel's first card",
+        timeout: HOLD_MS * 2,
+      })
+      .toBeGreaterThanOrEqual(1);
+    const sceneStart = sponsorLines().find((l) => l.kind === "start" && l.json.source === "scene")!;
+    expect(Object.values(ids), "the carousel shows a TICKED card").toContain(sceneStart.json.cardId);
+    // --- Live: the scene leaves; its showing ends (cut short — it left mid-showing).
+    script.serve("live");
+    await expect
+      .poll(() => sponsorLines().filter((l) => l.kind === "end" && l.json.momentId === sceneStart.json.momentId).length, {
+        message: "the carousel's showing ends when the scene leaves",
+        timeout: HOLD_MS * 2,
+      })
+      .toBe(1);
+    expect(sponsorLines().filter((l) => l.json.source === "rotation"), "no break card before the over").toHaveLength(0);
+
+    // --- The over: six legal balls (Law 17.1). The end-of-over card airs first, then the break card. Its lines are told
+    // from the carousel's by the start's `source` and, for the end, its moment id (a second carousel card may have
+    // started before the scene left; its own end can land in between).
+    for (let ballInOver = 1; ballInOver <= 6; ballInOver += 1) {
+      await sendEvent(page.request, rig.fixtureId, "cricket.ball", { over: 0, ballInOver, striker, nonStriker, bowler, runs: { bat: 0 } });
+    }
+    const breakLines = (): Line[] => {
+      const starts = sponsorLines().filter((l) => l.kind === "start" && l.json.source === "rotation");
+      const ids = new Set(starts.map((l) => l.json.momentId));
+      return sponsorLines().filter((l) => (l.kind === "start" && l.json.source === "rotation") || (l.kind === "end" && ids.has(l.json.momentId)));
+    };
+    await expect
+      .poll(() => breakLines().map((l) => l.kind).join(), {
+        message: "the over's break prints one start, then one end",
+        timeout: BREAK_LINES_MS,
+      })
+      .toBe("start,end");
+    const [start, end] = breakLines();
+    expect(start!.json).toEqual({
+      momentId: expect.stringMatching(/^\d+:sponsor\.over_end$/), cardId: heavierId, style: look.style, source: "rotation", breakKind: "over_end", at: expect.any(String),
+    });
+    expect(end!.json).toEqual({ momentId: start!.json.momentId, at: expect.any(String), cutShort: false });
+    const shownMs = Date.parse(String(end!.json.at)) - Date.parse(String(start!.json.at));
+    expect(shownMs, "it held its declared hold, then folded out").toBeGreaterThanOrEqual(look.holdMs);
+
+    // --- SC1's conversion, beaten in on the job token: four lines, two closed rows.
+    const sceneEnd = sponsorLines().find((l) => l.kind === "end" && l.json.momentId === sceneStart.json.momentId)!;
+    const airings = [sceneStart, sceneEnd, start!, end!].map((l) => ({ kind: l.kind, ...l.json }));
+    const beatRes = await page.request.post(`/api/internal/relay/sessions/${c.sid}/heartbeat`, {
+      headers: { Authorization: `Bearer ${c.jobToken}` },
+      data: { state: "playing", programmePhase: "live", airings },
+    });
+    expect(beatRes.status(), `heartbeat with airings: ${await beatRes.text()}`).toBe(200);
+    const rows = await withDb((sql) => sql<{ sponsor_id: string; source: string; break_kind: string | null; style: string; closed: boolean }[]>`
+      select sponsor_id, source, break_kind, style, ended_at is not null as closed from sponsor_airings where session_id = ${c.sid} order by started_at`);
+    expect(rows, "proof of play: the carousel's showing, then the break card's").toEqual([
+      { sponsor_id: sceneStart.json.cardId, source: "scene", break_kind: null, style: sceneStart.json.style, closed: true },
+      { sponsor_id: heavierId, source: "rotation", break_kind: "over_end", style: look.style, closed: true },
+    ]);
+  } finally {
+    await cef.context.close();
   }
 });

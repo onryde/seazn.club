@@ -115,6 +115,15 @@ on:
         required: false
         type: boolean
         default: false
+      # R4 S15: OFF unless asked for. On, the `walkthrough rest 1/2` leg also runs
+      # e2e/walkthrough/sponsors-capture.spec.ts with SPONSOR_CAPTURE_DIR set (without it every test there skips) and
+      # uploads the PNGs as the `sponsor-captures` artifact — the owner's sign-off pictures of the sponsor pages at
+      # 320/768/1280, never committed. Off (and on every `push`), both steps are skipped by their `if:`.
+      sponsor_captures:
+        description: "Also capture the sponsor pages (walkthrough rest 1/2 leg) and upload them as an artifact"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-${{ inputs.pr || github.ref }}
@@ -1318,6 +1327,35 @@ jobs:
           path: overlay-gallery-captures
           if-no-files-found: error
           retention-days: 7
+
+      # R4 S15, the same shape as the overlay gallery's two steps above: opt-in (`sponsor_captures`), one leg so the
+      # artifact name is unique, `!cancelled()` so a red spec step elsewhere does not cost the pictures. The spec's own
+      # last test refuses a missing, non-PNG or byte-identical capture (AGENTS.md class 10); the count below refuses an
+      # empty directory, which is what a run with the env var lost would leave.
+      - name: Sponsor captures (opt-in)
+        id: sponsor_captures
+        if: ${{ !cancelled() && inputs.sponsor_captures && matrix.slug == 'walkthrough-rest-1' }}
+        timeout-minutes: 8
+        run: |
+          mkdir -p "$SPONSOR_CAPTURE_DIR"
+          npx playwright test --project=walkthrough e2e/walkthrough/sponsors-capture.spec.ts
+          shots=$(find "$SPONSOR_CAPTURE_DIR" -name '*.png' | wc -l | tr -d ' ')
+          echo "sponsor captures: $shots"
+          if [ "$shots" -eq 0 ]; then echo "::error::the sponsor capture step wrote no screenshots"; exit 1; fi
+        working-directory: apps/web
+        env:
+          PLAYWRIGHT_BASE: http://localhost:3000
+          SPONSOR_CAPTURE_DIR: ${{ github.workspace }}/sponsor-captures
+
+      - name: Upload sponsor captures (opt-in)
+        if: ${{ !cancelled() && inputs.sponsor_captures && matrix.slug == 'walkthrough-rest-1' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sponsor-captures
+          path: sponsor-captures
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
 
       - name: Dev server log (on failure)
         if: failure()
