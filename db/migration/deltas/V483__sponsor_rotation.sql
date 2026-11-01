@@ -19,7 +19,9 @@
 -- Deletes never take proof of display with them (ruling R16): an airing outlives its sponsor, fixture and session
 -- (all set null; the report reads sponsor_name). Every foreign key to a parent the app deletes (a sponsor, a fixture,
 -- a session, a competition) has an index led by its column. The org_id and user (updated_by, created_by) keys carry
--- none beyond what a table's own keys give: those deletes are rare and staff-only, and each scans a table once.
+-- none beyond what a table's own keys give, or a reader's own index happens to lead with org_id (sponsor_airings'
+-- (org_id, sponsor_id, started_at), sponsor_clicks' (org_id, at)): those deletes are rare and staff-only, and each scans a
+-- table once.
 
 alter table sponsors add column on_stream boolean not null default false;
 
@@ -170,6 +172,9 @@ create table sponsor_clicks (
 );
 create index sponsor_clicks_sponsor_at_idx on sponsor_clicks (sponsor_id, at);
 create index sponsor_clicks_fixture_idx on sponsor_clicks (fixture_id);
+-- The hub's Overview (S13) counts one org's clicks in a time window across all its sponsors: `org_id = $1 and at >= $2 and
+-- at < $3`. (sponsor_id, at) cannot serve that (Postgres 16 has no skip scan), so it gets its own.
+create index sponsor_clicks_org_at_idx on sponsor_clicks (org_id, at);
 
 alter table sponsor_clicks enable row level security;
 alter table sponsor_clicks force  row level security;

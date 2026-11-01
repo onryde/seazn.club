@@ -649,10 +649,11 @@ describe.skipIf(!HAS_DB)("V483 sponsors on stream — the constraints are real",
     expect(refused, "privileged-only tables checked").toBe(NEW_TABLES.length - TENANT_WRITTEN.size);
   });
 
-  it("the brief's two composite indexes exist (count reported)", async () => {
+  it("the readers' composite indexes exist - the brief's two and the Overview's org-window click index (S13) (count reported)", async () => {
     const wanted: Array<[string, string]> = [
       ["sponsor_airings", "(org_id, sponsor_id, started_at)"],
       ["sponsor_clicks", "(sponsor_id, at)"],
+      ["sponsor_clicks", "(org_id, at)"],
     ];
     const defs = await sql<{ tablename: string; indexdef: string }[]>`
       select tablename, indexdef from pg_indexes where schemaname = current_schema() and tablename in ${sql(NEW_TABLES as unknown as string[])}`;
