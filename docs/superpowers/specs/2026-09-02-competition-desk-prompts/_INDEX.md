@@ -324,6 +324,10 @@ that floats a live BRACKET fixture or a live UNTIMED fixture, neither of which
 reaches the run sheet's day spine. Retiring it would hide a live match on finals
 day.
 
+> **SUPERSEDED 2026-11-02 by Match Day** (spec `2026-10-31-match-day-design.md` §9):
+> the Now playing band was retired from the competition page; live matches live on
+> Match Day.
+
 ## W2 walkthrough gate 1 — findings DEFERRED to the next wave (owner ruling 2026-09-05)
 
 Owner was shown F2 and F3 with the explicit note that **CI goes green with both

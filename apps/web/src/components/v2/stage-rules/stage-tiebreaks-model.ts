@@ -1,6 +1,6 @@
 // W2d Task 15 (spec §9, D3, D11, OC1, OC2; rule rows X-TB-1, X-TB-2, X-TB-3) — the decisions the stage editor's
 // "Tie-breaks" section makes, as pure functions with unit killers (`__tests__/stage-tiebreaks-model.test.ts`). The section
-// (`stage-tiebreaks-section.tsx`) renders what these answer and decides nothing of its own.
+// (`rules/tiebreaks-editor.tsx`, scope "stage", on the stage card) renders what these answer and decides nothing of its own.
 //
 // Client-safe like `stage-points-model.ts`: no "use client", no JSX, no `@/server` value import (`StageTableRules` is a
 // type, erased).

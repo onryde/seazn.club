@@ -1,6 +1,6 @@
 // W2c Task 18 (S3, ST-G8) - the decisions the stage points section makes, as pure functions with unit killers
 // (`__tests__/stage-points-model.test.ts`, `__tests__/stage-points-w2d-model.test.ts`). The section itself
-// (`stage-points-section.tsx`) renders what these answer.
+// (`rules/points-editor.tsx`, scope "stage", on the stage card) renders what these answer.
 //
 // Client-safe like `stage-row-model.ts`: no "use client", no JSX, no `@/server` import.
 //

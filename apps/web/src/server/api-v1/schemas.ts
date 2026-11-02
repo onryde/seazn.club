@@ -1180,8 +1180,10 @@ export const StageConfig = z
   .strictObject({
     ...TOP_LEVEL_DECIDER_REFUSALS,
     // League / group shape.
-    // Floor from FORMAT_BOUNDS (Match Day D1). The ceiling stays 8, the generator's own clamp (usecases/stages.ts,
-    // "Jul3/08 §2: legs > 2 allowed"), until the owner's 1-2 ruling is applied here — see the D1 report.
+    // Floor from FORMAT_BOUNDS (Match Day D1). The ceiling stays 8 on the server, the generator's own clamp (usecases/stages.ts,
+    // "Jul3/08 §2: legs > 2 allowed"), by owner ruling Option A (2026-11-01): the builder offers 1-2 only (LegsChoice), and
+    // Triple round robin is retired from the list, but a stored division with 3 or more legs keeps playing it, so the door
+    // must not refuse the value it already holds.
     legs: z.number().int().min(FORMAT_BOUNDS.legs.min).max(8).optional(),
     pools: z.strictObject({ count: z.number().int().min(1) }).optional(),
     // Knockout shape. `byes` are entrant ids; `slotOrder` is a draw order with

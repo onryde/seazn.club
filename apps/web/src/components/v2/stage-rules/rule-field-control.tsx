@@ -2,7 +2,7 @@
 
 // One curated rule field as a control: a number input, a Default/On/Off select for a boolean, a select for an option
 // list, or the ordered-list control for a `sequence`. Extracted verbatim from `MatchRuleFields` (the division builder's
-// and settings' grid) so the stage format row (`stage-rule-fields.tsx`) renders the same markup, the same D9 synthetic
+// and settings' grid) so the stage card's format editor (`rules/match-format-editor.tsx`, scope "stage") renders the same markup, the same D9 synthetic
 // option for a saved value the picker cannot offer, and the same inherited placeholder: two editors that cannot drift.
 //
 // Every field's label, help and option text is drawn from the dictionary in all four locales (W2e Task 33a: `labelKey` is

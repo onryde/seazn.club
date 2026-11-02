@@ -651,8 +651,9 @@ export async function getCompetitionDesk(
   // produced four distinct millisecond values.
   inPlayFixtures.sort((a, b) => {
     // Two-key sort. The MICROSECOND key first, never the millisecond ISO
-    // string the payload carries: `started_at` is min(recorded_at), a
-    // microsecond timestamptz, but it reaches JS as a Date and the ISO string
+    // string the payload carries: `started_at` is the kick-off (the LAST
+    // non-voided core.start, `kickoffsOf`, task F3), a microsecond
+    // timestamptz, but it reaches JS as a Date and the ISO string
     // built from it truncates. Two kick-offs 100us apart inside one
     // millisecond used to compare EQUAL here.
     //
