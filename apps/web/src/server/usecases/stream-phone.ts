@@ -24,6 +24,7 @@ import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { codeStatus } from "@/server/relay/domain/stream-code";
 import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { fixtureStreamTarget, requireSessionEditor } from "./stream-codes";
+import { frozenCompetitionIds } from "./entitlement-freeze";
 import { autoStopAppliesTo } from "./stream-sessions";
 
 /** PR-1 carries one camera: the panel reads slot 0. */
@@ -106,7 +107,9 @@ type SettingsFacts = {
  * reads the SAME verdict: the latch its failures name, by the domain's precedence (`autoWontStart`).
  */
 function autoOf(
-  st: SettingsFacts & { status: string }, c: { phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null }, now: Date,
+  st: SettingsFacts & { status: string },
+  c: { phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null; competitionFrozen: boolean },
+  now: Date,
 ): StreamPhone["auto"] {
   if (st.settings_id === null) return null;
   const refusal = word({ options: AUTO_START_REFUSALS }, st.auto_start_refusal);
@@ -123,7 +126,9 @@ function autoOf(
   }, now, tunable("AUTO_START_RETRY_SECONDS", AUTO_START_RETRY_SECONDS));
   return {
     enabled: st.auto_stream === true,
-    refusal: refusal !== null && verdict.due ? refusal : null,
+    // PB2 re-review 1, m10: the freeze's 402 is stored as the closed vocabulary's `not_entitled`; while the competition IS
+    // frozen the read serves the freeze's own word (`AUTO_SERVED_REFUSALS`), so the strip does not say phone streaming is off.
+    refusal: refusal !== null && verdict.due ? (refusal === "not_entitled" && c.competitionFrozen ? "competition_frozen" : refusal) : null,
     wontStart: autoWontStart(verdict.failed),
     stopApplies: c.stopApplies,
   };
@@ -155,8 +160,8 @@ function autoOf(
  */
 export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now: () => Date }): Promise<StreamPhone> {
   requireSessionEditor(auth);
-  const [fx] = await sql<(SettingsFacts & { org_id: string; finished_at: Date | null; status: string })[]>`
-    select c.org_id, f.finished_at, f.status,
+  const [fx] = await sql<(SettingsFacts & { org_id: string; competition_id: string; finished_at: Date | null; status: string })[]>`
+    select c.org_id, c.id as competition_id, f.finished_at, f.status,
            st.fixture_id as settings_id, st.auto_stream, st.auto_started_at, st.auto_start_blocked_at, st.auto_start_attempted_at,
            st.auto_start_refusal,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.first_ingest_at is not null) as any_ingest
@@ -167,6 +172,10 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
      where f.id = ${fixtureId}`;
   if (!fx || fx.org_id !== auth.orgId) throw new HttpError(404, "fixture not found");
   const now = deps.now();
+  // Asked only when it could change the answer: a stored `not_entitled` (the freeze's 402 among others). Outside any
+  // transaction, as `frozenCompetitionIds` requires.
+  const competitionFrozen =
+    fx.auto_start_refusal === "not_entitled" && (await frozenCompetitionIds(auth.orgId)).has(fx.competition_id);
 
   // --- the code ---
   const [codeRow] = await sql<{ id: string; created_at: Date; ended_at: Date | null; end_cause: "reissued" | "expired" | null }[]>`
@@ -260,7 +269,7 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
 
   return {
     code, phone, destination, lastTakeover,
-    auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies }, now),
+    auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies, competitionFrozen }, now),
     legacy, finished: fx.finished_at !== null, session: openId === null ? null : { id: openId },
   };
 }

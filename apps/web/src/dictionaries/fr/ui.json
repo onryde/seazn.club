@@ -6236,6 +6236,7 @@
   "stream.auto.refused": "Impossible de démarrer automatiquement : {reason}",
   "stream.auto.refusal.no_destination": "ce match n'a aucune destination de diffusion.",
   "stream.auto.refusal.no_credit": "il vous faut un crédit pour passer en direct.",
+  "stream.auto.refusal.competition_frozen": "cette compétition dépasse la limite de compétitions actives de votre offre : elle ne peut pas lancer de nouvelle diffusion. Une diffusion déjà en cours continue. Archivez une compétition ou passez à une offre supérieure.",
   "stream.auto.refusal.not_entitled": "la diffusion depuis le téléphone est désactivée pour cette organisation.",
   "stream.auto.refusal.destination_in_use": "cette destination est déjà en direct sur un autre match.",
   "stream.auto.refusal.unavailable": "le service de diffusion est indisponible. Réessayez dans une minute.",

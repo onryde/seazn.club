@@ -6236,6 +6236,7 @@
   "stream.auto.refused": "Automatic start couldn't begin: {reason}",
   "stream.auto.refusal.no_destination": "This match has no destination to stream to.",
   "stream.auto.refusal.no_credit": "You need a match credit to go live.",
+  "stream.auto.refusal.competition_frozen": "This competition is over your plan's limit on active competitions, so it can't start a new stream. A stream already running keeps going. Archive a competition or upgrade your plan.",
   "stream.auto.refusal.not_entitled": "Phone streaming is switched off for this organisation.",
   "stream.auto.refusal.destination_in_use": "That destination is already live on another match.",
   "stream.auto.refusal.unavailable": "The streaming service is unavailable. Try again in a minute.",

@@ -566,6 +566,8 @@ export const AUTO_REFUSAL_KEYS: Record<AutoRefusal, MessageKey> = {
   not_entitled: "stream.auto.refusal.not_entitled",
   destination_in_use: "stream.auto.refusal.destination_in_use",
   unavailable: "stream.auto.refusal.unavailable",
+  // PB2 re-review 1, m10: served (never stored) while the competition is billing-frozen — the manual Go live's own reason (m5).
+  competition_frozen: "stream.auto.refusal.competition_frozen",
 };
 
 /** B4 fix round 1, I-2: the destination an automatic start tried, as far as the strip needs it — whether it is a connected YouTube
@@ -609,6 +611,7 @@ export const AUTO_REFUSAL_REMEDY: Record<AutoRefusal, AutoRefusalRemedy | undefi
   not_entitled: undefined,
   destination_in_use: undefined,
   unavailable: undefined,
+  competition_frozen: undefined,
 };
 
 /** §7.4: "Phone · 78% charging · 2.4 Mbps · heard 4 s ago" — the read model's readings and the server's `elapsedMs`. */

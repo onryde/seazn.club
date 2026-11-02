@@ -46,7 +46,7 @@ import { YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTU
 import { autoStartRefusalOf } from "@/server/usecases/stream-auto";
 import { youtubeRefusal } from "@/server/youtube/prepare";
 import fc from "fast-check";
-import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
+import { AUTO_SERVED_REFUSALS, AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
 
 const DICT_DIR = join(import.meta.dirname, "..", "..", "dictionaries");
@@ -1129,35 +1129,38 @@ describe("PR-2 §7.4 — the strip under the chain (Option A: one line; an amber
 });
 
 describe("PR-2 §7.4 — the automatic start's refusal (served only while it could still fire — the server's gate)", () => {
-  it("the tables are total over the domain's AUTO_START_REFUSALS; each reason reads the manual refusal's own sentence; the remedies are Buy credits and Manage destinations", () => {
-    expect(Object.keys(AUTO_REFUSAL_KEYS).sort()).toEqual([...AUTO_START_REFUSALS].sort());
+  it("the tables are total over the domain's AUTO_SERVED_REFUSALS (the stored words and the freeze's served one); each reason reads the manual refusal's own sentence; the remedies are Buy credits and Manage destinations", () => {
+    expect(Object.keys(AUTO_REFUSAL_KEYS).sort()).toEqual([...AUTO_SERVED_REFUSALS].sort());
     const SPEC: Record<string, [string, "buy" | "manage" | undefined]> = {
       no_credit: ["You need a match credit to go live.", "buy"],
       no_destination: ["This match has no destination to stream to.", "manage"],
       not_entitled: ["Phone streaming is switched off for this organisation.", undefined],
       destination_in_use: ["That destination is already live on another match.", undefined],
       unavailable: ["The streaming service is unavailable. Try again in a minute.", undefined],
+      // PB2 re-review 1, m10: the freeze's refusal reads the manual Go live's own sentence (m5), not "phone streaming is off".
+      competition_frozen: ["This competition is over your plan's limit on active competitions, so it can't start a new stream. A stream already running keeps going. Archive a competition or upgrade your plan.", undefined],
     };
     let checked = 0;
-    for (const r of AUTO_START_REFUSALS) {
+    for (const r of AUTO_SERVED_REFUSALS) {
       const strip = autoRefusalStrip(readModel({ auto: { enabled: true, refusal: r, wontStart: null, stopApplies: null } }))!;
       expect([strip.tone, strip.lead, strip.remedy], r).toEqual(["amber", "stream.auto.refused", SPEC[r]![1]]);
       expect(msg(strip.lead!, { reason: msg((strip.leadVars as { reason: string }).reason) }), r).toBe(`Automatic start couldn't begin: ${SPEC[r]![0]}`);
       expect(AUTO_REFUSAL_REMEDY[r], r).toBe(SPEC[r]![1]);
       checked++;
     }
-    expect(checked).toBe(AUTO_START_REFUSALS.length);
+    expect(checked).toBe(AUTO_SERVED_REFUSALS.length);
     // B7 review M-7: the exact count — the lead, the remedy and one distinct key per refusal, in every locale.
     const keys = ["stream.auto.refused", "stream.auto.buyCredits", ...new Set(Object.values(AUTO_REFUSAL_KEYS))];
-    expect(keys.length, "one distinct reason key per refusal").toBe(2 + AUTO_START_REFUSALS.length);
-    expect(inEveryLocale(keys)).toBe(7 * LOCALES.length);
+    expect(keys.length, "one distinct reason key per refusal").toBe(2 + AUTO_SERVED_REFUSALS.length);
+    expect(inEveryLocale(keys)).toBe(8 * LOCALES.length);
   });
 
   // B7 review M-6: the reason follows "…couldn't begin:" mid-sentence — es/fr/nl open it in lower case; English reads the
   // manual refusal's own sentence. The manual keys are the source of truth for the words; only the first letter moves.
   it("each reason is the MANUAL refusal's sentence — verbatim in English, its first letter lowered in es/fr/nl (a mid-sentence clause); the lead reads naturally", () => {
-    const MANUAL: Partial<Record<(typeof AUTO_START_REFUSALS)[number], string>> = {
+    const MANUAL: Partial<Record<(typeof AUTO_SERVED_REFUSALS)[number], string>> = {
       no_credit: "stream.error.no_credits",
+      competition_frozen: "stream.error.competition_frozen",
       not_entitled: "stream.error.plan_lacks_relay",
       destination_in_use: "stream.error.target_in_use.unknown",
       unavailable: "stream.error.ingest_unavailable",
@@ -1166,7 +1169,7 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
     let checked = 0;
     for (const l of LOCALES) {
       const d = dict(l);
-      for (const r of AUTO_START_REFUSALS) {
+      for (const r of AUTO_SERVED_REFUSALS) {
         const reason = d[AUTO_REFUSAL_KEYS[r]]!;
         const manual = MANUAL[r];
         if (manual) expect(reason, `${l} ${r}`).toBe(l === "en" ? d[manual] : lowerFirst(d[manual]!));
@@ -1176,7 +1179,7 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
         checked++;
       }
     }
-    expect(checked).toBe(LOCALES.length * AUTO_START_REFUSALS.length);
+    expect(checked).toBe(LOCALES.length * AUTO_SERVED_REFUSALS.length);
     const lead = (l: string) => dict(l as (typeof LOCALES)[number])["stream.auto.refused"];
     expect([lead("es"), lead("fr"), lead("nl")]).toEqual([
       "No se pudo iniciar automáticamente: {reason}", "Impossible de démarrer automatiquement : {reason}", "Automatisch starten lukte niet: {reason}",

@@ -6236,6 +6236,7 @@
   "stream.auto.refused": "No se pudo iniciar automáticamente: {reason}",
   "stream.auto.refusal.no_destination": "este partido no tiene ningún destino al que emitir.",
   "stream.auto.refusal.no_credit": "necesitas un crédito para emitir.",
+  "stream.auto.refusal.competition_frozen": "esta competición supera el límite de competiciones activas de tu plan, así que no puede iniciar una nueva retransmisión. Una retransmisión que ya está en marcha continúa. Archiva una competición o mejora tu plan.",
   "stream.auto.refusal.not_entitled": "la transmisión desde el móvil está desactivada para esta organización.",
   "stream.auto.refusal.destination_in_use": "ese destino ya está en directo en otro partido.",
   "stream.auto.refusal.unavailable": "el servicio de emisión no está disponible. Inténtalo en un minuto.",

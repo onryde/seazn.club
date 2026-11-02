@@ -74,7 +74,7 @@ import { CaptureBeat, CaptureNotReady, CapturePhoneState, CaptureStartFailed } f
 // PR-2 T6: `StreamPhone.auto.refusal` and `StreamPhone.phone.health` are the domain's OWN declarations, never re-typed. Relative +
 // explicit `.ts`, same reason as above; both files import NOTHING (domain-purity.test.ts pins that), which is what lets the
 // standalone generator load them. (phone-health.ts itself imports ../config extensionlessly and cannot be loaded here.)
-import { AUTO_START_REFUSALS, AUTO_WONT_START } from "../relay/domain/auto-stream.ts";
+import { AUTO_SERVED_REFUSALS, AUTO_WONT_START } from "../relay/domain/auto-stream.ts";
 import { HEALTH_REASONS } from "../relay/domain/health-reasons.ts";
 // The compositor's degrade-ladder rungs (owner 2026-10-18: `full → overlay_half_rate`, the score is never removed). The
 // heartbeat use-case reads the same declaration for its sizing alarm. Import-free, like health-reasons.ts.
@@ -2279,7 +2279,7 @@ export const StreamPhone = z
     auto: z
       .object({
         enabled: z.boolean(),
-        refusal: z.enum(AUTO_START_REFUSALS).nullable(),
+        refusal: z.enum(AUTO_SERVED_REFUSALS).nullable(),
         /** Final review I-1 (owner, 2026-10-08): why automatic start will not run again in this match, whatever the switch
          *  says — the latch that holds over the auto-start predicate's own verdict (domain/auto-stream.ts
          *  `AUTO_START_LATCHES`): `stopped` (an organiser Stop or Cancel, A12), `already_streamed` (a session received video,
