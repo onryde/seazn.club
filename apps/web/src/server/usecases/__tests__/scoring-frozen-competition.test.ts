@@ -21,6 +21,7 @@ import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
 import { POST as eventsRoute } from "@/app/api/v1/fixtures/[id]/events/route";
 import { createDeviceLink } from "../device-links";
 import { frozenCompetitionIds } from "../entitlement-freeze";
+import { patchCompetition } from "../competitions";
 import { moveFixture } from "../schedule";
 import { scoreEvent } from "../scoring";
 
@@ -164,30 +165,76 @@ describe.skipIf(!HAS_DB)("a billing-frozen competition scores (PB2, option A)", 
     ]);
   });
 
-  // Review C1 (HELD for the owner's fix shape — PB2 fix round 1): in a REAL freeze (community's own limit, newer competitions
-  // in the active slots), one score on the frozen competition makes it the organisation's most recently active, and the
-  // activity ranking (`entitlement-freeze.ts`, `last_active`) thaws it and freezes an idle competition instead. Every other
-  // test here freezes with the override pin (limit 0), where nothing can rotate. `it.fails` until C1 lands: the fix flips it to
-  // `it`, and it must then pass as written. (Run as a plain `it` on this tree, it fails at the "frozen set" assertion below,
-  // after the score has landed — the rotation, not a broken rig.)
-  it.fails("C1 (held): in a real community freeze, scoring the frozen competition leaves the freeze where it was — the same competition frozen, its schedule edit still 402", async () => {
+  // Review C1, fixed (owner 2026-11-02, option A: "lock in the frozen set when the org goes over its limit"). In a REAL freeze —
+  // community's own limit, newer competitions in the active slots — the set is CHOSEN ONCE and stored (`competitions.frozen_at`,
+  // V489): scoring a frozen competition, once or again, makes it the most recently active and still moves nothing. Room moves
+  // it: archiving one running competition thaws exactly one frozen one, the most recently active (the one being scored), and
+  // the idle one stays frozen. Every other test here pins the limit at 0, where nothing could ever rotate.
+  it("C1: in a real community freeze the frozen set is chosen once — scoring it (twice) moves nothing, its schedule edit stays 402; archiving one running competition thaws exactly one, the most recently active", async () => {
     const s = await seed("badminton");
-    await freeze(s, "downgrade");
+    // A second, IDLE competition, older than everything: the freeze takes it too, and it is the one that must stay frozen.
+    const idle = randomUUID().slice(0, 8);
+    const [{ id: idleId }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, status, created_at)
+      values (${s.auth.orgId}, ${"Idle " + idle}, ${"idle-" + idle}, 'draft', now() - interval '30 days') returning id`;
+    await setOrgPlan(s.auth.orgId, "community");
+    await invalidateOrgEntitlements(s.auth.orgId);
     const limit = await getLimit(s.auth.orgId, "competitions.max_active");
     expect(limit, "premise: a REAL limit, not the override pin's 0").toBeGreaterThan(0);
-    const before = [...(await frozenCompetitionIds(s.auth.orgId))];
-    expect(before, "premise: the seeded competition is the frozen one").toEqual([s.competitionId]);
+    const fillers: string[] = [];
+    for (let i = 0; i < (limit as number); i++) {
+      const suffix = randomUUID().slice(0, 8);
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into competitions (org_id, name, slug, status)
+        values (${s.auth.orgId}, ${"Filler " + suffix}, ${"filler-" + suffix}, 'draft') returning id`;
+      fillers.push(id);
+    }
+    const frozenNow = async () => [...(await frozenCompetitionIds(s.auth.orgId))].sort();
+    const both = [s.competitionId, idleId].sort();
+    expect(await frozenNow(), "the overflow freezes the two least recently active: the seeded one and the idle one").toEqual(both);
+    const stored = async () =>
+      (await sql<{ id: string; frozen_at: Date }[]>`
+        select id, frozen_at from competitions where org_id = ${s.auth.orgId} and frozen_at is not null order by id`).map((r) => [
+        r.id,
+        r.frozen_at.toISOString(),
+      ]);
+    const chosen = await stored();
+    expect(chosen.map(([id]) => id), "the choice is STORED").toEqual(both);
+    // The schedule edit is asked of the competition's OTHER first-round match: the scored one is in play, and moving a match
+    // in play is refused for its status whatever the freeze says — a 402 there would prove nothing.
+    const [other] = await sql<{ id: string }[]>`
+      select f.id from fixtures f
+       where f.division_id = (select division_id from fixtures where id = ${s.fixtureId})
+         and f.id <> ${s.fixtureId} and f.status = 'scheduled'
+         and f.home_entrant_id is not null and f.away_entrant_id is not null
+       limit 1`;
+    expect(other, "premise: a second, unstarted, seated match in the same competition").toBeDefined();
+    const scheduleEditRefused = async (at: string) => {
+      const edit = await refusal(moveFixture(s.auth, other!.id, { scheduled_at: at }));
+      expect(edit).toBeInstanceOf(PaymentRequiredError);
+      expect([edit.status, (edit as PaymentRequiredError).featureKey]).toEqual([402, "competitions.max_active"]);
+    };
+    await scheduleEditRefused("2030-06-01T12:00:00.000Z");
 
-    const out = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
-    expect(out.seq, "premise: the frozen competition scored").toBe(1);
+    // Scored once: now the organisation's most recently active competition — and still frozen, the idle one too.
+    const started = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    expect(started.seq, "premise: the frozen competition scored").toBe(1);
+    expect(await frozenNow(), "a score does not move the freeze").toEqual(both);
+    await scheduleEditRefused("2030-06-01T13:00:00.000Z");
+    // Scored again: the same.
+    const point = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 1, type: "badminton.rally", payload: { wonBy: s.entrants[0] } });
+    expect(point.seq).toBe(2);
+    expect(await frozenNow(), "a second score does not move it either").toEqual(both);
+    expect(await stored(), "nor re-stamps it: the stored choice is the first one").toEqual(chosen);
+    await scheduleEditRefused("2030-06-01T14:00:00.000Z");
 
-    expect([...(await frozenCompetitionIds(s.auth.orgId))], "C1: a score on the frozen competition moved the freeze").toEqual(before);
-    const edit = await refusal(moveFixture(s.auth, s.fixtureId, { scheduled_at: "2030-06-01T12:00:00.000Z" }));
-    expect(edit).toBeInstanceOf(PaymentRequiredError);
-    expect([edit.status, (edit as PaymentRequiredError).featureKey], "the frozen competition's schedule edit is still refused").toEqual([
-      402,
-      "competitions.max_active",
-    ]);
+    // Room: one running competition archived (the real retire patch, which the freeze allows) — exactly ONE frozen competition
+    // thaws, and it is the most recently active one (the seeded competition, scored twice), not the idle one.
+    await patchCompetition(s.auth, fillers[0]!, { status: "archived" });
+    expect(await frozenNow(), "exactly one thaws: the idle competition stays frozen").toEqual([idleId]);
+    expect((await stored()).map(([id]) => id)).toEqual([idleId]);
+    // ...and the thawed one runs again: its schedule edit goes through.
+    await moveFixture(s.auth, other!.id, { scheduled_at: "2030-06-01T15:00:00.000Z" });
   });
 
   it("every sport: a frozen competition's match starts (one score event lands), counted", async () => {

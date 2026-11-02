@@ -12,13 +12,13 @@ If a renewal payment fails, nothing changes straight away. Stripe retries the ca
 
 ## The freeze
 
-Anything over a Community limit becomes **read-only**: your most recently active competitions stay fully editable up to the limit; the rest freeze. A frozen competition's dashboards, standings and history all remain visible — you just can't change it until there's room.
+Anything over a Community limit becomes **read-only**: your most recently active competitions stay fully editable up to the limit; the rest freeze. Which ones freeze is decided once, when you go over the limit, and then stays put — scoring a frozen competition doesn't swap it for another one. A frozen competition's dashboards, standings and history all remain visible — you just can't change it until there's room.
 
 **Matches still score.** A frozen competition's matches can still be scored and finished on the pad, so a match already under way is never stranded. Everything else waits for room: the schedule, entrants, registrations, match formats, calling matches on Match Day and starting any new stream, whether from the stream panel, a camera phone or an automatic start. A stream already running keeps going, and you can still stop it.
 
 ## Making room
 
-- **Archive** or complete competitions until you're inside the limits — frozen ones thaw automatically.
+- **Archive**, complete or delete competitions until you're inside the limits — frozen ones thaw automatically, one for each place you free, the most recently active first.
 - Or upgrade again; everything unfreezes instantly.
 
 Pro-only features (your brand colour, branded exports, sponsor tiers and packages, API keys…) simply switch off rather than freezing anything — public pages fall back to the standard look with your logo still on it, exports come out as plain tables, keys stop authenticating.
