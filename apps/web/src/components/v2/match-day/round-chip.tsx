@@ -11,7 +11,7 @@ import type { MatchDayRound } from "@/lib/match-day/types";
 const BASE = "inline-flex shrink-0 items-center rounded px-1.5 align-baseline text-xs font-semibold leading-5 tabular-nums";
 const TONE = {
   light: { coded: "bg-purple-100 text-purple-900 ring-1 ring-inset ring-purple-200", plain: "bg-slate-100 text-slate-700" },
-  dark: { coded: "bg-white/15 text-court-ink ring-1 ring-inset ring-white/25", plain: "bg-white/10 text-court-muted" },
+  dark: { coded: "bg-white/15 text-court-ink ring-1 ring-inset ring-white/25", plain: "bg-white/10 text-court-ink" },
 } as const;
 
 export function MatchRoundChip({ round, tone = "light" }: { round: MatchDayRound; tone?: keyof typeof TONE }) {
