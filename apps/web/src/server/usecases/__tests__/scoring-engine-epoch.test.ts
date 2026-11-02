@@ -33,6 +33,7 @@ import { declaredVariant, seedBracket } from "@/server/engine-db/__tests__/helpe
 import { requireFixtureActor, type AuthCtx } from "@/server/api-v1/auth";
 import { POST as eventsRoute } from "@/app/api/v1/fixtures/[id]/events/route";
 import { createDeviceLink } from "../device-links";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
 
@@ -607,11 +608,14 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
     expect(await rows(s.fixtureId)).toBe(0);
   });
 
-  it("13c. a frozen (over-quota) competition outranks the epoch: a behind phone gets the 402 paywall, not 426", async () => {
+  // Match Day PB2 (owner 2026-11-02, option A): a billing-frozen competition ALLOWS scoring, so the freeze no longer stands in
+  // front of the epoch gate — this case answered 402 until then. A behind phone on a frozen competition is told to update, as on
+  // any other, and an up-to-date one writes (scoring-frozen-competition.test.ts proves the write path itself).
+  it("13c. a frozen (over-quota) competition is no refusal at the scoring door: a behind phone gets the 426, an up-to-date one writes", async () => {
     const s = await seed(BADMINTON);
     bump.set(BADMINTON, 1);
     const behind = () => refusal(start(s, { engine_epoch: realEpoch(BADMINTON) }));
-    // The positive pair, BEFORE the freeze: the same behind write on the same fixture is the 426.
+    // The pair, BEFORE the freeze: the same behind write on the same fixture is the 426.
     expect((await behind()).status, "premise: not frozen, behind phone").toBe(426);
 
     // Over quota = a DOWNGRADE, so it is raw SQL (createCompetition enforces the quota itself): `limit` fillers created AFTER the
@@ -626,12 +630,16 @@ describe.skipIf(!HAS_DB)("scoreEvent — the engine-epoch gate (D31)", () => {
         insert into competitions (org_id, name, slug, status)
         values (${s.auth.orgId}, ${"Filler " + suffix}, ${"filler-" + suffix}, 'draft')`;
     }
-    const control = await refusal(start(s));
-    expect(control, "the control: with no epoch the frozen competition refuses").toBeInstanceOf(PaymentRequiredError);
+    const [{ competition_id }] = await sql<{ competition_id: string }[]>`select competition_id from divisions where id = ${s.divisionId}`;
+    expect([...(await frozenCompetitionIds(s.auth.orgId))], "premise: the seeded competition is frozen").toEqual([competition_id]);
     const err = await behind();
-    expect(err, "a behind phone gets the freeze, not the epoch refusal").toBeInstanceOf(PaymentRequiredError);
-    expect([err.status, err.code]).toEqual([402, control.code]);
-    expect(await rows(s.fixtureId)).toBe(0);
+    expect(err, "a behind phone on a frozen competition gets the epoch refusal, not a paywall").not.toBeInstanceOf(PaymentRequiredError);
+    expect([err.status, err.code]).toEqual([426, "ENGINE_OUTDATED"]);
+    expect(await rows(s.fixtureId), "the refused write wrote nothing").toBe(0);
+    // The control: the same frozen competition, the phone at the current epoch — written.
+    const out = await start(s, { engine_epoch: foldEpochOf(BADMINTON) });
+    expect(out.seq).toBe(1);
+    expect(await rows(s.fixtureId)).toBe(1);
   });
 
   it("13d. ledger-level refusals come AFTER the gate: a behind phone with a stale expected_seq is told to update (426), not SEQ_CONFLICT", async () => {

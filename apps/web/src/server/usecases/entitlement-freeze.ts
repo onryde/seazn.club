@@ -3,8 +3,11 @@ import "server-only";
 // over the new plan's quota become read-only, flagged `frozen` in read models.
 // Which N stay active is decided in exactly one place — the selector below:
 // most recently active first (last score event, else creation time).
+// Competitions: that choice is made ONCE and stored (`competitions.frozen_at`,
+// the competition_frozen_at migration; Match Day PB2 review C1, owner 2026-11-02 option A) — see
+// `frozenCompetitionIds`. Members are still chosen on every read.
 import type postgres from "postgres";
-import { withTenant } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { getLimit } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
 
@@ -159,8 +162,9 @@ export function liveUnpassedCompetition(
  * possible.
  *
  * NOT the same shape as `frozenCompetitionIds` below: that one already holds a
- * transaction when it needs the number, so it calls `quotaCount` directly
- * rather than opening a second one (see its header for why nesting is fatal).
+ * transaction when it needs the number, so it counts inside it (the same
+ * `liveUnpassedCompetition` predicate) rather than opening a second one (see
+ * its header for why nesting is fatal).
  */
 async function quotaCount(
   t: Tx,
@@ -192,6 +196,34 @@ export async function countActiveCompetitions(orgId: string): Promise<number> {
 }
 
 /**
+ * Does a status patch bring competition `id` INTO the `competitions.max_active` count — not counted now, counted after?
+ * PB2 re-review 1, N1: reopening an archived or completed competition is the other door into the active set beside
+ * create and template, and it asked nothing, so a reopen thawed a frozen competition with no room (and froze one the
+ * organiser never touched), or pushed a running one into the freeze. Both sides are `liveUnpassedCompetition` itself,
+ * the AFTER side on the patched status and end date (an Event Pass applies by both), so a competition a pass buys out
+ * of the quota reopens freely and one whose pass has lapsed is a slot again. False for an unknown id (its own 404 fires
+ * later). Opens its own transaction: call it before the caller's.
+ */
+export async function entersActiveQuota(
+  orgId: string,
+  id: string,
+  next: { status: string; endsOn?: string },
+): Promise<boolean> {
+  return withTenant(orgId, async (t) => {
+    const [row] = await t<{ counted: boolean; counts_after: boolean }[]>`
+      select ${liveUnpassedCompetition(t)} as counted,
+             exists (
+               select 1
+                 from (select c.id, ${next.status}::text as status,
+                              ${next.endsOn === undefined ? t`c.ends_on` : t`${next.endsOn}::date`} as ends_on) c
+                where ${liveUnpassedCompetition(t)}) as counts_after
+        from competitions c
+       where c.id = ${id}`;
+    return !!row && !row.counted && row.counts_after;
+  });
+}
+
+/**
  * How many publicly-readable dashboards count against `dashboard.public.max`
  * right now. `excludeId` omits one competition — the row a PATCH is changing.
  */
@@ -219,13 +251,67 @@ export function selectFrozen(
   limit: number | null,
 ): Set<string> {
   if (limit === null || candidates.length <= limit) return new Set();
-  const sorted = [...candidates].sort((a, b) => {
-    const ta = new Date(a.lastActiveAt).getTime();
-    const tb = new Date(b.lastActiveAt).getTime();
-    if (ta !== tb) return tb - ta; // most recently active first
-    return a.id < b.id ? -1 : 1;
-  });
+  const sorted = [...candidates].sort(byActivity);
   return new Set(sorted.slice(Math.max(limit, 0)).map((c) => c.id));
+}
+
+/** Most recently active first; ties on id, so the same inputs always rank the same way. The competition_frozen_at migration's backfill restates it in SQL
+ *  (milliseconds, uuid order), and `competition-freeze-backfill.test.ts` holds the two together. */
+function byActivity(a: FreezeCandidate, b: FreezeCandidate): number {
+  const ta = new Date(a.lastActiveAt).getTime();
+  const tb = new Date(b.lastActiveAt).getTime();
+  if (ta !== tb) return tb - ta;
+  return a.id < b.id ? -1 : 1;
+}
+
+/** A competition in the active set, with its stored mark (`competitions.frozen_at is not null`). */
+export interface HeldCandidate extends FreezeCandidate {
+  frozen: boolean;
+}
+
+export interface FreezeMoves {
+  /** The frozen set once the moves are made: what every guard answers from. */
+  frozen: Set<string>;
+  /** Running competitions to mark frozen now — the overflow grew. */
+  freeze: string[];
+  /** Frozen competitions to unmark now — room appeared — in thaw order. */
+  thaw: string[];
+}
+
+/**
+ * THE FREEZE IS CHOSEN ONCE (Match Day PB2 review C1; owner 2026-11-02, option A: "lock in the frozen set when the org goes
+ * over its limit"). Pure: given the active competitions with their STORED marks and the limit, what moves.
+ *
+ * Activity is read only when the set must change size, never to reshuffle it:
+ *  - more competitions RUNNING (unmarked) than the limit — the org has just gone over, or further over (a pass ending, a
+ *    downgrade): the least recently active RUNNING ones freeze, exactly the old selector's choice among them; those already
+ *    frozen stay frozen;
+ *  - fewer running than the limit while some are frozen — ROOM appeared (one archived, completed or deleted, a pass bought, an
+ *    upgrade, a staff grant): that many thaw, the MOST recently active frozen ones first, ties on id. The order is the
+ *    selector's own ranking turned round (freeze the least active, thaw the most active), so one rule decides both
+ *    directions; and a frozen competition still SCORES (PB2 item 1), so the one with the newest activity is the one the
+ *    organiser is actually running — it gets the room first, and an idle one waits;
+ *  - unlimited (`limit` null): every frozen competition thaws.
+ * Otherwise nothing moves — whatever the activity did. A point scored on a frozen competition, a withdrawal cascade, an
+ * imported result: each makes some competition more recently active and moves nothing, which is the whole of C1.
+ *
+ * Invariant (enumerated in `entitlement-freeze.test.ts`): the frozen set is always exactly the overflow's size,
+ * `max(0, candidates - limit)`, and a set this function settled never moves again until the counts change.
+ */
+export function reconcileFrozen(candidates: readonly HeldCandidate[], limit: number | null): FreezeMoves {
+  const held = candidates.filter((c) => c.frozen);
+  const running = candidates.filter((c) => !c.frozen);
+  if (limit === null) {
+    return { frozen: new Set(), freeze: [], thaw: [...held].sort(byActivity).map((c) => c.id) };
+  }
+  const cap = Math.max(limit, 0);
+  if (running.length > cap) {
+    const freeze = [...running].sort(byActivity).slice(cap).map((c) => c.id);
+    return { frozen: new Set([...held.map((c) => c.id), ...freeze]), freeze, thaw: [] };
+  }
+  const thaw = [...held].sort(byActivity).slice(0, cap - running.length).map((c) => c.id);
+  const thawed = new Set(thaw);
+  return { frozen: new Set(held.filter((c) => !thawed.has(c.id)).map((c) => c.id)), freeze: [], thaw };
 }
 
 // Activity = latest score event anywhere in the competition, else created_at.
@@ -235,22 +321,28 @@ export function selectFrozen(
 // "a pass row exists", so the exemption never ended (#347): a `live`
 // competition past its ends_on + grace was immune to freezing for ever.
 // V343's pass_applies is the same predicate the resolver uses.
-async function loadCandidates(tx: Tx): Promise<FreezeCandidate[]> {
-  const rows = await tx<{ id: string; last_active: string }[]>`
+// `frozen` is the stored mark (`competitions.frozen_at`): read beside the activity, so the reconcile sees both in one statement.
+async function loadCandidates(tx: Tx, orgId: string): Promise<HeldCandidate[]> {
+  const rows = await tx<{ id: string; last_active: string; frozen: boolean }[]>`
     select c.id,
-           greatest(c.created_at, coalesce(max(e.recorded_at), c.created_at)) as last_active
+           greatest(c.created_at, coalesce(max(e.recorded_at), c.created_at)) as last_active,
+           c.frozen_at is not null as frozen
     from competitions c
     left join divisions d on d.competition_id = c.id
     left join fixtures f on f.division_id = d.id
     left join score_events e on e.fixture_id = f.id
-    where ${liveUnpassedCompetition(tx)}
-    group by c.id, c.created_at`;
-  return rows.map((r) => ({ id: r.id, lastActiveAt: r.last_active }));
+    where c.org_id = ${orgId} and ${liveUnpassedCompetition(tx)}
+    group by c.id, c.created_at, c.frozen_at`;
+  return rows.map((r) => ({ id: r.id, lastActiveAt: r.last_active, frozen: r.frozen }));
 }
 
 /**
  * The org's frozen competition ids (empty for in-quota orgs — the common case
- * costs one count query).
+ * costs one count query). Chosen ONCE, at the first read that finds the org
+ * running more competitions than its limit, and stored in
+ * `competitions.frozen_at` (its migration also stored the set frozen on the day it
+ * shipped); every later read moves the set only when room appears or the
+ * overflow grows (`reconcileFrozen`). Scoring never moves it (review C1).
  *
  * MUST NOT be called from inside a `withTenant` callback. It opens with
  * `getLimit`, which queries the POOLED `sql` proxy on a cache miss; asking the
@@ -265,14 +357,44 @@ async function loadCandidates(tx: Tx): Promise<FreezeCandidate[]> {
  */
 export async function frozenCompetitionIds(orgId: string): Promise<Set<string>> {
   const limit = await getLimit(orgId, "competitions.max_active");
-  if (limit === null) return new Set();
+  // UNLIMITED (PB2 re-review 1, m11): nothing can be frozen, and the answer costs no transaction — one pooled statement on
+  // the partial index of stored marks (the pool's role reads past RLS; the org is the predicate). Marks left from before the
+  // ceiling went away take the full path once, which thaws them all (`reconcileFrozen` on a null limit), so a later
+  // downgrade is a new time over the limit and chooses afresh rather than reviving a dormant choice.
+  if (limit === null) {
+    const [row] = await sql<{ marked: boolean }[]>`
+      select exists (select 1 from competitions where org_id = ${orgId} and frozen_at is not null) as marked`;
+    if (!row?.marked) return new Set<string>();
+  }
   const run = async (t: Tx): Promise<Set<string>> => {
-    // The shared count, inside the transaction this already holds — see
-    // `quotaCount`. Opening its own would be the nesting this header warns
-    // about two paragraphs up.
-    const n = await quotaCount(t, { publiclyReadable: false });
-    if (n <= limit) return new Set();
-    return selectFrozen(await loadCandidates(t), limit);
+    // THE COMMON CASE costs one statement, as it always did: in quota with nothing marked frozen. The count is
+    // `quotaCount`'s predicate, asked inside the transaction this already holds — opening its own would be the nesting this
+    // header warns about two paragraphs up — beside the stored marks (the partial index on `frozen_at` serves `held`).
+    const [row] = await t<{ n: number; held: number }[]>`
+      select count(*) filter (where ${liveUnpassedCompetition(t)})::int as n,
+             count(*) filter (where c.frozen_at is not null)::int as held
+      from competitions c
+      where c.org_id = ${orgId}`;
+    const n = row?.n ?? 0;
+    const held = row?.held ?? 0;
+    if (held === 0 && (limit === null || n <= limit)) return new Set<string>();
+    // THE CHOICE IS MADE ONCE AND STORED (C1; `reconcileFrozen` says what moves and why). One reconcile per organisation at a
+    // time: two first reads racing would otherwise each freeze "the overflow" and mark twice as many.
+    await t`select pg_advisory_xact_lock(hashtext(${"competition-freeze:" + orgId}))`;
+    // A competition that has LEFT the active set (archived, completed, an Event Pass applying) is no longer frozen: it is gone
+    // from the count, and its mark with it — so a later return to the set is a fresh arrival, not a stale choice.
+    await t`
+      update competitions c set frozen_at = null
+       where c.org_id = ${orgId} and c.frozen_at is not null
+         and not (${liveUnpassedCompetition(t)})`;
+    const moves = reconcileFrozen(await loadCandidates(t, orgId), limit);
+    if (moves.freeze.length > 0) {
+      await t`update competitions set frozen_at = now() where org_id = ${orgId} and id in ${t(moves.freeze)}`;
+    }
+    if (moves.thaw.length > 0) {
+      await t`update competitions set frozen_at = null where org_id = ${orgId} and id in ${t(moves.thaw)}`;
+    }
+    return moves.frozen;
   };
   return withTenant(orgId, run);
 }

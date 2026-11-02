@@ -3,7 +3,8 @@
 // scoreboard: the public match page's own `LiveScoreBody`, fed the engine's whole folded summary and both sides' names, so a
 // set sport shows games in large type with the set table and who serves, a football pitch its goals and periods, cricket its
 // innings — never a badminton widget (§5). Its corner carries the match's stream: the Live badge and a link to watch while one
-// is live, "+ Connect a stream" while none is up (owner pick C1: no empty black video box, ever). Both links open the match's
+// is live, "+ Connect a stream" while none is up and a new one may start (owner pick C1: no empty black video box, ever; not on a
+// billing-frozen competition, PB2). Both links open the match's
 // console page with its stream panel open — the existing per-match stream flow (§8 Phase 1).
 //
 // "Live" on this page means a STREAM is live (the list's red badge, the corner link). The panel's own status line says the
@@ -46,6 +47,7 @@ export function CourtScoreboard({
   dict,
   scoreDict,
   readOnly = false,
+  frozen = false,
 }: {
   fixture: MatchDayFixture;
   /** The panel's accessible name: "Score on Court 3", or for a match on no court (B4) "Score: Ana v Ben". */
@@ -58,6 +60,9 @@ export function CourtScoreboard({
   /** A view-only reader (B4, owner ruling Q1b): a stream that is up still shows, but "+ Connect a stream" — an organiser's
    *  action — is not offered. */
   readOnly?: boolean;
+  /** The competition is billing-frozen (Match Day PB2, owner 2026-11-02 "hide"): a NEW stream is refused there (the
+   *  stream-session create route's 402), so "+ Connect a stream" is not offered; a stream that is already up still shows. */
+  frozen?: boolean;
 }) {
   // LiveScoreBody prints `matchCentre.status.live` over an in-play match; here that word belongs to streams.
   const panelDict: Dict = { ...scoreDict, "matchCentre.status.live": t(scoreDict, "matchCentre.status.in_play") };
@@ -88,9 +93,10 @@ export function CourtScoreboard({
         <span aria-hidden className="h-2 w-2 rounded-full bg-amber-400" />
         {t(dict, "matchDay.stream.waiting")}
       </Link>
-    ) : readOnly ? null : (
+    ) : readOnly || frozen ? null : (
       <Link
         href={streamHref}
+        data-testid="md-stream-connect"
         className="inline-flex min-h-11 items-center rounded-full px-2 text-xs font-medium text-purple-700 underline-offset-2 hover:underline md:min-h-0 md:py-1 md:text-court-muted md:hover:text-court-ink"
       >
         {t(dict, "matchDay.stream.connect")}

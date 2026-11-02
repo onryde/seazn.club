@@ -16,6 +16,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { z } from "zod";
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureBeat, CaptureNotReady } from "@/server/api-v1/capture-schemas";
@@ -31,6 +32,7 @@ import { pairPresentPhone, rigUser, sessionOnTarget, spendMonthlyStreamGrant } f
 import { getCode, postBeat, postStart } from "../capture-phone";
 import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
 import { grantCredits } from "../stream-credits";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import { createSession, stopSession } from "../stream-sessions";
 import { createStreamTarget } from "../stream-targets";
 import { streamPhone } from "../stream-phone";
@@ -639,6 +641,32 @@ describe.skipIf(!HAS_DB)("streamPhone — `auto` (PR-2 T6, §7.1)", () => {
     }
     expect(reached).toBe(AUTO_START_REFUSALS.length);
     expect(reached).toBe(5);
+  });
+
+  // PB2 re-review 1, m10: the billing freeze refuses the automatic start with a 402, which the column's closed vocabulary (V431)
+  // stores as `not_entitled` — read as "Phone streaming is switched off for this organisation", false on a frozen competition
+  // (phone streaming is on; the COMPETITION is over the limit). The read serves the freeze's own word while the competition is
+  // frozen; the stored column is untouched. The positive pair is the loop above: `not_entitled` for a plan that lacks the
+  // relay is still served as itself.
+  it("a start the billing freeze refused is served as competition_frozen while the competition is frozen; thawed, the stored word is served again", async () => {
+    const { r, phone } = await autoRig();
+    const [{ competition_id: cid }] = await sql<{ competition_id: string }[]>`
+      select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${r.fixtureId}`;
+    await sql`insert into org_entitlement_overrides (org_id, feature_key, int_value, reason)
+              values (${r.auth.orgId}, 'competitions.max_active', 0, 'PB2 m10')
+              on conflict (org_id, feature_key) do update set int_value = 0, bool_value = null`;
+    await invalidateOrgEntitlements(r.auth.orgId);
+    expect((await frozenCompetitionIds(r.auth.orgId)).has(cid), "premise: the competition is frozen").toBe(true);
+    await beat(r, phone, { mode: "automatic" });
+    expect((await settingsOf(r)).auto_start_refusal, "premise: the column stores the closed vocabulary's not_entitled").toBe("not_entitled");
+    const want = { enabled: true, refusal: "competition_frozen", wontStart: null, stopApplies: null };
+    expect((await readRig(r)).auto).toEqual(want);
+    expect((await readRig(r)).auto, "a second read agrees").toEqual(want);
+    // Thawed (the ceiling lifted) before the next attempt: the competition is not frozen, so the stored word is served as itself.
+    await sql`delete from org_entitlement_overrides where org_id = ${r.auth.orgId} and feature_key = 'competitions.max_active'`;
+    await invalidateOrgEntitlements(r.auth.orgId);
+    expect((await frozenCompetitionIds(r.auth.orgId)).has(cid), "premise: thawed").toBe(false);
+    expect((await readRig(r)).auto?.refusal).toBe("not_entitled");
   });
 
   // The B3 review: `auto_start_refusal` is not cleared by every path (an `already_running` start and an unmapped error leave the

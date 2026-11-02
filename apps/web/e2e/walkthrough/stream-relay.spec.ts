@@ -1373,7 +1373,8 @@ for (const sw of A7_SWITCHES) {
         if (r.method() === "GET" && new URL(r.url()).pathname.endsWith(`/fixtures/${f.id}/stream-sessions/current`)) gets++;
       });
       await page.setViewportSize({ width: 1280, height: 900 });
-      // Not `openFixture`: a frozen match with no stream renders neither the Scoring section nor the Stream card.
+      // Not `openFixture`: the wait is on the header, which every switch renders, not on a console section (Match Day PB2:
+      // a billing-frozen match now keeps its Scoring section, so "frozen ⇒ no Scoring section" no longer holds).
       await page.goto(`${rig.divPath}/f/${f.no}`);
       await expect(page.locator("header h1"), "the fixture page rendered").toContainText(`Side A ${rig.tag}`);
       await expect(streamControl(page), "no stream on this page: no Stream control").toHaveCount(0);

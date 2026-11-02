@@ -21,7 +21,13 @@ type Ctx = { params: Promise<{ id: string }> };
  *
  *  Match Day B1 (spec 2026-10-31 §9): the band is gone, and with it this
  *  route's last in-app caller; it stays as the public API's desk read, now
- *  carrying `fixtures_today` (A2's `countFixturesToday`) beside the rest. */
+ *  carrying `fixtures_today` (A2's `countFixturesToday`) beside the rest.
+ *
+ *  Match Day PB2 (review m4): this read is NOT a confidentiality boundary for the organiser's to-do list. It serves every
+ *  division's `attention[]` — the facts Match Day's Needs-you rows are built from — to every reader of the competition,
+ *  viewers and API keys included. Match Day's `matchDayForReader` strips Needs-you for a non-editor because a viewer
+ *  cannot ACT on those rows (a presentation choice), not because they are private: nothing may lean on that strip, or on
+ *  this route, to keep attention facts from a reader. */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;

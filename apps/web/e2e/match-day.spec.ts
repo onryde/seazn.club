@@ -9,11 +9,15 @@ import {
   competitionPath,
   createStageAndGenerate,
   expectNoHorizontalScroll,
+  invalidateOrgEntitlements,
   loginUi,
   scoreFixture,
   seedVenueWithCourts,
+  setEntitlementOverrideSql,
+  setOrgPlanBySql,
   withDb,
 } from "./helpers";
+import { dismissConsent, freshOrg } from "./directory-kit";
 
 /**
  * Match Day, task A3 (spec docs/superpowers/specs/2026-10-31-match-day-design.md §6, §7): the court list and the focused
@@ -1845,6 +1849,115 @@ test.describe("Match Day — E2 item 4: two different 'no match' messages", () =
       await expect(free).not.toContainText(UI_EN["matchDay.free.nothingWaiting"]!);
       await expect(free).not.toContainText(/could start here now/);
       await expectNoHorizontalScroll(page);
+    }
+  });
+});
+
+/**
+ * Match Day PB2 (owner 2026-11-02): a billing-frozen competition — its organisation over `competitions.max_active` — still
+ * SCORES ("apply rec", option A) and starts no new stream ("hide"); Call and Undo stay refused. Driven on an organisation of its
+ * OWN: the freeze is organisation-wide (the override pins the ceiling at 0), and the shared e2e organisation must never freeze.
+ * Pro, so the scorer QR is a real QR rather than the plan's paywall. Seeded through the owner's own session, then frozen, and the
+ * board read before the freeze first, so each absence below is the freeze and not the seed.
+ */
+test.describe("Match Day — PB2: a billing-frozen competition scores, calls nothing, connects no new stream", () => {
+  test("frozen: the pad link and scorer QR stay, no Call and no '+ Connect a stream' (both refused 402 on the server too); a point tapped on the pad lands", async ({
+    browser,
+  }) => {
+    test.setTimeout(240_000);
+    const context = await browser.newContext({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 900 } });
+    try {
+      const page = await context.newPage();
+      const { orgId } = await freshOrg(page, "mdfrozen");
+      await dismissConsent(page);
+      await setOrgPlanBySql({ orgId }, "pro");
+      await invalidateOrgEntitlements(page.request, orgId);
+      const seed = await seedMatchDay(page.request, "Frozen");
+      const path = await competitionPath(page.request, seed.competitionId, "/match-day");
+
+      // Before the freeze (the empty case): no banner, and the playing court offers "+ Connect a stream".
+      await page.goto(path, { waitUntil: "load" });
+      const focus = page.getByTestId("md-focus");
+      await expect(focus).toHaveAttribute("data-state", "playing");
+      await expect(page.getByTestId("md-frozen")).toHaveCount(0);
+      await expect(focus.getByTestId("md-stream-connect")).toHaveText(UI_EN["matchDay.stream.connect"]!);
+
+      await setEntitlementOverrideSql(orgId, "competitions.max_active", 0);
+      await invalidateOrgEntitlements(page.request, orgId);
+      await page.reload({ waitUntil: "load" });
+      await expect(page.getByTestId("md-frozen")).toHaveText(UI_EN["matchDay.frozen"]!);
+
+      // Court 1, playing: the pad link reads Open pad, the scorer QR mints and shows, and no new stream is offered.
+      await expect(focus).toHaveAttribute("data-state", "playing");
+      await expect(focus.getByTestId("md-open-pad")).toHaveText(UI_EN["matchDay.focus.openPad"]!);
+      await expect(focus.getByTestId("md-stream-connect")).toHaveCount(0);
+      await expect(focus).not.toContainText(UI_EN["matchDay.stream.connect"]!);
+      const scorer = focus.getByTestId("md-scorer");
+      await expect(scorer).toBeVisible();
+      await scorer.getByTestId("device-link-mint").click();
+      await expect(scorer.getByTestId("dlink-qr")).toBeVisible({ timeout: 15_000 });
+      await expectNoHorizontalScroll(page);
+
+      // Court 2, free: its candidates list, with no button to call one.
+      await row(page, seed.court2).click();
+      await expect(focus).toHaveAttribute("data-state", "free");
+      await expect(focus.locator(`[data-testid="md-candidate"][data-fixture-id="${seed.calDee}"]`)).toBeVisible();
+      await expect(focus.getByRole("button", { name: /^Call to / })).toHaveCount(0);
+
+      // The server refuses the call and a new stream with the freeze's own 402, through the real routes.
+      const call = await apiJson(page.request, `/api/v1/fixtures/${seed.calDee}/call`, "POST", { court_id: seed.court2Id });
+      expect(call.status, JSON.stringify(call.error)).toBe(402);
+      expect(call.error).toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "competitions.max_active" });
+      const stream = await apiJson(page.request, `/api/v1/fixtures/${seed.anaBen}/stream-sessions`, "POST", {
+        mode: "passthrough",
+        targetId: "00000000-0000-4000-8000-000000000000",
+      });
+      expect(stream.status, JSON.stringify(stream.error)).toBe(402);
+      expect(stream.error).toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "competitions.max_active" });
+
+      // Scoring: Open pad from Court 1, tap the home half once, and the point is in the ledger.
+      const scored = () =>
+        withDb(async (sql) => (await sql<{ n: number }[]>`
+          select count(*)::int as n from score_events where fixture_id = ${seed.anaBen} and type = 'generic.score'`)[0]!.n);
+      expect(await scored(), "premise: nothing scored yet").toBe(0);
+      await row(page, seed.court1).click();
+      await expect(focus).toHaveAttribute("data-state", "playing");
+      await focus.getByTestId("md-open-pad").click();
+      const half = page.locator('[data-role="v3-scorebug"] [data-role="v3-scorebug-half"]').nth(0);
+      await expect(half).toBeVisible({ timeout: 30_000 });
+      await half.click();
+      await expect.poll(scored, { timeout: 30_000, message: "the tapped point reaches score_events" }).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+/**
+ * Match Day PB2 item 3: the board's POLL (GET …/match-day, what the shell re-reads) carries no Needs-you rows to a view-only
+ * member. The organiser's read of the same board is asked first: rows there, none for the viewer — the strip, not an empty day.
+ */
+test.describe("Match Day — PB2 item 3: a viewer's poll carries no Needs-you rows", () => {
+  test("the organiser's read has Needs-you rows; the viewer's read of the same board has none and no owed count", async ({ request, browser }) => {
+    const seed = await seedMatchDay(request, "ViewerPoll", { needsYou: true });
+    const organiser = await apiJson<{ needs_you: { kind: string }[]; results_owed: number }>(
+      request,
+      `/api/v1/competitions/${seed.competitionId}/match-day`,
+    );
+    expect(organiser.status).toBe(200);
+    expect(organiser.data!.needs_you.length, "premise: the organiser has Needs-you rows").toBeGreaterThan(0);
+    const viewer = await viewerPage(browser, seed.competitionId);
+    try {
+      const read = await apiJson<{ needs_you: unknown[]; results_owed: number; courts: unknown[] }>(
+        viewer.page.request,
+        `/api/v1/competitions/${seed.competitionId}/match-day`,
+      );
+      expect(read.status).toBe(200);
+      expect(read.data!.needs_you).toEqual([]);
+      expect(read.data!.results_owed).toBe(0);
+      expect(read.data!.courts.length, "the board itself is the viewer's to read").toBeGreaterThan(0);
+    } finally {
+      await viewer.close();
     }
   });
 });

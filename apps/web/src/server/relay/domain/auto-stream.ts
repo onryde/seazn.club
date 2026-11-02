@@ -13,6 +13,14 @@
 export const AUTO_START_REFUSALS = ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable"] as const;
 export type AutoStartRefusal = (typeof AUTO_START_REFUSALS)[number];
 
+/** The words `GET /fixtures/{id}/stream-phone` SERVES for a refused automatic start: the stored ones, and `competition_frozen`,
+ *  which is never stored. The billing freeze refuses the start with a 402 and the column's closed vocabulary (V431's CHECK)
+ *  keeps that as `not_entitled` — "phone streaming is switched off for this organisation", false on a frozen competition. The
+ *  read serves the freeze's own word while the competition IS frozen (PB2 re-review 1, m10; `streamPhone`), so no migration
+ *  widens the column for a reason the competition's own state already answers. */
+export const AUTO_SERVED_REFUSALS = [...AUTO_START_REFUSALS, "competition_frozen"] as const;
+export type AutoServedRefusal = (typeof AUTO_SERVED_REFUSALS)[number];
+
 /** The phone's own switch (capture A4): `automatic` is the only value that lets the server start or stop for it. */
 export type PhoneMode = "automatic" | "operator";
 

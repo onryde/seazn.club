@@ -1,7 +1,7 @@
 // Final review C-1: the batch importer had no counterpart to `scoreEvent`'s
-// over-quota freeze (scoring.ts:195 + :214). An org past
-// `competitions.max_active` is read-only for live scoring, schedule apply,
-// division create and competition patch — but could still bulk-write finished
+// over-quota freeze (since lifted from live scoring, Match Day PB2). An org past
+// `competitions.max_active` is read-only for schedule apply, division create
+// and competition patch — but could still bulk-write finished
 // results in through this path. The freeze is a CALL-level 402 here (owner
 // ruling R-A): one import is scoped to one division, therefore to one
 // competition, so the verdict is identical for every stream and resolving it

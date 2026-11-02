@@ -23,6 +23,12 @@ export type OrgRole = (typeof ORG_ROLES)[number];
 /** Roles allowed to edit (create tournaments, record results, manage members). */
 export const EDITOR_ROLES = ["owner", "admin"] as const;
 
+/** Is this an editor's role — the organiser predicate a console page reads as `canEdit` (page-auth.ts)? An API key resolves
+ *  `role: null` and is not. */
+export function isEditorRole(role: OrgRole | null): boolean {
+  return role !== null && (EDITOR_ROLES as readonly string[]).includes(role);
+}
+
 /** Roles with org-wide read access. */
 export const READ_ROLES = ["owner", "admin", "viewer"] as const;
 
