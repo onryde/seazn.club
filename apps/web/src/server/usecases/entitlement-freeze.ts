@@ -7,7 +7,7 @@ import "server-only";
 // V489; Match Day PB2 review C1, owner 2026-11-02 option A) — see
 // `frozenCompetitionIds`. Members are still chosen on every read.
 import type postgres from "postgres";
-import { withTenant } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { getLimit } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
 
@@ -357,10 +357,19 @@ async function loadCandidates(tx: Tx, orgId: string): Promise<HeldCandidate[]> {
  */
 export async function frozenCompetitionIds(orgId: string): Promise<Set<string>> {
   const limit = await getLimit(orgId, "competitions.max_active");
+  // UNLIMITED (PB2 re-review 1, m11): nothing can be frozen, and the answer costs no transaction — one pooled statement on
+  // the partial index of stored marks (the pool's role reads past RLS; the org is the predicate). Marks left from before the
+  // ceiling went away take the full path once, which thaws them all (`reconcileFrozen` on a null limit), so a later
+  // downgrade is a new time over the limit and chooses afresh rather than reviving a dormant choice.
+  if (limit === null) {
+    const [row] = await sql<{ marked: boolean }[]>`
+      select exists (select 1 from competitions where org_id = ${orgId} and frozen_at is not null) as marked`;
+    if (!row?.marked) return new Set<string>();
+  }
   const run = async (t: Tx): Promise<Set<string>> => {
-    // THE COMMON CASE costs one statement, as it always did: in quota (or unlimited) with nothing marked frozen. The count is
+    // THE COMMON CASE costs one statement, as it always did: in quota with nothing marked frozen. The count is
     // `quotaCount`'s predicate, asked inside the transaction this already holds — opening its own would be the nesting this
-    // header warns about two paragraphs up — beside the stored marks (V489's partial index serves `held`).
+    // header warns about two paragraphs up — beside the stored marks (the partial index on `frozen_at` serves `held`).
     const [row] = await t<{ n: number; held: number }[]>`
       select count(*) filter (where ${liveUnpassedCompetition(t)})::int as n,
              count(*) filter (where c.frozen_at is not null)::int as held

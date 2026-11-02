@@ -237,6 +237,58 @@ describe.skipIf(!HAS_DB)("a billing-frozen competition scores (PB2, option A)", 
     await moveFixture(s.auth, other!.id, { scheduled_at: "2030-06-01T15:00:00.000Z" });
   });
 
+  // PB2 re-review 1, m11: an unlimited organisation answers from an early return with no transaction, so the marks have to go
+  // the first time the ceiling is gone — or they would sit dormant and come back at the next downgrade as the OLD choice,
+  // freezing a competition the organiser has been running since. The next downgrade is a new time over the limit: chosen
+  // afresh, by the activity then.
+  it("an upgrade drops the stored choice: the next downgrade chooses afresh, so a competition run in between stays running", async () => {
+    const s = await seed("badminton");
+    const org = s.auth.orgId;
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id: idleId }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, status, created_at)
+      values (${org}, ${"Idle " + suffix}, ${"idle-" + suffix}, 'draft', now() - interval '30 days') returning id`;
+    // Ranked by creation (no score yet): idle (30 days) < seeded (1 day) < the fillers, oldest first (minutes).
+    await sql`update competitions set created_at = now() - interval '1 day' where id = ${s.competitionId}`;
+    await setOrgPlan(org, "community");
+    await invalidateOrgEntitlements(org);
+    const limit = (await getLimit(org, "competitions.max_active")) as number;
+    const fillers: string[] = [];
+    for (let i = 0; i < limit; i++) {
+      const f = randomUUID().slice(0, 8);
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into competitions (org_id, name, slug, status, created_at)
+        values (${org}, ${"Filler " + f}, ${"filler-" + f}, 'draft', now() - make_interval(mins => ${limit - i})) returning id`;
+      fillers.push(id);
+    }
+    const frozenNow = async () => [...(await frozenCompetitionIds(org))].sort();
+    const marked = async () =>
+      (await sql<{ id: string }[]>`select id from competitions where org_id = ${org} and frozen_at is not null order by id`).map(
+        (r) => r.id,
+      );
+    expect(await frozenNow(), "premise: the seeded and the idle competition are frozen").toEqual([s.competitionId, idleId].sort());
+
+    // The ceiling goes away (a staff grant with no int: unlimited).
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value)
+      values (${org}, 'competitions.max_active', null)
+      on conflict (org_id, feature_key) do update set int_value = null, bool_value = null, expires_at = null`;
+    await invalidateOrgEntitlements(org);
+    expect(await getLimit(org, "competitions.max_active"), "premise: unlimited").toBeNull();
+    expect(await frozenNow(), "unlimited: nothing frozen").toEqual([]);
+    expect(await marked(), "and the stored choice is gone").toEqual([]);
+    expect(await frozenNow(), "a second read: still nothing").toEqual([]);
+
+    // Run in the meantime: the seeded competition is now the most recently active of all.
+    await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+
+    // The ceiling comes back: a new time over the limit, chosen afresh — the idle one and the OLDEST filler, not the old pair.
+    await sql`delete from org_entitlement_overrides where org_id = ${org} and feature_key = 'competitions.max_active'`;
+    await invalidateOrgEntitlements(org);
+    expect(await frozenNow(), "the downgrade chooses by the activity now").toEqual([idleId, fillers[0]!].sort());
+    expect(await marked()).toEqual([idleId, fillers[0]!].sort());
+  }, 120_000);
+
   it("every sport: a frozen competition's match starts (one score event lands), counted", async () => {
     let written = 0;
     const checked = await forEachSportAsync(async ({ key }) => {
