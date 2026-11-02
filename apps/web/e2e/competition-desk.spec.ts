@@ -912,6 +912,24 @@ test.describe("competition desk - divisions list paging (Match Day B2)", () => {
     await expect(toggle).toHaveAttribute("aria-checked", "true");
     await expect(pager).toHaveAttribute("data-page", "2");
 
+    // Match Day E1 fix round 1 (m5): a switch toggles on Space as well as Enter. Driven from the keyboard on the switch itself: Space turns
+    // it off (the URL loses ?finished=1, the finished rows leave), Space again turns it on, and Enter - the link's own key - still works.
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(page, "Space turned the switch off").not.toHaveURL(/finished=1/);
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(rows.and(page.locator('[data-phase="finished"]'))).toHaveCount(0);
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(page, "Space turned it back on").toHaveURL(/[?&]finished=1(&|$)/);
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(page, "Enter still toggles").not.toHaveURL(/finished=1/);
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/[?&]finished=1(&|$)/);
+
     // Phone and tablet: no sideways scroll, and the pager's links are tappable (44px) where it is a phone.
     for (const width of [768, 320]) {
       await page.setViewportSize({ width, height: 900 });

@@ -10,6 +10,7 @@ import type { Attention } from "@/lib/division-phase";
 import type { DeskDivision } from "@/server/usecases/competition-desk";
 import { BansToReviewPill, PhasePill } from "./phase-pill";
 import { DRAW_DOOR_KEY } from "./needs-you";
+import { SwitchLink } from "./switch-link";
 
 export interface LedgerRow {
   id: string;
@@ -173,10 +174,10 @@ export function DivisionLedger({
           Match Day E1 item 6: it is a SWITCH to the eye and to a screen reader - `role="switch"` with the state in `aria-checked`, a
           track and a thumb in house tokens (slate off, purple on) - and still that link, so the click still navigates. The label does not
           change with the state ("Show finished (N)" on and off): a switch names what it controls, `aria-checked` says where it is.
-          44px tall at every width, the tap floor. */}
+          44px tall at every width, the tap floor. Space toggles it as Enter does (`SwitchLink`, E1 fix round 1 m5). */}
       {view.finishedCount > 0 && (
         <div className="mb-2 flex justify-end">
-          <Link
+          <SwitchLink
             href={ledgerHref(base, query, { page: 1, showFinished: !showFinished })}
             role="switch"
             aria-checked={showFinished}
@@ -197,7 +198,7 @@ export function DivisionLedger({
               />
             </span>
             {t(dict, "desk.ledger.showFinished", { n: view.finishedCount })}
-          </Link>
+          </SwitchLink>
         </div>
       )}
       <div className="card divide-y divide-purple-50">
