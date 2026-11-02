@@ -1599,7 +1599,9 @@ test.describe("X-SW-23 a disqualification cascades like a withdrawal", () => {
       request,
     }) => {
       test.setTimeout(240_000);
-      const r = await startedSwiss(request, sport, 4, 3, "Dq");
+      // Six, not four (review I2): with three left, a chess round 3 can be left unpaired — engine 1.x fixes the bye before
+      // it checks the rest can pair (carried to app-B). Five left always pair. Both sports take the same field.
+      const r = await startedSwiss(request, sport, 6, 3, "Dq");
       const read = async (id: string) => {
         const got = await apiJson<Seated & { status: string; outcome: unknown }>(request, `/api/v1/fixtures/${id}`);
         expect(got.status, JSON.stringify(got.error)).toBe(200);
@@ -1608,8 +1610,8 @@ test.describe("X-SW-23 a disqualification cascades like a withdrawal", () => {
       for (const f of await r.boards(1)) await sport.win(request, f, f.home_entrant_id!);
       const paired = await apiJson(request, `/api/v1/stages/${r.stageId}/generate`, "POST");
       expect(paired.status, `pair round 2 → ${JSON.stringify(paired.error)}`).toBe(200);
-      const [open, other] = await r.boards(2);
-      expect([open, other].every(Boolean), "premise: round 2 is paired, two boards").toBe(true);
+      const [open, ...others] = await r.boards(2);
+      expect([open !== undefined, others.length], "premise: round 2 is paired, three boards").toEqual([true, 2]);
       const dq = open!.home_entrant_id!;
       const opponent = open!.away_entrant_id!;
       const played = (await r.boards(1)).find((f) => f.home_entrant_id === dq || f.away_entrant_id === dq)!;
@@ -1637,12 +1639,12 @@ test.describe("X-SW-23 a disqualification cascades like a withdrawal", () => {
       const line = fill("schedule.outcome.wonTagged", { name: r.nameOf.get(opponent)!, tag: uiEn["forfeit.tag.walkover"]! });
       await expect(page.locator(`li[data-fixture-no="${open!.fixture_no}"]`)).toContainText(line, { timeout: 20_000 });
 
-      // She is not paired again: round 3 seats the three still in the field, never her.
-      await sport.win(request, other!, other!.home_entrant_id!);
+      // She is not paired again: round 3 seats the five still in the field, never her.
+      for (const f of others) await sport.win(request, f, f.home_entrant_id!);
       const third = await apiJson(request, `/api/v1/stages/${r.stageId}/generate`, "POST");
       expect(third.status, `pair round 3 → ${JSON.stringify(third.error)}`).toBe(200);
       const seated = (await r.round(3)).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((id): id is string => id !== null);
-      // Three left: one board and a bye (the bye row seats its holder), each of the three once.
+      // Five left: two boards and a bye (the bye row seats its holder), each of the five once.
       expect(seated).not.toContain(dq);
       expect([...seated].sort()).toEqual([...r.nameOf.keys()].filter((id) => id !== dq).sort());
     });

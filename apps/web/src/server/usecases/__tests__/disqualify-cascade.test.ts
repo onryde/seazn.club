@@ -163,10 +163,10 @@ async function writes(divisionId: string) {
   return { events, ledger };
 }
 
-/** A Swiss of 4 × 3 with round 1 played (home wins) and round 2 paired: the disqualified entrant is round 1's first
- *  winner — a played result that must stand — and sits on an open round-2 board. */
-async function midSwiss(sport: Sport) {
-  const r = await rig(sport, 4, { kind: "swiss", rounds: 3 });
+/** A Swiss of `n` × 3 (4 unless a case says why) with round 1 played (home wins) and round 2 paired: the disqualified
+ *  entrant is round 1's first winner — a played result that must stand — and sits on an open round-2 board. */
+async function midSwiss(sport: Sport, n = 4) {
+  const r = await rig(sport, n, { kind: "swiss", rounds: 3 });
   await pair(r);
   await playRound(r, 1);
   const round1 = boardsOf(await rowsOf(r.stageId), 1);
@@ -202,18 +202,24 @@ describe.runIf(HAS_DB)("X-SW-23 a disqualification cascades like a withdrawal (R
       expect(after.find((f) => f.id === other.id)).toMatchObject({ status: "scheduled", outcome: null });
     }, 120_000);
 
+    // Six entrants, not four (review I2): with three left, a chess round 3 can be left unpaired — engine 1.x fixes the
+    // bye before it checks the rest can pair, and three players two rounds in can leave only a rematch once the bye is
+    // gone (the colour lot, seeded by the stage id, decides which). That gap predates T15 and is carried to app-B; five
+    // left always pair. Both sports take the same field so the case reads one way.
     it(`X-SW-23 a disqualified entrant is not paired again (${s.sport})`, async () => {
-      const { r, dq, owed } = await midSwiss(s);
+      const { r, dq, owed } = await midSwiss(s, 6);
       await patchEntrant(r.auth, dq, { status: "disqualified" });
       // The rest of round 2 is played; the DQ'd entrant's board is already settled, so the round is complete.
-      for (const f of boardsOf(await rowsOf(r.stageId), 2).filter((x) => x.id !== owed.id)) await homeWins(r, f);
+      const rest = boardsOf(await rowsOf(r.stageId), 2).filter((x) => x.id !== owed.id);
+      expect(rest, "premise: round 2's two other boards").toHaveLength(2);
+      for (const f of rest) await homeWins(r, f);
       await pair(r);
       const round3 = (await rowsOf(r.stageId)).filter((f) => f.round_no === 3);
       const seatedIds = round3.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null);
-      // Three left in the field: one board and a bye (⌊3/2⌋ boards, rulebook §3.1), every one of the three seated once.
-      expect(seatedIds.sort(), "round 3 seats the three still in the field, once each").toEqual(r.entrants.filter((id) => id !== dq).sort());
+      // Five left in the field: two boards and a bye (⌊5/2⌋ boards, rulebook §3.1), every one of the five seated once.
+      expect(seatedIds.sort(), "round 3 seats the five still in the field, once each").toEqual(r.entrants.filter((id) => id !== dq).sort());
       expect(seatedIds, "the disqualified entrant is on no round-3 row").not.toContain(dq);
-      expect(boardsOf(await rowsOf(r.stageId), 3)).toHaveLength(1);
+      expect(boardsOf(await rowsOf(r.stageId), 3)).toHaveLength(2);
     }, 120_000);
 
     it(`X-SW-23 before Start it stays a plain status flip (${s.sport})`, async () => {
@@ -227,7 +233,7 @@ describe.runIf(HAS_DB)("X-SW-23 a disqualification cascades like a withdrawal (R
 
       expect((await patchEntrant(r.auth, dq, { status: "disqualified" })).status).toBe("disqualified");
       // Nothing settled: no score event, no ledger row, every fixture row exactly as it was (the board stays seated and
-      // scheduled — before Start the round is redrawn from the field, never walked over).
+      // scheduled — nothing is walked over before Start).
       expect(await writes(r.divisionId), "no score event and no ledger row").toEqual(w0);
       expect(await rowsOf(r.stageId), "no fixture moved").toEqual(before);
     }, 120_000);
@@ -276,6 +282,21 @@ describe.runIf(HAS_DB)("X-SW-23 a disqualification cascades like a withdrawal (R
     expect(await rowsOf(r2.stageId)).toEqual(rows);
     expect(await writes(r2.divisionId)).toEqual(w);
   }, 180_000);
+
+  it("X-SW-23 a BARE-withdrawn entrant (ruling 111's PATCH `withdrawn`) still holding an open board, then disqualified: the plain write — the route reads the departed STATUS, so her board is left as it was (review m1/MB; badminton — the route reads the status, never the sport)", async () => {
+    // Pins TODAY's answer, so narrowing the route's departed set to `disqualified` alone (review mutant MB) reds here:
+    // under it this DQ would run the cascade and walk her board over. Whether a DQ of a bare-withdrawn entrant who still
+    // owes a board SHOULD settle it is an open question for the controller (AGENTS #13: both directions) — the
+    // already-departed guard is keyed on the status, not on "owes nothing".
+    const { r, dq, owed } = await midSwiss(SPORTS[0]);
+    expect((await patchEntrant(r.auth, dq, { status: "withdrawn" })).status, "ruling 111's bare flip").toBe("withdrawn");
+    const rows = await rowsOf(r.stageId);
+    expect(rows.find((f) => f.id === owed.id)!.status, "premise: the bare withdrawal left her board open").toBe("scheduled");
+    const w = await writes(r.divisionId);
+    expect((await patchEntrant(r.auth, dq, { status: "disqualified" })).status).toBe("disqualified");
+    expect(await rowsOf(r.stageId), "no fixture moved: her board is still open").toEqual(rows);
+    expect(await writes(r.divisionId), "no score event and no ledger row").toEqual(w);
+  }, 120_000);
 
   it("X-SW-23 PATCH status disqualified mid-league walks the open match over to the opponent and leaves played results standing (badminton league — the table policy: two of three played, so a walkover, never an expunge)", async () => {
     // Single sport: the league path is the table policy's, which reads the stage kind and the counts, never the sport.
