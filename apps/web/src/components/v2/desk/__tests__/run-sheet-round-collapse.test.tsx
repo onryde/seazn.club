@@ -160,14 +160,14 @@ describe("PB1 item 3: a finished round starts folded, the current and upcoming r
     expect(StageKind.options.includes("ladder"), "premise: so is the ladder").toBe(true);
   });
 
-  it("a round with one match still to play is open; the same round with that match settled is folded (the sequence)", () => {
+  it("a round with one match still to play loads open; a load of the same round with that match settled is folded", () => {
     const before = sheet([played(1, 1), fx(2, 1, { status: "in_play" })], "league");
     expect(toggles(before).map((x) => x.expanded)).toEqual(["true"]);
     const after = sheet([played(1, 1), played(2, 1)], "league");
     expect(toggles(after).map((x) => x.expanded)).toEqual(["false"]);
   });
 
-  it("a match held for its settle keeps its round open, and the round folds once the verdict is in", () => {
+  it("a match held for its settle keeps its round open, and a load after the verdict is in folds it", () => {
     const rows = [played(1, 1), fx(2, 1, { status: "abandoned" })];
     expect(toggles(sheet(rows, "league", { awaitingSettle: ["f2"] })).map((x) => x.expanded), "held: still owed").toEqual(["true"]);
     expect(toggles(sheet(rows, "league")).map((x) => x.expanded), "settled").toEqual(["false"]);
@@ -274,13 +274,55 @@ describe("PB1 item 3: the bar is the toggle - a tap opens and closes it, and the
     expect(barOpen(island)).toEqual([true, true, false]);
   });
 
-  it("a round that finishes on the next render is folded; one nobody touched follows its new default", () => {
+  // Controller ruling 2 (2026-11-02): a round's fold default is decided the FIRST time the round is seen. A round that finishes DURING the
+  // visit (a refresh, a poll) stays open until a reload or a tap - its rows never vanish from under the person reading them.
+  it("ruling 2: a round that finishes during the visit stays open (every later refresh too); a fresh load of the same data folds it", () => {
     const rows = THREE_ROUNDS();
     const island = renderIsland(RunSheet, propsFor(rows, "league") as never);
-    expect(barOpen(island)).toEqual([false, true, true]);
+    expect(barOpen(island), "premise: round 2 is open while a match is still to play").toEqual([false, true, true]);
     const settled = rows.map((f) => (f.id === "f4" ? { ...f, status: "decided", outcome: DECIDED } : f));
     island.rerender(propsFor(settled, "league") as never);
-    expect(barOpen(island), "round 2 is done now, so folded").toEqual([false, false, true]);
+    expect(barOpen(island), "round 2 finished under the person: still open").toEqual([false, true, true]);
+    expect(listHiddenFlags(island), "and its rows still show").toEqual([true, false, false]);
+    island.rerender(propsFor(settled, "league") as never);
+    expect(barOpen(island), "a second refresh: still open (a latch, not a one-render grace)").toEqual([false, true, true]);
+    tap(island, 1);
+    expect(barOpen(island), "the person can still fold it").toEqual([false, false, true]);
+    // The reload: a fresh mount of the same data takes the default - round 2 is finished, so it is folded (the positive pair).
+    const fresh = renderIsland(RunSheet, propsFor(settled, "league") as never);
+    expect(barOpen(fresh), "reload: the finished round folds").toEqual([false, false, true]);
+  });
+
+  it("ruling 2, the sweep: every kind that folds keeps a round finished mid-visit open", () => {
+    let checked = 0;
+    for (const kind of ROUND_SEQUENCE_STAGE_KINDS) {
+      const rows = THREE_ROUNDS();
+      const island = renderIsland(RunSheet, propsFor(rows, kind) as never);
+      island.rerender(propsFor(rows.map((f) => (f.id === "f4" ? { ...f, status: "decided", outcome: DECIDED } : f)), kind) as never);
+      expect(barOpen(island), kind).toEqual([false, true, true]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(ROUND_SEQUENCE_STAGE_KINDS.size);
+  });
+
+  it("a round FIRST seen during the visit takes its default then: a finished round that comes into view (Today -> All) is folded", () => {
+    // Round 1 was played on another day, round 2 is today. "Today" shows round 2 only; round 1 is first seen when the filter widens.
+    const rows = [played(1, 1, "2026-09-04T09:00:00.000Z"), played(2, 1, "2026-09-04T10:00:00.000Z"), fx(3, 2, { scheduled_at: `${DAY}T15:00:00.000Z` })];
+    const island = renderIsland(RunSheet, propsFor(rows, "league", { filter: "today" }) as never);
+    expect(barOpen(island), "premise: Today shows round 2 alone").toEqual([true]);
+    island.rerender(propsFor(rows, "league", { filter: "all" }) as never);
+    expect(barOpen(island), "round 1 seen now, finished: folded; round 2 as it was").toEqual([false, true]);
+  });
+
+  it("the safe direction: a void that re-opens a match in a folded round opens the round, and it stays open when that match settles again", () => {
+    const rows = [played(1, 1), played(2, 1), fx(3, 2, { scheduled_at: `${DAY}T15:00:00.000Z` })];
+    const island = renderIsland(RunSheet, propsFor(rows, "league") as never);
+    expect(barOpen(island), "premise: round 1 finished, folded").toEqual([false, true]);
+    const voided = rows.map((f) => (f.id === "f2" ? { ...f, status: "scheduled", outcome: null } : f));
+    island.rerender(propsFor(voided, "league") as never);
+    expect(barOpen(island), "a match to play again: round 1 opens").toEqual([true, true]);
+    island.rerender(propsFor(rows, "league") as never);
+    expect(barOpen(island), "re-settled mid-visit: it stays open (ruling 2)").toEqual([true, true]);
   });
 
   it("the ladder (no bars) has nothing to tap", () => {

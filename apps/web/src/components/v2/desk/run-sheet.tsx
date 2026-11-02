@@ -22,6 +22,7 @@ import {
   ROUND_SEQUENCE_STAGE_KINDS,
   BRACKET_STAGE_KINDS,
   isBye,
+  latchedOpen,
   roundDone,
   roundStartsCollapsed,
   roundWhen,
@@ -278,6 +279,9 @@ export function RunSheet({
   // Match Day PB1 (owner 2026-11-02): which round bars the person has toggled, by round number - their tap over the default (a finished
   // round starts folded, `roundStartsCollapsed`). Kept for the page visit and nothing longer; a round nobody tapped follows its default.
   const [roundToggled, setRoundToggled] = useState<ReadonlyMap<number, boolean>>(() => new Map());
+  // Controller ruling 2: that default is decided the FIRST time a round is seen and then held (`latchedOpen`), so a round that finishes
+  // during the visit stays open until a reload or a tap. Written during render (React's "adjust state during render"), never in an effect.
+  const [roundLatch, setRoundLatch] = useState<ReadonlyMap<number, boolean>>(() => new Map());
 
   // Empty division (spec, "Error and empty states"): no header, nothing —
   // the stage rail (Task 5) is the whole story until then.
@@ -614,16 +618,26 @@ export function RunSheet({
       }
     }
     const nowPlace: { round: number; index: number } | null = nowAt ?? lastToday;
+    // PB1: a bar is a toggle. Open unless the round was finished (every real match settled) when it was first seen - or the person
+    // said otherwise (ruling 2: `latchedOpen`, so a round that finishes now stays open). The flat list (a ladder) has no bars, so
+    // nothing to fold. The NOW rule is never lost to a fold: it is computed over EVERY section above, whatever is open, and a folded
+    // round that holds it draws it under its bar instead of inside the hidden list.
+    const latchMoves = new Map<number, boolean>();
+    const opens = sections.map((section) => {
+      if (!withBars) return true;
+      const was = roundLatch.get(section.round);
+      const now = latchedOpen(was, !roundStartsCollapsed(section.all, settleIds));
+      if (now !== was) latchMoves.set(section.round, now);
+      return roundToggled.get(section.round) ?? now;
+    });
+    if (latchMoves.size > 0) setRoundLatch((prev) => new Map([...prev, ...latchMoves]));
     return (
       <section key={`rounds-${stageId}`} data-run-sheet-block={withBars ? "rounds" : "flat"}>
-        {sections.map((section) => {
+        {sections.map((section, at) => {
           const when = roundWhen(section.rows, tz);
           const sameDay = when !== null && when.firstDay === when.lastDay;
           const dates = roundDateLabel(section.rows, tz, locale);
-          // PB1: a bar is a toggle. Open unless the round is finished (every real match settled) - or the person said otherwise. The
-          // flat list (a ladder) has no bars, so nothing to fold. The NOW rule is never lost to a fold: it is computed over EVERY
-          // section above, whatever is open, and a folded round that holds it draws it under its bar instead of inside the hidden list.
-          const open = !withBars || (roundToggled.get(section.round) ?? !roundStartsCollapsed(section.all, settleIds));
+          const open = opens[at]!;
           const listId = `run-sheet-rounds-${stageId}-${section.round}`;
           const holdsNow = nowPlace !== null && nowPlace.round === section.round;
           return (

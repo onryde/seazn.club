@@ -5,7 +5,7 @@
 // set answers yes to "is everything done?" and would collapse a card over nothing). Every sweep reports its count.
 import { describe, expect, it } from "vitest";
 import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES, SETTLED_FIXTURE_STATUSES } from "../fixture-status";
-import { roundDone, roundStartsCollapsed, type RunSheetInput } from "../run-sheet-groups";
+import { latchedOpen, roundDone, roundStartsCollapsed, type RunSheetInput } from "../run-sheet-groups";
 import { stageCardCollapse } from "../stage-card/summaries";
 
 function fx(over: Partial<RunSheetInput["fixtures"][number]> = {}) {
@@ -118,5 +118,26 @@ describe("stageCardCollapse - a stage card folds to one line only when it is com
   it("an unknown status is not complete: a typo never folds a card", () => {
     expect(stageCardCollapse({ ...base, status: "completed" })).toEqual({ collapsible: false, startsOpen: true });
     expect(stageCardCollapse({ ...base, status: "" })).toEqual({ collapsible: false, startsOpen: true });
+  });
+});
+
+// Controller ruling 2 (2026-11-02): the default is decided the FIRST time a round or a card is seen, and afterwards only ever moves toward
+// open - a thing that finishes while the person is looking never folds under them; something that comes back to want them opens it.
+describe("latchedOpen: the default a round bar / stage card keeps for the visit", () => {
+  it("the empty case first: nothing latched yet - the default of the moment, either way", () => {
+    expect(latchedOpen(undefined, true)).toBe(true);
+    expect(latchedOpen(undefined, false)).toBe(false);
+  });
+
+  it("the whole table: a latched OPEN never folds; a latched FOLD opens only when the default says open", () => {
+    const rows: [boolean, boolean, boolean][] = [
+      // latched, startsOpenNow, expected
+      [true, false, true], // finished during the visit: stays open (ruling 2)
+      [true, true, true],
+      [false, false, false], // folded at load, still finished: stays folded
+      [false, true, true], // folded at load, a void / a warning wants the person: opens (the safe direction)
+    ];
+    for (const [latched, now, want] of rows) expect(latchedOpen(latched, now), `${latched}/${now}`).toBe(want);
+    expect(rows.length, "anti-vacuity: every pair of the two booleans").toBe(4);
   });
 });
