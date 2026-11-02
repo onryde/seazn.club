@@ -54,7 +54,7 @@ vi.mock("@/server/usecases/card-stats", () => ({
 }));
 // Match Day C7: the page reads today's counts for its deck. None today — every card here is a quiet one.
 vi.mock("@/server/usecases/match-day", () => ({
-  competitionsFixturesToday: async () => ({ day: "2026-11-08", tz: "UTC", counts: new Map() }),
+  competitionsFixturesToday: async () => ({ day: "2026-11-08", tz: "UTC", counts: new Map(), next: new Map() }),
 }));
 
 // The only query the page issues itself is the held-pass read. Nothing here

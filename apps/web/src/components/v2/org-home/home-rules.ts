@@ -6,8 +6,12 @@
 //    (completed or archived, by the status chip's own vocabulary) is hidden by default whatever else is true of it.
 //  - The sports line: from the divisions — one named, two named, three or more as "N sports" with the full list for title/aria.
 //  - B's stub on a quiet card with nothing upcoming: "No fixtures yet" before any fixture exists, "No match scheduled" after.
+//  - When a match plays, as the page prints it everywhere (the deck's match and the quiet card's "Next:" line alike): its time
+//    in the organisation's zone, 24-hour, in the locale's own order (`fmtPublicTime`/`fmtPublicDate`), with its date in front
+//    unless it is on the deck's day — so two lines on one page can never disagree about a time.
 import { competitionChipState } from "@/components/ui/status-chip";
 import { needsYouHome } from "@/components/v2/desk/needs-you";
+import { fmtPublicDate, fmtPublicTime } from "@/lib/format";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import type { NextFixture } from "@/server/usecases/card-stats";
 
@@ -45,4 +49,41 @@ export type HomeStub = "no_fixtures" | "no_match";
 export function stubOf(s: { total: number; next: NextFixture | null }): HomeStub | null {
   if (s.next !== null) return null;
   return s.total === 0 ? "no_fixtures" : "no_match";
+}
+
+/** The day an instant falls on in `tz`, 'YYYY-MM-DD' (en-CA writes ISO order). */
+const dayIn = (tz: string, at: string) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(at));
+
+/** "15:10" on the organisation's day `day`, else "Mon 9 Nov 15:10" (the locale's order); null for a match with no time. */
+export function matchWhen(locale: string, tz: string, day: string, at: string | null): string | null {
+  if (at === null) return null;
+  const time = fmtPublicTime(locale, tz, at);
+  return dayIn(tz, at) === day ? time : `${fmtPublicDate(locale, tz, at)} ${time}`;
+}
+
+export interface NextLine {
+  /** When it plays (`matchWhen`); null while it is in play (the caller says "Now:") or when it has no time. */
+  when: string | null;
+  court: string | null;
+  /** "Ann vs Bob", joined with the locale's own word. */
+  pair: string;
+  /** In play right now: the caller shows "Now:" instead of "Next:" — one label, chosen once, never both. */
+  live: boolean;
+  /** The whole line, for a pointer's `title`. */
+  text: string;
+}
+
+/** The quiet card's answer to "what's next?", read as the deck reads its own match. A fixture with a side still to be decided
+ *  is no answer — card-stats' query already leaves such a fixture out (D4a), and it is refused here too rather than printed
+ *  with a placeholder. */
+export function nextLine(
+  next: NextFixture | null,
+  f: { locale: string; tz: string; day: string; vs: string },
+): NextLine | null {
+  if (!next || next.home === null || next.away === null) return null;
+  const when = next.in_play ? null : matchWhen(f.locale, f.tz, f.day, next.scheduled_at);
+  const pair = `${next.home} ${f.vs} ${next.away}`;
+  const text = [when, next.court_label, pair].filter((x): x is string => !!x).join(", ");
+  return { when, court: next.court_label, pair, live: next.in_play, text };
 }

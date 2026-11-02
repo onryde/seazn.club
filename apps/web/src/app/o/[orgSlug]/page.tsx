@@ -14,12 +14,12 @@ import { Trophy } from "lucide-react";
 import { BillingBanner } from "@/components/billing-banner";
 import { requireOrgPage } from "@/server/page-auth";
 import { listCompetitions } from "@/server/usecases/competitions";
-import { listCompetitionCardStats, nextLine } from "@/server/usecases/card-stats";
+import { listCompetitionCardStats } from "@/server/usecases/card-stats";
 import { competitionsFixturesToday } from "@/server/usecases/match-day";
 import { CardMenu } from "@/components/ui/card-menu";
 import { StatusChip, competitionChipState, CHIP_SORT } from "@/components/ui/status-chip";
 import { SwitchLink } from "@/components/v2/desk/switch-link";
-import { homeGroupOf, sportsLine, stubOf, type HomeGroup } from "@/components/v2/org-home/home-rules";
+import { homeGroupOf, nextLine, sportsLine, stubOf, type HomeGroup } from "@/components/v2/org-home/home-rules";
 import {
   HomeGroupSection,
   QuietCard,
@@ -210,7 +210,8 @@ export default async function OrgHomePage({
     .filter((b) => b.group === "today")
     .map(({ e }) => ({
       ...base(e, "night"),
-      next: stats.get(e.c.id)?.next ?? null,
+      // Today's own headline (C7 review M2), never the card stats' next of any date.
+      next: today.next.get(e.c.id) ?? null,
       matchesToday: today.counts.get(e.c.id) ?? 0,
       matchDayHref: routes.competitionMatchDay(orgSlug, e.c.slug),
     }));
@@ -234,7 +235,7 @@ export default async function OrgHomePage({
               label: t(dict, "org.home.stub.schedule"),
               aria: t(dict, "org.home.stub.scheduleFor", { name: e.c.name }),
             };
-    return { ...base(e, "light"), next: nextLine(s?.next ?? null, locale), stub: kind ? { kind, action } : null };
+    return { ...base(e, "light"), next: nextLine(s?.next ?? null, { locale, tz: today.tz, day: today.day, vs: t(dict, "schedule.vs") }), stub: kind ? { kind, action } : null };
   };
   const roster = ROSTER.filter((r) => r.group !== "finished" || showFinished)
     .map((r) => ({ ...r, cards: banded.filter((b) => b.group === r.group).map((b) => quiet(b.e, b.group)) }))

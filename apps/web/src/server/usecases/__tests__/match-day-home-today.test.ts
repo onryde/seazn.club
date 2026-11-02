@@ -148,6 +148,58 @@ describe.skipIf(!HAS_DB)("competitionsFixturesToday — the org home's today dec
     expect(sports, "premise: two sports").toEqual(["football", "generic"]);
   });
 
+  it("the deck's headline is TODAY's match: in play first (whatever its day), then the earliest planned today — never an overdue one, never one with a side to be decided", async () => {
+    // M2 (C7 review): the card's "next" is the earliest upcoming match of ANY date, so a league with an unplayed match from
+    // last week would headline that one on today's deck. The deck's own pick rides the today read.
+    const auth = await amsterdamOrg();
+    const [a, b, c] = [await person(auth.orgId, "Hd Ann"), await person(auth.orgId, "Hd Bob"), await person(auth.orgId, "Hd Cat")];
+    const comp = await seedCompetition(auth, "Headline Cup", [[a], [b], [c]], { courts: [] });
+    const [overdue, later, earlier] = comp.fixtures.map((f) => f.id);
+    expect([overdue, later, earlier].every(Boolean), "premise: three matches").toBe(true);
+    await sql`update fixtures set scheduled_at = '2026-11-03T10:00:00Z' where id = ${overdue!}`; // last Tuesday, unplayed
+    await sql`update fixtures set scheduled_at = '2026-11-08T10:00:00Z' where id = ${later!}`; // 11:00 Sun in Amsterdam
+    await sql`update fixtures set scheduled_at = '2026-11-08T09:00:00Z' where id = ${earlier!}`; // 10:00 Sun in Amsterdam
+    const names = async (id: string) =>
+      (await sql<{ home: string; away: string }[]>`
+        select he.display_name as home, ae.display_name as away from fixtures f
+          join entrants he on he.id = f.home_entrant_id join entrants ae on ae.id = f.away_entrant_id where f.id = ${id}`)[0]!;
+
+    let read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.counts.get(comp.id)).toBe(2);
+    expect(read.next.get(comp.id)).toMatchObject({ fixture_id: earlier, in_play: false, ...(await names(earlier!)) });
+    expect(Date.parse(read.next.get(comp.id)!.scheduled_at!)).toBe(Date.parse("2026-11-08T09:00:00Z"));
+
+    // A side still to be decided is counted (it is a match today) but is no headline: the next one with both sides is.
+    const [{ home_entrant_id: earlierHome }] = await sql<{ home_entrant_id: string }[]>`
+      select home_entrant_id from fixtures where id = ${earlier!}`;
+    await sql`update fixtures set home_entrant_id = null where id = ${earlier!}`;
+    read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.counts.get(comp.id)).toBe(2);
+    expect(read.next.get(comp.id)?.fixture_id).toBe(later);
+    await sql`update fixtures set home_entrant_id = ${earlierHome} where id = ${earlier!}`;
+
+    // In play leads: the 11:00 match goes into play and heads the deck over the 10:00 one still to start (planned order alone
+    // would pick the 10:00 one).
+    await setStatus(later!, "in_play");
+    read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.counts.get(comp.id)).toBe(2);
+    expect(read.next.get(comp.id)).toMatchObject({ fixture_id: later, in_play: true });
+
+    // The overdue one goes into play too: it is counted today whatever its planned day, and of the two in play the earlier
+    // planned leads.
+    await setStatus(overdue!, "in_play");
+    read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.counts.get(comp.id)).toBe(3);
+    expect(read.next.get(comp.id)).toMatchObject({ fixture_id: overdue, in_play: true, ...(await names(overdue!)) });
+
+    // Everything today played or cancelled: still counted where Match Day counts it, but nothing left to headline.
+    await setStatus(overdue!, "finalized");
+    await setStatus(later!, "cancelled");
+    await setStatus(earlier!, "cancelled");
+    read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.next.has(comp.id)).toBe(false);
+  });
+
   it("never counts another organisation's competition, even when its id is asked for", async () => {
     const mine = await amsterdamOrg();
     const theirs = await amsterdamOrg();

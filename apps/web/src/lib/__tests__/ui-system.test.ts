@@ -11,7 +11,7 @@ import { initials } from "@/components/ui/entity-logo";
 import { isConfirmArmed } from "@/lib/typed-confirm";
 import { msg, messages } from "@/lib/messages";
 import { divisionHue, divisionAccent } from "@/lib/division-hue";
-import { nextLine } from "@/server/usecases/card-stats";
+import { nextLine } from "@/components/v2/org-home/home-rules";
 
 describe("status chip vocabulary (v3/03 §1)", () => {
   it("maps competition statuses to the five chip states", () => {
@@ -85,37 +85,45 @@ describe("division hue (v3/03 §1)", () => {
 });
 
 describe("card meta lines (v3/03 §1)", () => {
-  it("nextLine is null-safe on TBD entrants and unscheduled fixtures", () => {
-    expect(nextLine(null, "en")).toBeNull();
-    expect(
-      nextLine(
-        { home: "Arun", away: null, court_label: null, scheduled_at: null, in_play: false },
-        "en",
-      ),
-    ).toEqual({ text: "Arun vs TBD", live: false });
+  // Match Day C7 review I1: the quiet card's "Next:" line reads as the deck beside it does — the organisation's zone, the
+  // locale's own order and its own word for "vs" — so the f() below is what the org home passes it.
+  const EN = { locale: "en", tz: "Europe/Amsterdam", day: "2026-11-08", vs: "vs" };
+
+  it("nextLine answers null for no fixture, and refuses one with a side still to be decided instead of printing 'TBD'", () => {
+    expect(nextLine(null, EN)).toBeNull();
+    // card-stats' query never returns such a fixture (D4a); the line refuses it too rather than inventing a placeholder.
+    expect(nextLine({ home: "Arun", away: null, court_label: null, scheduled_at: null, in_play: false }, EN)).toBeNull();
+    expect(nextLine({ home: null, away: "Dev", court_label: "Court 2", scheduled_at: null, in_play: true }, EN)).toBeNull();
+    // An unscheduled fixture with both sides is an answer: just the pair (the positive pair of the refusals above).
+    expect(nextLine({ home: "Arun", away: "Dev", court_label: null, scheduled_at: null, in_play: false }, EN)).toMatchObject({
+      when: null,
+      pair: "Arun vs Dev",
+      text: "Arun vs Dev",
+      live: false,
+    });
   });
 
-  it("nextLine reports `live` separately instead of baking a 'Now:' prefix into the text — the caller (EntityCard) picks exactly one label, so a live fixture never renders both 'Next:' and 'Now:' stacked together (design/fix-ui/02-console-org.md)", () => {
-    const line = nextLine(
-      { home: "A", away: "B", court_label: "Court 2", scheduled_at: null, in_play: true },
-      "en",
-    );
-    expect(line).toEqual({ text: "A vs B · Court 2", live: true });
+  it("nextLine reports `live` separately instead of baking a 'Now:' prefix into the text — the caller picks exactly one label, so a live fixture never renders both 'Next:' and 'Now:' stacked together (design/fix-ui/02-console-org.md)", () => {
+    const line = nextLine({ home: "A", away: "B", court_label: "Court 2", scheduled_at: "2026-11-08T14:10:00Z", in_play: true }, EN);
+    expect(line).toEqual({ when: null, court: "Court 2", pair: "A vs B", live: true, text: "Court 2, A vs B" });
     // No baked-in label of either kind — the raw fixture text alone.
     expect(line?.text).not.toMatch(/^(Next|Now):/);
   });
 
-  it("nextLine formats the scheduled time using the given locale, not a hardcoded en-GB string", () => {
-    const at = new Date();
-    at.setDate(at.getDate() + 3); // outside "same day" so weekday/month render
-    const line = nextLine(
-      { home: "A", away: "B", court_label: null, scheduled_at: at.toISOString(), in_play: false },
-      "fr",
+  it("nextLine prints the time in the organisation's zone, 24-hour, in the locale's order, with the locale's word for 'vs'", () => {
+    // 14:10Z is 15:10 in Amsterdam in November (UTC+1); the server's own zone (UTC on Fly) would print 14:10.
+    const sameDay = nextLine({ home: "A", away: "B", court_label: null, scheduled_at: "2026-11-08T14:10:00Z", in_play: false }, EN);
+    expect(sameDay?.when).toBe("15:10");
+    // Another day: the date in front, English day-month (owner ruling 2026-09-16), never US "Mon, Nov 9" or "02:10 PM".
+    const monday = nextLine({ home: "A", away: "B", court_label: null, scheduled_at: "2026-11-09T14:10:00Z", in_play: false }, EN);
+    expect(monday?.when).toBe("Mon 9 Nov 15:10");
+    // French: its own weekday and month, and "contre".
+    const fr = nextLine(
+      { home: "A", away: "B", court_label: null, scheduled_at: "2026-11-09T14:10:00Z", in_play: false },
+      { ...EN, locale: "fr", vs: "contre" },
     );
-    // French weekday/month abbreviations use lowercase + a trailing period
-    // ("mar.", "juil."), unlike the English "Tue"/"Jul" the old hardcoded
-    // en-GB formatter always produced regardless of locale.
-    expect(line?.text).not.toMatch(/\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/);
+    expect(fr?.pair).toBe("A contre B");
+    expect(fr?.when).toMatch(/^lun\.? 9 nov\.? 15:10$/);
   });
 });
 

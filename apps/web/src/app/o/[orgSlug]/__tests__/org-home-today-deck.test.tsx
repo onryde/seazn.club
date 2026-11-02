@@ -23,6 +23,7 @@ import uiEs from "@/dictionaries/es/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
 import { routes } from "@/lib/routes";
 import type { NextFixture } from "@/server/usecases/card-stats";
+import type { TodayHeadline } from "@/server/usecases/match-day";
 
 type Stats = {
   competition_id: string;
@@ -40,6 +41,7 @@ const h = vi.hoisted(() => ({
   competitions: [] as Array<{ id: string; name: string; slug: string; status: string; ends_on: string | null }>,
   stats: new Map<string, Stats>(),
   today: new Map<string, number>(),
+  todayNext: new Map<string, TodayHeadline>(),
 }));
 
 vi.mock("@/server/page-auth", () => ({
@@ -64,6 +66,7 @@ vi.mock("@/server/usecases/match-day", () => ({
     tz: "Europe/Amsterdam",
     // Only what was asked for: a page that forgot to pass a competition must not be rescued by the stub.
     counts: new Map([...h.today].filter(([id]) => ids.includes(id))),
+    next: new Map([...h.todayNext].filter(([id]) => ids.includes(id))),
   }),
 }));
 vi.mock("@/lib/db", () => ({
@@ -103,10 +106,29 @@ const stats = (slug: string, over: Partial<Stats> = {}): Stats => ({
   ...over,
 });
 
-function seed(rows: Array<[ReturnType<typeof comp>, Stats, number]>) {
+/** Today's headline match as `competitionsFixturesToday` answers it (its pick is pinned in match-day-home-today.test.ts). */
+const head = (over: Partial<TodayHeadline> = {}): TodayHeadline => ({
+  fixture_id: "fx-1",
+  home: "Ann",
+  away: "Bob",
+  court_label: "Court 2",
+  scheduled_at: "2026-11-08T14:10:00.000Z",
+  in_play: false,
+  ...over,
+});
+
+/** Rows of [competition, its card stats, its matches today, its headline today]. A row with matches today headlines `head()`
+ *  unless it says otherwise (null: none of today's matches can be named). */
+function seed(rows: Array<[ReturnType<typeof comp>, Stats, number, (TodayHeadline | null)?]>) {
   h.competitions = rows.map(([c]) => c);
   h.stats = new Map(rows.map(([, s]) => [s.competition_id, s]));
   h.today = new Map(rows.filter(([, , n]) => n > 0).map(([c, , n]) => [c.id, n]));
+  h.todayNext = new Map(
+    rows.flatMap(([c, , n, hd]) => {
+      const headline = hd === undefined ? head() : hd;
+      return n > 0 && headline !== null ? [[c.id, headline] as const] : [];
+    }),
+  );
 }
 
 const render = async (query: Record<string, string> = {}): Promise<string> =>
@@ -203,7 +225,7 @@ describe("the today deck", () => {
   it("shows the match in the deck in the organisation's zone: 14:10Z is 15:10 in Amsterdam, and a live one reads Now", async () => {
     seed([
       [comp("a", "live"), stats("a"), 2],
-      [comp("b", "live"), stats("b", { next: { home: "Cat", away: "Dan", court_label: "Court 1", scheduled_at: null, in_play: true } }), 1],
+      [comp("b", "live"), stats("b"), 1, head({ home: "Cat", away: "Dan", court_label: "Court 1", scheduled_at: null, in_play: true })],
     ]);
     const [a, b] = blocks(blocks(await render(), "org-home-today")[0]!, "org-home-today-row");
     expect(a).toContain(">15:10<"); // UTC would print 14:10
@@ -249,13 +271,52 @@ describe("the today deck", () => {
     expect(deck).not.toContain(en["desk.tools.openMatchDay"]);
   });
 
-  it("names an unfilled slot in the viewer's language: the deck's match reads 'À déterminer', never the English 'TBD'", async () => {
-    h.locale = "fr";
-    seed([[comp("k", "live"), stats("k", { next: { home: "Ann", away: null, court_label: "Court 1", scheduled_at: null, in_play: true } }), 1]]);
+  it("headlines TODAY's match, not the card's next of any date: an overdue match from last week is not the deck's match", async () => {
+    // C7 review M2: the card stats' `next` is the earliest upcoming match of ANY date; the deck reads today's own headline.
+    seed([
+      [
+        comp("league", "live"),
+        stats("league", { next: { home: "Old", away: "Rival", court_label: "Court 9", scheduled_at: "2026-11-03T10:00:00.000Z", in_play: false } }),
+        2,
+        head({ home: "Eve", away: "Fay", court_label: "Court 4", scheduled_at: "2026-11-08T17:30:00.000Z" }),
+      ],
+    ]);
     const match = blocks(blocks(await render(), "org-home-today")[0]!, "org-home-today-match")[0]!;
-    expect(fr["matchDay.tbd"]).not.toBe(en["matchDay.tbd"]); // the case can tell the two apart
-    expect(match).toContain(`>${amp(fr["matchDay.tbd"]!)}<`);
-    expect(match).not.toContain(">TBD<");
+    expect(match).toMatch(/Eve.*vs.*Fay/);
+    expect(match).toContain(">18:30<"); // 17:30Z in Amsterdam
+    expect(match).toContain("Court 4");
+    expect(match).not.toContain("Old");
+    expect(match).not.toContain("Court 9");
+  });
+
+  it("with matches today but none to name (all played, or a side still to be decided), the row says how many instead", async () => {
+    seed([[comp("busy", "live"), stats("busy"), 3, null]]);
+    const match = blocks(blocks(await render(), "org-home-today")[0]!, "org-home-today-match")[0]!;
+    expect(match).toContain(en["org.home.today.matches.other"]!.replace("{count}", "3"));
+    expect(match).not.toContain("Ann");
+  });
+});
+
+describe("the quiet card's Next: line — read as the deck beside it reads", () => {
+  it("prints its time in the organisation's zone, in the locale's date order, time first", async () => {
+    // 14:10Z on Monday 9 November is 15:10 in Amsterdam (UTC+1). English reads day-month (owner ruling 2026-09-16), 24-hour.
+    seed([[comp("q", "published"), stats("q", { next: { home: "Ann", away: "Bob", court_label: "Court 2", scheduled_at: "2026-11-09T14:10:00.000Z", in_play: false } }), 0]]);
+    const next = blocks(blocks(await render(), "org-home-card")[0]!, "org-home-card-next")[0]!;
+    expect(next).toContain(">Mon 9 Nov 15:10<"); // UTC would print 14:10; US order "Mon, Nov 9"
+    expect(next).not.toMatch(/14:10|PM|Nov 9/);
+    expect(next.indexOf("15:10")).toBeLessThan(next.indexOf("Ann")); // time first: a phone's truncation never eats it
+    expect(next).toContain("Court 2");
+    expect(next).toMatch(/Ann.*vs.*Bob/);
+  });
+
+  it("speaks the viewer's language: French reads 'contre', and the day and month in French", async () => {
+    h.locale = "fr";
+    seed([[comp("q", "published"), stats("q", { next: { home: "Ann", away: "Bob", court_label: null, scheduled_at: "2026-11-09T14:10:00.000Z", in_play: false } }), 0]]);
+    const next = blocks(blocks(await render(), "org-home-card")[0]!, "org-home-card-next")[0]!;
+    expect(fr["schedule.vs"]).not.toBe(en["schedule.vs"]); // the case can tell the two apart
+    expect(next).toContain(`Ann ${fr["schedule.vs"]} Bob`);
+    expect(next).toContain("15:10");
+    expect(next).not.toMatch(/\bMon\b|\bNov\b/);
   });
 });
 

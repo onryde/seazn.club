@@ -10,11 +10,11 @@
 import type { ReactNode } from "react";
 import { Radio } from "lucide-react";
 import Link from "@/components/ui/console-link";
-import { fmtPublicTime, fmtPublicDate } from "@/lib/format";
+import { fmtPublicDate } from "@/lib/format";
 import { t, plural, type Dict } from "@/lib/i18n";
 import type { Locale } from "@/lib/i18n-constants";
-import type { NextFixture, NextLine } from "@/server/usecases/card-stats";
-import type { HomeStub } from "./home-rules";
+import type { TodayHeadline } from "@/server/usecases/match-day";
+import { matchWhen, type HomeStub, type NextLine } from "./home-rules";
 
 /** What every card on the page shows about its competition. */
 export interface HomeCardBase {
@@ -32,7 +32,9 @@ export interface HomeCardBase {
 }
 
 export interface TodayRowData extends HomeCardBase {
-  next: NextFixture | null;
+  /** Today's headline match (`competitionsFixturesToday`): in play first, else the earliest planned today; null when none of
+   *  today's matches can be named (all played, or a side still to be decided) — the row then says how many there are. */
+  next: TodayHeadline | null;
   matchesToday: number;
   matchDayHref: string;
 }
@@ -83,24 +85,15 @@ function Progress({ dict, progress, tone }: { dict: Dict; progress: HomeCardBase
   );
 }
 
-/** The day a match is on in `tz`, 'YYYY-MM-DD' (en-CA writes ISO order). */
-const dayIn = (tz: string, at: string) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(at));
-
 /** The deck's date line, from the organisation's day 'YYYY-MM-DD' (noon UTC, so no zone can move the date). */
 export const deckDate = (locale: Locale, day: string) =>
   fmtPublicDate(locale, "UTC", `${day}T12:00:00Z`, { weekday: "long", day: "numeric", month: "long" });
 
 function TodayRow({ row, dict, locale, tz, day }: { row: TodayRowData; dict: Dict; locale: Locale; tz: string; day: string }) {
   const n = row.next;
-  // The match's time in the organisation's zone; a match not planned on the deck's day (one running late from yesterday) says
-  // which day it was planned for.
-  const when =
-    n?.scheduled_at == null
-      ? null
-      : dayIn(tz, n.scheduled_at) === day
-        ? fmtPublicTime(locale, tz, n.scheduled_at)
-        : `${fmtPublicDate(locale, tz, n.scheduled_at)} ${fmtPublicTime(locale, tz, n.scheduled_at)}`;
+  // The match's time in the organisation's zone; a match not planned on the deck's day (one in play from yesterday) says which
+  // day it was planned for. The quiet card's "Next:" line reads the same `matchWhen`.
+  const when = n ? matchWhen(locale, tz, day, n.scheduled_at) : null;
   return (
     <article
       data-testid="org-home-today-row"
@@ -141,8 +134,8 @@ function TodayRow({ row, dict, locale, tz, day }: { row: TodayRowData; dict: Dic
               {n.court_label && <span className="min-w-0 text-cream/70 [overflow-wrap:anywhere]">{n.court_label}</span>}
             </p>
             <p className="text-xl font-semibold leading-snug text-white [font-family:var(--font-barlow,var(--font-geist-sans))] [overflow-wrap:anywhere]">
-              <span>{n.home ?? t(dict, "matchDay.tbd")}</span> <span className="font-sans text-sm font-normal text-cream/70">{t(dict, "schedule.vs")}</span>{" "}
-              <span>{n.away ?? t(dict, "matchDay.tbd")}</span>
+              <span>{n.home}</span> <span className="font-sans text-sm font-normal text-cream/70">{t(dict, "schedule.vs")}</span>{" "}
+              <span>{n.away}</span>
             </p>
           </>
         ) : (
@@ -245,10 +238,15 @@ export function QuietCard({ card, dict }: { card: QuietCardData; dict: Dict }) {
         </div>
         {card.progress.total > 0 && <Progress dict={dict} progress={card.progress} tone="light" />}
         {card.next && (
-          <p className="truncate text-xs text-slate-600" title={card.next.text}>
-            <span className="font-semibold text-purple-700">{t(dict, card.next.live ? "card.next.live" : "card.next.upcoming")}</span>{" "}
-            {card.next.text}
-          </p>
+          // When first, then the court, then the pair on a line of its own: a phone's truncation eats the names, never the time.
+          <div data-testid="org-home-card-next" className="min-w-0 text-xs text-slate-600" title={card.next.text}>
+            <p className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+              <span className="font-semibold text-purple-700">{t(dict, card.next.live ? "card.next.live" : "card.next.upcoming")}</span>
+              {card.next.when && <span className="font-semibold tabular-nums text-slate-800">{card.next.when}</span>}
+              {card.next.court && <span className="min-w-0 truncate">{card.next.court}</span>}
+            </p>
+            <p className="truncate">{card.next.pair}</p>
+          </div>
         )}
         {card.meta && <p className="text-xs text-slate-500">{card.meta}</p>}
       </div>
