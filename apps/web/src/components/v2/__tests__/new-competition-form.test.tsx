@@ -360,6 +360,18 @@ describe("<ShowcaseOptIn>", () => {
     expect(checked).toBe(Visibility.options.length);
   });
 
+  it("shows the switch on only on Public, whatever it is handed", () => {
+    let checked = 0;
+    for (const visibility of Visibility.options) {
+      const html = flat(renderToStaticMarkup(<ShowcaseOptIn visibility={visibility} checked onChange={() => {}} />));
+      const input = /<input[^>]*role="switch"[^>]*>/.exec(html)![0];
+      // React prints a checked input as `checked=""`.
+      expect(/\schecked(=|\s|>)/.test(input), `${visibility} checked`).toBe(visibility === "public");
+      checked += 1;
+    }
+    expect(checked).toBe(Visibility.options.length);
+  });
+
   it("carries the one line and 'What this allows', whose consent wording is the existing key, unedited", () => {
     const html = flat(renderToStaticMarkup(<ShowcaseOptIn visibility="public" checked onChange={() => {}} />));
     expect(html).toContain(msg("showcase.label"));
@@ -392,6 +404,23 @@ describe("Create is disabled until the form can be created, and says what is mis
     both: msg("comp.wizard.missing.both"),
     order: msg("comp.validation.endsBeforeStarts"),
   };
+
+  it("Create stays disabled while the create is in flight, so a second press cannot make a second competition", async () => {
+    let release!: (made: unknown) => void;
+    vi.mocked(apiV1).mockReset();
+    vi.mocked(apiV1).mockReturnValue(new Promise((resolve) => (release = resolve)) as never);
+    const island = mount();
+    typeName(island, "Autumn Open");
+    typeEnd(island, "2026-11-15");
+    // A complete form: nothing but the in-flight create can be what disables it.
+    expect(propsOf(createButton(island)).disabled).toBe(false);
+    const pending = submit(island);
+    expect(propsOf(createButton(island)).disabled).toBe(true);
+    expect(textOf(createButton(island))).toBe(msg("comp.wizard.creating"));
+    release({ id: "c1", slug: "autumn-open", visibility: "public", discoverable: false });
+    await pending;
+    expect(vi.mocked(apiV1)).toHaveBeenCalledTimes(1);
+  });
 
   it("each missing field has its own reason, shown beside the disabled button", () => {
     const cases: [string, (i: Island) => void, CreateBlocker][] = [

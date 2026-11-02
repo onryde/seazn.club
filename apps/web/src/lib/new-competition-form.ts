@@ -19,7 +19,8 @@ export function endsOnAfterStartChange(c: {
   endsOn: string;
 }): string {
   if (c.nextStart === "") return c.endsOn;
-  if (c.endsOn === "") return c.nextStart;
+  // ISO dates compare as strings and "" sorts before every date, so an empty End
+  // is "earlier than the new Start" and takes it without a branch of its own.
   if (c.endsOn <= c.prevStart || c.endsOn < c.nextStart) return c.nextStart;
   return c.endsOn;
 }
@@ -38,6 +39,7 @@ export function createBlocker(c: { name: string; startsOn: string; endsOn: strin
   if (noName && noEnd) return "both";
   if (noName) return "name";
   if (noEnd) return "endsOn";
-  if (c.startsOn !== "" && c.endsOn < c.startsOn) return "order";
+  // An empty Start sorts before every date, so it is never after the End.
+  if (c.endsOn < c.startsOn) return "order";
   return null;
 }
