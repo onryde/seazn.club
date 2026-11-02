@@ -7127,6 +7127,51 @@ test("E1 fix 1 m7: every control in every rules panel (the stage card's three, t
   await expectNoHorizontalScroll(page);
 });
 
+// Match Day E1 fix round 2 (m3): the stage card's "N to schedule" clause is a link to the division schedule (fix round 1, m3), so on a phone
+// it is a control and owes the 44px tap floor - measured on the real card, hit-tested at both edges (`assertTapFloor`). Counted: a card
+// that offers no such link, or a run that measures none, is a FAILURE. From `md` up the link is an inline clause in a line of text and the
+// floor does not apply (the rule is phone-only), so there the test pins that the link is on the card and goes to the schedule.
+test("E1 fix 2 m3: the stage card's 'N to schedule' link holds the 44px floor below md, and goes to the division schedule at every width", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(120_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `E1 to-schedule ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "To schedule",
+    sport_key: "badminton",
+    variant_key: "bwf",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const added = await addEntrantsViaApi(request, div.data!.id, ["Ms Alpha", "Ms Bravo", "Ms Charlie"].map((n) => `${n} ${TAG}-${testInfo.project.name}`));
+  expect(added.status, "entrants accepted (an individual-kind roster on a singles division)").toBeLessThan(300);
+  expect(added.ids).toHaveLength(3);
+  const { fixtureIds } = await createStageAndGenerate(request, div.data!.id, { kind: "league", name: "League" });
+  expect(fixtureIds.length, "a league of three plays three matches, none of them dated").toBe(3);
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+
+  const links = page.getByTestId("stage-progress-to-schedule");
+  await expect(links, "the card carries ONE 'N to schedule' link").toHaveCount(1, { timeout: 20_000 });
+  await expect(links.first()).toContainText("3");
+  const href = await links.first().getAttribute("href");
+  expect(href, "the link goes to the division's schedule").toMatch(/\/schedule(\?|$)/);
+  let checked = 0;
+  if (page.viewportSize()!.width < 768) {
+    await assertTapFloor(links.first(), "the stage card's 'N to schedule' link");
+    checked++;
+    expect(checked, "anti-vacuity: the floor was measured on at least one link").toBeGreaterThan(0);
+  } else {
+    await expect(links.first()).toBeVisible();
+  }
+  await expectNoHorizontalScroll(page);
+});
+
 // W2c Task 20 (S4): the division's rule lock lines at every width (Match Day C2: on the Division rules strip's Match rules
 // panel, on the Fixtures tab - they left Settings with the match rules). A started stage locks the match-rule fields, and the
 // section says so ONCE ("Locked: Pool A has started and plays this format"; C2 fix round 1, I1 - never a line per field). The lines are plain text in the existing
