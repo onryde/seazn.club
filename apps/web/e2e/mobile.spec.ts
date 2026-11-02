@@ -7129,7 +7129,7 @@ test("E1 fix 1 m7: every control in every rules panel (the stage card's three, t
 
 // Match Day E1 fix round 2 (m3): the stage card's "N to schedule" clause is a link to the division schedule (fix round 1, m3), so on a phone
 // it is a control and owes the 44px tap floor - measured on the real card, hit-tested at both edges (`assertTapFloor`). Counted: a card
-// that offers no such link, or a run that measures none, is a FAILURE. From `md` up the link is an inline clause in a line of text and the
+// that offers no such link is a FAILURE (`toHaveCount(1)`), so the floor is never measured on nothing. From `md` up the link is an inline clause in a line of text and the
 // floor does not apply (the rule is phone-only), so there the test pins that the link is on the card and goes to the schedule.
 test("E1 fix 2 m3: the stage card's 'N to schedule' link holds the 44px floor below md, and goes to the division schedule at every width", async ({
   page,
@@ -7161,11 +7161,9 @@ test("E1 fix 2 m3: the stage card's 'N to schedule' link holds the 44px floor be
   await expect(links.first()).toContainText("3");
   const href = await links.first().getAttribute("href");
   expect(href, "the link goes to the division's schedule").toMatch(/\/schedule(\?|$)/);
-  let checked = 0;
+  // Anti-vacuity is `toHaveCount(1)` above: a card with no such link fails there, so the floor is never measured on nothing.
   if (page.viewportSize()!.width < 768) {
     await assertTapFloor(links.first(), "the stage card's 'N to schedule' link");
-    checked++;
-    expect(checked, "anti-vacuity: the floor was measured on at least one link").toBeGreaterThan(0);
   } else {
     await expect(links.first()).toBeVisible();
   }
