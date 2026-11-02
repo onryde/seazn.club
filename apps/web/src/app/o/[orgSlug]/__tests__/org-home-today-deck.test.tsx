@@ -345,6 +345,25 @@ describe("Show finished", () => {
     expect(sw).toContain('href="/o/riverside"');
   });
 
+  it("a finished card ends without B's stub: nothing upcoming is its normal state, and no editor's next step applies", async () => {
+    // Both finished competitions have nothing coming up — "done" played its 6, "shelved" never had a fixture — so the stub
+    // rule alone would hang "No match scheduled" and "No fixtures yet / Set up the draw" on them. The running one with no
+    // fixture yet keeps its stub (the positive pair).
+    seed([
+      [comp("running", "live"), stats("running", { total: 0, next: null }), 0],
+      [comp("done", "completed"), stats("done", { played: 6, next: null }), 0],
+      [comp("shelved", "archived"), stats("shelved", { total: 0, next: null }), 0],
+    ]);
+    const html = await render({ finished: "1" });
+    const finished = blocks(html, "org-home-group").find((g) => g.includes('data-group="finished"'))!;
+    const cards = blocks(finished, "org-home-card");
+    expect(cards.map(slugOf)).toEqual(["done", "shelved"]);
+    for (const c of cards) expect(c, slugOf(c)).not.toContain("org-home-stub");
+    expect(finished).not.toContain(en["org.home.stub.setUp"]);
+    expect(blocks(html, "org-home-stub")).toHaveLength(1);
+    expect(blocks(html, "org-home-card").filter((c) => c.includes("org-home-stub")).map(slugOf)).toEqual(["running"]);
+  });
+
   it("a finished competition stays hidden even with a match today (the deck is for competitions still running)", async () => {
     seed([...rows().slice(0, 1), [comp("done", "completed"), stats("done", { next: null }), 2]]);
     const html = await render();

@@ -214,9 +214,10 @@ export default async function OrgHomePage({
       matchesToday: today.counts.get(e.c.id) ?? 0,
       matchDayHref: routes.competitionMatchDay(orgSlug, e.c.slug),
     }));
-  const quiet = (e: Entry): QuietCardData => {
+  const quiet = (e: Entry, group: HomeGroup): QuietCardData => {
     const s = stats.get(e.c.id);
-    const kind = stubOf({ total: s?.total ?? 0, next: s?.next ?? null });
+    // A finished competition has nothing coming up as its normal state, and no next step: B's stub is for one still running.
+    const kind = group === "finished" ? null : stubOf({ total: s?.total ?? 0, next: s?.next ?? null });
     // The stub's action is an editor's: a viewer is shown the state, never a button for work the landing page will not let
     // them do (the desk ledger's rule).
     const action =
@@ -236,7 +237,7 @@ export default async function OrgHomePage({
     return { ...base(e, "light"), next: nextLine(s?.next ?? null, locale), stub: kind ? { kind, action } : null };
   };
   const roster = ROSTER.filter((r) => r.group !== "finished" || showFinished)
-    .map((r) => ({ ...r, cards: banded.filter((b) => b.group === r.group).map((b) => quiet(b.e)) }))
+    .map((r) => ({ ...r, cards: banded.filter((b) => b.group === r.group).map((b) => quiet(b.e, b.group)) }))
     .filter((r) => r.cards.length > 0);
   const visible = todayRows.length + roster.reduce((n, r) => n + r.cards.length, 0);
 
