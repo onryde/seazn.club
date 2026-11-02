@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { TAG, apiJson, addEntrantsViaApi, divisionPath } from "./helpers";
+import { TAG, apiJson, addEntrantsViaApi, divisionPath, expandStageCard } from "./helpers";
 
 // The Swiss shape legend (owner-approved 2026-09-22, option B) — one line under
 // a swiss stage's title on the competition desk:
@@ -292,6 +292,15 @@ test("swiss shape legend: odd, even, stale, complete and empty fields, at 320 / 
       await expect(header, `${c.key}@${w}: the stage card header rendered`).toBeVisible({
         timeout: 30_000,
       });
+      // Match Day PB1 (owner 2026-11-02): a COMPLETED stage's card loads folded
+      // to one line, and the legend folds with the rest of its header. The
+      // `complete-*` case opens it the way a person would (a no-op for every
+      // other case: a running or empty stage has no toggle) - before BOTH
+      // branches, so "no legend" below is never satisfied by a fold.
+      if (c.play) {
+        await expect(header.getByTestId("stage-collapse-toggle"), `${c.key}@${w}: premise, the completed card loads folded`).toHaveAttribute("aria-expanded", "false");
+      }
+      await expandStageCard(page.getByTestId("stage-sheet").first());
 
       if (c.expected === null) {
         await expect(
@@ -302,7 +311,8 @@ test("swiss shape legend: odd, even, stale, complete and empty fields, at 320 / 
       } else {
         const legend = header.getByTestId("stage-swiss-legend").first();
         // toBeVisible, not toBeAttached: the point of this spec is that a
-        // PERSON can read the line, and nothing folds it behind a disclosure.
+        // PERSON can read the line. Nothing folds it behind a disclosure on a
+        // live stage; on a completed one (PB1) it is read once the card is open.
         await expect(legend, `${c.key}@${w}: legend on screen`).toBeVisible({ timeout: 30_000 });
         seen[`${c.key}@${w}`] = (await legend.textContent())!.trim();
       }

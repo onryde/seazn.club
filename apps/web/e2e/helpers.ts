@@ -2673,11 +2673,21 @@ async function expandToggles(toggles: Locator): Promise<void> {
     const toggle = toggles.nth(i);
     await expect(async () => {
       if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
-      await expect(toggle, "the folded stage card did not open").toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
+      await expect(toggle, "the folded card / round did not open").toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
     }).toPass({ timeout: 15_000 });
   }
 }
 export const expandStageCard = (card: Locator): Promise<void> => expandToggles(card.getByTestId("stage-collapse-toggle"));
+
+/** Match Day PB1: open every fold in `scope` the way a person would before reading what is in it - each COMPLETED stage card first
+ *  (its rounds are inside its body), then each FINISHED round's bar (`run-sheet-round-toggle`: a league / group / Swiss / Americano
+ *  round whose every real match is settled loads folded). A no-op where nothing is folded. It opens what is on the page when it is
+ *  called, so call it after a positive anchor says the content rendered (a row count, a card header). Never a weaker assertion: the
+ *  read that follows still asks for VISIBLE. */
+export async function expandAllFolds(scope: Page | Locator): Promise<void> {
+  await expandToggles(scope.getByTestId("stage-collapse-toggle"));
+  await expandToggles(scope.getByTestId("run-sheet-round-toggle"));
+}
 
 /** Press one panel's button (the header's, or - on a phone - the sheet's row) until the panel reads open / closed. A click before
  *  hydration is a no-op, so the press is retried against what the header button says, and never doubled. */
