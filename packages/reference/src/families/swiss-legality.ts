@@ -14,8 +14,11 @@
 //      perfect-matching test. Odd field: for each bye-eligible entrant, delete it and test. A refusal is correct iff
 //      no test succeeds AND it names a reason; zero boards returned as success is `empty_success` (SW-H1).
 //   4. The bye (P-Q2's hard core): no eligible entrant with a strictly LOWER score may leave a pairable remainder.
-//   5. Round 1 with seeds and no history: exactly the fold of the active field in seed order (S1[i] v S2[i]); an odd
-//      field's bye is the last seed (lowest score — all are 0 — then lowest ranked).
+//   5. Round 1 with explicit seeds and no history, for the stage's EFFECTIVE round-1 mode (§2.3 item 5; §7 stores the
+//      mode per stage, with a per-press override, #844): fold → S1[i] v S2[i]; rank_adjacent → 1v2, 3v4, …; the
+//      default is fold. An odd field's bye is the last seed in both modes (P-Q2's full row: lowest score — all are 0 —
+//      then lowest ranked). Without explicit seeds ("unseeded": registration order or a lot) item 5 does not apply,
+//      so round 1 is judged on legality alone.
 //   6. Anti-vacuity: `examined` reports the boards, byes and perfect-matching tests the check looked at.
 
 import { SwissOutOfScope, blossomMatching } from "./swiss-matching.ts";
@@ -36,9 +39,13 @@ export type SwissHistoryIn = {
   scores: Record<string, number>;
 };
 
+/** The stage's effective round-1 mode (§2.3 item 5, §7): an exact order when seeded, none when not. */
+export type SwissRound1Mode = "fold" | "rank_adjacent" | "unseeded";
+export const SWISS_ROUND1_MODES: readonly SwissRound1Mode[] = Object.freeze(["fold", "rank_adjacent", "unseeded"]);
+
 /**
- * One round to judge. `field` is every entrant of the stage IN SEED (TPN) ORDER — round 1 is checked as the exact fold
- * of that order (§2.3 item 5). `departed` are the withdrawn, disqualified and deleted entrants (P-A7); the active field
+ * One round to judge. `field` is every entrant of the stage IN SEED (TPN) ORDER — round 1 is checked as the exact
+ * `round1Mode` order of that field (§2.3 item 5; default `fold`, #844; `unseeded` checks legality only). `departed` are the withdrawn, disqualified and deleted entrants (P-A7); the active field
  * is `field` minus `departed`. With `chess` on, a board's `home` plays White and its `away` Black.
  */
 export type SwissRoundIn = {
@@ -46,10 +53,11 @@ export type SwissRoundIn = {
   departed: string[];
   chess: boolean;
   history: SwissHistoryIn;
+  round1Mode?: SwissRound1Mode;
   outcome: { kind: "paired"; boards: { home: string; away: string }[]; bye: string | null } | { kind: "refused"; reason: string };
 };
 
-/** §2.1's absolute rows, P-Q2's hard core (§2.3 item 4), and the exact round 1 (§2.3 item 5, the P-Q3 fold). */
+/** §2.1's absolute rows, P-Q2's hard core (§2.3 item 4), and the exact seeded round 1 (§2.3 item 5; P-Q3 / P-Q4's round-1 order). */
 export type SwissRule = "P-A1" | "P-A3" | "P-A4" | "P-A5" | "P-A6" | "P-A7" | "P-Q2" | "P-Q3";
 export type SwissViolation = { rule: SwissRule; detail: string };
 
@@ -62,6 +70,8 @@ export type SwissVerdict = {
 
 export function checkSwissRound(input: SwissRoundIn): SwissVerdict {
   const { field, chess, history, outcome } = input;
+  const round1Mode = input.round1Mode ?? "fold";
+  if (!SWISS_ROUND1_MODES.includes(round1Mode)) throw new Error(`checkSwissRound: unknown round-1 mode ${JSON.stringify(round1Mode)}`);
   const seen = new Set<string>();
   for (const id of field) {
     if (seen.has(id)) throw new Error(`checkSwissRound: the field names ${id} twice`);
@@ -170,17 +180,19 @@ export function checkSwissRound(input: SwissRoundIn): SwissVerdict {
     if (lower.length > 0) violations.push({ rule: "P-Q2", detail: `${bye} (${scoreOf(bye)}) has the bye while ${lower.map((id) => `${id} (${scoreOf(id)})`).join(", ")} scores less and leaves a pairable remainder` });
   }
 
-  // §2.3 item 5: round 1 with seeds and no history is the exact fold.
-  if (isRoundOne(history)) {
+  // §2.3 item 5: round 1 with explicit seeds and no history is exact, in the stage's effective mode.
+  if (round1Mode !== "unseeded" && isRoundOne(history)) {
     const order = odd ? active.slice(0, -1) : active;
     const owedBye = odd ? (active[active.length - 1] ?? null) : null;
     const half = order.length / 2;
-    const owed = order.slice(0, half).map((s1, i) => pairOf(s1, order[half + i] as string));
+    const owed = round1Mode === "fold"
+      ? order.slice(0, half).map((s1, i) => pairOf(s1, order[half + i] as string))
+      : order.slice(0, half).map((_, i) => pairOf(order[2 * i] as string, order[2 * i + 1] as string));
     const got = boards.map(({ home, away }) => pairOf(home, away));
     const same = owedBye === bye && owed.length === got.length && [...owed].sort().join() === [...got].sort().join();
     if (!same) {
       const show = (pairs: string[], b: string | null) => `${pairs.map((p) => (JSON.parse(p) as string[]).join("–")).join(", ")}${b === null ? "" : `, bye ${b}`}`;
-      violations.push({ rule: "P-Q3", detail: `round 1 owes the fold ${show(owed, owedBye)}; got ${show(got, bye)}` });
+      violations.push({ rule: "P-Q3", detail: `round 1 (${round1Mode}) owes ${show(owed, owedBye)}; got ${show(got, bye)}` });
     }
   }
 

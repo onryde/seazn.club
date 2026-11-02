@@ -7,12 +7,26 @@
 // as a black box and every round it seats is judged here. `pairKey` comes with it, as the engine's own declared encoding
 // of its `played` input (SwissHistory.played is a set of pairKey strings) — the harness never guesses that format.
 //
+// What the sweep (Step 3) can and cannot reach, by construction — the unit tests carry every rule regardless:
+//   - P-A1, P-A3, P-A5, P-A6 (existence, empty rounds) and P-Q3 in both seeded modes (fold, rank_adjacent): every round.
+//   - P-A2 (a walkover is not a meeting): one sequence in three has walkovers; boards re-pairing a walked-over pair are
+//     counted and asserted > 0.
+//   - P-A4: its walkover clause and its second-bye clause are both reached once walkovers exhaust the bye-eligible pool
+//     below the hard maximum. That is where the sweep found the named engine 1.x defect (a bye re-given where a refusal
+//     was owed). The engine's SwissHistory has one bye-eligibility channel, `byes`, and the harness passes walkover
+//     winners through it. That is the harness's encoding; how the app maps them is App-B's to prove on the real app path.
+//   - P-A7: checked on every round with a departed entrant (counted), but it cannot be VIOLATED here. The harness builds
+//     the engine's standings from the active field, and pairRound has no departed channel, so the app path (App-B) owns it.
+//   - P-Q2: printed as an opportunity count (a bye above a strictly lower eligible entrant). It is 0 because engine 1.1.0
+//     never offers that choice, so only the unit tests witness P-Q2.
+//
 // Single-sport reason: the checker has no sport parameter. Its one sport-dependent rule is P-A5 (chess colours, the
 // boardgame row), so the "another sport" axis is `chess` on and off, which every colour test runs both ways.
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { pairKey, pairRound } from "@seazn/engine/scheduling";
-import { checkSwissRound, type SwissColour, type SwissHistoryIn, type SwissRoundIn, type SwissRule, type SwissVerdict } from "./swiss-legality.ts";
+import { checkSwissRound, type SwissColour, type SwissHistoryIn, type SwissRound1Mode, type SwissRoundIn, type SwissRule, type SwissVerdict } from "./swiss-legality.ts";
+import type * as Matching from "./swiss-matching.ts";
 import { BLOSSOM_MAX_N, BRUTE_FORCE_MAX_N, SwissOutOfScope, blossomMatching, bruteForceMaximumMatching, bruteForcePerfectMatching } from "./swiss-matching.ts";
 
 /** Anti-vacuity (TEST-STRATEGY rule 2): every property and sweep prints how many items it checked. */
@@ -33,8 +47,8 @@ const zeros = (ids: readonly string[]): Record<string, number> => Object.fromEnt
 const paired = (boards: Pair[], bye: string | null = null): SwissRoundIn["outcome"] => ({ kind: "paired", boards: boards.map(([home, away]) => ({ home, away })), bye });
 const refused = (reason: string): SwissRoundIn["outcome"] => ({ kind: "refused", reason });
 const rulesOf = (v: SwissVerdict): SwissRule[] => v.violations.map((x) => x.rule);
-const check = (field: string[], h: SwissHistoryIn, outcome: SwissRoundIn["outcome"], opts: { chess?: boolean; departed?: string[] } = {}): SwissVerdict =>
-  checkSwissRound({ field, departed: opts.departed ?? [], chess: opts.chess ?? false, history: h, outcome });
+const check = (field: string[], h: SwissHistoryIn, outcome: SwissRoundIn["outcome"], opts: { chess?: boolean; departed?: string[]; round1Mode?: SwissRound1Mode } = {}): SwissVerdict =>
+  checkSwissRound({ field, departed: opts.departed ?? [], chess: opts.chess ?? false, history: h, outcome, ...(opts.round1Mode === undefined ? {} : { round1Mode: opts.round1Mode }) });
 
 const FOUR = ["A", "B", "C", "D"];
 const FIVE = ["A", "B", "C", "D", "E"];
@@ -227,6 +241,25 @@ describe("§2.3 item 3: existence (P-A6) — refusals and empty rounds", () => {
     expect(exhausted.violations[0]?.detail).toMatch(/refusal was owed/);
   });
 
+  it("the empty round's boundary: 2 active entrants with zero boards is empty_success (one board was owed); 1 active entrant's only seating is the bye — legal with it, P-A3 without it, never empty_success", () => {
+    // A fresh 2-entrant field: A–B is owed, and nothing came back.
+    expect(check(["A", "B"], history({ scores: zeros(["A", "B"]) }), paired([]))).toEqual({
+      verdict: "empty_success",
+      violations: [{ rule: "P-A6", detail: "zero boards returned as success while a legal pairing exists" }],
+      examined: { boards: 0, byes: 0, candidates: 1 },
+    });
+    // 3 entrants, C withdrew: the same 2-entrant boundary, reached after a withdrawal.
+    expect(check(["A", "B", "C"], history({ scores: zeros(["A", "B", "C"]) }), paired([]), { departed: ["C"] }).verdict).toBe("empty_success");
+    // A and B played round 1 (A won), then B withdrew. Round 2 has one active entrant: no board is possible, so zero
+    // boards is the only seating — A on the bye is legal (P-A3: seated once, odd field, one bye; A never had a bye).
+    const alone = history({ met: [["A", "B"]], scores: { A: 1, B: 0 } });
+    expect(check(["A", "B"], alone, paired([], "A"), { departed: ["B"] })).toEqual({ verdict: "legal", violations: [], examined: { boards: 0, byes: 1, candidates: 1 } });
+    // Without the bye, A is unseated and the odd field has no bye: P-A3 twice — illegal, not empty_success.
+    const unseated = check(["A", "B"], alone, paired([]), { departed: ["B"] });
+    expect(unseated.verdict).toBe("illegal");
+    expect(rulesOf(unseated)).toEqual(["P-A3", "P-A3"]);
+  });
+
   it("P-A5 inside existence: compatibility is pairwise — with chess on, a field whose every unmet pair breaks the colour limits has no pairing; with chess off it has one", () => {
     // 4 players, chess, after round 2: R1 A(W)–C(B), B(W)–D(B); R2 A(W)–D(B), B(W)–C(B).
     // Colours A W,W · B W,W · C B,B · D B,B. Unmet: A–B (both need Black) and C–D (both need White): neither pair has
@@ -262,7 +295,7 @@ describe("§2.3 item 4: the bye goes to the lowest score whose removal leaves a 
   });
 });
 
-describe("§2.3 item 5: round 1 with seeds and no history is exact — the fold S1[i] v S2[i]", () => {
+describe("§2.3 item 5: round 1 with explicit seeds and no history is exact, in the stage's effective mode (§7: fold by default, or rank_adjacent; unseeded is not exact)", () => {
   const EIGHT = ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"];
   const R0 = (ids: string[]) => history({ scores: zeros(ids) });
 
@@ -280,6 +313,49 @@ describe("§2.3 item 5: round 1 with seeds and no history is exact — the fold 
     expect(check(SEVEN, R0(SEVEN), paired([["p1", "p4"], ["p2", "p5"], ["p3", "p6"]], "p7")).verdict).toBe("legal");
     // p1 on the bye, p2..p7 folded (2v5, 3v6, 4v7): all scores 0, so P-Q2 is silent — only the round-1 fold is broken.
     expect(rulesOf(check(SEVEN, R0(SEVEN), paired([["p2", "p5"], ["p3", "p6"], ["p4", "p7"]], "p1")))).toEqual(["P-Q3"]);
+  });
+
+  it("rank_adjacent (§2.3 item 5: 1v2, 3v4): 8 seeds 1v2, 3v4, 5v6, 7v8 is legal; the fold is illegal under it; an explicit fold equals the default", () => {
+    const adjacent = paired([["p1", "p2"], ["p3", "p4"], ["p5", "p6"], ["p7", "p8"]]);
+    const fold = paired([["p1", "p5"], ["p2", "p6"], ["p3", "p7"], ["p4", "p8"]]);
+    expect(check(EIGHT, R0(EIGHT), adjacent, { round1Mode: "rank_adjacent" })).toEqual({ verdict: "legal", violations: [], examined: { boards: 4, byes: 0, candidates: 1 } });
+    expect(check(EIGHT, R0(EIGHT), paired([["p2", "p1"], ["p4", "p3"], ["p6", "p5"], ["p8", "p7"]]), { round1Mode: "rank_adjacent", chess: true }).verdict).toBe("legal");
+    const wrong = check(EIGHT, R0(EIGHT), fold, { round1Mode: "rank_adjacent" });
+    expect(wrong.verdict).toBe("illegal");
+    expect(rulesOf(wrong)).toEqual(["P-Q3"]);
+    expect(wrong.violations[0]?.detail).toMatch(/rank_adjacent/);
+    // 1v3, 2v4, 5v7, 6v8: neither order.
+    expect(rulesOf(check(EIGHT, R0(EIGHT), paired([["p1", "p3"], ["p2", "p4"], ["p5", "p7"], ["p6", "p8"]]), { round1Mode: "rank_adjacent" }))).toEqual(["P-Q3"]);
+    expect(check(EIGHT, R0(EIGHT), fold, { round1Mode: "fold" })).toEqual(check(EIGHT, R0(EIGHT), fold));
+    expect(rulesOf(check(EIGHT, R0(EIGHT), adjacent, { round1Mode: "fold" }))).toEqual(["P-Q3"]);
+  });
+
+  it("rank_adjacent, 7 seeds: the last seed takes the bye and the rest pair adjacently (1v2, 3v4, 5v6); a fold or another bye is illegal", () => {
+    const SEVEN = EIGHT.slice(0, 7);
+    expect(check(SEVEN, R0(SEVEN), paired([["p1", "p2"], ["p3", "p4"], ["p5", "p6"]], "p7"), { round1Mode: "rank_adjacent" }).verdict).toBe("legal");
+    expect(rulesOf(check(SEVEN, R0(SEVEN), paired([["p1", "p4"], ["p2", "p5"], ["p3", "p6"]], "p7"), { round1Mode: "rank_adjacent" }))).toEqual(["P-Q3"]);
+    // p1 on the bye, p2..p7 adjacent (2v3, 4v5, 6v7): all scores 0, so P-Q2 is silent — only the round-1 order breaks.
+    expect(rulesOf(check(SEVEN, R0(SEVEN), paired([["p2", "p3"], ["p4", "p5"], ["p6", "p7"]], "p1"), { round1Mode: "rank_adjacent" }))).toEqual(["P-Q3"]);
+  });
+
+  it("unseeded round 1 (no explicit seeds: item 5 does not apply) is judged on legality alone — any order is legal, a partial round or a missing bye is not", () => {
+    const SEVEN = EIGHT.slice(0, 7);
+    for (const boards of [
+      [["p1", "p5"], ["p2", "p6"], ["p3", "p7"], ["p4", "p8"]],
+      [["p1", "p2"], ["p3", "p4"], ["p5", "p6"], ["p7", "p8"]],
+      [["p1", "p8"], ["p2", "p7"], ["p3", "p6"], ["p4", "p5"]],
+    ] as Pair[][]) {
+      expect(check(EIGHT, R0(EIGHT), paired(boards), { round1Mode: "unseeded" }).verdict).toBe("legal");
+    }
+    // Any bye in an odd field: all scores are 0, so P-Q2 has nobody strictly lower.
+    expect(check(SEVEN, R0(SEVEN), paired([["p2", "p7"], ["p3", "p6"], ["p4", "p5"]], "p1"), { round1Mode: "unseeded" }).verdict).toBe("legal");
+    // Legality still holds: p7 and p8 unseated (P-A3 ×2); the odd field without a bye (p7 unseated, no bye).
+    expect(rulesOf(check(EIGHT, R0(EIGHT), paired([["p1", "p2"], ["p3", "p4"], ["p5", "p6"]]), { round1Mode: "unseeded" }))).toEqual(["P-A3", "P-A3"]);
+    expect(rulesOf(check(SEVEN, R0(SEVEN), paired([["p1", "p2"], ["p3", "p4"], ["p5", "p6"]]), { round1Mode: "unseeded" }))).toEqual(["P-A3", "P-A3"]);
+  });
+
+  it("an unknown round-1 mode is refused, never read as a default", () => {
+    expect(() => checkSwissRound({ field: EIGHT, departed: [], chess: false, history: R0(EIGHT), round1Mode: "random" as SwissRound1Mode, outcome: paired([]) })).toThrow(/unknown round-1 mode "random"/);
   });
 
   it("after a withdrawal before round 1: the fold is of the ACTIVE field in seed order (p3 gone: bye p8; 1v5, 2v6, 4v7)", () => {
@@ -351,26 +427,107 @@ describe("RB3-24: the matching oracle, cross-checked", () => {
   });
 });
 
+// 3 players, no bye-eligible entrant left within the hard maximum (§3.1: 3 rounds for n = 3).
+//   R1: A–B walkover (B absent: A scores a win's points without playing — not a meeting, P-A2), C bye → A1 B0 C1.
+//   R2: A–C (A wins), B bye → A2 B1 C1.
+// Met: A–C. Byes: C, B. Walkover winner: A. Round 3 is odd and every entrant is barred from the bye (P-A4): no seating
+// is legal, so a named refusal is owed (P-A6) — and no candidate is even tested.
+const THREE_NO_ELIGIBLE = history({ met: [["A", "C"]], byes: ["C", "B"], walkoverWinners: ["A"], scores: { A: 2, B: 1, C: 1 } });
+
+describe("P-A4 × P-A6: an odd round with no bye-eligible entrant left", () => {
+  it("3 players after 2 rounds (A won a walkover; B and C had byes): every seating is illegal (P-A4), a named refusal is correct, 0 candidates", () => {
+    // A–B never met (the walkover is not a meeting): C's second bye is the only fault.
+    expect(rulesOf(check(["A", "B", "C"], THREE_NO_ELIGIBLE, paired([["A", "B"]], "C")))).toEqual(["P-A4"]);
+    // B–C never met: A's bye after a walkover win is the only fault.
+    expect(rulesOf(check(["A", "B", "C"], THREE_NO_ELIGIBLE, paired([["B", "C"]], "A")))).toEqual(["P-A4"]);
+    expect(check(["A", "B", "C"], THREE_NO_ELIGIBLE, refused("NO_LEGAL_PAIRING: no entrant may take the bye"))).toEqual({ verdict: "refusal_correct", violations: [], examined: { boards: 0, byes: 0, candidates: 0 } });
+  });
+
+  // Named regression (TEST-STRATEGY rule 10), found by the producer -> consumer sweep with walkovers: the same history
+  // through the engine's real pairRound. The expectation is the RULEBOOK's answer, refusal_correct. Engine 1.1.0 re-gives
+  // a bye instead, so this test is marked `fails`: it turns red the day the engine refuses, and App-B's bump then drops
+  // the `.fails`. The walkover winner reaches the engine through `byes`, its one bye-eligibility channel (header).
+  it.fails("engine 1.x: 3 players, round 3 with no bye-eligible entrant — the engine owes a named refusal (P-A6); 1.1.0 re-gives a bye (P-A4)", () => {
+    const standings = [{ entrantId: "A", score: 2, rank: 1 }, { entrantId: "B", score: 1, rank: 2 }, { entrantId: "C", score: 1, rank: 3 }];
+    let outcome: SwissRoundIn["outcome"];
+    try {
+      const r = pairRound(standings, { played: new Set([pairKey("A", "C")]), byes: new Set(["C", "B", "A"]) }, { chess: false });
+      outcome = { kind: "paired", boards: r.pairings.map((p) => ({ home: p.home, away: p.away })), bye: r.bye ?? null };
+    } catch (e) {
+      outcome = { kind: "refused", reason: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
+    }
+    const v = check(["A", "B", "C"], THREE_NO_ELIGIBLE, outcome);
+    report(`named regression (engine 1.x, P-A4 × P-A6): outcome ${JSON.stringify(outcome)} → ${v.verdict} ${JSON.stringify(v.violations)}`);
+    expect(v.verdict).toBe("refusal_correct");
+  });
+});
+
+describe("the checker's own guard: a broken matching oracle is refused, never turned into a verdict", () => {
+  it("with blossomMatching stubbed to match nothing, a legal round throws 'the oracle is broken'; an illegal round still answers illegal", async () => {
+    vi.resetModules();
+    vi.doMock("./swiss-matching.ts", async (importOriginal) => ({ ...(await importOriginal<typeof Matching>()), blossomMatching: (n: number) => new Int32Array(n).fill(-1) }));
+    try {
+      const { checkSwissRound: withBrokenOracle } = await import("./swiss-legality.ts");
+      const round = (outcome: SwissRoundIn["outcome"]): SwissRoundIn => ({ field: FOUR, departed: [], chess: false, history: FOUR_R1, outcome });
+      // FOUR_R1, A–C and B–D: legal by every rule, yet the stub finds no perfect matching.
+      expect(() => withBrokenOracle(round(paired([["A", "C"], ["B", "D"]])))).toThrow(/the oracle is broken/);
+      // The guard fires on a LEGAL verdict only: the rematch round is illegal (P-A1 ×2) whatever the oracle says.
+      expect(rulesOf(withBrokenOracle(round(paired([["A", "B"], ["C", "D"]]))))).toEqual(["P-A1", "P-A1"]);
+    } finally {
+      vi.doUnmock("./swiss-matching.ts");
+      vi.resetModules();
+    }
+  });
+});
+
 describe("producer -> consumer (R15): the engine's real pairRound, every round judged", () => {
-  it("200 seeded sequences, n 2–16, rounds to the hard maximum (§3.1), chess on and off, some with a withdrawal: no illegal round", () => {
+  it("200 seeded sequences, n 2–16, rounds to the hard maximum (§3.1), chess on and off, fold and rank_adjacent, some with a withdrawal or walkovers: no illegal round", () => {
     const BASE_SEED = 20261031;
     const SEQUENCES = 200;
     const histogram: Record<SwissVerdict["verdict"], number> = { legal: 0, illegal: 0, refusal_correct: 0, refusal_wrong: 0, empty_success: 0 };
     const illegal: string[] = [];
+    /** Engine 1.x defect, named (see the regression test above): an odd round with NO bye-eligible entrant left (every
+     *  active entrant had the bye or a walkover win — reachable below the hard maximum only through walkovers) owes a
+     *  named refusal (P-A4, P-A6); 1.1.0 re-gives a bye instead. Matched exactly: odd field, empty eligible pool, every
+     *  violation P-A4. Printed, not asserted — App-B's bump asserts it 0, with `illegal === 0` restored. */
+    const reByeWithNoEligible: string[] = [];
     const notes: string[] = [];
     let rounds = 0;
     let boards = 0;
     let withdrawals = 0;
-    /** empty_success split by what was owed: a pairing existed (the engine failed to find it), or a named refusal. */
-    const emptyOwed = { pairing: 0, refusal: 0 };
+    /** empty_success split by the active field's parity and by what was owed: a pairing existed, or a named refusal. */
+    const emptySplit = { odd_pairing: 0, even_pairing: 0, odd_refusal: 0, even_refusal: 0 };
+    /** How often each rule the unit tests carry had something to judge here (see the header: some are 0 by construction). */
+    const reach = {
+      walkovers: 0,
+      doubleWalkovers: 0,
+      /** P-A2: a board re-pairing two entrants whose earlier board was a walkover (not a meeting). */
+      rePairedAfterWalkover: 0,
+      /** P-A4 walkover clause: an odd round judged with an active walkover winner who never had the bye. */
+      oddRoundsWithWalkoverWinner: 0,
+      /** P-A7: rounds judged with a departed entrant. */
+      roundsWithDeparted: 0,
+      /** P-Q2: odd rounds whose bye holder scored strictly more than some eligible active entrant. */
+      byeAboveALowerEligible: 0,
+      /** P-A4 second bye: odd rounds where every active entrant had already had a bye or a walkover win. */
+      oddRoundsWithNoEligible: 0,
+      round1Fold: 0,
+      round1RankAdjacent: 0,
+    };
     for (let s = 0; s < SEQUENCES; s++) {
       const rng = mulberry32(BASE_SEED + s);
       const n = 2 + (s % 15);
       const chess = s % 2 === 1;
+      // One sequence pair in three is a rank_adjacent stage (§7 stores the mode; the engine's `pairing` constraint).
+      const mode: "fold" | "rank_adjacent" = Math.floor(s / 2) % 3 === 2 ? "rank_adjacent" : "fold";
+      // One sequence in three has walkovers: a one-sided walkover (8% of boards) or a double walkover (2%).
+      const walkovers = s % 3 === 2;
       const field = Array.from({ length: n }, (_, i) => `e${String(i + 1).padStart(2, "0")}`);
       const departed: string[] = [];
       const met: Pair[] = [];
+      const walkedOver: Pair[] = [];
       const byes: string[] = [];
+      const walkoverWinners: string[] = [];
       const colours: Record<string, SwissColour[]> = {};
       const scores: Record<string, number> = zeros(field);
       // One sequence in five loses an entrant between two rounds (TEST-STRATEGY rule 1: after a withdrawal).
@@ -384,31 +541,70 @@ describe("producer -> consumer (R15): the engine's real pairRound, every round j
           .map((entrantId, i) => ({ entrantId, score: scores[entrantId] ?? 0, rank: i + 1 }));
         const engineHistory = {
           played: new Set(met.map(([a, b]) => pairKey(a, b))),
-          byes: new Set(byes),
+          // The engine's one bye-eligibility channel: a walkover winner is passed as bye-ineligible (P-A4) through it.
+          byes: new Set([...byes, ...walkoverWinners]),
           ...(chess ? { colours: new Map(Object.entries(colours)) } : {}),
         };
         let outcome: SwissRoundIn["outcome"];
         try {
-          const r = pairRound(standings, engineHistory, { chess });
+          const r = pairRound(standings, engineHistory, { chess, pairing: mode });
           outcome = { kind: "paired", boards: r.pairings.map((p) => ({ home: p.home, away: p.away })), bye: r.bye ?? null };
         } catch (e) {
           outcome = { kind: "refused", reason: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
         }
-        const before: SwissHistoryIn = { met: met.map(([a, b]): Pair => [a, b]), byes: [...byes], walkoverWinners: [], colours: structuredClone(colours), scores: { ...scores } };
-        const v = checkSwissRound({ field, departed: [...departed], chess, history: before, outcome });
+        const before: SwissHistoryIn = { met: met.map(([a, b]): Pair => [a, b]), byes: [...byes], walkoverWinners: [...walkoverWinners], colours: structuredClone(colours), scores: { ...scores } };
+        const v = checkSwissRound({ field, departed: [...departed], chess, history: before, round1Mode: mode, outcome });
         rounds++;
         boards += v.examined.boards;
         histogram[v.verdict]++;
-        const at = `seq ${s} (seed ${BASE_SEED + s}, n ${n}, chess ${chess}, departed [${departed.join(",")}]) round ${round}`;
-        if (v.verdict === "empty_success") emptyOwed[v.violations[0]?.detail.includes("refusal was owed") === true ? "refusal" : "pairing"]++;
-        if (v.verdict === "illegal") illegal.push(`${at}: ${JSON.stringify(v.violations)} | history ${JSON.stringify(before)} | outcome ${JSON.stringify(outcome)}`);
+        const odd = active.length % 2 === 1;
+        if (round === 1) reach[mode === "fold" ? "round1Fold" : "round1RankAdjacent"]++;
+        if (departed.length > 0) reach.roundsWithDeparted++;
+        if (odd && active.some((id) => walkoverWinners.includes(id) && !byes.includes(id))) reach.oddRoundsWithWalkoverWinner++;
+        if (odd && active.every((id) => byes.includes(id) || walkoverWinners.includes(id))) reach.oddRoundsWithNoEligible++;
+        if (outcome.kind === "paired" && outcome.bye !== null) {
+          const byeScore = scores[outcome.bye] ?? 0;
+          if (active.some((id) => !byes.includes(id) && !walkoverWinners.includes(id) && (scores[id] ?? 0) < byeScore)) reach.byeAboveALowerEligible++;
+        }
+        if (outcome.kind === "paired") {
+          const keyOf = ([a, b]: Pair) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+          const walked = new Set(walkedOver.map(keyOf));
+          reach.rePairedAfterWalkover += outcome.boards.filter(({ home, away }) => walked.has(keyOf([home, away]))).length;
+        }
+        const eligible = active.filter((id) => !byes.includes(id) && !walkoverWinners.includes(id));
+        const at = `seq ${s} (seed ${BASE_SEED + s}, n ${n}, chess ${chess}, ${mode}, walkovers ${walkovers}, departed [${departed.join(",")}]) round ${round}, ${active.length} active, bye-eligible [${eligible.join(",")}]`;
+        if (v.verdict === "empty_success") {
+          const owed = v.violations[0]?.detail.includes("refusal was owed") === true ? "refusal" : "pairing";
+          emptySplit[`${odd ? "odd" : "even"}_${owed}`]++;
+        }
+        if (v.verdict === "illegal") {
+          const line = `${at}: ${JSON.stringify(v.violations)} | history ${JSON.stringify(before)} | outcome ${JSON.stringify(outcome)}`;
+          if (odd && eligible.length === 0 && v.violations.every((x) => x.rule === "P-A4")) reByeWithNoEligible.push(line);
+          else illegal.push(line);
+        }
         if (v.verdict !== "legal") {
           notes.push(`${at}: ${v.verdict}`);
           break;
         }
-        // Play the round: home win, away win or draw, at chess points (win 1, draw ½); the bye scores a win's points.
+        // Play the round. A walkover is not a meeting and gives no colour (P-A2, A2 3.4): its winner scores a win's
+        // points without playing (P-A4); a double walkover scores nobody and leaves both bye-eligible. Otherwise home
+        // win, away win or draw at chess points (win 1, draw ½). The bye scores a win's points.
         if (outcome.kind !== "paired") throw new Error("test: a legal verdict on a refusal");
         for (const { home, away } of outcome.boards) {
+          const wo = walkovers ? rng() : 1;
+          if (wo < 0.02) {
+            walkedOver.push([home, away]);
+            reach.doubleWalkovers++;
+            continue;
+          }
+          if (wo < 0.1) {
+            const winner = wo < 0.06 ? home : away;
+            walkedOver.push([home, away]);
+            if (!walkoverWinners.includes(winner)) walkoverWinners.push(winner);
+            scores[winner] = (scores[winner] ?? 0) + 1;
+            reach.walkovers++;
+            continue;
+          }
           met.push([home, away]);
           const roll = rng();
           if (roll < 0.45) scores[home] = (scores[home] ?? 0) + 1;
@@ -437,16 +633,30 @@ describe("producer -> consumer (R15): the engine's real pairRound, every round j
     }
     report(`producer -> consumer: ${SEQUENCES} sequences (seeds ${BASE_SEED}..${BASE_SEED + SEQUENCES - 1}), ${rounds} rounds, ${boards} boards, ${withdrawals} withdrawals`);
     report(`verdicts: ${JSON.stringify(histogram)}`);
-    // HAND-OFF to App-B's engine bump: once SW-H1 is closed, this becomes `expect(histogram.empty_success).toBe(0)`.
-    report(`empty_success = ${histogram.empty_success} (pairing existed ${emptyOwed.pairing}, refusal owed ${emptyOwed.refusal}) — SW-H1 in engine 1.x, printed, not asserted; App-B's bump asserts 0`);
+    // HAND-OFF to App-B's engine bump: once SW-H1 is closed, this becomes `expect(histogram.empty_success).toBe(0)`,
+    // with `expect(histogram.refusal_wrong).toBe(0)` beside it (an empty round must not turn into a wrong refusal).
+    report(`empty_success = ${histogram.empty_success} ${JSON.stringify(emptySplit)} — SW-H1 in engine 1.x, printed, not asserted; App-B's bump asserts 0`);
+    report(`reach: ${JSON.stringify(reach)}`);
+    report(`known engine 1.x defect — a bye re-given with no bye-eligible entrant left (a refusal was owed): ${reByeWithNoEligible.length} (printed, not asserted; App-B's bump asserts 0)`);
     for (const line of notes.slice(0, 40)) report(`  stop: ${line}`);
+    for (const line of illegal.slice(0, 20)) report(`  ILLEGAL: ${line}`);
+    // No illegal round outside the one named defect — every other rule held on every round the engine seated.
     expect(illegal).toEqual([]);
-    expect(histogram.illegal).toBe(0);
+    expect(histogram.illegal).toBe(reByeWithNoEligible.length);
     expect(rounds).toBeGreaterThan(0);
     expect(histogram.legal).toBeGreaterThan(0);
     expect(boards).toBeGreaterThan(0);
     expect(withdrawals).toBeGreaterThan(0);
-    expect(emptyOwed.pairing + emptyOwed.refusal).toBe(histogram.empty_success);
+    expect(Object.values(emptySplit).reduce((a, b) => a + b, 0)).toBe(histogram.empty_success);
+    // The sweep reached the transitions it claims to (header): walkovers of both kinds, a walked-over pair re-paired
+    // (P-A2), an odd round holding an unbyed walkover winner (P-A4), a departed entrant (P-A7), both round-1 modes.
+    expect(reach.walkovers).toBeGreaterThan(0);
+    expect(reach.doubleWalkovers).toBeGreaterThan(0);
+    expect(reach.rePairedAfterWalkover).toBeGreaterThan(0);
+    expect(reach.oddRoundsWithWalkoverWinner).toBeGreaterThan(0);
+    expect(reach.roundsWithDeparted).toBeGreaterThan(0);
+    expect(reach.round1Fold).toBeGreaterThan(0);
+    expect(reach.round1RankAdjacent).toBeGreaterThan(0);
   });
 });
 

@@ -56,8 +56,8 @@ export type { CreditCfgEntry, PlayedScenario, SportCreditData } from "./families
 
 // W3 adds the Swiss legality and existence checker (rulebook-W3-swiss.md §2.3, RB3-24) — exported here, not held in
 // FAMILIES: it judges one paired round against its history, not a stage kind × sport pair's final answer.
-export { checkSwissRound } from "./families/swiss-legality.ts";
-export type { SwissColour, SwissHistoryIn, SwissRoundIn, SwissRule, SwissVerdict, SwissViolation } from "./families/swiss-legality.ts";
+export { SWISS_ROUND1_MODES, checkSwissRound } from "./families/swiss-legality.ts";
+export type { SwissColour, SwissHistoryIn, SwissRound1Mode, SwissRoundIn, SwissRule, SwissVerdict, SwissViolation } from "./families/swiss-legality.ts";
 export {
   BLOSSOM_MAX_N,
   BRUTE_FORCE_MAX_N,
