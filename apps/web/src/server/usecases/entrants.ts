@@ -43,6 +43,8 @@ import { openRosterSeatGate } from "./online-seat-gate";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
 // W3 T9: an entrant added (or reinstated) while the division's Swiss is running is a late player.
 import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from "./swiss-late-entry";
+// Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
+import type { WithdrawCascadeOut } from "./withdrawal";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -911,16 +913,22 @@ export async function patchEntrant(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,
-): Promise<EntrantWithMembers> {
+): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut }> {
   if (patch.status === "disqualified") {
     const [current] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
     if (current !== undefined && !DEPARTED_STATUSES.has(current.status)) {
       // A dynamic import: withdrawal.ts imports this module (scoring.ts → stages.ts's `completeStage` is the precedent).
       const { withdrawEntrantCascade } = await import("./withdrawal");
-      await withdrawEntrantCascade(auth, id, { as: "disqualified" });
       const rest: PatchEntrant = { ...patch };
       delete rest.status; // written by the cascade
-      return writeEntrantPatch(auth, id, rest);
+      // T15 review m4: the rest of the patch lands FIRST. A refusal there (a roster too big, a seat the online gate
+      // refuses) then answers before any fixture surgery, so a refused PATCH changes nothing; the cascade's own final
+      // write (C6) writes the status.
+      if (Object.keys(rest).length > 0) await writeEntrantPatch(auth, id, rest);
+      const cascade = await withdrawEntrantCascade(auth, id, { as: "disqualified" });
+      // T15 review m3: the cascade's report rides with the entrant — `left_to_organiser` names an abandoned board that
+      // holds the Swiss round until the organiser settles it (X-AB-5), which an API client otherwise never learns.
+      return { ...(await getEntrant(auth, id)), cascade };
     }
   }
   return writeEntrantPatch(auth, id, patch);

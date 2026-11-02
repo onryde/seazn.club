@@ -7,6 +7,44 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-11-02 — `PATCH /entrants/{id}` to `disqualified` walks the entrant's open matches over
+
+`PATCH /api/v1/entrants/{id}` with `status: "disqualified"` used to be a plain
+status write: the entrant's open matches stayed on the schedule, seated, waiting
+for a result she would never play. A disqualification now runs the same fixture
+surgery as `POST /entrants/{id}/withdraw` (W3 T15; rulebook RB3-17:
+"disqualification = withdrawal from that moment"), and writes the status
+`disqualified` at its end.
+
+| Case | Before | Now |
+|---|---|---|
+| A disqualified entrant's open (unplayed) match | stays `scheduled`, seated | walked over to the opponent (`forfeited`, `outcome {kind: "award", reason: "withdrew"}`), or expunged from a table under 50% played, exactly as a withdrawal does it |
+| Her played results | stand | stand (unchanged) |
+| The reply | the entrant | the entrant, plus `cascade` — the withdrawal's report (`policy`, `walkovers`, `voided`, `skipped_finalized`, `walked_over_held`, `left_to_organiser`) |
+| The rest of the same patch (`members`, `seed`, ...) | one write with the status | written FIRST; if it is refused (422), nothing else happens — no surgery, no status |
+| An entrant already `withdrawn` or `disqualified` | a plain status write | unchanged: a plain status write, no `cascade` |
+| `status: "withdrawn"` | a plain status write | unchanged (ruling 111): use `POST /entrants/{id}/withdraw` for the surgery |
+
+The public pages word a disqualified entrant's walkover as a plain walkover
+("Walkover against {name}"), never as a withdrawal.
+
+**What replaces it.** Nothing is removed. A client that disqualified an entrant
+and then settled her matches itself should read `cascade` instead: the matches
+are already settled, and `left_to_organiser` lists the ones (an abandoned board,
+a line both of whose sides have gone) still owed a settle or a void.
+
+**What a consumer sees.** Matches that change state on a disqualification, and a
+new optional `cascade` key on that one reply.
+
+**No data migration was required.** Entrants disqualified before the change keep
+their matches as they stand.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W3 Swiss app-A, Task 15. The pinning tests are
+`apps/web/src/server/usecases/__tests__/disqualify-cascade.test.ts`.
+
 ## 2026-10-29 — the standings export prints what the public standings table prints
 
 `GET /api/v1/divisions/{id}/exports/standings` (PDF and XLSX) used to build its

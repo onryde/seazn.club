@@ -9703,7 +9703,7 @@
         ]
       },
       "patch": {
-        "summary": "Set status, seed, name or members (no fixture surgery — see /withdraw). A members-only patch also renames an ad-hoc entrant whose name was derived from its people (e.g. 'A & B' − B + C → 'A & C'); a custom name, a team-linked entrant or an explicit display_name in the same patch is never renamed",
+        "summary": "Set status, seed, name or members. A status change is a plain write (no fixture surgery — see /withdraw), with one exception: status disqualified on an entrant still in the field runs the withdrawal's fixture surgery (W3 T15, RB3-17: a disqualification is a withdrawal from that moment) — played results stand, her open matches are walked over (or a table's expunged) as /withdraw does them, and the reply carries that report as `cascade` (`left_to_organiser` names an abandoned board still the organiser's to settle). The rest of such a patch is written first, so a field it refuses (422 ENTRANT_ROSTER_TOO_BIG) changes nothing. A members-only patch also renames an ad-hoc entrant whose name was derived from its people (e.g. 'A & B' − B + C → 'A & C'); a custom name, a team-linked entrant or an explicit display_name in the same patch is never renamed",
         "tags": [
           "entrants"
         ],
@@ -9951,6 +9951,70 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "cascade": {
+                          "type": "object",
+                          "properties": {
+                            "entrant_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "withdrawn",
+                                "disqualified"
+                              ]
+                            },
+                            "policy": {
+                              "type": "string",
+                              "enum": [
+                                "none",
+                                "walkover",
+                                "expunge"
+                              ]
+                            },
+                            "walkovers": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "voided": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "skipped_finalized": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "walked_over_held": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "left_to_organiser": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              }
+                            }
+                          },
+                          "required": [
+                            "entrant_id",
+                            "status",
+                            "policy",
+                            "walkovers",
+                            "voided",
+                            "skipped_finalized",
+                            "walked_over_held",
+                            "left_to_organiser"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [

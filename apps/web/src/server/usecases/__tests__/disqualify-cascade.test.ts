@@ -42,6 +42,7 @@ import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { WithdrawCascadeReport } from "@/server/api-v1/schemas";
 import { seedOrg } from "./_seed";
 
 // The public reads (T15 review I4) go through `unstable_cache`, which has no incrementalCache outside a real request: a
@@ -277,6 +278,66 @@ describe.runIf(HAS_DB)("X-SW-23 a disqualification cascades like a withdrawal (R
       expect(await rowsOf(r.stageId)).toEqual(rows1);
     }, 120_000);
   }
+
+  // T15 review m3: the PATCH used to drop the cascade's report, so an API client that disqualified an entrant on an
+  // abandoned board was never told `left_to_organiser` — which holds the Swiss round until it is settled (X-AB-5).
+  it("X-SW-23 the PATCH answers the cascade's report beside the entrant: what it walked over, and an abandoned board left to the organiser (badminton — the route is sport-blind)", async () => {
+    const { r, dq, owed, opponent } = await midSwiss(SPORTS[0]);
+    const other = boardsOf(await rowsOf(r.stageId), 2).find((f) => f.id !== owed.id)!;
+    // The second board's home side, disqualified while her board stands ABANDONED with no result (X-AB-5).
+    const held = other.home_entrant_id!;
+    await scoreEvent(r.auth, other.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.auth, other.id, { expected_seq: 1, type: "core.abandon", payload: { reason: "weather" } });
+    expect((await rowsOf(r.stageId)).find((f) => f.id === other.id)!.status, "premise: the board stands abandoned").toBe("abandoned");
+
+    const out = await patchEntrant(r.auth, dq, { status: "disqualified" });
+    expect(out.status).toBe("disqualified");
+    expect(out.cascade, "the walkover").toEqual({
+      entrant_id: dq,
+      status: "disqualified",
+      policy: "walkover",
+      walkovers: 1,
+      voided: 0,
+      skipped_finalized: 0,
+      walked_over_held: 0,
+      left_to_organiser: [],
+    });
+    expect((await rowsOf(r.stageId)).find((f) => f.id === owed.id)).toMatchObject({ outcome: { winner: opponent, loser: dq } });
+    // The documented reply shape (`PatchedEntrant.cascade`) is the real report, key for key.
+    expect(() => WithdrawCascadeReport.strict().parse(out.cascade), "the report parses strictly as documented").not.toThrow();
+    const left = await patchEntrant(r.auth, held, { status: "disqualified" });
+    expect(left.cascade?.left_to_organiser, "the abandoned board is named, still the organiser's to settle").toEqual([other.id]);
+    expect(left.cascade?.walkovers).toBe(0);
+    // Positive pairs: a write that runs no cascade answers no report — a plain flip between departed statuses, and a
+    // patch that names no status.
+    expect("cascade" in (await patchEntrant(r.auth, dq, { status: "withdrawn" })), "a departed entrant's plain flip").toBe(false);
+    expect("cascade" in (await patchEntrant(r.auth, opponent, { seed: 9 })), "a seed edit").toBe(false);
+  }, 120_000);
+
+  // T15 review m4: the DQ PATCH ran the cascade, then wrote the rest of the patch in a second transaction — a refused
+  // rest (a roster too big for the kind) answered an error over a cascade already committed. The rest now lands first.
+  it("X-SW-23 a DQ PATCH whose other fields are refused changes nothing: no walkover, no status, no event (badminton — the route is sport-blind)", async () => {
+    const { r, dq } = await midSwiss(SPORTS[0]);
+    const before = await rowsOf(r.stageId);
+    const w0 = await writes(r.divisionId);
+    const status0 = (await getEntrant(r.auth, dq)).status;
+    expect(["withdrawn", "disqualified"], "premise: she is in the field").not.toContain(status0);
+    const [row] = await sql<{ kind: string }[]>`select kind from entrants where id = ${dq}`;
+    const cap = entrantKindCap(row!.kind);
+    const tooMany = Array.from({ length: cap + 1 }, () => ({ person_id: randomUUID(), is_captain: false, roles: [] }));
+    await expect(patchEntrant(r.auth, dq, { status: "disqualified", members: tooMany as never })).rejects.toMatchObject({
+      status: 422,
+      code: "ENTRANT_ROSTER_TOO_BIG",
+    });
+    expect((await getEntrant(r.auth, dq)).status, "she is not disqualified").toBe(status0);
+    expect(await rowsOf(r.stageId), "no fixture moved").toEqual(before);
+    expect(await writes(r.divisionId), "no score event and no ledger row").toEqual(w0);
+    // …and the same PATCH with a roster that fits lands both: the members and the cascade.
+    const fits = (await getEntrant(r.auth, dq)).members.map((m) => ({ person_id: (m as { person_id: string }).person_id, is_captain: false, roles: [] }));
+    expect(fits.length, "premise: she has a roster to re-send").toBeGreaterThan(0);
+    const out = await patchEntrant(r.auth, dq, { status: "disqualified", members: fits.slice(0, 1) as never });
+    expect([out.status, out.members.length, out.cascade?.walkovers]).toEqual(["disqualified", 1, 1]);
+  }, 120_000);
 
   it("X-SW-23 the cascade reports what it wrote as `disqualified`; a withdrawn entrant then disqualified is a plain flip (badminton — the report is sport-blind)", async () => {
     const { r, dq, owed, opponent } = await midSwiss(SPORTS[0]);

@@ -759,6 +759,25 @@ export const Entrant = z.object({
   swiss_first_round_stage_id: Uuid.nullable(),
 });
 
+/** W3 T15 review m3: the withdrawal cascade's report (`withdrawEntrantCascade`) — what a disqualification through
+ *  `PATCH /entrants/{id}` walked over, voided or left to the organiser. Mirrors `WithdrawCascadeOut` (withdrawal.ts);
+ *  disqualify-cascade.test.ts parses the real report strictly against it. */
+export const WithdrawCascadeReport = z.object({
+  entrant_id: Uuid,
+  status: z.enum(["withdrawn", "disqualified"]),
+  policy: z.enum(["none", "walkover", "expunge"]),
+  walkovers: z.number().int(),
+  voided: z.number().int(),
+  skipped_finalized: z.number().int(),
+  walked_over_held: z.number().int(),
+  /** Fixtures the cascade wrote nothing to, each still the organiser's to void or settle (an abandoned Swiss board
+   *  holds the next round until it is settled, X-AB-5). */
+  left_to_organiser: z.array(Uuid),
+});
+/** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
+ *  (the withdrawal's fixture surgery ran, W3 T15). */
+export const PatchedEntrant = Entrant.extend({ cascade: WithdrawCascadeReport.optional() });
+
 /** W3 T9 (ruling 250, X-SW-12/13/14): what "Add late player" did with an entrant added to a division whose Swiss is
  *  running. (a) re-paired the unstarted round with the newcomer (`repaired`: the players whose opponent changed; a
  *  board the odd→even field needed is `new_board`); (b) seated the newcomer against the round's bye holder

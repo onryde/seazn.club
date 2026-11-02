@@ -6,6 +6,16 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-11-02",
+    title: "Breaking: PATCH /entrants/{id} to disqualified walks the entrant's open matches over",
+    lines: [
+      "PATCH /entrants/{id} with status disqualified, on an entrant still in the field, now runs the same fixture surgery as POST /entrants/{id}/withdraw: her played results stand, and her open matches are walked over to the opponent (or expunged from a table under 50% played). It used to be a plain status write that left them seated.",
+      "The reply carries the surgery's report as cascade (policy, walkovers, voided, skipped_finalized, walked_over_held, left_to_organiser); left_to_organiser lists the matches still owed a settle or a void, such as an abandoned board.",
+      "The rest of the same patch is written first: if it is refused (422), nothing else happens. A status change between withdrawn and disqualified, and status withdrawn itself, stay plain writes.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
     date: "2026-10-29",
     title: "Breaking: the standings export prints what the public standings table prints",
     lines: [
