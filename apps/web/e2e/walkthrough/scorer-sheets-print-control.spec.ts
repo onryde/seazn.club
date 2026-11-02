@@ -12,9 +12,9 @@
 // exactly the org-clock days the fixtures sit on; Print sends the PICKED day;
 // the file lands as a browser download under the server's filename; a 422
 // "nothing on that day" renders the LOCALISED line (en, fr), never the
-// server's English; a Community org without an Event Pass gets the
-// device-links upgrade pill, saying what it sells in the page's language,
-// instead of the button. Every state is checked at 320/768/1280: no
+// server's English; a Community org without an Event Pass gets the same
+// control (remote scoring is free on every plan, V490) and no upgrade pill.
+// Every state is checked at 320/768/1280: no
 // horizontal page scroll, both controls hit-tested at their centre and at
 // least 44px, the same controls in the same order at 320 and 1280, BESIDE the
 // title from 768 up (the phone composition is below 768 only) and under it at
@@ -49,18 +49,14 @@ import {
 import { dismissConsent, freshOrg, waitForHydration } from "../directory-kit";
 import { pdfLinkUris, pdfTextRuns } from "../pdf-uris";
 
-const dict = (locale: "en" | "fr" | "es") =>
+const dict = (locale: "en" | "fr") =>
   JSON.parse(
     readFileSync(fileURLToPath(new URL(`../../src/dictionaries/${locale}/ui.json`, import.meta.url)), "utf8"),
   ) as Record<string, string>;
 const EN = dict("en");
 const FR = dict("fr");
-const ES = dict("es");
 
 const WIDTHS = [320, 768, 1280] as const;
-/** The pill's width cap holds until xl; 1024 is where releasing it early
- *  left the Spanish title (the longest reason) under 40% of the header. */
-const PILL_WIDTHS = [320, 768, 1024, 1280] as const;
 /** A page load, a seed, or a poll of the server's own record. */
 const STEP_MS = 20_000;
 /** A click or a local assertion: a fraction of a page load. */
@@ -164,7 +160,7 @@ async function rowBoxes(page: Page, control: Locator) {
  *  up; under the title on a phone.
  *  `error` — a refusal line on screen: from 768 it belongs to the control's
  *  column, below the control's row, never under the title.
- *  `widths` — the Community pill adds 1024, the width its cap is sized for. */
+ *  `widths` — the widths to shoot at (default: all three). */
 async function capture(
   page: Page,
   control: Locator,
@@ -474,38 +470,38 @@ test.describe("a Community organiser without an Event Pass", () => {
   // shared Pro org cannot be moved to Community without moving its whole group.
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test("sees the upgrade pill where the Print button would be, saying what it sells (en + fr + es)", async ({
+  test("gets the print control like any plan — no upgrade pill — and Print saves a real PDF with a scoring QR", async ({
     page,
-  }, testInfo) => {
-    // Navs: login + org (2), seed (~3), 3 page loads. Acts: ~10. Captures: 3,
-    // each at four widths — costed as 4 captures at the standard three.
-    test.setTimeout(budgetFor(8, 10, 4));
+  }) => {
+    // Navs: login + org (2), seed (~3), 3 page loads + 1. Acts: ~6.
+    test.setTimeout(budgetFor(9, 6, 0));
     await freshOrg(page, "sheets9");
     await dismissConsent(page);
     const seeded = await seedScoredDivision(page.request, [`Eli ${TAG}`, `Fay ${TAG}`], { decide: false });
     await setLocale(page, "en");
+    const schedule = await competitionPath(page.request, seeded.competitionId, "/schedule");
+    for (const width of WIDTHS) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(schedule);
+      await expect(page.locator("main h1.page-title")).toBeVisible({ timeout: STEP_MS });
+      const control = page.getByTestId("print-sheets");
+      await expect(control, `${width}px: the print control is on a Community org`).toBeVisible({ timeout: STEP_MS });
+      await expect(page.getByTestId("print-sheets-day")).toBeVisible();
+      await expect(page.getByTestId("print-sheets-submit")).toHaveText(EN["sheets.print"]!);
+      await expect(header(page).locator("a[data-feature]"), `${width}px: no upgrade pill`).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+    }
+
+    // The control is real: Print saves a PDF carrying one scoring QR per match on the day.
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(await competitionPath(page.request, seeded.competitionId, "/schedule"));
-    await expect(page.locator("main h1.page-title")).toBeVisible({ timeout: STEP_MS });
-    const gate = header(page).locator('a[data-feature="scoring.device_links"]');
-    await expect(gate).toBeVisible();
-    // The print control's own sentence, not the feature's hand-over-links one.
-    await expect(gate).toContainText(EN["sheets.gate.reason"]!);
-    await expect(page.getByTestId("print-sheets-submit")).toHaveCount(0);
-    await expect(page.getByTestId("print-sheets-day")).toHaveCount(0);
-    await capture(page, gate, testInfo, "community-gate-en", [], { widths: PILL_WIDTHS });
-
-    await setLocale(page, "fr");
-    await page.reload();
-    await expect(gate).toBeVisible({ timeout: STEP_MS });
-    await expect(gate).toContainText(FR["sheets.gate.reason"]!);
-    await capture(page, gate, testInfo, "community-gate-fr", [], { widths: PILL_WIDTHS });
-
-    // Spanish carries the longest reason: the width where the cap matters.
-    await setLocale(page, "es");
-    await page.reload();
-    await expect(gate).toBeVisible({ timeout: STEP_MS });
-    await expect(gate).toContainText(ES["sheets.gate.reason"]!);
-    await capture(page, gate, testInfo, "community-gate-es", [], { widths: PILL_WIDTHS });
+    await page.goto(schedule);
+    const submit = page.getByTestId("print-sheets-submit");
+    await waitForHydration(page.getByTestId("print-sheets"));
+    const [download] = await Promise.all([page.waitForEvent("download", { timeout: STEP_MS }), submit.click()]);
+    const pdf = readFileSync((await download.path())!);
+    expect(pdf.subarray(0, 5).toString("latin1"), "the saved file is a PDF").toBe("%PDF-");
+    const uris = pdfLinkUris(pdf);
+    expect(uris.length, "a QR for each match on the day").toBeGreaterThan(0);
+    for (const uri of uris) expect(new URL(uri).pathname, uri).toMatch(/^\/score\/dl_[A-Za-z0-9_-]+$/);
   });
 });

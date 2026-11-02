@@ -26,7 +26,7 @@ import { type Session, type V1Res, newSession, call, check, setPlan, signIn, tag
  * Where each expected value comes from: the codes are the engine's `EngineErrorCode` names; the sentences are the engine's
  * exports; the ending level, the method lists and `gameTo` are the modules' own declarations; the floor (5), the chase
  * bound (target 18, largest total 24 = 18 - 1 + 7, RBS:433) and the unreachable set (8-6, ITF App VI) are the rulebooks'.
- * Own fresh Pro owner (a device link is a Pro feature); needs DATABASE_URL (the plan flip). Every check is counted, and a
+ * Own fresh Pro owner; needs DATABASE_URL (the plan flip). Every check is counted, and a
  * run that checked nothing fails. SMOKE_ONLY=w2eRefusals runs it alone (SELECTABLE_SUITES).
  */
 export async function w2eRefusalsSuite(): Promise<void> {

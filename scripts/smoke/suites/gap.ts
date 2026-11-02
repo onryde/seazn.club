@@ -5,10 +5,9 @@ import {
 } from "../harness.ts";
 import { scorerSheetsSuite } from "./scorerSheets.ts";
 
-/** Printing ensures a device link per match, so the sheet carries the device
- *  links' Community gate. The match is timed first: an empty day is refused
- *  422 before the gate is ever asked, which would pass a bare "not 200" for
- *  the wrong reason. */
+/** Printing ensures a device link per match. Remote scoring is free on every plan (V490), so a Community org
+ *  prints: a PDF, not a paywall. The match is timed first: an empty day is refused 422 before anything else is
+ *  asked, which would pass a bare "not 402" for the wrong reason. */
 async function scorerSheetsCommunityCheck(free: Session, competitionId: string, fixtureId: string): Promise<void> {
   const when = "2026-10-03T12:00:00.000Z";
   const timed = await v1(free, `/api/v1/fixtures/${fixtureId}`, "PATCH", { scheduled_at: when });
@@ -18,10 +17,13 @@ async function scorerSheetsCommunityCheck(free: Session, competitionId: string, 
     await orgDayOf(free, competitionId, when),
     new URL(BASE).origin,
   );
-  const body = (await print.json().catch(() => ({}))) as { error?: { code?: string } };
+  const bytes = Buffer.from(await print.arrayBuffer());
   check(
-    "scorer sheets Pro-gated (402 PAYMENT_REQUIRED on community, a match on the day)",
-    timed.status === 200 && print.status === 402 && body.error?.code === "PAYMENT_REQUIRED",
+    "scorer sheets are free (a Community org prints a PDF for a day with a match)",
+    timed.status === 200 &&
+      print.status === 200 &&
+      (print.headers.get("content-type") ?? "").includes("application/pdf") &&
+      bytes.subarray(0, 5).toString() === "%PDF-",
   );
 }
 
@@ -61,7 +63,7 @@ export async function gapSuite(admin: Session, org1Id: string, proOrgId: string)
   const fixtureId = v1data<{ fixtures: { id: string }[] }>(gen).fixtures[0].id;
   await v1(admin, `/api/v1/divisions/${divId}/start`, "POST");
 
-  // --- Device links (Pro): mint once, token opens the scoring door alone ---
+  // --- Device links: mint once, token opens the scoring door alone ---
   const dl = await v1(admin, `/api/v1/fixtures/${fixtureId}/device-links`, "POST", {
     label: "Court 1",
   });
@@ -254,8 +256,8 @@ export async function gapSuite(admin: Session, org1Id: string, proOrgId: string)
   // still proves it links and dedupes a person. What has no equivalent here is
   // the end-to-end path from a public submit to that link.
 
-  // --- Free paths on a fresh community owner: device links 402, offline
-  // entry fees allowed without Stripe ---
+  // --- Free paths on a fresh community owner: device links and scorer sheets,
+  // offline entry fees allowed without Stripe ---
   const free = newSession();
   await signIn(free, `delivered+free_${tag}@resend.dev`);
   const fComp = await v1(free, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
@@ -290,8 +292,8 @@ export async function gapSuite(admin: Session, org1Id: string, proOrgId: string)
   const fFixture = v1data<{ fixtures: { id: string }[] }>(fGen).fixtures[0].id;
   const fDl = await v1(free, `/api/v1/fixtures/${fFixture}/device-links`, "POST", { label: "X" });
   check(
-    "gap device links Pro-gated (402 on community)",
-    fDl.status === 402 && fDl.json.error?.code === "PAYMENT_REQUIRED",
+    "gap device links are free (a Community org mints one, dl_)",
+    fDl.status === 201 && String(v1data<{ secret?: string }>(fDl).secret ?? "").startsWith("dl_"),
   );
   await scorerSheetsCommunityCheck(free, v1data<{ id: string }>(fComp).id, fFixture);
   const fFee = await v1(free, `/api/v1/divisions/${fDivId}/registration-settings`, "PUT", {

@@ -14,7 +14,7 @@ import { newSession, call, check, signIn, tag, html, v1, v1data, setPlan } from 
 
 /**
  * Format matrix W2a (spec §5, plan Task 17 Step 1): a knockout always finishes. Four flows through the real API as the
- * organiser of one fresh org, repriced to Pro (flow 4 mints a device link, a Pro grant):
+ * organiser of one fresh org, repriced to Pro (flow 4 mints a device link):
  *  1. a football semi-final played to full time level, every decider switched off (C18; W2c X-SR-6): held `needs_decision`; the
  *     organiser settles it by lot for the away side → decided, `settled_lot`, the final's seat holds the winner, and
  *     the public match page says the winner "advanced on lot";
