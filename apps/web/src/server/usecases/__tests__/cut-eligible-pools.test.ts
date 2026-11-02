@@ -64,7 +64,8 @@ describe("cutEligiblePools (T15 Carry A)", () => {
   });
 
   it("the order is the table's rank order, whatever order the snapshot stored its rows in", () => {
-    const shuffled = [{ pool: "A", rows: [row("E", 5), row("A", 1), row("D", 4, ["B", "C"]), row("B", 2, ["C", "D"]), row("C", 3, ["B", "D"])] }];
+    // Both halves stored OUT of rank order: the eligible E before B and C, the departed D (rank 4) before A (rank 1).
+    const shuffled = [{ pool: "A", rows: [row("E", 5), row("D", 4, ["B", "C"]), row("A", 1), row("C", 3, ["B", "D"]), row("B", 2, ["C", "D"])] }];
     const [p] = cutEligiblePools("swiss", shuffled, new Set(["D", "A"]));
     expect(p!.pool).toBe("A");
     // Both halves in table order: the eligible by rank, then the departed by rank (A, rank 1, before D, rank 4).

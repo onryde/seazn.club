@@ -905,8 +905,9 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
  * completed. The cascade itself decides "started" (T9's `divisionHasStarted`): before Start it is the plain flip, so that
  * fact has ONE reader. An entrant already departed (`DEPARTED_STATUSES`) is owed nothing — a second PATCH to
  * `disqualified`, or a withdrawn entrant later disqualified — and takes the plain write (controller ruling C6: the cascade
- * writes through `writeEntrantPatch`, which never routes back). Any other field of the same patch is written after the
- * cascade. A `status: "withdrawn"` patch stays the bare flip it has always been (ruling 111's self-withdrawal); the
+ * writes through `writeEntrantPatch`, which never routes back). Any other field of the same patch is written BEFORE the
+ * cascade (T15 review m4), so a refused field leaves the status, the boards and the ledger untouched. A
+ * `status: "withdrawn"` patch stays the bare flip it has always been (ruling 111's self-withdrawal); the
  * Withdraw button is `POST /entrants/{id}/withdraw`.
  */
 export async function patchEntrant(
