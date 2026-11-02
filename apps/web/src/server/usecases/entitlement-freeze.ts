@@ -196,6 +196,34 @@ export async function countActiveCompetitions(orgId: string): Promise<number> {
 }
 
 /**
+ * Does a status patch bring competition `id` INTO the `competitions.max_active` count — not counted now, counted after?
+ * PB2 re-review 1, N1: reopening an archived or completed competition is the other door into the active set beside
+ * create and template, and it asked nothing, so a reopen thawed a frozen competition with no room (and froze one the
+ * organiser never touched), or pushed a running one into the freeze. Both sides are `liveUnpassedCompetition` itself,
+ * the AFTER side on the patched status and end date (an Event Pass applies by both), so a competition a pass buys out
+ * of the quota reopens freely and one whose pass has lapsed is a slot again. False for an unknown id (its own 404 fires
+ * later). Opens its own transaction: call it before the caller's.
+ */
+export async function entersActiveQuota(
+  orgId: string,
+  id: string,
+  next: { status: string; endsOn?: string },
+): Promise<boolean> {
+  return withTenant(orgId, async (t) => {
+    const [row] = await t<{ counted: boolean; counts_after: boolean }[]>`
+      select ${liveUnpassedCompetition(t)} as counted,
+             exists (
+               select 1
+                 from (select c.id, ${next.status}::text as status,
+                              ${next.endsOn === undefined ? t`c.ends_on` : t`${next.endsOn}::date`} as ends_on) c
+                where ${liveUnpassedCompetition(t)}) as counts_after
+        from competitions c
+       where c.id = ${id}`;
+    return !!row && !row.counted && row.counts_after;
+  });
+}
+
+/**
  * How many publicly-readable dashboards count against `dashboard.public.max`
  * right now. `excludeId` omits one competition — the row a PATCH is changing.
  */

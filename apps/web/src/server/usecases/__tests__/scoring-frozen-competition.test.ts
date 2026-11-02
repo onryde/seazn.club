@@ -252,3 +252,98 @@ describe.skipIf(!HAS_DB)("a billing-frozen competition scores (PB2, option A)", 
     expect(written).toBe(checked);
   }, 240_000);
 });
+
+// PB2 re-review 1, N1: reopening is the OTHER door into the active set. Archiving a frozen competition is allowed (the retire
+// patch) and its mark goes with it; reopening it used to ask only the freeze guard — about a competition no longer in the
+// active set, so it passed — and the competition came back RUNNING, thawed with no room, while the reconcile froze one the
+// organiser never touched. A status patch from outside the active set into it now asks the quota, as create and template do.
+describe.skipIf(!HAS_DB)("reopening a competition is a quota door (PB2 re-review 1, N1)", () => {
+  /** A raw competition of the org (raw, because `createCompetition` enforces the quota itself). */
+  async function raw(orgId: string, label: string, extra: { status?: string; age?: string } = {}): Promise<string> {
+    const suffix = randomUUID().slice(0, 8);
+    const [{ id }] = await sql<{ id: string }[]>`
+      insert into competitions (org_id, name, slug, status, created_at)
+      values (${orgId}, ${label + " " + suffix}, ${label.toLowerCase() + "-" + suffix}, ${extra.status ?? "draft"},
+              now() - ${extra.age ?? "0 minutes"}::interval) returning id`;
+    return id;
+  }
+  const statusOf = async (id: string) => (await sql<{ status: string }[]>`select status from competitions where id = ${id}`)[0]!.status;
+  const quotaRefusal = async (p: Promise<unknown>) => {
+    const e = await refusal(p);
+    expect(e).toBeInstanceOf(PaymentRequiredError);
+    expect([e.status, (e as PaymentRequiredError).featureKey]).toEqual([402, "competitions.max_active"]);
+  };
+
+  it("the probe's sequence: a frozen competition scored, archived, then reopened answers 402 and the set stays put; room taken by the frozen one keeps it 402; room left over lets the reopen through", async () => {
+    const s = await seed("badminton");
+    const org = s.auth.orgId;
+    const idleId = await raw(org, "Idle", { age: "30 days" });
+    await setOrgPlan(org, "community");
+    await invalidateOrgEntitlements(org);
+    const limit = (await getLimit(org, "competitions.max_active")) as number;
+    expect(limit, "premise: a REAL limit").toBeGreaterThan(0);
+    const fillers: string[] = [];
+    for (let i = 0; i < limit; i++) fillers.push(await raw(org, "Filler"));
+    const frozenNow = async () => [...(await frozenCompetitionIds(org))].sort();
+    expect(await frozenNow(), "premise: the seeded and the idle competition are frozen").toEqual([s.competitionId, idleId].sort());
+    await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+
+    // Archived (the retire patch the freeze allows): it leaves the set, and the idle one is all that stays frozen.
+    await patchCompetition(s.auth, s.competitionId, { status: "archived" });
+    expect(await frozenNow()).toEqual([idleId]);
+    // Reopened with no room: refused, and nothing moved — not its status, not the frozen set.
+    await quotaRefusal(patchCompetition(s.auth, s.competitionId, { status: "live" }));
+    expect(await statusOf(s.competitionId), "the refused reopen wrote nothing").toBe("archived");
+    expect(await frozenNow(), "the frozen set is unchanged: no filler froze in its place").toEqual([idleId]);
+    // The other ways back in are the same door.
+    await quotaRefusal(patchCompetition(s.auth, s.competitionId, { status: "published" }));
+    await quotaRefusal(patchCompetition(s.auth, s.competitionId, { status: "draft" }));
+
+    // Room: one filler archived. The room goes to the frozen idle competition (it thaws), so the reopen is still over.
+    await patchCompetition(s.auth, fillers[0]!, { status: "archived" });
+    expect(await frozenNow(), "the freed place thaws the frozen competition").toEqual([]);
+    await quotaRefusal(patchCompetition(s.auth, s.competitionId, { status: "live" }));
+    // A second place freed: room left over, and the reopen goes through — nothing frozen afterwards.
+    await patchCompetition(s.auth, fillers[1]!, { status: "archived" });
+    await patchCompetition(s.auth, s.competitionId, { status: "live" });
+    expect(await statusOf(s.competitionId)).toBe("live");
+    expect(await frozenNow(), "at the limit, nothing over it").toEqual([]);
+  }, 120_000);
+
+  it("an organisation exactly AT its limit cannot reopen an archived competition (it would push a running one into the freeze); a completed one neither; a status patch that stays inside the set is not a door", async () => {
+    const s = await seed("badminton");
+    const org = s.auth.orgId;
+    await setOrgPlan(org, "community");
+    await invalidateOrgEntitlements(org);
+    const limit = (await getLimit(org, "competitions.max_active")) as number;
+    for (let i = 0; i < limit - 1; i++) await raw(org, "Filler");
+    const archived = await raw(org, "Old", { status: "archived" });
+    const completed = await raw(org, "Done", { status: "completed" });
+    expect(await frozenCompetitionIds(org), "premise: at the limit, nothing frozen").toEqual(new Set());
+    await quotaRefusal(patchCompetition(s.auth, archived, { status: "published" }));
+    await quotaRefusal(patchCompetition(s.auth, completed, { status: "live" }));
+    expect([await statusOf(archived), await statusOf(completed)]).toEqual(["archived", "completed"]);
+    expect(await frozenCompetitionIds(org), "nothing froze").toEqual(new Set());
+    // Inside the set: draft -> published on the seeded competition is no new slot.
+    await patchCompetition(s.auth, s.competitionId, { status: "published" });
+    expect(await statusOf(s.competitionId)).toBe("published");
+  }, 120_000);
+
+  it("a competition an Event Pass buys out of the quota reopens at the limit (it takes no slot); once its pass has lapsed it is a slot again and is refused", async () => {
+    const s = await seed("badminton");
+    const org = s.auth.orgId;
+    await setOrgPlan(org, "community");
+    await invalidateOrgEntitlements(org);
+    const limit = (await getLimit(org, "competitions.max_active")) as number;
+    for (let i = 0; i < limit - 1; i++) await raw(org, "Filler");
+    const passed = await raw(org, "Passed", { status: "archived" });
+    const lapsed = await raw(org, "Lapsed", { status: "archived" });
+    await sql`update competitions set ends_on = (now() at time zone 'utc')::date - 30 where id = ${lapsed}`;
+    for (const id of [passed, lapsed]) await sql`insert into competition_passes (competition_id, org_id) values (${id}, ${org})`;
+    await patchCompetition(s.auth, passed, { status: "live" });
+    expect(await statusOf(passed)).toBe("live");
+    expect(await frozenCompetitionIds(org), "the passed competition counts for nothing").toEqual(new Set());
+    await quotaRefusal(patchCompetition(s.auth, lapsed, { status: "live" }));
+    expect(await statusOf(lapsed)).toBe("archived");
+  }, 120_000);
+});

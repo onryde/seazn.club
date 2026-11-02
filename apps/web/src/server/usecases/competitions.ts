@@ -28,8 +28,10 @@ import { ONBOARDING_EARN, REFERRAL_WELCOME_EARN, tryEarnGrant } from "@/lib/cred
 import { invalidateSlugCache } from "@/server/slug-resolve";
 import { dropPublicCompetitionRefs } from "@/server/public-site/public-ref-cache";
 import {
+  ACTIVE_COMPETITION_STATUSES,
   assertCompetitionNotFrozen,
   countActiveCompetitions,
+  entersActiveQuota,
   countPublicDashboards,
   countsTowardPublicQuota,
   frozenCompetitionIds,
@@ -489,6 +491,17 @@ export async function patchCompetition(
   patch: PatchCompetition,
 ): Promise<CompetitionRow> {
   if (!isRetirePatch(patch)) await assertCompetitionNotFrozen(auth.orgId, id);
+  // PB2 re-review 1, N1: a status patch that brings a competition BACK into the active set (an archived or completed one
+  // reopened) takes a slot exactly as a create does, so it asks the same quota. Without it the reopen was free: over the
+  // limit it thawed a frozen competition with no room and froze one the organiser never touched; at the limit it pushed a
+  // running one into the freeze. A patch that stays inside the set (draft -> published -> live) is not a door.
+  if (
+    patch.status &&
+    (ACTIVE_COMPETITION_STATUSES as readonly string[]).includes(patch.status) &&
+    (await entersActiveQuota(auth.orgId, id, { status: patch.status, endsOn: patch.ends_on }))
+  ) {
+    await assertActiveQuota(auth);
+  }
   // Any transition INTO a publicly readable state, not just into `public`
   // (owner ruling 2026-09-05). `excludeId` is what keeps a LATERAL move
   // possible: public -> unlisted does not add a readable dashboard, so counting
