@@ -90,7 +90,9 @@ test("the stage card: header buttons, a one-line summary, the stage's own fixtur
   await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
   await expect(card.getByTestId("stage-run-sheet"), "the stage's rows are in its card").toBeVisible();
   await expect(card.locator("li[data-fixture-no]"), "all three matches are in the card").toHaveCount(3);
-  await expect(page.getByTestId("stage-view-fixtures")).toHaveCount(0);
+  // Final review G6: `stage-view-fixtures` is rendered by no source now, so a count-0 check on it could never fail. What replaced the
+  // trip is that the rows live in the card and nowhere else: the page holds exactly the card's three, no second list to lead to.
+  await expect(page.locator("li[data-fixture-no]"), "the three matches are on the page once, in the card").toHaveCount(3);
   await expect(page.getByText(/View \d+ fixtures?/)).toHaveCount(0);
   await expect(page.getByText(/See the fixtures/i)).toHaveCount(0);
 

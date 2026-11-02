@@ -114,7 +114,10 @@ test("the run sheet groups fixtures by day and prints them in the competition tz
   await expect(page.locator(`[data-fixture-no="${leftover.fixture_no}"]`)).toContainText("No time yet");
   await expect(page.getByText("Not yet scheduled"), "the group is gone").toHaveCount(0);
   await expect(page.getByText("To schedule in this stage"), "the footer is gone").toHaveCount(0);
-  await expect(page.getByTestId("stage-unscheduled-count")).toHaveCount(0);
+  // Final review G6: `stage-unscheduled-count` is rendered by no source now, so asserting it absent could never fail. What replaced the
+  // footer is asserted instead: the clause above is in the counts line, and it is the only "to schedule" door on the page.
+  await expect(page.getByTestId("stage-progress-counts").getByTestId("stage-progress-to-schedule")).toHaveCount(1);
+  await expect(page.getByTestId("stage-progress-to-schedule"), "no second door where the footer was").toHaveCount(1);
 
   // Inline "Set time" (item 5, re-aimed — fix round 1) -> notice grows an
   // Undo that restores the slot. The ONLY unscheduled fixture is the one

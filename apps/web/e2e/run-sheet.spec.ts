@@ -1305,7 +1305,13 @@ test("desktop (E1): the stage's actions sit in the card HEADER - left of the div
     expect(presence[testid]!.inRail, `${testid}: rail count does not match page-wide count`).toBe(presence[testid]!.onPage);
   }
   // The retired footer: not there at any width.
-  await expect(page.getByTestId("stage-unscheduled-count"), "the 'To schedule in this stage' footer is gone").toHaveCount(0);
+  // Final review G6: `stage-unscheduled-count` is rendered by no source now, so asserting it absent could never fail. What took the
+  // footer's place is asserted instead: the counts line's clause is the one door to the Schedule page (exactly one on the page), it says
+  // the seed's own count - every fixture the seed made is still unscheduled - and it is a real link.
+  const toSchedule = page.getByTestId("stage-progress-to-schedule");
+  await expect(toSchedule, "exactly one 'to schedule' door on the page: the counts line's clause").toHaveCount(1);
+  await expect(toSchedule, "the clause says how many fixtures the seed left unscheduled").toHaveText(`${fixtureIds.length} to schedule`);
+  await expect(toSchedule, "and it is the link to the Schedule page").toHaveAttribute("href", /\/schedule$/);
   await expect(page.getByText("To schedule in this stage")).toHaveCount(0);
   // ...and the count it carried is still said, in the counts line.
   await expect(card.getByTestId("stage-progress-counts")).toContainText(/\d+ to schedule/);
@@ -2234,7 +2240,12 @@ test("Review M2 (C3): the stage card holds its rows - no 'View N fixtures' - and
   ).toHaveAttribute("aria-pressed", "true");
 
   // The retired trip is gone, and its words with it.
-  await expect(page.getByTestId("stage-view-fixtures"), "the View N fixtures control is retired").toHaveCount(0);
+  // Final review G6: `stage-view-fixtures` is rendered by no source now, so a count-0 check on it could never fail. What replaced the
+  // trip is asserted instead: the stage's rows are IN its card, the one place they are (the count checks further down say how many).
+  await expect(
+    page.locator("section.card[data-stage-id]").getByTestId("stage-run-sheet"),
+    "the rows are in the stage's card, where the 'View N fixtures' trip used to lead",
+  ).toBeVisible();
   await expect(page.getByText(/View \d+ fixtures?/)).toHaveCount(0);
 
   // Today keeps exactly the one fixture that is today, and it sits in its stage's card.

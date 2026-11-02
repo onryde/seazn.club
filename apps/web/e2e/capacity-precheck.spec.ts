@@ -97,7 +97,13 @@ test("capacity precheck: impossible config shows the card + disabled Solve + a r
   const counts = page.getByTestId("stage-progress-counts");
   await expect(counts).toBeVisible({ timeout: 20_000 });
   await expect(counts).toContainText(/\d+ to schedule/);
-  await expect(page.getByTestId("stage-unscheduled-count"), "the footer is gone").toHaveCount(0);
+  // Final review G6: `stage-unscheduled-count` is rendered by no source now, so asserting it absent could never fail. What replaced the
+  // footer is asserted instead: the counts line's clause says all of the round robin's fixtures are unscheduled (C(n,2), from the
+  // entrants the seed made), and it is the one door to the Schedule page.
+  const toSchedule = page.getByTestId("stage-progress-to-schedule");
+  await expect(toSchedule, "exactly one 'to schedule' door on the page: the counts line's clause").toHaveCount(1);
+  await expect(toSchedule).toHaveText(`${(ENTRANTS * (ENTRANTS - 1)) / 2} to schedule`);
+  await expect(toSchedule).toHaveAttribute("href", /\/schedule$/);
 
   // Server is the authority, not just the UI (acceptance criteria) — the
   // SAME impossibility is refused at the API even if a client bypassed the
