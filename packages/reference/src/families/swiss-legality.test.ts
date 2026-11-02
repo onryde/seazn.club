@@ -241,7 +241,7 @@ describe("§2.3 item 3: existence (P-A6) — refusals and empty rounds", () => {
     expect(exhausted.violations[0]?.detail).toMatch(/refusal was owed/);
   });
 
-  it("the empty round's boundary: 2 active entrants with zero boards is empty_success (one board was owed); 1 active entrant's only seating is the bye — legal with it, P-A3 without it, never empty_success", () => {
+  it("the empty round's boundary: 2 active entrants with zero boards is empty_success — one board was owed", () => {
     // A fresh 2-entrant field: A–B is owed, and nothing came back.
     expect(check(["A", "B"], history({ scores: zeros(["A", "B"]) }), paired([]))).toEqual({
       verdict: "empty_success",
@@ -250,14 +250,29 @@ describe("§2.3 item 3: existence (P-A6) — refusals and empty rounds", () => {
     });
     // 3 entrants, C withdrew: the same 2-entrant boundary, reached after a withdrawal.
     expect(check(["A", "B", "C"], history({ scores: zeros(["A", "B", "C"]) }), paired([]), { departed: ["C"] }).verdict).toBe("empty_success");
-    // A and B played round 1 (A won), then B withdrew. Round 2 has one active entrant: no board is possible, so zero
-    // boards is the only seating — A on the bye is legal (P-A3: seated once, odd field, one bye; A never had a bye).
-    const alone = history({ met: [["A", "B"]], scores: { A: 1, B: 0 } });
-    expect(check(["A", "B"], alone, paired([], "A"), { departed: ["B"] })).toEqual({ verdict: "legal", violations: [], examined: { boards: 0, byes: 1, candidates: 1 } });
-    // Without the bye, A is unseated and the odd field has no bye: P-A3 twice — illegal, not empty_success.
-    const unseated = check(["A", "B"], alone, paired([]), { departed: ["B"] });
-    expect(unseated.verdict).toBe("illegal");
-    expect(rulesOf(unseated)).toEqual(["P-A3", "P-A3"]);
+  });
+
+  // Ruling (controller, T19 fix round 2): §3.1 gives hardMax(1) = 0 — one active entrant is owed no round. Nothing to
+  // pair, and a bye-only round is not a round (P-A6; T13 agrees: a round whose only seat is a bye is not decided).
+  // A and B played round 1 (A won), then B withdrew: A is the one active entrant.
+  const ALONE = history({ met: [["A", "B"]], scores: { A: 1, B: 0 } });
+
+  it("§3.1 ruling, one active entrant: a paired outcome is illegal (P-A6, no round is owed — a bye-only round is not a round), with the bye or without it, fresh or after a withdrawal", () => {
+    const byeOnly = check(["A", "B"], ALONE, paired([], "A"), { departed: ["B"] });
+    expect(byeOnly.verdict).toBe("illegal");
+    expect(rulesOf(byeOnly)).toEqual(["P-A6"]);
+    expect(byeOnly.violations[0]?.detail).toMatch(/hard maximum is 0, so no round is owed/);
+    expect(byeOnly.examined).toEqual({ boards: 0, byes: 1, candidates: 0 });
+    expect(rulesOf(check(["A", "B"], ALONE, paired([]), { departed: ["B"] }))).toEqual(["P-A6"]);
+    // A single-entrant field before any round: the same answer — never empty_success, never legal.
+    expect(rulesOf(check(["A"], history({ scores: { A: 0 } }), paired([], "A")))).toEqual(["P-A6"]);
+  });
+
+  it("§3.1 ruling, one active entrant: a named refusal is refusal_correct (no matching tested); a blank one is refusal_wrong", () => {
+    expect(check(["A", "B"], ALONE, refused("NO_ROUND_OWED: one active entrant"), { departed: ["B"] })).toEqual({ verdict: "refusal_correct", violations: [], examined: { boards: 0, byes: 0, candidates: 0 } });
+    const blank = check(["A", "B"], ALONE, refused(""), { departed: ["B"] });
+    expect(blank.verdict).toBe("refusal_wrong");
+    expect(rulesOf(blank)).toEqual(["P-A6"]);
   });
 
   it("P-A5 inside existence: compatibility is pairwise — with chess on, a field whose every unmet pair breaks the colour limits has no pairing; with chess off it has one", () => {
@@ -444,10 +459,10 @@ describe("P-A4 × P-A6: an odd round with no bye-eligible entrant left", () => {
   });
 
   // Named regression (TEST-STRATEGY rule 10), found by the producer -> consumer sweep with walkovers: the same history
-  // through the engine's real pairRound. The expectation is the RULEBOOK's answer, refusal_correct. Engine 1.1.0 re-gives
-  // a bye instead, so this test is marked `fails`: it turns red the day the engine refuses, and App-B's bump then drops
-  // the `.fails`. The walkover winner reaches the engine through `byes`, its one bye-eligibility channel (header).
-  it.fails("engine 1.x: 3 players, round 3 with no bye-eligible entrant — the engine owes a named refusal (P-A6); 1.1.0 re-gives a bye (P-A4)", () => {
+  // through the engine's real pairRound. The rulebook's answer is refusal_correct. This test PINS engine 1.1.0's exact
+  // output (controller ruling, fix round 2), so any change to it turns the test red; App-B's bump flips it to assert
+  // refusal_correct. The walkover winner reaches the engine through `byes`, its one bye-eligibility channel (header).
+  it("engine 1.1.0 defect pin (P-A4 × P-A6): 3 players, round 3 with no bye-eligible entrant — 1.1.0 returns A–B with C's SECOND bye (illegal); App-B's bump flips this to refusal_correct", () => {
     const standings = [{ entrantId: "A", score: 2, rank: 1 }, { entrantId: "B", score: 1, rank: 2 }, { entrantId: "C", score: 1, rank: 3 }];
     let outcome: SwissRoundIn["outcome"];
     try {
@@ -457,8 +472,9 @@ describe("P-A4 × P-A6: an odd round with no bye-eligible entrant left", () => {
       outcome = { kind: "refused", reason: e instanceof Error ? `${e.name}: ${e.message}` : String(e) };
     }
     const v = check(["A", "B", "C"], THREE_NO_ELIGIBLE, outcome);
-    report(`named regression (engine 1.x, P-A4 × P-A6): outcome ${JSON.stringify(outcome)} → ${v.verdict} ${JSON.stringify(v.violations)}`);
-    expect(v.verdict).toBe("refusal_correct");
+    report(`engine 1.1.0 defect pin (P-A4 × P-A6): outcome ${JSON.stringify(outcome)} → ${v.verdict} ${JSON.stringify(v.violations)}`);
+    expect(outcome).toEqual({ kind: "paired", boards: [{ home: "A", away: "B" }], bye: "C" });
+    expect(v).toEqual({ verdict: "illegal", violations: [{ rule: "P-A4", detail: "C already received the pairing-allocated bye" }], examined: { boards: 1, byes: 1, candidates: 0 } });
   });
 });
 
@@ -486,7 +502,7 @@ describe("producer -> consumer (R15): the engine's real pairRound, every round j
     const SEQUENCES = 200;
     const histogram: Record<SwissVerdict["verdict"], number> = { legal: 0, illegal: 0, refusal_correct: 0, refusal_wrong: 0, empty_success: 0 };
     const illegal: string[] = [];
-    /** Engine 1.x defect, named (see the regression test above): an odd round with NO bye-eligible entrant left (every
+    /** Engine 1.x defect, named (see the 1.1.0 defect pin above): an odd round with NO bye-eligible entrant left (every
      *  active entrant had the bye or a walkover win — reachable below the hard maximum only through walkovers) owes a
      *  named refusal (P-A4, P-A6); 1.1.0 re-gives a bye instead. Matched exactly: odd field, empty eligible pool, every
      *  violation P-A4. Printed, not asserted — App-B's bump asserts it 0, with `illegal === 0` restored. */
@@ -654,6 +670,7 @@ describe("producer -> consumer (R15): the engine's real pairRound, every round j
     expect(reach.doubleWalkovers).toBeGreaterThan(0);
     expect(reach.rePairedAfterWalkover).toBeGreaterThan(0);
     expect(reach.oddRoundsWithWalkoverWinner).toBeGreaterThan(0);
+    expect(reach.oddRoundsWithNoEligible).toBeGreaterThan(0);
     expect(reach.roundsWithDeparted).toBeGreaterThan(0);
     expect(reach.round1Fold).toBeGreaterThan(0);
     expect(reach.round1RankAdjacent).toBeGreaterThan(0);

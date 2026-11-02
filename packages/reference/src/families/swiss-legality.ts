@@ -94,6 +94,18 @@ export function checkSwissRound(input: SwissRoundIn): SwissVerdict {
   const scoreOf = (id: string): number => history.scores[id] ?? 0;
   const byeEligible = (id: string) => !hadBye.has(id) && !walkoverWinners.has(id);
 
+  // §3.1: one active entrant has a hard maximum of 0 rounds — no round is owed (controller ruling, T19 fix round 2;
+  // T13 agrees: a round whose only seat is a bye is not decided). Nothing to pair, and a bye-only round is not a round
+  // (P-A6), so any paired outcome is illegal and a named refusal is correct. No matching is tested.
+  if (active.length === 1) {
+    const notOwed = `one active entrant (${active[0]}): §3.1's hard maximum is 0, so no round is owed — nothing to pair, and a bye-only round is not a round`;
+    if (outcome.kind === "refused") {
+      const blank = outcome.reason.trim() === "";
+      return { verdict: blank ? "refusal_wrong" : "refusal_correct", violations: blank ? [{ rule: "P-A6", detail: "the refusal names no reason" }] : [], examined: { boards: 0, byes: 0, candidates: 0 } };
+    }
+    return { verdict: "illegal", violations: [{ rule: "P-A6", detail: notOwed }], examined: { boards: outcome.boards.length, byes: outcome.bye === null ? 0 : 1, candidates: 0 } };
+  }
+
   // §2.3 item 3: the compatibility graph and one perfect-matching test per candidate.
   const compatible = (a: string, b: string): boolean => {
     if (metKeys.has(pairOf(a, b))) return false; // P-A1
@@ -132,8 +144,9 @@ export function checkSwissRound(input: SwissRoundIn): SwissVerdict {
 
   const { boards, bye } = outcome;
   const examined = { boards: boards.length, byes: bye === null ? 0 : 1, candidates };
-  // §2.3 items 3 and 6: zero boards on a round the stage owes is SW-H1, whatever else is wrong with it.
-  if (boards.length === 0 && active.length >= 2) {
+  // §2.3 items 3 and 6: zero boards on a round the stage owes is SW-H1, whatever else is wrong with it. Two or more
+  // entrants are active here (one returned above), so at least one board was owed.
+  if (boards.length === 0) {
     const detail = exists
       ? `zero boards returned as success while a legal pairing exists${witness === undefined ? "" : ` (with ${witness} on the bye)`}`
       : "zero boards returned as success where no legal pairing exists — a named refusal was owed";
