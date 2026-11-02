@@ -4,6 +4,8 @@
 //
 // The predicate is the page's: `isEditorRole` is what page-auth.ts computes `canEdit` from (owner, admin). Every role the
 // organisation has is enumerated off ORG_ROLES itself, plus the API key's null role, so a new role cannot slip past unasked.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ORG_ROLES, EDITOR_ROLES, isEditorRole, type OrgRole } from "@/lib/types";
 import { matchDayForReader } from "@/lib/match-day/view";
@@ -45,5 +47,12 @@ describe("matchDayForReader — the organiser's to-do list reaches organisers on
     }
     expect(checked, "anti-vacuity: every org role").toBe(ORG_ROLES.length);
     expect(isEditorRole(null), "an API key").toBe(false);
+  });
+
+  it("fix round 1 (m3): the console pages' canEdit is the SAME predicate — page-auth.ts asks isEditorRole and never re-spells EDITOR_ROLES", () => {
+    const src = readFileSync(join(process.cwd(), "src/server/page-auth.ts"), "utf8");
+    const asks = src.match(/\bisEditorRole\(/g) ?? [];
+    expect(asks.length, "page-auth computes canEdit through isEditorRole").toBeGreaterThan(0);
+    expect(src, "no second spelling of the editor set").not.toMatch(/EDITOR_ROLES/);
   });
 });
