@@ -27,6 +27,7 @@ import {
   courtCounts,
   filterCandidates,
   filterCourts,
+  callConfirmLabel,
   filterNoCourt,
   headerCountParts,
   scoreLine,
@@ -1972,88 +1973,110 @@ describe("E2-3 — a court's closure", () => {
     expect(focus(free5(null))).not.toContain('data-testid="md-closure"');
   });
 
-  it("closed NOW: every Call button is off, and the reason is in a status region the buttons are described by", () => {
-    const html = body(free5(NOW_UNTIL), two());
-    const buttons = callButtons(html);
-    expect(buttons).toHaveLength(2);
-    for (const b of buttons) expect(b).toMatch(/\sdisabled(=""|\s|>)/);
-    const region = /<div id="([^"]+)" role="status" data-testid="md-call-paused"[^>]*>([\s\S]*?)<\/div>/.exec(html);
-    expect(region, "the status region").not.toBeNull();
-    expect(region![2]).toContain("Closed until 15:00, so no match can be called to Court 5 yet.");
-    for (const b of buttons) expect(b).toContain(`aria-describedby="${region![1]}"`);
+  it("closed NOW: Call stays ON for every candidate — there is no disabled button and no paused line (R0: a confirmed override, not a stop)", () => {
+    let checked = 0;
+    for (const closure of [NOW_UNTIL, NOW_REST]) {
+      const html = body(free5(closure), two());
+      const buttons = callButtons(html);
+      expect(buttons, closure.until ?? "rest").toHaveLength(2);
+      for (const b of buttons) {
+        expect(b).not.toMatch(/\sdisabled/);
+        expect(b).not.toContain("aria-describedby");
+        checked++;
+      }
+      expect(html).not.toContain("md-call-paused");
+      expect(html).not.toContain("so no match can be called");
+    }
+    expect(checked).toBe(4);
   });
 
-  it("closed for the rest of today: the same stop, in its own words", () => {
-    const html = body(free5(NOW_REST), two());
-    for (const b of callButtons(html)) expect(b).toMatch(/\sdisabled(=""|\s|>)/);
-    expect(html).toContain("Closed for the rest of today, so no match can be called to Court 5.");
-  });
-
-  it("a break still to come is NOT a stop: Call stays on, with no reason shown (the call sheet warns instead)", () => {
+  it("a break still to come is no different: Call on, nothing paused (the call sheet warns instead)", () => {
     const html = body(free5(LATER), two());
     const buttons = callButtons(html);
     expect(buttons).toHaveLength(2);
     for (const b of buttons) expect(b).not.toMatch(/\sdisabled/);
-    for (const b of buttons) expect(b).not.toContain("aria-describedby");
-    expect(html).not.toMatch(/data-testid="md-call-paused"[^>]*>[^<]/);
+    expect(html).not.toContain("md-call-paused");
   });
 
-  it("the SEQUENCE: closed now, then reopened on the next poll — Call comes back and the reason goes", () => {
+  it("the SEQUENCE: closed now, then reopened on the next poll — Call is on throughout and the closure line comes and goes", () => {
     const closed = body(free5(NOW_UNTIL), two());
     const reopened = body(free5(null), two());
-    expect(callButtons(closed).every((b) => /\sdisabled/.test(b))).toBe(true);
-    expect(callButtons(reopened).some((b) => /\sdisabled/.test(b))).toBe(false);
-    expect(reopened).not.toContain("so no match can be called");
-    // And the other way round: open, then it closes under the organiser's hands.
-    expect(callButtons(body(free5(null), two())).some((b) => /\sdisabled/.test(b))).toBe(false);
-    expect(callButtons(body(free5(NOW_REST), two())).every((b) => /\sdisabled/.test(b))).toBe(true);
+    expect(callButtons(closed)).toHaveLength(2);
+    expect(callButtons(reopened)).toHaveLength(2);
+    expect([...callButtons(closed), ...callButtons(reopened)].some((b) => /\sdisabled/.test(b))).toBe(false);
+    // The closure line lives on the card and the focus head, not in the panel body.
+    expect(focus(free5(NOW_UNTIL))).toContain("Closed until 15:00");
+    expect(focus(free5(null))).not.toContain('data-testid="md-closure"');
   });
 
-  it("a blocked candidate keeps its own reason; the closure's reason is added, not swapped in", () => {
+  it("a blocked candidate keeps its own reason and has no Call button, whatever the court's hours", () => {
     const busy = { kind: "player_busy" as const, person_name: "Zara Khan", court_name: "Court 3" };
     const html = body(free5(NOW_UNTIL), [cand({ blocked: busy }, { id: "b-1" }), cand({}, { id: "x-2" })]);
     expect(html).toContain(t(dict, "matchDay.candidate.blocked", { person: "Zara Khan", court: "Court 3" }));
     expect(callButtons(html)).toHaveLength(1);
   });
 
-  it("every locale: each closure form and each stop reads in the reader's language, none left a raw key (counted)", () => {
+  it("every locale: each closure form and each warning reads in the reader's language, none left a raw key (counted)", () => {
     let checked = 0;
     for (const [locale, d] of Object.entries(DICTS) as [ "en" | "es" | "fr" | "nl", Dict ][]) {
       const forms = [
         t(d, "matchDay.closure.later", { from: "14:00", until: "15:00" }),
         t(d, "matchDay.closure.until", { time: "15:00" }),
         t(d, "matchDay.closure.rest"),
-        t(d, "matchDay.closure.callPaused.until", { court: "Court 5", time: "15:00" }),
-        t(d, "matchDay.closure.callPaused.rest", { court: "Court 5" }),
         t(d, "matchDay.sheet.warn.crossesClosure", { court: "Court 5", from: "14:00", until: "15:00" }),
         t(d, "matchDay.sheet.warn.courtClosedUntil", { court: "Court 5", time: "15:00" }),
         t(d, "matchDay.sheet.warn.courtClosedToday", { court: "Court 5" }),
+        t(d, "matchDay.sheet.warn.courtClosedSince", { court: "Court 5", time: "18:00" }),
+        t(d, "matchDay.sheet.confirmAnyway"),
       ];
       for (const text of forms) {
         expect(text, locale).not.toMatch(/matchDay\.|[{}]/);
         expect(text.length, locale).toBeGreaterThan(8);
         checked++;
       }
-      // The rendered card and panel speak the locale too.
-      const html = body(free5(NOW_UNTIL), two(), d, locale);
-      expect(html, locale).toContain(esc(t(d, "matchDay.closure.callPaused.until", { court: "Court 5", time: "15:00" })));
+      // The three warnings that ask the question end on it, in every language (the confirm button answers it).
+      for (const text of forms.slice(4, 7)) expect(text, locale).toMatch(/[?]$/);
     }
     expect(checked).toBe(4 * 8);
   });
 
-  it("the call sheet: a closure the match would run into, and a court already shut, are warnings among the others", () => {
+  it("the call sheet: a closure the match would run into is a warning among the others; a court already shut is the sheet's loud question", () => {
     const preview = (w: CallPreview["warnings"][number]): CallPreview => ({ shifts: [], warnings: [w] });
     const sheetOf = (w: CallPreview["warnings"][number]) =>
       renderToStaticMarkup(<CallSheetBody ctx={ctx} court={court({ court_name: "Court 5" })} candidate={cand()} state={{ kind: "ready", preview: preview(w) }} />);
     const crosses = sheetOf({ kind: "crosses_closure", court_name: "Court 5", from: "2026-10-31T14:00:00.000Z", until: "2026-10-31T15:00:00.000Z" });
     expect(crosses).toContain('data-kind="crosses_closure"');
     expect(crosses).toContain("Court 5 closes from 14:00 to 15:00, while this match would still be on.");
-    const closedUntil = sheetOf({ kind: "court_closed", court_name: "Court 5", until: "2026-10-31T15:00:00.000Z" });
-    expect(closedUntil).toContain("Court 5 is closed until 15:00.");
-    const closedToday = sheetOf({ kind: "court_closed", court_name: "Court 5", until: null });
-    expect(closedToday).toContain("Court 5 is closed for the rest of today.");
-    // A warning, not a stop: the confirm button is the sheet's own, and the sheet body never disables it.
+    expect(crosses).not.toContain('role="alert"');
+    const closedUntil = sheetOf({ kind: "court_closed", court_name: "Court 5", until: "2026-10-31T15:00:00.000Z", since: "2026-10-31T14:00:00.000Z" });
+    expect(closedUntil).toContain("Court 5 is closed until 15:00. Call anyway?");
+    const closedToday = sheetOf({ kind: "court_closed", court_name: "Court 5", until: null, since: null });
+    expect(closedToday).toContain("Court 5 is closed for the rest of today. Call anyway?");
+    // The brief's own sentence: "Court 4 is closed for the rest of today (hours end 18:00). Call anyway?"
+    const closedSince = sheetOf({ kind: "court_closed", court_name: "Court 4", until: null, since: "2026-10-31T18:00:00.000Z" });
+    expect(closedSince).toContain("Court 4 is closed for the rest of today (hours end 18:00). Call anyway?");
+    // The closed warning is announced on arrival and stands once, above the others (never duplicated in the plain list).
+    for (const html of [closedUntil, closedToday, closedSince]) {
+      expect(html).toContain('role="alert"');
+      expect(html.split('data-kind="court_closed"').length - 1).toBe(1);
+      expect(html).not.toContain("disabled");
+    }
+    // A warning, not a stop: the sheet body never disables anything.
     expect(crosses).not.toContain("disabled");
+  });
+
+  it("the confirm button says what it does: 'Call to Court 5' normally, 'Call anyway' when the court is shut now (every locale)", () => {
+    let checked = 0;
+    const open: CallPreview = { shifts: [], warnings: [{ kind: "pushes_later", count: 1 }] };
+    const shut: CallPreview = { shifts: [], warnings: [{ kind: "pushes_later", count: 1 }, { kind: "court_closed", court_name: "Court 5", until: null, since: null }] };
+    for (const [locale, d] of Object.entries(DICTS) as [ "en" | "es" | "fr" | "nl", Dict ][]) {
+      expect(callConfirmLabel(d, "Court 5", open), locale).toBe(t(d, "matchDay.sheet.confirm", { court: "Court 5" }));
+      expect(callConfirmLabel(d, "Court 5", shut), locale).toBe(t(d, "matchDay.sheet.confirmAnyway"));
+      expect(callConfirmLabel(d, "Court 5", { shifts: [], warnings: [] }), locale).toBe(t(d, "matchDay.sheet.confirm", { court: "Court 5" }));
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(callConfirmLabel(dict, "Court 5", shut)).toBe("Call anyway");
   });
 });
 

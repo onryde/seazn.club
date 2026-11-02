@@ -9,7 +9,7 @@ import { scoreLevels, type ScoreLevels } from "@/lib/score/levels";
 import type { Attention, Severity } from "@/lib/division-phase";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
 import { needsYouKey } from "@/components/v2/desk/needs-you";
-import { CALL_REFUSAL, TBD_ENTRANT, type CallWarning } from "./call";
+import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview, type CallWarning } from "./call";
 import type {
   CourtClosure,
   MatchDayCandidate,
@@ -518,10 +518,26 @@ export function warningText(dict: Dict, w: CallWarning, locale: Locale, tz: stri
         until: fmtPublicTime(locale, tz, w.until),
       });
     case "court_closed":
-      return w.until === null
+      // "Call anyway?" ends each form: this is the question the confirm button answers (fix round 1, R0).
+      if (w.until !== null) {
+        return t(dict, "matchDay.sheet.warn.courtClosedUntil", { court: w.court_name, time: fmtPublicTime(locale, tz, w.until) });
+      }
+      return w.since === null
         ? t(dict, "matchDay.sheet.warn.courtClosedToday", { court: w.court_name })
-        : t(dict, "matchDay.sheet.warn.courtClosedUntil", { court: w.court_name, time: fmtPublicTime(locale, tz, w.until) });
+        : t(dict, "matchDay.sheet.warn.courtClosedSince", { court: w.court_name, time: fmtPublicTime(locale, tz, w.since) });
   }
+}
+
+/** The call sheet's confirm button: "Call to Court 5", or "Call anyway" when the court is shut right now (R0). */
+export function callConfirmLabel(dict: Dict, courtName: string, preview: CallPreview): string {
+  return closedWarning(preview) === null ? t(dict, "matchDay.sheet.confirm", { court: courtName }) : t(dict, "matchDay.sheet.confirmAnyway");
+}
+
+/** The preview's "this court is shut right now" warning, when it has one: it turns the sheet's confirm into "Call anyway" and the
+ *  warning into the sheet's prominent question (fix round 1, R0 — a closed court is a warning the organiser confirms past, not a
+ *  stop: a venue running late is real). */
+export function closedWarning(preview: Pick<CallPreview, "warnings">): Extract<CallWarning, { kind: "court_closed" }> | null {
+  return preview.warnings.find((w): w is Extract<CallWarning, { kind: "court_closed" }> => w.kind === "court_closed") ?? null;
 }
 
 /** A court card's closure line (E2 item 3): "Closed 14:00–15:00" for a break still to come, "Closed until 15:00" while shut and
@@ -535,16 +551,6 @@ export function closureText(dict: Dict, closure: CourtClosure | null, locale: Lo
   return closure.until === null
     ? t(dict, "matchDay.closure.rest")
     : t(dict, "matchDay.closure.until", { time: fmtPublicTime(locale, tz, closure.until) });
-}
-
-/** Why Call is off on a court that is closed now — the line beside the disabled buttons, announced to a screen reader. Null while
- *  the court is open (a break still to come is a warning in the call preview, not a stop). */
-export function callPausedReason(dict: Dict, court: Pick<MatchDayCourt, "court_name" | "closure">, locale: Locale, tz: string): string | null {
-  const closure = court.closure;
-  if (closure === null || closure.kind !== "now") return null;
-  return closure.until === null
-    ? t(dict, "matchDay.closure.callPaused.rest", { court: court.court_name })
-    : t(dict, "matchDay.closure.callPaused.until", { court: court.court_name, time: fmtPublicTime(locale, tz, closure.until) });
 }
 
 // ---- Needs you, the scorer marks and the stream preview (task A4) ----------------------------------------------------------

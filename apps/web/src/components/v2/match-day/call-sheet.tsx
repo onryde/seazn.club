@@ -11,7 +11,7 @@ import { fmtPublicTime } from "@/lib/format";
 import { t } from "@/lib/i18n-runtime";
 import type { CallPreview } from "@/lib/match-day/call";
 import type { MatchDayCandidate, MatchDayCourt } from "@/lib/match-day/types";
-import { matchLabel, refusalMessage, warningText } from "@/lib/match-day/view";
+import { callConfirmLabel, closedWarning, matchLabel, refusalMessage, warningText } from "@/lib/match-day/view";
 import { MatchRoundChip } from "./round-chip";
 import type { MatchDayCtx } from "./court-focus";
 
@@ -93,7 +93,8 @@ export function CallSheet({
               onClick={() => void confirm()}
               className="btn btn-primary min-h-11"
             >
-              {state.kind === "calling" ? t(dict, "matchDay.sheet.calling") : t(dict, "matchDay.sheet.confirm", { court: court.court_name })}
+              {/* A court shut right now still takes the call (R0): the sheet asks, and the button says what it does. */}
+              {state.kind === "calling" ? t(dict, "matchDay.sheet.calling") : callConfirmLabel(dict, court.court_name, state.preview)}
             </button>
           </>
         ) : (
@@ -122,6 +123,9 @@ export function CallSheetBody({
 }) {
   const { dict, locale, tz } = ctx;
   const time = (iso: string) => fmtPublicTime(locale, tz, iso);
+  const ready = state.kind === "ready" || state.kind === "calling";
+  const closed = ready ? closedWarning(state.preview) : null;
+  const others = ready ? state.preview.warnings.filter((w) => w.kind !== "court_closed") : [];
   return (
     <div data-testid="md-call-sheet" className="grid gap-3">
       <p className="text-base font-semibold text-slate-900 [overflow-wrap:anywhere]">
@@ -131,6 +135,21 @@ export function CallSheetBody({
       {state.kind === "loading" && <p aria-live="polite">{t(dict, "matchDay.sheet.loading")}</p>}
       {(state.kind === "ready" || state.kind === "calling") && (
         <>
+          {closed !== null && (
+            // The question this sheet exists to ask when the court is shut: loud, announced on arrival, and answered by "Call anyway".
+            <div
+              role="alert"
+              data-testid="md-warning"
+              data-kind="court_closed"
+              className="flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2.5 text-sm font-semibold text-amber-950 ring-1 ring-inset ring-amber-300"
+            >
+              <svg aria-hidden viewBox="0 0 16 16" className="mt-0.5 h-4 w-4 shrink-0 fill-none stroke-current" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M8 4.5V8l2.25 1.5" />
+              </svg>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{warningText(dict, closed, locale, tz)}</span>
+            </div>
+          )}
           {state.preview.shifts.length === 0 ? (
             <p>{t(dict, "matchDay.sheet.noShift", { court: court.court_name })}</p>
           ) : (
@@ -145,9 +164,9 @@ export function CallSheetBody({
               </ul>
             </div>
           )}
-          {state.preview.warnings.length > 0 && (
+          {others.length > 0 && (
             <ul className="grid gap-1 rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
-              {state.preview.warnings.map((w, i) => (
+              {others.map((w, i) => (
                 <li key={`${w.kind}-${i}`} data-testid="md-warning" data-kind={w.kind}>
                   {warningText(dict, w, locale, tz)}
                 </li>

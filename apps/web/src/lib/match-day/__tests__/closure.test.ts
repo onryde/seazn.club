@@ -148,13 +148,15 @@ describe("closureWarning — the call preview (a warning, never a refusal)", () 
   });
 
   it("the court is already closed at the call: court_closed, until it reopens", () => {
-    expect(closureWarning(BREAK, "Court 3", ...span(14, 10, 30))).toEqual({ kind: "court_closed", court_name: "Court 3", until: iso(15) });
-    expect(closureWarning(BREAK, "Court 3", ...span(7, 0, 30))).toEqual({ kind: "court_closed", court_name: "Court 3", until: iso(9) });
+    // `since`: when the hours last ended before the call — the morning window's end inside the break, nothing before the opening.
+    expect(closureWarning(BREAK, "Court 3", ...span(14, 10, 30))).toEqual({ kind: "court_closed", court_name: "Court 3", until: iso(15), since: iso(14) });
+    expect(closureWarning(BREAK, "Court 3", ...span(7, 0, 30))).toEqual({ kind: "court_closed", court_name: "Court 3", until: iso(9), since: null });
   });
 
   it("closed for the rest of today: until is null; a court closed all day likewise", () => {
-    expect(closureWarning(BREAK, "Court 3", ...span(22, 30, 30))).toEqual({ kind: "court_closed", court_name: "Court 3", until: null });
-    expect(closureWarning([], "Court 3", ...span(10, 0, 30))).toEqual({ kind: "court_closed", court_name: "Court 3", until: null });
+    // After the night's close two windows are over; `since` is the LATER end (22:00), not the break's (14:00).
+    expect(closureWarning(BREAK, "Court 3", ...span(22, 30, 30))).toEqual({ kind: "court_closed", court_name: "Court 3", until: null, since: iso(22) });
+    expect(closureWarning([], "Court 3", ...span(10, 0, 30))).toEqual({ kind: "court_closed", court_name: "Court 3", until: null, since: null });
   });
 
   it("no calendar: nothing to warn about", () => {

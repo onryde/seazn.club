@@ -35,8 +35,10 @@ export type CallWarning =
   /** Match Day E2 item 3 (`lib/match-day/closure.ts`): the court is open at the call and closes, then reopens, before the match is
    *  due to end — `from`/`until` are the break's bounds. */
   | { kind: "crosses_closure"; court_name: string; from: string; until: string }
-  /** The court is already closed at the call; `until` is when it reopens, null when it does not open again today. */
-  | { kind: "court_closed"; court_name: string; until: string | null };
+  /** The court is already closed at the call (the organiser may still call: "Call anyway", R0); `until` is when it reopens, null
+   *  when it does not open again today; `since` is when its hours last ended before the call, null when it has not opened yet
+   *  today or has no hours today. */
+  | { kind: "court_closed"; court_name: string; until: string | null; since: string | null };
 
 /** A match on the target court that the call pushes later than its planned time. Planned times are never written (owner
  *  ruling B); `estimated_at` is the read-time estimate. */

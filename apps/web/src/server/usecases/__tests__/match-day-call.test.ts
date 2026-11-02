@@ -777,8 +777,10 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
     expect(await closureWarnings(0)).toEqual([]);
     expect(await closureWarnings(5)).toEqual([{ kind: "crosses_closure", court_name: "Court 1", from: iso(30), until: iso(90) }]);
     // Shut at the call: inside the break (until 11:30Z), and after the night's close (rest of today).
-    expect(await closureWarnings(40)).toEqual([{ kind: "court_closed", court_name: "Court 1", until: iso(90) }]);
-    expect(await closureWarnings(600)).toEqual([{ kind: "court_closed", court_name: "Court 1", until: null }]);
+    // `since` is when the hours last ended before the call: the morning window's end (10:30Z) inside the break, the evening
+    // window's end (19:00Z) after the night's close.
+    expect(await closureWarnings(40)).toEqual([{ kind: "court_closed", court_name: "Court 1", until: iso(90), since: iso(30) }]);
+    expect(await closureWarnings(600)).toEqual([{ kind: "court_closed", court_name: "Court 1", until: null, since: iso(540) }]);
     // The same call a minute-step later, once the break is over: nothing (the closure ended).
     expect(await closureWarnings(90)).toEqual([]);
 
@@ -803,6 +805,11 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
       (await previewCall(day.auth, f.id, court, at(minute))).warnings.map((w) => w.kind).filter((k) => k === "court_closed" || k === "crosses_closure");
 
     expect(await kinds(day.courts.c1, 0)).toEqual(["court_closed"]); // closed all day, despite its Saturday hours
+    // The empty case of `since`: a court with no window today (closed all day) never opened, and one not open yet has not either.
+    const closedWarning = async (court: string, minute: number) =>
+      (await previewCall(day.auth, f.id, court, at(minute))).warnings.find((w) => w.kind === "court_closed");
+    expect(await closedWarning(day.courts.c1, 0)).toMatchObject({ until: null, since: null });
+    expect(await closedWarning(day.courts.c2, 0)).toMatchObject({ until: iso(60), since: null });
     expect(await kinds(day.courts.c2, 0)).toEqual(["court_closed"]); // 10:00Z: not open until 11:00Z
     expect(await kinds(day.courts.c2, 70)).toEqual([]); // 11:10Z–11:40Z, inside its override range
     expect(await kinds(day.courts.c3, 0)).toEqual([]); // no calendar at all: open all day

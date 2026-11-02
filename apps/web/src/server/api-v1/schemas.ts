@@ -1650,7 +1650,12 @@ export const FixtureCallPreview = z.object({
         from: z.iso.datetime({ offset: true }),
         until: z.iso.datetime({ offset: true }),
       }),
-      z.object({ kind: z.literal("court_closed"), court_name: z.string(), until: z.iso.datetime({ offset: true }).nullable() }),
+      z.object({
+        kind: z.literal("court_closed"),
+        court_name: z.string(),
+        until: z.iso.datetime({ offset: true }).nullable(),
+        since: z.iso.datetime({ offset: true }).nullable(),
+      }),
     ]),
   ),
 });

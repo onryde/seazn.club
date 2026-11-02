@@ -53,6 +53,9 @@ export const closedNow = (c: { closure: CourtClosure | null }): boolean => c.clo
  *  - `crosses_closure`: the court is open at `start` and closes, then reopens, before the match is due to end.
  * A span that outlasts the day's LAST window is `past_day_end`'s, not this one's; a span that ends exactly as the break
  * begins does not cross it.
+ *
+ * `court_closed` also carries `since`: when the court last closed before `start` (the end of the latest window already over),
+ * so "closed for the rest of today" can say when its hours ended. Null when it has not opened yet today, or has no window at all.
  */
 export function closureWarning(
   windows: readonly UsableWindow[],
@@ -62,7 +65,10 @@ export function closureWarning(
 ): Extract<CallWarning, { kind: "crosses_closure" | "court_closed" }> | null {
   const closure = closureOf(windows, start);
   if (closure === null) return null;
-  if (closure.kind === "now") return { kind: "court_closed", court_name: courtName, until: closure.until };
+  if (closure.kind === "now") {
+    const ended = windows.filter((w) => w.to <= start).map((w) => w.to);
+    return { kind: "court_closed", court_name: courtName, until: closure.until, since: ended.length === 0 ? null : iso(Math.max(...ended)) };
+  }
   return new Date(closure.from).getTime() < end
     ? { kind: "crosses_closure", court_name: courtName, from: closure.from, until: closure.until }
     : null;
