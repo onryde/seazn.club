@@ -163,20 +163,24 @@ test("settings tab: sections render, rename works, structure locks with fixtures
   expect(refusedList.map((r) => r.stageName), "every refused field names the started stage").toEqual(refusedList.map(() => firstStage.name));
 });
 
-test("cards wear their identity: sport banner on comps, sport-emoji avatar on division ledger rows", async ({
+test("cards wear their identity: sports line on comps, sport-emoji avatar on division ledger rows", async ({
   page,
   request,
 }) => {
   // W1 (competition-desk design, 2026-09-02 §"Divisions ledger rows") retired
   // the EntityCard tile grid for divisions on THIS page in favour of
   // DivisionLedger: "logo, otherwise the sport emoji … never a letter
-  // monogram." The org page's own EntityCard grid (competitions, elsewhere)
-  // is unchanged and still asserted below.
+  // monogram." Match Day C7 (owner, 2026-11-01) retired the org page's sport
+  // banner too ("no tinted band, no emoji"): a competition card names its
+  // sports, read from its divisions — asserted below.
   const org = await activeOrg(page);
   const rig = await seedRig(request);
 
   await page.goto(`/o/${org.slug}`);
-  await expect(page.getByTestId("card-banner").first()).toBeVisible({ timeout: 20_000 });
+  const compCard = page.locator(`[data-testid="org-home-card"][data-comp="${rig.compSlug}"]`);
+  await expect(compCard).toBeVisible({ timeout: 20_000 });
+  await expect(compCard.getByTestId("org-home-sports")).toHaveText(uiString("en", "sport.generic"));
+  await expect(compCard.getByTestId("card-banner")).toHaveCount(0);
 
   await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
   const row = page.getByTestId("desk-ledger-row").filter({ hasText: "Tile Open" }).first();

@@ -12,18 +12,25 @@ export async function uiSystemSuite(admin: Session, proOrgSlug: string): Promise
     }),
   );
   const dash = await html(admin, "/dashboard");
-  check("dashboard renders card grid (pro)", dash.status === 200 && dash.body.includes("ecard"));
+  // Match Day C7: the org home's quiet-roster card for THIS competition (a fresh draft has no match today, so it is a card,
+  // not a deck row) — anchored on the rendered attributes, never a bare substring the flight payload could also carry.
+  check(
+    "dashboard renders card grid (pro)",
+    dash.status === 200 && dash.body.includes(`<article data-testid="org-home-card" data-comp="${comp.slug}"`),
+  );
   check("card carries status chip", dash.body.includes('data-chip="draft"'));
-  check("console dashboard renders English by default", dash.body.includes("Matchday console"));
+  // Match Day C7: the "Matchday console" eyebrow is gone everywhere; the page's own title is the localized probe.
+  check("console dashboard renders English by default", dash.body.includes(">Competitions</h1>"));
+  check("console dashboard drops the Matchday console eyebrow", !dash.body.includes("Matchday console"));
 
   // v5 i18n cycle 47: the console renders in the viewer's locale. Same page with
-  // seazn_locale=fr → the English eyebrow is gone, the French one is present.
+  // seazn_locale=fr → the English title is gone, the French one is present.
   const frDash = await html({ cookies: { ...admin.cookies, seazn_locale: "fr" } }, "/dashboard");
   check(
     "console dashboard localizes to French (ui catalog)",
     frDash.status === 200 &&
-      frDash.body.includes("Console de jour de match") &&
-      !frDash.body.includes("Matchday console"),
+      frDash.body.includes(">Compétitions</h1>") &&
+      !frDash.body.includes(">Competitions</h1>"),
   );
 
   const flip = await v1(admin, `/api/v1/competitions/${comp.id}`, "PATCH", {
@@ -49,9 +56,11 @@ export async function uiSystemSuite(admin: Session, proOrgSlug: string): Promise
     }),
   );
   const freeDash = await html(free, "/dashboard");
+  // Match Day C7: was a bare "ecard" substring, which the new page never renders and which still matched (most likely
+  // "scorecard" in the flight payload) — it could not fail. Now this competition's own card, anchored as above.
   check(
     "dashboard renders card grid (free)",
-    freeDash.status === 200 && freeDash.body.includes("ecard"),
+    freeDash.status === 200 && freeDash.body.includes(`<article data-testid="org-home-card" data-comp="${freeComp.slug}"`),
   );
   // PROMPT-30 free path: slug console URL serves for community orgs too.
   const freeConsole = await html(free, `/o/${freeOrg.slug}/c/${freeComp.slug}`);

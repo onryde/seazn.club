@@ -475,8 +475,8 @@ describe("DivisionLedger", () => {
   // F1 regression (final review, Critical), toothless-guard fix: the OLD
   // assertion here was `not.toMatch(/Nothing scheduled yet/)` against a
   // hand-typed, already-correct "15 of 15 played · complete" statusLine —
-  // that string lives only at entity-card.tsx's `card.next.none`, which
-  // this component never renders, on a FINISHED row that could never have
+  // that string lived only at the since-deleted entity-card.tsx's
+  // `card.next.none` (gone with it), which this component never rendered, on a FINISHED row that could never have
   // produced it anyway. Vacuous twice over. This test drives the REAL
   // `resolvePhase` + `statusLine` functions over the exact live repro (a
   // started division, one active stage with 6 generated fixtures, none

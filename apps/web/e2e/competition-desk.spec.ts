@@ -68,8 +68,8 @@ test.describe("competition desk", () => {
     // while the row's OWN status line said "nothing scheduled" next to it.
     await expect(row).toHaveAttribute("data-phase", "setting_up");
     // Toothless-guard fix: the old assertion checked for
-    // "Nothing scheduled yet" — a string that lives only at
-    // entity-card.tsx's `card.next.none`, which this page never renders.
+    // "Nothing scheduled yet" — a string that lived only at the since-deleted
+    // entity-card.tsx's `card.next.none` (gone with it), which this page never rendered.
     // The live defect copy is lowercase and has no "yet"; re-anchored on
     // that, and on the row actually stating a played count that must never
     // sit beside it.

@@ -536,6 +536,10 @@ const WALKTHROUGH_SPECS: string[] = [
   // reconnect-needed row (the daily sweep, same exclusion), Disconnect and its three outcomes, two matches on one
   // channel, and the consent links.
   "youtube-connect.spec.ts",
+
+  // Match Day — C7, the org Competitions home: in through the nav, today's two (a Draft one included) in the deck with
+  // Open Match Day, the quiet card's stub, Show finished, and each Open Match Day landing on that competition's courts.
+  "competitions-home.spec.ts",
 ];
 
 /** The values of `E2E_WALKTHROUGH_SLICE` that e2e.yml dispatches. Named here
