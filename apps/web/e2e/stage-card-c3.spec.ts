@@ -7,7 +7,7 @@
 //
 // Anti-vacuity: every absence is paired with the presence beside it; the sweep reports how many panels it opened.
 import { expect, test, type Page } from "@playwright/test";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, closeStagePanel, stageCardOf, type StagePanel } from "./helpers";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, openStagePanel, closeStagePanel, seedCompletedLeague, stageCardOf, type StagePanel } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { expectStageToolsSheet } from "./helpers/stage-tools-sheet";
 import { escapeRe, moduleOf, summaryFormatText, summaryPointsText, summaryTiesPrefix } from "./helpers/stage-summary";
@@ -84,10 +84,11 @@ test("the stage card: header buttons, a one-line summary, the stage's own fixtur
   await expect(card.getByTestId(`stage-points-${stageId}`), "no inline Points section").toHaveCount(0);
   await expect(card.getByTestId(`stage-tiebreaks-${stageId}`), "no inline Tie-breaks section").toHaveCount(0);
 
-  // The stage's fixtures are IN the card; there is no "View N fixtures" trip and no "See the fixtures" link. A started division opens
-  // its sheet on Today, which keeps none of these unscheduled matches (the page says so, once): "All" shows the stage's rows.
-  await expect(page.getByTestId("run-sheet-empty"), "Today keeps none of them: the page says so once").toHaveCount(1);
-  await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
+  // The stage's fixtures are IN the card; there is no "View N fixtures" trip and no "See the fixtures" link. The sheet opens on All
+  // whatever the division's phase (PB1, owner 2026-11-02: it used to open on Today once a division started, which kept none of these
+  // unscheduled matches and said so), so the stage's rows are there with no tap, and the page has no "nothing matches" sentence.
+  await expect(page.getByTestId("run-sheet-filter").locator('[data-filter="all"]'), "the sheet opens on All").toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("run-sheet-empty"), "All keeps every row: nothing to apologise for").toHaveCount(0);
   await expect(card.getByTestId("stage-run-sheet"), "the stage's rows are in its card").toBeVisible();
   await expect(card.locator("li[data-fixture-no]"), "all three matches are in the card").toHaveCount(3);
   // Final review G6: `stage-view-fixtures` is rendered by no source now, so a count-0 check on it could never fail. What replaced the
@@ -128,6 +129,71 @@ test("the stage card: header buttons, a one-line summary, the stage's own fixtur
   await expect(card.getByTestId("stage-format-editor")).toBeVisible();
   await expect(card.getByTestId(`stage-points-${stageId}`)).toBeVisible();
   await expectNoHorizontalScroll(page);
+});
+
+// Match Day PB1 item 3 (owner 2026-11-02): a COMPLETED stage's card is one line until its toggle opens it, and inside it a FINISHED round is one
+// bar until its bar opens it. Driven at the desktop width here (the phone widths are `mobile.spec.ts`, whose projects run the phone
+// branches; this spec's do not). Anti-vacuity: every "folded" is paired with the "open" beside it, and the rows are counted.
+test("PB1 item 3: a completed stage is one line - its toggle opens and closes the card, and a finished round inside is a bar that opens and closes", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const { divisionId, stageId } = await seedCompletedLeague(request, "fold");
+  const card = await openCard(page, request, divisionId, stageId);
+  const toggle = card.getByTestId("stage-collapse-toggle");
+  const body = card.locator(`#stage-body-${stageId}`);
+
+  // Folded on arrival: the one line says "1. League", Completed and "3 of 3 done"; nothing else of the card is on screen.
+  await expect(toggle, "one toggle on the card").toHaveCount(1);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toHaveAttribute("aria-controls", `stage-body-${stageId}`);
+  await expect(card.getByTestId("stage-collapsed-summary")).toHaveText("3 of 3 done");
+  await expect(card.locator("h3")).toContainText("1. League");
+  await expect(card.locator("h3 ~ .badge"), "the status pill").toHaveText(/^Complete/i);
+  await expect(body, "the body it controls is hidden").toBeHidden();
+  await expect(card.locator("li[data-fixture-no]:visible"), "no row is on screen").toHaveCount(0);
+  await expect(card.getByTestId("stage-controls"), "its buttons are away with it").toHaveCount(0);
+  expect((await toggle.boundingBox())!.height, "a 44px target").toBeGreaterThanOrEqual(43.5);
+  await expectNoHorizontalScroll(page);
+
+  // Open: the card is back (positive pair), and every round - all finished - is itself one bar.
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(body).toBeVisible();
+  await expect(card.getByTestId("stage-collapsed-summary"), "the folded line is gone").toHaveCount(0);
+  await expect(card.getByTestId("stage-controls"), "the header's controls are back").toBeVisible();
+  const roundToggles = card.getByTestId("run-sheet-round-toggle");
+  await expect(roundToggles, "three rounds, a bar each").toHaveCount(3);
+  for (let i = 0; i < 3; i++) {
+    await expect(roundToggles.nth(i), `round ${i + 1}: finished, so folded`).toHaveAttribute("aria-expanded", "false");
+    expect((await roundToggles.nth(i).boundingBox())!.height, `round ${i + 1}: a 44px bar`).toBeGreaterThanOrEqual(43.5);
+  }
+  await expect(card.locator("li[data-fixture-no]:visible"), "every round is folded: no row yet").toHaveCount(0);
+
+  // A round's bar opens its rows and closes them again - twice (the sequence, not the click).
+  for (let pass = 0; pass < 2; pass++) {
+    await roundToggles.nth(0).click();
+    await expect(roundToggles.nth(0)).toHaveAttribute("aria-expanded", "true");
+    await expect(card.locator("li[data-fixture-no]:visible"), `pass ${pass + 1}: the opened round shows its one match`).toHaveCount(1);
+    await roundToggles.nth(0).click();
+    await expect(roundToggles.nth(0)).toHaveAttribute("aria-expanded", "false");
+    await expect(card.locator("li[data-fixture-no]:visible")).toHaveCount(0);
+  }
+
+  // The card folds and opens again; a round left open stays open (same page visit).
+  await roundToggles.nth(1).click();
+  await expect(card.locator("li[data-fixture-no]:visible")).toHaveCount(1);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(body).toBeHidden();
+  await expect(card.locator("li[data-fixture-no]:visible"), "folded: nothing on screen").toHaveCount(0);
+  await toggle.click();
+  await expect(body).toBeVisible();
+  await expect(roundToggles.nth(1), "the round opened by hand is still open").toHaveAttribute("aria-expanded", "true");
+  await expect(card.locator("li[data-fixture-no]:visible")).toHaveCount(1);
+  await expectNoHorizontalScroll(page);
+
+  // A reload starts from the defaults again: nothing is remembered (no persistence).
+  await page.reload({ waitUntil: "load" });
+  await expect(stageCardOf(page, stageId).getByTestId("stage-collapse-toggle")).toHaveAttribute("aria-expanded", "false");
 });
 
 test("the phone: the three buttons are the top rows of the ONE Stage tools sheet; choosing one closes the sheet and opens its panel", async ({ page, request }) => {
@@ -198,9 +264,10 @@ test("a stage not yet started: Generate leads, no Complete, and the card still s
 });
 
 // Match Day E1 item 1 (owner 2026-11-01): the stage's actions are in the card HEADER - [actions | divider | settings] on one line from md,
-// the same actions in the Stage tools sheet below it - and Complete's reason is an ⓘ: hover and keyboard focus show it, a tap toggles it,
-// the waiting button uses `aria-disabled` (still focusable) and a press on it does nothing.
-test("E1: Complete's reason is an ⓘ - hover, focus and tap show it, the waiting button is aria-disabled and a press does nothing; the actions sit in the header", async ({ page, request }) => {
+// the same actions in the Stage tools sheet below it - and Complete's reason is a bubble on the waiting button itself (Match Day PB1,
+// owner 2026-11-02: the ⓘ beside it is gone): hover and keyboard focus show it, a tap toggles it, the waiting button uses
+// `aria-disabled` (still focusable) and a press on it does nothing but show why.
+test("E1 (PB1): Complete's reason is a bubble on the greyed button - hover, focus and tap show it, it is aria-disabled and a press does nothing; the actions sit in the header", async ({ page, request }) => {
   test.setTimeout(150_000);
   const { divisionId, stageId, fixtureIds } = await seedLeague(request, "tip");
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
@@ -211,12 +278,11 @@ test("E1: Complete's reason is an ⓘ - hover, focus and tap show it, the waitin
   const railTrigger = card.getByTestId("stage-rail-trigger");
   const phone = await railTrigger.isVisible();
   const complete = card.getByTestId("stage-complete");
-  const info = card.getByTestId("stage-complete-info");
   const hint = card.getByTestId("stage-complete-hint");
   const hintId = `stage-complete-hint-${stageId}`;
 
   if (!phone) {
-    // From md the actions are in the header's one line: title, then [Complete + ⓘ, Add match, Delete] | divider | settings buttons.
+    // From md the actions are in the header's one line: title, then [Complete, Add match, Delete] | divider | settings buttons.
     const header = card.locator("header").first();
     await expect(header.getByTestId("stage-complete"), "Complete is in the card header").toBeVisible();
     await expect(header.getByTestId("stage-add-match"), "Add match is in the card header").toBeVisible();
@@ -236,65 +302,71 @@ test("E1: Complete's reason is an ⓘ - hover, focus and tap show it, the waitin
   await expect(complete, "waiting: aria-disabled").toHaveAttribute("aria-disabled", "true");
   expect(await complete.evaluate((el) => el.hasAttribute("disabled")), "...and NOT `disabled`: it stays focusable").toBe(false);
   await expect(complete).toHaveAttribute("aria-describedby", hintId);
-  await expect(info).toHaveAttribute("aria-describedby", hintId);
+  await expect(complete, "a screen reader reads the reason as the button's description").toHaveAccessibleDescription(/unlocks when all 3 matches are played/);
+  await expect(card.getByTestId("stage-complete-info"), "PB1: the ⓘ is retired, in every state and at every width").toHaveCount(0);
   await expect(hint).toHaveAttribute("role", "tooltip");
   await expect(hint).toHaveAttribute("id", hintId);
   await expect(hint).toHaveText(/unlocks when all 3 matches are played/);
-  await expect(info).toHaveAccessibleName(/not available yet/);
-  expect((await info.boundingBox())!.height, "the ⓘ clears the 44px floor").toBeGreaterThanOrEqual(44);
-  expect((await info.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+  expect((await complete.boundingBox())!.height, "the greyed Complete clears the 44px floor").toBeGreaterThanOrEqual(44);
 
   if (!phone) {
     // Closed until asked: hidden. Hover shows it; moving away hides it. Keyboard focus shows it; focusing elsewhere hides it.
     await expect(hint, "closed: the bubble is not on screen").toBeHidden();
-    await info.hover();
+    await complete.hover();
     await expect(hint, "hover shows the reason").toBeVisible();
+    // The pointer can cross the gap to the bubble without it going away (WCAG 1.4.13 hoverable), and moving off both hides it.
+    await hint.hover();
+    await expect(hint, "the pointer is on the bubble: it stays").toBeVisible();
     await page.mouse.move(2, 2);
     await expect(hint, "moving away hides it").toBeHidden();
-    await info.focus();
+    // The button itself is focusable (aria-disabled, not disabled) and focusing IT shows the reason.
+    await complete.focus();
+    await expect(complete).toBeFocused();
     await expect(hint, "keyboard focus shows the reason").toBeVisible();
     await card.getByTestId("stage-tool-format").focus();
     await expect(hint, "focus elsewhere hides it").toBeHidden();
-    // The button itself is focusable (aria-disabled, not disabled) and focusing IT shows the reason too.
-    await complete.focus();
-    await expect(complete).toBeFocused();
-    await expect(hint, "focusing the waiting button shows why").toBeVisible();
-    await card.getByTestId("stage-tool-format").focus();
 
     // E1 fix round 1 (m4, WCAG 1.4.13): Escape puts away a bubble that hover or focus is holding up, with the pointer / focus still
     // where they are - and it stays away until the pointer and focus have both left and one of them returns.
-    await info.hover();
+    await complete.hover();
     await expect(hint, "premise: hover shows the reason").toBeVisible();
     await page.keyboard.press("Escape");
     await expect(hint, "Escape dismisses the hover bubble").toBeHidden();
-    await page.mouse.move(info.page().viewportSize()!.width - 2, 2);
-    await info.hover();
+    await page.mouse.move(page.viewportSize()!.width - 2, 2);
+    await complete.hover();
     await expect(hint, "the pointer left and came back: shown again").toBeVisible();
-    await page.mouse.move(info.page().viewportSize()!.width - 2, 2);
-    await info.focus();
+    await page.mouse.move(page.viewportSize()!.width - 2, 2);
+    await complete.focus();
     await expect(hint, "premise: focus shows the reason").toBeVisible();
     await page.keyboard.press("Escape");
     await expect(hint, "Escape dismisses the focus bubble").toBeHidden();
-    await expect(info, "...and focus never moved").toBeFocused();
+    await expect(complete, "...and focus never moved").toBeFocused();
     await card.getByTestId("stage-tool-format").focus();
-    await info.focus();
+    await complete.focus();
     await expect(hint, "focus left and came back: shown again").toBeVisible();
     await card.getByTestId("stage-tool-format").focus();
     await expect(hint).toBeHidden();
   }
 
-  // A tap toggles it, at every width; Escape closes the bubble and nothing else (below md the sheet stays open).
-  await info.click();
+  // A tap on the greyed button toggles it, at every width (forced past Playwright's own enabled check: aria-disabled reads as not
+  // enabled, and a person's finger has no such check); Escape closes the bubble and nothing else (below md the sheet stays open).
+  await complete.click({ force: true });
   await expect(hint, "a tap opens the reason").toBeVisible();
-  await expect(info).toHaveAttribute("aria-expanded", "true");
+  await expect(hint).toHaveAttribute("data-open", "true");
   await page.keyboard.press("Escape");
-  await expect(info, "Escape closes the bubble").toHaveAttribute("aria-expanded", "false");
+  await expect(hint, "Escape closes the bubble").toHaveAttribute("data-open", "false");
+  await expect(hint).toBeHidden();
   if (phone) await expect(card.getByTestId("stage-rail-sheet"), "...and leaves the Stage tools sheet open").toBeVisible();
-  await info.click();
+  await complete.click({ force: true });
+  await expect(hint).toBeVisible();
+  await complete.click({ force: true });
+  await expect(hint, "a second tap toggles the tapped-open state back off (a hovering pointer may still hold the bubble up)").toHaveAttribute("data-open", "false");
+  await complete.click({ force: true });
   await expect(hint).toBeVisible();
   await card.getByTestId("stage-add-match").evaluate((el) => (el as HTMLElement).blur());
   await page.mouse.click(2, 2);
-  await expect(info, "a tap outside closes it").toHaveAttribute("aria-expanded", "false");
+  await expect(hint, "a tap outside closes it").toHaveAttribute("data-open", "false");
+  await expect(hint).toBeHidden();
 
   // A press on the waiting Complete does nothing: forced past Playwright's own enabled check (aria-disabled reads as not enabled), the
   // stage is still active and no dialog or notice appeared.

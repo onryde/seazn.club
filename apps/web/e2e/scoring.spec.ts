@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   addEntrantsViaApi,
   apiJson,
+  expandAllFolds,
   createStageAndGenerate,
   expectNoHorizontalScroll,
   seedScoredDivision,
@@ -53,6 +54,9 @@ test("every fixture row carries its own action entry point", async ({ page, requ
   // Without it, every assertion below is satisfied by a blank page or a 500 —
   // which is exactly how the version this replaces stayed green.
   await expect(rows).toHaveCount(expected, { timeout: 20_000 });
+  // Match Day PB1 (owner 2026-11-02): a round whose every match is settled loads folded to its bar - and here every round is. The
+  // rows above are counted in the DOM either way; open the bars the way an organiser would before asking for the links on screen.
+  await expandAllFolds(page);
   // …and every one of those rows offers its ONE action. `seedScoredDivision`
   // decides every fixture and leaves it untimed (helpers.ts: scored callers get
   // no schedule events), so all of them land on `fixtureRowAction`'s SETTLED

@@ -7,8 +7,11 @@
 // Expected values come from the engine's declarations (stage kinds, `DRAW_KINDS`, the sport registry, a sport's own default order
 // through `unitLabelKey`) and the en dictionary - never from the code under test. Every sweep reports its count; zero is a failure.
 import { describe, expect, it, vi } from "vitest";
+import type { ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
+import { RunSheet, RunSheetFilterBar } from "@/components/v2/desk/run-sheet";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
@@ -73,28 +76,31 @@ const MOCK_FIXTURES = [
   fixture(A, 3),
 ];
 
+/** The panel's props as the tests below hand them in (one place, so the static render and the hook-harness island read the same). */
+const panelProps = (over: Record<string, unknown> = {}) => ({
+  divisionId: "d1",
+  competitionId: "c1",
+  orgSlug: "o",
+  compSlug: "c",
+  divSlug: "d",
+  stages: [stageRow()],
+  fixtures: MOCK_FIXTURES,
+  entrantNames: { e1: "Alpha", e2: "Bravo" },
+  canEdit: true,
+  sportKey: "badminton",
+  divisionConfig: {},
+  tz: "UTC",
+  orgTz: "UTC",
+  canExport: false,
+  viewerPlan: { plan: "pro", isStaff: false } as never,
+  stageTableRules: { [A]: tableRulesOf(sport("badminton"), "league") },
+  ...over,
+});
+
 function panel(over: Record<string, unknown> = {}, locale: Locale = "en", dict: Dict = enUi as Dict): string {
   return renderToStaticMarkup(
     <DictProvider dict={dict} locale={locale}>
-      <StagesPanel
-        divisionId="d1"
-        competitionId="c1"
-        orgSlug="o"
-        compSlug="c"
-        divSlug="d"
-        stages={[stageRow()]}
-        fixtures={MOCK_FIXTURES}
-        entrantNames={{ e1: "Alpha", e2: "Bravo" }}
-        canEdit
-        sportKey="badminton"
-        divisionConfig={{}}
-        tz="UTC"
-        orgTz="UTC"
-        canExport={false}
-        viewerPlan={{ plan: "pro", isStaff: false } as never}
-        stageTableRules={{ [A]: tableRulesOf(sport("badminton"), "league") }}
-        {...over}
-      />
+      <StagesPanel {...(panelProps(over) as unknown as ComponentProps<typeof StagesPanel>)} />
     </DictProvider>,
   );
 }
@@ -589,14 +595,17 @@ describe("E1 item 1: the header is [actions | divider | settings], the footer ro
     }
   });
 
-  it("the Complete reason is an ⓘ, not a paragraph: it names the button, and a stage that can complete has no ⓘ", () => {
+  it("the Complete reason is a bubble on the button, not a paragraph and not an ⓘ: the button names it, and a stage that can complete has none (PB1)", () => {
     const waiting = panel();
-    expect(tag(waiting, "stage-complete-info")).toContain('aria-describedby="stage-complete-hint-' + A + '"');
+    expect(waiting, "PB1: the ⓘ is retired").not.toContain("stage-complete-info");
     expect(tag(waiting, "stage-complete")).toContain('aria-describedby="stage-complete-hint-' + A + '"');
+    const reason = tag(waiting, "stage-complete-hint");
+    expect(reason, "the positive pair: the reason is on the card").toContain('role="tooltip"');
+    expect(reason).toContain('id="stage-complete-hint-' + A + '"');
     expect(waiting).not.toMatch(/<p[^>]*stage-complete-hint/);
     const done = panel({ fixtures: [fixture(A, 1, { status: "decided", outcome: DECIDED })] });
     expect(tag(done, "stage-complete")).not.toBeNull();
-    expect(done).not.toContain("stage-complete-info");
+    expect(done).not.toContain("stage-complete-hint");
   });
 });
 
@@ -664,11 +673,24 @@ describe("the stage's fixtures are in the card (item 9)", () => {
   });
 
   it("the filter that leaves no row anywhere says so ONCE, with the way back (and the stage sheets stay quiet)", () => {
-    // Every fixture is unscheduled or far in the future, so "Today" keeps none of them.
-    const html = panel({ phase: "match_day" });
-    expect(count(html, "run-sheet-empty")).toBe(1);
-    expect(count(html, "run-sheet-empty-show-all")).toBe(1);
-    expect(html).not.toContain('data-testid="stage-run-sheet-empty"');
+    // Every fixture is unscheduled or far in the future, so "Today" keeps none of them. The panel mounts on "All" whatever the
+    // day (PB1), so the filter is chosen the way a person chooses it: through the bar's own onFilter, on a match-day division.
+    const island = renderIsland(StagesPanel, panelProps({ phase: "match_day" }) as unknown as ComponentProps<typeof StagesPanel>);
+    const ofId = (id: string) => island.tree().filter((el) => propsOf(el)["data-testid"] === id);
+    expect(ofId("run-sheet-empty"), "premise: on All the rows are there, so nothing is empty").toHaveLength(0);
+    const bar = island.tree().filter((el) => el.type === RunSheetFilterBar);
+    expect(bar, "the one filter bar").toHaveLength(1);
+    (propsOf(bar[0]!).onFilter as (f: string) => void)("today");
+    expect(propsOf(island.tree().filter((el) => el.type === RunSheetFilterBar)[0]!).filter, "premise: Today is chosen").toBe("today");
+    expect(ofId("run-sheet-empty")).toHaveLength(1);
+    expect(ofId("run-sheet-empty-show-all")).toHaveLength(1);
+    // The stage's own sheet is told to stay quiet (its `stage-run-sheet-empty` line is RunSheet's, drawn only when it is not).
+    const sheets = island.tree().filter((el) => el.type === RunSheet);
+    expect(sheets, "the stage's embedded sheet").toHaveLength(1);
+    expect(propsOf(sheets[0]!).quietEmpty).toBe(true);
+    // ...and the way back works through the panel's own button.
+    (propsOf(ofId("run-sheet-empty-show-all")[0]!).onClick as () => void)();
+    expect(ofId("run-sheet-empty"), "All brings the rows back").toHaveLength(0);
   });
 });
 

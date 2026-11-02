@@ -78,7 +78,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { stageActions } from "@/lib/stage-card/summaries";
-import { WithInfoTip } from "./info-tip";
+import { WithReasonTip } from "./reason-tip";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
 import {
   swissPairingForKey,
@@ -529,27 +529,26 @@ export function StageRail({
                         void onAct(stage.id, "complete");
                       }}
                       data-testid="stage-complete"
-                      className={`btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-not-allowed aria-disabled:opacity-50 max-md:grow ${
+                      className={`btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow ${
                         primary?.action === "complete" ? "btn-primary" : "btn-ghost"
                       }`}
                     >
                       {msg("schedule.complete")}
                     </button>
                   );
-                  // Present but waiting while any match is open (item 8): the reason sits behind an ⓘ beside the button - hover, keyboard
-                  // focus or a tap - and `aria-describedby` above names it, so it is read with the button as well.
+                  // Present but waiting while any match is open (item 8): the reason is a bubble on the greyed button itself - hover,
+                  // keyboard focus or a tap (PB1: there is no ⓘ any more) - and `aria-describedby` above names it, so it is read with the
+                  // button as well.
                   return completeButton.enabled ? (
                     complete
                   ) : (
-                    <WithInfoTip
+                    <WithReasonTip
                       id={completeHintId}
-                      label={msg("stageCard.completeInfo")}
                       reason={msgPlural("stageCard.completeHint", matchCount)}
-                      infoTestId="stage-complete-info"
                       reasonTestId="stage-complete-hint"
                     >
                       {complete}
-                    </WithInfoTip>
+                    </WithReasonTip>
                   );
                 })()}
             </>
