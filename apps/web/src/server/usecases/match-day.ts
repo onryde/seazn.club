@@ -88,13 +88,62 @@ const wholeMinutes = (ms: number): number => Math.max(0, Math.floor(ms / MS_PER_
 export async function countFixturesToday(tx: Tx, competitionId: string, now: Date): Promise<number> {
   const [org] = await tx<{ timezone: string | null }[]>`
     select o.timezone from competitions c join organizations o on o.id = c.org_id where c.id = ${competitionId}`;
-  const days = await divisionDays(tx, org?.timezone ?? null, now, tx`d.competition_id = ${competitionId} and d.archived_at is null`);
-  const [row] = await tx<{ n: number }[]>`
-    select count(*)::int as n
-      from fixtures f join ${dayTable(tx, days)} on w.division_id = f.division_id
+  const counts = await countTodayByCompetition(tx, org?.timezone ?? null, now, tx`d.competition_id = ${competitionId}`);
+  return counts.get(competitionId) ?? 0;
+}
+
+/**
+ * The one "how many matches today" rule, per competition, for the divisions `where` picks (alias `d`; an archived division is
+ * always left out here, I1). Two statements whatever the number of competitions: the divisions' days, then ONE grouped count
+ * over the `w(division_id, day_from, day_to)` table joined in. `countFixturesToday` (one competition: the desk, Match Day)
+ * and `competitionsFixturesToday` (the org home's whole list, C7) are both this, so the two cannot disagree.
+ */
+async function countTodayByCompetition(tx: Tx, orgTz: string | null, now: Date, where: postgres.Fragment): Promise<Map<string, number>> {
+  const days = await divisionDays(tx, orgTz, now, tx`${where} and d.archived_at is null`);
+  if (days.length === 0) return new Map();
+  const rows = await tx<{ competition_id: string; n: number }[]>`
+    select d.competition_id, count(*)::int as n
+      from fixtures f
+      join ${dayTable(tx, days)} on w.division_id = f.division_id
+      join divisions d on d.id = f.division_id
      where f.status <> ${CANCELLED}
-       and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to) or f.status = ${IN_PLAY})`;
-  return row?.n ?? 0;
+       and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to) or f.status = ${IN_PLAY})
+     group by d.competition_id`;
+  return new Map(rows.map((r) => [r.competition_id, r.n]));
+}
+
+/** The org Competitions home's today deck (Match Day C7): the organisation's day, and how many of each listed competition's
+ *  matches are today. */
+export interface CompetitionsToday {
+  /** The organisation's day `now` falls on, 'YYYY-MM-DD': the deck's date label, as the Match Day view's `date` is. */
+  day: string;
+  /** The organisation's zone (else UTC): the deck shows its match times in it. */
+  tz: string;
+  /** Competition id -> its matches today. A competition with none is absent. */
+  counts: Map<string, number>;
+}
+
+/**
+ * `countFixturesToday` for a whole list of competitions: ONE tenant transaction and three statements however long the list
+ * (the organisation's zone, the divisions' days, one grouped count) - never a query per card. Every read is under the tenant's
+ * RLS, so a competition of another organisation is never counted even when its id is asked for.
+ */
+export async function competitionsFixturesToday(
+  auth: AuthCtx,
+  competitionIds: readonly string[],
+  now: Date = new Date(),
+): Promise<CompetitionsToday> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
+    const orgTz = org?.timezone ?? null;
+    const tz = resolveVenueTz(null, orgTz);
+    const { day } = todayIn(tz, now);
+    const counts =
+      competitionIds.length === 0
+        ? new Map<string, number>()
+        : await countTodayByCompetition(tx, orgTz, now, tx`d.competition_id = any(${[...competitionIds]}::uuid[])`);
+    return { day, tz, counts };
+  });
 }
 
 /**
