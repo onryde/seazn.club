@@ -1324,9 +1324,10 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
 /**
  * Match Day E2 (owner 2026-11-01): items 1, 2, 3, 4, 5 and 7, in a real browser. What the node suite cannot see: that the fold
  * opens in place and keeps the list's order, that the venue filter's popover / bottom sheet is operable and its choice survives a
- * reload through the address, that a closure shows on a card and PAUSES the Call buttons of a court closed now (while a break still
- * to come is only a warning in the call sheet), that the candidate rows print the planned time, and that every match wears the
- * schedule board's round chip.
+ * reload through the address, that a closure shows on a card and a court closed now is "Closed" (not free, counted out of "N free",
+ * after the free ones) whose Call stays ON and asks "Call anyway?" in the sheet (fix round 1, R0/m2), while a break still to come
+ * is only a warning in the call sheet, that the candidate rows print the planned time, and that every match wears the schedule
+ * board's round chip.
  *
  * The seed is one competition on SIX courts in TWO venues (Hall A: A1-A4, Hall B: B1-B2) with a league of four and a
  * knockout cup of four (two semi-finals and a final):
@@ -1459,19 +1460,27 @@ async function e2ListChecks(page: Page, request: APIRequestContext, seed: E2Seed
   await expect(page.getByTestId("md-court-row").first()).toBeVisible();
 
   // ITEM 2: playing -> up next (courts with a match queued, in list order); the three free, empty courts are one fold row.
-  expect(await courtIdsInList(page), "playing first, then the courts with something waiting, in list order").toEqual([courts.a1.id, courts.a2.id, courts.b1.id]);
+  // Fix round 1, m2: A4 (closed for the day) is not "free": it is the list's LAST row, after the fold, never inside it.
+  expect(await courtIdsInList(page), "playing first, then the courts with something waiting, in list order, then the closed one").toEqual([courts.a1.id, courts.a2.id, courts.b1.id, courts.a4.id]);
   const fold = page.getByTestId("md-court-fold");
   await expect(fold).toBeVisible();
-  const foldText = fill(UI_EN["matchDay.list.freeFold.court.other"]!.replace(/ \(\{names\}\)$/, ""), { count: 3 });
-  await expect(page.getByTestId("md-court-fold-toggle")).toContainText(foldText);
+  // m5: the two folded courts (A3 in Hall A, B2 in Hall B) do not make one range of names, and sit in different venues, so the
+  // label is the count alone.
+  const foldText = fill(UI_EN["matchDay.list.freeFoldCount.court.other"]!, { count: 2 });
+  await expect(page.getByTestId("md-court-fold-toggle")).toHaveText(foldText);
   await expect(page.getByTestId("md-court-fold-toggle")).toHaveAttribute("aria-expanded", "false");
-  for (const c of [courts.a3, courts.a4, courts.b2]) await expect(row(page, c.name), `${c.name} is folded away`).toHaveCount(0);
+  for (const c of [courts.a3, courts.b2]) await expect(row(page, c.name), `${c.name} is folded away`).toHaveCount(0);
+  // m2: the closed court says Closed, not Free, and leaves the header's free count: 6 courts, 1 playing, 4 free (A2, B1, A3, B2).
+  await expect(row(page, courts.a4.name)).toContainText(UI_EN["matchDay.state.closed"]!);
+  await expect(row(page, courts.a4.name)).not.toContainText(new RegExp(`\\b${UI_EN["matchDay.state.free"]}\\b`));
+  await expect(row(page, courts.a4.name)).toHaveAttribute("data-closed", "true");
+  await expect(page.getByTestId("md-counts")).toContainText(fill(UI_EN["matchDay.header.free"]!, { count: 4 }));
   await expectNoHorizontalScroll(page);
 
-  // It opens in place - the live rows stay where they were, and the three courts appear after them, in list order.
+  // It opens in place - the live rows stay where they were, and the two courts appear after them, in list order; the closed court stays last.
   await page.getByTestId("md-court-fold-toggle").click();
   await expect(page.getByTestId("md-court-fold-toggle")).toHaveAttribute("aria-expanded", "true");
-  expect(await courtIdsInList(page)).toEqual([courts.a1.id, courts.a2.id, courts.b1.id, courts.a3.id, courts.a4.id, courts.b2.id]);
+  expect(await courtIdsInList(page)).toEqual([courts.a1.id, courts.a2.id, courts.b1.id, courts.a3.id, courts.b2.id, courts.a4.id]);
 
   // ITEM 3: a break still to come on A3 (a card, not a stop), the whole day closed on A4, nothing on B2.
   if (seed.breakWindow !== null) {
@@ -1509,17 +1518,33 @@ test.describe("Match Day — E2 items 1, 2, 3, 5, 7 (desktop)", () => {
     const { courts, fx } = seed;
     await e2ListChecks(page, request, seed);
 
-    // ITEM 3, the stop: A4 is closed for the rest of today, so no match can be called to it - the buttons are off and say why.
+    // ITEM 3 (R0): A4 is closed for the rest of today. It is a court the organiser may still call a match onto - a venue running late is
+    // real - so Call stays ON, the panel says it is closed (not "free", no "could start here now"), and the sheet asks.
     await row(page, courts.a4.name).click();
     const focus = page.getByTestId("md-focus");
-    await expect(focus).toContainText(`${courts.a4.name} is free`);
+    await expect(focus).toContainText(fill(UI_EN["matchDay.free.closedTitle"]!, { court: courts.a4.name }));
+    await expect(focus).not.toContainText(`${courts.a4.name} is free`);
     await expect(focus.getByTestId("md-closure")).toHaveAttribute("data-kind", "now");
-    const paused = focus.getByTestId("md-call-paused");
-    await expect(paused).toBeVisible();
-    await expect(paused).toHaveText(fill(UI_EN["matchDay.closure.callPaused.rest"]!, { court: courts.a4.name }));
+    await expect(focus.getByTestId("md-call-paused")).toHaveCount(0);
+    await expect(focus.getByTestId("md-free-panel")).not.toContainText("could start here now");
+    await expect(focus.getByTestId("md-free-panel")).toContainText(UI_EN["matchDay.closure.rest"]!);
     const calls = focus.getByRole("button", { name: /^Call to / });
     await expect.poll(() => calls.count(), { message: "premise: there is a match that could be called" }).toBeGreaterThanOrEqual(1);
-    for (const b of await calls.all()) await expect(b).toBeDisabled();
+    for (const b of await calls.all()) await expect(b).toBeEnabled();
+    // Pressing Call opens the preview; its loud, announced question is the court's closure, and its button says what it does.
+    const closedCall = focus.locator(`[data-testid="md-candidate"][data-fixture-id="${fx.sf1}"]`).getByRole("button", { name: `Call to ${courts.a4.name}` });
+    await closedCall.click();
+    const closedSheet = page.getByRole("dialog");
+    const closedWarning = closedSheet.locator('[data-testid="md-warning"][data-kind="court_closed"]');
+    await expect(closedWarning).toBeVisible();
+    await expect(closedWarning).toHaveAttribute("role", "alert");
+    await expect(closedWarning).toHaveText(fill(UI_EN["matchDay.sheet.warn.courtClosedToday"]!, { court: courts.a4.name }));
+    await expect(closedSheet.getByTestId("md-call-confirm")).toHaveText(UI_EN["matchDay.sheet.confirmAnyway"]!);
+    await expect(closedSheet.getByTestId("md-call-confirm")).toBeEnabled();
+    await closedSheet.getByRole("button", { name: UI_EN["matchDay.sheet.cancel"]! }).click();
+    await expect(closedSheet).toHaveCount(0);
+    const closedCalls = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${fx.sf1}`);
+    expect(closedCalls[0]!.n, "cancelling the preview called nothing").toBe(0);
 
     // ITEM 1 + 7 on A3 (free, a break coming): each candidate prints its planned time, then where it waits.
     await row(page, courts.a3.name).click();
@@ -1548,7 +1573,7 @@ test.describe("Match Day — E2 items 1, 2, 3, 5, 7 (desktop)", () => {
     // ITEM 3, the warning: calling Cal v Dee to A3 would still be on when the break starts - warned, never refused.
     if (seed.breakWindow !== null) {
       await expect(focus.getByTestId("md-closure")).toHaveAttribute("data-kind", "later");
-      await expect(focus.getByTestId("md-call-paused")).toBeHidden();
+      await expect(focus.getByTestId("md-call-paused")).toHaveCount(0);
       await cand(fx.calDee).getByRole("button", { name: `Call to ${courts.a3.name}` }).click();
       const sheet = page.getByRole("dialog");
       await expect(sheet.getByTestId("md-call-confirm")).toBeEnabled();
@@ -1611,8 +1636,25 @@ test.describe("Match Day — E2 items 1, 2, 3, 5, 7 (desktop)", () => {
     await expect(page.getByTestId("md-venue-summary")).toHaveText(UI_EN["matchDay.venue.triggerAll"]!);
     await page.keyboard.press("Escape");
     expect(new URL(page.url()).searchParams.get("venue")).toBe("all");
-    expect(await courtIdsInList(page)).toEqual([courts.a1.id, courts.a2.id, courts.b1.id]);
+    // The closed court is still the list's last row, after the (collapsed) fold of A3 and B2.
+    expect(await courtIdsInList(page)).toEqual([courts.a1.id, courts.a2.id, courts.b1.id, courts.a4.id]);
     await expectNoHorizontalScroll(page);
+
+    // R0, the call itself: the closed court takes it as a confirmed "Call anyway" - the API only ever warned.
+    await row(page, courts.a4.name).click();
+    await focus.locator(`[data-testid="md-candidate"][data-fixture-id="${fx.sf1}"]`).getByRole("button", { name: `Call to ${courts.a4.name}` }).click();
+    const anywaySheet = page.getByRole("dialog");
+    await expect(anywaySheet.getByTestId("md-call-confirm")).toHaveText(UI_EN["matchDay.sheet.confirmAnyway"]!);
+    await anywaySheet.getByTestId("md-call-confirm").click();
+    await expect(anywaySheet).toHaveCount(0);
+    await expect(focus).toHaveAttribute("data-state", "called");
+    const landed = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${fx.sf1} and court_id = ${courts.a4.id}`);
+    expect(landed[0]!.n, "the match was called onto the closed court").toBe(1);
+    // It is no longer a closed EMPTY court: it has a match called to it, so it leaves the closed group for the called one, and its
+    // card keeps the closure line.
+    await expect(row(page, courts.a4.name)).toHaveAttribute("data-state", "called");
+    await expect(row(page, courts.a4.name)).not.toHaveAttribute("data-closed", /.+/);
+    await expect(row(page, courts.a4.name).getByTestId("md-closure")).toHaveAttribute("data-kind", "now");
 
     await page.setViewportSize({ width: 768, height: 1024 });
     await expect(page.getByTestId("md-list")).toBeVisible();
