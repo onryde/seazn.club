@@ -148,119 +148,122 @@ function expectSeatedFrozenBye(bye: Row): void {
   expect(bye.config_snapshot_at, "premise: … and stamped when").not.toBeNull();
 }
 
-for (const s of SPORTS) {
-  describe.runIf(HAS_DB)(`W3 T3 a Swiss bye freezes at award (${s.sport})`, () => {
-    it(`X-SW-5 a seated bye carries config_snapshot equal to the stage cfg at award (${s.sport})`, async () => {
-      const rig = await oddSwiss(s);
-      // Read BEFORE Pair: the format the bye is awarded under.
-      const atAward = await liveCfgOf(rig.divisionId, rig.stageId);
-      expect(atAward, "premise: the stage resolves a cfg").not.toBeNull();
-      await pairRoundOne(rig);
+// One plain-string title carries the rule id: the rules checker reads literal titles only, never a template.
+describe("X-SW-5 a Swiss bye is frozen at award", () => {
+  for (const s of SPORTS) {
+    describe.runIf(HAS_DB)(`W3 T3 a Swiss bye freezes at award (${s.sport})`, () => {
+      it(`X-SW-5 a seated bye carries config_snapshot equal to the stage cfg at award (${s.sport})`, async () => {
+        const rig = await oddSwiss(s);
+        // Read BEFORE Pair: the format the bye is awarded under.
+        const atAward = await liveCfgOf(rig.divisionId, rig.stageId);
+        expect(atAward, "premise: the stage resolves a cfg").not.toBeNull();
+        await pairRoundOne(rig);
 
-      const bye = await byeOf(rig.stageId, 1);
-      expectSeatedFrozenBye(bye);
-      expect(bye.config_snapshot, "the bye's snapshot is the stage's cfg at award").toEqual(atAward);
-      // Only the bye is frozen: the boards of the round hold nothing until their first event.
-      const boards = (await rowsOf(rig.stageId)).filter((r) => r.round_no === 1 && r.ext_key !== "sw-r1-bye");
-      expect(boards.length, "rig: round 1 seats two boards").toBe(2);
-      expect(boards.map((b) => b.config_snapshot), "a board is frozen by its first event, not by Pair").toEqual([null, null]);
+        const bye = await byeOf(rig.stageId, 1);
+        expectSeatedFrozenBye(bye);
+        expect(bye.config_snapshot, "the bye's snapshot is the stage's cfg at award").toEqual(atAward);
+        // Only the bye is frozen: the boards of the round hold nothing until their first event.
+        const boards = (await rowsOf(rig.stageId)).filter((r) => r.round_no === 1 && r.ext_key !== "sw-r1-bye");
+        expect(boards.length, "rig: round 1 seats two boards").toBe(2);
+        expect(boards.map((b) => b.config_snapshot), "a board is frozen by its first event, not by Pair").toEqual([null, null]);
 
-      // The stage's format moves before Start (and its points with it). The bye keeps the format it was awarded under.
-      const m = mod(s.sport);
-      const pick = movingFragment(m, s.variant, "swiss");
-      expect(pick, `premise: a ${s.sport} swiss stage has a rule it can move`).not.toBeNull();
-      await putStageRules(rig.auth, rig.stageId, { rules: pick!.frag });
-      await putStageRules(rig.auth, rig.stageId, {
-        points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" },
-      });
-      const moved = await liveCfgOf(rig.divisionId, rig.stageId);
-      expect(canonicalJson(moved), "witness: the save moved what an unfrozen fixture resolves").not.toBe(canonicalJson(atAward));
-      const after = await byeOf(rig.stageId, 1);
-      expect(after.config_snapshot, "the bye's snapshot is unchanged by a later format save").toEqual(atAward);
-      expect(after.config_snapshot_at).toEqual(bye.config_snapshot_at);
-    }, 120_000);
+        // The stage's format moves before Start (and its points with it). The bye keeps the format it was awarded under.
+        const m = mod(s.sport);
+        const pick = movingFragment(m, s.variant, "swiss");
+        expect(pick, `premise: a ${s.sport} swiss stage has a rule it can move`).not.toBeNull();
+        await putStageRules(rig.auth, rig.stageId, { rules: pick!.frag });
+        await putStageRules(rig.auth, rig.stageId, {
+          points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" },
+        });
+        const moved = await liveCfgOf(rig.divisionId, rig.stageId);
+        expect(canonicalJson(moved), "witness: the save moved what an unfrozen fixture resolves").not.toBe(canonicalJson(atAward));
+        const after = await byeOf(rig.stageId, 1);
+        expect(after.config_snapshot, "the bye's snapshot is unchanged by a later format save").toEqual(atAward);
+        expect(after.config_snapshot_at).toEqual(bye.config_snapshot_at);
+      }, 120_000);
 
-    it(`X-SW-5 the bye freezes exactly what a board's first event freezes (${s.sport})`, async () => {
-      // The differential against the real producer: append-event.ts's own freeze, on a board of the same round, with
-      // nothing saved in between.
-      const rig = await oddSwiss(s);
-      await startDivision(rig.auth, rig.divisionId); // mints the shells
-      await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
-      const bye = await byeOf(rig.stageId, 1);
-      expectSeatedFrozenBye(bye);
-      const board = (await rowsOf(rig.stageId)).find((r) => r.round_no === 1 && r.away_entrant_id !== null)!;
-      expect(board.config_snapshot, "premise: the board is unfrozen").toBeNull();
-      await scoreEvent(rig.auth, board.id, { expected_seq: 0, type: "core.start", payload: {} });
-      const [frozen] = await sql<{ config_snapshot: unknown }[]>`select config_snapshot from fixtures where id = ${board.id}`;
-      expect(frozen!.config_snapshot, "premise: the board's first event froze its cfg").not.toBeNull();
-      expect(bye.config_snapshot).toEqual(frozen!.config_snapshot);
-    }, 120_000);
+      it(`X-SW-5 the bye freezes exactly what a board's first event freezes (${s.sport})`, async () => {
+        // The differential against the real producer: append-event.ts's own freeze, on a board of the same round, with
+        // nothing saved in between.
+        const rig = await oddSwiss(s);
+        await startDivision(rig.auth, rig.divisionId); // mints the shells
+        await generateStageFixtures(rig.auth, rig.stageId); // Pair round 1
+        const bye = await byeOf(rig.stageId, 1);
+        expectSeatedFrozenBye(bye);
+        const board = (await rowsOf(rig.stageId)).find((r) => r.round_no === 1 && r.away_entrant_id !== null)!;
+        expect(board.config_snapshot, "premise: the board is unfrozen").toBeNull();
+        await scoreEvent(rig.auth, board.id, { expected_seq: 0, type: "core.start", payload: {} });
+        const [frozen] = await sql<{ config_snapshot: unknown }[]>`select config_snapshot from fixtures where id = ${board.id}`;
+        expect(frozen!.config_snapshot, "premise: the board's first event froze its cfg").not.toBeNull();
+        expect(bye.config_snapshot).toEqual(frozen!.config_snapshot);
+      }, 120_000);
 
-    it(`a frozen bye is not PLAYED: stage rules stay editable, Unpair clears it (${s.sport})`, async () => {
-      const rig = await oddSwiss(s);
-      await pairRoundOne(rig); // pre-Start: the division is still in setup
-      expectSeatedFrozenBye(await byeOf(rig.stageId, 1));
+      it(`a frozen bye is not PLAYED: stage rules stay editable, Unpair clears it (${s.sport})`, async () => {
+        const rig = await oddSwiss(s);
+        await pairRoundOne(rig); // pre-Start: the division is still in setup
+        expectSeatedFrozenBye(await byeOf(rig.stageId, 1));
 
-      // The rule lock (rule-locks.ts, `playedSql`): a bye is not play, so the stage's format is still the organiser's.
-      const pick = movingFragment(mod(s.sport), s.variant, "swiss")!;
-      await expect(
-        putStageRules(rig.auth, rig.stageId, { rules: pick.frag }),
-        "stage rules stay editable over a frozen bye (playedSql exempts a system bye)",
-      ).resolves.toBeDefined();
+        // The rule lock (rule-locks.ts, `playedSql`): a bye is not play, so the stage's format is still the organiser's.
+        const pick = movingFragment(mod(s.sport), s.variant, "swiss")!;
+        await expect(
+          putStageRules(rig.auth, rig.stageId, { rules: pick.frag }),
+          "stage rules stay editable over a frozen bye (playedSql exempts a system bye)",
+        ).resolves.toBeDefined();
 
-      // Unpair (`fixtureEvidenceSql`): a bye is no recorded match data, so the round goes back onto its shells.
-      await expect(
-        unpairSwissRound(rig.auth, rig.stageId),
-        "Unpair clears a round with a frozen bye (fixtureEvidenceSql exempts a system bye)",
-      ).resolves.toMatchObject({ round: 1 });
-      const bye = await byeOf(rig.stageId, 1);
-      expect(
-        {
-          home: bye.home_entrant_id,
-          away: bye.away_entrant_id,
-          outcome: bye.outcome,
-          snapshot: bye.config_snapshot,
-          at: bye.config_snapshot_at,
-          status: bye.status,
-        },
-        "Unpair clears the bye's seats, its outcome AND its snapshot",
-      ).toEqual({ home: null, away: null, outcome: null, snapshot: null, at: null, status: "scheduled" });
+        // Unpair (`fixtureEvidenceSql`): a bye is no recorded match data, so the round goes back onto its shells.
+        await expect(
+          unpairSwissRound(rig.auth, rig.stageId),
+          "Unpair clears a round with a frozen bye (fixtureEvidenceSql exempts a system bye)",
+        ).resolves.toMatchObject({ round: 1 });
+        const bye = await byeOf(rig.stageId, 1);
+        expect(
+          {
+            home: bye.home_entrant_id,
+            away: bye.away_entrant_id,
+            outcome: bye.outcome,
+            snapshot: bye.config_snapshot,
+            at: bye.config_snapshot_at,
+            status: bye.status,
+          },
+          "Unpair clears the bye's seats, its outcome AND its snapshot",
+        ).toEqual({ home: null, away: null, outcome: null, snapshot: null, at: null, status: "scheduled" });
 
-      // The sequence: Pair again freezes afresh, under the format the stage now plays.
-      const now = await liveCfgOf(rig.divisionId, rig.stageId);
-      await generateStageFixtures(rig.auth, rig.stageId);
-      const again = await byeOf(rig.stageId, 1);
-      expectSeatedFrozenBye(again);
-      expect(again.config_snapshot, "a re-Pair freezes the cfg that stands at the new award").toEqual(now);
-    }, 120_000);
+        // The sequence: Pair again freezes afresh, under the format the stage now plays.
+        const now = await liveCfgOf(rig.divisionId, rig.stageId);
+        await generateStageFixtures(rig.auth, rig.stageId);
+        const again = await byeOf(rig.stageId, 1);
+        expectSeatedFrozenBye(again);
+        expect(again.config_snapshot, "a re-Pair freezes the cfg that stands at the new award").toEqual(now);
+      }, 120_000);
 
-    it(`a frozen bye does not block Rebuild or Undo (${s.sport})`, async () => {
-      // Rebuild: its refusal set is `fixtureHasResultSql` over the stage (a frozen bye would be STAGE_HAS_RESULTS).
-      const rig = await oddSwiss(s);
-      await pairRoundOne(rig);
-      expectSeatedFrozenBye(await byeOf(rig.stageId, 1));
-      // Roster drift makes the Rebuild a real one: the last seed leaves before Start (five → four, no bye).
-      await patchEntrant(rig.auth, rig.entrants[4]!, { status: "withdrawn" });
-      await expect(rebuildStageFixtures(rig.auth, rig.stageId), "Rebuild over a frozen bye").resolves.toBeDefined();
-      const rebuilt = await rowsOf(rig.stageId);
-      expect(rebuilt.length, "rig: the rebuild regenerated the stage").toBeGreaterThan(0);
-      expect(rebuilt.filter((r) => r.config_snapshot !== null), "nothing frozen survives a rebuild").toEqual([]);
+      it(`a frozen bye does not block Rebuild or Undo (${s.sport})`, async () => {
+        // Rebuild: its refusal set is `fixtureHasResultSql` over the stage (a frozen bye would be STAGE_HAS_RESULTS).
+        const rig = await oddSwiss(s);
+        await pairRoundOne(rig);
+        expectSeatedFrozenBye(await byeOf(rig.stageId, 1));
+        // Roster drift makes the Rebuild a real one: the last seed leaves before Start (five → four, no bye).
+        await patchEntrant(rig.auth, rig.entrants[4]!, { status: "withdrawn" });
+        await expect(rebuildStageFixtures(rig.auth, rig.stageId), "Rebuild over a frozen bye").resolves.toBeDefined();
+        const rebuilt = await rowsOf(rig.stageId);
+        expect(rebuilt.length, "rig: the rebuild regenerated the stage").toBeGreaterThan(0);
+        expect(rebuilt.filter((r) => r.config_snapshot !== null), "nothing frozen survives a rebuild").toEqual([]);
 
-      // Undo: history's results-guard is the played set (`playedFixtureIds` = `fixtureHasResultSql`). Walk the ledger
-      // back past the Pair AND the mint (whose undo deletes the bye shell itself).
-      const rig2 = await oddSwiss(s);
-      await pairRoundOne(rig2);
-      expectSeatedFrozenBye(await byeOf(rig2.stageId, 1));
-      let undone = 0;
-      while ((await rowsOf(rig2.stageId)).length > 0) {
-        await expect(undoDivision(rig2.auth, rig2.divisionId), `Undo step ${undone + 1} over a frozen bye`).resolves.toBeDefined();
-        undone++;
-        expect(undone, "the walk back ends within the two steps it took (mint, Pair)").toBeLessThanOrEqual(2);
-      }
-      expect(undone, "anti-vacuity: at least the mint was undone").toBeGreaterThan(0);
-    }, 120_000);
-  });
-}
+        // Undo: history's results-guard is the played set (`playedFixtureIds` = `fixtureHasResultSql`). Walk the ledger
+        // back past the Pair AND the mint (whose undo deletes the bye shell itself).
+        const rig2 = await oddSwiss(s);
+        await pairRoundOne(rig2);
+        expectSeatedFrozenBye(await byeOf(rig2.stageId, 1));
+        let undone = 0;
+        while ((await rowsOf(rig2.stageId)).length > 0) {
+          await expect(undoDivision(rig2.auth, rig2.divisionId), `Undo step ${undone + 1} over a frozen bye`).resolves.toBeDefined();
+          undone++;
+          expect(undone, "the walk back ends within the two steps it took (mint, Pair)").toBeLessThanOrEqual(2);
+        }
+        expect(undone, "anti-vacuity: at least the mint was undone").toBeGreaterThan(0);
+      }, 120_000);
+    });
+  }
+});
 
 // The guard's positive pair, and the three-valued trap. The predicate reads seats, the outcome and the snapshot only —
 // no sport field — so one sport's rows carry it (single-sport: the SQL under test is sport-agnostic).

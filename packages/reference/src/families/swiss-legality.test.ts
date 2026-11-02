@@ -380,7 +380,7 @@ describe("§2.3 item 5: round 1 with explicit seeds and no history is exact, in 
   });
 });
 
-describe("RB3-24: the matching oracle, cross-checked", () => {
+describe("X-SW-1 / RB3-24: the matching oracle, cross-checked", () => {
   it("the empty graph, and the bounds: blossom refuses n > 128 and the brute force n > 12 (OutOfScope); a bad edge is refused", () => {
     expect(Array.from(blossomMatching(0, []))).toEqual([]);
     expect(bruteForcePerfectMatching(0, [])).toBe(true);
