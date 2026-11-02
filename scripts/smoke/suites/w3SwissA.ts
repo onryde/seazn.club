@@ -28,6 +28,8 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * way to re-derive it after a correction.
  * T15 (X-SW-23; RB3-17): a disqualification through the roster editor's `PATCH /entrants/{id}` cascades like a
  * withdrawal — her open board walks over, played results stand, a second PATCH is idempotent.
+ * T16 (SW-L11): the public hub document carries a Swiss table's "Round X of N" verdict (`tables[].swissRound`), read
+ * anonymously.
  * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
@@ -49,8 +51,9 @@ export async function w3SwissASuite(): Promise<void> {
   // and Add a round mints the next round within the hard maximum) + T13: 1 (Finish the Swiss now: refused until a round is
   // decided, then ends the Swiss after the last decided round, completes the stage, an undo barrier) + T14: 1 (a PATCH
   // naming a seat on a round-2 board is refused 400 and the row reads back unchanged) + T15: 1 (a PATCH to disqualified
-  // mid-Swiss walks her open board over, round 1 stands, and a second PATCH rewrites nothing).
-  const EXPECTED_CHECKS = 20;
+  // mid-Swiss walks her open board over, round 1 stands, and a second PATCH rewrites nothing) + T16: 1 (the public hub
+  // names a Swiss table's round: round 2 of 3, in play, in its document, read anonymously).
+  const EXPECTED_CHECKS = 21;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -932,6 +935,39 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-23: PATCH status disqualified mid-Swiss walks her round-2 board over to its other side (reason withdrew) and answers the cascade's report, round 1 and the other round-2 board stand, and a second PATCH is a 200 that rewrites nothing" +
           (ok ? "" : ` — board ${board ? `${board.id} ${dq} v ${opponent}` : "none (check 13 left no round-2 board)"}, before ${premise ? `${premise.status} ${premise.home_entrant_id} v ${premise.away_entrant_id}` : "missing"}, first ${first.status} ${JSON.stringify(first.json).slice(0, 160)}, walked ${JSON.stringify(walked ?? null).slice(0, 200)} (read ${walkedRes.status} ${JSON.stringify(walkedRes.json).slice(0, 160)}), round 1 kept ${r1Kept} (${roundOne.length}), other round-2 rows kept ${othersKept} (${otherR2.length}), report ${JSON.stringify(report ?? null)}, second ${second.status} ${JSON.stringify(second.json).slice(0, 160)}, unchanged ${unchanged}`),
+        ok,
+      );
+    }
+
+    // Check 21 (T16, SW-L11): the public hub says where a Swiss table stands. On check 13's division, after check 20 (the
+    // community plan's caps leave no room for a division of its own): three rounds, round 1 decided by two walkovers,
+    // round 2 paired with one board (check 20's) walked over by the disqualification and the other still scheduled, and
+    // round 3's shells unseated. The expected verdict is derived from those rows by hand, never read from the code: the
+    // LATEST round with a seated board is 2 (the bye does not count, nor do round 3's empty shells), of the stage's 3
+    // rounds, and a round with one board decided and one open is "in_play". Read ANONYMOUSLY, from the hub document. (Not
+    // from the page: the Table tab reads `?tab=` on the client, so the server-rendered HTML is the Overview and carries no
+    // chip whatever the document says; the chip's markup is proven by the component tests and the e2e in a browser.)
+    {
+      const divId = roundTwoBoard?.divId;
+      const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+      const orgSlug = orgs.find((o) => o.id === orgId)?.slug ?? "";
+      const divSlug = v1data<{ slug?: string } | undefined>(await v1(owner, `/api/v1/divisions/${divId}`))?.slug ?? "";
+      const stageRows = (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => !isBye(f));
+      const seated = stageRows.filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null);
+      const latest = Math.max(0, ...seated.map((f) => f.round_no));
+      const latestStatuses = seated.filter((f) => f.round_no === latest).map((f) => f.status).sort();
+      const hubRes = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${lateComp?.slug}/hub`);
+      type HubTable = { id: string; divisionId: string; swissRound?: { round: number; of: number; state: string } | null };
+      const tables = (v1data<{ tables?: HubTable[] } | undefined>(hubRes)?.tables ?? []).filter((t) => t.divisionId === divId);
+      const want = { round: 2, of: 3, state: "in_play" };
+      const ok =
+        divId !== undefined && orgSlug !== "" && divSlug !== "" &&
+        // the premise: the rows are the ones the expectation was derived from (round 2 latest; one decided, one open)
+        latest === 2 && latestStatuses.join(",") === "forfeited,scheduled" &&
+        hubRes.status === 200 && tables.length === 1 && JSON.stringify(tables[0]?.swissRound) === JSON.stringify(want);
+      w3Check(
+        "w3a SW-L11: the public hub document names a Swiss table's round — round 2 of 3, in play — read anonymously" +
+          (ok ? "" : ` — division ${divId ?? "none"} (${divSlug || "no slug"}), org ${orgSlug || "none"}, latest round ${latest} ${latestStatuses.join("/")}, hub ${hubRes.status} tables ${tables.length} swissRound ${JSON.stringify(tables[0]?.swissRound ?? null)}`),
         ok,
       );
     }

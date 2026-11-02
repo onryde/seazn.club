@@ -45,6 +45,7 @@ import type { PartialScheduleKey, TiebreakerKey } from "@seazn/engine/sport";
 import { standingsColumns, formatMetric, type MetricSpecLike, type StandingsColumn } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
+import type { SwissRoundState } from "@/lib/swiss-round-state";
 import type { TableViewT } from "./competition-hub-schema";
 import type { QualificationView } from "./qualification-view";
 
@@ -535,6 +536,9 @@ export interface TableViewInput {
   rules: TableRulesLike | null;
   /** An instant as the page prints a date (the org's locale and zone): the lots note's "Drawn by lots on {date}". */
   dateOf: (iso: string) => string | null;
+  /** W3 T16 (SW-L11): a Swiss stage's "Round X of N" verdict (`swissRoundState`), carried as is. Null/absent = no chip:
+   *  every table but a Swiss one, and a Swiss with nothing paired yet. */
+  swissRound?: SwissRoundState | null;
 }
 
 export function buildTableView(input: TableViewInput): TableViewT {
@@ -583,5 +587,6 @@ export function buildTableView(input: TableViewInput): TableViewT {
       champion: !level && input.championId === r.entrantId,
     })),
     qualification: qual?.table ?? null,
+    swissRound: input.swissRound ?? null,
   };
 }

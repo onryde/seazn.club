@@ -30,6 +30,8 @@ import { Msg, Side, Person, MatchCentreHeader } from "./match-centre-schema.ts";
 // — so the derivation itself is imported instead of restated. `matches-hub.ts`
 // is pure and imports nothing, so pulling it in costs this module nothing.
 import { deriveHubTabs } from "../../lib/matches-hub.ts";
+// The Swiss chip's closed state set (W3 T16), from the lib that computes it — same reason, same `.ts` extension.
+import { SWISS_ROUND_STATES } from "../../lib/swiss-round-state.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because
  *  `lib/matches-hub.ts` — which owns the same vocabulary as a client-safe
@@ -257,6 +259,13 @@ export const TableRow = z.object({
   qual: QualRowView.nullable(),
   champion: z.boolean(),
 });
+/** W3 T16 (SW-L11): where a Swiss stage stands - `swissRoundState`'s verdict, published as data (the renderer fills the
+ *  sentence from the org's dictionary, `swissRoundKey`). `of` is the stage's CURRENT round count. */
+export const SwissRoundView = z.object({
+  round: z.number().int().min(1),
+  of: z.number().int().min(1),
+  state: z.enum(SWISS_ROUND_STATES),
+});
 export const TableView = z.object({
   id: z.string(),
   divisionId: z.string(),
@@ -267,6 +276,10 @@ export const TableView = z.object({
   rows: z.array(TableRow),
   /** The cut line and legend; null when the table shows no status. */
   qualification: QualTable.nullable(),
+  /** W3 T16 (SW-L11): the "Round X of N" chip of a SWISS stage's table; null for every other table, and for a Swiss with
+   *  nothing paired yet. Optional because a hub document cached before the field existed (Redis 15s, ISR 30s) reaches
+   *  the client without it - absent reads as "no chip", as `TableRow.cellNotes` does. */
+  swissRound: SwissRoundView.nullable().optional(),
   updatedAt: z.string(),
   fullHref: z.string(),
 });
@@ -529,6 +542,7 @@ export type MatchBucketSchemaT = z.infer<typeof MatchBucketSchema>;
 export type HubDivisionT = z.infer<typeof HubDivision>;
 export type HubMatchT = z.infer<typeof HubMatch>;
 export type TableViewT = z.infer<typeof TableView>;
+export type SwissRoundViewT = z.infer<typeof SwissRoundView>;
 export type TableRowT = z.infer<typeof TableRow>;
 export type TableColumnT = z.infer<typeof TableColumn>;
 export type KnockoutKindT = z.infer<typeof KnockoutKind>;

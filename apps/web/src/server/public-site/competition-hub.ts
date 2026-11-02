@@ -84,6 +84,8 @@ import {
 import { statusOf } from "./match-centre";
 import { byPoolOrder } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
+import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
+import { swissRoundState, type SwissRoundState } from "@/lib/swiss-round-state";
 import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
@@ -355,6 +357,37 @@ export function hubByeSides(
     bye(fixture.home_entrant_id, fixture.home_slot_label, "home"),
     bye(fixture.away_entrant_id, fixture.away_slot_label, "away"),
   ];
+}
+
+// ------------------------------------------------------------ swiss round
+
+/**
+ * W3 T16 (SW-L11) - a Swiss stage's "Round X of N", from the rows the hub already holds for it, or null.
+ *
+ * Only a stage of kind `swiss` states one (a league, a group and a knockout never do), and only with a declared round
+ * count: `stage.swiss_rounds` is `config.rounds` read live (V475's `stage_qualification_meta`), so after "Finish the
+ * Swiss now" it is the round the Swiss finished after. A stage row without a usable count is a broken stage, and a
+ * public page does not throw for one - it states nothing (`swissRoundState` itself refuses a count below 1).
+ *
+ * The bye is read off the row's `ext_key` (`isSwissByeShellExtKey`, the one predicate T13's Finish and Rebuild read), and
+ * the stage is complete on its own status - the verdict the standings were finalised on.
+ */
+export function hubSwissRound(stage: PublicStage, fixtures: readonly PublicFixture[]): SwissRoundState | null {
+  const rounds = stage.swiss_rounds;
+  if (stage.kind !== "swiss" || rounds === null || rounds === undefined || !Number.isInteger(rounds) || rounds < 1) return null;
+  return swissRoundState(
+    rounds,
+    fixtures
+      .filter((f) => f.stage_id === stage.id)
+      .map((f) => ({
+        round_no: f.round_no,
+        home: f.home_entrant_id,
+        away: f.away_entrant_id,
+        status: f.status,
+        isBye: isSwissByeShellExtKey(f.ext_key),
+      })),
+    stage.status === "complete",
+  );
 }
 
 // ------------------------------------------------------------------ header
@@ -944,6 +977,8 @@ export async function loadCompetitionHub(
     });
     for (const stage of orderedStages) {
       if (BRACKET_KINDS.has(stage.kind)) continue;
+      // W3 T16: once per stage, from its own rows - the same verdict on every snapshot of it.
+      const swissRound = hubSwissRound(stage, fixtures);
       const snapshots = standings
         .filter((s) => s.stage_id === stage.id)
         // Pool A above Pool B — the pool's own order, never its random id.
@@ -971,6 +1006,7 @@ export async function loadCompetitionHub(
             // W2d T17: the stage's column layout (OTW/OTL, half-points) and the lots note's date, in the org's locale
             rules: stage.table_rules ?? null,
             dateOf: (iso) => formatPublicInstant(locale, tz, iso, { dateStyle: "medium" }),
+            swissRound,
           }),
         );
       }

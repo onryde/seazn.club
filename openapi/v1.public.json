@@ -44611,6 +44611,43 @@
                                   }
                                 ]
                               },
+                              "swissRound": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "round": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "of": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "state": {
+                                        "type": "string",
+                                        "enum": [
+                                          "paired",
+                                          "in_play",
+                                          "complete",
+                                          "final"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "round",
+                                      "of",
+                                      "state"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "updatedAt": {
                                 "type": "string"
                               },

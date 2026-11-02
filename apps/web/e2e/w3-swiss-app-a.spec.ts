@@ -1,5 +1,19 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, activeOrgIdFromRequest, competitionPath, divisionPath, fixturePath, seedVenueWithCourts, withDb } from "./helpers";
+import {
+  TAG,
+  addEntrantsViaApi,
+  apiJson,
+  activeOrgIdFromRequest,
+  competitionPath,
+  divisionPath,
+  expectNoHorizontalScroll,
+  fixturePath,
+  scoreFixture,
+  seedVenueWithCourts,
+  withDb,
+} from "./helpers";
+import { closeOpenContexts } from "./spectator-public-helpers";
+import { spectator } from "./spectator-w2-kit";
 import { fill, seedOnlineRound, uiEn } from "./match-room-kit";
 import type { Page } from "@playwright/test";
 import { swissColourLot, swissDrawSeed, swissRoundOneOrder } from "../src/lib/swiss-draw";
@@ -1647,6 +1661,137 @@ test.describe("X-SW-23 a disqualification cascades like a withdrawal", () => {
       // Five left: two boards and a bye (the bye row seats its holder), each of the five once.
       expect(seated).not.toContain(dq);
       expect([...seated].sort()).toEqual([...r.nameOf.keys()].filter((id) => id !== dq).sort());
+    });
+  }
+});
+
+// W3 T16 (SW-L11): the public hub's Table tab names where a Swiss stage stands - "Round X of N" - from the round's own
+// boards: paired (every board still to play), in play, complete, and "Final standings after N rounds" once the stage is
+// done. A spectator reads it, so the page is opened ANONYMOUSLY, in a browser, on the hub's Table tab (which reads `?tab=`
+// on the client: the server-rendered HTML is the Overview and carries no chip). The expected sentences are typed here, in
+// English (the org's language), not read back from the dictionary. `N` is the stage's CURRENT round count: after "Finish
+// the Swiss now" it is the round it finished after, not the 3 it was set to. A league table beside it has no chip.
+const SWISS_CHIP = '[data-testid^="mh-table-"][data-testid$="-swiss-round"]';
+
+/** What a spectator sees on the hub's Table tab, as one string: how many chips there are, or the ONE chip's `data-state`
+ *  (`getAttribute`: an attribute that is absent reads `null`, never a pass) and its words. Reloaded on each call, so a poll
+ *  reads the page afresh (ISR can serve a page rendered a moment before the last result folded). */
+async function readSwissChip(page: Page, hubUrl: string): Promise<string> {
+  await page.goto(hubUrl, { waitUntil: "load" });
+  try {
+    await page.getByTestId("mh-tab-panel-table").waitFor({ state: "visible", timeout: 15_000 });
+  } catch {
+    return "no Table tab";
+  }
+  const chips = page.locator(SWISS_CHIP);
+  const n = await chips.count();
+  if (n !== 1) return `${n} chips`;
+  return `${await chips.getAttribute("data-state")} | ${((await chips.textContent()) ?? "").trim()}`;
+}
+
+test.describe("public Swiss shows Round X of N", () => {
+  test.afterEach(async () => {
+    // Never `finally`: a Playwright timeout skips it.
+    await closeOpenContexts();
+  });
+
+  for (const sport of LATE_SPORTS) {
+    test(`the Table tab says paired, in play, complete, then the next round paired and, after Finish, the final standings over the CURRENT rounds; a league beside it has no chip, and no width scrolls (${sport.key})`, async ({
+      browser,
+      request,
+    }) => {
+      test.setTimeout(400_000);
+      // Four players and three rounds: two boards a round and no bye.
+      const g = await startedSwiss(request, sport, 4, 3, "Public round");
+      const div = await apiJson<{ competition_id: string }>(request, `/api/v1/divisions/${g.divisionId}`);
+      expect(div.status, JSON.stringify(div.error)).toBe(200);
+      const competitionId = div.data!.competition_id;
+      const made = await apiJson<{ visibility: string }>(request, `/api/v1/competitions/${competitionId}`, "PATCH", { visibility: "public" });
+      expect([made.status, made.data?.visibility], `a spectator can only read a public competition: ${JSON.stringify(made.error)}`).toEqual([200, "public"]);
+      const hubUrl = (await competitionPath(request, competitionId)).replace(/^\/o\/([^/]+)\/c\//, "/shared/$1/") + "?tab=table";
+      expect(hubUrl, "premise: the organiser path became the public one").toMatch(/^\/shared\/[^/]+\/[^/?]+\?tab=table$/);
+
+      const page = await spectator(browser, { width: 1280, height: 900 });
+      const reads = (want: string) =>
+        expect.poll(() => readSwissChip(page, hubUrl), { timeout: 90_000, intervals: [2_000] }).toBe(want);
+
+      // A league in the same competition: one result in, so its table exists. It must never carry a chip.
+      const league = await apiJson<{ id: string }>(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", {
+        name: "League",
+        sport_key: "generic",
+        variant_key: "score",
+        config: GENERIC_CONFIG,
+      });
+      expect(league.status, JSON.stringify(league.error)).toBe(201);
+      const leagueStage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${league.data!.id}/stages`, "POST", {
+        seq: 1,
+        kind: "league",
+        name: "League",
+      });
+      expect(leagueStage.status, JSON.stringify(leagueStage.error)).toBe(201);
+      expect((await addEntrantsViaApi(request, league.data!.id, ["League A", "League B", "League C"].map((n) => `${n} ${TAG}`))).status).toBe(201);
+      expect((await apiJson(request, `/api/v1/stages/${leagueStage.data!.id}/generate`, "POST")).status).toBe(200);
+      expect((await apiJson(request, `/api/v1/divisions/${league.data!.id}/start`, "POST")).status).toBe(200);
+      const leagueFixtures = ((await apiJson<{ id: string; stage_id: string }[]>(request, `/api/v1/divisions/${league.data!.id}/fixtures`)).data ?? []).filter(
+        (f) => f.stage_id === leagueStage.data!.id,
+      );
+      expect(leagueFixtures.length, "premise: a league of three has three fixtures").toBe(3);
+      await scoreFixture(request, leagueFixtures[0]!.id, 2, 1);
+
+      // Round 1: both boards on their shells, paired and unplayed.
+      const one = await g.boards(1);
+      expect(one, "premise: two boards in round 1").toHaveLength(2);
+      await reads("paired | Round 1 of 3 · paired");
+      // The league's table is on the page too (its one result may fold a moment after the Swiss's page rendered, so poll
+      // for it), and the chip is the Swiss's alone.
+      const sections = page.locator('section[data-testid^="mh-table-"]');
+      await expect
+        .poll(
+          async () => {
+            await readSwissChip(page, hubUrl);
+            return sections.count();
+          },
+          { timeout: 90_000, intervals: [2_000], message: "premise: the Swiss table and the league table" },
+        )
+        .toBe(2);
+      expect(await sections.locator(SWISS_CHIP).count(), "a league table has no chip: one chip on a page of two tables").toBe(1);
+      const chipless = sections.filter({ hasNot: page.locator(SWISS_CHIP) });
+      expect(await chipless.count(), "exactly one table without a chip, and it is the league").toBe(1);
+      await expect(chipless.first()).toContainText(`League A ${TAG}`);
+
+      // One board decided, the other still open: in play.
+      await sport.win(request, one[0]!, one[0]!.home_entrant_id!);
+      await reads("in_play | Round 1 of 3 · in play");
+      // Both decided: the round is complete.
+      await sport.win(request, one[1]!, one[1]!.home_entrant_id!);
+      await reads("complete | Round 1 of 3 · complete");
+
+      // Round 2 paired: the verdict moves to the new round, and the denominator stays the stage's three.
+      const paired = await apiJson(request, `/api/v1/stages/${g.stageId}/generate`, "POST");
+      expect(paired.status, `pair round 2 → ${JSON.stringify(paired.error)}`).toBe(200);
+      await reads("paired | Round 2 of 3 · paired");
+
+      // No width scrolls the page, and the chip sits inside it: the sentence wraps rather than widening anything.
+      for (const width of [768, 320] as const) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(await readSwissChip(page, hubUrl), `at ${width}`).toBe("paired | Round 2 of 3 · paired");
+        await expectNoHorizontalScroll(page);
+        const box = await page.locator(SWISS_CHIP).evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, vw: document.documentElement.clientWidth, scroll: el.scrollWidth, client: el.clientWidth };
+        });
+        expect(box.left, `at ${width}: the chip starts inside the page`).toBeGreaterThanOrEqual(0);
+        expect(box.right, `at ${width}: the chip ends inside the page`).toBeLessThanOrEqual(box.vw);
+        expect(box.scroll, `at ${width}: the chip's words fit the chip`).toBeLessThanOrEqual(box.client);
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
+
+      // Play round 2, then Finish the Swiss now: it ends after round 2, so the table reads over TWO rounds, not three.
+      for (const f of await g.boards(2)) await sport.win(request, f, f.home_entrant_id!);
+      await reads("complete | Round 2 of 3 · complete");
+      const finished = await apiJson<{ finished_after: number; completed: boolean }>(request, `/api/v1/stages/${g.stageId}/swiss/finish`, "POST");
+      expect([finished.status, finished.data?.finished_after, finished.data?.completed], JSON.stringify(finished.error)).toEqual([200, 2, true]);
+      await reads("final | Final standings after 2 rounds");
     });
   }
 });

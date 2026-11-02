@@ -333,3 +333,55 @@ describe("CompetitionHubDoc — standings qualification (spec 2026-09-22 §4.1)"
     expect(issuesOf(noTable)).toContainEqual({ path: "tables.0.qualification", code: "invalid_type" });
   });
 });
+
+// W3 Task 16 (SW-L11): a Swiss table's "Round X of N" verdict rides on the table view as `swissRound`. The state set is
+// `SWISS_ROUND_STATES` (lib/swiss-round-state.ts) and the schema reads that same list. Optional AND nullable: a hub
+// document cached before the field existed (Redis 15s / ISR 30s) must still parse and read as "no chip", exactly as
+// `cellNotes` does; null is the builder's "nothing to state yet" (a Swiss with nothing paired). Mutants, killed by:
+//  19 `swissRound` dropped from the table schema ... "a Swiss table's swissRound round-trips" (zod strips it)
+//  20 `state` → `z.string()` ....................... "a state outside the closed set is refused"
+//  21 `round` loses `.min(1)` / `.int()` ........... "round and of are whole numbers of 1 or more"
+//  22 `swissRound` loses `.nullable()` ............. "null and absent both parse"
+//  23 `swissRound` loses `.optional()` ............. "null and absent both parse"
+describe("CompetitionHubDoc — a Swiss table's Round X of N (W3 T16, SW-L11)", () => {
+  const swiss = (state: unknown = "in_play", round: unknown = 2, of: unknown = 5) => {
+    const doc = structuredClone(validDoc() as CompetitionHubDocT);
+    (doc.tables[0] as { swissRound?: unknown }).swissRound = { round, of, state };
+    return doc;
+  };
+
+  it("a Swiss table's swissRound round-trips: the parsed document equals the input, field included", () => {
+    const input = swiss();
+    const parsed = CompetitionHubDoc.parse(input);
+    expect(parsed.tables[0]!.swissRound).toEqual({ round: 2, of: 5, state: "in_play" });
+    expect(parsed).toEqual(input);
+  });
+
+  it("every state of the closed set parses, and the set is the four the chip knows", () => {
+    const states = ["paired", "in_play", "complete", "final"];
+    for (const s of states) expect(issuesOf(swiss(s)), s).toEqual([]);
+    expect(states).toHaveLength(4);
+  });
+
+  it("a state outside the closed set is refused", () => {
+    for (const bad of ["done", "in-play", "", 3, null]) {
+      expect(issuesOf(swiss(bad)).map((i) => i.path), String(bad)).toEqual(["tables.0.swissRound.state"]);
+    }
+  });
+
+  it("round and of are whole numbers of 1 or more", () => {
+    for (const bad of [0, -1, 1.5, "2", null]) {
+      expect(issuesOf(swiss("paired", bad)).map((i) => i.path), `round ${String(bad)}`).toEqual(["tables.0.swissRound.round"]);
+      expect(issuesOf(swiss("paired", 1, bad)).map((i) => i.path), `of ${String(bad)}`).toEqual(["tables.0.swissRound.of"]);
+    }
+  });
+
+  it("null and absent both parse: a league table has none, and an older cached document predates the field", () => {
+    const withNull = structuredClone(validDoc() as CompetitionHubDocT);
+    (withNull.tables[0] as { swissRound?: unknown }).swissRound = null;
+    expect(issuesOf(withNull)).toEqual([]);
+    // The unmodified fixture has no key at all.
+    expect("swissRound" in (validDoc() as CompetitionHubDocT).tables[0]!).toBe(false);
+    expect(issuesOf(validDoc())).toEqual([]);
+  });
+});
