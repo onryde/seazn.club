@@ -578,9 +578,9 @@ describe("bracket-finish never guesses: OutOfScope names kernel behaviour W2a do
 });
 
 // ── Rule 10: every action sequence, invariants after every step ──────────────────────────────────────────────────
-// Bounded-EXHAUSTIVE rather than fast-check: packages/reference does not declare fast-check, and adding it changes the
-// root lockfile outside lane P2. Every sequence up to DEPTH over ALPHABET is walked (a superset of what a random
-// sampler draws at those lengths), and the first failure in walk order is already a shortest one.
+// Bounded-EXHAUSTIVE rather than fast-check, though packages/reference does declare it: every sequence up to DEPTH over
+// ALPHABET is walked (a superset of what a random sampler draws at those lengths), and the first failure in walk order
+// is already a shortest one, so there is no shrinking to buy.
 
 /** Nothing played, a win either way, and every X-BR-1 level kind (read from the row). */
 const PLAYS: readonly PlayResult[] = [{ kind: "none" }, { kind: "win", winner: "home" }, { kind: "win", winner: "away" }, ...LEVEL_KINDS_FROM_ROWS.map((as): PlayResult => ({ kind: "level", as }))];

@@ -1617,6 +1617,9 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect(zodBranchFlaws(zodErrorBranch(branch(deferred.replace("SWISS_REFUSALS.SWISS_REQUESTED_BYES_DEFERRED", "SWISS_REFUSALS.OTHER"), generic)), rows)).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // bound to another row
     expect(zodBranchFlaws(zodErrorBranch(branch(deferred.replaceAll("SWISS_REQUESTED_BYES_DEFERRED", "SWISS_OTHER"), generic)), rows)).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // an undeclared code
     expect(zodBranchFlaws(zodErrorBranch(branch(deferred.replace("row.status", "row.other"), generic)), rows)).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // not the row's status
+    // The VARIABLE half of the binding: `row` is the variable bound to the declared row, `other` is bound to nothing - its
+    // status is whatever it is. Without it the check reads `const \w+ = SWISS_REFUSALS.<CODE>` and any variable passes.
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred.replace("row.status", "other.status"), generic)), rows)).toEqual([expect.stringMatching(/^not a 400 VALIDATION: return errorResponse\(requestId, other\.status/)]); // a variable that is not the bound one
     expect(zodBranchNamedRows(), "the table's ruled status, read").toEqual({ SWISS_REQUESTED_BYES_DEFERRED: 400 });
     expect(zodBranchFlaws(zodErrorBranch(branch("      if (x) return errorResponse(requestId, 500, \"X\");\n", generic)))).toEqual(["a return that does not start its own line"]);
     expect(zodBranchFlaws(zodErrorBranch(branch("      throw err;\n")))).toEqual(["the branch answers nothing", "the branch throws"]);
