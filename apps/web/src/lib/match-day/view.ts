@@ -587,6 +587,11 @@ export function courtScorerAttention(court: Pick<MatchDayCourt, "state" | "curre
   return court.state === "playing" ? (court.current?.scorer_attention ?? null) : null;
 }
 
+/** The `sessionStorage` item that remembers whether the organiser Hid a court's Remote scoring panel (E2 item 6): one per court
+ *  (`memoryKey` is the court's id; a match on no court uses its own), so the choice survives a poll and the next match on the
+ *  court, and one court's choice never moves another's. */
+export const scorerMemoryKey = (memoryKey: string): string => `seazn.matchDay.scorer.${memoryKey}`;
+
 /** The playing court's stream preview (§6.2 "Playing, stream live"; §8 Phase 1): the YouTube video its live stream goes into, as
  *  a replay part the public page's player plays — only when the stream is live, the address is provably a video, and the
  *  broadcast may be embedded (`mayEmbedReplay`: positively not made for kids; DP III.E.4.j). Otherwise null, and the court shows

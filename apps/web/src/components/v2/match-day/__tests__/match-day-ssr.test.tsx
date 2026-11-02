@@ -1213,10 +1213,12 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
   /** The panel's explainer, as the dictionary words it up to its `{scorer}` slot (the slot is the sport's official's name). */
   const DESC_HEAD = esc(String(dict["dlink.desc"]).split("{scorer}")[0]!);
   const CALLED = () => court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) });
+  /** A playing court the desk says nobody is scoring: the case where the hand-over panel opens (E2 item 6). */
+  const UNSCORED = () => court({ current: fx({ scorer_attention: "no_scorer" }) });
 
-  it("playing and called: the console's Remote scoring panel, embedded AND compact, under the court's own heading for it", () => {
+  it("playing (nobody scoring) and called: the console's Remote scoring panel, embedded AND compact, under the court's own heading for it", () => {
     let checked = 0;
-    for (const c of [court(), CALLED()]) {
+    for (const c of [UNSCORED(), CALLED()]) {
       const html = focus(c);
       const at = html.indexOf('data-testid="md-scorer"');
       expect(at, c.state).toBeGreaterThan(-1);
@@ -1237,18 +1239,34 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
     expect(checked).toBe(2);
   });
 
-  it("V5 — PLAYING: the QR is folded behind its heading, closed at every width, and comes after the scoreboard", () => {
-    const html = focus(court());
-    const tag = /<details[^>]*data-testid="md-scorer"[^>]*>/.exec(html)?.[0];
-    expect(tag, "a native disclosure").toBeDefined();
-    expect(tag).toContain('data-folded="true"');
-    expect(tag).not.toMatch(/\sopen=""/);
-    // No width-conditional hiding: the fold is the same at 320 and 1280.
-    expect(tag).not.toMatch(/(?:^|\s|")(?:max-)?(?:sm|md|lg):/);
-    const summary = html.slice(html.indexOf("<summary", html.indexOf(tag!)), html.indexOf("</summary>", html.indexOf(tag!)));
-    expect(summary).toContain(`>${t(dict, "dlink.title")}<`);
-    expect(summary, "the panel is inside the fold, not its heading").not.toContain('data-role="device-link-panel"');
-    expect(html.indexOf(tag!), "the scoreboard outranks the QR").toBeGreaterThan(html.indexOf('data-testid="md-scoreboard"'));
+  it("E2-6 — PLAYING with a scorer (or nothing the desk complains of): the panel is HIDDEN to one row, after the scoreboard, at every width", () => {
+    let checked = 0;
+    for (const attention of [null, "not_recording"] as const) {
+      const html = focus(court({ current: fx({ scorer_attention: attention }) }));
+      const tag = tagWith(html, "md-scorer");
+      expect(tag, String(attention)).toMatch(/^<section/); // not the old native disclosure
+      expect(tag).not.toContain("data-folded");
+      const scorer = html.slice(html.indexOf('data-testid="md-scorer"'), html.indexOf("</section>", html.indexOf('data-role="device-link-panel"')));
+      expect(scorer, String(attention)).toContain('data-hide-state="hidden"');
+      // The row: the court's own heading, and the one control that makes a link (no read has landed on the server).
+      expect(scorer, String(attention)).toContain(`>${t(dict, "dlink.title")}<`);
+      expect(scorer, String(attention)).toContain('data-testid="device-link-row-create"');
+      expect(scorer, String(attention)).not.toContain('data-testid="device-link-hide"');
+      expect(scorer, String(attention)).not.toContain('data-testid="device-link-mint"');
+      expect(scorer, "no QR and no More fold while hidden").not.toContain('data-testid="device-link-more"');
+      // No width-conditional hiding: hidden is hidden at 320 and at 1280.
+      expect(scorer).not.toMatch(/(?:^|\s|")(?:max-)?(?:sm|md|lg):hidden/);
+      expect(html.indexOf('data-testid="md-scorer"'), "the scoreboard outranks the panel").toBeGreaterThan(html.indexOf('data-testid="md-scoreboard"'));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("E2-6 — PLAYING and the desk says nobody is scoring: the panel is OPEN, with Hide in its heading row", () => {
+    const html = focus(UNSCORED());
+    expect(html).toContain('data-hide-state="open"');
+    expect(html).toContain('data-testid="device-link-hide"');
+    expect(html).toContain('data-testid="device-link-mint"');
   });
 
   it("a link made, re-shown or revoked on Match Day re-reads the board: the panel gets the focus's own onChanged (I1: a live link IS a scorer)", () => {
@@ -1261,7 +1279,7 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
         // The scorer section is a hookless component inside court-focus.tsx: expand it to reach the panel element it mounts.
         (node) => {
           const els = walk(node);
-          const scorer = els.filter((e) => typeof e.type === "function" && "folded" in propsOf(e));
+          const scorer = els.filter((e) => typeof e.type === "function" && "memoryKey" in propsOf(e));
           return [...els, ...scorer.flatMap((e) => walk((e.type as (p: unknown) => ReactNode)(e.props)))];
         },
       );
@@ -1275,11 +1293,13 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
     expect(checked).toBe(2);
   });
 
-  it("V5 — CALLED: open (no fold around it); the hand-over button comes first", () => {
+  it("V5 / E2-6 — CALLED: open (no fold around it, Hide in its heading row); the hand-over button comes first", () => {
     const html = focus(CALLED());
     expect(html).toMatch(/<section[^>]*data-testid="md-scorer"/);
     expect(html).not.toMatch(/<details[^>]*data-testid="md-scorer"/);
     expect(html).not.toContain('data-folded="true"');
+    expect(html).toContain('data-hide-state="open"');
+    expect(html.indexOf('data-testid="device-link-hide"')).toBeLessThan(html.indexOf('data-testid="device-link-mint"'));
   });
 
   it("free and in use elsewhere: no scorer QR (nothing to score here) — decided by the court's STATE, not by whether a match rode along", () => {
@@ -1336,12 +1356,17 @@ describe("A4 — no_scorer / not_recording mark the affected court's row", () =>
     expect(courtScorerAttention(court({ current: fx({ scorer_attention: "not_recording" }) }))).toBe("not_recording");
   });
 
-  it("the focused court's QR heading carries the same mark — on a playing court, ON the fold's own heading, so it shows while closed", () => {
-    const html = focus(court({ current: fx({ scorer_attention: "no_scorer" }) }));
-    const scorer = html.slice(html.indexOf('data-testid="md-scorer"'));
-    const summary = scorer.slice(scorer.indexOf("<summary"), scorer.indexOf("</summary>"));
-    expect(summary).toContain('data-md-scorer="no_scorer"');
-    expect(summary).toContain(`>${esc(t(dict, "matchDay.scorer.no_scorer"))}<`);
+  it("the focused court's QR heading carries the same mark in BOTH shapes — open (Hide beside it) and hidden (in the row), so it shows either way", () => {
+    let checked = 0;
+    for (const [kind, shape] of [["no_scorer", "open"], ["not_recording", "hidden"]] as const) {
+      const html = focus(court({ current: fx({ scorer_attention: kind }) }));
+      const scorer = html.slice(html.indexOf('data-testid="md-scorer"'), html.indexOf("</section>", html.indexOf('data-role="device-link-panel"')));
+      expect(scorer, kind).toContain(`data-hide-state="${shape}"`);
+      expect(scorer, kind).toContain(`data-md-scorer="${kind}"`);
+      expect(scorer, kind).toContain(`>${esc(t(dict, `matchDay.scorer.${kind}`))}<`);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 });
 
@@ -1557,15 +1582,16 @@ describe("B4 — 'Playing, no court': the group under the courts", () => {
     expect(b).toContain('aria-current="true"');
   });
 
-  it("its panel: the match, the scoreboard named by the match, the scorer QR folded — and no queue, nothing to call, no Undo", () => {
+  it("its panel: the match, the scoreboard named by the match, the scorer QR hideable — and no queue, nothing to call, no Undo", () => {
     const f = goldenMatch("badminton", BADMINTON!, { started_at: "2026-10-31T11:20:00.000Z" });
     const html = noCourtFocus(f);
     expect(tagWith(html, "md-focus")).toContain('data-no-court="true"');
     expect(html).toContain(`>${t(dict, "matchDay.noCourt.title.court")}<`);
     expect(html).toContain(`aria-label="${esc(t(dict, "matchDay.noCourt.scoreboard", { match: t(dict, "matchDay.match", { home: HOME.name, away: AWAY.name }) }))}"`);
     expect(scoreboardOf(html)).not.toBe("");
-    expect(tagWith(html, "md-scorer")).toContain('data-folded="true"');
+    expect(tagWith(html, "md-scorer")).toMatch(/^<section/);
     expect(html).toContain('data-role="device-link-panel"');
+    expect(html).toContain('data-hide-state="hidden"'); // playing, nobody flagged: hidden to its row
     expect(html).not.toContain(`>${t(dict, "matchDay.queue.title")}<`);
     expect(html).not.toContain('data-testid="md-undo-call"');
     expect(html).not.toContain(`>${t(dict, "matchDay.candidate.call", { court: "" }).trim()}`);
@@ -1865,14 +1891,15 @@ describe("B4 — §9 carried (fix round 1, R2/R3): Needs you's unscheduled row f
   });
 });
 
-describe("B4 — A4 n1/n2: the scorer fold and the panel's More fold are separate groups", () => {
-  it("the fold is a NAMED group whose chevron turns on its own open only, and More's chevron turns on More's own only", () => {
-    const html = focus(court());
+describe("B4 — A4 n1/n2: the panel's More fold is a NAMED group (the scorer's own fold is gone: Hide replaced it, E2 item 6)", () => {
+  it("More's chevron turns on More's own open only; no unnamed group-open anywhere in the court's panel, and no scorer fold group left", () => {
+    // An open panel (called) is the one that has a More fold in the markup.
+    const html = focus(court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) }));
     const scorer = tagWith(html, "md-scorer");
-    expect(scorer).toMatch(/class="[^"]*\bgroup\/scorer\b/);
+    expect(scorer).not.toMatch(/\bgroup\/scorer\b/);
     expect(scorer).not.toMatch(/class="group\s|\sgroup\s|\sgroup"/);
     const panel = html.slice(html.indexOf('data-testid="md-scorer"'));
-    expect(panel).toContain("group-open/scorer:rotate-90");
+    expect(panel).not.toContain("group-open/scorer");
     const more = tagWith(html, "device-link-more");
     expect(more).toMatch(/class="[^"]*\bgroup\/more\b/);
     expect(panel).toContain("group-open/more:rotate-90");

@@ -7247,5 +7247,10 @@
   "matchDay.venue.triggerAll": "Todas las sedes",
   "matchDay.venue.triggerMany.one": "{count} sede",
   "matchDay.venue.triggerMany.other": "{count} sedes",
-  "matchDay.venue.done": "Hecho"
+  "matchDay.venue.done": "Hecho",
+  "dlink.hide": "Ocultar",
+  "dlink.hideLabel": "Ocultar la puntuación remota",
+  "dlink.linkReady": "Enlace de anotación listo",
+  "dlink.noLink": "Aún no hay enlace de anotación",
+  "dlink.copied": "Enlace copiado"
 }

@@ -10,7 +10,7 @@
 // "Revoke now" under a shown QR) kills a printed sheet just the same, so it
 // asks first too, with the same on-screen question (owner ruling, T3 fix
 // round 2). One question at a time.
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -18,11 +18,31 @@ import { failureKey, liveCopy } from "@/components/v2/device-link-copy";
 import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
 import { renderSeaznQr, type SeaznQr } from "@/lib/seazn-qr";
 import { officialLabelKey } from "@/lib/official-label";
+import { useSessionStorageItem, writeSessionStorageItem } from "@/lib/use-client-snapshot";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 
 /** The Remote scoring QR's cap, CSS px: four px per module for today's 71-byte pad URL (v8, 57 modules with the quiet
  *  zone: 228). The painted size is the frame snapped to whole device px per module (B6 fix round 1, ruling I-2). */
 const DLINK_QR_MAX_PX = 240;
+
+/**
+ * Match Day's opt-in "Hide" (E2 item 6): a compact panel that can be put away. Hidden, it is one row — the host's heading,
+ * whether a link is ready, and Show QR / Copy link; open, it is the panel with a Hide button in its heading row. Nothing
+ * here applies unless a host passes it, so every other mount (the fixture console's) is unchanged.
+ */
+export interface DeviceLinkHide {
+  /** The `sessionStorage` item that remembers the organiser's choice ("open" | "hidden") — the host keys it per court. */
+  storageKey: string;
+  /** The host's heading content (title, scorer mark): shown in both shapes, so the panel does not own the court's wording. */
+  heading: ReactNode;
+  /** Open before anything is remembered or read? Match Day's rule: a PLAYING court opens only while the desk says nobody is
+   *  scoring it; a CALLED one opens (a hand-over is its next step). */
+  initiallyOpen: boolean;
+  /** The host cannot know whether a link is live (a called court: the desk raises no scorer attention before play). Decide from
+   *  the panel's FIRST read of the fixture's link instead — open iff none is live — until the organiser chooses. Latched at that
+   *  first read, so making a link under the organiser's hands does not close the panel they are looking at. */
+  followLink: boolean;
+}
 
 interface ActiveLink {
   id: string;
@@ -39,6 +59,7 @@ export function DeviceLinkPanel({
   compact = false,
   onChanged,
   viewerPlan,
+  hide,
 }: {
   fixtureId: string;
   /** Names the sport's official in the viewer's locale (doc 13 §1:
@@ -64,6 +85,8 @@ export function DeviceLinkPanel({
    *  so a host that reads the link elsewhere (Match Day's "No scorer" mark: a live link IS a scorer) can re-read. */
   onChanged?: () => void;
   viewerPlan: ViewerPlan;
+  /** Opt-in (Match Day, `compact` only): the organiser can Hide the panel to one row. Absent = the panel as it always was. */
+  hide?: DeviceLinkHide;
 }) {
   const msg = useMsg();
   const [active, setActive] = useState<ActiveLink | null>(null);
@@ -75,6 +98,27 @@ export function DeviceLinkPanel({
   const [confirm, setConfirm] = useState<"reissue" | "revoke" | null>(null);
   /** The fixture is finalized or cancelled: nothing left to hand over. */
   const [over, setOver] = useState(false);
+  /** Hide (opt-in): this tab's own choice, the remembered one, and what the FIRST read of the link said (`true` = none live). */
+  const [picked, setPicked] = useState<"open" | "hidden" | null>(null);
+  const remembered = useSessionStorageItem(hide?.storageKey ?? null);
+  const [noLinkAtFirstRead, setNoLinkAtFirstRead] = useState<boolean | null>(null);
+  // The default is decided ONCE, at mount: a link made under the organiser's hands clears the desk's "No scorer" and flips the
+  // host's `initiallyOpen`, and the panel they are looking at must not close because of it.
+  const [defaults] = useState(() => ({ open: hide?.initiallyOpen ?? true, followLink: hide?.followLink ?? false }));
+  const [copied, setCopied] = useState(false);
+  const rowButton = useRef<HTMLButtonElement>(null);
+  const hideButton = useRef<HTMLButtonElement>(null);
+  /** Where focus goes once the panel changes shape (the control that was pressed is gone): the row's button, or Hide. */
+  const focusNext = useRef<"row" | "hide" | null>(null);
+  const choice = picked ?? (remembered === "open" || remembered === "hidden" ? remembered : null);
+  const bodyShown =
+    hide === undefined
+      ? true
+      : choice !== null
+        ? choice === "open"
+        : defaults.followLink && noLinkAtFirstRead !== null
+          ? noLinkAtFirstRead
+          : defaults.open;
   const fmtDate = (iso: string) => new Date(iso).toLocaleString();
 
   /** Every refusal below lands here, localised by code and status — never the
@@ -116,7 +160,9 @@ export function DeviceLinkPanel({
     let ignore = false;
     fetchActive().then(
       (link) => {
-        if (!ignore) setActive(link);
+        if (ignore) return;
+        setActive(link);
+        setNoLinkAtFirstRead(link === null);
       },
       () => {
         // non-editor or transient — panel just shows the create button
@@ -148,6 +194,49 @@ export function DeviceLinkPanel({
       await showLink(link);
       await refresh();
       onChanged?.();
+    } catch (err) {
+      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
+      else refused(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Hide / Show: remembered for this tab (a tab that refuses storage still follows the choice for as long as it lives). */
+  function choose(next: "open" | "hidden") {
+    setPicked(next);
+    setCopied(false);
+    if (hide !== undefined) writeSessionStorageItem(hide.storageKey, next);
+    focusNext.current = next === "hidden" ? "row" : "hide";
+  }
+
+  // The control the organiser just pressed is gone with the shape it belonged to: hand focus to its counterpart.
+  useEffect(() => {
+    const want = focusNext.current;
+    if (want === null) return;
+    focusNext.current = null;
+    (want === "row" ? rowButton : hideButton).current?.focus();
+  }, [bodyShown]);
+
+  /** The hidden row's Show QR (and Create): open the panel, then make or re-show the link in it, where the QR will be. */
+  async function showFromRow() {
+    choose("open");
+    await show();
+  }
+
+  /** The hidden row's Copy link: ENSURE re-shows the SAME sealed link (a copy never revokes), and its URL goes to the clipboard. */
+  async function copyFromRow() {
+    setBusy(true);
+    setError(null);
+    setPaywall(false);
+    setCopied(false);
+    try {
+      const link = await apiV1<ActiveLink & { secret: string }>(
+        `/api/v1/fixtures/${fixtureId}/device-links`,
+        { method: "POST", json: {} },
+      );
+      await navigator.clipboard?.writeText(`${window.location.origin}/score/${link.secret}`);
+      setCopied(true);
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(true);
       else refused(err);
@@ -271,12 +360,84 @@ export function DeviceLinkPanel({
         <div className="mt-2 min-w-0 space-y-2">{body}</div>
       </details>
     );
+    if (hide !== undefined && !bodyShown) {
+      const ready = noLinkAtFirstRead === null ? null : active !== null;
+      return (
+        <section
+          className="rounded-xl border border-purple-100 bg-purple-50/40 px-3 py-1"
+          data-role="device-link-panel"
+          data-compact="true"
+          data-hide-state="hidden"
+        >
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">{hide.heading}</div>
+            {ready !== null && (
+              <p data-testid="device-link-row-state" className="flex min-w-0 items-center gap-2 text-xs text-slate-600">
+                <span aria-hidden>·</span>
+                {msg(ready ? "dlink.linkReady" : "dlink.noLink")}
+              </p>
+            )}
+            <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+              <button
+                ref={rowButton}
+                type="button"
+                data-testid={active ? "device-link-row-show" : "device-link-row-create"}
+                disabled={busy}
+                onClick={showFromRow}
+                className="btn btn-primary min-h-11 text-xs"
+              >
+                {msg(active ? "dlink.showQr" : "dlink.create")}
+              </button>
+              {active && (
+                <button
+                  type="button"
+                  data-testid="device-link-row-copy"
+                  disabled={busy}
+                  onClick={copyFromRow}
+                  className="btn btn-ghost min-h-11 text-xs"
+                >
+                  {msg(copied ? "dlink.copied" : "dlink.copy")}
+                </button>
+              )}
+            </div>
+          </div>
+          <span role="status" className="sr-only">
+            {copied ? msg("dlink.copied") : ""}
+          </span>
+          {paywall && (
+            <div className="mb-2">
+              <UpgradeGate feature="scoring.device_links" viewerPlan={viewerPlan} />
+            </div>
+          )}
+          {error && <p className="mb-2 rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">{error}</p>}
+        </section>
+      );
+    }
     return (
       <section
         className="rounded-xl border border-purple-100 bg-purple-50/40 p-4"
         data-role="device-link-panel"
         data-compact="true"
+        data-hide-state={hide === undefined ? undefined : "open"}
       >
+        {hide !== undefined && (
+          <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">{hide.heading}</div>
+            <button
+              ref={hideButton}
+              type="button"
+              data-testid="device-link-hide"
+              aria-label={msg("dlink.hideLabel")}
+              onClick={() => choose("hidden")}
+              className="btn btn-ghost inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 text-xs"
+            >
+              {msg("dlink.hide")}
+              <svg aria-hidden viewBox="0 0 16 16" className="h-3 w-3 shrink-0 fill-none stroke-current" strokeWidth={1.8}>
+                <path d="M3.5 3.5 12.5 12.5M12.5 3.5 3.5 12.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+        )}
         {paywall && (
           <div className="mb-3">
             <UpgradeGate feature="scoring.device_links" viewerPlan={viewerPlan} />

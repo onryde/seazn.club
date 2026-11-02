@@ -7247,5 +7247,10 @@
   "matchDay.venue.triggerAll": "All venues",
   "matchDay.venue.triggerMany.one": "{count} venue",
   "matchDay.venue.triggerMany.other": "{count} venues",
-  "matchDay.venue.done": "Done"
+  "matchDay.venue.done": "Done",
+  "dlink.hide": "Hide",
+  "dlink.hideLabel": "Hide remote scoring",
+  "dlink.linkReady": "Scorer link ready",
+  "dlink.noLink": "No scorer link yet",
+  "dlink.copied": "Link copied"
 }

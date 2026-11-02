@@ -197,9 +197,9 @@ async function expectNoDanglingDot(box: Locator): Promise<number> {
 }
 
 /** The header's Needs-you button opens the desk's own list with the owed result FIRST (the desk itself puts the red
- *  no_scorer row first). Court 3 is unscored: marked on its row and on its folded "Remote scoring" heading. Opening the
- *  fold and creating the link mints the QR — and a live link IS a scorer (the desk, fix round 1 I1), so the mark goes from
- *  the heading and the row at once. A second visit (`minted`) finds no mark, and Show QR rather than a second Create. */
+ *  no_scorer row first). Court 3 is unscored: marked on its row and on its "Remote scoring" heading, and its panel starts open.
+ *  Creating the link mints the QR - and a live link IS a scorer (the desk, fix round 1 I1), so the mark goes from the heading
+ *  and the row at once. A second visit (`minted`) finds no mark, and the panel hidden to its row (Show QR, not a second Create). */
 async function needsYouAndScorer(page: Page, seed: Seed, minted = false): Promise<void> {
   const toggle = page.getByTestId("md-needs-you-toggle");
   await expect(toggle).toBeVisible();
@@ -241,41 +241,44 @@ async function needsYouAndScorer(page: Page, seed: Seed, minted = false): Promis
   await r3.click();
   const focus = page.getByTestId("md-focus");
   await expect(focus).toHaveAttribute("data-state", "playing");
-  // A playing court's QR is FOLDED (V5): the heading shows, closed, after the scoreboard; the mark sits on the heading.
+  // E2 item 6: a playing court's Remote scoring is HIDEABLE. The desk says nobody scores Court 3, so its panel starts OPEN with
+  // Hide beside the heading and the mark on it; with a live link (a second visit) nothing is flagged and it starts HIDDEN, as one row.
   const scorer = focus.getByTestId("md-scorer");
-  // The fold's OWN heading: the panel inside has a "More" fold of its own.
-  const heading = scorer.locator(":scope > summary");
-  await expect(heading).toBeVisible();
-  await expect(heading).toContainText("Remote scoring");
-  await expect(scorer).not.toHaveAttribute("open", /.*/);
-  const mark = heading.locator('[data-md-scorer="no_scorer"]');
-  if (minted) await expect(mark).toHaveCount(0);
-  else await expect(mark).toBeVisible();
-  // AGENTS 22: what the fold hides is ATTACHED before it opens; open it, then it is visible.
-  const action = scorer.getByTestId(minted ? "device-link-show" : "device-link-mint");
-  await expect(action).toBeAttached();
-  await expect(action).toBeHidden();
-  await heading.click();
-  await expect(scorer).toHaveAttribute("open", "");
-  await expect(action).toBeVisible();
-  // A4 n1 (task B4): the fold and the panel's own "More" fold are separate NAMED groups — opening this one turns its own
-  // chevron and leaves More's, still closed, unturned (an unnamed `group` turned both).
-  // Tailwind v4's `rotate-90` writes the `rotate` property, not `transform` (which stays "none" either way).
-  await expect(scorer.locator(":scope > summary svg")).toHaveCSS("rotate", "90deg");
-  await expect(scorer.getByTestId("device-link-more")).not.toHaveAttribute("open", /.*/);
-  await expect(scorer.getByTestId("device-link-more").locator(":scope > summary svg")).toHaveCSS("rotate", "none");
-  if (minted) await expect(scorer.getByTestId("device-link-mint")).toHaveCount(0);
-  await action.click();
+  const panel = scorer.locator('[data-role="device-link-panel"]');
+  await expect(scorer.getByRole("heading", { name: "Remote scoring" })).toBeVisible();
+  const mark = scorer.locator('[data-md-scorer="no_scorer"]');
+  if (minted) {
+    await expect(panel).toHaveAttribute("data-hide-state", "hidden");
+    await expect(mark).toHaveCount(0);
+    await expect(scorer.getByTestId("device-link-row-state")).toContainText("Scorer link ready");
+    await expect(scorer.getByTestId("device-link-row-copy")).toBeVisible();
+    // The body is not there to see: no QR, no create button, no More fold.
+    await expect(scorer.getByTestId("dlink-qr")).toHaveCount(0);
+    await expect(scorer.getByTestId("device-link-more")).toHaveCount(0);
+    await scorer.getByTestId("device-link-row-show").click();
+    await expect(panel).toHaveAttribute("data-hide-state", "open");
+  } else {
+    await expect(panel).toHaveAttribute("data-hide-state", "open");
+    await expect(mark).toBeVisible();
+    await expect(scorer.getByTestId("device-link-hide")).toBeVisible();
+    // A4 n1 (task B4): the panel's own "More" fold is a NAMED group - its chevron turns on More's own open only.
+    await expect(scorer.getByTestId("device-link-more")).not.toHaveAttribute("open", /.*/);
+    await expect(scorer.getByTestId("device-link-more").locator(":scope > summary svg")).toHaveCSS("rotate", "none");
+    await expect(scorer.getByTestId("device-link-mint")).toBeVisible();
+    await scorer.getByTestId("device-link-mint").click();
+  }
   await expect(scorer.getByTestId("dlink-qr")).toBeVisible({ timeout: 15_000 });
   // Compact: Copy beside the QR; the raw link behind More, closed.
   await expect(scorer.getByTestId("device-link-copy")).toBeVisible();
   await expect(scorer.getByTestId("device-link-url")).toBeAttached();
   await expect(scorer.getByTestId("device-link-url")).toBeHidden();
   if (!minted) {
-    // The link is a scorer: the panel re-reads the board, and the mark goes from the heading AND the row — well inside the
-    // 20 s live poll, so it is the re-read that moved it, not the next tick.
+    // The link is a scorer: the panel re-reads the board, and the mark goes from the heading AND the row - well inside the
+    // 20 s live poll, so it is the re-read that moved it, not the next tick. The panel the organiser is using stays open.
     await expect(mark).toHaveCount(0, { timeout: 5_000 });
     await expect(r3).not.toHaveAttribute("data-scorer", /.+/, { timeout: 5_000 });
+    await expect(panel).toHaveAttribute("data-hide-state", "open");
+    await expect(scorer.getByTestId("dlink-qr")).toBeVisible();
   }
   await expectNoHorizontalScroll(page);
 }
@@ -386,13 +389,13 @@ test.describe("Match Day — desktop", () => {
     await expect(page.getByTestId("md-court-row")).toHaveCount(3);
     await expect(page.getByTestId("md-counts")).toContainText("2 playing");
     await needsYouAndScorer(page, seed);
-    // A4 n2 (task B4): the fold's open state is its MATCH's — Court 3's, opened above, does not carry over to Court 1's
-    // (an unkeyed <details> kept its DOM `open` when the focus moved to another playing court).
-    await expect(page.getByTestId("md-focus").getByTestId("md-scorer")).toHaveAttribute("open", "");
+    // A4 n2 (task B4): the panel's state is its MATCH's - Court 3's, open above with its QR, does not carry over to Court 1's.
+    const panelOf = () => page.getByTestId("md-focus").getByTestId("md-scorer").locator('[data-role="device-link-panel"]');
+    await expect(panelOf()).toHaveAttribute("data-hide-state", "open");
     await row(page, seed.court1).click();
     await expect(page.getByTestId("md-focus")).toContainText(seed.names.ana);
     await expect(page.getByTestId("md-focus").getByTestId("md-scorer")).toBeAttached();
-    await expect(page.getByTestId("md-focus").getByTestId("md-scorer")).not.toHaveAttribute("open", /.*/);
+    await expect(page.getByTestId("md-focus").getByTestId("dlink-qr")).toHaveCount(0);
 
     await page.setViewportSize({ width: 768, height: 1024 });
     await page.reload({ waitUntil: "load" });
@@ -443,6 +446,140 @@ test.describe("Match Day — phone (320)", () => {
     await needsYouAndScorer(page, seed);
     await expect(page.getByTestId("md-list")).toBeHidden();
     await expect(page.getByTestId("md-back")).toBeVisible();
+  });
+});
+
+/**
+ * Match Day E2 item 6 (owner 2026-11-01): the Remote scoring panel can be put away. In a real browser, because what matters is
+ * what the node suite cannot see: that Hide is reachable and operable from the keyboard, that focus lands somewhere sensible when
+ * the control that was pressed disappears, that the choice outlives a reload (sessionStorage) and is the COURT's, not the page's,
+ * and that the enlarged QR can be left three ways (the ✕, Esc, and a tap anywhere else - the overlay is the whole screen).
+ *
+ * Court 1 (Ana v Ben, in play, nothing recorded) is the desk's red no_scorer, so its panel starts OPEN; Court 2 is free.
+ */
+async function hideFlow(page: Page, request: APIRequestContext, label: string): Promise<void> {
+  const seed = await seedMatchDay(request, label);
+  await page.goto(await competitionPath(request, seed.competitionId, "/match-day"), { waitUntil: "load" });
+  // The phone opens a court full-screen from the list; wider screens already have Court 1 focused.
+  if (await page.getByTestId("md-focus").isHidden()) await row(page, seed.court1).click();
+  const focus = page.getByTestId("md-focus");
+  await expect(focus).toHaveAttribute("data-court-id", seed.court1Id);
+  const scorer = focus.getByTestId("md-scorer");
+  const panel = scorer.locator('[data-role="device-link-panel"]');
+  const hideButton = scorer.getByTestId("device-link-hide");
+  const key = `seazn.matchDay.scorer.${seed.court1Id}`;
+  const remembered = () => page.evaluate((k) => window.sessionStorage.getItem(k), key);
+  // The panel's own heading is where Hide sits: the pad ships a real <h3>, not a styled span.
+  await expect(panel).toHaveAttribute("data-hide-state", "open");
+  await expect(hideButton).toBeVisible();
+  expect(await remembered(), "nothing remembered until the organiser chooses").toBeNull();
+
+  // 44px, and reachable from the keyboard: focus it and press Enter, no pointer.
+  const box = (await hideButton.boundingBox())!;
+  expect(box.height, "Hide is a 44px target").toBeGreaterThanOrEqual(43.5);
+  expect(box.width, "Hide is a 44px target").toBeGreaterThanOrEqual(43.5);
+  await hideButton.focus();
+  await expect(hideButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(panel).toHaveAttribute("data-hide-state", "hidden");
+  expect(await remembered()).toBe("hidden");
+  // The control that was pressed is gone; focus must not fall to the page: it lands on the row's button.
+  const create = scorer.getByTestId("device-link-row-create");
+  await expect(create).toBeVisible();
+  await expect(create).toBeFocused();
+  await expect(scorer.getByTestId("device-link-row-state")).toContainText("No scorer link yet");
+  await expect(scorer.getByRole("heading", { name: "Remote scoring" })).toBeVisible();
+  // Hidden is ONE row: the panel is short, the QR and the More fold are not in the page at all.
+  await expect(scorer.getByTestId("dlink-qr")).toHaveCount(0);
+  await expect(scorer.getByTestId("device-link-more")).toHaveCount(0);
+  expect((await panel.boundingBox())!.height, "one row, not a panel").toBeLessThan(140);
+  await expectNoHorizontalScroll(page);
+
+  // Remembered across a reload, and it is this COURT's: the free court next door has no panel to carry it.
+  await page.reload({ waitUntil: "load" });
+  if (await page.getByTestId("md-focus").isHidden()) await row(page, seed.court1).click();
+  await expect(page.getByTestId("md-focus").locator('[data-role="device-link-panel"]')).toHaveAttribute("data-hide-state", "hidden");
+
+  // Create from the row: the panel opens (and the choice flips to open), the QR is on screen, and focus is on Hide.
+  await page.getByTestId("md-focus").getByTestId("device-link-row-create").click();
+  await expect(panel).toHaveAttribute("data-hide-state", "open");
+  expect(await remembered()).toBe("open");
+  const qr = scorer.getByTestId("dlink-qr");
+  await expect(qr).toBeVisible({ timeout: 15_000 });
+  await expect(hideButton).toBeFocused();
+
+  // The enlarged QR (shared with the fixture console): a ✕ that is a 44px target, and Esc, and a tap anywhere else.
+  const enlarge = scorer.getByTestId("dlink-qr-enlarge");
+  const overlay = page.getByTestId("qr-enlarged");
+  await enlarge.click();
+  await expect(overlay).toBeVisible();
+  const close = page.getByTestId("qr-enlarged-close");
+  await expect(close).toBeVisible();
+  const cbox = (await close.boundingBox())!;
+  expect(cbox.width, "the overlay's ✕ is a 44px target").toBeGreaterThanOrEqual(43.5);
+  expect(cbox.height).toBeGreaterThanOrEqual(43.5);
+  await close.click();
+  await expect(overlay).toHaveCount(0);
+  await enlarge.click();
+  await expect(overlay).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(overlay).toHaveCount(0);
+  await enlarge.click();
+  await expect(overlay).toBeVisible();
+  const vp = page.viewportSize()!;
+  await page.mouse.click(vp.width - 8, vp.height - 8); // a corner: nowhere near the QR or the ✕
+  await expect(overlay).toHaveCount(0);
+  await expect(enlarge, "focus returns to the QR").toBeFocused();
+
+  // A link is live now: hiding shows "Scorer link ready" with Show QR and Copy link; Copy link copies the ONE sealed link.
+  await hideButton.click();
+  await expect(panel).toHaveAttribute("data-hide-state", "hidden");
+  await expect(scorer.getByTestId("device-link-row-state")).toContainText("Scorer link ready");
+  const show = scorer.getByTestId("device-link-row-show");
+  const copy = scorer.getByTestId("device-link-row-copy");
+  await expect(show).toBeVisible();
+  await expect(copy).toBeVisible();
+  for (const [name, control] of [["Show QR", show], ["Copy link", copy]] as const) {
+    expect((await control.boundingBox())!.height, `${name} is a 44px target`).toBeGreaterThanOrEqual(43.5);
+  }
+  const origin = new URL(page.url()).origin;
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin });
+  await copy.click();
+  await expect(copy).toHaveText("Link copied");
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copied.startsWith(`${origin}/score/`), `the clipboard holds the pad link, got ${copied.slice(0, 60)}`).toBe(true);
+  expect(copied.length, "and a secret follows it").toBeGreaterThan(`${origin}/score/`.length + 8);
+  await expect(panel, "copying does not open the panel").toHaveAttribute("data-hide-state", "hidden");
+  await expectNoHorizontalScroll(page);
+
+  // The SEQUENCE: Show QR brings the SAME link's QR back (a second look never makes a second link).
+  await show.click();
+  await expect(panel).toHaveAttribute("data-hide-state", "open");
+  await expect(scorer.getByTestId("dlink-qr")).toBeVisible({ timeout: 15_000 });
+  const links = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from device_links where fixture_id = ${seed.anaBen}`);
+  expect(links[0]!.n, "hide / copy / show never made a second link").toBe(1);
+  await expectNoHorizontalScroll(page);
+}
+
+test.describe("Match Day — E2 item 6: Remote scoring can be hidden", () => {
+  test("desktop: Hide by keyboard, one row when hidden, remembered across a reload, enlarged QR leaves three ways; at 1280 then 768", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await hideFlow(page, request, "HideDesk");
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(page.getByTestId("md-focus")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+  });
+
+  test.describe("phone (320)", () => {
+    test.use({ viewport: { width: 320, height: 568 } });
+    test("the same at 320: Hide, the row, the reload, the enlarged QR - no sideways scroll", async ({ page, request }) => {
+      test.setTimeout(180_000);
+      await hideFlow(page, request, "HidePhone");
+    });
   });
 });
 
@@ -977,7 +1114,7 @@ test.describe("Match Day — B4: playing with no court, no courts at all, a view
     await expect(format).toBeVisible();
     await expect(format.getByTestId("match-format-chips")).toHaveText(formatLine!);
     await expect(format.locator("input, select, textarea, button"), "read-only: no control").toHaveCount(0);
-    await expect(focus.getByTestId("md-scorer").locator(":scope > summary")).toContainText("Remote scoring");
+    await expect(focus.getByTestId("md-scorer").getByRole("heading", { name: "Remote scoring" })).toBeVisible();
     await expect(focus).not.toContainText(UI_EN["matchDay.queue.title"]!);
     await expect(focus.getByTestId("md-undo-call")).toHaveCount(0);
     await expect(focus.getByRole("button", { name: /^Call to / })).toHaveCount(0);

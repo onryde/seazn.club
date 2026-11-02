@@ -7247,5 +7247,10 @@
   "matchDay.venue.triggerAll": "Alle locaties",
   "matchDay.venue.triggerMany.one": "{count} locatie",
   "matchDay.venue.triggerMany.other": "{count} locaties",
-  "matchDay.venue.done": "Klaar"
+  "matchDay.venue.done": "Klaar",
+  "dlink.hide": "Verbergen",
+  "dlink.hideLabel": "Scoren op afstand verbergen",
+  "dlink.linkReady": "Scorelink klaar",
+  "dlink.noLink": "Nog geen scorelink",
+  "dlink.copied": "Link gekopieerd"
 }

@@ -11,9 +11,10 @@
 //
 // The scorer's QR (spec §2, §9: "Match Day … now shows the scorer QR for a called or live match"; task A4) is the console's own
 // Remote scoring panel (`DeviceLinkPanel`, embedded and COMPACT — fix round 1, V5): the same per-match link, ENSURE'd — showing
-// it never kills a printed sheet. Open on a called court (the hand-over is next); folded behind its heading on a playing one (the
-// scorer is on; the scoreboard comes first), the No-scorer mark staying on the heading. Keyed by the match, so another court's
-// match never shows the last one's link.
+// it never kills a printed sheet. The organiser can Hide it to one row (E2 item 6): open by default on a called court with no link
+// live (the hand-over is next) and on a playing court the desk says nobody is scoring, hidden otherwise (the scoreboard comes first),
+// the No-scorer mark staying on the heading in both shapes; the choice is remembered per court in this tab. Keyed by the match, so
+// another court's match never shows the last one's link.
 //
 // Task B4 (owner ruling Q1):
 //  - a match playing on NO court (an untimed bracket match, an online board) opens `NoCourtFocus`: the playing court's own
@@ -32,7 +33,7 @@ import { routes } from "@/lib/routes";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
-import { closureText, courtScorerAttention, matchLabel, streamPreviewOf } from "@/lib/match-day/view";
+import { closureText, courtScorerAttention, matchLabel, scorerMemoryKey, streamPreviewOf } from "@/lib/match-day/view";
 import { venueNoun } from "@/lib/venue";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { FreeCourt } from "./candidate-list";
@@ -171,7 +172,8 @@ export function CourtFocus({
           ctx={ctx}
           fixture={f}
           attention={courtScorerAttention(court)}
-          folded={court.state === "playing"}
+          memoryKey={court.court_id}
+          called={court.state === "called"}
           onChanged={onChanged}
         />
       )}
@@ -202,7 +204,7 @@ export function CourtFocus({
 
 /**
  * A match playing on NO court (task B4, owner ruling Q1: an untimed bracket match, an online board). The playing court's own
- * panel — the match, its scoreboard (or its live stream's preview), the scorer's QR folded behind its heading — with no queue
+ * panel — the match, its scoreboard (or its live stream's preview), the scorer's QR (hideable, as on a court) — with no queue
  * and nothing to call: there is no court to queue on, or to call onto. On a phone it is a full screen of its own, like a court.
  */
 export function NoCourtFocus({
@@ -262,7 +264,9 @@ export function NoCourtFocus({
           readOnly={ctx.readOnly}
         />
       )}
-      {!ctx.readOnly && <ScorerPanel ctx={ctx} fixture={f} attention={f.scorer_attention} folded onChanged={onChanged} />}
+      {!ctx.readOnly && (
+        <ScorerPanel ctx={ctx} fixture={f} attention={f.scorer_attention} memoryKey={`fixture-${f.id}`} called={false} onChanged={onChanged} />
+      )}
     </section>
   );
 }
@@ -374,20 +378,24 @@ function CalledPanel({
 }
 
 /** The match's scorer link as a QR (the console's Remote scoring panel, embedded), under the court's own heading for it — with the
- *  court's scorer mark beside the heading while the desk says nobody is scoring (§9). */
+ *  court's scorer mark beside the heading while the desk says nobody is scoring (§9). The organiser can Hide it to one row
+ *  (E2 item 6): open by default only where a hand-over is the next step — a CALLED court with no link live, or a PLAYING one the
+ *  desk says nobody is scoring — and the choice is remembered for this tab, per court. */
 function ScorerPanel({
   ctx,
   fixture,
   attention,
-  folded,
+  memoryKey,
+  called,
   onChanged,
 }: {
   ctx: MatchDayCtx;
   fixture: MatchDayFixture;
   attention: ReturnType<typeof courtScorerAttention>;
-  /** A PLAYING court (fix round 1, V5): the scorer is already on, so the QR sits behind its heading, closed at every width,
-   *  and never outranks the scoreboard. A CALLED court shows it open — handing the phone over is the next thing to do. */
-  folded: boolean;
+  /** What the choice is remembered under: the court (the next match on it inherits the choice) or, with no court, the match. */
+  memoryKey: string;
+  /** A CALLED court: the scorer is not on yet, so the panel opens unless a link is already live (it decides at its first read). */
+  called: boolean;
   /** A link made, re-shown or revoked here re-reads the board: a live link IS a scorer (the desk, I1), so "No scorer" goes. */
   onChanged: () => void;
 }) {
@@ -400,43 +408,19 @@ function ScorerPanel({
       {attention !== null && <ScorerMark dict={dict} kind={attention} severity={ATTENTION_SEVERITY[attention]} />}
     </>
   );
-  // Compact either way: Create / Show QR, then the QR and Copy; the rest behind the panel's own "More".
-  const panel = (
-    <DeviceLinkPanel
-      key={fixture.id}
-      fixtureId={fixture.id}
-      sportKey={fixture.sport_key}
-      embedded
-      compact
-      onChanged={onChanged}
-      viewerPlan={ctx.viewerPlan}
-    />
-  );
-  if (folded) {
-    return (
-      // Keyed by the match (A4 n2): the fold's open state is the DOM's, so without a key an opened fold carried over to the next
-      // playing court the organiser tapped. A named group (A4 n1): the panel inside has its own "More" fold (`group/more`), and
-      // an unnamed `group` here turned More's chevron too the moment this fold opened.
-      <details key={fixture.id} data-testid="md-scorer" data-folded="true" className="group/scorer min-w-0">
-        <summary className="flex min-h-11 min-w-0 cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 rounded-lg [&::-webkit-details-marker]:hidden">
-          <svg
-            aria-hidden
-            viewBox="0 0 16 16"
-            className="h-3.5 w-3.5 shrink-0 fill-none stroke-current text-slate-500 transition-transform group-open/scorer:rotate-90 motion-reduce:transition-none"
-            strokeWidth={1.8}
-          >
-            <path d="M6 3.5 10.5 8 6 12.5" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          {heading}
-        </summary>
-        <div className="mt-2 min-w-0">{panel}</div>
-      </details>
-    );
-  }
   return (
     <section data-testid="md-scorer" aria-labelledby={`md-scorer-${fixture.id}`} className="min-w-0">
-      <div className="mb-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">{heading}</div>
-      {panel}
+      <DeviceLinkPanel
+        // Keyed by the match: the panel's own state (a shown QR, an open question) is that match's, not the next court's.
+        key={fixture.id}
+        fixtureId={fixture.id}
+        sportKey={fixture.sport_key}
+        embedded
+        compact
+        onChanged={onChanged}
+        viewerPlan={ctx.viewerPlan}
+        hide={{ storageKey: scorerMemoryKey(memoryKey), heading, initiallyOpen: called || attention === "no_scorer", followLink: called }}
+      />
     </section>
   );
 }
