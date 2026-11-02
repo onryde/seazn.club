@@ -126,7 +126,7 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
     expect(html).not.toMatch(/<p[^>]*>[^<]*Round \d<\/p>/);
   });
 
-  it("a round of untimed rows: the bar has no 'when'; each row says 'No time yet'; an in-play row with no time is in its round, not in a group", () => {
+  it("a round of untimed rows: the bar has no 'when'; each open row says 'No time yet'; an in-play row with no time is in its round, in play, and does NOT say 'No time yet'", () => {
     const html = sheet(
       [
         fx(1, { round_no: 3, scheduled_at: null }),
@@ -138,12 +138,15 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
     expect(bars(html)).toEqual([`Round 3 · ${done(1, 3)}`]);
     expect(html).not.toContain("data-run-sheet-round-span");
     expect(html).not.toContain("data-run-sheet-round-dates");
-    // Fixtures 1 and 2 are open with no time; 3 is a RESULT with no time and says nothing of the kind.
-    expect(html.split(UI["runsheet.noTimeYet"]!).length - 1, "two rows say No time yet (desktop line + phone line each: 2 x 2)").toBe(4);
+    // Only fixture 1 is a match nobody has timed: a RESULT with no time (3) says nothing of the kind, and a match being played (2) is not
+    // waiting for a time at all - it shows its in-play state instead (the row's amber dot beside the time cell).
+    expect(html.split(UI["runsheet.noTimeYet"]!).length - 1, "one row says No time yet (desktop line + phone line: 2)").toBe(2);
     const rowOf = (no: number) => html.slice(html.indexOf(`data-fixture-no="${no}"`), html.indexOf("</li>", html.indexOf(`data-fixture-no="${no}"`)));
     expect(rowOf(1)).toContain(UI["runsheet.noTimeYet"]!);
-    expect(rowOf(2)).toContain(UI["runsheet.noTimeYet"]!);
+    expect(rowOf(2), "positive pair: the in-play row rendered, in its round").toContain("bg-amber-500");
+    expect(rowOf(2), "an in-play match is not waiting for a time").not.toContain(UI["runsheet.noTimeYet"]!);
     expect(rowOf(3), "a played match with no time is a result, not 'No time yet'").not.toContain(UI["runsheet.noTimeYet"]!);
+    expect(html, "in its round, not in a group").not.toContain('data-run-sheet-block="unscheduled"');
   });
 
   it("inside a round the rows run in time order and the untimed ones sit last (the draw gave them the other way round)", () => {

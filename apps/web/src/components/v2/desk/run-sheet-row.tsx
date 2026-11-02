@@ -441,10 +441,10 @@ export function RunSheetRow({
   // the desktop meta line and the phone line-2 text below read the SAME
   // value instead of restating the interpolation twice. Always non-empty:
   // `schedule.round` has no guard, unlike the two optional prefixes.
-  // E1 item 1: under a round's bar the row drops its own "Round N" and says "No time yet" for an open match nobody has timed (the
-  // `OPEN` pair the run sheet's grouping already routes to "unscheduled": scheduled, or in play with no time - the in-play one used
-  // to sit under "Not yet scheduled" only because it had no time). A played match with no time is a RESULT and says nothing.
-  const noTimeYet = inRound && fixture.scheduled_at === null && (fixture.status === "scheduled" || fixture.status === "in_play");
+  // E1 item 1: under a round's bar the row drops its own "Round N" and says "No time yet" for a match nobody has timed. Only a SCHEDULED
+  // one is waiting for a time (fix round 1, m1): a match in play is being played, and shows that (the amber dot by its time cell, its
+  // score action) rather than a promise of a time to come; a played match with no time is a RESULT and says nothing.
+  const noTimeYet = inRound && fixture.scheduled_at === null && fixture.status === "scheduled";
   const metaLine = [
     stageName ? stageName : null,
     courtLabel ? courtLabel : null,
