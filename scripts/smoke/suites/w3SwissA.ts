@@ -19,6 +19,9 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * T12 (X-SW-17; SW-M10, #838): the round count is edited on the stage until its first start (shells deleted and minted,
  * an undo barrier); after it the count is 409 SWISS_ROUNDS_LOCKED, the chess colours 422 SWISS_CHESS_LOCKED, and Add a
  * round mints the next round within the field's hard maximum.
+ * T13 (X-SW-26; RB3-20): "Finish the Swiss now" is refused 409 SWISS_FINISH_NOTHING_PLAYED until a round is decided,
+ * then ends the Swiss after the last decided round (its later shells deleted), completes the stage, and is an undo
+ * barrier; a second Finish is 422 SWISS_OVER.
  * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
@@ -37,8 +40,9 @@ export async function w3SwissASuite(): Promise<void> {
   // and (c) through the organiser's Add, and one automatic arrival — a public registration — taking (c)) + T11: 1 (a
   // Swiss above its field's hard maximum is refused at Generate and writes nothing) + T12: 2 (the round count edited
   // before play, an undo barrier; after the first start the count and the chess colours are locked by their own codes,
-  // and Add a round mints the next round within the hard maximum).
-  const EXPECTED_CHECKS = 17;
+  // and Add a round mints the next round within the hard maximum) + T13: 1 (Finish the Swiss now: refused until a round is
+  // decided, then ends the Swiss after the last decided round, completes the stage, an undo barrier).
+  const EXPECTED_CHECKS = 18;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -799,6 +803,40 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-17: after the first start rounds are 409 SWISS_ROUNDS_LOCKED, chess 422 SWISS_CHESS_LOCKED; Add a round mints round 3, a 4th is 422 above the hard max" +
           (ok ? "" : ` — start ${begun}, rounds ${lockedRounds.status} ${JSON.stringify(lockedRounds.json).slice(0, 160)}, chess ${lockedChess.status} ${JSON.stringify(lockedChess.json).slice(0, 120)}, add ${added.status} ${JSON.stringify(added.json).slice(0, 160)} rounds ${roundsOf(afterAdd)}, over ${over.status} ${JSON.stringify(over.json).slice(0, 160)}, rows ${afterAdd.length} -> ${afterOver.length}`),
+        ok,
+      );
+    }
+
+    // Check 18 (T13, X-SW-26; RB3-20): "Finish the Swiss now" on check 17's stage — 3 rounds, round 1 paired with one board
+    // started, rounds 2-3 unpaired shells. Before round 1 is decided no round is complete, so Finish is refused 409
+    // SWISS_FINISH_NOTHING_PLAYED and writes nothing; once both round-1 boards are decided it ends the Swiss after round 1:
+    // rounds 2 and 3 go (2 boards each for a field of 4, rulebook §3.1: 4 shells), the stage completes, a second Finish is
+    // 422 SWISS_OVER, and Undo refuses across the finish's barrier by name.
+    {
+      const before = await fiveRows();
+      const early = await v1(owner, `/api/v1/stages/${swissFiveStageId}/swiss/finish`, "POST");
+      const afterEarly = await fiveRows();
+      const r1 = before.filter((f) => f.round_no === 1 && !isBye(f) && f.home_entrant_id !== null && f.away_entrant_id !== null);
+      const decided: number[] = [];
+      for (const b of r1) decided.push((await appendScoreEvent(owner, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" })).status);
+      const finished = await v1(owner, `/api/v1/stages/${swissFiveStageId}/swiss/finish`, "POST");
+      const afterFinish = await fiveRows();
+      const again = await v1(owner, `/api/v1/stages/${swissFiveStageId}/swiss/finish`, "POST");
+      const undo = await v1(owner, `/api/v1/divisions/${fourFieldDivId}/undo`, "POST", {});
+      const f = v1data<{ finished_after?: number; shells_removed?: number; completed?: boolean } | undefined>(finished);
+      const earlyErr: { code?: string; canFinish?: boolean } | undefined = early.json.error;
+      const ok =
+        roundsOf(before) === "1,2,3" && boardsIn(before, 2) === 2 && boardsIn(before, 3) === 2 &&
+        early.status === 409 && earlyErr?.code === "SWISS_FINISH_NOTHING_PLAYED" && earlyErr.canFinish === false &&
+        afterEarly.length === before.length &&
+        r1.length === 2 && decided.every((st) => st < 300) &&
+        finished.status === 200 && f?.finished_after === 1 && f.shells_removed === 4 && f.completed === true &&
+        roundsOf(afterFinish) === "1" && afterFinish.length === 2 &&
+        again.status === 422 && again.json.error?.code === "SWISS_OVER" &&
+        undo.status === 422 && undo.json.error?.code === "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE";
+      w3Check(
+        "w3a X-SW-26: Finish refuses 409 SWISS_FINISH_NOTHING_PLAYED while no round is decided; round 1 decided, it ends the Swiss after round 1 — 4 shells gone, the stage complete; again 422 SWISS_OVER; Undo refuses by name" +
+          (ok ? "" : ` — rounds ${roundsOf(before)}, early ${early.status} ${JSON.stringify(early.json).slice(0, 200)} rows ${before.length} -> ${afterEarly.length}, decided ${decided.join(",")}, finish ${finished.status} ${JSON.stringify(finished.json).slice(0, 200)} rounds ${roundsOf(afterFinish)} rows ${afterFinish.length}, again ${again.status} ${JSON.stringify(again.json).slice(0, 120)}, undo ${undo.status} ${JSON.stringify(undo.json).slice(0, 120)}`),
         ok,
       );
     }

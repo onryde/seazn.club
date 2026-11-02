@@ -17,8 +17,10 @@ export type SwissRefusalMsg = (key: MessageKey, vars?: Record<string, string | n
  * count is fixed once a match has started (T12), so "recommended" would mislead there. For `SWISS_ROUNDS_LOCKED`
  * (`{ canFinish, canAddRound }`), a second sentence names only the recoveries actually offered — Finish now, Add a round,
  * both, or (neither) that the Swiss keeps its rounds; with neither detail sent, the sentence alone (W3 T12 Phase 2 fix).
- * `SWISS_NO_ROUND_LEFT` (`{ canAddRound, stageId }`) the same way: Add a round named only when it goes through, else
- * that no more rounds fit (T12 Fix round 1, review I1).
+ * `SWISS_NO_ROUND_LEFT` (`{ canAddRound, canFinish, stageId }`) the same way: Add a round named only when it goes through,
+ * Finish now only when it does (W3 T13, THE Finish predicate), else that no more rounds fit (T12 Fix round 1, review I1).
+ * `SWISS_FINISH_ROUND_UNDECIDED` (`{ boards }`, T13) names the boards still to decide, as the abandoned-board refusal
+ * names its boards ("round {round} board {board}").
  */
 export function swissRefusalText(
   code: SwissRefusalCode,
@@ -44,7 +46,22 @@ export function swissRefusalText(
   if (code === "SWISS_NO_ROUND_LEFT") {
     const add = details?.canAddRound;
     if (typeof add !== "boolean") return sentence;
-    return `${sentence} ${msg(add ? "swiss.rounds.noRoundLeft.add" : "swiss.rounds.noRoundLeft.none")}`;
+    const finish = details?.canFinish === true;
+    const next: MessageKey = add
+      ? finish
+        ? "swiss.rounds.noRoundLeft.addOrFinish"
+        : "swiss.rounds.noRoundLeft.add"
+      : finish
+        ? "swiss.rounds.noRoundLeft.finish"
+        : "swiss.rounds.noRoundLeft.none";
+    return `${sentence} ${msg(next)}`;
+  }
+  if (code === "SWISS_FINISH_ROUND_UNDECIDED") {
+    const boards = Array.isArray(details?.boards) ? (details.boards as { round?: unknown; board?: unknown }[]) : [];
+    const named = boards
+      .filter((b) => typeof b.round === "number" && typeof b.board === "number")
+      .map((b) => msg("schedule.error.swissAbandonedRef", { round: b.round as number, board: b.board as number }));
+    return named.length === 0 ? sentence : `${sentence} ${msg("swiss.finish.owed", { boards: named.join(", ") })}`;
   }
   if (code !== "SWISS_ROUNDS_ABOVE_MAX") return sentence;
   const field = details?.field;

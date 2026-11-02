@@ -1409,3 +1409,124 @@ test.describe("X-SW-17 edit rounds, then add a round after play", () => {
     });
   }
 });
+
+// W3 T13 (RB3-20, X-SW-26): "Finish the Swiss now" — a 5-round Swiss feeding a knockout of the top 4 (the swiss_knockout
+// shape: `timing: "setup"`, its TBD bracket drawn on day one), three rounds played through the scorer's events, then
+// the organiser's path: the rail's More → Finish the Swiss now → the house confirm naming what goes → Finish. Read back:
+// rounds 4–5 gone, the stage complete, the knockout's seed proposal drawn from the table read BEFORE the finish, and Undo
+// refused across the barrier the finish wrote.
+test.describe("X-SW-26 finish a 5-round Swiss after round 3 into the knockout", () => {
+  for (const sport of LATE_SPORTS) {
+    test(`More → Finish the Swiss now confirms what goes, ends the Swiss after round 3, and seeds the knockout from round 3's table (${sport.key})`, async ({
+      page,
+      request,
+    }) => {
+      test.setTimeout(300_000);
+      const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+        ends_on: "2030-12-31",
+        name: `Finish ${sport.key} ${TAG}`,
+        visibility: "private",
+      });
+      expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+      const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+        name: "Open",
+        sport_key: sport.key,
+        variant_key: sport.variant,
+        config: sport.config,
+      });
+      expect(div.status, JSON.stringify(div.error)).toBe(201);
+      const divisionId = div.data!.id;
+      const added = await apiJson<{ id: string }[]>(
+        request,
+        `/api/v1/divisions/${divisionId}/entrants`,
+        "POST",
+        Array.from({ length: 6 }, (_, i) => ({ kind: "individual", display_name: `Finish S${i + 1} ${TAG}`, seed: i + 1, members: [] })),
+      );
+      expect(added.status, JSON.stringify(added.error)).toBe(201);
+      const swiss = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+        seq: 1,
+        kind: "swiss",
+        name: "Swiss",
+        config: { rounds: 5 },
+      });
+      expect(swiss.status, JSON.stringify(swiss.error)).toBe(201);
+      const ko = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+        seq: 2,
+        kind: "knockout",
+        name: "Knockout",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      });
+      expect(ko.status, JSON.stringify(ko.error)).toBe(201);
+      const swissId = swiss.data!.id;
+      const koId = ko.data!.id;
+      const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+      expect(started.status, `start → ${JSON.stringify(started.error)}`).toBe(200);
+      const drawn = await apiJson(request, `/api/v1/stages/${koId}/generate`, "POST");
+      expect(drawn.status, `the knockout's TBD bracket → ${JSON.stringify(drawn.error)}`).toBe(200);
+      const rowsOf = async (r?: number) =>
+        ((await stageFixtures(request, divisionId, swissId)) as Seated[])
+          .filter((f) => r === undefined || f.round_no === r)
+          .sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
+      const roundsIn = async () => [...new Set((await rowsOf()).map((f) => f.round_no))];
+      expect(await roundsIn(), "premise: five rounds minted").toEqual([1, 2, 3, 4, 5]);
+      for (let r = 1; r <= 3; r++) {
+        const paired = await apiJson(request, `/api/v1/stages/${swissId}/generate`, "POST");
+        expect(paired.status, `pair round ${r} → ${JSON.stringify(paired.error)}`).toBe(200);
+        const boards = (await rowsOf(r)).filter((f) => !isByeRow(f) && f.home_entrant_id !== null && f.away_entrant_id !== null);
+        expect(boards, `round ${r}: ⌊6/2⌋ boards`).toHaveLength(3);
+        for (const f of boards) await sport.win(request, f, f.home_entrant_id!);
+      }
+      // The table after round 3, read BEFORE the finish: the independent expected value for the knockout's seeds.
+      const table = await apiJson<{ rows: { entrantId: string; rank?: number }[] }>(request, `/api/v1/stages/${swissId}/standings`);
+      expect(table.status, JSON.stringify(table.error)).toBe(200);
+      const top = [...table.data!.rows].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0)).slice(0, 4).map((r) => r.entrantId);
+      expect(top, "premise: four ranked").toHaveLength(4);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+      await page.getByTestId("stage-more").first().click();
+      const finish = page.getByTestId("stage-finish-swiss");
+      await expect(finish).toBeEnabled({ timeout: 20_000 });
+      await expect(page.getByTestId("stage-finish-swiss-hint")).toHaveText(fill("stage.more.finishSwiss.hint", { round: 3 }));
+      await finish.click();
+      const confirm = page.getByRole("alertdialog", { name: uiEn["stage.finish.confirm.title"]! });
+      await expect(confirm).toBeVisible();
+      await expect(confirm).toContainText(fill("stage.finish.confirm.final", { round: 3 }));
+      await expect(confirm).toContainText(fill("stage.finish.confirm.removeMany", { from: 4, to: 5 }));
+      expect(await roundsIn(), "nothing written before the confirm").toEqual([1, 2, 3, 4, 5]);
+      const posted = page.waitForResponse((res) => res.url().endsWith(`/api/v1/stages/${swissId}/swiss/finish`) && res.request().method() === "POST");
+      await confirm.getByRole("button", { name: uiEn["stage.finish.confirm.label"]! }).click();
+      const answer = await posted;
+      expect(answer.status(), "Finish writes once").toBe(200);
+      expect(((await answer.json()) as { data?: unknown }).data).toMatchObject({ finished_after: 3, shells_removed: 6, completed: true });
+      await expect(page.getByText(fill("schedule.notice.swissFinished", { round: 3 }))).toBeVisible({ timeout: 20_000 });
+      expect(await roundsIn(), "rounds 4 and 5 are gone").toEqual([1, 2, 3]);
+
+      // The knockout seeds from round 3's table: the proposal's qualifiers, in rank order, are its top four.
+      const proposal = await apiJson<{ computed: { qualifiers: { rank: number; entrantId: string }[] } }>(
+        request,
+        `/api/v1/stages/${koId}/seed-proposal`,
+        "POST",
+      );
+      expect(proposal.status, JSON.stringify(proposal.error)).toBe(200);
+      expect([...proposal.data!.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId)).toEqual(top);
+
+      // Finished stays finished: the item is gone from More, a second Finish is SWISS_OVER, and Undo is refused by name.
+      await page.reload();
+      // The positive anchor first (the Swiss card reads complete), so the absence below is read off a loaded desk.
+      await expect(page.locator(`[data-stage-id="${swissId}"]`).getByText(uiEn["schedule.sstatus.complete"]!, { exact: true })).toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(page.getByTestId("stage-finish-swiss")).toHaveCount(0);
+      const again = await apiJson(request, `/api/v1/stages/${swissId}/swiss/finish`, "POST");
+      expect([again.status, (again.error as { code?: string } | undefined)?.code]).toEqual([422, "SWISS_OVER"]);
+      const undo = await apiJson(request, `/api/v1/divisions/${divisionId}/undo`, "POST", {});
+      expect((undo.error as { code?: string } | undefined)?.code).toBe("SWISS_ROUNDS_CHANGE_NOT_UNDOABLE");
+    });
+  }
+});

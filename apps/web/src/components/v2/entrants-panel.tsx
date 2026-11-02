@@ -36,6 +36,7 @@ import {
 import { requiresDob, requiresGender, type EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
+import { swissFinishConfirm, swissFinishPlanOf, type SwissFinishPlan } from "@/lib/swiss-finish-plan";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { lateEntryNotice, lateEntryNoticeText, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
@@ -245,6 +246,10 @@ export function EntrantsPanel({
   // "Add a round" goes through there (`canAddRound`, ruling C11); and the round it added, said until the next add.
   const [addRoundFor, setAddRoundFor] = useState<string | null>(null);
   const [roundAdded, setRoundAdded] = useState<number | null>(null);
+  // W3 T13 — and "Finish the Swiss now", the other recovery it offers while the server says Finish goes through there
+  // (`canFinish`, THE Finish predicate, with its plan); the round it finished after, said until the next add.
+  const [finishFor, setFinishFor] = useState<{ stageId: string; plan: SwissFinishPlan } | null>(null);
+  const [swissFinished, setSwissFinished] = useState<number | null>(null);
   // Club facet (Jul3/01 §8): filter entrants by parent club. Hidden when the
   // org has no clubs (or the clubs list is not readable on this plan).
   const [clubs, setClubs] = useState<{ id: string; name: string }[]>([]);
@@ -335,6 +340,8 @@ export function EntrantsPanel({
           ? err.extra.stageId
           : null,
       );
+      const plan = err instanceof ApiV1Error && err.code === "SWISS_NO_ROUND_LEFT" ? swissFinishPlanOf(err.extra) : null;
+      setFinishFor(plan && err instanceof ApiV1Error && typeof err.extra.stageId === "string" ? { stageId: err.extra.stageId, plan } : null);
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
         return;
@@ -463,6 +470,7 @@ export function EntrantsPanel({
   async function addEntrants<T>(fn: (override?: { reason: string }) => Promise<T>): Promise<T | undefined> {
     setLateNotice([]);
     setRoundAdded(null);
+    setSwissFinished(null);
     const res = await runGated(fn);
     if (res === undefined) return res;
     const { results, names } = lateEntryResultsOf(res);
@@ -676,6 +684,32 @@ export function EntrantsPanel({
         >
           {msg("stage.more.addRound")}
         </button>
+      )}
+      {error && finishFor && (
+        <button
+          type="button"
+          data-testid="entrants-finish-swiss"
+          disabled={busy}
+          onClick={async () => {
+            const offer = finishFor;
+            if (!(await confirmDialog(swissFinishConfirm(offer.plan, msg)))) return;
+            const out = await run(() =>
+              apiV1<{ finished_after: number }>(`/api/v1/stages/${offer.stageId}/swiss/finish`, { method: "POST", json: {} }),
+            );
+            if (!out) return;
+            setFinishFor(null);
+            setAddRoundFor(null);
+            setSwissFinished(out.finished_after);
+          }}
+          className="btn btn-ghost min-h-11 px-3 py-1.5 text-sm"
+        >
+          {msg("stage.more.finishSwiss")}
+        </button>
+      )}
+      {swissFinished !== null && (
+        <p role="status" data-testid="entrants-swiss-finished" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {msg("schedule.notice.swissFinished", { round: swissFinished })}
+        </p>
       )}
       {roundAdded !== null && (
         <p role="status" data-testid="entrants-round-added" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">

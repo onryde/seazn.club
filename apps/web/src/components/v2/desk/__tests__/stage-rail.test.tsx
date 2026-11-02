@@ -670,10 +670,15 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
       chess: false,
       field: 6,
       addRound: { canAddRound: true, refusal: null, field: 6, hardMax: 5 },
+      // W3 T13: round 2 complete once started (the Finish predicate's k), nothing before.
+      finish: started
+        ? { canFinish: true, refusal: null, finishedAfter: 2 }
+        : { canFinish: false, refusal: "nothing_played" as const, finishedAfter: 0 },
     },
     fixtures: [],
     onSave: async () => null,
     onAddRound: async () => null,
+    onFinish: async () => null,
   });
   const render = (swissRounds: ReturnType<typeof rounds> | undefined) =>
     renderToStaticMarkup(
@@ -707,5 +712,18 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
     expect(html).toContain(en["stage.more.addRound"]);
     expect(render(rounds(false)), "before the first start the dialog edits the count").not.toContain("stage-add-round");
     expect(render(rounds(false))).toContain('data-testid="stage-add-late-player"');
+  });
+
+  it("W3 T13: Finish the Swiss now sits in the same More menu, after Add a round, once the stage has started; not before", () => {
+    const html = render(rounds(true));
+    const add = html.indexOf('data-testid="stage-add-round"');
+    const finish = html.indexOf('data-testid="stage-finish-swiss"');
+    const menuEnd = html.indexOf("</div></div>", html.indexOf('data-testid="stage-more-menu"'));
+    expect(add, "premise: Add a round rendered").toBeGreaterThan(-1);
+    expect(finish, "Finish follows Add a round").toBeGreaterThan(add);
+    expect(finish, "inside the More menu").toBeLessThan(menuEnd);
+    expect(html).toContain(en["stage.more.finishSwiss"]);
+    expect(render(rounds(false)), "before the first start nothing is played").not.toContain("stage-finish-swiss");
+    expect(render(undefined), "no swissRounds, no Finish").not.toContain("stage-finish-swiss");
   });
 });

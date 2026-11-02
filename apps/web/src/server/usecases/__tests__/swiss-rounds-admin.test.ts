@@ -729,11 +729,20 @@ describe.runIf(HAS_DB)("C11 the offered Add a round never leads to SWISS_ROUNDS_
       // Phase 2: the stage it names is where the entrants panel's "Add a round" recovery posts.
       extra: { canAddRound: false, stageId: four.stageId },
     });
-    // Rounds 1 and 2 are complete, so Finish now resolves it: the controller's ruled 409 (review I2 MA), not the 422 above.
+    // T13 (C11 applied to Finish): round 3 is under way, so Finish is refused too (a started board cannot be unpaired) —
+    // `canFinish` is THE Finish predicate's answer, false, and the refusal can never succeed as sent: 422. (Before T13 it
+    // read "a round is complete" and offered a Finish that would have refused.)
     await expect(addSwissRound(four.auth, four.stageId), "and indeed it refuses").rejects.toMatchObject({
+      status: 422,
+      code: "SWISS_ROUNDS_ABOVE_MAX",
+      extra: { rounds: 4, field: 4, hardMax: 3, canFinish: false },
+    });
+    // Round 3 decided: Finish now resolves it — the controller's ruled 409 (review I2 MA), Finish offered after round 3.
+    await playRound(four, 3);
+    await expect(addSwissRound(four.auth, four.stageId), "and Finish is offered").rejects.toMatchObject({
       status: 409,
       code: "SWISS_ROUNDS_ABOVE_MAX",
-      extra: { rounds: 4, field: 4, hardMax: 3, canFinish: true },
+      extra: { rounds: 4, field: 4, hardMax: 3, canFinish: true, finish: { after: 3, rounds: 3 } },
     });
 
     // The positive pair: 6 players × 3 rounds (hard max 5) — offered, and Add a round goes through; the late player then
@@ -879,6 +888,8 @@ describe.runIf(HAS_DB)("listSwissRoundControls (the desk's view of the rounds lo
         chess: s.sport === "boardgame",
         field: 5,
         addRound: { canAddRound: true, refusal: null, field: 5, hardMax: HARD_MAX(5) },
+        // T13: nothing is played, so there is nothing to finish with (the predicate's k = 0).
+        finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0 },
       });
       await startDivision(rig.auth, rig.divisionId);
       await pair(rig);

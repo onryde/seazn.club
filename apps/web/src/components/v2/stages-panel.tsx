@@ -22,6 +22,7 @@ import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
+import { swissFinishConfirm, swissFinishPlanOf, type SwissFinishPlan } from "@/lib/swiss-finish-plan";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import type { HoldState } from "@/server/relay/domain/session";
@@ -578,6 +579,10 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([tag]) => tag);
   }, [venues]);
   const [error, setError] = useState<string | null>(null);
+  // W3 T13 — "Finish the Swiss now" under a red line whose Swiss refusal offers it (`canFinish: true` with its plan: a
+  // Pair's shrunk-field 409, the More menu's Add a round at the hard maximum). Keyed to the line's own text, so any later
+  // line — another refusal, another write — never keeps a stale button.
+  const [finishOffer, setFinishOffer] = useState<{ stageId: string; plan: SwissFinishPlan; text: string } | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // stage id in flight
   const [notice, setNotice] = useState<string | null>(null);
@@ -704,6 +709,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     } catch (err) {
       const refusal = swissStageRefusal(err, msg, msgPlural, locale);
       if (report) setError(refusal.text);
+      const plan = report ? swissFinishPlanOf(refusal.extra) : null;
+      setFinishOffer(plan ? { stageId, plan, text: refusal.text } : null);
       if (err instanceof ApiV1Error) router.refresh();
       return refusal;
     } finally {
@@ -742,6 +749,24 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       },
       from === "more",
     );
+
+  // W3 T13 (RB3-20, X-SW-26) — "Finish the Swiss now": the rail's More item, the rounds dialog's recovery and the red
+  // line's. Confirmed first (danger: rounds go for good, Undo cannot reverse it), then posted; the panel says the answer.
+  const finishSwissStage = async (stageId: string, plan: SwissFinishPlan): Promise<SwissRoundsRefusal | null> => {
+    if (!(await confirmDialog(swissFinishConfirm(plan, msg)))) return null;
+    return swissStageWrite(
+      stageId,
+      async () => {
+        const out = await apiV1<{ finished_after: number; slots_freed: number }>(`/api/v1/stages/${stageId}/swiss/finish`, {
+          method: "POST",
+          json: {},
+        });
+        const finished = msg("schedule.notice.swissFinished", { round: out.finished_after });
+        return out.slots_freed > 0 ? `${finished} ${msgPlural("schedule.notice.roundsSlotsFreed", out.slots_freed)}` : finished;
+      },
+      true,
+    );
+  };
 
   const setSwissChess = (stageId: string, chess: boolean) =>
     swissStageWrite(
@@ -821,8 +846,11 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           setError(msg("schedule.error.unpairFailed"));
         } else if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
           // W3 T11: a Swiss refusal (SWISS_ROUNDS_ABOVE_MAX on a Generate or Pair next) in the reader's language, with
-          // what to do next — never the server's English sentence.
-          setError(swissRefusalText(err.code, err.extra, msg, msgPlural));
+          // what to do next — never the server's English sentence. T13: and Finish under it when the refusal offers it.
+          const text = swissRefusalText(err.code, err.extra, msg, msgPlural);
+          setError(text);
+          const plan = swissFinishPlanOf(err.extra);
+          setFinishOffer(plan ? { stageId, plan, text } : null);
         } else {
           // The stage list lets an early Generate on a waiting stage name
           // both stages (generatePreconditionMessage).
@@ -945,6 +973,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" data-testid="schedule-error">
           {error}
         </p>
+      )}
+      {error && finishOffer?.text === error && (
+        <button
+          type="button"
+          data-testid="schedule-finish-swiss"
+          disabled={busy !== null}
+          onClick={() => void finishSwissStage(finishOffer.stageId, finishOffer.plan)}
+          className="btn btn-ghost min-h-11 self-start px-3 py-1.5 text-sm"
+        >
+          {msg("stage.more.finishSwiss")}
+        </button>
       )}
 
       {/* Print (item 8). The tz caption that used to sit beside this moved
@@ -1677,6 +1716,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                           fixtures: swissShellFixtures,
                           onSave: saveSwissRounds,
                           onAddRound: addSwissRoundTo,
+                          onFinish: finishSwissStage,
                         }
                       : undefined
                   }

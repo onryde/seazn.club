@@ -2836,6 +2836,20 @@ export const AddSwissRoundResult = z.object({
   shells_added: z.number().int(),
 });
 
+/** POST /stages/{id}/swiss/finish (W3 T13, X-SW-26) — the round whose standings became final, the rows past it deleted
+ *  (and how many held a laid-out slot), and the stage's completion (`completeStage`'s own answer). */
+export const FinishSwissResult = z.object({
+  finished_after: z.number().int(),
+  shells_removed: z.number().int(),
+  slots_freed: z.number().int(),
+  completed: z.boolean(),
+  events: z.array(z.record(z.string(), z.unknown())),
+  qualified: z.object({ stage_id: Uuid, entrants: z.array(Uuid) }).optional(),
+  next_stage_fixtures: z.number().int().optional(),
+  division_completed: z.boolean().optional(),
+  seed_proposal: z.object({ id: Uuid, status: z.string() }).optional(),
+});
+
 /** POST /stages/{id}/open-round (T19, D12) — the organiser opens one round
  *  of an online-play stage: stamps it and invites its players. */
 export const OpenRoundInput = z.object({ roundNo: z.number().int().positive() }).strict();

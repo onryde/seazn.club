@@ -1316,31 +1316,33 @@ export function judgeSwissRoundsAt(rounds: number, fieldSize: number, canFinish:
  * - before Start, the count as sent can never be played — Start refuses it too — and the organiser can still change it:
  *   refused as sent (422, `canFinish: false`, `judgeSwissRoundsAt`);
  * - in a running Swiss (withdrawals shrank the field), only a round this field cannot reach is refused: `target >
- *   hardMax` (409, `canFinish: true` — `target` is then past round 1, whose decision `swissGen` checked). A round still
- *   within the shrunk field's hard maximum is paired, and the answer carries the `shrunk` warning: the Swiss can reach at
- *   most `hardMax` rounds; finish after that one, or now — `canFinish: target > 1` (re-review n1): a round-1 Pair after
- *   no-shows withdrew has nothing played to finish with. Blocking it would strand a live event over rounds it has not
- *   reached; the engine's own no-legal-pairing outcome (SW-H1) stays the backstop.
+ *   hardMax` (409 when the Swiss can be finished now). A round still within the shrunk field's hard maximum is paired,
+ *   and the answer carries the `shrunk` warning: the Swiss can reach at most `hardMax` rounds; finish after that one, or
+ *   now. Blocking it would strand a live event over rounds it has not reached; the engine's own no-legal-pairing outcome
+ *   (SW-H1) stays the backstop.
+ * `finish` (W3 T13, C11 applied to Finish): THE Finish predicate's answer (`swissFinishState`), read by the caller only
+ * when a running Swiss's count is above the field's hard maximum — the one case its `canFinish` is sent. Before T13 this
+ * was `target > 1` (re-review n1: a round-1 Pair has nothing played to finish with — the predicate's own k = 0 case).
  */
 export function judgeSwissPairAt(
   rounds: number,
   fieldSize: number,
-  target: number,
   started: boolean,
+  target: number,
+  finish: { canFinish: boolean; finish?: { after: number; rounds: number } },
 ): SwissRoundsJudgement | SwissRoundsShrunk {
   const judgement = judgeSwissRounds(rounds, fieldSize);
   if (judgement.verdict !== "refuse") return judgement;
   if (!started) return judgeSwissRoundsAt(rounds, fieldSize, false);
   if (target > judgement.hardMax) {
-    const canFinish = target > 1;
     throw swissRefusal(
       "SWISS_ROUNDS_ABOVE_MAX",
-      { rounds, field: fieldSize, hardMax: judgement.hardMax, canFinish },
-      { resolvable: canFinish },
+      { rounds, field: fieldSize, hardMax: judgement.hardMax, ...finish },
+      { resolvable: finish.canFinish },
     );
   }
   const { recommended, safeMax, hardMax } = judgement;
-  return { verdict: "shrunk", rounds, field: fieldSize, recommended, safeMax, hardMax, canFinish: target > 1 };
+  return { verdict: "shrunk", rounds, field: fieldSize, recommended, safeMax, hardMax, canFinish: finish.canFinish };
 }
 
 /**
@@ -1694,7 +1696,15 @@ export async function swissGen(
   // W3 T11 (X-SW-16): this round's field against the round count, before any write — withdrawals since the last Generate
   // can have shrunk it under the rounds. Fix round 1 (ruling on review m2): a running Swiss refuses only a round its
   // field cannot reach; see `judgeSwissPairAt`.
-  const swissRounds = judgeSwissPairAt(rounds, field.length, target, await divisionHasStarted(tx, divisionId));
+  const started = await divisionHasStarted(tx, divisionId);
+  // W3 T13: THE Finish predicate, read only when its answer is sent (a running Swiss above the field's hard maximum).
+  // Imported lazily: swiss-rounds-admin.ts imports this module.
+  let finish: Parameters<typeof judgeSwissPairAt>[4] = { canFinish: false };
+  if (started && judgeSwissRounds(rounds, field.length).verdict === "refuse") {
+    const admin = await import("./swiss-rounds-admin");
+    finish = admin.swissFinishDetails(await admin.swissFinishStateOf(tx, stageId));
+  }
+  const swissRounds = judgeSwissPairAt(rounds, field.length, started, target, finish);
   // The division's pinned module: the bye's frozen cfg below, and what "played" means for a forfeit (ruling 118).
   const [division] = await tx<{ config: unknown; sport_key: string; module_version: string }[]>`
     select config, sport_key, module_version from divisions where id = ${divisionId}`;

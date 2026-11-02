@@ -28,6 +28,17 @@ export interface SwissAddRoundControl {
   hardMax: number | null;
 }
 
+/** The server's `SwissFinishState` (swiss-rounds-admin.ts, W3 T13) — the predicate `finishSwissNow` judges by and every
+ *  `canFinish` reads, so the desk offers "Finish the Swiss now" exactly when it goes through (C11, applied to Finish). */
+export interface SwissFinishControl {
+  canFinish: boolean;
+  /** Why it would be refused, or null when it goes through: the Swiss is over, no round is complete yet, or a round past
+   *  the last complete one is under way. */
+  refusal: "over" | "nothing_played" | "round_undecided" | null;
+  /** k: the round whose standings become final (0: none complete). */
+  finishedAfter: number;
+}
+
 /** One Swiss stage as the desk reads it (`listSwissRoundControls`, read by the division page for an organiser). */
 export interface SwissRoundControl {
   /** A board of the stage has started (`swissBoardStartedSql`): the count and the chess colours are fixed. */
@@ -39,6 +50,7 @@ export interface SwissRoundControl {
   /** The field the next Pair seats — the one the PATCH judges a count against (null: no field known yet). */
   field: number | null;
   addRound: SwissAddRoundControl;
+  finish: SwissFinishControl;
 }
 
 /** The stepper's ceiling with no field to judge against (a fed Swiss before its draw): the round-count input's own bound

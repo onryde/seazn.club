@@ -810,6 +810,19 @@ export async function appendDivisionEvent(
   return seq;
 }
 
+/**
+ * W3 T13 (reviewer flag R3): whether `completeStageIfReady` would complete this TABLE stage now — its own predicate
+ * (`isTableStageComplete` over the stage as the caller's transaction sees it), so a write that hands the stage to
+ * `completeStage` once it commits ("Finish the Swiss now") can refuse BEFORE it commits instead of leaving the stage
+ * half-finished. Already complete: true. Another kind: false (its only caller is a Swiss).
+ */
+export async function tableStageCompletable(tx: Tx, stageId: string): Promise<boolean> {
+  const inputs = await loadStageInputs(tx, stageId);
+  if (inputs.stage.status === "complete") return true;
+  if (!TABLE_KINDS.has(inputs.kind)) return false;
+  return isTableStageComplete(toTableStage(inputs, new Map()), inputs.tableFixtures);
+}
+
 export interface CompleteResult {
   completed: boolean;
   events: DivisionEvent[];

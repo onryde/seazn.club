@@ -91,6 +91,7 @@ import { swissLateEntryOffered } from "@/lib/open-entry-stages";
 // W3 T12 Phase 2: the rounds chip (with its edit dialog) and the More menu's "Add a round" — their own file, so this
 // rail only mounts them.
 import { SwissAddRoundMenuItem, SwissRoundsChip, type SwissRoundsRail } from "./swiss-rounds-dialog";
+import { SwissFinishMenuItem } from "./swiss-rounds-dialog";
 
 interface StageRow {
   id: string;
@@ -690,6 +691,7 @@ export function StageRail({
                     <span className="text-xs text-slate-500">{msg("stage.more.addLatePlayer.hint")}</span>
                   </Link>
                   {swissRounds && <SwissAddRoundMenuItem stageId={stage.id} busy={busy} rail={swissRounds} />}
+                  {swissRounds && <SwissFinishMenuItem stageId={stage.id} busy={busy} rail={swissRounds} onOpen={() => open && onToggleOpen(stage.id)} />}
                 </div>
               </div>
             </>

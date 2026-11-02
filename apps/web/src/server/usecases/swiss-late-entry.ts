@@ -33,7 +33,7 @@ import { resolveModule } from "@/server/engine-db";
 import { forfeitPlayedFacts } from "@/server/engine-db/forfeit-played";
 import { withTenant } from "@/lib/db";
 import { swissRefusal } from "./swiss-refusal";
-import { swissAddRoundState, swissBoardStartedSql } from "./swiss-rounds-admin";
+import { swissAddRoundState, swissBoardStartedSql, swissFinishDetails, swissFinishState } from "./swiss-rounds-admin";
 import { OCCUPYING, afterScheduleWrite, courtVenueIds, divisionLockState } from "./schedule";
 import {
   DECIDED,
@@ -351,8 +351,12 @@ export async function admitSwissLateEntrant(
     case "noop":
       return null;
     case "refused":
-      // T12 Phase 2: the stage rides along, so the entrants panel's "Add a round" recovery knows where to post.
-      if (!automatic) throw swissRefusal(decision.code, { canAddRound: addRound.canAddRound, stageId: stage.id });
+      // T12 Phase 2: the stage rides along, so the entrants panel's "Add a round" recovery knows where to post. T13: and
+      // its "Finish the Swiss now", from THE Finish predicate (C11 applied to Finish — the arrival is not a row it reads).
+      if (!automatic) {
+        const finish = swissFinishDetails(await swissFinishState(tx, { ...stage, division_id: divisionId }));
+        throw swissRefusal(decision.code, { canAddRound: addRound.canAddRound, ...finish, stageId: stage.id });
+      }
       // X-SW-13 / Review Focus 4: the arrival stands, recorded as joining after the last round (the desk lists it so;
       // an added round seats it).
       return recordC(rounds + 1);

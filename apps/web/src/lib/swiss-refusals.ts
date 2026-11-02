@@ -130,7 +130,7 @@ export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
   // W3 T13 (RB3-20): Finish now while the next round has a started board.
   SWISS_FINISH_ROUND_UNDECIDED: {
     status: 409,
-    message: "The round in progress has a started match. Decide it before finishing the Swiss.",
+    message: "A match in the round in progress has started, so that round stays. Decide its matches before finishing the Swiss.",
     key: "swiss.refusal.SWISS_FINISH_ROUND_UNDECIDED",
   },
   // W3 T13 (RB3-20): Finish now before any round is complete.

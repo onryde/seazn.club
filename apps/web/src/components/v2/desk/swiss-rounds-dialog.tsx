@@ -15,7 +15,11 @@
 // Beside it, the two rail pieces (stage-rail.tsx mounts them; this file owns their state and copy so the rail's own Swiss
 // blocks stay untouched): `SwissRoundsChip`, "Rounds: N · Edit" until the stage's first start and a fixed "Rounds: N"
 // after it, and `SwissAddRoundMenuItem`, the More menu's "Add a round" after that start — offered on THE predicate
-// `addSwissRound` judges by (`addRound`, ruling C11), and at the hard maximum shown disabled with the reason.
+// `addSwissRound` judges by (`addRound`, ruling C11), and at the hard maximum shown disabled with the reason. W3 T13 adds
+// `SwissFinishMenuItem`, the More menu's "Finish the Swiss now" beside it — offered on THE Finish predicate (`finish`,
+// `swissFinishState`), disabled with the reason while no round is complete or the round in progress is undecided — and
+// the same Finish as the dialog's recovery when a SWISS_ROUNDS_LOCKED refusal says `canFinish: true`. Either way the
+// panel confirms first ("Standings after round {k} become final…", `swissFinishConfirm`), then posts.
 //
 // Save and Cancel sit at the end of the BODY, not in `Modal`'s `footer` slot: the body is short at every width, and
 // keeping them in the children keeps the whole dialog visible to `renderIsland`'s walk (its tests drive the stepper and
@@ -24,6 +28,7 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { Modal } from "@/components/modal";
+import { swissFinishPlanOf, type SwissFinishPlan } from "@/lib/swiss-finish-plan";
 import { swissRefusalKey } from "@/lib/swiss-refusals";
 import { swissRoundsGuidanceLine, swissRoundsWarnNotice } from "@/lib/swiss-rounds";
 import { swissRoundsEditPreview, type SwissRoundControl, type SwissRoundsEditFixture } from "@/lib/swiss-rounds-edit";
@@ -45,6 +50,9 @@ export interface SwissRoundsDialogProps {
   onSave: (stageId: string, rounds: number) => Promise<SwissRoundsRefusal | null>;
   /** "Add a round", the recovery a SWISS_ROUNDS_LOCKED refusal offers; same answer shape. */
   onAddRound: (stageId: string) => Promise<SwissRoundsRefusal | null>;
+  /** W3 T13: "Finish the Swiss now", the other recovery it offers (`canFinish`). The dialog closes first; the panel
+   *  confirms and says the answer itself. */
+  onFinish: (stageId: string, plan: SwissFinishPlan) => void;
   onClose: () => void;
 }
 
@@ -55,6 +63,9 @@ export interface SwissRoundsRail {
   onSave: (stageId: string, rounds: number) => Promise<SwissRoundsRefusal | null>;
   /** `from`: the More menu's item (the panel says a refusal itself) or the dialog's recovery (the dialog says it). */
   onAddRound: (stageId: string, from: "more" | "dialog") => Promise<SwissRoundsRefusal | null>;
+  /** W3 T13: "Finish the Swiss now" after round `plan.after` — confirmed by the panel, then posted; the panel says the
+   *  answer (resolves null when it landed, else the refusal). */
+  onFinish: (stageId: string, plan: SwissFinishPlan) => Promise<SwissRoundsRefusal | null>;
 }
 
 /**
@@ -86,6 +97,7 @@ export function SwissRoundsChip({
         fixtures={rail.fixtures}
         onSave={rail.onSave}
         onAddRound={(id) => rail.onAddRound(id, "dialog")}
+        onFinish={(id, plan) => void rail.onFinish(id, plan)}
         onClose={() => setEditing(false)}
       />,
       document.body,
@@ -159,7 +171,49 @@ export function SwissAddRoundMenuItem({ stageId, busy, rail }: { stageId: string
   );
 }
 
-export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRound, onClose }: SwissRoundsDialogProps) {
+/**
+ * "Finish the Swiss now" in the rail's More menu (W3 T13, RB3-20, X-SW-26): after the stage's first start, end the Swiss
+ * after its last complete round. Offered on THE Finish predicate (`control.finish`, the one `finishSwissNow` judges by);
+ * nothing once the Swiss is over; disabled with the reason before any round is complete, or while the round in progress
+ * is under way. `onOpen` closes the phone sheet first: the confirm is a modal of its own.
+ */
+export function SwissFinishMenuItem({
+  stageId,
+  busy,
+  rail,
+  onOpen,
+}: {
+  stageId: string;
+  busy: string | null;
+  rail: SwissRoundsRail;
+  onOpen: () => void;
+}) {
+  const msg = useMsg();
+  const finish = rail.control.finish;
+  if (!rail.control.started || finish.refusal === "over") return null;
+  const hint = finish.canFinish
+    ? msg("stage.more.finishSwiss.hint", { round: finish.finishedAfter })
+    : msg(finish.refusal === "nothing_played" ? "stage.more.finishSwiss.nothingPlayed" : "stage.more.finishSwiss.undecided");
+  return (
+    <button
+      type="button"
+      data-testid="stage-finish-swiss"
+      disabled={busy !== null || !finish.canFinish}
+      onClick={() => {
+        onOpen();
+        void rail.onFinish(stageId, { after: finish.finishedAfter, rounds: rail.control.rounds });
+      }}
+      className="flex min-h-11 flex-col items-start justify-center border-b border-purple-100 px-4 py-2 text-left last:border-b-0 hover:bg-purple-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+    >
+      <span className={`text-sm font-medium ${finish.canFinish ? "text-purple-700" : "text-slate-400"}`}>{msg("stage.more.finishSwiss")}</span>
+      <span className="text-xs text-slate-500" data-testid="stage-finish-swiss-hint">
+        {hint}
+      </span>
+    </button>
+  );
+}
+
+export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRound, onFinish, onClose }: SwissRoundsDialogProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
   const from = control.rounds;
@@ -199,6 +253,8 @@ export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRou
     : null;
   const refusalText = refusal?.text ?? null;
   const offerAddRound = refusal?.code === "SWISS_ROUNDS_LOCKED" && refusal.extra.canAddRound === true;
+  // W3 T13: the refusal's `canFinish` is THE Finish predicate's answer, and its plan rides with it.
+  const finishPlan = refusal?.code === "SWISS_ROUNDS_LOCKED" ? swissFinishPlanOf(refusal.extra) : null;
 
   const stepClass =
     "grid h-11 w-11 place-items-center text-xl leading-none text-purple-700 hover:bg-purple-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent";
@@ -277,16 +333,34 @@ export function SwissRoundsDialog({ stageId, control, fixtures, onSave, onAddRou
         {refusalText && (
           <div role="alert" data-testid="stage-rounds-error" className="space-y-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
             <p>{refusalText}</p>
-            {offerAddRound && (
-              <button
-                type="button"
-                data-testid="stage-rounds-add-round"
-                disabled={saving}
-                onClick={() => void run(() => onAddRound(stageId))}
-                className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
-              >
-                {msg("stage.more.addRound")}
-              </button>
+            {(finishPlan || offerAddRound) && (
+              <div className="flex flex-wrap gap-2">
+                {finishPlan && (
+                  <button
+                    type="button"
+                    data-testid="stage-rounds-finish"
+                    disabled={saving}
+                    onClick={() => {
+                      onClose();
+                      onFinish(stageId, finishPlan);
+                    }}
+                    className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                  >
+                    {msg("stage.more.finishSwiss")}
+                  </button>
+                )}
+                {offerAddRound && (
+                  <button
+                    type="button"
+                    data-testid="stage-rounds-add-round"
+                    disabled={saving}
+                    onClick={() => void run(() => onAddRound(stageId))}
+                    className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                  >
+                    {msg("stage.more.addRound")}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}

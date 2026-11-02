@@ -1,5 +1,6 @@
 // W3 Task 12 (SW-M10, #838) — the route half of the Swiss rounds edit: `PATCH /stages/{id}` with `PatchSwissStage`
-// (`{ rounds?, chess? }`, strict, at least one key) and `POST /stages/{id}/swiss/add-round` (no body). The usecases are
+// (`{ rounds?, chess? }`, strict, at least one key), `POST /stages/{id}/swiss/add-round` (no body) and — W3 T13 —
+// `POST /stages/{id}/swiss/finish` (no body; "Finish the Swiss now", swiss-finish-now.test.ts). The usecases are
 // swiss-rounds-admin.test.ts's on Postgres; what that suite cannot see is the HANDLER: whether the auth door opens
 // BEFORE the body is parsed (#376's order — publish-schedule/__tests__/route-auth-order.test.ts carries the argument),
 // whether the strict body refuses a typo or an empty object instead of reaching the usecase, what exactly reaches the
@@ -11,22 +12,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "@/lib/errors";
 import { SWISS_REFUSALS } from "@/lib/swiss-refusals";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { patchSwissStage as PatchFn, addSwissRound as AddFn } from "@/server/usecases/swiss-rounds-admin";
+import type {
+  patchSwissStage as PatchFn,
+  addSwissRound as AddFn,
+  finishSwissNow as FinishFn,
+} from "@/server/usecases/swiss-rounds-admin";
 
 const AUTH: AuthCtx = { orgId: "org1", via: "session", userId: "user1", role: "owner", keyId: null };
 
 const PATCHED = { rounds: 3, chess: false, swiss_rounds: null, shells: { added: 0, removed: 0, slots_freed: 0 } };
 const patchMock = vi.hoisted(() => vi.fn<typeof PatchFn>());
 const addMock = vi.hoisted(() => vi.fn<typeof AddFn>());
+const finishMock = vi.hoisted(() => vi.fn<typeof FinishFn>());
 const authMock = vi.hoisted(() => vi.fn(async () => AUTH));
-vi.mock("@/server/usecases/swiss-rounds-admin", () => ({ patchSwissStage: patchMock, addSwissRound: addMock }));
+vi.mock("@/server/usecases/swiss-rounds-admin", () => ({
+  patchSwissStage: patchMock,
+  addSwissRound: addMock,
+  finishSwissNow: finishMock,
+}));
 vi.mock("@/server/usecases/stages", () => ({ deleteStage: vi.fn(), getStageWithTableRules: vi.fn() }));
 vi.mock("@/server/api-v1/auth", () => ({ requireResourceAuth: authMock }));
 
 import { PATCH } from "../route";
 import { POST as ADD_ROUND } from "../swiss/add-round/route";
+import { POST as FINISH } from "../swiss/finish/route";
 
 const STAGE_ID = "11111111-1111-4111-8111-111111111111";
+const FINISHED = { completed: true, events: [], finished_after: 3, shells_removed: 6, slots_freed: 1, seed_proposal: { id: "p1", status: "draft" } };
 const ctx = { params: Promise.resolve({ id: STAGE_ID }) };
 
 function patch(body: string): Request {
@@ -49,10 +61,12 @@ interface ErrorEnvelope {
 beforeEach(() => {
   patchMock.mockReset();
   addMock.mockReset();
+  finishMock.mockReset();
   authMock.mockReset();
   authMock.mockResolvedValue(AUTH);
   patchMock.mockResolvedValue(PATCHED as never);
   addMock.mockResolvedValue({ rounds: 4, shells_added: 3 });
+  finishMock.mockResolvedValue(FINISHED as never);
 });
 
 describe("PATCH /api/v1/stages/{id} — the Swiss rounds and chess edit", () => {
@@ -142,5 +156,39 @@ describe("POST /api/v1/stages/{id}/swiss/add-round", () => {
     const res = await ADD_ROUND(addRound(), ctx);
     expect(res.status).toBe(422);
     expect(((await res.json()) as ErrorEnvelope).error).toMatchObject({ code: "SWISS_ROUNDS_ABOVE_MAX", ...above });
+  });
+});
+
+describe("POST /api/v1/stages/{id}/swiss/finish (W3 T13)", () => {
+  const finish = () => new Request(`http://localhost/api/v1/stages/${STAGE_ID}/swiss/finish`, { method: "POST" });
+
+  it("finishes behind the stage's write door; no body is read; the answer is the usecase's", async () => {
+    const res = await FINISH(finish(), ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, data: FINISHED });
+    expect(authMock.mock.calls[0]).toEqual([expect.any(Request), "stage", STAGE_ID, "write"]);
+    expect(finishMock.mock.calls[0]).toEqual([AUTH, STAGE_ID]);
+  });
+
+  it("refuses an unauthorised caller and finishes nothing", async () => {
+    authMock.mockRejectedValueOnce(new HttpError(403, "Forbidden"));
+    const res = await FINISH(finish(), ctx);
+    expect(res.status).toBe(403);
+    expect(finishMock).not.toHaveBeenCalled();
+  });
+
+  it("passes SWISS_FINISH_ROUND_UNDECIDED (409, with the boards it names) and SWISS_OVER (422) through intact", async () => {
+    const boards = [{ fixtureId: "f1", round: 4, board: 2 }];
+    finishMock.mockRejectedValueOnce(
+      new HttpError(409, SWISS_REFUSALS.SWISS_FINISH_ROUND_UNDECIDED.message, "SWISS_FINISH_ROUND_UNDECIDED", { canFinish: false, boards }),
+    );
+    const undecided = await FINISH(finish(), ctx);
+    expect(undecided.status).toBe(409);
+    expect(((await undecided.json()) as ErrorEnvelope).error).toMatchObject({ code: "SWISS_FINISH_ROUND_UNDECIDED", canFinish: false, boards });
+
+    finishMock.mockRejectedValueOnce(new HttpError(422, SWISS_REFUSALS.SWISS_OVER.message, "SWISS_OVER", { canFinish: false }));
+    const over = await FINISH(finish(), ctx);
+    expect(over.status).toBe(422);
+    expect(((await over.json()) as ErrorEnvelope).error).toMatchObject({ code: "SWISS_OVER", canFinish: false });
   });
 });

@@ -14,8 +14,10 @@ import frUi from "@/dictionaries/fr/ui.json";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
 import type { SwissRoundControl, SwissRoundsEditFixture } from "@/lib/swiss-rounds-edit";
+import type { SwissFinishPlan } from "@/lib/swiss-finish-plan";
 import {
   SwissAddRoundMenuItem,
+  SwissFinishMenuItem,
   SwissRoundsChip,
   SwissRoundsDialog,
   type SwissRoundsDialogProps,
@@ -73,12 +75,14 @@ function control(over: Partial<SwissRoundControl> & { field: number | null }): S
     rounds: 5,
     chess: false,
     addRound: { canAddRound: true, refusal: null, field, hardMax: field === null ? null : HARD_MAX(field) },
+    // W3 T13: nothing played (the Finish predicate's k = 0) unless a case says otherwise.
+    finish: { canFinish: false, refusal: "nothing_played", finishedAfter: 0 },
     ...over,
   };
 }
 
 function open(over: Partial<SwissRoundsDialogProps> & { control: SwissRoundControl }) {
-  const calls = { save: [] as number[], addRound: 0, closed: 0 };
+  const calls = { save: [] as number[], addRound: 0, closed: 0, finish: [] as SwissFinishPlan[] };
   const props: SwissRoundsDialogProps = {
     stageId: "s1",
     fixtures: [],
@@ -89,6 +93,9 @@ function open(over: Partial<SwissRoundsDialogProps> & { control: SwissRoundContr
     onAddRound: async () => {
       calls.addRound++;
       return null;
+    },
+    onFinish: (_id, plan) => {
+      calls.finish.push(plan);
     },
     onClose: () => {
       calls.closed++;
@@ -216,6 +223,35 @@ describe.each(LOCALES)("SwissRoundsDialog (X-SW-17, owner pick B) [%s]", (locale
     expect(n.disabled("stage-rounds-save")).toBe(true);
   });
 
+  it("W3 T13: SWISS_ROUNDS_LOCKED with canFinish — Finish the Swiss now beside Add a round; pressing it closes the dialog first and hands the refusal's plan to the panel", async () => {
+    const locked = (extra: Record<string, unknown>): SwissRoundsRefusal => ({ code: "SWISS_ROUNDS_LOCKED", extra, text: "locked" });
+    const ROWS: { name: string; extra: Record<string, unknown>; finish: boolean; add: boolean }[] = [
+      { name: "both offered", extra: { canFinish: true, finish: { after: 3, rounds: 5 }, canAddRound: true }, finish: true, add: true },
+      { name: "Finish only", extra: { canFinish: true, finish: { after: 3, rounds: 5 }, canAddRound: false }, finish: true, add: false },
+      { name: "Add a round only", extra: { canFinish: false, canAddRound: true }, finish: false, add: true },
+      // A `canFinish: true` with no plan sent cannot say what Finish removes: no button that would confirm a blank.
+      { name: "canFinish without its plan", extra: { canFinish: true, canAddRound: false }, finish: false, add: false },
+      { name: "neither", extra: { canFinish: false, canAddRound: false }, finish: false, add: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      const d = open({ control: control({ field: 6, rounds: 5 }), fixtures: shells(6, 5), onSave: async () => locked(r.extra) });
+      d.press("stage-rounds-fewer");
+      d.press("stage-rounds-save");
+      await flush();
+      expect(d.find("stage-rounds-finish") !== undefined, `${r.name}: Finish`).toBe(r.finish);
+      expect(d.find("stage-rounds-add-round") !== undefined, `${r.name}: Add a round`).toBe(r.add);
+      if (r.finish) {
+        expect(textOf(d.get("stage-rounds-finish"))).toBe(D["stage.more.finishSwiss"]);
+        d.press("stage-rounds-finish");
+        expect(d.calls.closed, `${r.name}: closed first (the confirm is a modal of its own)`).toBe(1);
+        expect(d.calls.finish, `${r.name}: the refusal's plan`).toEqual([{ after: 3, rounds: 5 }]);
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
+
   it("another refusal (a frozen timetable) says its text and leaves the count editable — only LOCKED fixes it", async () => {
     const d = open({
       control: control({ field: 6, rounds: 3 }),
@@ -265,6 +301,7 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
     fixtures: [],
     onSave: async () => null,
     onAddRound: async () => null,
+    onFinish: async () => null,
   });
 
   it("the chip: \"Rounds: N\" with Edit until the first start, a fixed chip after it", () => {
@@ -364,5 +401,77 @@ describe.each(LOCALES)("the rail's rounds chip and the More menu's Add a round [
     expect(checked, "anti-vacuity: rows rendered").toBe(ROWS.length);
     expect(ROWS.filter((r) => r.shown).length).toBeGreaterThan(0);
     expect(ROWS.filter((r) => !r.shown).length).toBeGreaterThan(0);
+  });
+
+  it("W3 T13 Finish the Swiss now: offered after the first start exactly when the Finish predicate lets it through; disabled with the reason otherwise; never before the start or once over", () => {
+    type Row = { name: string; c: SwissRoundControl; shown: boolean; enabled?: boolean; hint?: string };
+    const started = (finish: SwissRoundControl["finish"]) => control({ field: 6, rounds: 5, started: true, finish });
+    const ROWS: Row[] = [
+      {
+        name: "round 3 complete, nothing past it started",
+        c: started({ canFinish: true, refusal: null, finishedAfter: 3 }),
+        shown: true,
+        enabled: true,
+        hint: fill(D["stage.more.finishSwiss.hint"]!, { round: 3 }),
+      },
+      {
+        name: "no round complete yet",
+        c: started({ canFinish: false, refusal: "nothing_played", finishedAfter: 0 }),
+        shown: true,
+        enabled: false,
+        hint: D["stage.more.finishSwiss.nothingPlayed"]!,
+      },
+      {
+        name: "the round in progress is under way",
+        c: started({ canFinish: false, refusal: "round_undecided", finishedAfter: 3 }),
+        shown: true,
+        enabled: false,
+        hint: D["stage.more.finishSwiss.undecided"]!,
+      },
+      { name: "before the first start", c: control({ field: 6, rounds: 5 }), shown: false },
+      { name: "over", c: started({ canFinish: false, refusal: "over", finishedAfter: 3 }), shown: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      const html = renderToStaticMarkup(<SwissFinishMenuItem stageId="s1" busy={null} rail={rail(r.c)} onOpen={() => {}} />);
+      if (!r.shown) {
+        expect(html, r.name).toBe("");
+      } else {
+        expect(html, r.name).toContain('data-testid="stage-finish-swiss"');
+        expect(html, r.name).toContain(D["stage.more.finishSwiss"]);
+        expect(/<button[^>]*disabled=""/.test(html), `${r.name}: disabled`).toBe(!r.enabled);
+        expect(html, r.name).toContain(r.hint!.replace(/'/g, "&#x27;"));
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows rendered").toBe(ROWS.length);
+    expect(ROWS.filter((r) => r.shown && r.enabled).length).toBeGreaterThan(0);
+    expect(ROWS.filter((r) => r.shown && !r.enabled).length).toBeGreaterThan(0);
+    // Busy (another write in flight): disabled even when offered.
+    const busy = renderToStaticMarkup(<SwissFinishMenuItem stageId="s1" busy="s1" rail={rail(ROWS[0]!.c)} onOpen={() => {}} />);
+    expect(/<button[^>]*disabled=""/.test(busy)).toBe(true);
+  });
+
+  it("W3 T13 pressing Finish closes the phone sheet first, then hands the panel the plan: after k, of N", () => {
+    let opened = 0;
+    const plans: SwissFinishPlan[] = [];
+    const island = renderIsland(SwissFinishMenuItem, {
+      stageId: "s1",
+      busy: null,
+      rail: {
+        ...rail(control({ field: 6, rounds: 5, started: true, finish: { canFinish: true, refusal: null, finishedAfter: 3 } })),
+        onFinish: async (_id: string, plan: SwissFinishPlan) => {
+          expect(opened, "the sheet closed before the confirm").toBe(1);
+          plans.push(plan);
+          return null;
+        },
+      },
+      onOpen: () => {
+        opened++;
+      },
+    });
+    const item = island.tree().find((e) => propsOf(e)["data-testid"] === "stage-finish-swiss")!;
+    (propsOf(item).onClick as () => void)();
+    expect(plans).toEqual([{ after: 3, rounds: 5 }]);
   });
 });

@@ -21,8 +21,10 @@ import en from "@/dictionaries/en/ui.json";
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
+// W3 T13: the house confirm, answered per case (default: cancelled).
+const confirmMock = vi.hoisted(() => vi.fn<(opts: unknown) => Promise<boolean>>(async () => false));
 vi.mock("@/components/ui/confirm-provider", () => ({
-  useConfirm: () => vi.fn(async () => false),
+  useConfirm: () => confirmMock,
 }));
 vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));
 
@@ -32,6 +34,9 @@ const api = vi.hoisted(() => ({
   // W3 T12 Phase 2: the answer to "Add a round" (POST /stages/{id}/swiss/add-round), and the URLs it was sent to.
   addRound: null as null | (() => unknown),
   addRoundUrls: [] as string[],
+  // W3 T13: the answer to "Finish the Swiss now" (POST /stages/{id}/swiss/finish), and the URLs it was sent to.
+  finish: null as null | (() => unknown),
+  finishUrls: [] as string[],
 }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
@@ -47,6 +52,11 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
         api.addRoundUrls.push(url);
         if (!api.addRound) throw new Error("no add-round answer queued");
         return api.addRound();
+      }
+      if (url.endsWith("/swiss/finish") && options?.method === "POST") {
+        api.finishUrls.push(url);
+        if (!api.finish) throw new Error("no finish answer queued");
+        return api.finish();
       }
       if (url.startsWith("/api/v1/persons?"))
         return api.personsPage ? api.personsPage() : { items: [], nextCursor: null };
@@ -451,5 +461,71 @@ describe("EntrantsPanel — Add a round on SWISS_NO_ROUND_LEFT (W3 T12 Phase 2)"
     );
     expect(button(p)).toBeUndefined();
     expect(added(p)).toBeNull();
+  });
+});
+
+describe("EntrantsPanel — Finish the Swiss now on SWISS_NO_ROUND_LEFT (W3 T13)", () => {
+  const noRoundLeft = (extra: Record<string, unknown>) => () => {
+    throw new ApiV1Error("English from the server", 409, "SWISS_NO_ROUND_LEFT", extra);
+  };
+  const finishBtn = (p: ReturnType<typeof mount>) =>
+    p.island.tree().find((e) => propsOf(e)["data-testid"] === "entrants-finish-swiss");
+  const finished = (p: ReturnType<typeof mount>) => {
+    const el = p.island.tree().find((e) => propsOf(e)["data-testid"] === "entrants-swiss-finished");
+    return el ? textOf([el]) : null;
+  };
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const PLAN = { canFinish: true, finish: { after: 3, rounds: 3 } };
+
+  it("the sentence names exactly the recoveries offered: Finish, Add a round, both, or neither", async () => {
+    const base = EN["swiss.refusal.SWISS_NO_ROUND_LEFT"];
+    const ROWS = [
+      { extra: { canAddRound: false, ...PLAN, stageId: "s1" }, said: `${base} ${EN["swiss.rounds.noRoundLeft.finish"]}`, finish: true, add: false },
+      { extra: { canAddRound: true, ...PLAN, stageId: "s1" }, said: `${base} ${EN["swiss.rounds.noRoundLeft.addOrFinish"]}`, finish: true, add: true },
+      { extra: { canAddRound: true, canFinish: false, stageId: "s1" }, said: `${base} ${EN["swiss.rounds.noRoundLeft.add"]}`, finish: false, add: true },
+      { extra: { canAddRound: false, canFinish: false, stageId: "s1" }, said: `${base} ${EN["swiss.rounds.noRoundLeft.none"]}`, finish: false, add: false },
+      // Finish offered but no Swiss named: nowhere to post, no button.
+      { extra: { canAddRound: false, ...PLAN }, said: `${base} ${EN["swiss.rounds.noRoundLeft.finish"]}`, finish: false, add: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      const p = mount();
+      await p.submit(noRoundLeft(r.extra));
+      expect(p.error(), JSON.stringify(r.extra)).toBe(r.said);
+      expect(finishBtn(p) !== undefined, `${JSON.stringify(r.extra)}: Finish`).toBe(r.finish);
+      expect(p.island.tree().some((e) => propsOf(e)["data-testid"] === "entrants-add-round"), `${JSON.stringify(r.extra)}: Add a round`).toBe(r.add);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
+
+  it("confirms first with the plan; cancelled nothing is sent; confirmed it posts to the Swiss the refusal names and says the round", async () => {
+    api.finishUrls = [];
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(false);
+    const p = mount();
+    await p.submit(noRoundLeft({ canAddRound: false, ...PLAN, stageId: "s1" }));
+    expect(textOf([finishBtn(p)!])).toBe(EN["stage.more.finishSwiss"]);
+    (propsOf(finishBtn(p)!).onClick as () => void)();
+    await flush();
+    expect(api.finishUrls, "cancelled: nothing sent").toEqual([]);
+    expect(confirmMock.mock.calls[0]![0]).toMatchObject({
+      title: EN["stage.finish.confirm.title"],
+      body: fill("stage.finish.confirm.final", { round: 3 }),
+      tone: "danger",
+    });
+    expect(finishBtn(p), "still offered").toBeDefined();
+
+    confirmMock.mockResolvedValueOnce(true);
+    api.finish = () => ({ completed: true, events: [], finished_after: 3, shells_removed: 0, slots_freed: 0 });
+    (propsOf(finishBtn(p)!).onClick as () => void)();
+    await flush();
+    expect(api.finishUrls).toEqual(["/api/v1/stages/s1/swiss/finish"]);
+    expect(p.error(), "the refusal is answered").toBeNull();
+    expect(finishBtn(p), "and its button gone").toBeUndefined();
+    expect(finished(p)).toBe(fill("schedule.notice.swissFinished", { round: 3 }));
+    // The next add clears the line.
+    await p.submit(created());
+    expect(finished(p)).toBeNull();
   });
 });
