@@ -1,5 +1,5 @@
 // WALKTHROUGH — Remote scoring (device links, the scoring QR) is free on every plan
-// (V490, owner ruling 2026-11-02, "make it free", in line with "all scoring is free").
+// (V485, owner ruling 2026-11-02, "make it free", in line with "all scoring is free").
 //
 // The organiser's story this plays, on a COMMUNITY org (a fresh user and org nobody
 // else touches; no subscription, no Event Pass): open a started match's console, open

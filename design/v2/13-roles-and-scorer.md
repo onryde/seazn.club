@@ -155,7 +155,7 @@ Rules:
 - **Transport:** `/score/{token}` page (no session) → stripped scoring pad;
   token never stored in localStorage beyond the tab; server rate-limits per
   link like the per-fixture scoring limit (doc 08 §6).
-- **Entitlement:** none since V490 (owner, 2026-11-02, "make it free"): remote
+- **Entitlement:** none since V485 (owner, 2026-11-02, "make it free"): remote
   scoring is free on every plan. It was `scoring.device_links` — Pro/Business
   only, Community keeping the one account scorer seat as the taste of
   delegation (doc 13 §5).

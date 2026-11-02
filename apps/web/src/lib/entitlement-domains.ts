@@ -9,7 +9,7 @@
  *  every plan" story, the `stats.player` precedent) but that NO code asks any more, so a staff edit of their cell
  *  or an override on them would silently do nothing. /admin drops them from their domain section; they must stay
  *  listed below (that is also what keeps them out of /admin's "other").
- *  `scoring.device_links`: V490 (owner, 2026-11-02, "make it free") — the gate calls are gone from
+ *  `scoring.device_links`: V485 (owner, 2026-11-02, "make it free") — the gate calls are gone from
  *  `usecases/device-links.ts`, so the row only feeds the pricing tick. */
 export const ADMIN_HIDDEN_FEATURES: ReadonlySet<string> = new Set(["scoring.device_links"]);
 

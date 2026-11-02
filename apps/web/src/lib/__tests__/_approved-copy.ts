@@ -170,7 +170,7 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
  * Owner ruling 2026-11-02 ("make it free"): remote scoring (device links, the
  * scoring QR) and the printed scorer sheets that carry its links are free on
  * every plan, so a pass no longer lifts anything there and the bullet would
- * have sold a Community org what it already has. Read against: `V490`
+ * have sold a Community org what it already has. Read against: `V485`
  * (`scoring.device_links` true on every plan in `plans`); `lib/pass-features.ts`
  * (the key left PASS_FEATURES); `server/usecases/device-links.ts` (no gate call
  * remains). The removed digest was 00924962c38ce30e.

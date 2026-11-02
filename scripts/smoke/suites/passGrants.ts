@@ -457,7 +457,7 @@ export async function passGrantsSuite(): Promise<void> {
     careerRead.status === 200,
   );
 
-  // === scoring.device_links — free on every plan (V490) ===================
+  // === scoring.device_links — free on every plan (V485) ===================
   // Was community false, pass true (V393): the sibling was refused 402. Owner
   // ruling 2026-11-02 made remote scoring free, so BOTH competitions mint — the
   // sibling's 201 is the witness that the gate is gone, not leaked. Minted

@@ -61,7 +61,7 @@ describe("groupForAdmin", () => {
     expect(sections[sections.length - 1].slug).toBe("other");
   });
 
-  // V490: scoring.device_links is true on every plan and gates nothing, so an
+  // V485: scoring.device_links is true on every plan and gates nothing, so an
   // /admin cell or override for it would be a control that silently does nothing.
   it("does not offer a key that gates nothing any more, and still offers its domain's other keys", () => {
     const withInert: AdminEntRow[] = [

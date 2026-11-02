@@ -465,11 +465,11 @@ const WALKTHROUGH_SPECS: string[] = [
   // the day the organiser picks, lands the file as a browser download, reads a
   // "nothing on that day" refusal in the viewer's language, and gives a
   // Community org the same control, no upgrade pill (remote scoring is free on
-  // every plan, V490). The control's unit
+  // every plan, V485). The control's unit
   // suite drives a stubbed fetch and a fake anchor; only a browser shows the
   // download and the header's phone stacking.
   "scorer-sheets-print-control.spec.ts",
-  // Remote scoring is free on every plan (V490): a Community org opens the
+  // Remote scoring is free on every plan (V485): a Community org opens the
   // hand-over panel with no upgrade gate, creates the scoring link and shows its
   // QR at 320/768/1280, and a signed-out phone opens that link and taps the match
   // to its end — the result lands in the organiser's ledger carrying the link's

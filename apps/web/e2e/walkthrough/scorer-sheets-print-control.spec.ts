@@ -13,7 +13,7 @@
 // the file lands as a browser download under the server's filename; a 422
 // "nothing on that day" renders the LOCALISED line (en, fr), never the
 // server's English; a Community org without an Event Pass gets the same
-// control (remote scoring is free on every plan, V490) and no upgrade pill.
+// control (remote scoring is free on every plan, V485) and no upgrade pill.
 // Every state is checked at 320/768/1280: no
 // horizontal page scroll, both controls hit-tested at their centre and at
 // least 44px, the same controls in the same order at 320 and 1280, BESIDE the
