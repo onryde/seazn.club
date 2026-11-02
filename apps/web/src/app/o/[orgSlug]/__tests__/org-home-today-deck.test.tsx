@@ -248,6 +248,15 @@ describe("the today deck", () => {
     expect(deck).toContain(amp(fr["org.home.today.title"]!));
     expect(deck).not.toContain(en["desk.tools.openMatchDay"]);
   });
+
+  it("names an unfilled slot in the viewer's language: the deck's match reads 'À déterminer', never the English 'TBD'", async () => {
+    h.locale = "fr";
+    seed([[comp("k", "live"), stats("k", { next: { home: "Ann", away: null, court_label: "Court 1", scheduled_at: null, in_play: true } }), 1]]);
+    const match = blocks(blocks(await render(), "org-home-today")[0]!, "org-home-today-match")[0]!;
+    expect(fr["matchDay.tbd"]).not.toBe(en["matchDay.tbd"]); // the case can tell the two apart
+    expect(match).toContain(`>${amp(fr["matchDay.tbd"]!)}<`);
+    expect(match).not.toContain(">TBD<");
+  });
 });
 
 describe("the sports line — from the divisions", () => {

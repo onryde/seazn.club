@@ -141,8 +141,8 @@ function TodayRow({ row, dict, locale, tz, day }: { row: TodayRowData; dict: Dic
               {n.court_label && <span className="min-w-0 text-cream/70 [overflow-wrap:anywhere]">{n.court_label}</span>}
             </p>
             <p className="text-xl font-semibold leading-snug text-white [font-family:var(--font-barlow,var(--font-geist-sans))] [overflow-wrap:anywhere]">
-              <span>{n.home ?? "TBD"}</span> <span className="font-sans text-sm font-normal text-cream/70">{t(dict, "schedule.vs")}</span>{" "}
-              <span>{n.away ?? "TBD"}</span>
+              <span>{n.home ?? t(dict, "matchDay.tbd")}</span> <span className="font-sans text-sm font-normal text-cream/70">{t(dict, "schedule.vs")}</span>{" "}
+              <span>{n.away ?? t(dict, "matchDay.tbd")}</span>
             </p>
           </>
         ) : (
