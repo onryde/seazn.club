@@ -14,6 +14,7 @@
     "@seazn/engine": "npm:@onryde/seazn-engine@^1.1.0",
     "@types/node": "^26",
     "eslint": "^9",
+    "fast-check": "^3",
     "typescript": "6.0.3",
     "typescript-eslint": "^8",
     "typescript-native": "npm:typescript@7.0.2",

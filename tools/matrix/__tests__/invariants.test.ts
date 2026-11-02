@@ -727,10 +727,18 @@ describe("I4 nothing-ends-stuck", () => {
     codes: [...src.matchAll(/errorResponse\(\s*requestId,\s*\d{3},\s*"([A-Z_]+)"/g)].map((m) => m[1]!),
     literalCalls: (src.match(/errorResponse\(\s*requestId,\s*[^,()]+,\s*"/g) ?? []).length,
   });
+  /** W3 T18 (RB3-7(c), X-SW-18): http.ts's ZodError branch answers a requested bye with `errorResponse(requestId, row.status,
+   *  "SWISS_REQUESTED_BYES_DEFERRED", …)`, the status read off its SWISS_REFUSALS row — which `directCodes`' three-digit status
+   *  cannot read. That code is a NAMED refusal (the point of the row is that it is not the generic "Invalid input"), so it is
+   *  deliberately NOT a generic code: it is declared here, read from http.ts, and held to be named. */
+  const tableStatusCodes = (src: string) => [...src.matchAll(/errorResponse\(\s*requestId,\s*\w+\.status,\s*"([A-Z_]+)"/g)].map((m) => m[1]!);
+  const NAMED_DIRECT_CODES = ["SWISS_REQUESTED_BYES_DEFERRED"];
   it("GENERIC_ERROR_CODES also covers every code http.ts emits DIRECTLY — the pin is statusCode() ∪ those literals", () => {
     const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/http.ts"), "utf8");
     const direct = directCodes(src);
-    expect(direct.codes.length).toBe(direct.literalCalls);
+    // Every literal-code call is read one way or the other: a numeric status (generic), or a SWISS_REFUSALS row's (named, below).
+    const named = tableStatusCodes(src);
+    expect(direct.codes.length + named.length).toBe(direct.literalCalls);
     expect(direct.codes.length).toBeGreaterThanOrEqual(4);
     const body = /\nfunction statusCode\(status: number\): string \{\n([\s\S]*?)\n\}\n/.exec(src)![1]!;
     const fromStatus = [...body.matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]!);
@@ -739,6 +747,27 @@ describe("I4 nothing-ends-stuck", () => {
     expect(directCodes('return errorResponse(requestId, 402, "PAYWALL", m);')).toEqual({ codes: ["PAYWALL"], literalCalls: 1 });
     expect(directCodes("return errorResponse(requestId, 402, code, m);").literalCalls).toBe(0);
     expect(directCodes('return errorResponse(requestId, st, "PAYWALL", m);')).toEqual({ codes: [], literalCalls: 1 });
+  });
+  it("the codes http.ts answers with a refusal row's status are exactly the declared NAMED ones: named (never generic), at the status the table row rules", () => {
+    const src = readFileSync(resolve(REPO, "apps/web/src/server/api-v1/http.ts"), "utf8");
+    const named = tableStatusCodes(src);
+    expect(named, "anti-vacuity: the reader found the row-status call").not.toEqual([]);
+    expect(named).toEqual(NAMED_DIRECT_CODES);
+    const table = readFileSync(resolve(REPO, "apps/web/src/lib/swiss-refusals.ts"), "utf8");
+    let checked = 0;
+    for (const code of named) {
+      expect(GENERIC_ERROR_CODES, `${code} is a domain refusal, not a statusCode() stamp`).not.toContain(code);
+      expect(isNamedRefusal(400, code), code).toBe(true);
+      // The table row's status is the ruled one (T18: refused at the body door, 400 like every body validation).
+      expect(new RegExp(`\\n  ${code}: \\{\\s*status: (\\d{3}),`).exec(table)?.[1], `${code}'s SWISS_REFUSALS row`).toBe("400");
+      checked++;
+    }
+    expect(checked).toBe(NAMED_DIRECT_CODES.length);
+    // The reader finds a row-status call and ignores a numeric status, a bare variable status and a non-literal code.
+    expect(tableStatusCodes('return errorResponse(requestId, row.status, "SWISS_X", row.message);')).toEqual(["SWISS_X"]);
+    expect(tableStatusCodes('return errorResponse(requestId, 400, "VALIDATION", m);')).toEqual([]);
+    expect(tableStatusCodes('return errorResponse(requestId, st, "PAYWALL", m);')).toEqual([]);
+    expect(tableStatusCodes("return errorResponse(requestId, row.status, code, m);")).toEqual([]);
   });
   it("abstain: a case deliberately cut short", () => {
     expect(evaluateInvariant(I4, run([stage({})], { facts: facts("cut_short") })).verdict).toBe("abstain");

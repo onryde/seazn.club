@@ -1256,17 +1256,38 @@ function zodErrorBranch(src: string): string {
  *  no longer the question): EVERY path of the branch answers 400 VALIDATION, and the branch ends in an UNCONDITIONAL
  *  answer — which is where a malformed id (it names no moved decider) lands. Full-line comments are dropped first:
  *  they may sit anywhere in the branch and say anything. */
-function zodBranchFlaws(branch: string): string[] {
+function zodBranchFlaws(branch: string, namedRows: Readonly<Record<string, number>> = {}): string[] {
   const code = branch.replace(/^\s*\/\/.*$/gm, "");
   const returns = [...code.matchAll(/^( *)return\b[^;]*;/gm)];
   const flaws: string[] = [];
   if (returns.length === 0) flaws.push("the branch answers nothing");
-  for (const r of returns) if (!/^ *return errorResponse\(requestId, 400, "VALIDATION", /.test(r[0])) flaws.push(`not a 400 VALIDATION: ${r[0].trim().slice(0, 70)}`);
+  for (const r of returns) {
+    if (/^ *return errorResponse\(requestId, 400, "VALIDATION", /.test(r[0])) continue;
+    // W3 T18 (RB3-7(c), X-SW-18): the one other answer, a NAMED refusal whose status is its SWISS_REFUSALS row's - sound only
+    // when the code is a declared one, the branch binds the variable to THAT row (`const row = SWISS_REFUSALS.<CODE>;`), and the
+    // row's status is 400, so every path still answers 400.
+    const named = /^ *return errorResponse\(requestId, (\w+)\.status, "([A-Z_]+)", /.exec(r[0]);
+    if (named !== null && namedRows[named[2]!] === 400 && new RegExp(`\\bconst ${named[1]!} = SWISS_REFUSALS\\.${named[2]!};`).test(code)) continue;
+    flaws.push(`not a 400 VALIDATION: ${r[0].trim().slice(0, 70)}`);
+  }
   if ((code.match(/\breturn\b/g) ?? []).length !== returns.length) flaws.push("a return that does not start its own line");
   if (/\bthrow\b/.test(code)) flaws.push("the branch throws");
   const last = returns.at(-1);
   if (last !== undefined && last[1]!.length !== 6) flaws.push("no unconditional answer: the last return is nested in a condition");
   return flaws;
+}
+
+/** The named refusals the ZodError branch may answer besides 400 VALIDATION, with the status their SWISS_REFUSALS row carries.
+ *  The CODES are declared here (W3 T18: a requested bye is deferred, refused by name); the STATUS is read off the table row, so a
+ *  row moved off 400 reds the pin that says every path answers 400. THROWS on a code the table does not hold. */
+const ZOD_BRANCH_NAMED = ["SWISS_REQUESTED_BYES_DEFERRED"] as const;
+function zodBranchNamedRows(): Record<string, number> {
+  const table = read("apps/web/src/lib/swiss-refusals.ts");
+  return Object.fromEntries(ZOD_BRANCH_NAMED.map((c) => {
+    const status = new RegExp(`\\n  ${c}: \\{\\s*status: (\\d{3}),`).exec(table)?.[1];
+    if (status === undefined) throw new Error(`swiss-refusals.ts: no ${c} row with a literal status`);
+    return [c, Number(status)];
+  }));
 }
 
 describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in beneath ruling 49)", () => {
@@ -1550,7 +1571,7 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect(/\nexport async function gateLineupSuspensions\([\s\S]*?\n\}\n/.exec(read("apps/web/src/server/usecases/discipline.ts"))?.[0]).toMatch(/throw new HttpError\(\s*422,[^;]*"SUSPENDED_PLAYER"/);
     // A malformed person id never reaches the usecase: a Uuid in the schema, a ZodError answered 400 VALIDATION.
     expect(read("apps/web/src/server/api-v1/schemas.ts")).toMatch(/export const LineupSlotInput = z\.object\(\{\s*person_id: Uuid,/);
-    expect(zodBranchFlaws(zodErrorBranch(read("apps/web/src/server/api-v1/http.ts")))).toEqual([]);
+    expect(zodBranchFlaws(zodErrorBranch(read("apps/web/src/server/api-v1/http.ts")), zodBranchNamedRows())).toEqual([]);
     // A second PUT replaces the first: delete, then insert.
     const del = put.indexOf("delete from lineups where fixture_id = ${fixtureId} and entrant_id = ${entrantId}");
     expect(del).toBeGreaterThan(-1);
@@ -1586,6 +1607,17 @@ describe("team rosters and per-fixture lineups (W1-driving Task 4, fold-in benea
     expect(zodBranchFlaws(zodErrorBranch(branch(named, generic.replace("400", "422"))))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
     expect(zodBranchFlaws(zodErrorBranch(branch(named.replace("400", "200"), generic)))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]);
     expect(zodBranchFlaws(zodErrorBranch(branch(named)))).toEqual(["no unconditional answer: the last return is nested in a condition"]);
+    // W3 T18: the table-statused named refusal is sound only as declared (code, bound row, and a 400 row).
+    const deferred = '      const row = SWISS_REFUSALS.SWISS_REQUESTED_BYES_DEFERRED;\n      if (deferred !== null) {\n        return errorResponse(requestId, row.status, "SWISS_REQUESTED_BYES_DEFERRED", row.message, { field: 1 });\n      }\n';
+    const rows = { SWISS_REQUESTED_BYES_DEFERRED: 400 };
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred, generic)), rows), "the shape http.ts has now").toEqual([]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(named, deferred, generic)), rows)).toEqual([]);
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred, generic)))).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // no declared rows: refused
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred, generic)), { SWISS_REQUESTED_BYES_DEFERRED: 422 })).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // the row moved off 400
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred.replace("SWISS_REFUSALS.SWISS_REQUESTED_BYES_DEFERRED", "SWISS_REFUSALS.OTHER"), generic)), rows)).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // bound to another row
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred.replaceAll("SWISS_REQUESTED_BYES_DEFERRED", "SWISS_OTHER"), generic)), rows)).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // an undeclared code
+    expect(zodBranchFlaws(zodErrorBranch(branch(deferred.replace("row.status", "row.other"), generic)), rows)).toEqual([expect.stringMatching(/^not a 400 VALIDATION/)]); // not the row's status
+    expect(zodBranchNamedRows(), "the table's ruled status, read").toEqual({ SWISS_REQUESTED_BYES_DEFERRED: 400 });
     expect(zodBranchFlaws(zodErrorBranch(branch("      if (x) return errorResponse(requestId, 500, \"X\");\n", generic)))).toEqual(["a return that does not start its own line"]);
     expect(zodBranchFlaws(zodErrorBranch(branch("      throw err;\n")))).toEqual(["the branch answers nothing", "the branch throws"]);
     expect(zodBranchFlaws(zodErrorBranch(branch("      log(err);\n")))).toEqual(["the branch answers nothing"]);

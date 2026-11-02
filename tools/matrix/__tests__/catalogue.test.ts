@@ -11,6 +11,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { TOP_LEVEL_STAGE_DECIDERS } from "../../../apps/web/src/lib/top-level-stage-deciders.ts";
 import { FORMAT_BOUNDS } from "../../../apps/web/src/lib/format-bounds.ts";
 import { STAGE_DECIDER_MOVED, StageConfig } from "../../../apps/web/src/server/api-v1/schemas.ts";
+import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../../apps/web/src/lib/swiss-refusals.ts";
 import {
   API_ONLY_ROWS, BUILDER_DEFAULT_KNOBS, BUILDER_KNOB_BOUNDS, BUILDER_PREFERRED_VARIANT, ROW_KEYS,
   SPORT_KEYS, TEMPLATE_ROW_KEYS, UnknownRow, builderDefaultVariant, builderStages, cellId, stagesForRow,
@@ -236,6 +237,12 @@ function stageConfigKeys(src: string = SCHEMAS_TS()): string[] {
  *  TOP_LEVEL_STAGE_DECIDERS that the schema's spread consumes (an expected value taken from the code under test). */
 const ENGINE_DECIDER_KEYS = [...new Set((builtinModules as readonly AnySportModule[]).flatMap((m) => deciderKeysFor(m, null, null)))].sort();
 
+/** The refused keys of StageConfig that are NOT whole deciders: W3 T18 (RB3-7(c), X-SW-18, signed ruling 252) defers a requested
+ *  half-point or zero-point bye - the key is declared only to be REFUSED, by name, with guidance (http.ts answers 400
+ *  SWISS_REQUESTED_BYES_DEFERRED). Typed here from that ruling, not read from the schema under test; a second deferred key is a
+ *  conscious edit of this list, and a row that posts one fails the "not refused" loop below like any decider. */
+const DEFERRED_CONFIG_KEYS = ["requestedByes"];
+
 describe("API-only rows — bodies derived from product authorities", () => {
   it("empty case first: an unknown row is still refused, never a silent league", () => {
     expect(() => stagesForRow("nope")).toThrow(UnknownRow);
@@ -336,14 +343,22 @@ describe("API-only rows — bodies derived from product authorities", () => {
     const declared = stageConfigKeys();
     expect(declared).toContain("thirdPlace");
     const refused = refusedConfigKeys();
-    // The refused set is exactly the decider set the ENGINE declares (R-13b-1), however the schema spells it.
+    // The refused set is the decider set the ENGINE declares (R-13b-1), however the schema spells it, plus the deferred keys.
+    const deferred = refused.filter((k) => DEFERRED_CONFIG_KEYS.includes(k));
+    const deciders = refused.filter((k) => !DEFERRED_CONFIG_KEYS.includes(k));
     expect(ENGINE_DECIDER_KEYS.length, "anti-vacuity: the engine declares deciders").toBeGreaterThan(2);
-    expect([...refused].sort()).toEqual(ENGINE_DECIDER_KEYS);
+    expect(deciders.sort()).toEqual(ENGINE_DECIDER_KEYS);
+    expect(deferred.sort(), "the deferred keys the schema refuses are exactly the ruled ones").toEqual([...DEFERRED_CONFIG_KEYS].sort());
     for (const key of refused) expect(declared).toContain(key); // declared-but-refused: why the declared list alone is not enough
     // And the live schema refuses each one saying where it went — the text scan above is not left to vouch for itself.
-    for (const key of refused) {
+    for (const key of deciders) {
       const said = StageConfig.safeParse({ [key]: false }).error?.issues.map((i) => i.message) ?? [];
       expect(said, `StageConfig.${key}`).toContain(STAGE_DECIDER_MOVED);
+    }
+    for (const key of deferred) {
+      const said = StageConfig.safeParse({ [key]: false }).error?.issues.map((i) => i.message) ?? [];
+      expect(said, `StageConfig.${key}`).toContain(SWISS_REQUESTED_BYES_DEFERRED_MESSAGE);
+      expect(said, `StageConfig.${key} is a deferral, not a moved decider`).not.toContain(STAGE_DECIDER_MOVED);
     }
     expect(declared).toContain("rules"); // W2c Task 12: a create takes config.rules (validated by the usecase)
     let checked = 0;

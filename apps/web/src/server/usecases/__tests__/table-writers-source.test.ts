@@ -102,9 +102,12 @@ describe("W2d T10 every writer of a tie-break order validates it (source scan)",
       ["update stages set config = config || ${tx.json({ rules: merged })} where id = ${id}`", "exempt"],
       ["update stages set config = config || ${tx.json({ tiebreakers: order })} where id = ${id}`", "order"],
       ["update stages set config = config - 'ladder_order' where id = ${id}`", "exempt"],
+      // W3 PR #1104 CI: patchSwissStage writes `{ rounds, chess }` as a visible literal, so the scan can prove it carries no
+      // order; the same call with a computed `patch` object stays an order writer (the first two cases).
+      ["update stages set config = config || ${tx.json({ rounds: roundsPatch, chess: chessPatch } as never)} where id = ${stageId}`", "exempt"],
     ];
     for (const [text, want] of cases) expect(classify(text), text).toBe(want);
-    expect(cases.length, "anti-vacuity").toBe(5);
+    expect(cases.length, "anti-vacuity").toBe(6);
   });
 
   it("every SQL write to divisions.tiebreakers and stages.config under W/server is in a function that calls validateCascade (counted; 0 fails)", () => {

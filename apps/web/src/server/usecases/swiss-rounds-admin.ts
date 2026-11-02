@@ -512,16 +512,18 @@ export async function patchSwissStage(auth: AuthCtx, stageId: string, body: Patc
     }
 
     const chess = body.chess ?? stage.config.chess === true;
-    const patch: Record<string, unknown> = {};
-    if (body.rounds !== undefined && to !== from) patch.rounds = to;
-    if (body.chess !== undefined && body.chess !== stage.config.chess) patch.chess = body.chess;
-    if (Object.keys(patch).length > 0) {
-      await tx`update stages set config = config || ${tx.json(patch as never)} where id = ${stageId}`;
+    // W3 PR #1104 CI: the keys this write can carry are `rounds` and `chess` and no others, written as a literal so the
+    // table-writers source scan (table-writers-source.test.ts) can SEE that it never carries a tie-break order. An
+    // undefined key is dropped by the JSON serialiser, so only the keys that changed reach the merge.
+    const roundsPatch = body.rounds !== undefined && to !== from ? to : undefined;
+    const chessPatch = body.chess !== undefined && body.chess !== stage.config.chess ? body.chess : undefined;
+    const changed = roundsPatch !== undefined || chessPatch !== undefined;
+    if (changed) {
+      await tx`update stages set config = config || ${tx.json({ rounds: roundsPatch, chess: chessPatch } as never)} where id = ${stageId}`;
     }
     if (to !== from) {
       await appendRoundsChanged(tx, stage.division_id, { stage_id: stageId, from, to, via: "edit" }, auth.userId);
     }
-    const changed = Object.keys(patch).length > 0;
     return {
       result: { rounds: to, chess, swiss_rounds: judgement, shells: { added, removed: to < from ? removed.length : 0, slots_freed: slotsFreed } },
       published: changed ? { divisionId: stage.division_id, competitionId: await competitionOf(tx, stage.division_id), removedIds: to < from ? removed.map((f) => f.id) : [] } : null,

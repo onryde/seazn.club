@@ -53,7 +53,12 @@ const TOP_LEVEL_STAGE_DECIDERS = "apps/web/src/lib/top-level-stage-deciders.ts";
 // it rather than keep a list of refused cells. format-templates.ts value-imports it too (templatesForSport), so it must
 // stay import-free (pinned below) or every node-run reader of the templates breaks.
 const CHESS_INDIVIDUAL_ONLY_RULE = "apps/web/src/lib/chess-individual-only-rule.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE]);
+// W3 T9/T10 (ruling 250, review I1): open-entry-stages.ts is the PRODUCT's "which stages keep a division's entrant list open"
+// predicate - `isRunningRootSwiss` is the one rule behind the list lock, the late-add note and the rail's More - and lib/model/state.ts's
+// `rosterLocked` reads it rather than keep a second copy of "a running root Swiss keeps the list open". Import-free (pinned below),
+// so plain node loads it with no alias (the model-fake-driver test double reads it the same way).
+const OPEN_ENTRY_STAGES = "apps/web/src/lib/open-entry-stages.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE, OPEN_ENTRY_STAGES]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -170,6 +175,17 @@ describe("tools/matrix import boundary", () => {
     const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === BRACKET_NEXT_MATCH)).map((m) => relative(MATRIX, m)).sort();
     // reference-bracket.ts cannot read it through the checks: w2b-checks → assertions.ts → reference-bracket.ts.
     expect(naming).toEqual(["lib/reference-bracket.ts", "lib/scenarios/w2b-checks.ts"]);
+  });
+
+  it("the product's open-entry-stage predicate is a file plain node can load: it exists and imports nothing, and only the model's state.ts names it", () => {
+    const file = join(REPO, OPEN_ENTRY_STAGES);
+    expect(existsSync(file), OPEN_ENTRY_STAGES).toBe(true);
+    expect(importsOf(file), `${OPEN_ENTRY_STAGES} must stay import-free`).toEqual([]);
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === OPEN_ENTRY_STAGES)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/model/state.ts"]);
+    // A value import (not `import type`): state.ts calls the predicate, so the file really is loaded under plain node.
+    const edge = importsOf(join(MATRIX, "lib/model/state.ts")).filter((i) => i.spec.endsWith("/open-entry-stages.ts"));
+    expect(edge.map((i) => [i.typeOnly, i.dynamic])).toEqual([[false, false]]);
   });
 
   it("the product's cascade-only forfeit reasons are a file plain node can load: it exists, imports only the engine's core barrel (a package the matrix depends on), and only the browser driver names it", () => {

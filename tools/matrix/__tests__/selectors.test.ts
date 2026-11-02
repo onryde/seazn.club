@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FINALIZE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../bench/lib/drivers/scorer.ts";
-import { MissingLabel, DATA, NAME, PAD_PINS, TEMPLATE_CARD, TESTID, UnreadableLiteral, UnrenderableName, literalText, renderedName, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
+import { MissingLabel, DATA, NAME, PAD_PINS, TEMPLATE_CARD, TESTID, UnreadableLiteral, UnrenderableName, hardcoded, literalText, renderedName, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
 import { TEMPLATE_ROW_KEYS, type TemplateRowKey } from "../lib/catalogue.ts";
 
@@ -105,8 +105,14 @@ describe("selectors are pinned to the product's text", () => {
     expect(cannot.length).toBe(6);
     // Every hardcoded NAME derives its text so (the literal pins below check the file carries the needle).
     let literal = 0;
-    for (const n of Object.values(NAME)) if (!("dictKey" in n)) { literal++; expect(n.text).toBe(literalText(n.needle)); }
-    expect(literal).toBe(3);
+    // (Widened on purpose: with no hardcoded member left the inferred type of this branch is `never`, and the loop must still compile.)
+    for (const n of Object.values(NAME) as readonly ({ text: string } & ({ dictKey: string } | { needle: string }))[]) if (!("dictKey" in n)) { literal++; expect(n.text).toBe(literalText(n.needle)); }
+    // W3 T10 localised the add-entrant form (entrants.add.submit / .name / .seed), the last three hardcoded names: NAME holds
+    // none, and the helper is proven on a sample instead. A hardcoded name that returns moves this count on purpose.
+    expect(literal, "no hardcoded name is left in NAME").toBe(0);
+    const sample = hardcoded("apps/web/src/server/usecases/withdrawal.ts", '"server-only"');
+    expect([sample.text, sample.file, sample.needle]).toEqual(["server-only", "apps/web/src/server/usecases/withdrawal.ts", '"server-only"']);
+    expect(() => hardcoded("x.tsx", "<span>Seed</div>").text).toThrow(UnreadableLiteral);
   });
 
   // M-4: a label the component decorates in a template literal —
@@ -164,20 +170,45 @@ describe("selectors are pinned to the product's text", () => {
     expect(() => renderedName("no.such.key", "`${msg(\"no.such.key\")} *`")).toThrow(MissingLabel);
   });
 
+  /** What is wrong with one name pin: a dictionary key its component does not pass (quoted, whole), or a hardcoded needle its
+   *  file lacks or that does not carry the pinned text. */
+  const nameFaults = (k: string, n: { text: string; file: string } & ({ dictKey: string } | { needle: string })): string[] => {
+    if ("dictKey" in n) return src(n.file).includes(`"${n.dictKey}"`) ? [] : [`${k}: "${n.dictKey}" not in ${n.file}`];
+    const out = src(n.file).includes(n.needle) ? [] : [`${k}: ${n.needle} not in ${n.file}`];
+    if (!n.needle.includes(n.text)) out.push(`${k}: needle ${n.needle} does not carry the text ${n.text}`);
+    return out;
+  };
   it("every dictionary-pinned name's key is the one its component passes (quoted, whole), and every hardcoded name is in its file", () => {
     let dict = 0;
     let literal = 0;
     const wrong = Object.entries(NAME).flatMap(([k, n]) => {
-      if ("dictKey" in n) { dict++; return src(n.file).includes(`"${n.dictKey}"`) ? [] : [`${k}: "${n.dictKey}" not in ${n.file}`]; }
-      literal++;
-      const out = src(n.file).includes(n.needle) ? [] : [`${k}: ${n.needle} not in ${n.file}`];
-      if (!n.needle.includes(n.text)) out.push(`${k}: needle ${n.needle} does not carry the text ${n.text}`);
-      return out;
+      if ("dictKey" in n) dict++;
+      else literal++;
+      return nameFaults(k, n);
     });
     expect(dict + literal).toBe(Object.keys(NAME).length);
     expect(dict).toBeGreaterThan(0);
-    expect(literal).toBeGreaterThan(0);
+    // W3 T10: the add-entrant form's three names are dictionary pins now; the hardcoded half of this sweep has no member,
+    // so it is proven on samples below (a sound pin passes, a missing needle and a missing key each fail).
+    expect(literal, "no hardcoded name is left in NAME").toBe(0);
     expect(wrong).toEqual([]);
+    for (const k of ["addEntrant", "entrantName", "entrantSeed"] as const) expect(NAME[k], k).toHaveProperty("dictKey");
+  });
+
+  it("the name-pin check sees a fault in each branch: a hardcoded needle missing from its file, a text its needle does not carry, a dictionary key the component does not pass", () => {
+    const file = "apps/web/src/server/usecases/withdrawal.ts";
+    expect(nameFaults("ok", hardcoded(file, '"server-only"'))).toEqual([]);
+    expect(nameFaults("missing", hardcoded(file, '"no such literal in this file"'))).toEqual([`missing: "no such literal in this file" not in ${file}`]);
+    expect(nameFaults("text", { text: "other", file, needle: '"server-only"' })).toEqual([`text: needle "server-only" does not carry the text other`]);
+    expect(nameFaults("key", { text: "x", file, dictKey: "no.such.key" })).toEqual([`key: "no.such.key" not in ${file}`]);
+    // And the entrants-panel pins resolve to the live component: the submit label is the dictionary's, passed whole.
+    // The key is the one on the SUBMIT BUTTON (the heading `entrants.add.title` says the same words in an <h3>, so the en value
+    // alone cannot tell them apart): read it off the product's button - the one with the busy "Saving…" twin - and compare.
+    const submitKey = /<button\s+type="button"\s+onClick=\{submit\}[^>]*>\s*\{busy \? msg\("entrants\.add\.saving"\) : msg\("([\w.]+)"\)\}/.exec(src("apps/web/src/components/v2/entrants-panel.tsx"))?.[1];
+    expect(submitKey, "the add form's submit button, found in the product").toBeDefined();
+    expect(NAME.addEntrant.dictKey).toBe(submitKey);
+    expect(NAME.addEntrant.text).toBe(enUi()["entrants.add.submit"]);
+    expect([NAME.entrantName.text, NAME.entrantSeed.text]).toEqual([enUi()["entrants.add.name"], enUi()["entrants.add.seed"]]);
   });
 
   it("templateLabel reads the en dictionary for every template row", () => {

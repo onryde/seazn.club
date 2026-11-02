@@ -349,9 +349,10 @@ export function bracketWalkoverKindsText(): string[] {
 
 /** stages.ts departedEntrantIds: the entrant statuses that have LEFT the
  *  field — a challenge naming one is LADDER_ENTRANT_WITHDRAWN, and the live
- *  ladder is the raw order without them (W1-driving T7). */
+ *  ladder is the raw order without them (W1-driving T7). W3 T15 made it
+ *  `export async function` (the Swiss cut reads it too): the `export` is optional here. */
 export function departedStatusesText(): string[] {
-  const m = /\nasync function departedEntrantIds\(tx: Tx, divisionId: string\): Promise<Set<string>> \{[\s\S]*?status in \(([^)]*)\)/.exec(read("apps/web/src/server/usecases/stages.ts"));
+  const m = /\n(?:export )?async function departedEntrantIds\(tx: Tx, divisionId: string\): Promise<Set<string>> \{[\s\S]*?status in \(([^)]*)\)/.exec(read("apps/web/src/server/usecases/stages.ts"));
   if (m === null) throw new Error("product-text: stages.ts departedEntrantIds not found in the expected shape — re-read it");
   const out = [...m[1].matchAll(/'([a-z_]+)'/g)].map((x) => x[1]);
   if (out.length === 0) throw new Error("product-text: stages.ts departedEntrantIds names no status");

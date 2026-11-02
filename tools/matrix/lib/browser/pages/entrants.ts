@@ -1,19 +1,22 @@
 // The entrants tab: adding entrants one at a time, and withdrawing one
 // (Task 5). Product facts, read at Step 0 (components/v2/entrants-panel.tsx):
-//  - AddEntrantForm (:684-758) is a <form> holding NewEntrantFields
-//    (:940-1143) — unless the org has teams and the division takes a team
-//    kind, when it opens on "Existing team" (hardcoded English toggle, not
-//    handled here: a concern routed; the harness's orgs have no teams).
+//  - AddEntrantForm is a <form> holding NewEntrantFields — unless the org has
+//    teams and the division takes a team kind, when it opens on "Existing
+//    team" (a toggle, not handled here: a concern routed; the harness's orgs
+//    have no teams). Re-read at W3 T10 (the form was reworked and localised;
+//    line numbers dropped: they moved with every edit).
 //  - NewEntrantFields: the Kind chips `data-kind={k}` + aria-pressed inside
-//    role=group (:1028-1052) only when the division offers more than one kind
-//    — else a static caption; `<label><span class="label">Name</span><input>`
-//    and `<label><span class="label">Seed</span><input type=number>` (:1059-
-//    1081, both labels hardcoded English); the button "Add entrant" (:1140,
-//    hardcoded English; "Saving…" while busy), disabled while the name is
-//    blank (:1137). submit() (:1005-1017) sends `{kind, display_name,
-//    seed: seed ? Number(seed) : null, members}` — THE FORM SEEDS (the
-//    brief's Step 0 question), so each entrant's seed is typed — and only
-//    after the answer clears the fields (name "", seed "").
+//    role=group only when the division offers more than one kind — else a
+//    static caption; `<label><span class="label">{msg("entrants.add.name")}
+//    </span><input>` and the same for `entrants.add.seed` (type=number): the
+//    labels are dictionary values now (selectors.ts NAME.entrantName,
+//    NAME.entrantSeed); the button `entrants.add.submit` ("Add entrant";
+//    "Saving…" while busy), disabled while the name is blank. A "New player"
+//    block (data-testid new-player…) sits below the member chips and is not
+//    used here: the harness types a display name. submit() sends `{kind,
+//    display_name, seed: seed ? Number(seed) : null, members}` — THE FORM
+//    SEEDS (the brief's Step 0 question), so each entrant's seed is typed —
+//    and only after the answer clears the fields (name "", seed "").
 //  - The panel POSTs /api/v1/divisions/<id>/entrants (:397-409) — one row
 //    per add.
 //  - A row (:1480-1560): `entrant-row-disclosure` (the name, then ▸/▾);
