@@ -1966,7 +1966,7 @@ test.describe("X-SW-18 requested half/zero byes have no path and refuse with gui
   test("create, replace and PATCH refuse requestedByes 400 SWISS_REQUESTED_BYES_DEFERRED and write nothing; the walkover the sentence names goes through", async ({
     request,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(240_000);
     // The sentence the task's brief signs, typed here (never read back from the product).
     const GUIDANCE =
       "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board.";
@@ -2023,24 +2023,22 @@ test.describe("X-SW-18 requested half/zero byes have no path and refuse with gui
     expect(after[0]!.config.rounds, "neither the PUT nor a PATCH moved the round count").toBe(2);
     expect(JSON.stringify(after[0]!.config), "no requested bye was stored").not.toContain("requestedByes");
 
-    // The way out the sentence names: a walkover on the player's board is a real, working path. A Swiss stage's FIRST
-    // Generate only mints the empty shells for every round and seats nobody; the SECOND (Pair next) seats round 1 on them.
-    const minted = await apiJson<{ created: number; fixtures: Seated[] }>(request, `/api/v1/stages/${stageId}/generate`, "POST");
-    expect(minted.status, JSON.stringify(minted.error)).toBe(200);
-    expect(minted.data!.created, "premise: the first Generate mints the two rounds' shells").toBeGreaterThan(0);
-    expect(
-      minted.data!.fixtures.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null),
-      "premise: the mint seats nobody, so Pair is a second press",
-    ).toHaveLength(0);
-    const paired = await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST");
-    expect(paired.status, `pair round 1 → ${JSON.stringify(paired.error)}`).toBe(200);
-    const boards = await apiJson<Seated[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
-    expect(boards.status, JSON.stringify(boards.error)).toBe(200);
-    const board = boards.data!.find((f) => f.stage_id === stageId && f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null);
-    expect(board, "premise: round 1 seats a real board").toBeDefined();
-    await scoreAt(request, board!.id, "core.forfeit", { by: board!.home_entrant_id, reason: "walkover" });
-    const decided = await apiJson<{ status: string }>(request, `/api/v1/fixtures/${board!.id}`);
-    expect(decided.status, JSON.stringify(decided.error)).toBe(200);
-    expect(decided.data!.status, "the walkover decided the board").toBe("forfeited");
+    // The way out the sentence names: a walkover on the player's board is a real, working path. It is recorded on a STARTED
+    // Swiss — scoring is closed until the division starts (WRONG_PHASE "division has not started") — so it is driven on
+    // the late-player tests' own helper, which starts the division and pairs round 1, in every sport it covers. The
+    // refusals above ran on the unstarted division, where the three doors take a config.
+    for (const sport of LATE_SPORTS) {
+      const r = await startedSwiss(request, sport, 4, 2, "NoByeWO");
+      const board = (await r.boards(1))[0];
+      expect(board, `${sport.key}: premise: round 1 seats a real board`).toBeDefined();
+      await scoreAt(request, board!.id, "core.forfeit", { by: board!.home_entrant_id, reason: "walkover" });
+      const decided = await apiJson<{ status: string; outcome: unknown }>(request, `/api/v1/fixtures/${board!.id}`);
+      expect(decided.status, JSON.stringify(decided.error)).toBe(200);
+      expect(decided.data!.status, `${sport.key}: the walkover decided the board`).toBe("forfeited");
+      expect(decided.data!.outcome, `${sport.key}: the side that did not forfeit is awarded it`).toMatchObject({
+        kind: "award",
+        winner: board!.away_entrant_id,
+      });
+    }
   });
 });
