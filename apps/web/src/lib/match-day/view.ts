@@ -423,6 +423,12 @@ export function filterCandidates(
   return divisions === null ? [...candidates] : candidates.filter((c) => divisions.has(c.fixture.division_id));
 }
 
+/** A match's meta line: "Boys Singles · Swiss · Round 2" — its division, its stage and its round's FULL name (E2 item 7). The chip
+ *  before the names is the round's code; this is the long form beside it, so the code is never the only label. */
+export function matchMeta(f: Pick<MatchDayFixture, "division_name" | "stage_label" | "round">): string {
+  return [f.division_name, f.stage_label, f.round.label].join(" · ");
+}
+
 /** "Zara Khan v Ella Brooks"; a side still to be decided reads "TBD". */
 export function matchLabel(dict: Dict, f: Pick<MatchDayFixture, "home" | "away">): string {
   const tbd = t(dict, "matchDay.tbd");

@@ -517,8 +517,8 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     const c1 = courtOf(view, day.courts.c1);
     expect(c1.state).toBe("playing");
     // Its console address (task A3: Open pad, the stream panel), read off the rows themselves — never off the read model.
-    const [address] = await sql<{ slug: string; fixture_no: number }[]>`
-      select d.slug, f.fixture_no from fixtures f join divisions d on d.id = f.division_id where f.id = ${f12.id}`;
+    const [address] = await sql<{ slug: string; fixture_no: number; round_no: number }[]>`
+      select d.slug, f.fixture_no, f.round_no from fixtures f join divisions d on d.id = f.division_id where f.id = ${f12.id}`;
     // C2: the match's format, the organiser's match block's own line (the fixture page's reader), not a copy of it.
     const block = await loadFixtureMatchRules(day.auth, f12.id, enPublic as Dict);
     expect(block.effectiveLine, "premise: generic says a format").not.toBe("");
@@ -528,6 +528,8 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       division_name: "Doubles",
       division_slug: address!.slug,
       fixture_no: address!.fixture_no,
+      // E2 item 7: a league round is not coded; the board's own fallback names it from the row's round_no.
+      round: { code: `R${address!.round_no}`, label: `Round ${address!.round_no}`, coded: false },
       sport_key: "generic",
       stage_label: "League",
       home: day.comp.pairs.find((p) => p.id === f12.home)!.name,

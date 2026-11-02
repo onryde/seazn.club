@@ -1648,6 +1648,14 @@ export const FixtureCallPreview = z.object({
 
 /** Match Day's read model (spec 2026-10-31 §6.2, §7, §7.1, task A2). The shapes are lib/match-day/types.ts's; the route test
  *  parses each real answer with these. A match as Match Day shows it. */
+export const MatchDayRound = z.object({
+  // The schedule board's chip text for the match's round ("QF", "SF", "F", "3rd", or its fallback "R2"), its full name ("Semi-finals",
+  // "Round 2") in the reader's language, and whether the board codes it (a bracket role).
+  code: z.string().min(1),
+  label: z.string().min(1),
+  coded: z.boolean(),
+});
+
 export const MatchDayFixture = z.object({
   id: Uuid,
   division_id: Uuid,
@@ -1656,6 +1664,7 @@ export const MatchDayFixture = z.object({
   fixture_no: z.number().int().positive(),
   sport_key: z.string(),
   stage_label: z.string(),
+  round: MatchDayRound,
   home: z.string().nullable(),
   away: z.string().nullable(),
   home_entrant_id: Uuid.nullable(),

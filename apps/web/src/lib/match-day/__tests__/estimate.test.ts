@@ -126,6 +126,7 @@ const fixture = (id: string) => ({
   fixture_no: 1,
   sport_key: "badminton",
   stage_label: "League",
+  round: { code: "R1", label: "Round 1", coded: false },
   home: "H",
   away: "A",
   home_entrant_id: null,

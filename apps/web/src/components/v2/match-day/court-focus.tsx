@@ -33,7 +33,7 @@ import { routes } from "@/lib/routes";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
-import { closureText, courtScorerAttention, matchLabel, scorerMemoryKey, streamPreviewOf } from "@/lib/match-day/view";
+import { closureText, courtScorerAttention, matchLabel, matchMeta, scorerMemoryKey, streamPreviewOf } from "@/lib/match-day/view";
 import { venueNoun } from "@/lib/venue";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { FreeCourt } from "./candidate-list";
@@ -41,6 +41,7 @@ import { ClosureLine } from "./court-list";
 import { failureMessage } from "./call-sheet";
 import { CourtScoreboard } from "./court-scoreboard";
 import { CourtStreamPreview } from "./court-stream-preview";
+import { MatchRoundChip } from "./round-chip";
 import { ScorerMark } from "./scorer-mark";
 import { MatchFormatEditor } from "@/components/v2/rules/match-format-editor";
 
@@ -306,9 +307,11 @@ function MatchLine({ ctx, fixture }: { ctx: MatchDayCtx; fixture: MatchDayFixtur
   const { dict } = ctx;
   return (
     <div className="min-w-0">
-      <p className="text-lg font-semibold text-slate-900 [overflow-wrap:anywhere]">{matchLabel(dict, fixture)}</p>
+      <p className="text-lg font-semibold text-slate-900 [overflow-wrap:anywhere]">
+        <MatchRoundChip round={fixture.round} /> {matchLabel(dict, fixture)}
+      </p>
       <p className="text-xs text-slate-600 [overflow-wrap:anywhere]">
-        {fixture.division_name} · {fixture.stage_label}
+        {matchMeta(fixture)}
         {fixture.started_at !== null && (
           <> · {t(dict, "matchDay.focus.started", { time: fmtPublicTime(ctx.locale, ctx.tz, fixture.started_at) })}</>
         )}
@@ -355,10 +358,10 @@ function CalledPanel({
         <span aria-hidden className="h-2 w-2 rounded-full bg-amber-400" />
         {t(dict, "matchDay.called.title")}
       </p>
-      <p className="mt-3 font-display text-2xl font-semibold [overflow-wrap:anywhere] sm:text-3xl">{matchLabel(dict, fixture)}</p>
-      <p className="mt-1 text-sm text-court-muted [overflow-wrap:anywhere]">
-        {fixture.division_name} · {fixture.stage_label}
+      <p className="mt-3 font-display text-2xl font-semibold [overflow-wrap:anywhere] sm:text-3xl">
+        <MatchRoundChip round={fixture.round} tone="dark" /> {matchLabel(dict, fixture)}
       </p>
+      <p className="mt-1 text-sm text-court-muted [overflow-wrap:anywhere]">{matchMeta(fixture)}</p>
       {fixture.called_at !== null && (
         <p className="mt-3 text-sm text-court-muted">
           {t(dict, "matchDay.called.at", { time: fmtPublicTime(ctx.locale, ctx.tz, fixture.called_at) })}
@@ -443,7 +446,7 @@ function Queue({ ctx, court }: { ctx: MatchDayCtx; court: MatchDayCourt }) {
               <li key={q.id} data-testid="md-queue-row" className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-baseline gap-x-3 px-4 py-2.5">
                 <span className="font-mono text-xs text-slate-400">{i + 1}</span>
                 <span className="min-w-0 text-sm text-slate-900 [overflow-wrap:anywhere]">
-                  {matchLabel(dict, q)} <span className="text-xs text-slate-500">· {q.division_name}</span>
+                  <MatchRoundChip round={q.round} /> {matchLabel(dict, q)} <span className="text-xs text-slate-500">· {q.division_name}</span>
                 </span>
                 <span className="text-right">
                   <span className="block font-mono text-sm tabular-nums text-slate-700">{t(dict, "matchDay.queue.estimate", { time: estimate })}</span>

@@ -43,6 +43,7 @@ const fixture = (id: string): MatchDayFixture => ({
   fixture_no: 1,
   sport_key: "badminton",
   stage_label: "League",
+  round: { code: "R1", label: "Round 1", coded: false },
   home: "Zara Khan",
   away: "Ella Brooks",
   home_entrant_id: "e-1",

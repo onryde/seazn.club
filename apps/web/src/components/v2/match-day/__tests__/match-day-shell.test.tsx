@@ -237,6 +237,7 @@ describe("B4 — a match on no court, opened, ended; Needs you's Find a court; a
     fixture_no: 3,
     sport_key: "generic",
     stage_label: "Knockout",
+    round: { code: "QF", label: "Quarter-finals", coded: true },
     home,
     away,
     home_entrant_id: `${id}-h`,

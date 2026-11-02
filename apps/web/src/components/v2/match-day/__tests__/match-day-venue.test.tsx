@@ -71,6 +71,7 @@ const fixture = (id: string, division: string): MatchDayFixture => ({
   fixture_no: 1,
   sport_key: "badminton",
   stage_label: "League",
+  round: { code: "R1", label: "Round 1", coded: false },
   home: "Ana",
   away: "Ben",
   home_entrant_id: "e-1",

@@ -119,6 +119,7 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
   fixture_no: 7,
   sport_key: "badminton",
   stage_label: "Swiss round 3",
+  round: { code: "R3", label: "Round 3", coded: false },
   home: "Zara Khan",
   away: "Ella Brooks",
   home_entrant_id: "e-zara",
@@ -1556,8 +1557,10 @@ describe("B4 — 'Playing, no court': the group under the courts", () => {
       expect(n).toContain("[overflow-wrap:anywhere]");
       expect(n).not.toMatch(/[\s"]truncate[\s"]/);
     }
-    expect(first).toContain(`>${esc(t(dict, "matchDay.match", { home: HOME.name, away: AWAY.name }))}<`);
-    expect(first).toContain(`>${esc("Girls U14")} · ${esc("Swiss round 3")}<`);
+    // E2 item 7: the round's chip leads the match, and the meta line ends on the round's full name (never the code alone).
+    expect(first).toContain(`</span> ${esc(t(dict, "matchDay.match", { home: HOME.name, away: AWAY.name }))}<`);
+    expect(first).toContain(`>${esc("Girls U14")} · ${esc("Swiss round 3")} · ${esc(rows[0]!.round.label)}<`);
+    expect(first).toContain(`data-round-code="${rows[0]!.round.code}"`);
     // The court rows' own score form (`compactScore` of the engine's structure), not a headline typed here.
     expect(first).toContain(`>${esc(compactScore(scoreLine(rows[0]!)!))}<`);
     expect(first).toContain('data-md-stream="live"');

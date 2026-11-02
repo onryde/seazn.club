@@ -22,7 +22,10 @@ import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEFAULT_LOCALE, getDictionary, type Locale } from "@/lib/i18n";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 import { estimateQueue, rankCandidates } from "@/lib/match-day/estimate";
+import { matchDayRounds } from "@/lib/match-day/rounds";
 import { withFindCourt } from "@/lib/match-day/view";
 import { routes } from "@/lib/routes";
 import { closureOf } from "@/lib/match-day/closure";
@@ -34,12 +37,14 @@ import type {
   MatchDayFindCourt,
   MatchDayFixture,
   MatchDayQueued,
+  MatchDayRound,
   MatchDaySummary,
   MatchDayView,
 } from "@/lib/match-day/types";
 import { resolveVenueTz } from "@/lib/tz";
 import { venueNoun } from "@/lib/venue";
 import { needsYouAt, needsYouHome, needsYouItems, resultsOwedOf } from "@/components/v2/desk/needs-you";
+import type { RoundCodeFixture } from "@/components/v2/board/round-codes";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { defaultMatchMinutes, getCompetitionDesk } from "./competition-desk";
 import { resolveCandidateCourts } from "./court-candidates";
@@ -126,6 +131,9 @@ interface FixtureRow {
   division_name: string;
   division_slug: string;
   sport_key: string;
+  /** Its stage, for the round code: the board ranks a round against the whole stage (`readRounds`). */
+  stage_id: string;
+  stage_kind: string;
   stage_name: string;
   stage_status: string;
   status: string;
@@ -135,7 +143,8 @@ interface FixtureRow {
   away_entrant_id: string | null;
   home: string | null;
   away: string | null;
-  round_no: number | null;
+  /** `fixtures.round_no` is NOT NULL (V214). */
+  round_no: number;
   fixture_no: number;
   headline: string | null;
   /** `match_states.summary`, whole (jsonb). */
@@ -259,8 +268,8 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
     (select fc.called_at from fixture_calls fc join fixtures g on g.id = fc.fixture_id
       where fc.fixture_id = ${fixture} and ${liveCallSql(tx)})`;
   const rows = await tx<FixtureRow[]>`
-    select f.id, f.division_id, d.name as division_name, d.slug as division_slug, d.sport_key, s.name as stage_name,
-           s.status as stage_status,
+    select f.id, f.division_id, d.name as division_name, d.slug as division_slug, d.sport_key,
+           s.id as stage_id, s.kind as stage_kind, s.name as stage_name, s.status as stage_status,
            f.status, f.court_id, f.scheduled_at, f.home_entrant_id, f.away_entrant_id,
            h.display_name as home, a.display_name as away, f.round_no, f.fixture_no,
            ms.summary->>'headline' as headline, ms.summary,
@@ -409,7 +418,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
           (a, b) =>
             (a.scheduled_at === null ? Infinity : new Date(a.scheduled_at).getTime()) -
               (b.scheduled_at === null ? Infinity : new Date(b.scheduled_at).getTime()) ||
-            (a.round_no ?? Infinity) - (b.round_no ?? Infinity) ||
+            a.round_no - b.round_no ||
             a.fixture_no - b.fixture_no ||
             (a.id < b.id ? -1 : 1),
         )
@@ -481,7 +490,34 @@ interface PlayingExtras {
 }
 const NO_EXTRAS: PlayingExtras = { serving: null, scorer_attention: null, live_video: null, format_line: null };
 
-function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">, extras: PlayingExtras = NO_EXTRAS): MatchDayFixture {
+/**
+ * Each of `rows`' round, named by the SCHEDULE BOARD's own `boardRoundCodes` (Match Day E2 item 7; `lib/match-day/rounds.ts`) in the
+ * reader's language. The board ranks a round against its whole stage, so this reads every fixture of every stage a shown match is
+ * in — the columns the board reads, as `fed-seats.ts`'s `boardRef` does for a refusal — not just today's.
+ */
+async function readRounds(tx: Tx, rows: readonly FixtureRow[], dict: Dict): Promise<Map<string, MatchDayRound>> {
+  const stages = [...new Map(rows.map((r) => [r.stage_id, { id: r.stage_id, kind: r.stage_kind }])).values()];
+  if (stages.length === 0) return new Map();
+  const stageRows = await tx<RoundCodeFixture[]>`
+    select id, stage_id, round_no, seq_in_round, ext_key, lane, is_final, third_place, conditional
+      from fixtures where stage_id in ${tx(stages.map((s) => s.id))}`;
+  return matchDayRounds(rows, stageRows, stages, (key, vars) => t(dict, key, vars));
+}
+
+/** A shown match's round: `readRounds` names every match it is handed, so one missing is a wiring fault, never a match to show
+ *  without its code. */
+function roundOf(rounds: ReadonlyMap<string, MatchDayRound>, id: string): MatchDayRound {
+  const round = rounds.get(id);
+  if (round === undefined) throw new Error(`match-day: no round was read for match ${id}`);
+  return round;
+}
+
+function fixtureView(
+  r: FixtureRow,
+  rounds: ReadonlyMap<string, MatchDayRound>,
+  streams: Record<string, "live" | "waiting">,
+  extras: PlayingExtras = NO_EXTRAS,
+): MatchDayFixture {
   return {
     id: r.id,
     division_id: r.division_id,
@@ -490,6 +526,7 @@ function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">,
     fixture_no: r.fixture_no,
     sport_key: r.sport_key,
     stage_label: r.stage_name,
+    round: roundOf(rounds, r.id),
     home: r.home,
     away: r.away,
     home_entrant_id: r.home_entrant_id,
@@ -506,9 +543,14 @@ function fixtureView(r: FixtureRow, streams: Record<string, "live" | "waiting">,
   };
 }
 
-function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, extras: (fixtureId: string) => PlayingExtras): MatchDayCourt {
+function courtView(
+  c: BoardCourt,
+  rounds: ReadonlyMap<string, MatchDayRound>,
+  streams: Record<string, "live" | "waiting">,
+  extras: (fixtureId: string) => PlayingExtras,
+): MatchDayCourt {
   const queue: MatchDayQueued[] = c.queue.map((q) => ({
-    ...fixtureView(q.row, streams),
+    ...fixtureView(q.row, rounds, streams),
     planned_at: q.planned_at.toISOString(),
     estimated_at: q.estimated_at.toISOString(),
   }));
@@ -519,7 +561,7 @@ function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, e
     venue_name: c.venue_name,
     sport_noun: venueNoun(c.current?.sport_key ?? c.queue[0]?.row.sport_key ?? c.candidate_sport),
     state: c.state,
-    current: c.current === null ? null : fixtureView(c.current, streams, extras(c.current.id)),
+    current: c.current === null ? null : fixtureView(c.current, rounds, streams, extras(c.current.id)),
     in_use_by: c.in_use_by,
     free_since: iso(c.free_since),
     queue,
@@ -538,7 +580,10 @@ export async function getMatchDay(
   now: Date = new Date(),
   opts: { locale?: Locale } = {},
 ): Promise<MatchDayView> {
-  const { board, serving, findCourts } = await withTenant(auth.orgId, async (tx) => {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  // Read before the tenant transaction (a file, not a connection): the round codes named inside it are in the reader's language.
+  const dict = await getDictionary(locale, "ui");
+  const { board, serving, findCourts, rounds } = await withTenant(auth.orgId, async (tx) => {
     // The "no court yet" arm too: Needs you's "Find a court" is offered only for a division with such a match (R2).
     const board = await readBoard(tx, competitionId, now, { noCourt: true });
     const findCourts = await findCourtsOf(tx, board);
@@ -563,19 +608,23 @@ export async function getMatchDay(
         serving.set(fixtureId, null);
       }
     }
-    return { board, serving, findCourts };
+    // Every match the view shows, named by the board's own round codes (E2 item 7).
+    const shown = [
+      ...board.courts.flatMap((c) => [...(c.current ? [c.current] : []), ...c.queue.map((q) => q.row)]),
+      ...board.playingNoCourt,
+    ];
+    const rounds = await readRounds(tx, shown, dict);
+    return { board, serving, findCourts, rounds };
   });
-  const locale = opts.locale ?? DEFAULT_LOCALE;
   // Each reads through its own connection: none may run inside the tenant transaction above (pool nesting).
   const ids = [
     ...board.courts.flatMap((c) => [...(c.current ? [c.current.id] : []), ...c.queue.map((q) => q.row.id)]),
     ...board.playingNoCourt.map((r) => r.id),
   ];
-  const [streams, desk, divisions, dict] = await Promise.all([
+  const [streams, desk, divisions] = await Promise.all([
     openStreamStates(auth, ids),
     getCompetitionDesk(auth, competitionId, now),
     listDivisions(auth, competitionId),
-    getDictionary(locale, "ui"),
   ]);
   const needs = needsYouItems(
     dict,
@@ -634,8 +683,8 @@ export async function getMatchDay(
     date: board.day,
     tz: board.tz,
     now: now.toISOString(),
-    courts: board.courts.map((c) => courtView(c, streams, extras)),
-    playing_no_court: board.playingNoCourt.map((r) => fixtureView(r, streams, extras(r.id))),
+    courts: board.courts.map((c) => courtView(c, rounds, streams, extras)),
+    playing_no_court: board.playingNoCourt.map((r) => fixtureView(r, rounds, streams, extras(r.id))),
     needs_you: withFindCourt(dict, atHome, findCourts, routes.competitionMatchDay(board.comp.org_slug, board.comp.slug)),
     results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,
@@ -662,9 +711,11 @@ export async function matchDayCandidates(
   competitionId: string,
   courtId: string,
   now: Date = new Date(),
+  opts: { locale?: Locale } = {},
 ): Promise<MatchDayCandidate[]> {
   const nowMs = now.getTime();
-  const { picked, busy, courtNames } = await withTenant(auth.orgId, async (tx) => {
+  const dict = await getDictionary(opts.locale ?? DEFAULT_LOCALE, "ui");
+  const { picked, busy, courtNames, rounds } = await withTenant(auth.orgId, async (tx) => {
     const board = await readBoard(tx, competitionId, now, { noCourt: true });
     await targetCourt(tx, courtId);
     const picked: {
@@ -705,14 +756,16 @@ export async function matchDayCandidates(
     const allowed = await callableCourtsByFixture(tx, picked.map((p) => p.row));
     const usable = picked.filter((p) => allowed.get(p.row.id)?.has(courtId) === true);
     const busy = await whoIsBusy(tx, usable.map((p) => p.row));
-    return { picked: usable, busy, courtNames: board.courtNames };
+    // Their round codes, as the board names them (E2 item 7), in the reader's language.
+    const rounds = await readRounds(tx, usable.map((p) => p.row), dict);
+    return { picked: usable, busy, courtNames: board.courtNames, rounds };
   });
   const streams = await openStreamStates(auth, picked.map((p) => p.row.id));
   return rankCandidates(
     picked.map((p) => {
       const holder = busy.get(p.row.id);
       return {
-        fixture: fixtureView(p.row, streams),
+        fixture: fixtureView(p.row, rounds, streams),
         source: p.source,
         from_court_name: p.from,
         waiting_minutes: p.waiting,

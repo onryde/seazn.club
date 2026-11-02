@@ -24,9 +24,11 @@ import {
   foldFreeCourts,
   foldedNames,
   matchLabel,
+  matchMeta,
   scoreLine,
   sharedNoun,
 } from "@/lib/match-day/view";
+import { MatchRoundChip } from "./round-chip";
 import { ScorerMark } from "./scorer-mark";
 
 /** The state dot: green while playing, amber while called, an open ring while free, grey while another competition has it. */
@@ -161,7 +163,9 @@ function CourtRow({
             <span className="truncate text-sm font-semibold">{c.court_name}</span>
             {c.current?.stream === "live" && <LiveBadge dict={dict} />}
           </span>
-          <span className="block truncate text-xs text-slate-600">{rowLine(dict, c)}</span>
+          <span className="block truncate text-xs text-slate-600">
+            <RowLine dict={dict} court={c} />
+          </span>
           {/* The score on its own line (beside the name a real score squeezed the court's own name to "Cour…"), in the row's
               own sans with tabular figures: games won and the current game's points for a set sport, the sport's own
               headline otherwise (`scoreLine`, the panel's rule; review V4). */}
@@ -259,13 +263,11 @@ export function NoCourtList({
                       away side at 320; a court row's name is a court's, short, and stays one line. */}
                   <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                     <span data-md-match className="min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">
-                      {matchLabel(dict, f)}
+                      <MatchRoundChip round={f.round} /> {matchLabel(dict, f)}
                     </span>
                     {f.stream === "live" && <LiveBadge dict={dict} />}
                   </span>
-                  <span className="block truncate text-xs text-slate-600">
-                    {f.division_name} · {f.stage_label}
-                  </span>
+                  <span className="block truncate text-xs text-slate-600">{matchMeta(f)}</span>
                   {score !== null ? (
                     <span data-md-row-score className="mt-0.5 block text-xs font-semibold tabular-nums text-purple-900 [overflow-wrap:anywhere]">
                       {compactScore(score)}
@@ -296,11 +298,15 @@ export function NoCourtList({
   );
 }
 
-/** The row's second line: the match on it, or who has it. A free court's word sits on the right, so its line names the
- *  next match planned here when there is one. */
-function rowLine(dict: Dict, c: MatchDayCourt): string {
-  if (c.state === "in_use_elsewhere") return t(dict, "matchDay.state.inUse", { competition: c.in_use_by ?? "" });
-  if (c.current !== null) return matchLabel(dict, c.current);
-  const next = c.queue[0];
-  return next === undefined ? "" : matchLabel(dict, next);
+/** The row's second line: the match on it, or who has it — behind its round's code chip (E2 item 7). A free court's word sits on
+ *  the right, so its line names the next match planned here when there is one. */
+function RowLine({ dict, court: c }: { dict: Dict; court: MatchDayCourt }) {
+  if (c.state === "in_use_elsewhere") return <>{t(dict, "matchDay.state.inUse", { competition: c.in_use_by ?? "" })}</>;
+  const shown = c.current ?? c.queue[0];
+  if (shown === undefined) return null;
+  return (
+    <>
+      <MatchRoundChip round={shown.round} /> {matchLabel(dict, shown)}
+    </>
+  );
 }

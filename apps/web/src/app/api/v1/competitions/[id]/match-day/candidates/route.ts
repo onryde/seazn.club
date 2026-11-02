@@ -2,6 +2,7 @@ import { v1 } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
 import { Uuid } from "@/server/api-v1/schemas";
 import { HttpError } from "@/lib/errors";
+import { resolveLocale } from "@/lib/resolve-locale";
 import { matchDayCandidates } from "@/server/usecases/match-day";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -14,6 +15,6 @@ export async function GET(req: Request, { params }: Ctx) {
     const auth = await requireResourceAuth(req, "competition", id, "read");
     const courtId = Uuid.safeParse(new URL(req.url).searchParams.get("court_id"));
     if (!courtId.success) throw new HttpError(400, "court_id must be a court's id");
-    return matchDayCandidates(auth, id, courtId.data);
+    return matchDayCandidates(auth, id, courtId.data, new Date(), { locale: await resolveLocale() });
   });
 }

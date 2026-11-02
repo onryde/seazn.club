@@ -12,6 +12,7 @@ import { t } from "@/lib/i18n-runtime";
 import type { CallPreview } from "@/lib/match-day/call";
 import type { MatchDayCandidate, MatchDayCourt } from "@/lib/match-day/types";
 import { matchLabel, refusalMessage, warningText } from "@/lib/match-day/view";
+import { MatchRoundChip } from "./round-chip";
 import type { MatchDayCtx } from "./court-focus";
 
 export type CallSheetState =
@@ -124,7 +125,7 @@ export function CallSheetBody({
   return (
     <div data-testid="md-call-sheet" className="grid gap-3">
       <p className="text-base font-semibold text-slate-900 [overflow-wrap:anywhere]">
-        {matchLabel(dict, candidate.fixture)}{" "}
+        <MatchRoundChip round={candidate.fixture.round} /> {matchLabel(dict, candidate.fixture)}{" "}
         <span className="text-sm font-normal text-slate-500">· {candidate.fixture.division_name}</span>
       </p>
       {state.kind === "loading" && <p aria-live="polite">{t(dict, "matchDay.sheet.loading")}</p>}

@@ -28,6 +28,19 @@ export interface MatchDaySummary {
   detail?: unknown;
 }
 
+/** A match's round as the SCHEDULE BOARD names it (Match Day E2 item 7): the board's own `boardRoundCodes` decides it, so a
+ *  Match Day chip and a board card can never disagree. */
+export interface MatchDayRound {
+  /** The chip text: the board's short code for a bracket round ("QF", "SF", "F", "3rd", "WB2", "Q1", "E2"), else the board's own
+   *  fallback `R{round_no}` — a league or Swiss round, and any bracket the board cannot name from its rows. */
+  code: string;
+  /** The round's full name in the reader's language: the board's long name when it has a code ("Semi-finals"), else "Round 2".
+   *  The chip's accessible name and its tooltip, and the last part of the division meta line. */
+  label: string;
+  /** Whether the board codes this round (a bracket role): the board's heavier chip variant. False for a plain `R{n}`. */
+  coded: boolean;
+}
+
 /** A match as Match Day shows it. Times are ISO instants. */
 export interface MatchDayFixture {
   id: string;
@@ -40,6 +53,8 @@ export interface MatchDayFixture {
   sport_key: string;
   /** The stage's name. */
   stage_label: string;
+  /** The match's round, as the schedule board names it (`MatchDayRound`). */
+  round: MatchDayRound;
   /** Entrant display names; null for a side still to be decided. */
   home: string | null;
   away: string | null;

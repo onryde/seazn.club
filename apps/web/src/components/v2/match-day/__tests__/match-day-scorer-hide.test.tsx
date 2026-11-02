@@ -39,6 +39,7 @@ const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
   fixture_no: 7,
   sport_key: "badminton",
   stage_label: "Swiss round 3",
+  round: { code: "R3", label: "Round 3", coded: false },
   home: "Zara Khan",
   away: "Ella Brooks",
   home_entrant_id: "e-1",

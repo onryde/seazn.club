@@ -23,6 +23,7 @@ import {
 } from "@/lib/match-day/view";
 import type { MatchDayCtx } from "./court-focus";
 import { CallSheet } from "./call-sheet";
+import { MatchRoundChip } from "./round-chip";
 
 export type CandidateLoad =
   | { status: "loading" }
@@ -198,7 +199,7 @@ export function CandidateRows({
                 >
                   <div className={`min-w-0 ${c.blocked !== null ? "opacity-60" : ""}`}>
                     <p className="text-sm font-medium text-slate-900 [overflow-wrap:anywhere]">
-                      {matchLabel(dict, c.fixture)}{" "}
+                      <MatchRoundChip round={c.fixture.round} /> {matchLabel(dict, c.fixture)}{" "}
                       <span className="font-normal text-slate-500">· {c.fixture.division_name}</span>
                     </p>
                     <p className="text-xs text-slate-600">{candidateWhere(dict, c, (iso) => fmtPublicTime(ctx.locale, ctx.tz, iso))}</p>

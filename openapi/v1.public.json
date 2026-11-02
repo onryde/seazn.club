@@ -2958,6 +2958,28 @@
                                       "stage_label": {
                                         "type": "string"
                                       },
+                                      "round": {
+                                        "type": "object",
+                                        "properties": {
+                                          "code": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "coded": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "code",
+                                          "label",
+                                          "coded"
+                                        ],
+                                        "additionalProperties": false
+                                      },
                                       "home": {
                                         "anyOf": [
                                           {
@@ -3156,6 +3178,7 @@
                                       "fixture_no",
                                       "sport_key",
                                       "stage_label",
+                                      "round",
                                       "home",
                                       "away",
                                       "home_entrant_id",
@@ -3230,6 +3253,28 @@
                                     },
                                     "stage_label": {
                                       "type": "string"
+                                    },
+                                    "round": {
+                                      "type": "object",
+                                      "properties": {
+                                        "code": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "coded": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "code",
+                                        "label",
+                                        "coded"
+                                      ],
+                                      "additionalProperties": false
                                     },
                                     "home": {
                                       "anyOf": [
@@ -3439,6 +3484,7 @@
                                     "fixture_no",
                                     "sport_key",
                                     "stage_label",
+                                    "round",
                                     "home",
                                     "away",
                                     "home_entrant_id",
@@ -3568,6 +3614,28 @@
                               },
                               "stage_label": {
                                 "type": "string"
+                              },
+                              "round": {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "coded": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "label",
+                                  "coded"
+                                ],
+                                "additionalProperties": false
                               },
                               "home": {
                                 "anyOf": [
@@ -3767,6 +3835,7 @@
                               "fixture_no",
                               "sport_key",
                               "stage_label",
+                              "round",
                               "home",
                               "away",
                               "home_entrant_id",
@@ -3928,6 +3997,11 @@
                           "fixture_no": 1,
                           "sport_key": "example",
                           "stage_label": "example",
+                          "round": {
+                            "code": "example",
+                            "label": "example",
+                            "coded": true
+                          },
                           "home": "example",
                           "away": "example",
                           "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -3960,6 +4034,11 @@
                             "fixture_no": 1,
                             "sport_key": "example",
                             "stage_label": "example",
+                            "round": {
+                              "code": "example",
+                              "label": "example",
+                              "coded": true
+                            },
                             "home": "example",
                             "away": "example",
                             "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -3999,6 +4078,11 @@
                         "fixture_no": 1,
                         "sport_key": "example",
                         "stage_label": "example",
+                        "round": {
+                          "code": "example",
+                          "label": "example",
+                          "coded": true
+                        },
                         "home": "example",
                         "away": "example",
                         "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
@@ -4272,6 +4356,28 @@
                               "stage_label": {
                                 "type": "string"
                               },
+                              "round": {
+                                "type": "object",
+                                "properties": {
+                                  "code": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "label": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "coded": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "label",
+                                  "coded"
+                                ],
+                                "additionalProperties": false
+                              },
                               "home": {
                                 "anyOf": [
                                   {
@@ -4470,6 +4576,7 @@
                               "fixture_no",
                               "sport_key",
                               "stage_label",
+                              "round",
                               "home",
                               "away",
                               "home_entrant_id",
@@ -4592,6 +4699,11 @@
                         "fixture_no": 1,
                         "sport_key": "example",
                         "stage_label": "example",
+                        "round": {
+                          "code": "example",
+                          "label": "example",
+                          "coded": true
+                        },
                         "home": "example",
                         "away": "example",
                         "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
