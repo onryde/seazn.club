@@ -164,6 +164,32 @@ describe.skipIf(!HAS_DB)("a billing-frozen competition scores (PB2, option A)", 
     ]);
   });
 
+  // Review C1 (HELD for the owner's fix shape — PB2 fix round 1): in a REAL freeze (community's own limit, newer competitions
+  // in the active slots), one score on the frozen competition makes it the organisation's most recently active, and the
+  // activity ranking (`entitlement-freeze.ts`, `last_active`) thaws it and freezes an idle competition instead. Every other
+  // test here freezes with the override pin (limit 0), where nothing can rotate. `it.fails` until C1 lands: the fix flips it to
+  // `it`, and it must then pass as written. (Run as a plain `it` on this tree, it fails at the "frozen set" assertion below,
+  // after the score has landed — the rotation, not a broken rig.)
+  it.fails("C1 (held): in a real community freeze, scoring the frozen competition leaves the freeze where it was — the same competition frozen, its schedule edit still 402", async () => {
+    const s = await seed("badminton");
+    await freeze(s, "downgrade");
+    const limit = await getLimit(s.auth.orgId, "competitions.max_active");
+    expect(limit, "premise: a REAL limit, not the override pin's 0").toBeGreaterThan(0);
+    const before = [...(await frozenCompetitionIds(s.auth.orgId))];
+    expect(before, "premise: the seeded competition is the frozen one").toEqual([s.competitionId]);
+
+    const out = await scoreEvent(s.auth, s.fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    expect(out.seq, "premise: the frozen competition scored").toBe(1);
+
+    expect([...(await frozenCompetitionIds(s.auth.orgId))], "C1: a score on the frozen competition moved the freeze").toEqual(before);
+    const edit = await refusal(moveFixture(s.auth, s.fixtureId, { scheduled_at: "2030-06-01T12:00:00.000Z" }));
+    expect(edit).toBeInstanceOf(PaymentRequiredError);
+    expect([edit.status, (edit as PaymentRequiredError).featureKey], "the frozen competition's schedule edit is still refused").toEqual([
+      402,
+      "competitions.max_active",
+    ]);
+  });
+
   it("every sport: a frozen competition's match starts (one score event lands), counted", async () => {
     let written = 0;
     const checked = await forEachSportAsync(async ({ key }) => {
