@@ -384,6 +384,7 @@ export function hubSwissRound(stage: PublicStage, fixtures: readonly PublicFixtu
         home: f.home_entrant_id,
         away: f.away_entrant_id,
         status: f.status,
+        outcome: f.outcome,
         isBye: isSwissByeShellExtKey(f.ext_key),
       })),
     stage.status === "complete",

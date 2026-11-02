@@ -8,6 +8,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { isSwissBoardSeated } from "@/lib/swiss-shell";
 import { WITHDRAWAL_PLAYED_STATUSES } from "@/lib/table-withdrawal";
 import { SWISS_ROUND_STATES, swissRoundKey, swissRoundState, type SwissRoundFixture, type SwissRoundState } from "../swiss-round-state";
 import enPublic from "@/dictionaries/en/public.json";
@@ -15,20 +16,26 @@ import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
 
+/** The award a walkover or a bye is decided by (`outcome.kind === "award"`, the shape the withdrawal cascade writes). */
+const AWARD = { kind: "award", winner: "w", loser: "l", reason: "withdrew" };
+
 /** A seated board: both sides filled. */
 const board = (round_no: number, status: string, n = 1): SwissRoundFixture => ({
   round_no,
   home: `h${round_no}-${n}`,
   away: `a${round_no}-${n}`,
   status,
+  outcome: null,
   isBye: false,
 });
 /** The round's bye: one side filled, never a board. */
-const bye = (round_no: number, status = "decided"): SwissRoundFixture => ({ round_no, home: `bye${round_no}`, away: null, status, isBye: true });
+const bye = (round_no: number, status = "decided"): SwissRoundFixture => ({ round_no, home: `bye${round_no}`, away: null, status, outcome: AWARD, isBye: true });
 /** An unpaired shell: no side filled. */
-const shell = (round_no: number): SwissRoundFixture => ({ round_no, home: null, away: null, status: "scheduled", isBye: false });
-/** A board whose opponent departed: one side left, walked over (the withdrawal cascade) - a board, not a bye. */
-const walkover = (round_no: number): SwissRoundFixture => ({ round_no, home: `w${round_no}`, away: null, status: "forfeited", isBye: false });
+const shell = (round_no: number): SwissRoundFixture => ({ round_no, home: null, away: null, status: "scheduled", outcome: null, isBye: false });
+/** A board whose opponent departed: one side left, walked over (the withdrawal cascade writes an award) - a board, not a bye. */
+const walkover = (round_no: number): SwissRoundFixture => ({ round_no, home: `w${round_no}`, away: null, status: "forfeited", outcome: AWARD, isBye: false });
+/** A half-seated stub: one side filled, no award - what Finish and Add a round (`isSwissBoardSeated`) do not call seated. */
+const stub = (round_no: number, status = "scheduled"): SwissRoundFixture => ({ round_no, home: `s${round_no}`, away: null, status, outcome: null, isBye: false });
 
 interface Case {
   name: string;
@@ -46,6 +53,7 @@ const CASES: Case[] = [
   { name: "a round whose only seated row is the bye is not paired (T13: a bye-only round was never played)", rounds: 3, fixtures: [bye(1, "scheduled"), shell(1), shell(2)], stageComplete: false, want: null },
   { name: "a decided bye alone is still nothing seated", rounds: 3, fixtures: [bye(1), shell(1)], stageComplete: false, want: null },
   { name: "a complete stage with nothing seated states nothing (final needs a round to be after)", rounds: 3, fixtures: [shell(1)], stageComplete: true, want: null },
+  { name: "a one-seat stub with no award is not seated (the repo's isSwissBoardSeated): alone it states nothing", rounds: 3, fixtures: [stub(1), shell(1)], stageComplete: false, want: null },
 
   // ---- paired: seated, no board started ----
   { name: "round 1 paired, both boards scheduled", rounds: 5, fixtures: [board(1, "scheduled", 1), board(1, "scheduled", 2), shell(2), shell(3)], stageComplete: false, want: { round: 1, of: 5, state: "paired" } },
@@ -64,6 +72,7 @@ const CASES: Case[] = [
   { name: "both boards decided", rounds: 5, fixtures: [board(1, "decided", 1), board(1, "decided", 2), shell(2)], stageComplete: false, want: { round: 1, of: 5, state: "complete" } },
   { name: "decided, finalized and forfeited are all results", rounds: 3, fixtures: [board(1, "decided", 1), board(1, "finalized", 2), board(1, "forfeited", 3)], stageComplete: false, want: { round: 1, of: 3, state: "complete" } },
   { name: "the bye never holds a round open", rounds: 3, fixtures: [board(1, "decided", 1), board(1, "decided", 2), bye(1, "scheduled")], stageComplete: false, want: { round: 1, of: 3, state: "complete" } },
+  { name: "a one-seat stub in round 2 is no board: the chip stays on the decided round 1, as Finish and Add a round read it", rounds: 3, fixtures: [board(1, "decided", 1), board(1, "decided", 2), stub(2), shell(3)], stageComplete: false, want: { round: 1, of: 3, state: "complete" } },
   { name: "a walkover is a decided board: a round of one walkover is complete", rounds: 2, fixtures: [walkover(1)], stageComplete: false, want: { round: 1, of: 2, state: "complete" } },
   { name: "the last round decided, the stage not yet completed: complete, NOT final", rounds: 3, fixtures: [board(3, "decided", 1), board(3, "decided", 2), board(2, "decided", 1)], stageComplete: false, want: { round: 3, of: 3, state: "complete" } },
   { name: "a take-back reopened a round-1 board while round 2 is decided: the latest round is stated", rounds: 3, fixtures: [board(1, "scheduled", 1), board(1, "decided", 2), board(2, "decided", 1), board(2, "decided", 2)], stageComplete: false, want: { round: 2, of: 3, state: "complete" } },
@@ -80,7 +89,7 @@ const CASES: Case[] = [
 
 describe("swissRoundState — the state table", () => {
   it("runs a table that reaches every state of the closed set (anti-vacuity)", () => {
-    expect(CASES.length).toBe(25);
+    expect(CASES.length).toBe(27);
     const reached = new Set(CASES.map((c) => c.want?.state ?? "none"));
     for (const s of SWISS_ROUND_STATES) expect(reached.has(s), `no case reaches ${s}`).toBe(true);
     expect(reached.has("none")).toBe(true);
@@ -114,6 +123,33 @@ describe("swissRoundState — the state table", () => {
     for (const bad of [0, -1, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => swissRoundState(bad, [board(1, "scheduled")], false), String(bad)).toThrow(RangeError);
     }
+  });
+});
+
+describe("swissRoundState — a board is seated exactly as the repo's isSwissBoardSeated says (Finish and Add a round read the same)", () => {
+  // Hand-written: whether a lone non-bye row is a board. Both seats, or an award (a walkover keeps one seat); a one-seat row
+  // with no award, and an empty shell, are not. The authority is asserted against the same table so it cannot drift unseen.
+  const SHAPES: { name: string; home: string | null; away: string | null; outcome: unknown; seated: boolean }[] = [
+    { name: "both seats, no outcome", home: "a", away: "b", outcome: null, seated: true },
+    { name: "both seats, a played outcome", home: "a", away: "b", outcome: { kind: "win" }, seated: true },
+    { name: "one seat, an award (the walkover left behind by a departure)", home: "a", away: null, outcome: AWARD, seated: true },
+    { name: "the other seat, an award", home: null, away: "b", outcome: AWARD, seated: true },
+    { name: "one seat, no outcome (a stub)", home: "a", away: null, outcome: null, seated: false },
+    { name: "the other seat, no outcome (a stub)", home: null, away: "b", outcome: null, seated: false },
+    { name: "one seat, a non-award outcome", home: "a", away: null, outcome: { kind: "win" }, seated: false },
+    { name: "no seats (a shell)", home: null, away: null, outcome: null, seated: false },
+  ];
+
+  it.each(SHAPES.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    const row: SwissRoundFixture = { round_no: 1, home: c.home, away: c.away, status: "scheduled", outcome: c.outcome, isBye: false };
+    expect(isSwissBoardSeated({ home_entrant_id: c.home, away_entrant_id: c.away, outcome: c.outcome }), "the authority").toBe(c.seated);
+    expect(swissRoundState(2, [row], false) !== null, "the verdict").toBe(c.seated);
+  });
+
+  it("the table covers both outcomes of the question (anti-vacuity)", () => {
+    expect(SHAPES.length).toBe(8);
+    expect(SHAPES.filter((c) => c.seated).length).toBeGreaterThan(0);
+    expect(SHAPES.filter((c) => !c.seated).length).toBeGreaterThan(0);
   });
 });
 
@@ -161,6 +197,9 @@ describe("swissRoundKey — the copy each state says (4 locales)", () => {
     { state: { round: 3, of: 3, state: "final" }, key: "table.swissRound.final.other", en: "Final standings after 3 rounds" },
     // One round is "round", not "rounds": a Swiss finished after round 1 reads right.
     { state: { round: 1, of: 1, state: "final" }, key: "table.swissRound.final.one", en: "Final standings after 1 round" },
+    // The plural is over `of`, never `round`: these two rows tell the two apart (the rows above have round == of).
+    { state: { round: 1, of: 3, state: "final" }, key: "table.swissRound.final.other", en: "Final standings after 3 rounds" },
+    { state: { round: 2, of: 1, state: "final" }, key: "table.swissRound.final.one", en: "Final standings after 1 round" },
   ];
 
   it("states a key for every state of the closed set, and the English reads as the brief says", () => {

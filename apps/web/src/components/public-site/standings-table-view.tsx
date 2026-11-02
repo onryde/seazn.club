@@ -404,7 +404,14 @@ export function StandingsTableView({
       <div
         className={`flex items-baseline justify-between ${view.swissRound ? "flex-wrap gap-x-3 gap-y-1" : "gap-3"}`}
       >
-        <h3 className="min-w-0 truncate font-display text-lg font-semibold text-ink">
+        {/* With a chip the row can wrap, and a wrapping row decides by the heading's WORDS (its content width), not by what
+            it could shrink to: a 30-character stage name pushed "Full division" onto a line of its own at 320. `flex-1
+            basis-0` makes the heading's wrap size zero, so only the chip's full-width line wraps and the heading
+            truncates beside the link exactly as every other table's does. Appended only with a chip: the string is
+            otherwise the one the goldens pin. */}
+        <h3
+          className={`min-w-0 truncate font-display text-lg font-semibold text-ink${view.swissRound ? " flex-1 basis-0" : ""}`}
+        >
           {view.caption}
         </h3>
         {view.swissRound ? (

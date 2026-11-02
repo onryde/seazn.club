@@ -5,15 +5,13 @@
 // only draws it. The document carries the VERDICT, not a sentence — `swissRoundKey` names the copy, the renderer fills it
 // from the org's dictionary.
 
-// `.ts` on both imports: `competition-hub-schema.ts` imports this file and the standalone OpenAPI generator reads that
-// schema under bare `node --experimental-strip-types` (which resolves no extensionless specifier), and the scripts
-// tsconfig (`nodenext`) refuses an extensionless relative import even for a type.
-import type { DictionaryKey } from "./i18n-keys.ts";
-import { WITHDRAWAL_PLAYED_STATUSES } from "./table-withdrawal.ts";
+import type { DictionaryKey } from "./i18n-keys";
+import { SWISS_ROUND_STATES, type SwissRoundStateName } from "./swiss-round-state-names";
+import { isSwissBoardSeated } from "./swiss-shell";
+import { WITHDRAWAL_PLAYED_STATUSES } from "./table-withdrawal";
 
-/** The chip's states, as a VALUE so a sweep and the hub schema (`z.enum(SWISS_ROUND_STATES)`) read the same list. */
-export const SWISS_ROUND_STATES = ["paired", "in_play", "complete", "final"] as const;
-export type SwissRoundStateName = (typeof SWISS_ROUND_STATES)[number];
+// The state list is declared in a leaf (see its header) and re-exported here, so every consumer keeps one import.
+export { SWISS_ROUND_STATES, type SwissRoundStateName };
 
 export interface SwissRoundState {
   /** The latest round with a seated board (never the bye). */
@@ -24,12 +22,15 @@ export interface SwissRoundState {
 }
 
 /** One row of the stage, in the shape the hub already holds: `home`/`away` are the seats' entrant ids (null = empty),
- *  `isBye` is the Swiss bye shell (`isSwissByeShellExtKey` on the row's `ext_key`). */
+ *  `outcome` is the row's own outcome (a walkover keeps one seat and carries an award), `isBye` is the Swiss bye shell
+ *  (`isSwissByeShellExtKey` on the row's `ext_key`). `outcome` is required, not optional: a caller that forgot it would
+ *  silently drop every walkover board. */
 export interface SwissRoundFixture {
   round_no: number;
   home: string | null;
   away: string | null;
   status: string;
+  outcome: unknown;
   isBye: boolean;
 }
 
@@ -38,8 +39,10 @@ export interface SwissRoundFixture {
  *
  * EMPTY CASE FIRST: a stage with no seated board — nothing yet paired, shells only — is null, and so is one whose only
  * seated row is a round's bye (T13: an engine "empty success" seats the bye and leaves every board vacant; that round was
- * never paired). A board is any row that is not the bye with at least one seat filled: a board whose opponent departed
- * keeps its one seat and a walkover, and is still the round's board.
+ * never paired). A board is a row that is not the bye and is seated by the repo's one authority, `isSwissBoardSeated` (the
+ * predicate Finish, Add a round and the stage rail read): both seats, or an award. A board whose opponent departed keeps
+ * its one seat and its walkover award, and is still the round's board; a one-seat row with no award is a half-built stub
+ * and is not.
  *
  * Then, over the LATEST round with a board:
  *  - the stage is complete -> `final` (the stage's own verdict is the authority, not the boards);
@@ -59,7 +62,9 @@ export function swissRoundState(
   if (!Number.isInteger(rounds) || rounds < 1) {
     throw new RangeError(`swissRoundState: rounds must be a whole number of 1 or more, got ${rounds}`);
   }
-  const boards = fixtures.filter((f) => !f.isBye && (f.home !== null || f.away !== null));
+  const boards = fixtures.filter(
+    (f) => !f.isBye && isSwissBoardSeated({ home_entrant_id: f.home, away_entrant_id: f.away, outcome: f.outcome }),
+  );
   if (boards.length === 0) return null;
   const round = boards.reduce((latest, f) => Math.max(latest, f.round_no), 0);
   if (round > rounds) return null;

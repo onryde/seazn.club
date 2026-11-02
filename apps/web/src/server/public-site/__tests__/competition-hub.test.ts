@@ -3194,6 +3194,16 @@ describe("loadCompetitionHub — W3 T16: a Swiss table says Round X of N", () =>
     expect(roundOf(doc, "sw1")).toEqual({ round: 2, of: 5, state: "complete" });
   });
 
+  it("a board is seated as isSwissBoardSeated says, from the row's own outcome: a one-seat WALKOVER (an award) is a board, a one-seat STUB (no award) is not", async () => {
+    const decided = [sb("a", 1, "decided"), sb("b", 1, "decided", "e3", "e4")];
+    const walked = F({ id: "w", stage_id: "sw1", round_no: 2, status: "forfeited", home_entrant_id: "e1", away_entrant_id: null, outcome: { kind: "award", winner: "e1", loser: "e9", method: "walkover" } });
+    const half = F({ id: "t", stage_id: "sw1", round_no: 2, status: "scheduled", home_entrant_id: "e1", away_entrant_id: null, outcome: null });
+    // The walkover's round is the latest seated round: the loader passes the row's outcome through.
+    expect(roundOf(await tablesFor([swissStage()], [...decided, walked]), "sw1")).toEqual({ round: 2, of: 5, state: "complete" });
+    // The stub seats nobody the way Finish and Add a round count it: the chip stays on the decided round 1.
+    expect(roundOf(await tablesFor([swissStage()], [...decided, half]), "sw1")).toEqual({ round: 1, of: 5, state: "complete" });
+  });
+
   it("a completed Swiss is final after the CURRENT rounds (3 once finished early), and a running one on the same rows is not", async () => {
     const rows = [sb("a", 1, "decided"), sb("b", 2, "decided"), sb("c", 3, "decided")];
     expect(roundOf(await tablesFor([swissStage({ swiss_rounds: 3, status: "complete" })], rows), "sw1")).toEqual({ round: 3, of: 3, state: "final" });

@@ -30,8 +30,9 @@ import { Msg, Side, Person, MatchCentreHeader } from "./match-centre-schema.ts";
 // — so the derivation itself is imported instead of restated. `matches-hub.ts`
 // is pure and imports nothing, so pulling it in costs this module nothing.
 import { deriveHubTabs } from "../../lib/matches-hub.ts";
-// The Swiss chip's closed state set (W3 T16), from the lib that computes it — same reason, same `.ts` extension.
-import { SWISS_ROUND_STATES } from "../../lib/swiss-round-state.ts";
+// The Swiss chip's closed state set (W3 T16), from the import-free leaf the lib that computes it re-exports — same reason,
+// same `.ts` extension (the leaf, not `swiss-round-state.ts`: that one reaches `@/` aliases this module's loader cannot resolve).
+import { SWISS_ROUND_STATES } from "../../lib/swiss-round-state-names.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because
  *  `lib/matches-hub.ts` — which owns the same vocabulary as a client-safe

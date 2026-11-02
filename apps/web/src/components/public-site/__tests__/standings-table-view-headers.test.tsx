@@ -403,6 +403,17 @@ describe("hub table: a Swiss table's Round X of N chip (W3 T16, SW-L11)", () => 
     expect(m).toContain(`data-testid="${TESTID}-empty"`);
   });
 
+  it("with a chip the heading takes the row's remaining width (flex-1 basis-0), so a long stage name truncates beside Full division instead of pushing it onto its own line; without a chip the heading's class is the original string", () => {
+    const h3Class = (markup: string) => markup.match(/<h3 class="([^"]*)"/)![1]!;
+    const withChip = h3Class(markupIn({ ...swiss({ round: 2, of: 5, state: "in_play" }), caption: "Spring Championship Swiss Open" }, "en"));
+    expect(withChip.split(/\s+/)).toEqual(expect.arrayContaining(["min-w-0", "truncate", "flex-1", "basis-0"]));
+    expect(h3Class(markupIn(swiss(null), "en"))).toBe("min-w-0 truncate font-display text-lg font-semibold text-ink");
+    // the link stays in the same row as the heading, ahead of the chip's own line (source order: heading, chip, link)
+    const m = markupIn({ ...swiss({ round: 2, of: 5, state: "in_play" }), caption: "Spring Championship Swiss Open" }, "en");
+    expect(m.indexOf(`data-testid="${TESTID}-full"`)).toBeGreaterThan(m.indexOf(CHIP));
+    expect(m).toContain('class="order-last basis-full"');
+  });
+
   it("the chip wraps instead of widening the page: a flexible, shrinkable box with no fixed width (the 320px rule)", () => {
     const { tag } = chipOf(markupIn(swiss({ round: 2, of: 5, state: "in_play" }), "en"));
     const classes = tag.match(/class="([^"]*)"/)![1]!.split(/\s+/);
