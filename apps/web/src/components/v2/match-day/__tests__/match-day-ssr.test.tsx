@@ -14,6 +14,10 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import publicEn from "@/dictionaries/en/public.json";
+import publicEs from "@/dictionaries/es/public.json";
+import publicFr from "@/dictionaries/fr/public.json";
+import publicNl from "@/dictionaries/nl/public.json";
+import { LiveScoreBody } from "@/components/public-site/live-score";
 import type { Dict } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
@@ -64,7 +68,11 @@ import type { CompetitionDesk } from "@/server/usecases/competition-desk";
 import { SCORER_ATTENTIONS } from "@/lib/match-day/types";
 import { youtubeVideoId, youtubeWatchUrl } from "@/lib/youtube";
 // The golden-stream corpus and the engine's sport list are shared with the score reader's own suite (task B3): one corpus.
-import { CORPORA, SPORTS, goldenMoments, hasOpenSet, inPlaySummary, liveOf, midOf, tennisMatchTiebreak } from "@/lib/score/__tests__/_golden";
+import { CORPORA, SPORTS, goldenMoments, hasOpenSet, inPlaySummary, liveOf, liveSidesOf, midOf, tennisMatchTiebreak } from "@/lib/score/__tests__/_golden";
+import { levelWords, scoreLevels } from "@/lib/score/levels";
+
+/** A live level's words (TB, MTB, Ad) in English (task F5): what the shell hands its lists. */
+const WORDS = levelWords(publicEn as Dict);
 
 const dict = en as Dict;
 const DICTS = { en, es, fr, nl } as Record<string, Dict>;
@@ -654,7 +662,7 @@ describe("the court list", () => {
       court({ court_id: "c-4", court_name: "Court 4", state: "called", current: fx({ id: "d", stream: null, started_at: null }) }),
       court({ court_id: "c-5", court_name: "Court 5", state: "free", current: null }),
     ];
-    const html = renderToStaticMarkup(<CourtList courts={courts} selectedId="c-3" dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    const html = renderToStaticMarkup(<CourtList words={WORDS} courts={courts} selectedId="c-3" dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
     const rows = rowsOf(html, "md-court-row");
     expect(rows).toHaveLength(5);
     const withBadge = rows.map((r) => r.includes('data-md-stream="live"'));
@@ -669,7 +677,7 @@ describe("the court list", () => {
       court({ court_id: "c-3", state: "free", current: null }),
       court({ court_id: "c-4", state: "in_use_elsewhere", current: null, in_use_by: "Winter Open" }),
     ];
-    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />), "md-court-row");
+    const rows = rowsOf(renderToStaticMarkup(<CourtList words={WORDS} courts={courts} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />), "md-court-row");
     expect(rows[0]).toContain("Zara Khan v Ella Brooks");
     expect(rows[0]).toContain("data-md-row-score");
     expect(rows[1]).toContain(t(dict, "matchDay.state.called"));
@@ -680,7 +688,7 @@ describe("the court list", () => {
   it("V4 — a set sport's row: games won and the current game's points, compact — no brackets, no finished game, no monospace", () => {
     const summary = BADMINTON!;
     const rows = rowsOf(
-      renderToStaticMarkup(<CourtList courts={[goldenCourt("badminton", summary)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />),
+      renderToStaticMarkup(<CourtList words={WORDS} courts={[goldenCourt("badminton", summary)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />),
       "md-court-row",
     );
     expect(rows).toHaveLength(1);
@@ -701,7 +709,7 @@ describe("the court list", () => {
     expect(football, "a football golden stream in play").not.toBeNull();
     expect(isSetSport(football!)).toBe(false);
     const row = rowsOf(
-      renderToStaticMarkup(<CourtList courts={[goldenCourt("football", football!)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />),
+      renderToStaticMarkup(<CourtList words={WORDS} courts={[goldenCourt("football", football!)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />),
       "md-court-row",
     )[0]!;
     expect(row).toContain(`>${esc(football!.headline!)}</span>`);
@@ -709,7 +717,7 @@ describe("the court list", () => {
 
   it("marks the selected court, and only it", () => {
     const courts = [court({ court_id: "c-1" }), court({ court_id: "c-2" })];
-    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId="c-2" dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />), "md-court-row");
+    const rows = rowsOf(renderToStaticMarkup(<CourtList words={WORDS} courts={courts} selectedId="c-2" dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />), "md-court-row");
     expect(rows.map((r) => /aria-current="true"/.test(r.slice(0, r.indexOf(">"))))).toEqual([false, true]);
   });
 });
@@ -727,7 +735,7 @@ function levelText(big: string, attr: "mid" | "live"): string | null {
   return m === null ? null : m[1]!.replace(/&amp;/g, "&");
 }
 const rowScore = (c: MatchDayCourt): string => {
-  const html = renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+  const html = renderToStaticMarkup(<CourtList words={WORDS} courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
   const at = html.indexOf("data-md-row-score");
   return at < 0 ? "" : html.slice(html.indexOf(">", at) + 1, html.indexOf("</span>", at));
 };
@@ -865,6 +873,137 @@ describe("B3 — Match Day reads the score's levels from the engine's structure"
       else expect(withMid, `${key} has no middle level`).toBe(0);
     },
   );
+});
+
+// ---- F4 / F5: one adapter (`scoreLineOf`), in the reader's words -----------------------------------------------------------
+// Owner rulings 10-31 (4) and 11-01. Match Day's court scoreboard and the public match page's large type read ONE adapter, so
+// for every in-play moment of every set sport's golden streams the two draw the same levels; a summary it cannot read keeps the
+// engine's headline WHOLE on both (the public page used to cut a trailing "(…)" off it); and TB / MTB / Ad are the reader's
+// words, taken from each locale's dictionary, on the panel, the row and the public page alike. Sides come from the engine's
+// folded STATE (`liveSidesOf`), never from the string the reader splits.
+describe("F4/F5 — one adapter, in the reader's words: Match Day's court scoreboard and the public match page", () => {
+  const PUBLIC = { en: publicEn, es: publicEs, fr: publicFr, nl: publicNl } as Record<string, Dict>;
+  const NO_OUTCOME = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
+  /** The public match page's large type for `summary`, in `pd`'s words. */
+  const publicLarge = (summary: MatchDaySummary, key: string, pd: Dict): string => {
+    const html = renderToStaticMarkup(
+      <LiveScoreBody
+        data={{ status: "in_play", summary, outcome: null }}
+        entrantNames={{ [HOME.id]: HOME.name, [AWAY.id]: AWAY.name }}
+        sportKey={key}
+        decidedTemplates={NO_OUTCOME}
+        dict={pd}
+      />,
+    );
+    const at = html.indexOf('data-testid="ls-score-large"');
+    return at < 0 ? "" : html.slice(at, html.indexOf("</p>", at));
+  };
+  const publicLevel = (big: string, attr: "mid" | "live"): string | null => {
+    const m = new RegExp(`<span data-ls-score-${attr}[^>]*>([^<]*)</span>`).exec(big);
+    return m === null ? null : m[1]!.replace(/&amp;/g, "&");
+  };
+  /** Match Day's focused court, its scoreboard in `pd`'s words. */
+  const panelIn = (c: MatchDayCourt, pd: Dict): string =>
+    renderToStaticMarkup(
+      <CourtFocus ctx={{ ...ctx, scoreDict: pd }} court={c} backLabel="All courts" onBack={() => {}} onChanged={() => {}} onRefused={() => {}} refreshKey="k" divisions={null} />,
+    );
+  const rowIn = (c: MatchDayCourt, pd: Dict): string => {
+    const html = renderToStaticMarkup(
+      <CourtList words={levelWords(pd)} courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />,
+    );
+    const at = html.indexOf("data-md-row-score");
+    return at < 0 ? "" : html.slice(html.indexOf(">", at) + 1, html.indexOf("</span>", at));
+  };
+  const numbers = (text: string): string[] => text.match(/\d+/g) ?? [];
+  /** A large type's first span: the sets (games) won. */
+  const firstSpan = (big: string): string => /<span[^>]*>([^<]*)<\/span>/.exec(big)?.[1] ?? "";
+
+  it.each(["badminton", "tabletennis", "volleyball", "tennis"])(
+    "every in-play moment of %s: the court scoreboard and the public page draw the same won · mid · live (count reported)",
+    (key) => {
+      const kinds = new Map<string, number>();
+      for (const m of goldenMoments(key)) {
+        if (m.decided || !isSetSport(m.summary)) continue;
+        const where = `${key} stream ${m.stream} @${m.events}`;
+        const md = largeOf(scoreboardOf(panelIn(goldenCourt(key, m.summary), pub)));
+        const pg = publicLarge(m.summary, key, pub);
+        expect(md, where).not.toBe("");
+        expect(pg, where).not.toBe("");
+        // The sets won: the same two numbers (the surfaces set them with their own dash).
+        expect(numbers(firstSpan(md)), where).toEqual(numbers(gamesWon(m.summary)));
+        expect(numbers(firstSpan(pg)), where).toEqual(numbers(gamesWon(m.summary)));
+        expect(levelText(md, "mid"), where).toBe(publicLevel(pg, "mid"));
+        expect(levelText(md, "live"), where).toBe(publicLevel(pg, "live"));
+        const live = scoreLevels(m.summary)?.live ?? null;
+        const kind = live === null ? "none" : live.kind === "game" && live.sides.includes("Ad") ? "advantage" : live.kind;
+        kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+      }
+      console.info(`[F4 one adapter] ${key}: ${JSON.stringify(Object.fromEntries(kinds))}`);
+      const total = [...kinds.values()].reduce((n, x) => n + x, 0);
+      expect(total, `${key} in-play moments`).toBeGreaterThan(20);
+      if (key === "tennis") {
+        // Tennis in normal play, in a set tie-break and at advantage — each seen, or the sweep could not tell them apart.
+        for (const k of ["game", "tiebreak", "advantage"]) expect(kinds.get(k) ?? 0, `tennis moments: ${k}`).toBeGreaterThan(0);
+      } else {
+        expect(kinds.get("set") ?? 0, `${key} moments with live points`).toBeGreaterThan(20);
+      }
+    },
+  );
+
+  it("TB, MTB and Ad read in the reader's words on the panel, the row and the public page — all four locales", () => {
+    const tennis = goldenMoments("tennis").filter((m) => !m.decided && isSetSport(m.summary));
+    const tb = tennis.find((m) => scoreLevels(m.summary)?.live?.kind === "tiebreak");
+    const ad = tennis.find((m) => scoreLevels(m.summary)?.live?.kind === "game" && liveSidesOf(m)!.includes("Ad"));
+    const mtb = tennisMatchTiebreak(["H", "A", "A", "H", "H", "H"]);
+    expect(tb, "a tennis golden moment in a set tie-break").toBeDefined();
+    expect(ad, "a tennis golden moment at advantage").toBeDefined();
+    const cases = [
+      { name: "tiebreak", m: tb!, mark: "matchCentre.level.tiebreak" },
+      { name: "matchTiebreak", m: mtb, mark: "matchCentre.level.matchTiebreak" },
+      { name: "advantage", m: ad!, mark: null },
+    ] as const;
+    let checked = 0;
+    let unlikeEnglish = 0;
+    for (const [locale, pd] of Object.entries(PUBLIC)) {
+      for (const c of cases) {
+        // Expected from the locale's dictionary and the engine's state: never from the code under test.
+        const word = (d: Dict, side: string) => (side === "Ad" ? (d["matchCentre.level.advantage"] as string) : side);
+        const expectedIn = (d: Dict) => {
+          const [h, a] = liveSidesOf(c.m)!;
+          const points = `${word(d, h)}–${word(d, a)}`;
+          return c.mark === null ? points : `${d[c.mark] as string} ${points}`;
+        };
+        const want = expectedIn(pd);
+        const where = `${locale} ${c.name}`;
+        const crt = goldenCourt("tennis", c.m.summary);
+        expect(levelText(largeOf(scoreboardOf(panelIn(crt, pd))), "live"), `${where}: panel`).toBe(want);
+        expect(publicLevel(publicLarge(c.m.summary, "tennis", pd), "live"), `${where}: public page`).toBe(want);
+        expect(rowIn(crt, pd).split(" · ").at(-1), `${where}: row`).toBe(want);
+        checked++;
+        if (want !== expectedIn(pub)) unlikeEnglish++;
+      }
+    }
+    expect(checked).toBe(4 * 3);
+    // French writes all three differently (JD, SJD, AV): an English word leaking through any surface is visible here.
+    expect(unlikeEnglish, "cases whose words are not English").toBeGreaterThanOrEqual(3);
+  });
+
+  it("a set summary the levels cannot be read from keeps the engine's headline WHOLE on both surfaces — no '(…)' cut off its end", () => {
+    // A finished tennis set that went to a tie-break: the headline ends "7–6(5)". One field set to a kind the reader does not
+    // know, so the reader refuses — the case the public page's old regex fallback ate the "(5)" in.
+    const m = goldenMoments("tennis").find(
+      (x) => x.decided && !hasOpenSet(x.summary) && /\([^)]*\)\s*$/.test(x.summary.headline ?? "") && typeof detailOf(x.summary).game === "string",
+    );
+    expect(m, "a finished tennis golden match whose headline ends in a tie-break's (n)").toBeDefined();
+    const summary: MatchDaySummary = { ...m!.summary, detail: { ...detailOf(m!.summary), gameKind: "notAKind" } };
+    const headline = summary.headline!;
+    expect(scoreLevels(summary), "premise: the reader refuses this shape").toBeNull();
+    expect(scoreLine({ summary })).toEqual({ kind: "plain", text: headline });
+    const pg = publicLarge(summary, "tennis", pub);
+    expect(pg).toContain(`>${esc(headline)}`);
+    const md = scoreboardOf(panelIn(goldenCourt("tennis", summary), pub));
+    expect(md).toContain(`>${esc(headline)}<`);
+  });
 });
 
 describe("every sport: the court noun and the scoreboard follow the sport (G5)", () => {
@@ -1361,7 +1500,7 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
 });
 
 describe("A4 — no_scorer / not_recording mark the affected court's row", () => {
-  const rowOf = (c: MatchDayCourt) => renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+  const rowOf = (c: MatchDayCourt) => renderToStaticMarkup(<CourtList words={WORDS} courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
 
   it("EMPTY CASE FIRST: a playing court with no attention carries no mark", () => {
     const html = rowOf(court());
@@ -1374,7 +1513,7 @@ describe("A4 — no_scorer / not_recording mark the affected court's row", () =>
     for (const kind of SCORER_ATTENTIONS) {
       for (const [locale, d] of Object.entries(DICTS)) {
         const html = renderToStaticMarkup(
-          <CourtList courts={[court({ current: fx({ scorer_attention: kind }) })]} selectedId={null} dict={d} locale="en" tz="Europe/London" onSelect={() => {}} />,
+          <CourtList words={WORDS} courts={[court({ current: fx({ scorer_attention: kind }) })]} selectedId={null} dict={d} locale="en" tz="Europe/London" onSelect={() => {}} />,
         );
         expect(html, `${locale} ${kind}`).toContain(`data-scorer="${kind}"`);
         expect(html, `${locale} ${kind}`).toContain(`data-md-scorer="${kind}"`);
@@ -1546,7 +1685,7 @@ const noCourtFocus = (f: MatchDayFixture, c: MatchDayCtx = ctx) =>
 
 const noCourtList = (fixtures: MatchDayFixture[], openLabel = t(dict, "matchDay.focus.openPad"), selectedId: string | null = null) =>
   renderToStaticMarkup(
-    <NoCourtList
+    <NoCourtList words={WORDS}
       fixtures={fixtures}
       noun={noCourtNoun(fixtures)}
       selectedId={selectedId}
@@ -1604,7 +1743,7 @@ describe("B4 — 'Playing, no court': the group under the courts", () => {
     expect(first).toContain(`>${esc("Girls U14")} · ${esc("Swiss round 3")} · ${esc(rows[0]!.round.label)}<`);
     expect(first).toContain(`data-round-code="${rows[0]!.round.code}"`);
     // The court rows' own score form (`compactScore` of the engine's structure), not a headline typed here.
-    expect(first).toContain(`>${esc(compactScore(scoreLine(rows[0]!)!))}<`);
+    expect(first).toContain(`>${esc(compactScore(scoreLine(rows[0]!)!, WORDS))}<`);
     expect(first).toContain('data-md-stream="live"');
     expect(first).toContain('data-scorer="no_scorer"');
     expect(first).toContain(`>${t(dict, "matchDay.scorer.no_scorer")}<`);
@@ -2035,7 +2174,7 @@ describe("E2-3 — a court's closure", () => {
 
   it("the court row: a break still to come, closed until, closed for the rest of today — and nothing while open", () => {
     const row = (closure: MatchDayCourt["closure"]) =>
-      renderToStaticMarkup(<CourtList courts={[free5(closure)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+      renderToStaticMarkup(<CourtList words={WORDS} courts={[free5(closure)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
     expect(closureOf(row(LATER))).toBe("Closed 14:00–15:00");
     expect(closureOf(row(NOW_UNTIL))).toBe("Closed until 15:00");
     expect(closureOf(row(NOW_REST))).toBe("Closed for the rest of today");
@@ -2052,7 +2191,7 @@ describe("E2-3 — a court's closure", () => {
       court({ court_name: "Court 5", state: "free", current: null, closure: LATER }),
       court({ court_name: "Court 5", state: "in_use_elsewhere", current: null, in_use_by: "Winter Open", closure: LATER }),
     ]) {
-      const html = renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+      const html = renderToStaticMarkup(<CourtList words={WORDS} courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
       expect(html.split('data-testid="md-closure"').length - 1, c.state).toBe(1);
       expect(closureOf(html), c.state).toBe("Closed 14:00–15:00");
       checked++;

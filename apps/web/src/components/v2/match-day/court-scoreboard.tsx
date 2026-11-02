@@ -26,6 +26,7 @@ import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { servingSide } from "@/lib/public-site";
 import type { MatchDayFixture, MatchDaySummary } from "@/lib/match-day/types";
 import { scoreLine } from "@/lib/match-day/view";
+import { levelWords, liveLabel } from "@/lib/score/levels";
 
 /** `LiveScoreBody` prints a decided outcome's sentence from these; a playing court's match has no outcome (it is passed
  *  `outcome: null`), so no template is ever read. */
@@ -139,7 +140,7 @@ export function CourtScoreboard({
                   <span data-md-score-mid className="text-3xl text-court-ink/75 sm:text-4xl">{`${line.levels.mid[0]}–${line.levels.mid[1]}`}</span>
                 )}
                 {line.levels.live !== null && (
-                  <span data-md-score-live className="text-3xl text-court-ink/75 sm:text-4xl">{line.levels.live.label}</span>
+                  <span data-md-score-live className="text-3xl text-court-ink/75 sm:text-4xl">{liveLabel(line.levels.live, levelWords(scoreDict))}</span>
                 )}
               </p>
               {servingName !== null && (

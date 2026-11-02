@@ -17,6 +17,7 @@ import { t } from "@/lib/i18n-runtime";
 import { servingSide } from "@/lib/public-site";
 import type { MatchDayFixture } from "@/lib/match-day/types";
 import { scoreLine } from "@/lib/match-day/view";
+import { levelWords, liveLabel } from "@/lib/score/levels";
 import type { PublicReplayPart } from "@/lib/youtube";
 
 export function CourtStreamPreview({
@@ -80,7 +81,7 @@ export function CourtStreamPreview({
                 <span data-md-score-mid className="font-display text-2xl font-semibold leading-none tabular-nums text-court-ink/75">{`${line.levels.mid[0]}–${line.levels.mid[1]}`}</span>
               )}
               {line.levels.live !== null && (
-                <span data-md-score-live className="font-display text-2xl font-semibold leading-none tabular-nums text-court-ink/75">{line.levels.live.label}</span>
+                <span data-md-score-live className="font-display text-2xl font-semibold leading-none tabular-nums text-court-ink/75">{liveLabel(line.levels.live, levelWords(scoreDict))}</span>
               )}
             </>
           ) : (

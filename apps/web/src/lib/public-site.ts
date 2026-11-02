@@ -320,13 +320,6 @@ export interface SetBreakdown {
  *  membership is how the two surfaces come to disagree. */
 export const GAME_UNIT_SPORTS = new Set(["badminton", "tabletennis"]);
 
-/** The kernel headline carries the open set's points — "1 — 0 (14–11)". The
- *  public match page renders those in the per-set scoreboard card instead, so
- *  it strips the suffix to keep the big scoreline sets-only. */
-export function stripLiveSetPoints(headline: string): string {
-  return headline.replace(/\s*\([^)]*\)\s*$/, "");
-}
-
 export function setBreakdown(summary: unknown, sportKey: string): SetBreakdown | null {
   if (typeof summary !== "object" || summary === null) return null;
   const detail = (summary as { detail?: unknown }).detail;

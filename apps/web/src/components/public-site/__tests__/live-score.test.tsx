@@ -25,7 +25,6 @@ import type { Dict } from "@/lib/i18n-constants";
 import { LiveScoreBody } from "../live-score";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
-import { stripLiveSetPoints } from "@/lib/public-site";
 import type { MatchDaySummary } from "@/lib/match-day/types";
 import { SPORTS, goldenMoments, hasOpenSet, inPlaySummary, liveOf, midOf, setTable, tennisMatchTiebreak } from "@/lib/score/__tests__/_golden";
 
@@ -878,6 +877,8 @@ describe("LiveScoreBody — W2a chess tie-break sentence", () => {
 // on a finished tennis match, corrupted: "7–6(5)" lost its "(5)"). Every summary is the ENGINE's fold of a recorded golden
 // stream; every expected level is read off the engine's own fields (`_golden.ts` oracles), never the headline.
 describe("LiveScoreBody — B3: a set sport's large type is its levels", () => {
+  /** The large type's reading of a headline before task F4 (`stripLiveSetPoints`, retired): the witness only. */
+  const retiredHeadlineCut = (headline: string): string => headline.replace(/\s*\([^)]*\)\s*$/, "");
   const emptyTemplates: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
   const names = { H: "Riverside FC", A: "Oakdale United" };
   const render = (status: string, summary: MatchDaySummary, sportKey: string, outcome: { kind: string; winner?: string } | null = null) =>
@@ -955,7 +956,7 @@ describe("LiveScoreBody — B3: a set sport's large type is its levels", () => {
         x.decided &&
         !hasOpenSet(x.summary) &&
         setTable(x.summary).some((s) => (s as { tb?: unknown }).tb !== undefined) &&
-        stripLiveSetPoints(x.summary.headline!) !== x.summary.headline,
+        retiredHeadlineCut(x.summary.headline!) !== x.summary.headline,
     );
     expect(m, "a finished tennis golden match with a tie-break set").toBeDefined();
     const big = largeOf(render("decided", m!.summary, "tennis", { kind: "win", winner: "H" }));
@@ -1003,14 +1004,16 @@ describe("LiveScoreBody — B3: a set sport's large type is its levels", () => {
     expect(checked).toBeGreaterThan(4);
   });
 
-  it("a set summary the reader cannot read (a side line that is not a count) keeps the legacy large type", () => {
+  // Task F4 (owner ruling 10-31 (4)): this used to pin the legacy reading — the headline with its trailing "(…)" cut off. The
+  // ruling drops that regex: a summary the levels cannot be read from keeps the engine's headline WHOLE, as Match Day does.
+  it("a set summary the reader cannot read (a side line that is not a count) keeps the engine's headline whole — no '(…)' cut", () => {
     const summary: MatchDaySummary = {
       headline: "1 — 0 · 21–15 (14–11)",
       perSide: [{ entrantId: "H", line: "6-4 3-6" }, { entrantId: "A", line: "0" }],
       detail: { sets: [{ home: 21, away: 15, closed: true }, { home: 14, away: 11, closed: false }] },
     };
     const big = largeOf(render("in_play", summary, "badminton"));
-    expect(big.endsWith(">1 — 0 · 21–15")).toBe(true);
+    expect(big.endsWith(">1 — 0 · 21–15 (14–11)")).toBe(true);
     expect(big).not.toContain("data-ls-score-");
   });
 });

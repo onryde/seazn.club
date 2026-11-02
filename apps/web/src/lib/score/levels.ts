@@ -15,7 +15,19 @@
 //
 // Any other shape — cricket's innings, a football clock, a board game — answers null, and the caller keeps that sport's own
 // headline and scorebug. Client-safe and DOM-free.
+//
+// Task F4 (owner ruling 10-31 (4), engine Q3): `scoreLineOf` is the ONE adapter both surfaces draw their large type from —
+// Match Day's court scoreboard and rows (`scoreLine`, lib/match-day/view.ts) and the public match page (`LiveScoreBody`): the
+// levels, or, for a summary they cannot be read from, the engine's headline WHOLE. No surface cuts the headline with a regex any
+// more: the public page's `stripLiveSetPoints` cut "(…)" off its end, which on a finished tie-break set ("7–6(5)") was the
+// loser's tie-break points.
+//
+// Task F5 (owner, 11-01): a live level's words — TB, MTB, Ad — are the reader's language (`levelWords`, the public dictionary's
+// `matchCentre.level.*`), so a label is composed from the level's structured sides (`liveLabel`), never printed as the engine's
+// English `detail.game`.
 import { setBreakdown } from "@/lib/public-site";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
 
 export interface ScoreLevels {
   /** Sets (badminton and table tennis: games) won, home then away — each side's own `perSide` line, so a forfeit's credited
@@ -33,9 +45,7 @@ export interface ScoreLevels {
 }
 
 export interface LiveLevel {
-  /** The level's score as the engine writes it, home first: one string for a row that has room for one ("40–30"). */
-  label: string;
-  /** The same score split per side, home then away, for a surface that sets each side's figure on its own line ("40", "30").
+  /** The score split per side, home then away, for a surface that sets each side's figure on its own line ("40", "30").
    *  A set sport's are the open set's own numbers; a tennis game's are the two halves of the engine's `detail.game` (the one
    *  place the engine states a game's points, as a string) - split under the engine's own three formats and refused otherwise. */
   sides: readonly [string, string];
@@ -76,7 +86,7 @@ export function scoreLevels(summary: unknown): ScoreLevels | null {
     return {
       won,
       mid: null,
-      live: open === undefined ? null : { label: `${open.home}–${open.away}`, sides: [String(open.home), String(open.away)], kind: "set" },
+      live: open === undefined ? null : { sides: [String(open.home), String(open.away)], kind: "set" },
     };
   }
   // Nested (tennis). An unknown game kind is a shape this does not know: the caller's headline is the safe answer.
@@ -84,15 +94,64 @@ export function scoreLevels(summary: unknown): ScoreLevels | null {
   if (open === undefined) return { won, mid: null, live: null };
   if (gameKind === "matchTiebreak") {
     // The open entry holds the match tie-break's POINTS, not games: there is no middle level, and the points are structured.
-    return { won, mid: null, live: { label: game, sides: [String(open.home), String(open.away)], kind: "matchTiebreak" } };
+    return { won, mid: null, live: { sides: [String(open.home), String(open.away)], kind: "matchTiebreak" } };
   }
   const halves = (gameKind === "tiebreak" ? TIEBREAK_LINE : GAME_LINE).exec(game);
   if (halves === null) return null;
   return {
     won,
     mid: [open.home, open.away],
-    live: { label: game, sides: [halves[1]!, halves[2]!], kind: gameKind === "tiebreak" ? "tiebreak" : "game" },
+    live: { sides: [halves[1]!, halves[2]!], kind: gameKind === "tiebreak" ? "tiebreak" : "game" },
   };
+}
+
+/** A large type's score, as every surface draws it (task F4): a set sport's levels, else the engine's headline whole. Null when
+ *  the engine has published no headline (not started). */
+export type ScoreLine = { kind: "sets"; levels: ScoreLevels } | { kind: "plain"; text: string };
+
+export function scoreLineOf(summary: unknown): ScoreLine | null {
+  if (typeof summary !== "object" || summary === null) return null;
+  const headline = (summary as { headline?: unknown }).headline;
+  if (typeof headline !== "string" || headline === "") return null;
+  const levels = scoreLevels(summary);
+  return levels === null ? { kind: "plain", text: headline } : { kind: "sets", levels };
+}
+
+/** The words a live level is labelled with, in the reader's language (task F5). */
+export interface LevelWords {
+  /** A set tie-break's mark: en "TB". */
+  tiebreak: string;
+  /** A match tie-break's mark: en "MTB". */
+  matchTiebreak: string;
+  /** A game point called advantage: en "Ad". */
+  advantage: string;
+}
+
+/** `LevelWords` from a dictionary holding the public `matchCentre.level.*` keys (the public dictionary, or Match Day's
+ *  `scoreDict` slice of it). */
+export function levelWords(dict: Dict): LevelWords {
+  return {
+    tiebreak: t(dict, "matchCentre.level.tiebreak"),
+    matchTiebreak: t(dict, "matchCentre.level.matchTiebreak"),
+    advantage: t(dict, "matchCentre.level.advantage"),
+  };
+}
+
+/** One side's live figure in the reader's words: a standard game's advantage call is `words.advantage`; every other figure is a
+ *  number and reads as itself. */
+export function liveSide(live: LiveLevel, i: 0 | 1, words: LevelWords): string {
+  const side = live.sides[i];
+  return live.kind === "game" && side === "Ad" ? words.advantage : side;
+}
+
+/** A live level as one string for a row that has room for one, home first, in the reader's words: "12–10" (a set), "40–30" /
+ *  "Ad–40" (a game), "TB 3–2", "MTB 5–3". With the English words it is exactly the engine's own `detail.game` line for tennis
+ *  (`gameScoreLine`), which is how its tests pin it. */
+export function liveLabel(live: LiveLevel, words: LevelWords): string {
+  const points = `${liveSide(live, 0, words)}–${liveSide(live, 1, words)}`;
+  if (live.kind === "tiebreak") return `${words.tiebreak} ${points}`;
+  if (live.kind === "matchTiebreak") return `${words.matchTiebreak} ${points}`;
+  return points;
 }
 
 /**

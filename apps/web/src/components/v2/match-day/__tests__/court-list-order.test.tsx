@@ -35,6 +35,11 @@ import {
 } from "@/lib/match-day/view";
 import { CourtList } from "@/components/v2/match-day/court-list";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import publicEnForWords from "@/dictionaries/en/public.json";
+import { levelWords } from "@/lib/score/levels";
+
+/** A live level's words (TB, MTB, Ad) in English (task F5): what the shell hands its lists. */
+const WORDS = levelWords(publicEnForWords as Dict);
 
 const dict = en as Dict;
 const DICTS: Record<Locale, Dict> = { en, es, fr, nl } as Record<Locale, Dict>;
@@ -340,9 +345,9 @@ describe("m5 — the fold label: a range when the names make ONE, else the count
 
   it("as drawn: the folded row carries the count-and-venue label, and opening it lists EVERY folded court by name", () => {
     const day = orderCourts([playing(1), ...[4, 6, 9, 12].map((n) => at(n, HALL))]);
-    const html = renderToStaticMarkup(<CourtList courts={day} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    const html = renderToStaticMarkup(<CourtList words={WORDS} courts={day} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
     expect(html).toContain("4 free courts · City Sports Hall");
-    const island = renderIsland(CourtList, { courts: day, selectedId: null, dict, locale: "en" as Locale, tz: "Europe/London", onSelect: () => {} });
+    const island = renderIsland(CourtList, { courts: day, selectedId: null, dict, words: WORDS, locale: "en" as Locale, tz: "Europe/London", onSelect: () => {} });
     const toggle = () => island.tree().find((e) => propsOf(e)["data-testid"] === "md-court-fold-toggle")!;
     (propsOf(toggle()).onClick as () => void)();
     const listed = island.tree().filter((e) => propsOf(e).court !== undefined && (propsOf(e).court as MatchDayCourt).state === "free").map((e) => (propsOf(e).court as MatchDayCourt).court_name);
@@ -369,7 +374,7 @@ describe("m2 — a closed court is not counted free", () => {
 
   it("the row says 'Closed', not 'Free'; the dot is its own; a free court still says 'Free'", () => {
     const render = (courts: MatchDayCourt[]) =>
-      renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+      renderToStaticMarkup(<CourtList words={WORDS} courts={courts} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
     const html = render(orderCourts([playing(1), free(2), closed(3)]));
     const rowOf = (id: string) => new RegExp(`<button[^>]*data-court-id="${id}"[\\s\\S]*?</button>`).exec(html)![0];
     expect(rowOf("c-3")).toContain(">Closed</span>");
@@ -383,7 +388,7 @@ describe("m2 — a closed court is not counted free", () => {
 
   it("closed courts list AFTER the fold row, outside it; opening the fold does not move them", () => {
     const day = orderCourts([free(5), free(6), free(7), playing(1), closed(2), closed(3)]);
-    const html = renderToStaticMarkup(<CourtList courts={day} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    const html = renderToStaticMarkup(<CourtList words={WORDS} courts={day} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
     const at = (needle: string) => html.indexOf(needle);
     expect(at('data-court-id="c-1"')).toBeGreaterThan(-1);
     expect(at('data-testid="md-court-fold"')).toBeGreaterThan(at('data-court-id="c-1"'));
@@ -414,7 +419,7 @@ describe("the court list as drawn", () => {
   const rowsOf = (html: string): string[] =>
     [...html.matchAll(/data-testid="md-court-row" data-court-id="([^"]+)"/g)].map((m) => m[1]!);
   const render = (courts: MatchDayCourt[], selectedId: string | null = null) =>
-    renderToStaticMarkup(<CourtList courts={courts} selectedId={selectedId} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    renderToStaticMarkup(<CourtList words={WORDS} courts={courts} selectedId={selectedId} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
 
   const tenCourts = orderCourts([
     free(5), free(6), free(7), free(8), free(9), free(10),
@@ -451,7 +456,7 @@ describe("the court list as drawn", () => {
   });
 
   it("the row opens and closes in place, and the courts it opens are the folded ones, in order", () => {
-    const island = renderIsland(CourtList, { courts: tenCourts, selectedId: null, dict, locale: "en" as Locale, tz: "Europe/London", onSelect: () => {} });
+    const island = renderIsland(CourtList, { courts: tenCourts, selectedId: null, dict, words: WORDS, locale: "en" as Locale, tz: "Europe/London", onSelect: () => {} });
     const toggle = (tree: ReactElement[]) => tree.find((e) => propsOf(e)["data-testid"] === "md-court-fold-toggle")!;
     const folded = (tree: ReactElement[]) =>
       tree.filter((e) => propsOf(e).court !== undefined && (propsOf(e).court as MatchDayCourt).state === "free" && (propsOf(e).court as MatchDayCourt).queue.length === 0);

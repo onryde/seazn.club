@@ -27,6 +27,10 @@ import { FreeCourtBody } from "../candidate-list";
 import { CourtFocus, NoCourtFocus, type MatchDayCtx } from "../court-focus";
 import { CourtList, NoCourtList } from "../court-list";
 import { MatchRoundChip } from "../round-chip";
+import { levelWords } from "@/lib/score/levels";
+
+/** A live level's words (TB, MTB, Ad) in English (task F5): what the shell hands its lists. */
+const WORDS = levelWords(publicEn as Dict);
 
 const dict = en as Dict;
 const DICTS: Record<Locale, Dict> = { en, es, fr, nl } as Record<Locale, Dict>;
@@ -179,7 +183,7 @@ describe("MatchRoundChip — the chip itself", () => {
 
 describe("the court list", () => {
   const list = (courts: MatchDayCourt[]) =>
-    renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    renderToStaticMarkup(<CourtList words={WORDS} courts={courts} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
 
   it("a playing court's row carries the chip of the match on it, before the names", () => {
     const html = list([court()]);
@@ -224,7 +228,7 @@ describe("Playing, no court", () => {
   it("each row: the chip before the names, and the meta line ends on the round's FULL name", () => {
     const rows = [fx({ id: "n-1", round: roundOf("ko-f") }), fx({ id: "n-2", round: PLAIN, stage_label: "Swiss" })];
     const html = renderToStaticMarkup(
-      <NoCourtList fixtures={rows} noun="court" selectedId={null} dict={dict} hrefOf={(f) => routes.fixture("acme", "open", f.division_slug, f.fixture_no)} openLabel="Open pad" onSelect={() => {}} />,
+      <NoCourtList words={WORDS} fixtures={rows} noun="court" selectedId={null} dict={dict} hrefOf={(f) => routes.fixture("acme", "open", f.division_slug, f.fixture_no)} openLabel="Open pad" onSelect={() => {}} />,
     );
     expect(chipsOf(html).map((x) => x.code)).toEqual([roundOf("ko-f").code, "R2"]);
     for (const r of rows) {

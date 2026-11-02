@@ -5,7 +5,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import { fmtPublicTime } from "@/lib/format";
 import { venueNoun, type VenueNoun } from "@/lib/venue";
-import { scoreLevels, type ScoreLevels } from "@/lib/score/levels";
+import { liveLabel, scoreLineOf, type LevelWords, type ScoreLine } from "@/lib/score/levels";
 import type { Attention, Severity } from "@/lib/division-phase";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
 import { needsYouKey } from "@/components/v2/desk/needs-you";
@@ -30,23 +30,21 @@ import type {
  * has published one.
  *
  * The levels are read off the summary's structure, never its headline: a tie-break's "7–6(3)" ends a headline the way a game's
- * live points do, and only the structure says which is which.
+ * live points do, and only the structure says which is which. It is `scoreLineOf` (task F4): the public match page's large type
+ * reads the same one.
  */
-export type ScoreLine = { kind: "sets"; levels: ScoreLevels } | { kind: "plain"; text: string };
+export type { ScoreLine };
 
 export function scoreLine(f: Pick<MatchDayFixture, "summary">): ScoreLine | null {
-  const s = f.summary;
-  if (s === null || !s.headline) return null;
-  const levels = scoreLevels(s);
-  return levels === null ? { kind: "plain", text: s.headline } : { kind: "sets", levels };
+  return scoreLineOf(f.summary);
 }
 
 /** The court list's one-line form of `scoreLine`: "0–1 · 12–10" for a set sport, "1–0 · 3–2 · 40–30" for tennis (sets · games ·
- *  points), the sport's own headline otherwise. */
-export function compactScore(line: ScoreLine): string {
+ *  points; "TB 3–2", "Ad–40" in the reader's `words`, task F5), the sport's own headline otherwise. */
+export function compactScore(line: ScoreLine, words: LevelWords): string {
   if (line.kind === "plain") return line.text;
   const { won, mid, live } = line.levels;
-  return [`${won[0]}–${won[1]}`, ...(mid === null ? [] : [`${mid[0]}–${mid[1]}`]), ...(live === null ? [] : [live.label])].join(" · ");
+  return [`${won[0]}–${won[1]}`, ...(mid === null ? [] : [`${mid[0]}–${mid[1]}`]), ...(live === null ? [] : [liveLabel(live, words)])].join(" · ");
 }
 
 /** The v1 envelope's optimistic-concurrency refusal (api-v1/http.ts): a call or undo that raced another schedule write. */

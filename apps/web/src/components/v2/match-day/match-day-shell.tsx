@@ -63,6 +63,7 @@ import { browserBandPollDeps, startBandPolling } from "@/components/v2/desk/band
 import { NeedsYou } from "@/components/v2/desk/needs-you";
 import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court-focus";
 import { CourtList, NoCourtList } from "./court-list";
+import { levelWords } from "@/lib/score/levels";
 import { VenueFilter } from "./venue-filter";
 
 /** How often the page re-reads the closures against its clock: a break is minutes, so a minute is exact enough (m1). */
@@ -183,6 +184,7 @@ export function MatchDayShell({
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
   const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen };
+  const words = levelWords(scoreDict);
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
 
@@ -355,13 +357,14 @@ export function MatchDayShell({
           )}
           <div data-testid="md-list" className={`grid min-w-0 gap-5 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
             {courts.length > 0 && (
-              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} locale={locale} tz={view.tz} onSelect={open} />
+              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} words={words} locale={locale} tz={view.tz} onSelect={open} />
             )}
             <NoCourtList
               fixtures={noCourt}
               noun={noCourtNoun(noCourt)}
               selectedId={focusedMatch?.id ?? null}
               dict={dict}
+              words={words}
               hrefOf={(f) => fixtureHref(ctx, f)}
               openLabel={t(dict, readOnly ? "matchDay.focus.openMatch" : "matchDay.focus.openPad")}
               onSelect={openMatch}

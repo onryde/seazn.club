@@ -4,11 +4,20 @@
 // reader's own path: sets won are counted from the closed sets, a set sport's live points are the match totals less the closed
 // sets, tennis's games are `detail.games` and its live line is `detail.game`.
 import { describe, expect, it } from "vitest";
-import { stripLiveSetPoints } from "@/lib/public-site";
-import { courtSubLines, scoreLevels } from "@/lib/score/levels";
+import publicEn from "@/dictionaries/en/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { courtSubLines, levelWords, liveLabel, scoreLevels, type LiveLevel, type ScoreLevels } from "@/lib/score/levels";
 import { CORPORA, SPORTS, courtSubLinesOracle, goldenMoments, liveSidesOf, tennisMatchTiebreak, type GoldenMoment } from "./_golden";
 
 type SetEntry = { home: number; away: number; closed: boolean; tb?: unknown; mtb?: unknown };
+/** The large type's reading of a headline before task F4 (`stripLiveSetPoints`, retired): kept here only as the witness that the
+ *  headline could not be read this way. */
+const retiredHeadlineCut = (headline: string): string => headline.replace(/\s*\([^)]*\)\s*$/, "");
+/** The English level words (task F5): with them a composed label is exactly the engine's own `detail.game` line, so each
+ *  expectation below that names the engine's string pins the composition too. */
+const EN_WORDS = levelWords(publicEn as Dict);
+const withLabel = (l: LiveLevel | null) => (l === null ? null : { label: liveLabel(l, EN_WORDS), ...l });
+const labelled = (l: ScoreLevels | null) => (l === null ? null : { ...l, live: withLabel(l.live) });
 const detailOf = (m: GoldenMoment): Record<string, unknown> => (m.summary.detail ?? {}) as Record<string, unknown>;
 const setsOf = (m: GoldenMoment): SetEntry[] | null => {
   const sets = detailOf(m).sets;
@@ -98,7 +107,7 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
         const where = `${key} stream ${m.stream} @${m.events}`;
         expect(levels.mid, where).toBeNull();
         if (sets.some((s) => !s.closed)) {
-          expect(levels.live, where).toEqual({ label: `${liveHome}–${liveAway}`, sides: liveSidesOf(m), kind: "set" });
+          expect(withLabel(levels.live), where).toEqual({ label: `${liveHome}–${liveAway}`, sides: liveSidesOf(m), kind: "set" });
           // The open set has points on the board, else the equality above would hold of a 0–0 for any reading.
           expect(liveHome + liveAway, where).toBeGreaterThan(0);
           counts[m.decided ? "stopped" : "live"]++;
@@ -158,14 +167,14 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
       } else {
         expect(levels.mid, where).toEqual([games.home, games.away]);
       }
-      expect(levels.live, where).toEqual({
+      expect(withLabel(levels.live), where).toEqual({
         label: game,
         sides: liveSidesOf(m),
         kind: d.gameKind === "standard" ? "game" : d.gameKind,
       });
       checked++;
       // A moment where the three levels differ from each other, or a swap of two of them could not be seen.
-      if (levels.mid !== null && levels.live!.label !== `${levels.mid[0]}–${levels.mid[1]}` && levels.won[0] !== levels.mid[0]) distinct++;
+      if (levels.mid !== null && liveLabel(levels.live!, EN_WORDS) !== `${levels.mid[0]}–${levels.mid[1]}` && levels.won[0] !== levels.mid[0]) distinct++;
     }
     expect(checked, "tennis moments with a set in progress").toBeGreaterThan(500);
     expect(notStarted, "tennis moments between sets / before the first point").toBeGreaterThan(20);
@@ -180,8 +189,8 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
       const games = detailOf(m).games as { home: number; away: number };
       const where = `stream ${m.stream} @${m.events}`;
       expect(levels.mid, where).toEqual([games.home, games.away]);
-      expect(levels.live!.label, where).toMatch(/^TB \d+–\d+$/);
-      expect(levels.live!.label, where).toBe(detailOf(m).game);
+      expect(liveLabel(levels.live!, EN_WORDS), where).toMatch(/^TB \d+–\d+$/);
+      expect(liveLabel(levels.live!, EN_WORDS), where).toBe(detailOf(m).game);
       // Each side's own tie-break points, from the engine's folded state, not split off the label.
       expect(levels.live!.sides, where).toEqual(liveSidesOf(m));
       expect(levels.live!.kind, where).toBe("tiebreak");
@@ -191,7 +200,7 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
   it("a finished set's tie-break score ('7–6(5)') never leaks into live — the headline reading it replaced did", () => {
     // A set that went to a tie-break is a closed entry carrying `tb`; the headline writes it "7–6(3)" and, on a decided match,
     // ends with that "(3)". Read off the headline, the loser's tie-break points were the "live" score and the large type lost
-    // them (`stripLiveSetPoints`); read off the structure, there is no live level once every set is closed.
+    // them (`stripLiveSetPoints`, retired in F4); read off the structure, there is no live level once every set is closed.
     let checked = 0;
     let headlineWouldMisread = 0;
     for (const m of MOMENTS.get("tennis")!) {
@@ -199,7 +208,7 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
       if (sets === null || !m.decided || sets.some((s) => !s.closed) || !sets.some((s) => s.closed && s.tb !== undefined)) continue;
       expect(scoreLevels(m.summary)!.live, `stream ${m.stream} @${m.events}`).toBeNull();
       checked++;
-      if (/\(([^)]*)\)\s*$/.test(m.summary.headline!) && stripLiveSetPoints(m.summary.headline!) !== m.summary.headline) headlineWouldMisread++;
+      if (/\(([^)]*)\)\s*$/.test(m.summary.headline!) && retiredHeadlineCut(m.summary.headline!) !== m.summary.headline) headlineWouldMisread++;
     }
     expect(checked, "finished tennis matches with a tie-break set").toBeGreaterThan(3);
     expect(headlineWouldMisread, "…of which the headline reading would have misread the tie-break's points").toBeGreaterThan(0);
@@ -219,11 +228,11 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
     expect(levels.won, "a set each").toEqual([1, 1]);
     expect(levels.mid).toBeNull();
     // Home won three of the five points, away two — the script's own count.
-    expect(levels.live).toEqual({ label: "MTB 3–2", sides: ["3", "2"], kind: "matchTiebreak" });
+    expect(withLabel(levels.live)).toEqual({ label: "MTB 3–2", sides: ["3", "2"], kind: "matchTiebreak" });
     expect(levels.live!.sides).toEqual(liveSidesOf(played));
     // The closed sets' scores (7–6 with its tie-break, 1–6) are not the live level, nor part of it.
-    expect(levels.live!.label).not.toContain("7");
-    expect(levels.live!.label).not.toContain("6");
+    expect(liveLabel(levels.live!, EN_WORDS)).not.toContain("7");
+    expect(liveLabel(levels.live!, EN_WORDS)).not.toContain("6");
   });
 
   it("a finished tennis match has no live level, a stopped one keeps the engine's open entry (a caller shows live only in play)", () => {
@@ -234,7 +243,7 @@ describe("scoreLevels — every registered sport, over the engine's recorded gol
       if (!m.decided || sets === null) continue;
       const levels = scoreLevels(m.summary)!;
       if (sets.some((s) => !s.closed)) {
-        expect(levels.live, `stopped: stream ${m.stream} @${m.events}`).toMatchObject({ label: detailOf(m).game, sides: liveSidesOf(m) });
+        expect(withLabel(levels.live), `stopped: stream ${m.stream} @${m.events}`).toMatchObject({ label: detailOf(m).game, sides: liveSidesOf(m) });
         stopped++;
       } else {
         expect(levels.live, `finished: stream ${m.stream} @${m.events}`).toBeNull();
@@ -263,7 +272,7 @@ describe("scoreLevels — shapes it refuses (a refusal reads the caller's own he
   });
 
   it("the well-formed set-based shape is read (so each refusal below is the one change that matters)", () => {
-    expect(scoreLevels(summary())).toEqual({ won: [1, 0], mid: null, live: { label: "14–11", sides: ["14", "11"], kind: "set" } });
+    expect(labelled(scoreLevels(summary()))).toEqual({ won: [1, 0], mid: null, live: { label: "14–11", sides: ["14", "11"], kind: "set" } });
   });
 
   it.each([
@@ -296,7 +305,7 @@ describe("scoreLevels — shapes it refuses (a refusal reads the caller's own he
       perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
       detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 3, away: 2, closed: false }], games: { home: 3, away: 2 }, game: "40–30", gameKind: "standard" },
     });
-    expect(scoreLevels(nested)).toEqual({ won: [0, 1], mid: [3, 2], live: { label: "40–30", sides: ["40", "30"], kind: "game" } });
+    expect(labelled(scoreLevels(nested))).toEqual({ won: [0, 1], mid: [3, 2], live: { label: "40–30", sides: ["40", "30"], kind: "game" } });
   });
 
   it.each([
@@ -310,7 +319,7 @@ describe("scoreLevels — shapes it refuses (a refusal reads the caller's own he
       perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
       detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 3, away: 2, closed: false }], games: { home: 3, away: 2 }, game, gameKind: "standard" },
     });
-    expect(scoreLevels(nested)!.live).toEqual({ label: game, sides, kind: "game" });
+    expect(withLabel(scoreLevels(nested)!.live)).toEqual({ label: game, sides, kind: "game" });
   });
 
   it("a set tie-break splits per side in plain points, double digits included", () => {
@@ -318,7 +327,7 @@ describe("scoreLevels — shapes it refuses (a refusal reads the caller's own he
       perSide: [{ entrantId: "H", line: "0" }, { entrantId: "A", line: "1" }],
       detail: { sets: [{ home: 4, away: 6, closed: true }, { home: 6, away: 6, closed: false }], games: { home: 6, away: 6 }, game: "TB 10–8", gameKind: "tiebreak" },
     });
-    expect(scoreLevels(nested)!.live).toEqual({ label: "TB 10–8", sides: ["10", "8"], kind: "tiebreak" });
+    expect(withLabel(scoreLevels(nested)!.live)).toEqual({ label: "TB 10–8", sides: ["10", "8"], kind: "tiebreak" });
   });
 });
 

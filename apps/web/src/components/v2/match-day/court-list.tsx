@@ -17,6 +17,7 @@ import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { MatchDayCourt, MatchDayFixture, VenueNoun } from "@/lib/match-day/types";
+import type { LevelWords } from "@/lib/score/levels";
 import {
   closureText,
   compactScore,
@@ -46,6 +47,7 @@ export function CourtList({
   courts,
   selectedId,
   dict,
+  words,
   locale,
   tz,
   onSelect,
@@ -54,6 +56,8 @@ export function CourtList({
   courts: MatchDayCourt[];
   selectedId: string | null;
   dict: Dict;
+  /** A live level's words (TB, MTB, Ad) in the reader's language (`levelWords` of the public dictionary; task F5). */
+  words: LevelWords;
   locale: Locale;
   /** The organisation's zone: the view's `tz`, in which a closure's times print. */
   tz: string;
@@ -69,7 +73,7 @@ export function CourtList({
   return (
     <ul aria-label={t(dict, "matchDay.list.label")} className="card divide-y divide-purple-50 overflow-hidden">
       {live.map((c) => (
-        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} locale={locale} tz={tz} onSelect={onSelect} />
+        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} />
       ))}
       {folded.length > 0 && (
         <li data-testid="md-court-fold" data-open={foldOpen ? "true" : "false"}>
@@ -100,14 +104,14 @@ export function CourtList({
           {foldOpen && (
             <ul id={foldId} className="divide-y divide-purple-50 border-t border-purple-50">
               {folded.map((c) => (
-                <CourtRow key={c.court_id} court={c} selected={false} dict={dict} locale={locale} tz={tz} onSelect={onSelect} />
+                <CourtRow key={c.court_id} court={c} selected={false} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} />
               ))}
             </ul>
           )}
         </li>
       )}
       {shut.map((c) => (
-        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} locale={locale} tz={tz} onSelect={onSelect} />
+        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} words={words} locale={locale} tz={tz} onSelect={onSelect} />
       ))}
     </ul>
   );
@@ -136,6 +140,7 @@ function CourtRow({
   court: c,
   selected,
   dict,
+  words,
   locale,
   tz,
   onSelect,
@@ -143,6 +148,7 @@ function CourtRow({
   court: MatchDayCourt;
   selected: boolean;
   dict: Dict;
+  words: LevelWords;
   locale: Locale;
   tz: string;
   onSelect: (courtId: string) => void;
@@ -180,7 +186,7 @@ function CourtRow({
               headline otherwise (`scoreLine`, the panel's rule; review V4). */}
           {score !== null ? (
             <span data-md-row-score className="mt-0.5 block text-xs font-semibold tabular-nums text-purple-900 [overflow-wrap:anywhere]">
-              {compactScore(score)}
+              {compactScore(score, words)}
             </span>
           ) : null}
           {closure !== null && c.closure !== null && <ClosureLine kind={c.closure.kind} text={closure} />}
@@ -224,6 +230,7 @@ export function NoCourtList({
   noun,
   selectedId,
   dict,
+  words,
   hrefOf,
   openLabel,
   onSelect,
@@ -234,6 +241,8 @@ export function NoCourtList({
   /** The match whose panel is open, when it is one of these. */
   selectedId: string | null;
   dict: Dict;
+  /** A live level's words, as `CourtList`'s (task F5). */
+  words: LevelWords;
   /** The match's console page (`fixtureHref`). */
   hrefOf: (f: MatchDayFixture) => string;
   /** "Open pad", or "Open match" for a view-only reader. */
@@ -281,7 +290,7 @@ export function NoCourtList({
                   <span className="block truncate text-xs text-slate-600">{matchMeta(f)}</span>
                   {score !== null ? (
                     <span data-md-row-score className="mt-0.5 block text-xs font-semibold tabular-nums text-purple-900 [overflow-wrap:anywhere]">
-                      {compactScore(score)}
+                      {compactScore(score, words)}
                     </span>
                   ) : null}
                   {scorer !== null && (
