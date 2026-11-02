@@ -258,6 +258,27 @@ test("E1: Complete's reason is an ⓘ - hover, focus and tap show it, the waitin
     await expect(complete).toBeFocused();
     await expect(hint, "focusing the waiting button shows why").toBeVisible();
     await card.getByTestId("stage-tool-format").focus();
+
+    // E1 fix round 1 (m4, WCAG 1.4.13): Escape puts away a bubble that hover or focus is holding up, with the pointer / focus still
+    // where they are - and it stays away until the pointer and focus have both left and one of them returns.
+    await info.hover();
+    await expect(hint, "premise: hover shows the reason").toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(hint, "Escape dismisses the hover bubble").toBeHidden();
+    await page.mouse.move(info.page().viewportSize()!.width - 2, 2);
+    await info.hover();
+    await expect(hint, "the pointer left and came back: shown again").toBeVisible();
+    await page.mouse.move(info.page().viewportSize()!.width - 2, 2);
+    await info.focus();
+    await expect(hint, "premise: focus shows the reason").toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(hint, "Escape dismisses the focus bubble").toBeHidden();
+    await expect(info, "...and focus never moved").toBeFocused();
+    await card.getByTestId("stage-tool-format").focus();
+    await info.focus();
+    await expect(hint, "focus left and came back: shown again").toBeVisible();
+    await card.getByTestId("stage-tool-format").focus();
+    await expect(hint).toBeHidden();
   }
 
   // A tap toggles it, at every width; Escape closes the bubble and nothing else (below md the sheet stays open).
