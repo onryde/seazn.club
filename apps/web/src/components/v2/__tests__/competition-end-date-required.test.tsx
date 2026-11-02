@@ -36,7 +36,13 @@ vi.mock("@/lib/client-v1", async () => {
 // the sentence also fails if the key was never added to en/ui.json.
 const enDict = uiEn as unknown as Dict;
 const msg = (key: MessageKey) => t(enDict, key);
+// Two surfaces, two sentences, ONE per surface: the competition SETTINGS form
+// says `endsOn.required`; the New competition form says what the disabled Create
+// button beside it already says (`missing.endsOn`, M9 — it used to answer a
+// blank End with a second, different sentence on submit).
 const REQUIRED = msg("comp.wizard.endsOn.required");
+const WIZARD_MISSING_END = msg("comp.wizard.missing.endsOn");
+const WIZARD_MISSING_BOTH = msg("comp.wizard.missing.both");
 const BACKWARDS = msg("comp.validation.endsBeforeStarts");
 
 const postedBody = () => {
@@ -63,6 +69,14 @@ const expandFields = (node: ReactNode): ReactElement[] =>
       : [el],
   );
 
+/** Match Day C8: Create needs a name too (its button is disabled without one, and a
+ *  submit that gets past it is refused), so a journey that is about the DATES has
+ *  to give the competition one, as an organiser would. */
+function typeName(tree: ReactElement[], value: string): void {
+  const input = tree.find((el) => el.type === "input" && propsOf(el).maxLength === 200)!;
+  (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
+}
+
 function typeDate(tree: ReactElement[], which: 0 | 1, value: string): void {
   const input = dateInputs(tree)[which]!;
   (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
@@ -86,7 +100,7 @@ const mountWizard = () =>
     CompetitionWizard,
     // The public-dashboard upgrade figure is required (see the component)
     // but irrelevant here — these tests never reach the degrade card.
-    { orgSlug: "riverside", publicDashboardUpgrade: null, viewerPlan: "community" },
+    { orgSlug: "riverside", orgId: "org-1", publicDashboardUpgrade: null, viewerPlan: "community" },
     expandFields,
   );
 
@@ -101,15 +115,34 @@ describe("CompetitionWizard — create requires an end date (#376)", () => {
 
   it("refuses to POST at all when the end date is blank, and says why", async () => {
     const island = mount();
-    typeDate(island.tree(), 0, "2026-06-01"); // a start date alone is not enough
+    typeName(island.tree(), "Summer Cup");
+    // A start date alone is not enough — and since C8 it no longer FILLS the end
+    // date in for you when one is already there; here none is typed after it.
+    typeDate(island.tree(), 0, "2026-06-01");
+    typeDate(island.tree(), 1, "");
     await submitForm(island.tree());
 
     expect(vi.mocked(apiV1)).not.toHaveBeenCalled();
-    expect(island.text()).toContain(REQUIRED);
+    expect(island.text()).toContain(WIZARD_MISSING_END);
+    // …and ONLY that sentence: the settings form's wording must not also appear.
+    expect(island.text()).not.toContain(REQUIRED);
+  });
+
+  it("a blank name AND a blank end date get the one combined sentence, not two", async () => {
+    // Enter in a field submits past the disabled button; the answer is the same
+    // sentence the button's reason line shows (`both`), never `endsOn.required`.
+    const island = mount();
+    typeDate(island.tree(), 1, "");
+    await submitForm(island.tree());
+
+    expect(vi.mocked(apiV1)).not.toHaveBeenCalled();
+    expect(island.text()).toContain(WIZARD_MISSING_BOTH);
+    expect(island.text()).not.toContain(REQUIRED);
   });
 
   it("refuses an end date before the start date, without a round trip", async () => {
     const island = mount();
+    typeName(island.tree(), "Summer Cup");
     typeDate(island.tree(), 0, "2026-06-01");
     typeDate(island.tree(), 1, "2026-05-31");
     await submitForm(island.tree());
@@ -120,6 +153,7 @@ describe("CompetitionWizard — create requires an end date (#376)", () => {
 
   it("POSTs the typed date itself — never `|| null`", async () => {
     const island = mount();
+    typeName(island.tree(), "Summer Cup");
     typeDate(island.tree(), 0, "2026-06-01");
     typeDate(island.tree(), 1, "2026-08-31");
     await submitForm(island.tree());
@@ -154,12 +188,33 @@ describe("CompetitionWizard — shared date/time control (date/time UX prompt 03
     // Held constant across the swap: same copy, same implicit association via
     // an enclosing <label> (DateTimeField is hookless, so there is no htmlFor).
     const tree = mountWizard().tree();
-    const labels = [msg("comp.wizard.startsOn"), `${msg("comp.wizard.endsOn")} *`];
-    dateInputs(tree).forEach((input, i) => {
+    const labels = [msg("comp.wizard.startsOn"), msg("comp.wizard.endsOn")];
+    const inputs = dateInputs(tree);
+    expect(inputs).toHaveLength(2);
+    inputs.forEach((input, i) => {
       const index = tree.indexOf(input);
-      expect(propsOf(tree[index - 1]!).className).toBe("label");
-      expect(propsOf(tree[index - 1]!).children).toBe(labels[i]);
-      expect(tree[index - 2]!.type).toBe("label");
+      // The label text span is the nearest `.label` before the input; the mark
+      // (Ends) is an element nested inside it, so it can sit between the two in
+      // the flattened tree.
+      let at = index - 1;
+      while (at >= 0 && propsOf(tree[at]!).className !== "label") at -= 1;
+      expect(at, "a .label span precedes the input").toBeGreaterThan(0);
+      expect(tree[at - 1]!.type).toBe("label");
+      const children = propsOf(tree[at]!).children;
+      if (i === 0) {
+        // Starts is optional: its label is the bare string, no mark.
+        expect(children).toBe(labels[0]);
+      } else {
+        // Ends is required: the mark is an aria-hidden ELEMENT after the label,
+        // so it is not part of the control's accessible name (M1) — the label
+        // string itself has no asterisk baked in.
+        const [text, mark] = propsOf(children as ReactElement).children as [string, ReactElement];
+        expect(text).toBe(labels[1]);
+        expect(text).not.toContain("*");
+        expect(mark.type).toBe("span");
+        expect(propsOf(mark)["aria-hidden"]).toBe("true");
+        expect(propsOf(mark).children).toContain("*");
+      }
     });
   });
 
@@ -176,6 +231,7 @@ describe("CompetitionWizard — shared date/time control (date/time UX prompt 03
     // The join the swap could break invisibly: DateTimeField hands its parent
     // the VALUE, not the event, so a mis-wired onChange would post undefined.
     const island = mountWizard();
+    typeName(island.tree(), "Summer Cup");
     typeDate(island.tree(), 0, "2026-06-01");
     typeDate(island.tree(), 1, "2026-08-31");
     await submitForm(island.tree());

@@ -129,6 +129,10 @@ test("the wizard opens on Public, and at the cap it creates a PRIVATE competitio
     await expect(page.getByRole("radio", { name: /^private/i })).not.toBeChecked();
 
     await page.getByRole("button", { name: /create/i }).click();
+    // Match Day C8: Create lands on "Add your first division"; "Later" opens
+    // the competition page.
+    await expect(page.getByTestId("first-division-prompt")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("first-division-later").click();
     await page.waitForURL(/\/o\/[^/]+\/c\/(?!new$)[^/?]+$/, { timeout: 20_000 });
     // And the default REACHED the row, not just the radio: an untouched
     // picker whose value never got into the payload would look identical here.

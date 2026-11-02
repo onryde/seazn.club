@@ -30,6 +30,7 @@ function gallery() {
     <DictProvider locale="en" dict={enUi as unknown as Dict}>
       <TemplateGallery
         orgSlug="org"
+        orgId="org-1"
         templates={TEMPLATES}
         publicDashboardUpgrade={null}
         viewerPlan="community"

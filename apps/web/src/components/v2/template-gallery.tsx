@@ -515,11 +515,14 @@ export function TemplateDetailSheet({
 
 export function TemplateGallery({
   orgSlug,
+  orgId,
   templates,
   publicDashboardUpgrade,
   viewerPlan,
 }: {
   orgSlug: string;
+  /** The org the blank form's description editor uploads images to. */
+  orgId: string;
   /** The catalog, passed down from the Server Component page — see the
    *  module header for why this can't be a direct catalog.ts import here. */
   templates: CompetitionTemplate[];
@@ -538,6 +541,7 @@ export function TemplateGallery({
     return (
       <CompetitionWizard
         orgSlug={orgSlug}
+        orgId={orgId}
         publicDashboardUpgrade={publicDashboardUpgrade}
         viewerPlan={viewerPlan}
       />

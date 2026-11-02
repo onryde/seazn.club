@@ -540,6 +540,12 @@ const WALKTHROUGH_SPECS: string[] = [
   // Match Day — C7, the org Competitions home: in through the nav, today's two (a Draft one included) in the deck with
   // Open Match Day, the quiet card's stub, Show finished, and each Open Match Day landing on that competition's courts.
   "competitions-home.spec.ts",
+  // Match Day C8 — the organiser's New competition form, from the org home to
+  // "Add your first division": every field tapped or typed, Ends following
+  // Start, the "Who will find it" list read after each visibility, the Showcase
+  // rules, a description typed with the Bold button, Create, and each exit of
+  // the first-division screen. The only test that taps the form end to end.
+  "new-competition-form.spec.ts",
 ];
 
 /** The values of `E2E_WALKTHROUGH_SLICE` that e2e.yml dispatches. Named here

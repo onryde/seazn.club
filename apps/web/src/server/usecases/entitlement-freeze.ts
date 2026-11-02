@@ -10,6 +10,10 @@ import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { getLimit } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
+import {
+  PUBLICLY_READABLE_VISIBILITIES,
+  type PubliclyReadableVisibility,
+} from "@/lib/competition-listing";
 
 type Tx = postgres.TransactionSql;
 
@@ -73,9 +77,13 @@ export const PUBLIC_DASHBOARD_STATUSES = ["published", "live"] as const;
  * `private` is genuinely outside the set: the view does not admit it, and the
  * `/shared/...` page 404s for it (V230, see usecases/exports.ts).
  */
-export const PUBLICLY_READABLE_VISIBILITIES = ["public", "unlisted"] as const;
-export type PubliclyReadableVisibility =
-  (typeof PUBLICLY_READABLE_VISIBILITIES)[number];
+// The tuple itself lives in `lib/competition-listing.ts` (dependency-free, so the
+// New competition form's client island can read it too); this file re-exports it
+// so every existing importer keeps its path.
+export {
+  PUBLICLY_READABLE_VISIBILITIES,
+  type PubliclyReadableVisibility,
+};
 
 /**
  * Does this visibility consume a `dashboard.public.max` slot?

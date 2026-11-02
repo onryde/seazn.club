@@ -55,6 +55,15 @@ export interface DateTimeFieldProps {
    */
   required?: boolean;
   /**
+   * Draw a compulsory asterisk after the label of a `kind="date"` field. The
+   * mark is an `aria-hidden` element of its own, NOT part of the `label`
+   * string, so it is not part of the control's accessible name (a screen reader
+   * already gets "required" from `required`, and `getByLabel("Ends on")` keeps
+   * resolving). Opt-in: callers that bake an asterisk into their label string
+   * are unchanged.
+   */
+  requiredMark?: boolean;
+  /**
    * Hide the label VISUALLY only, for a field that already sits under a
    * `<legend>` or heading saying the same thing — a second visible line there
    * is duplication, and the extra `.label` row (16px + 4px margin) is what
@@ -147,6 +156,7 @@ export function DateTimeField({
   max,
   disabled,
   required,
+  requiredMark,
   labelHidden,
   step,
   options,
@@ -210,7 +220,16 @@ export function DateTimeField({
   return (
     <label className="block">
       {/* `sr-only` is a visual utility, never a removal — see `labelHidden`. */}
-      <span className={labelHidden ? "label sr-only" : "label"}>{label}</span>
+      <span className={labelHidden ? "label sr-only" : "label"}>
+        {requiredMark ? (
+          <>
+            {label}
+            <span aria-hidden="true"> *</span>
+          </>
+        ) : (
+          label
+        )}
+      </span>
       <input
         type={kind}
         // `text-base` only. The plan asked for `text-base sm:text-sm` as an iOS

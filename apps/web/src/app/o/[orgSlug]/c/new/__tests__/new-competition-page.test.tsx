@@ -65,6 +65,14 @@ beforeEach(() => {
   h.fail = false;
 });
 
+describe("the create page hands the gallery the org the description editor uploads to", () => {
+  it("orgId is the signed-in org's id, not its slug", async () => {
+    const props = await galleryProps();
+    expect(props.orgId).toBe("org1");
+    expect(props.orgSlug).toBe("riverside");
+  });
+});
+
 describe("the create page supplies the public-dashboard upgrade figure", () => {
   it("asks plan_entitlements for the plan featurePlan names, on the refused key", async () => {
     await galleryProps();
