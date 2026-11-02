@@ -28,7 +28,8 @@ import { dismissConsent, freshOrg } from "../directory-kit";
  *      the shared e2e organisation must never freeze — with three courts: Court 1 PLAYING (a real core.start), Court 2 CALLED
  *      (called before the freeze, so an Undo call would be offered if the freeze did not take it away), Court 3 FREE (its
  *      candidates list, so a Call would be offered), and one match whose window closed hours ago with no result (a
- *      Needs-you row, so the viewer's empty list in step 4 is a strip and not an empty day). Then the freeze.
+ *      Needs-you row, so the viewer's empty list in step 5 is a strip and not an empty day). Then a second, newer competition
+ *      and the freeze: a limit of one.
  *   2. The organiser opens Match Day by TAPPING the competition page's door: the frozen notice; Needs you; Court 2 called
  *      with no Undo; Court 3's candidates with no Call; Court 1's scoreboard with no "+ Connect a stream", "Open pad", and a
  *      scorer QR that mints and shows.
@@ -42,9 +43,11 @@ import { dismissConsent, freshOrg } from "../directory-kit";
  *      finish — but no Needs you.
  * At 1280 and at 320, with no sideways scroll at any step.
  *
- * The freeze is PINNED (`competitions.max_active` = 0), not reached organically by going over a real plan's limit: scoring a
- * frozen competition currently re-ranks the freeze (review C1, held for the owner's fix shape), so an organic freeze would move
- * off this competition mid-walk. Once C1 lands, the seed can freeze by a real downgrade instead.
+ * The freeze is a REAL limit the competition can rotate under (review C1, fixed: the frozen set is chosen once and stored,
+ * V489): the organisation keeps Pro (the scorer QR is Pro's — on Community it is the plan's paywall) with its
+ * `competitions.max_active` set to 1, and a second, newer competition holds the one running place. Before C1's fix the pad's
+ * first point made this competition the most recently active, thawed it and froze the other; so after every point and after
+ * the finish, Match Day still says frozen and the stored set is still this competition alone.
  */
 
 const UI_EN = JSON.parse(
@@ -220,8 +223,20 @@ for (const vp of WIDTHS) {
       await setOrgPlanBySql({ orgId }, "pro");
       await invalidateOrgEntitlements(page.request, orgId);
       const seed = await seedFrozenDay(page.request, orgId, `W${vp.width}`);
-      await setEntitlementOverrideSql(orgId, "competitions.max_active", 0);
+      // The other competition, created after the seed's core.start: the more recently active of the two, so a limit of one
+      // keeps it running and freezes this one.
+      const other = await apiJson<{ id: string }>(page.request, "/api/v1/competitions", "POST", {
+        ends_on: "2030-12-31",
+        name: `Running ${vp.width} ${TAG}`,
+        visibility: "private",
+      });
+      expect(other.status, `the running competition: ${JSON.stringify(other.error)}`).toBe(201);
+      await setEntitlementOverrideSql(orgId, "competitions.max_active", 1);
       await invalidateOrgEntitlements(page.request, orgId);
+      const storedFrozen = () =>
+        withDb(async (sql) =>
+          (await sql<{ id: string }[]>`select id from competitions where org_id = ${orgId} and frozen_at is not null`).map((r) => r.id),
+        );
       const compPath = await competitionPath(page.request, seed.competitionId);
       const ledgerPoints = () =>
         withDb(async (sql) => (await sql<{ n: number }[]>`
@@ -231,7 +246,8 @@ for (const vp of WIDTHS) {
       // 2. The organiser opens Match Day by tapping its door, and reads what a frozen competition leaves them.
       await openMatchDayByTapping(page, compPath);
       await expect(page.getByTestId("md-frozen"), "the frozen notice says what still works").toHaveText(UI_EN["matchDay.frozen"]!);
-      await expect(page.getByTestId("md-needs-you-toggle"), "the organiser has a Needs-you list (step 4's positive pair)").toBeVisible();
+      expect(await storedFrozen(), "the freeze chose this competition, and stored it").toEqual([seed.competitionId]);
+      await expect(page.getByTestId("md-needs-you-toggle"), "the organiser has a Needs-you list (step 5's positive pair)").toBeVisible();
       await expect(page.getByTestId("md-court-row")).toHaveCount(3);
       await expectNoHorizontalScroll(page);
 
@@ -278,8 +294,11 @@ for (const vp of WIDTHS) {
       await expect(halfFigure(home), "the tap shows on the pad").toHaveText("1");
       await expect.poll(ledgerPoints, { timeout: 30_000, message: "the tapped point reaches the ledger" }).toBe(1);
 
-      // ...on Match Day: Court 1's row and its scoreboard read the point (a fresh read of the board).
+      // ...on Match Day: Court 1's row and its scoreboard read the point (a fresh read of the board) — and the competition is
+      // still frozen: the point made it the most recently active, and the freeze did not move (C1).
       await openMatchDayByTapping(page, compPath);
+      await expect(page.getByTestId("md-frozen"), "a point scored does not thaw it (C1)").toBeVisible();
+      expect(await storedFrozen(), "nor freeze the other competition in its place").toEqual([seed.competitionId]);
       await expect(courtRow(page, seed.courts.playing).locator("[data-md-row-score]"), "Court 1's row reads the point").toHaveText(/^1\D+0$/);
       playing = await openCourt(page, seed.courts.playing, "playing");
       // Anchored on the scoreboard's own headline figure (fix round 1, m1): a bare "1" is in the court's name and the clock.
@@ -330,6 +349,8 @@ for (const vp of WIDTHS) {
       // is no longer among the court's candidates. With Court 2 the only court busy, the two free ones now sit under the list's
       // one "more courts free" row (`foldFreeCourts`), which the organiser taps open.
       await openMatchDayByTapping(page, compPath);
+      await expect(page.getByTestId("md-frozen"), "finished and finalized, still frozen (C1)").toBeVisible();
+      expect(await storedFrozen()).toEqual([seed.competitionId]);
       await expect(page.getByTestId("md-counts")).toContainText(UI_EN["matchDay.header.playing"]!.replace("{count}", "0"));
       await openFreeFold(page);
       const court1Row = courtRow(page, seed.courts.playing);
