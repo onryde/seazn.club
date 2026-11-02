@@ -803,8 +803,8 @@ const isForeignKeyViolation = (err: unknown): boolean =>
  *    mint: one bucket, one number") → 429 rate_limited. Spent HERE, past the tok and holder checks (review M2): a caller
  *    without the tok, or a replaced phone, never drains the bucket the organiser's console shares. Every call that
  *    reaches it spends it, a re-shown link included — as the console's ensure does;
- *  - `provideDeviceLinkForPhone`: the console's plan gate (→ 402 not_entitled), then under the fixture's link lock a
- *    finished match (→ 409 match_finished, nothing written), else the live sealed link or a new one — NEVER revoking
+ *  - `provideDeviceLinkForPhone`: no plan gate (remote scoring is free on every plan, V490); under the fixture's link
+ *    lock a finished match (→ 409 match_finished, nothing written), else the live sealed link or a new one — NEVER revoking
  *    (the owner's rule: "must not remove or replace any existing QR"). A missing DEVICE_LINK_KEK → 503 unavailable;
  *    the link insert breaking a foreign key (the code's issuer deleted) → 401 code_ended, warned, not reported.
  * 200 `{url}` = `captureOrigin()` + `/score/` + the secret. The URL is a credential: it is never logged, and it is
@@ -825,7 +825,6 @@ export async function postScoringLink(
   try {
     got = await provideDeviceLinkForPhone(checked);
   } catch (err) {
-    if (err instanceof PaymentRequiredError) throw new CaptureRefusalError(402, "not_entitled", `the plan lacks ${err.featureKey}`);
     if (err instanceof HttpError && err.code === "DEVICE_LINK_KEK_MISSING") {
       throw new CaptureRefusalError(503, "unavailable", "scoring links are not configured on this server");
     }

@@ -56090,7 +56090,7 @@
     },
     "/api/v1/capture/codes/{code}/scoring-link": {
       "post": {
-        "summary": "The match's Remote scoring link (Bearer: the stream code's tok), body {phone}, for the slot's CURRENT phone, with or without a session (capture QR v2 §6.3.5, W27). Returns the match's live scoring link, or creates one — it never removes or replaces an existing link, so a repeat call returns the same url. 200 {url} (https, /score/, the link's secret: a credential, never logged). 409 replaced (not the current phone), 409 match_finished (the match is finalized or cancelled; nothing written), 402 not_entitled (the plan has no scoring links; an Event Pass on the competition lifts it), 503 unavailable (scoring links not configured on this server). 401 code_ended (an ended code serves nothing here), 404 not_a_stream_code, 422 invalid, 429 rate_limited with Retry-After (the code's budget, then the console's per-IP mint budget). Served private, no-store. Never 410",
+        "summary": "The match's Remote scoring link (Bearer: the stream code's tok), body {phone}, for the slot's CURRENT phone, with or without a session (capture QR v2 §6.3.5, W27). Returns the match's live scoring link, or creates one — it never removes or replaces an existing link, so a repeat call returns the same url. 200 {url} (https, /score/, the link's secret: a credential, never logged). 409 replaced (not the current phone), 409 match_finished (the match is finalized or cancelled; nothing written), 503 unavailable (scoring links not configured on this server). 401 code_ended (an ended code serves nothing here), 404 not_a_stream_code, 422 invalid, 429 rate_limited with Retry-After (the code's budget, then the console's per-IP mint budget). Served private, no-store. Never 410",
         "tags": [
           "capture"
         ],
@@ -56156,77 +56156,6 @@
           },
           "401": {
             "description": "Not authenticated",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "const": "already_live"
-                        },
-                        "message": {
-                          "type": "string"
-                        },
-                        "sid": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "startedBy": {
-                          "type": "string",
-                          "enum": [
-                            "organiser",
-                            "automatic",
-                            "operator"
-                          ]
-                        }
-                      },
-                      "required": [
-                        "code",
-                        "message",
-                        "sid",
-                        "startedBy"
-                      ],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "string",
-                          "enum": [
-                            "code_ended",
-                            "not_a_stream_code",
-                            "replaced",
-                            "no_destination",
-                            "no_credit",
-                            "not_entitled",
-                            "unavailable",
-                            "invalid",
-                            "rate_limited",
-                            "match_finished"
-                          ]
-                        },
-                        "message": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "code",
-                        "message"
-                      ],
-                      "additionalProperties": false
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
@@ -124729,7 +124658,7 @@
     },
     "/api/v1/competitions/{id}/exports/scorer-sheets": {
       "post": {
-        "summary": "Printable scorer sheets PDF for one day (application/pdf attachment, `private, no-store`): per court, a 3×3 grid of cut-out cards, one QR per match, each its fixture's live device link (re-shown, never rotated). Session editors only (`scoring.device_links`). 422 NO_FIXTURES_ON_DAY when nothing prints; 500 SHEET_LINKS_INCOMPLETE when any card's link cannot be proven — never a partial sheet",
+        "summary": "Printable scorer sheets PDF for one day (application/pdf attachment, `private, no-store`): per court, a 3×3 grid of cut-out cards, one QR per match, each its fixture's live device link (re-shown, never rotated). Session editors only; free on every plan. 422 NO_FIXTURES_ON_DAY when nothing prints; 500 SHEET_LINKS_INCOMPLETE when any card's link cannot be proven — never a partial sheet",
         "tags": [
           "exports"
         ],

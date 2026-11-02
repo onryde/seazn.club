@@ -18,7 +18,6 @@ import { saveStreamSettings } from "@/server/usecases/stream-codes";
 import { sql } from "@/lib/db";
 import { sealWith } from "@/server/relay/crypto";
 import { hashDeviceLinkToken, mintDeviceLinkSecret } from "@/server/usecases/device-links";
-import { override } from "@/server/usecases/__tests__/_capture-rig";
 import { captureRig, phoneId, type CaptureRig } from "@/server/usecases/__tests__/_capture-rig";
 import { GET } from "@/app/api/v1/capture/codes/[code]/route";
 import { POST as BEATS } from "@/app/api/v1/capture/codes/[code]/beats/route";
@@ -164,13 +163,12 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
     expect(checked).toBe(lines.length);
   });
 
-  it("W27 scoring-link — 200, the repeat, 409 replaced, 422, 401, 402, 409 match_finished, 503 (no KEK), and a passed-over envelope — no captured line carries the tok, the link's secret or its url; lines were captured", async () => {
+  it("W27 scoring-link — 200, the repeat, 409 replaced, 422, 401, 409 match_finished, 503 (no KEK), and a passed-over envelope — no captured line carries the tok, the link's secret or its url; lines were captured", async () => {
     lines.length = 0;
     process.env.DEVICE_LINK_KEK = randomBytes(32).toString("hex");
     process.env.OAUTH_BASE_URL = "https://logger-redact.test";
     const r = await captureRig();
     setRelayDriversForTest(r.deps.drivers);
-    await override(r.auth.orgId, "scoring.device_links", true);
     const A = phoneId("a");
     const statuses: number[] = [];
     const link = async (tok: string | null, body: unknown, raw?: string) => {
@@ -190,9 +188,6 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
     await link(r.tok, { phone: phoneId("x") });                               // 409 replaced
     await link(r.tok, null, "{nope");                                         // 422
     await link("wrong-tok", { phone: A });                                    // 401
-    await override(r.auth.orgId, "scoring.device_links", false);
-    await link(r.tok, { phone: A });                                          // 402
-    await override(r.auth.orgId, "scoring.device_links", true);
     delete process.env.DEVICE_LINK_KEK;
     await link(r.tok, { phone: A });                                          // 503 (the sealed link cannot be re-opened)
     await sql`update fixtures set status = 'finalized' where id = ${r.fixtureId}`;
@@ -201,7 +196,7 @@ describe.skipIf(!HAS_DB)("the phone routes never log a secret (§10.2): each rou
     expect(url, "PREMISE: the phone was served its link").toMatch(/\/score\/dl_/);
     const secret = url.slice(url.lastIndexOf("/") + 1);
     const secrets = [r.tok, url, secret, swappedSecret];
-    expect(new Set(statuses)).toEqual(new Set([200, 401, 402, 409, 422, 503]));
+    expect(new Set(statuses)).toEqual(new Set([200, 401, 409, 422, 503]));
     expect(lines.length, "anti-vacuity: the route logged").toBeGreaterThan(0);
     expect(lines.some((l) => l.includes("passed over")), "the passed-over envelope was logged").toBe(true);
     let checked = 0;

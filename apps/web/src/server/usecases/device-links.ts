@@ -8,7 +8,6 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { requireFeature } from "@/lib/entitlements";
 import { hasValidKek, openWith, sealWith } from "@/server/relay/crypto";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -98,28 +97,6 @@ function requireSessionEditor(auth: AuthCtx): void {
   if (auth.via !== "session" || !auth.userId) {
     throw new HttpError(403, "Device links can only be managed with a session login");
   }
-}
-
-/** The competition an Event-Pass-lifted gate must be resolved against.
- *
- *  lib/entitlements.ts only consults `competition_passes` when a competition is
- *  in scope, so a gate on a key V393 lifts (`scoring.device_links`) that omits it makes the
- *  pass INVISIBLE — the org pays $29 and is refused on the competition it
- *  bought. Same shape as usecases/officials.ts's `competitionForDivision` (T6).
- *
- *  Pooled `sql`, and deliberately OUTSIDE the `withTenant` callback below:
- *  `resolve` queries the pooled proxy, and issuing that from inside a pinned
- *  tenant transaction asks the pool for a second connection while the first is
- *  still held — the self-deadlock lib/db.ts guards against.
- *
- *  A missing row yields `undefined`, which resolves the gate org-wide (the
- *  pre-V393 behaviour) and the 404 is raised inside the transaction as before. */
-async function competitionForFixture(fixtureId: string): Promise<string | undefined> {
-  const [row] = await sql<{ competition_id: string }[]>`
-    select d.competition_id from fixtures f
-    join divisions d on d.id = f.division_id
-    where f.id = ${fixtureId}`;
-  return row?.competition_id;
 }
 
 /** A link is live until its expiry; a sealed link (V417) has none — it lives
@@ -214,8 +191,6 @@ export async function createDeviceLink(
   label: string | null,
 ): Promise<DeviceLinkRow & { secret: string }> {
   requireSessionEditor(auth);
-  // 402 for Community, unless an Event Pass covers this fixture's competition.
-  await requireFeature(auth.orgId, "scoring.device_links", await competitionForFixture(fixtureId));
   return withTenant(auth.orgId, async (tx) => {
     await lockFixtureLinks(tx, fixtureId);
     await loadLinkableFixture(tx, fixtureId);
@@ -290,7 +265,6 @@ export async function ensureDeviceLink(
   label: string | null = null,
 ): Promise<EnsuredDeviceLink> {
   requireSessionEditor(auth);
-  await requireFeature(auth.orgId, "scoring.device_links", await competitionForFixture(fixtureId));
   return withTenant(auth.orgId, (tx) => ensureInTx(tx, auth, fixtureId, label));
 }
 
@@ -309,7 +283,6 @@ export async function ensureDeviceLinks(
   fixtureIds: readonly string[],
 ): Promise<Map<string, EnsuredDeviceLink>> {
   requireSessionEditor(auth);
-  await requireFeature(auth.orgId, "scoring.device_links", competitionId);
   const out = new Map<string, EnsuredDeviceLink>();
   await withTenant(auth.orgId, async (tx) => {
     for (const id of [...new Set(fixtureIds)].sort()) {
@@ -338,9 +311,9 @@ export type PhoneScoringLink =
  * revokes and never calls `mintInTx` (which revokes every live link first): a printed sheet, a console hand-over and a
  * legacy or unreadable link all stay exactly as they were.
  *
- * The console's own gate (`scoring.device_links`, Event Pass included via the fixture's competition), then under the
- * fixture's link lock — the one the console's ensure and the sheet print take, so a phone and a printer racing on a
- * fixture with no link agree on ONE — in one transaction:
+ * No plan gate: remote scoring is free on every plan (V490). Under the fixture's link lock — the one the console's
+ * ensure and the sheet print take, so a phone and a printer racing on a fixture with no link agree on ONE — in one
+ * transaction:
  *  - a finalized or cancelled match → `{kind: "finished"}`, nothing written;
  *  - ONLY the fixture's newest live link is read — legacy or sealed, `newestLiveLink`, the row the console's ensure
  *    reads (review M1). Sealed, and its envelope opens AND hashes to its `token_hash`: returned unchanged;
@@ -353,7 +326,6 @@ export type PhoneScoringLink =
  */
 export async function provideDeviceLinkForPhone(code: HolderVerifiedCode): Promise<PhoneScoringLink> {
   const { orgId, fixtureId, issuedBy } = code;
-  await requireFeature(orgId, "scoring.device_links", await competitionForFixture(fixtureId));
   return withTenant(orgId, async (tx) => {
     await lockFixtureLinks(tx, fixtureId);
     const status = await linkableStatus(tx, fixtureId);
