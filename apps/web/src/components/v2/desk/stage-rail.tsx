@@ -243,7 +243,6 @@ export function StageRail({
   // Which controls the actions row below draws, read once here so the divider beside the group can tell an empty group from a full one (a
   // complete stage with nothing to delete draws none). Add match is not listed: `stageActions` hands an ad-hoc stage with fixtures an
   // "add_match" only beside Generate (not started) or Complete (started), so wherever Add match shows, one of those already counts.
-  const addMatchShown = stage.status !== "complete" && adhoc && fixtureCount > 0;
   const hasActions =
     (stage.status !== "complete" && (showGenerate || (stage.kind === "swiss" && canUnpairSwiss) || completeButton !== undefined)) ||
     deletable;
@@ -555,7 +554,18 @@ export function StageRail({
                 })()}
             </>
           )}
-          {addMatchShown && (
+          {deletable && (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => onDelete({ id: stage.id, name: stage.name })}
+              data-testid="stage-delete"
+              className="btn btn-danger min-h-11 px-3 py-1.5 text-xs"
+            >
+              {msg("schedule.delete")}
+            </button>
+          )}
+          {stage.status !== "complete" && adhoc && fixtureCount > 0 && (
             // Task 3 — trigger only. `AddMatchForm` deliberately stays mounted in
             // stages-panel.tsx: it reads `boardSlotOptions`, which also feeds
             // `<RunSheet>`, so hoisting the form itself here would mean building
@@ -570,17 +580,6 @@ export function StageRail({
               className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
             >
               {msg("stage.addMatch.button")}
-            </button>
-          )}
-          {deletable && (
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() => onDelete({ id: stage.id, name: stage.name })}
-              data-testid="stage-delete"
-              className="btn btn-danger min-h-11 px-3 py-1.5 text-xs"
-            >
-              {msg("schedule.delete")}
             </button>
           )}
         </div>
