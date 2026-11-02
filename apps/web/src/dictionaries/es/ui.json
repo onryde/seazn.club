@@ -355,7 +355,7 @@
   "confirm.withdrawEntrant.body": "En una fase de liga en curso sus resultados se mantienen y los partidos restantes se otorgan a los oponentes. En una liga o un grupo, si le quedan más partidos por jugar de los que ya ha jugado, contando solo lo programado hasta ahora, esos resultados también se anulan; en el suizo, nunca. En un cuadro, los oponentes avanzan; en una escalera o un americano, los partidos restantes se anulan y la clasificación lograda se mantiene. Todo pasa por el registro de puntuación normal, así que cada uno se puede deshacer.",
   "confirm.withdrawEntrant.label": "Retirar participante",
   "confirm.disqualifyEntrant.title": "¿Descalificar a {name}?",
-  "confirm.disqualifyEntrant.body": "Queda fuera de todas las rondas restantes. Los resultados ya jugados se mantienen. Su partido abierto se concede por incomparecencia al oponente.",
+  "confirm.disqualifyEntrant.lead": "Se marcan como descalificados en lugar de retirados; el efecto en sus partidos es el mismo que el de una retirada:",
   "confirm.disqualifyEntrant.label": "Descalificar",
   "confirm.deleteEntrant.title": "¿Eliminar a {name}?",
   "confirm.deleteEntrant.body": "Esto elimina por completo al participante y su plantilla — a diferencia de Retirar, no se puede reincorporar. Solo disponible antes de que empiece la división.",

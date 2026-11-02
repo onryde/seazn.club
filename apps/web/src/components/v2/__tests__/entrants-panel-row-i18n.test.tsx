@@ -254,10 +254,16 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
     ]) {
       expectFourDistinct(key);
     }
-    // The confirm that guards Disqualify (ruling 258): its title interpolates the entrant, its body and label do not.
+    // The confirm that guards Disqualify (ruling 258): its title interpolates the entrant, its lead and label do not. Its
+    // body is the lead THEN Withdraw's own body (ruling 260), so there is no second long paragraph to translate: the old
+    // `confirm.disqualifyEntrant.body` is gone from every catalogue.
     expectFourDistinct("confirm.disqualifyEntrant.title", { name: ENTRANT.display_name });
-    expectFourDistinct("confirm.disqualifyEntrant.body");
+    expectFourDistinct("confirm.disqualifyEntrant.lead");
     expectFourDistinct("confirm.disqualifyEntrant.label");
+    for (const l of LOCALES) {
+      expect(value(DICTS[l], "confirm.disqualifyEntrant.body"), `${l}: the duplicated body paragraph is gone`).toBeUndefined();
+      expect(value(DICTS[l], "confirm.withdrawEntrant.body"), `${l}: Withdraw's body, which Disqualify's confirm reuses, is there`).toBeTruthy();
+    }
     expectFourDistinct("entrants.row.seedLabel", { name: ENTRANT.display_name });
   });
 

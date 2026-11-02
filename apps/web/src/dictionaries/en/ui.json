@@ -355,7 +355,7 @@
   "confirm.withdrawEntrant.body": "In a running table stage their results stand and remaining games walk over to opponents. In a league or group, if more of their games are still to play than they've played, counting only what's scheduled so far, those results are voided too; in Swiss they never are. In a bracket, opponents advance; in a ladder or americano, remaining games are voided and earned standings stand. All of it rides the normal scoring ledger, so each can be undone.",
   "confirm.withdrawEntrant.label": "Withdraw entrant",
   "confirm.disqualifyEntrant.title": "Disqualify {name}?",
-  "confirm.disqualifyEntrant.body": "Removed from all remaining rounds. Results already played stand. Their open match is a walkover to the opponent.",
+  "confirm.disqualifyEntrant.lead": "They are marked disqualified rather than withdrawn; the effect on their matches is the same as a withdrawal:",
   "confirm.disqualifyEntrant.label": "Disqualify",
   "confirm.deleteEntrant.title": "Delete {name}?",
   "confirm.deleteEntrant.body": "This removes the entrant and its roster entirely — unlike Withdraw, there is no reinstating it. Only offered before the division has started.",

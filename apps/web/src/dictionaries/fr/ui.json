@@ -355,7 +355,7 @@
   "confirm.withdrawEntrant.body": "Dans une phase de poule en cours, leurs résultats sont conservés et les matchs restants sont attribués par forfait aux adversaires. En championnat ou en poule, s'il leur reste plus de matchs à jouer qu'ils n'en ont joué, en ne comptant que ce qui est programmé jusqu'ici, ces résultats sont invalidés eux aussi ; en système suisse, jamais. Dans un tableau, les adversaires progressent ; dans une échelle ou un americano, les matchs restants sont invalidés et le classement acquis est conservé. Tout passe par le registre de scores habituel, chacun peut donc être annulé.",
   "confirm.withdrawEntrant.label": "Retirer le participant",
   "confirm.disqualifyEntrant.title": "Disqualifier {name} ?",
-  "confirm.disqualifyEntrant.body": "Retiré de tous les tours restants. Les résultats déjà joués sont conservés. Son match en cours est attribué par forfait à l'adversaire.",
+  "confirm.disqualifyEntrant.lead": "Ils sont marqués comme disqualifiés plutôt que retirés ; l'effet sur leurs matchs est le même que pour un retrait :",
   "confirm.disqualifyEntrant.label": "Disqualifier",
   "confirm.deleteEntrant.title": "Supprimer {name} ?",
   "confirm.deleteEntrant.body": "Ceci supprime entièrement le participant et son effectif — contrairement à Retirer, il n'y a pas de réintégration possible. Proposé uniquement avant que la division n'ait commencé.",

@@ -14,6 +14,7 @@ import type { ReactElement } from "react";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { EntrantsPanel, type EntrantsPanelEligibility } from "@/components/v2/entrants-panel";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
+import en from "@/dictionaries/en/ui.json";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -91,7 +92,12 @@ beforeEach(() => {
   confirmMock.mockImplementation(async () => false);
 });
 
-const SIGNED_BODY = "Removed from all remaining rounds. Results already played stand. Their open match is a walkover to the opponent.";
+// Ruling 260 (orchestrator, applying ruling 259: a disqualification is the same cascade as a withdrawal): the confirm is as
+// truthful as Withdraw's. The LEAD is the ruling's sentence, typed here; the rest is Withdraw's own body, read from ITS key -
+// never retyped into this test, so a change to Withdraw's policy copy moves both confirms (one authority per fact).
+const SIGNED_LEAD = "They are marked disqualified rather than withdrawn; the effect on their matches is the same as a withdrawal:";
+const WITHDRAW_BODY = (en as Record<string, string>)["confirm.withdrawEntrant.body"]!;
+const DQ_BODY = `${SIGNED_LEAD} ${WITHDRAW_BODY}`;
 
 describe("Entrants row: Disqualify sends the disqualification (ruling 258)", () => {
   it("the button asks first, in the signed words, with the destructive tone - and a cancelled confirm sends nothing", async () => {
@@ -105,10 +111,12 @@ describe("Entrants row: Disqualify sends the disqualification (ruling 258)", () 
     expect(confirmMock, "one confirm").toHaveBeenCalledTimes(1);
     expect(confirmMock.mock.calls[0]![0]).toEqual({
       title: "Disqualify Rohan Nair?",
-      body: SIGNED_BODY,
+      body: DQ_BODY,
       confirmLabel: "Disqualify",
       tone: "danger",
     });
+    // The inaccurate sentences the first draft carried ("Results already played stand" is false in a league under half played).
+    expect((confirmMock.mock.calls[0]![0] as { body: string }).body).not.toContain("Results already played stand");
     expect(writes(), "the organiser said no: nothing is written").toEqual([]);
   });
 
@@ -130,6 +138,13 @@ describe("Entrants row: Disqualify sends the disqualification (ruling 258)", () 
     await (propsOf(byTestid(row, "entrant-row-withdraw")[0]!).onClick as () => Promise<void>)();
     expect(writes()).toEqual([{ url: "/api/v1/entrants/e1/withdraw", options: { method: "POST", json: {} } }]);
     expect(confirmMock.mock.calls[0]![0]).toMatchObject({ title: "Withdraw Rohan Nair?" });
+    // The two confirms say the same thing about the matches: Disqualify's body CONTAINS the body Withdraw sent (one key).
+    const withdrawBody = (confirmMock.mock.calls[0]![0] as { body: string }).body;
+    expect(withdrawBody, "premise: Withdraw sent its own long body").toBe(WITHDRAW_BODY);
+    expect(WITHDRAW_BODY.length, "premise: the policy paragraph is long, not a stub").toBeGreaterThan(200);
+    confirmMock.mockClear();
+    await (propsOf(byTestid(rowOf("e1").tree(), "entrant-row-disqualify")[0]!).onClick as () => Promise<void>)();
+    expect((confirmMock.mock.calls[0]![0] as { body: string }).body, "the DQ confirm contains Withdraw's body, taken from the same key").toContain(withdrawBody);
   });
 
   it("a refused PATCH shows its message on the panel (and the row stays offered)", async () => {

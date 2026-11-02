@@ -826,7 +826,10 @@ export function EntrantsPanel({
                   // status flip, so there is no started-ness branch here.
                   const ok = await confirmDialog({
                     title: msg("confirm.disqualifyEntrant.title", { name: e.display_name }),
-                    body: msg("confirm.disqualifyEntrant.body"),
+                    // Ruling 260: a disqualification runs the SAME cascade as a withdrawal, so its confirm is as truthful as
+                    // Withdraw's - one lead sentence, then Withdraw's own body (one authority per fact: the per-format policy
+                    // is spelled out once, in `confirm.withdrawEntrant.body`).
+                    body: `${msg("confirm.disqualifyEntrant.lead")} ${msg("confirm.withdrawEntrant.body")}`,
                     confirmLabel: msg("confirm.disqualifyEntrant.label"),
                     tone: "danger",
                   });

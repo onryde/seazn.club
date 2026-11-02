@@ -89,7 +89,10 @@ async function disqualifyThroughTheScreen(page: Page, request: APIRequestContext
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible({ timeout: STEP_MS });
   await expect(dialog, "the confirm names the entrant").toContainText(fill("confirm.disqualifyEntrant.title", { name }));
-  await expect(dialog, "and says what a disqualification does").toContainText(uiEn["confirm.disqualifyEntrant.body"]!);
+  // Ruling 260: the lead, then WITHDRAW's own body (the same cascade, said once) - read from the dictionary, never retyped here.
+  await expect(dialog, "and says it is the withdrawal's effect on their matches").toContainText(uiEn["confirm.disqualifyEntrant.lead"]!);
+  await expect(dialog, "in Withdraw's own words").toContainText(uiEn["confirm.withdrawEntrant.body"]!);
+  await expect(dialog, "and not the first draft's untrue promise").not.toContainText("Results already played stand");
   const go = dialog.getByRole("button", { name: uiEn["confirm.disqualifyEntrant.label"]!, exact: true });
   await expect(go).toBeEnabled({ timeout: STEP_MS });
   // Bounded by its own clock: a button that never sends the PATCH must fail HERE, by name, not by running out the test's budget.
