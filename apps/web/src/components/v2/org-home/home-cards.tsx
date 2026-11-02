@@ -4,8 +4,8 @@
 //
 //  - The today deck: one night panel at the top, a wide row per competition with a match today — its identity, the match it
 //    plays next, its progress and Open Match Day. On a phone the three stack; from `lg` they sit side by side.
-//  - The quiet roster: small white cards, four to a row on a desktop, one on a phone. A card with nothing upcoming ends in B's
-//    stub (a dashed tear line), whose action is an editor's.
+//  - The quiet roster: white cards, three to a row from `lg` (owner, 2026-11-02: four were too small), two from `md`, one on a
+//    phone. A card with nothing upcoming ends in B's stub (a dashed tear line), whose action is an editor's.
 // Server components: the ⋯ menu and the status chip arrive as slots, built by the page (the pass seal's logic stays there).
 import type { ReactNode } from "react";
 import { Radio } from "lucide-react";
@@ -276,7 +276,7 @@ export function QuietCard({ card, dict }: { card: QuietCardData; dict: Dict }) {
   );
 }
 
-/** A roster group: "Under way 6", then its cards — one to a row on a phone, two from `md`, four from `lg`. */
+/** A roster group: "Under way 6", then its cards — one to a row on a phone, two from `md`, three from `lg`. */
 export function HomeGroupSection({
   group,
   title,
@@ -295,7 +295,7 @@ export function HomeGroupSection({
         {title}
         <span className="font-sans text-sm font-normal normal-case tracking-normal text-slate-500">{count}</span>
       </h2>
-      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-3 lg:grid-cols-4">{children}</div>
+      <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-3 lg:grid-cols-3">{children}</div>
     </section>
   );
 }

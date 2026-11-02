@@ -126,6 +126,21 @@ async function expectTapTarget(target: Locator, label: string): Promise<void> {
   expect(hit, `${label}: a tap at its centre reaches it`).toBe(true);
 }
 
+/** The roster grid holds `n` cards to a row, filling it: the card is a 1/n share of its grid's width after the gaps (owner,
+ *  2026-11-02: "the grid are small, can we try to fit three grid" — three from `lg`, so ~370px at 1280, not four at ~270). */
+async function expectColumns(card: Locator, n: number, label: string): Promise<void> {
+  const m = await card.evaluate((el) => {
+    const grid = el.parentElement!;
+    return {
+      card: el.getBoundingClientRect().width,
+      grid: grid.getBoundingClientRect().width,
+      gap: parseFloat(getComputedStyle(grid).columnGap) || 0,
+    };
+  });
+  expect(m.grid, `${label}: the grid has a width`).toBeGreaterThan(0);
+  expect(Math.abs(m.card - (m.grid - (n - 1) * m.gap) / n), `${label}: ${n} to a row (card ${m.card}px in ${m.grid}px)`).toBeLessThan(1.5);
+}
+
 const deckRow = (page: Page, c: SeededCompetition): Locator => page.getByTestId("org-home-today-row").filter({ hasText: c.name });
 const card = (page: Page, c: SeededCompetition): Locator => page.getByTestId("org-home-card").filter({ hasText: c.name });
 
@@ -174,6 +189,8 @@ for (const width of [1280, 320] as const) {
     await expect(stub).toContainText(ui("card.progress.none"));
     await expect(stub.getByRole("link", { name: ui("org.home.stub.setUpFor", { name: quiet.name }) })).toBeVisible();
     await expect(quietCard.getByRole("link", { name: ui("org.home.today.openFor", { name: quiet.name }) })).toHaveCount(0);
+    // Three to a row on a desktop, one on a phone.
+    await expectColumns(quietCard, width === 1280 ? 3 : 1, `quiet card @${width}`);
 
     // No Directory button on the page; the nav keeps Directory (the positive pair).
     await expect(page.getByRole("main").getByRole("link", { name: CONSOLE["nav.directory"] })).toHaveCount(0);
