@@ -54,6 +54,19 @@ export type { CreditAnswer, CreditCase, CreditMetricRule, CreditReason, CreditRe
 export { WALKOVER_CREDIT_DATA } from "./families/walkover-credit-cfgs.ts";
 export type { CreditCfgEntry, PlayedScenario, SportCreditData } from "./families/walkover-credit-cfgs.ts";
 
+// W3 adds the Swiss legality and existence checker (rulebook-W3-swiss.md §2.3, RB3-24) — exported here, not held in
+// FAMILIES: it judges one paired round against its history, not a stage kind × sport pair's final answer.
+export { checkSwissRound } from "./families/swiss-legality.ts";
+export type { SwissColour, SwissHistoryIn, SwissRoundIn, SwissRule, SwissVerdict, SwissViolation } from "./families/swiss-legality.ts";
+export {
+  BLOSSOM_MAX_N,
+  BRUTE_FORCE_MAX_N,
+  SwissOutOfScope,
+  blossomMatching,
+  bruteForceMaximumMatching,
+  bruteForcePerfectMatching,
+} from "./families/swiss-matching.ts";
+
 export type StageKindName = StageKind;
 
 /** What every family declares: where it answers from, and which stage kind × sport pairs it answers. */
