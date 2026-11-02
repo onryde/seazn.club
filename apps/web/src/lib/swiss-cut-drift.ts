@@ -40,6 +40,34 @@ export function swissCutDrift(
   return { out, in: incoming };
 }
 
+/**
+ * The drift this stage's card warns about, or null — THE one predicate for "does this card carry the cut-drift warning?".
+ * Two things must agree on it and are both handed it: the card draws the amber notice from it (`stages-panel.tsx`), and the
+ * division page lists the same stages as needing attention (`swissCutDriftStageIds`, below) so Match Day PB1's fold (a
+ * COMPLETED stage starts as one line) opens exactly the cards that carry the notice. A second copy of the condition is how
+ * a warning ends up on a card that starts folded, drawn inside a `hidden` body that nobody sees.
+ *
+ * Only an organiser's Swiss: a viewer has no warning (`canEdit`), and a drift keyed to another kind of stage never lands.
+ */
+export function swissCutDriftOf(
+  stage: { id: string; kind: string },
+  canEdit: boolean,
+  drifts: Readonly<Record<string, SwissCutDrift>> | undefined,
+): SwissCutDrift | null {
+  if (!canEdit || stage.kind !== "swiss") return null;
+  return drifts?.[stage.id] ?? null;
+}
+
+/** The ids of the stages whose card carries the warning, in the order the stages are handed in — the page's
+ *  `attentionStageIds` for the stages panel (PB1's seam: a completed card in this list starts open). */
+export function swissCutDriftStageIds(
+  stages: readonly { id: string; kind: string }[],
+  canEdit: boolean,
+  drifts: Readonly<Record<string, SwissCutDrift>> | undefined,
+): string[] {
+  return stages.filter((s) => swissCutDriftOf(s, canEdit, drifts) !== null).map((s) => s.id);
+}
+
 /** The plural base (`.one` / `.other` in every locale) the warning is said with. The count is the number who come in:
  *  the verb agrees with them. */
 export const SWISS_CUT_DRIFT_PLURAL_KEY = "swiss.cutDrift.warning" as const;

@@ -116,7 +116,7 @@ import {
 // never from a count of the fixture rows.
 import { swissLegendRound, swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
 import { lateEntryNoticeText, swissLatecomerCounts, swissLatecomerLines } from "@/lib/swiss-late-entry-notice";
-import { swissCutDriftText, type SwissCutDrift } from "@/lib/swiss-cut-drift";
+import { swissCutDriftOf, swissCutDriftText, type SwissCutDrift } from "@/lib/swiss-cut-drift";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
 // `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
@@ -1385,6 +1385,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 }),
               )
             : [];
+        // W3 T17 (RB3-19): the cut-drift warning this card carries, if any - the ONE predicate (`swissCutDriftOf`) the page's
+        // `attentionStageIds` is built from too, so the card that has the notice is the card that starts open.
+        const cutDrift = swissCutDriftOf(stage, canEdit, swissCutDrift);
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1663,15 +1666,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 {/* W3 T17 (RB3-19, X-SW-25) — a result of this Swiss was corrected after its knockout began: the bracket
                     stands (no seat moves), and the desk says who today's table would have cut instead. The house amber
                     notice (the roster-drift banner's treatment), polite (role="status"), never a dialog. The sentence and
-                    its name lists are `swissCutDriftText` (lib/swiss-cut-drift.ts), so a test can read them. */}
-                {canEdit && stage.kind === "swiss" && swissCutDrift?.[stage.id] && (
+                    its name lists are `swissCutDriftText` (lib/swiss-cut-drift.ts), so a test can read them. It sits INSIDE the folded body
+                    (PB1): a completed card starts as one line, so the page lists these stages in `attentionStageIds` - from the same
+                    `swissCutDriftOf` this reads - and the card starts open. */}
+                {cutDrift && (
                   <div
                     role="status"
                     data-testid="swiss-cut-drift-warning"
                     className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
                   >
                     <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
-                      {swissCutDriftText(swissCutDrift[stage.id]!, entrantNames, locale, msgPlural)}
+                      {swissCutDriftText(cutDrift, entrantNames, locale, msgPlural)}
                     </p>
                   </div>
                 )}

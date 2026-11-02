@@ -21,6 +21,7 @@ import { divisionQualification, qualificationFixtures } from "@/server/public-si
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
+import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
@@ -1074,6 +1075,10 @@ export default async function DivisionPage({
               divisionStatus={division.status}
               swissRoundControls={swissRoundControls}
               swissCutDrift={swissCutDrift}
+              // Match Day PB1 x W3 T17: a COMPLETED stage's card starts as one line, and the cut-drift warning lives on a completed
+              // Swiss - so the cards that carry it are listed here and start open. `swissCutDriftStageIds` reads the SAME predicate
+              // the card draws the notice from (`swissCutDriftOf`), so the two cannot disagree.
+              attentionStageIds={swissCutDriftStageIds(stages, editable, swissCutDrift)}
               matchDayHref={matchDayHref}
               rulesStrip={{
                 divisionId: id,

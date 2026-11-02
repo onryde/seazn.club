@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { StagesPanel } from "@/components/v2/stages-panel";
-import { swissCutDriftText } from "@/lib/swiss-cut-drift";
+import { swissCutDriftStageIds, swissCutDriftText, type SwissCutDrift } from "@/lib/swiss-cut-drift";
 import { plural as pluralRuntime } from "@/lib/i18n-runtime";
 import type { Locale } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/ui.json";
@@ -111,6 +111,103 @@ describe("StagesPanel — the Swiss cut drift warning (X-SW-25)", () => {
   it("X-SW-25 the warning sits on the Swiss card only: a drift handed to the knockout's id renders nothing", () => {
     const html = renderToStaticMarkup(<StagesPanel {...baseProps} canEdit swissCutDrift={{ s2: { out: ["e3"], in: ["e4"] } }} />);
     expect(warningOf(html)).toBeNull();
+  });
+});
+
+// Match Day PB1 x W3 T17 — a COMPLETED stage's card starts as one line, its body `hidden`; the warning lives in that body, on a
+// COMPLETED Swiss. The tests above hand the panel NO fixtures, and a completed stage with no match has nothing to fold, so they
+// never saw the fold at all. These give the Swiss its played rounds, and drive the page's own producer
+// (`swissCutDriftStageIds`, the function the division page calls for `attentionStageIds`) into the real panel. The seam's generic
+// behaviour — a listed card starts open, a tap folds it, a warning that ARRIVES after a fold re-opens it ONCE and the next fold
+// holds — is pinned for every kind in stages-panel-collapse.test.tsx ("the attention seam", "a warning that arrives after the
+// person folded the card re-opens it"); it is not re-proved here. The browser half is e2e/w3-swiss-app-a.spec.ts "X-SW-25", which
+// loads the real page and asserts the warning VISIBLE on the completed Swiss.
+describe("StagesPanel — the cut-drift warning is never folded away (Match Day PB1 attention seam)", () => {
+  const DRIFT: SwissCutDrift = { out: ["e3"], in: ["e4"] };
+  /** Two decided rounds on a Swiss, so it has real matches to fold. */
+  const played = (stageId: string) =>
+    [1, 2].flatMap((round) =>
+      [1, 2].map((board) => ({
+        id: `${stageId}-${round}-${board}`,
+        stage_id: stageId,
+        pool_id: null,
+        round_no: round,
+        seq_in_round: board,
+        fixture_no: (round - 1) * 2 + board,
+        home_entrant_id: board === 1 ? "e1" : "e3",
+        away_entrant_id: board === 1 ? "e2" : "e4",
+        scheduled_at: null,
+        venue: null,
+        court_label: null,
+        court_id: null,
+        court_name: null,
+        status: "decided",
+        outcome: { kind: "win", winner: board === 1 ? "e1" : "e3" },
+      })),
+    );
+  const swissStage = (id: string, seq: number) => ({ id, seq, kind: "swiss", name: `Swiss ${seq}`, config: { rounds: 2 }, progression: null, status: "complete" });
+  const props = { ...baseProps, stages: [swissStage("s1", 1)], fixtures: played("s1") };
+  /** What the division page does: build the attention list from the same stages / editability / drift map it hands the panel. */
+  const render = (over: { canEdit?: boolean; drift?: Record<string, SwissCutDrift>; stages?: ReturnType<typeof swissStage>[]; fixtures?: ReturnType<typeof played> } & { attention?: "page" | "absent" } = {}) => {
+    const stages = over.stages ?? props.stages;
+    const canEdit = over.canEdit ?? true;
+    const drift = over.drift;
+    const attention = over.attention === "absent" ? undefined : swissCutDriftStageIds(stages, canEdit, drift);
+    return renderToStaticMarkup(
+      <StagesPanel {...props} stages={stages} fixtures={over.fixtures ?? props.fixtures} canEdit={canEdit} swissCutDrift={drift} attentionStageIds={attention} />,
+    );
+  };
+  const expandedOf = (html: string, stageId: string): string | null => {
+    const card = html.slice(html.indexOf(`data-stage-id="${stageId}"`));
+    return /data-testid="stage-collapse-toggle"[^>]*aria-expanded="(true|false)"|aria-expanded="(true|false)"[^>]*data-testid="stage-collapse-toggle"/.exec(card)?.slice(1).find((g) => g !== undefined) ?? null;
+  };
+  const bodyTag = (html: string, stageId: string): string | null => new RegExp(`<div[^>]*\\sid="stage-body-${stageId}"[^>]*>`).exec(html)?.[0] ?? null;
+  const hiddenOf = (html: string, stageId: string): boolean | null => {
+    const tag = bodyTag(html, stageId);
+    return tag === null ? null : /\shidden(=""|\s|>)/.test(tag);
+  };
+
+  it("a completed Swiss WITH a drift renders expanded, its body shown, and the warning inside that body", () => {
+    const html = render({ drift: { s1: DRIFT } });
+    expect(expandedOf(html, "s1"), "still collapsible: the person can fold it").toBe("true");
+    expect(hiddenOf(html, "s1"), "the body is shown").toBe(false);
+    const warning = warningOf(html);
+    expect(warning, "the warning renders").not.toBeNull();
+    expect(warning!.text).toContain("Di Eze would qualify instead of Cy Dube");
+    expect(html.indexOf('data-testid="swiss-cut-drift-warning"'), "inside the card's body, not above it").toBeGreaterThan(html.indexOf('id="stage-body-s1"'));
+    expect(html).not.toContain('data-testid="stage-collapsed-summary"');
+  });
+
+  it("the SAME completed Swiss WITHOUT a drift renders collapsed: toggle closed, body hidden, no warning, the one-line summary", () => {
+    for (const drift of [undefined, {}] as const) {
+      const html = render({ drift });
+      expect(expandedOf(html, "s1"), JSON.stringify(drift)).toBe("false");
+      expect(hiddenOf(html, "s1"), JSON.stringify(drift)).toBe(true);
+      expect(warningOf(html), JSON.stringify(drift)).toBeNull();
+      expect(html, JSON.stringify(drift)).toContain('data-testid="stage-collapsed-summary"');
+    }
+  });
+
+  it("the wiring is what opens it: the same drift with NO attention list leaves the warning inside a hidden body (the inert-seam shape this exists to prevent)", () => {
+    const html = render({ drift: { s1: DRIFT }, attention: "absent" });
+    expect(warningOf(html), "premise: the warning is in the markup").not.toBeNull();
+    expect(expandedOf(html, "s1")).toBe("false");
+    expect(hiddenOf(html, "s1"), "and the body that holds it is hidden: nobody would see it").toBe(true);
+  });
+
+  it("a viewer's card never opens for a warning they cannot see (positive pair: the organiser's, above)", () => {
+    const html = render({ canEdit: false, drift: { s1: DRIFT } });
+    expect(warningOf(html)).toBeNull();
+    expect(expandedOf(html, "s1")).toBe("false");
+    expect(hiddenOf(html, "s1")).toBe(true);
+  });
+
+  it("per stage: of two completed Swiss cards only the one with the drift opens", () => {
+    const stages = [swissStage("s1", 1), swissStage("s3", 2)];
+    const html = render({ stages, fixtures: [...played("s1"), ...played("s3")], drift: { s3: DRIFT } });
+    expect([expandedOf(html, "s1"), expandedOf(html, "s3")], "premise: both cards have a toggle").toEqual(["false", "true"]);
+    expect([hiddenOf(html, "s1"), hiddenOf(html, "s3")]).toEqual([true, false]);
+    expect(html.split('data-testid="swiss-cut-drift-warning"').length - 1, "exactly one warning on the page").toBe(1);
   });
 });
 

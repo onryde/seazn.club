@@ -16,7 +16,7 @@
 // the behaviour, and if one of these ever disagrees with the other, the
 // browser wins.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const SRC = join(process.cwd(), "src");
@@ -257,6 +257,11 @@ describe("the organiser pages hand the entrants' statuses to the readers that wo
 // W3 T17 (RB3-19, X-SW-25): the cut-drift warning is computed on the division page and rendered by StagesPanel. The only
 // behaviour witness is the e2e describe "X-SW-25 the desk warns after a cut-changing correction"; this scan exists so a
 // rebase that drops the prop (the StagesPanel mount moved under Match Day #1103) reds on a pull request, not after merge.
+//
+// Match Day PB1 (#1105) folds a COMPLETED stage's card to one line, its body `hidden`, and the warning lives on a completed Swiss:
+// the page must ALSO list the stages that carry it as `attentionStageIds`, from the same predicate the card draws the notice from
+// (`swissCutDriftOf`). Two props that must travel together are the wiring a scan can pin: a mount with one and not the other is the
+// inert seam (a warning inside a body nobody opens). The card half is driven by render (swiss-cut-drift-warning.test.tsx).
 describe("the division page feeds the Swiss cut-drift warning to the stages panel (W3 T17)", () => {
   const page = read("app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx");
   const panel = read("components/v2/stages-panel.tsx");
@@ -270,9 +275,85 @@ describe("the division page feeds the Swiss cut-drift warning to the stages pane
     expect(page).not.toMatch(/swissCutDrift=\{\{/);
   });
 
-  it("renders the warning from that prop, keyed by the stage", () => {
-    expect(panel).toMatch(/swissCutDrift\?\.\[stage\.id\]/);
+  it("renders the warning from the shared predicate (swissCutDriftOf), not a condition of its own", () => {
+    expect(panel).toMatch(/const cutDrift = swissCutDriftOf\(\s*stage,\s*canEdit,\s*swissCutDrift\s*\)/);
     expect(panel).toContain('data-testid="swiss-cut-drift-warning"');
-    expect(panel).toMatch(/swissCutDriftText\(\s*swissCutDrift\[stage\.id\]!/);
+    expect(panel).toMatch(/swissCutDriftText\(\s*cutDrift,/);
+    // The negative pair: no inline restatement of the condition beside it (a second copy is how the two drift apart).
+    expect(panel).not.toMatch(/swissCutDrift\?\.\[stage\.id\]/);
+    expect(panel).not.toMatch(/swissCutDrift\[stage\.id\]/);
+  });
+
+  /** Every non-test source file under `src/app` and `src/components` that mounts the StagesPanel, with its mounts. */
+  function stagesPanelMounts(): { file: string; mount: string }[] {
+    const found: { file: string; mount: string }[] = [];
+    for (const root of ["app", "components"]) {
+      for (const entry of readdirSync(join(SRC, root), { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile() || !/\.tsx$/.test(entry.name)) continue;
+        const dir = (entry as unknown as { parentPath?: string; path?: string }).parentPath ?? (entry as unknown as { path: string }).path;
+        if (/__tests__/.test(dir)) continue;
+        const source = readFileSync(join(dir, entry.name), "utf8");
+        for (const mount of source.includes("<StagesPanel") ? mounts(source, ["StagesPanel"]) : []) {
+          found.push({ file: join(dir, entry.name).slice(SRC.length + 1), mount });
+        }
+      }
+    }
+    return found;
+  }
+
+  /** What is wrong with ONE StagesPanel mount's cut-drift hand-over; [] = nothing. */
+  function cutDriftProblems(mount: string): string[] {
+    const named = (prop: string) => (mount.match(new RegExp(`\\b${prop}=`, "g")) ?? []).length;
+    const problems: string[] = [];
+    const drift = named("swissCutDrift");
+    const attention = named("attentionStageIds");
+    if (drift !== 1) problems.push(`names swissCutDrift= ${drift}x, expected exactly once`);
+    if (attention !== 1) problems.push(`names attentionStageIds= ${attention}x, expected exactly once (a mount with the drift and not the attention list hides the warning in a folded card)`);
+    // The list is built from the SAME three values the mount hands the panel for stages / canEdit / swissCutDrift - read off the
+    // mount itself, never typed here - through the one helper, so a literal, a stale copy or another list cannot pass.
+    const value = (prop: string) => new RegExp(`\\b${prop}=\\{([^{}]*)\\}`).exec(mount)?.[1]?.trim();
+    const stages = value("stages");
+    const canEdit = value("canEdit");
+    const driftValue = value("swissCutDrift");
+    if (stages === undefined || canEdit === undefined || driftValue === undefined) {
+      problems.push("does not hand stages= / canEdit= / swissCutDrift= as plain {values}");
+    } else if (!mount.includes(`attentionStageIds={swissCutDriftStageIds(${stages}, ${canEdit}, ${driftValue})}`)) {
+      problems.push(`attentionStageIds is not {swissCutDriftStageIds(${stages}, ${canEdit}, ${driftValue})}`);
+    }
+    return problems;
+  }
+
+  it("every StagesPanel mount that receives the drift also receives the attention list, built from the same predicate", () => {
+    const all = stagesPanelMounts();
+    expect(all.length, "anti-vacuity: the scan found StagesPanel mounts").toBeGreaterThan(0);
+    const withDrift = all.filter((m) => /\bswissCutDrift=/.test(m.mount));
+    expect(withDrift.map((m) => m.file), "premise: the division page is the mount that receives the drift").toEqual(["app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx"]);
+    for (const { file, mount } of withDrift) {
+      expect(cutDriftProblems(mount), `the StagesPanel mount in ${file}:\n${mount}`).toEqual([]);
+    }
+    // The converse: nobody lists attention stages without the drift that explains them (a literal list would sit here).
+    for (const { file, mount } of all) {
+      if (/\battentionStageIds=/.test(mount)) expect(/\bswissCutDrift=/.test(mount), `${file} names attentionStageIds= without swissCutDrift=`).toBe(true);
+    }
+    expect(page).toMatch(/import \{ swissCutDriftStageIds \} from "@\/lib\/swiss-cut-drift"/);
+  });
+
+  it("the scan sees what it exists for: the attention list dropped, a literal, a wrong editability, another map, a duplicate (mutants against a clean control)", () => {
+    const clean = '<StagesPanel stages={stages} canEdit={editable} swissCutDrift={swissCutDrift} attentionStageIds={swissCutDriftStageIds(stages, editable, swissCutDrift)} />';
+    expect(cutDriftProblems(clean), "control: a clean mount").toEqual([]);
+    const killed: Array<[string, string]> = [
+      ["attention list dropped", clean.replace(" attentionStageIds={swissCutDriftStageIds(stages, editable, swissCutDrift)}", "")],
+      ["empty literal", clean.replace("swissCutDriftStageIds(stages, editable, swissCutDrift)", "[]")],
+      ["editability hardcoded", clean.replace("(stages, editable, swissCutDrift)", "(stages, true, swissCutDrift)")],
+      ["another map", clean.replace("(stages, editable, swissCutDrift)", "(stages, editable, {})")],
+      ["a second, overriding list", clean.replace(" />", " attentionStageIds={[]} />")],
+      ["drift dropped, list kept", clean.replace(" swissCutDrift={swissCutDrift}", "")],
+    ];
+    let checked = 0;
+    for (const [name, mount] of killed) {
+      expect(cutDriftProblems(mount), name).not.toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every mutant run").toBe(killed.length);
   });
 });
