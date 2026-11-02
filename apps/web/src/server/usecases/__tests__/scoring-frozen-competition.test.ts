@@ -398,4 +398,47 @@ describe.skipIf(!HAS_DB)("reopening a competition is a quota door (PB2 re-review
     await quotaRefusal(patchCompetition(s.auth, lapsed, { status: "live" }));
     expect(await statusOf(lapsed)).toBe("archived");
   }, 120_000);
+
+  // PB2 re-review 2, m16 + m17: the END DATE is the predicate's other half. A competition an Event Pass buys out of the quota
+  // counts again once its end date sits more than the grace in the past, so a patch carrying `ends_on` is a door too: alone
+  // (m16: measured 200, with a running competition frozen in its place) and beside a reopen, where the PATCHED date decides,
+  // not the stored one (m17: the stored date here is null, under which the pass would still apply).
+  it("an end date that takes a passed competition back into the count asks the quota, alone and beside a reopen; a date that keeps the pass applying, or one on a competition already counted, does not", async () => {
+    const s = await seed("badminton");
+    const org = s.auth.orgId;
+    await setOrgPlan(org, "community");
+    await invalidateOrgEntitlements(org);
+    const limit = (await getLimit(org, "competitions.max_active")) as number;
+    for (let i = 0; i < limit - 1; i++) await raw(org, "Filler");
+    // At the limit (the seeded competition and limit - 1 fillers); two passed competitions take no slot.
+    const passedLive = await raw(org, "PassedLive", { status: "live" });
+    const passedArchived = await raw(org, "PassedArchived", { status: "archived" });
+    for (const id of [passedLive, passedArchived]) {
+      await sql`insert into competition_passes (competition_id, org_id) values (${id}, ${org})`;
+    }
+    expect(await frozenCompetitionIds(org), "premise: at the limit, nothing frozen").toEqual(new Set());
+    const endsOf = async (id: string) =>
+      (await sql<{ ends_on: string | null }[]>`select ends_on::text as ends_on from competitions where id = ${id}`)[0]!.ends_on;
+    const day = (offset: number) => new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+    const lapsedDate = day(-30); // more than the 7-day grace past: the pass no longer applies
+    const applyingDate = day(30);
+
+    // m16: the date alone.
+    await quotaRefusal(patchCompetition(s.auth, passedLive, { ends_on: lapsedDate }));
+    expect(await endsOf(passedLive), "the refused edit wrote nothing").toBeNull();
+    expect(await frozenCompetitionIds(org), "and nothing froze in its place").toEqual(new Set());
+    await patchCompetition(s.auth, passedLive, { ends_on: applyingDate });
+    expect(await endsOf(passedLive), "a date that keeps the pass applying takes no slot").toBe(applyingDate);
+
+    // m17: beside a reopen, the patched date decides.
+    await quotaRefusal(patchCompetition(s.auth, passedArchived, { status: "live", ends_on: lapsedDate }));
+    expect([await statusOf(passedArchived), await endsOf(passedArchived)]).toEqual(["archived", null]);
+    await patchCompetition(s.auth, passedArchived, { status: "live", ends_on: applyingDate });
+    expect(await statusOf(passedArchived)).toBe("live");
+
+    // A competition already in the count moves its date freely: no new slot.
+    await patchCompetition(s.auth, s.competitionId, { ends_on: applyingDate });
+    expect(await endsOf(s.competitionId)).toBe(applyingDate);
+    expect(await frozenCompetitionIds(org), "still at the limit, nothing over it").toEqual(new Set());
+  }, 120_000);
 });

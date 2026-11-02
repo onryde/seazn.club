@@ -495,9 +495,13 @@ export async function patchCompetition(
   // reopened) takes a slot exactly as a create does, so it asks the same quota. Without it the reopen was free: over the
   // limit it thawed a frozen competition with no room and froze one the organiser never touched; at the limit it pushed a
   // running one into the freeze. A patch that stays inside the set (draft -> published -> live) is not a door.
+  // PB2 re-review 2, m16: neither is the status the only door. A competition an Event Pass buys out of the quota counts
+  // again once its end date sits past the pass's grace, so an end date patched ALONE (the API takes `{ends_on}` by itself)
+  // asks the same question, on the stored status.
   if (
-    patch.status &&
-    (ACTIVE_COMPETITION_STATUSES as readonly string[]).includes(patch.status) &&
+    (patch.status !== undefined
+      ? (ACTIVE_COMPETITION_STATUSES as readonly string[]).includes(patch.status)
+      : patch.ends_on !== undefined) &&
     (await entersActiveQuota(auth.orgId, id, { status: patch.status, endsOn: patch.ends_on }))
   ) {
     await assertActiveQuota(auth);
