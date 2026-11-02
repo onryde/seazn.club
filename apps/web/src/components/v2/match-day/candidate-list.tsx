@@ -5,13 +5,14 @@
 // button (§7.2's hard stop); every other one has "Call to Court N", which opens the call sheet's knock-on preview. Only the
 // top-ranked callable one carries the primary button; the rest are secondary (review V2: one primary action per list).
 // A view-only reader (task B4, `ctx.readOnly`) sees the same list with no call buttons: what could start here, not a door to it.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicTime } from "@/lib/format";
 import { plural, t } from "@/lib/i18n-runtime";
 import type { MatchDayCandidate, MatchDayCandidateSource, MatchDayCourt } from "@/lib/match-day/types";
 import {
   blockedReason,
+  callPausedReason,
   callableCount,
   candidateWhere,
   filterCandidates,
@@ -113,6 +114,10 @@ export function FreeCourtBody({
   onRetry: () => void;
 }) {
   const { dict } = ctx;
+  // A court that is closed NOW takes no call (E2 item 3): the buttons are off, and the reason is on screen and announced. A break
+  // still to come is a warning in the call sheet instead.
+  const paused = callPausedReason(dict, court, ctx.locale, ctx.tz);
+  const pausedId = useId();
   return (
     <div className="grid gap-4">
       <div data-testid="md-free-panel" className="rounded-2xl bg-court p-5 text-court-ink shadow-lg sm:p-6">
@@ -127,6 +132,18 @@ export function FreeCourtBody({
                 ? t(dict, "matchDay.free.countNone")
                 : plural(dict, "matchDay.free.count", callableCount(load.candidates), ctx.locale)}
         </p>
+        {/* Always mounted, so a court that closes between two polls is ANNOUNCED when the words arrive, not only rendered. */}
+        <div id={pausedId} role="status" data-testid="md-call-paused" className={paused === null ? "hidden" : "mt-3 flex items-start gap-2 rounded-lg bg-amber-100 px-3 py-2 text-sm font-medium text-amber-950"}>
+          {paused !== null && (
+            <>
+              <svg aria-hidden viewBox="0 0 16 16" className="mt-0.5 h-4 w-4 shrink-0 fill-none stroke-current" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="8" cy="8" r="6" />
+                <path d="M8 4.5V8l2.25 1.5" />
+              </svg>
+              <span className="min-w-0 [overflow-wrap:anywhere]">{paused}</span>
+            </>
+          )}
+        </div>
         {load.status === "failed" && (
           <button type="button" onClick={onRetry} className="btn mt-3 min-h-11 border border-white/30 text-court-ink hover:bg-white/10">
             {t(dict, "matchDay.free.retry")}
@@ -134,7 +151,7 @@ export function FreeCourtBody({
         )}
       </div>
       {load.status === "ready" && load.candidates.length > 0 && (
-        <CandidateRows ctx={ctx} court={court} candidates={load.candidates} onCall={onCall} />
+        <CandidateRows ctx={ctx} court={court} candidates={load.candidates} onCall={onCall} pausedId={paused === null ? null : pausedId} />
       )}
     </div>
   );
@@ -146,11 +163,14 @@ export function CandidateRows({
   court,
   candidates,
   onCall,
+  pausedId = null,
 }: {
   ctx: MatchDayCtx;
   court: MatchDayCourt;
   candidates: MatchDayCandidate[];
   onCall: (candidate: MatchDayCandidate) => void;
+  /** The id of the line that says why Call is off (the court is closed now); null while calls are open. */
+  pausedId?: string | null;
 }) {
   const { dict } = ctx;
   const primary = primaryCandidateId(candidates);
@@ -188,6 +208,8 @@ export function CandidateRows({
                     <button
                       type="button"
                       data-md-primary={c.fixture.id === primary ? "true" : undefined}
+                      disabled={pausedId !== null}
+                      aria-describedby={pausedId ?? undefined}
                       onClick={() => onCall(c)}
                       className={`btn min-h-11 text-sm ${
                         c.fixture.id === primary ? "btn-primary w-full md:w-auto" : "btn-ghost justify-self-start md:justify-self-auto"

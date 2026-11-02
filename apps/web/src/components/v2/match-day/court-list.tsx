@@ -18,6 +18,7 @@ import type { Dict, Locale } from "@/lib/i18n-constants";
 import { plural, t } from "@/lib/i18n-runtime";
 import type { MatchDayCourt, MatchDayFixture, VenueNoun } from "@/lib/match-day/types";
 import {
+  closureText,
   compactScore,
   courtScorerAttention,
   foldFreeCourts,
@@ -41,6 +42,7 @@ export function CourtList({
   selectedId,
   dict,
   locale,
+  tz,
   onSelect,
 }: {
   /** In list order (`orderCourts`); the list folds the free, empty ones itself. */
@@ -48,6 +50,8 @@ export function CourtList({
   selectedId: string | null;
   dict: Dict;
   locale: Locale;
+  /** The organisation's zone: the view's `tz`, in which a closure's times print. */
+  tz: string;
   onSelect: (courtId: string) => void;
 }) {
   const [foldOpen, setFoldOpen] = useState(false);
@@ -57,7 +61,7 @@ export function CourtList({
   return (
     <ul aria-label={t(dict, "matchDay.list.label")} className="card divide-y divide-purple-50 overflow-hidden">
       {shown.map((c) => (
-        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} onSelect={onSelect} />
+        <CourtRow key={c.court_id} court={c} selected={c.court_id === selectedId} dict={dict} locale={locale} tz={tz} onSelect={onSelect} />
       ))}
       {folded.length > 0 && (
         <li data-testid="md-court-fold" data-open={foldOpen ? "true" : "false"}>
@@ -90,7 +94,7 @@ export function CourtList({
           {foldOpen && (
             <ul id={foldId} className="divide-y divide-purple-50 border-t border-purple-50">
               {folded.map((c) => (
-                <CourtRow key={c.court_id} court={c} selected={false} dict={dict} onSelect={onSelect} />
+                <CourtRow key={c.court_id} court={c} selected={false} dict={dict} locale={locale} tz={tz} onSelect={onSelect} />
               ))}
             </ul>
           )}
@@ -100,19 +104,42 @@ export function CourtList({
   );
 }
 
+/** A court's closure, in amber: a break still to come ("Closed 14:00–15:00") or the court shut now ("Closed until 15:00"). A clock
+ *  glyph carries the meaning beside the words (never colour alone); the card's `data-kind` says which of the two it is. */
+export function ClosureLine({ kind, text, className = "mt-0.5" }: { kind: "now" | "later"; text: string; className?: string }) {
+  return (
+    <span
+      data-testid="md-closure"
+      data-kind={kind}
+      className={`${className} flex min-w-0 items-center gap-1 text-xs font-medium text-amber-800`}
+    >
+      <svg aria-hidden viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 fill-none stroke-current" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="8" cy="8" r="6" />
+        <path d="M8 4.5V8l2.25 1.5" />
+      </svg>
+      <span className="min-w-0 [overflow-wrap:anywhere]">{text}</span>
+    </span>
+  );
+}
+
 /** One court: its name, what is on it now, its state and the desk's scorer mark. */
 function CourtRow({
   court: c,
   selected,
   dict,
+  locale,
+  tz,
   onSelect,
 }: {
   court: MatchDayCourt;
   selected: boolean;
   dict: Dict;
+  locale: Locale;
+  tz: string;
   onSelect: (courtId: string) => void;
 }) {
   const score = c.state === "playing" && c.current !== null ? scoreLine(c.current) : null;
+  const closure = closureText(dict, c.closure, locale, tz);
   const scorer = courtScorerAttention(c);
   return (
     <li>
@@ -143,6 +170,7 @@ function CourtRow({
               {compactScore(score)}
             </span>
           ) : null}
+          {closure !== null && c.closure !== null && <ClosureLine kind={c.closure.kind} text={closure} />}
           {scorer !== null && (
             <span className="mt-1 flex min-w-0">
               <ScorerMark dict={dict} kind={scorer} severity={ATTENTION_SEVERITY[scorer]} />

@@ -47,6 +47,7 @@ const court = (id: string, name: string, o: Partial<MatchDayCourt> = {}): MatchD
   in_use_by: null,
   free_since: null,
   queue: [],
+  closure: null,
   ...o,
 });
 

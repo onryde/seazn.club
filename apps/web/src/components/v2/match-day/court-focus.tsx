@@ -32,10 +32,11 @@ import { routes } from "@/lib/routes";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { MatchDayCourt, MatchDayFixture } from "@/lib/match-day/types";
-import { courtScorerAttention, matchLabel, streamPreviewOf } from "@/lib/match-day/view";
+import { closureText, courtScorerAttention, matchLabel, streamPreviewOf } from "@/lib/match-day/view";
 import { venueNoun } from "@/lib/venue";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { FreeCourt } from "./candidate-list";
+import { ClosureLine } from "./court-list";
 import { failureMessage } from "./call-sheet";
 import { CourtScoreboard } from "./court-scoreboard";
 import { CourtStreamPreview } from "./court-stream-preview";
@@ -115,6 +116,9 @@ export function CourtFocus({
           <p className="truncate text-xs text-slate-600">
             <span>{t(dict, `matchDay.noun.${court.sport_noun}`)}</span> · <span>{court.venue_name}</span>
           </p>
+          {court.closure !== null && (
+            <ClosureLine kind={court.closure.kind} text={closureText(dict, court.closure, ctx.locale, ctx.tz) ?? ""} className="mt-1" />
+          )}
         </div>
         {f !== null && (court.state === "playing" || court.state === "called") && <OpenPadLink ctx={ctx} fixture={f} />}
       </header>

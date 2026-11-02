@@ -283,7 +283,7 @@ export function MatchDayShell({
           )}
           <div data-testid="md-list" className={`grid min-w-0 gap-5 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
             {courts.length > 0 && (
-              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} locale={locale} onSelect={open} />
+              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} locale={locale} tz={view.tz} onSelect={open} />
             )}
             <NoCourtList
               fixtures={noCourt}

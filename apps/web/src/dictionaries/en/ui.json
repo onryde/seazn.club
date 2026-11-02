@@ -7231,5 +7231,13 @@
   "matchDay.list.freeFold.pitch.other": "{count} more pitches free ({names})",
   "matchDay.list.freeFold.table.other": "{count} more tables free ({names})",
   "matchDay.list.freeFold.board.other": "{count} more boards free ({names})",
-  "matchDay.list.freeFold.rink.other": "{count} more rinks free ({names})"
+  "matchDay.list.freeFold.rink.other": "{count} more rinks free ({names})",
+  "matchDay.closure.later": "Closed {from}–{until}",
+  "matchDay.closure.until": "Closed until {time}",
+  "matchDay.closure.rest": "Closed for the rest of today",
+  "matchDay.closure.callPaused.until": "Closed until {time}, so no match can be called to {court} yet.",
+  "matchDay.closure.callPaused.rest": "Closed for the rest of today, so no match can be called to {court}.",
+  "matchDay.sheet.warn.crossesClosure": "{court} closes from {from} to {until}, while this match would still be on.",
+  "matchDay.sheet.warn.courtClosedUntil": "{court} is closed until {time}.",
+  "matchDay.sheet.warn.courtClosedToday": "{court} is closed for the rest of today."
 }

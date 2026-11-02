@@ -30,7 +30,12 @@ export const TBD_ENTRANT = "tbd_entrant";
 export type CallWarning =
   | { kind: "pushes_later"; count: number }
   | { kind: "rest_gap"; person_name: string; minutes: number; min_rest: number }
-  | { kind: "past_day_end"; court_name: string; until: string };
+  | { kind: "past_day_end"; court_name: string; until: string }
+  /** Match Day E2 item 3 (`lib/match-day/closure.ts`): the court is open at the call and closes, then reopens, before the match is
+   *  due to end — `from`/`until` are the break's bounds. */
+  | { kind: "crosses_closure"; court_name: string; from: string; until: string }
+  /** The court is already closed at the call; `until` is when it reopens, null when it does not open again today. */
+  | { kind: "court_closed"; court_name: string; until: string | null };
 
 /** A match on the target court that the call pushes later than its planned time. Planned times are never written (owner
  *  ruling B); `estimated_at` is the read-time estimate. */

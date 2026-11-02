@@ -313,6 +313,75 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     expect(await getMatchDay(day.auth, day.comp.id, at(0))).toEqual(view);
   });
 
+  it("E2-3 — a court's closure is the scheduler's own reading of court_hours and court_exceptions: a break to come, closed now, reopened, closed for the day — and none for a court with no calendar", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    const c4 = await addCourt(day, "hallB", "Court 4", 1);
+    await place(day, between(day.comp, p1, p2).id, 120, c4); // puts Court 4 on today's board
+    // Saturday 2026-11-07, Amsterdam = UTC+1. Court 1: 09:00–11:30 and 12:30–20:00 local = 08:00–10:30Z and 11:30–19:00Z, so the
+    // break is 10:30Z–11:30Z; at(0) is 10:00Z.
+    await sql`
+      insert into court_hours (court_id, org_id, weekday, open_min, close_min)
+      values (${day.courts.c1}, ${day.orgId}, 6, ${9 * 60}, ${11 * 60 + 30}),
+             (${day.courts.c1}, ${day.orgId}, 6, ${12 * 60 + 30}, ${20 * 60})`;
+    // Court 2: a Saturday calendar the date's CLOSED exception overrides (exceptions win over weekday hours).
+    await sql`
+      insert into court_hours (court_id, org_id, weekday, open_min, close_min)
+      values (${day.courts.c2}, ${day.orgId}, 6, ${9 * 60}, ${20 * 60})`;
+    await sql`
+      insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c2}, ${day.orgId}, '2026-11-07', true)`;
+    // Court 3: no Saturday hours, but a single override range on the date, 12:00–14:00 local = 11:00Z–13:00Z.
+    await sql`
+      insert into court_exceptions (court_id, org_id, date, closed, open_min, close_min)
+      values (${day.courts.c3}, ${day.orgId}, '2026-11-07', false, ${12 * 60}, ${14 * 60})`;
+    // Court 4: hours on Sundays only — a declared calendar that says "not Saturdays" (closed, not unrestricted).
+    await sql`
+      insert into court_hours (court_id, org_id, weekday, open_min, close_min)
+      values (${c4}, ${day.orgId}, 0, ${9 * 60}, ${20 * 60})`;
+
+    const closures = async (minute: number) => {
+      const view = await getMatchDay(day.auth, day.comp.id, at(minute));
+      // The wire schema accepts every closure the board produced (the route test parses with it too).
+      MatchDayViewSchema.parse(JSON.parse(JSON.stringify(view)));
+      return Object.fromEntries([day.courts.c1, day.courts.c2, day.courts.c3, c4].map((id) => [id, courtOf(view, id).closure]));
+    };
+    const rest = { kind: "now", until: null };
+
+    // 10:00Z: Court 1 open with the break to come; Court 2 shut (exception); Court 3 not open until 11:00Z; Court 4 shut all day.
+    expect(await closures(0)).toEqual({
+      [day.courts.c1]: { kind: "later", from: iso(30), until: iso(90) },
+      [day.courts.c2]: rest,
+      [day.courts.c3]: { kind: "now", until: iso(60) },
+      [c4]: rest,
+    });
+    // 10:40Z: Court 1 is IN the break, until 11:30Z; Court 3 still not open.
+    expect((await closures(40))[day.courts.c1]).toEqual({ kind: "now", until: iso(90) });
+    // 11:30Z: the break is over (a window is [from, to)): Court 1 open, no break left; Court 3 is open (its window is 11:00–13:00Z).
+    const reopened = await closures(90);
+    expect(reopened[day.courts.c1]).toBeNull();
+    expect(reopened[day.courts.c3]).toBeNull();
+    // 20:00Z (21:00 local): Court 1 closed for the night; Court 3 closed since 13:00Z.
+    const night = await closures(600);
+    expect(night[day.courts.c1]).toEqual(rest);
+    expect(night[day.courts.c3]).toEqual(rest);
+    // 07:30Z: before Court 1 opens (08:00Z).
+    expect((await closures(-150))[day.courts.c1]).toEqual({ kind: "now", until: iso(-120) });
+    expect(Object.keys(night), "anti-vacuity: four courts read").toHaveLength(4);
+  });
+
+  it("E2-3 — a court with no hours and no exceptions is open all day: no closure at any hour", async () => {
+    const day = await seedDay();
+    let checked = 0;
+    for (const minute of [-600, 0, 300, 600, 800]) {
+      const view = await getMatchDay(day.auth, day.comp.id, at(minute));
+      for (const c of view.courts) {
+        expect(c.closure, `${c.court_name} @${minute}`).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked).toBe(5 * 3);
+  });
+
   it("Review Focus 4: a called court's state follows the match's STATUS — called, then playing once started, then free for every finished status the database declares", async () => {
     const day = await seedDay();
     const [check] = await sql<{ def: string }[]>`

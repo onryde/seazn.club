@@ -7231,5 +7231,13 @@
   "matchDay.list.freeFold.pitch.other": "{count} autres terrains libres ({names})",
   "matchDay.list.freeFold.table.other": "{count} autres tables libres ({names})",
   "matchDay.list.freeFold.board.other": "{count} autres plateaux libres ({names})",
-  "matchDay.list.freeFold.rink.other": "{count} autres patinoires libres ({names})"
+  "matchDay.list.freeFold.rink.other": "{count} autres patinoires libres ({names})",
+  "matchDay.closure.later": "Fermé {from}–{until}",
+  "matchDay.closure.until": "Fermé jusqu'à {time}",
+  "matchDay.closure.rest": "Fermé pour le reste de la journée",
+  "matchDay.closure.callPaused.until": "Fermé jusqu'à {time} : aucun match ne peut encore être appelé sur {court}.",
+  "matchDay.closure.callPaused.rest": "Fermé pour le reste de la journée : aucun match ne peut être appelé sur {court}.",
+  "matchDay.sheet.warn.crossesClosure": "{court} ferme de {from} à {until}, alors que ce match serait encore en cours.",
+  "matchDay.sheet.warn.courtClosedUntil": "{court} : fermé jusqu'à {time}.",
+  "matchDay.sheet.warn.courtClosedToday": "{court} : fermé pour le reste de la journée."
 }

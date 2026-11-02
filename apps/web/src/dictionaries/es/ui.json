@@ -7231,5 +7231,13 @@
   "matchDay.list.freeFold.pitch.other": "{count} campos más libres ({names})",
   "matchDay.list.freeFold.table.other": "{count} mesas más libres ({names})",
   "matchDay.list.freeFold.board.other": "{count} tableros más libres ({names})",
-  "matchDay.list.freeFold.rink.other": "{count} pistas de hielo más libres ({names})"
+  "matchDay.list.freeFold.rink.other": "{count} pistas de hielo más libres ({names})",
+  "matchDay.closure.later": "Cerrado {from}–{until}",
+  "matchDay.closure.until": "Cerrado hasta las {time}",
+  "matchDay.closure.rest": "Cerrado el resto de hoy",
+  "matchDay.closure.callPaused.until": "Cerrado hasta las {time}: aún no se puede convocar ningún partido a {court}.",
+  "matchDay.closure.callPaused.rest": "Cerrado el resto de hoy: no se puede convocar ningún partido a {court}.",
+  "matchDay.sheet.warn.crossesClosure": "{court} cierra de {from} a {until}, con este partido aún en juego.",
+  "matchDay.sheet.warn.courtClosedUntil": "{court}: cerrado hasta las {time}.",
+  "matchDay.sheet.warn.courtClosedToday": "{court}: cerrado el resto de hoy."
 }

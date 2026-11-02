@@ -145,6 +145,7 @@ const court = (o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   in_use_by: null,
   free_since: null,
   queue: [],
+  closure: null,
   ...o,
 });
 
@@ -634,7 +635,7 @@ describe("the court list", () => {
       court({ court_id: "c-4", court_name: "Court 4", state: "called", current: fx({ id: "d", stream: null, started_at: null }) }),
       court({ court_id: "c-5", court_name: "Court 5", state: "free", current: null }),
     ];
-    const html = renderToStaticMarkup(<CourtList courts={courts} selectedId="c-3" dict={dict} locale="en" onSelect={() => {}} />);
+    const html = renderToStaticMarkup(<CourtList courts={courts} selectedId="c-3" dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
     const rows = rowsOf(html, "md-court-row");
     expect(rows).toHaveLength(5);
     const withBadge = rows.map((r) => r.includes('data-md-stream="live"'));
@@ -649,7 +650,7 @@ describe("the court list", () => {
       court({ court_id: "c-3", state: "free", current: null }),
       court({ court_id: "c-4", state: "in_use_elsewhere", current: null, in_use_by: "Winter Open" }),
     ];
-    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />), "md-court-row");
+    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />), "md-court-row");
     expect(rows[0]).toContain("Zara Khan v Ella Brooks");
     expect(rows[0]).toContain("data-md-row-score");
     expect(rows[1]).toContain(t(dict, "matchDay.state.called"));
@@ -660,7 +661,7 @@ describe("the court list", () => {
   it("V4 — a set sport's row: games won and the current game's points, compact — no brackets, no finished game, no monospace", () => {
     const summary = BADMINTON!;
     const rows = rowsOf(
-      renderToStaticMarkup(<CourtList courts={[goldenCourt("badminton", summary)]} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />),
+      renderToStaticMarkup(<CourtList courts={[goldenCourt("badminton", summary)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />),
       "md-court-row",
     );
     expect(rows).toHaveLength(1);
@@ -681,7 +682,7 @@ describe("the court list", () => {
     expect(football, "a football golden stream in play").not.toBeNull();
     expect(isSetSport(football!)).toBe(false);
     const row = rowsOf(
-      renderToStaticMarkup(<CourtList courts={[goldenCourt("football", football!)]} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />),
+      renderToStaticMarkup(<CourtList courts={[goldenCourt("football", football!)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />),
       "md-court-row",
     )[0]!;
     expect(row).toContain(`>${esc(football!.headline!)}</span>`);
@@ -689,7 +690,7 @@ describe("the court list", () => {
 
   it("marks the selected court, and only it", () => {
     const courts = [court({ court_id: "c-1" }), court({ court_id: "c-2" })];
-    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId="c-2" dict={dict} locale="en" onSelect={() => {}} />), "md-court-row");
+    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId="c-2" dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />), "md-court-row");
     expect(rows.map((r) => /aria-current="true"/.test(r.slice(0, r.indexOf(">"))))).toEqual([false, true]);
   });
 });
@@ -707,7 +708,7 @@ function levelText(big: string, attr: "mid" | "live"): string | null {
   return m === null ? null : m[1]!.replace(/&amp;/g, "&");
 }
 const rowScore = (c: MatchDayCourt): string => {
-  const html = renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />);
+  const html = renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
   const at = html.indexOf("data-md-row-score");
   return at < 0 ? "" : html.slice(html.indexOf(">", at) + 1, html.indexOf("</span>", at));
 };
@@ -1293,7 +1294,7 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
 });
 
 describe("A4 — no_scorer / not_recording mark the affected court's row", () => {
-  const rowOf = (c: MatchDayCourt) => renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />);
+  const rowOf = (c: MatchDayCourt) => renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
 
   it("EMPTY CASE FIRST: a playing court with no attention carries no mark", () => {
     const html = rowOf(court());
@@ -1306,7 +1307,7 @@ describe("A4 — no_scorer / not_recording mark the affected court's row", () =>
     for (const kind of SCORER_ATTENTIONS) {
       for (const [locale, d] of Object.entries(DICTS)) {
         const html = renderToStaticMarkup(
-          <CourtList courts={[court({ current: fx({ scorer_attention: kind }) })]} selectedId={null} dict={d} locale="en" onSelect={() => {}} />,
+          <CourtList courts={[court({ current: fx({ scorer_attention: kind }) })]} selectedId={null} dict={d} locale="en" tz="Europe/London" onSelect={() => {}} />,
         );
         expect(html, `${locale} ${kind}`).toContain(`data-scorer="${kind}"`);
         expect(html, `${locale} ${kind}`).toContain(`data-md-scorer="${kind}"`);
@@ -1873,5 +1874,140 @@ describe("B4 — A4 n1/n2: the scorer fold and the panel's More fold are separat
     expect(panel).toContain("group-open/more:rotate-90");
     // No unnamed variant left anywhere in the court's panel: an unnamed `group-open:` would turn on ANY open ancestor group.
     expect(html).not.toMatch(/[\s"]group-open:/);
+  });
+});
+
+// ---- E2 item 3: a court's closure (court_hours + court_exceptions, read by the scheduler's own reader) -------------------
+// The words come from the brief ("Closed 2:00–3:00 PM" for a break still to come; "Closed until 3:00 PM" / "Closed for the rest of
+// today" while shut; Call off with the reason on screen and announced). Times print through `fmtPublicTime` like every other time on
+// the page, so the brief's 12-hour example reads 24-hour here; ctx.tz is Europe/London = UTC on 2026-10-31.
+describe("E2-3 — a court's closure", () => {
+  const LATER: NonNullable<MatchDayCourt["closure"]> = { kind: "later", from: "2026-10-31T14:00:00.000Z", until: "2026-10-31T15:00:00.000Z" };
+  const NOW_UNTIL: NonNullable<MatchDayCourt["closure"]> = { kind: "now", until: "2026-10-31T15:00:00.000Z" };
+  const NOW_REST: NonNullable<MatchDayCourt["closure"]> = { kind: "now", until: null };
+  const free5 = (closure: MatchDayCourt["closure"]) => court({ court_name: "Court 5", state: "free", current: null, closure });
+  const closureOf = (html: string): string | null => /data-testid="md-closure"[^>]*>[\s\S]*?<span class="min-w-0[^"]*">([^<]*)<\/span>/.exec(html)?.[1] ?? null;
+  const callButtons = (html: string): string[] => [...html.matchAll(/<button[^>]*>Call to Court 5<\/button>/g)].map((m) => m[0]);
+  const body = (c: MatchDayCourt, candidates: MatchDayCandidate[], d: Dict = dict, locale: "en" | "es" | "fr" | "nl" = "en") =>
+    renderToStaticMarkup(
+      <FreeCourtBody ctx={{ ...ctx, dict: d, locale }} court={c} load={{ status: "ready", candidates }} onCall={() => {}} onRetry={() => {}} />,
+    );
+  const two = () => [cand({ source: "this_court", from_court_name: null }, { id: "x-1" }), cand({}, { id: "x-2" })];
+
+  it("the court row: a break still to come, closed until, closed for the rest of today — and nothing while open", () => {
+    const row = (closure: MatchDayCourt["closure"]) =>
+      renderToStaticMarkup(<CourtList courts={[free5(closure)]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    expect(closureOf(row(LATER))).toBe("Closed 14:00–15:00");
+    expect(closureOf(row(NOW_UNTIL))).toBe("Closed until 15:00");
+    expect(closureOf(row(NOW_REST))).toBe("Closed for the rest of today");
+    expect(row(null)).not.toContain('data-testid="md-closure"');
+    expect(row(LATER)).toContain('data-kind="later"');
+    expect(row(NOW_UNTIL)).toContain('data-kind="now"');
+  });
+
+  it("the closure shows on a court in EVERY state (a playing court's break is news too), once per card", () => {
+    let checked = 0;
+    for (const c of [
+      court({ court_name: "Court 5", state: "playing", closure: LATER }),
+      court({ court_name: "Court 5", state: "called", closure: LATER }),
+      court({ court_name: "Court 5", state: "free", current: null, closure: LATER }),
+      court({ court_name: "Court 5", state: "in_use_elsewhere", current: null, in_use_by: "Winter Open", closure: LATER }),
+    ]) {
+      const html = renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+      expect(html.split('data-testid="md-closure"').length - 1, c.state).toBe(1);
+      expect(closureOf(html), c.state).toBe("Closed 14:00–15:00");
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("the focus header carries the same line", () => {
+    expect(closureOf(focus(free5(LATER)))).toBe("Closed 14:00–15:00");
+    expect(closureOf(focus(free5(NOW_REST)))).toBe("Closed for the rest of today");
+    expect(focus(free5(null))).not.toContain('data-testid="md-closure"');
+  });
+
+  it("closed NOW: every Call button is off, and the reason is in a status region the buttons are described by", () => {
+    const html = body(free5(NOW_UNTIL), two());
+    const buttons = callButtons(html);
+    expect(buttons).toHaveLength(2);
+    for (const b of buttons) expect(b).toMatch(/\sdisabled(=""|\s|>)/);
+    const region = /<div id="([^"]+)" role="status" data-testid="md-call-paused"[^>]*>([\s\S]*?)<\/div>/.exec(html);
+    expect(region, "the status region").not.toBeNull();
+    expect(region![2]).toContain("Closed until 15:00, so no match can be called to Court 5 yet.");
+    for (const b of buttons) expect(b).toContain(`aria-describedby="${region![1]}"`);
+  });
+
+  it("closed for the rest of today: the same stop, in its own words", () => {
+    const html = body(free5(NOW_REST), two());
+    for (const b of callButtons(html)) expect(b).toMatch(/\sdisabled(=""|\s|>)/);
+    expect(html).toContain("Closed for the rest of today, so no match can be called to Court 5.");
+  });
+
+  it("a break still to come is NOT a stop: Call stays on, with no reason shown (the call sheet warns instead)", () => {
+    const html = body(free5(LATER), two());
+    const buttons = callButtons(html);
+    expect(buttons).toHaveLength(2);
+    for (const b of buttons) expect(b).not.toMatch(/\sdisabled/);
+    for (const b of buttons) expect(b).not.toContain("aria-describedby");
+    expect(html).not.toMatch(/data-testid="md-call-paused"[^>]*>[^<]/);
+  });
+
+  it("the SEQUENCE: closed now, then reopened on the next poll — Call comes back and the reason goes", () => {
+    const closed = body(free5(NOW_UNTIL), two());
+    const reopened = body(free5(null), two());
+    expect(callButtons(closed).every((b) => /\sdisabled/.test(b))).toBe(true);
+    expect(callButtons(reopened).some((b) => /\sdisabled/.test(b))).toBe(false);
+    expect(reopened).not.toContain("so no match can be called");
+    // And the other way round: open, then it closes under the organiser's hands.
+    expect(callButtons(body(free5(null), two())).some((b) => /\sdisabled/.test(b))).toBe(false);
+    expect(callButtons(body(free5(NOW_REST), two())).every((b) => /\sdisabled/.test(b))).toBe(true);
+  });
+
+  it("a blocked candidate keeps its own reason; the closure's reason is added, not swapped in", () => {
+    const busy = { kind: "player_busy" as const, person_name: "Zara Khan", court_name: "Court 3" };
+    const html = body(free5(NOW_UNTIL), [cand({ blocked: busy }, { id: "b-1" }), cand({}, { id: "x-2" })]);
+    expect(html).toContain(t(dict, "matchDay.candidate.blocked", { person: "Zara Khan", court: "Court 3" }));
+    expect(callButtons(html)).toHaveLength(1);
+  });
+
+  it("every locale: each closure form and each stop reads in the reader's language, none left a raw key (counted)", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS) as [ "en" | "es" | "fr" | "nl", Dict ][]) {
+      const forms = [
+        t(d, "matchDay.closure.later", { from: "14:00", until: "15:00" }),
+        t(d, "matchDay.closure.until", { time: "15:00" }),
+        t(d, "matchDay.closure.rest"),
+        t(d, "matchDay.closure.callPaused.until", { court: "Court 5", time: "15:00" }),
+        t(d, "matchDay.closure.callPaused.rest", { court: "Court 5" }),
+        t(d, "matchDay.sheet.warn.crossesClosure", { court: "Court 5", from: "14:00", until: "15:00" }),
+        t(d, "matchDay.sheet.warn.courtClosedUntil", { court: "Court 5", time: "15:00" }),
+        t(d, "matchDay.sheet.warn.courtClosedToday", { court: "Court 5" }),
+      ];
+      for (const text of forms) {
+        expect(text, locale).not.toMatch(/matchDay\.|[{}]/);
+        expect(text.length, locale).toBeGreaterThan(8);
+        checked++;
+      }
+      // The rendered card and panel speak the locale too.
+      const html = body(free5(NOW_UNTIL), two(), d, locale);
+      expect(html, locale).toContain(esc(t(d, "matchDay.closure.callPaused.until", { court: "Court 5", time: "15:00" })));
+    }
+    expect(checked).toBe(4 * 8);
+  });
+
+  it("the call sheet: a closure the match would run into, and a court already shut, are warnings among the others", () => {
+    const preview = (w: CallPreview["warnings"][number]): CallPreview => ({ shifts: [], warnings: [w] });
+    const sheetOf = (w: CallPreview["warnings"][number]) =>
+      renderToStaticMarkup(<CallSheetBody ctx={ctx} court={court({ court_name: "Court 5" })} candidate={cand()} state={{ kind: "ready", preview: preview(w) }} />);
+    const crosses = sheetOf({ kind: "crosses_closure", court_name: "Court 5", from: "2026-10-31T14:00:00.000Z", until: "2026-10-31T15:00:00.000Z" });
+    expect(crosses).toContain('data-kind="crosses_closure"');
+    expect(crosses).toContain("Court 5 closes from 14:00 to 15:00, while this match would still be on.");
+    const closedUntil = sheetOf({ kind: "court_closed", court_name: "Court 5", until: "2026-10-31T15:00:00.000Z" });
+    expect(closedUntil).toContain("Court 5 is closed until 15:00.");
+    const closedToday = sheetOf({ kind: "court_closed", court_name: "Court 5", until: null });
+    expect(closedToday).toContain("Court 5 is closed for the rest of today.");
+    // A warning, not a stop: the confirm button is the sheet's own, and the sheet body never disables it.
+    expect(crosses).not.toContain("disabled");
   });
 });

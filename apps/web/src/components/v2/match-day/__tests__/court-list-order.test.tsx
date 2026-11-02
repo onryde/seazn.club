@@ -73,6 +73,7 @@ const court = (n: number, o: Partial<MatchDayCourt> = {}): MatchDayCourt => ({
   in_use_by: null,
   free_since: null,
   queue: [],
+  closure: null,
   ...o,
 });
 const playing = (n: number) => court(n, { state: "playing", current: fixture(`p-${n}`) });
@@ -253,7 +254,7 @@ describe("the court list as drawn", () => {
   const rowsOf = (html: string): string[] =>
     [...html.matchAll(/data-testid="md-court-row" data-court-id="([^"]+)"/g)].map((m) => m[1]!);
   const render = (courts: MatchDayCourt[], selectedId: string | null = null) =>
-    renderToStaticMarkup(<CourtList courts={courts} selectedId={selectedId} dict={dict} locale="en" onSelect={() => {}} />);
+    renderToStaticMarkup(<CourtList courts={courts} selectedId={selectedId} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
 
   const tenCourts = orderCourts([
     free(5), free(6), free(7), free(8), free(9), free(10),
@@ -289,7 +290,7 @@ describe("the court list as drawn", () => {
   });
 
   it("the row opens and closes in place, and the courts it opens are the folded ones, in order", () => {
-    const island = renderIsland(CourtList, { courts: tenCourts, selectedId: null, dict, locale: "en" as Locale, onSelect: () => {} });
+    const island = renderIsland(CourtList, { courts: tenCourts, selectedId: null, dict, locale: "en" as Locale, tz: "Europe/London", onSelect: () => {} });
     const toggle = (tree: ReactElement[]) => tree.find((e) => propsOf(e)["data-testid"] === "md-court-fold-toggle")!;
     const folded = (tree: ReactElement[]) =>
       tree.filter((e) => propsOf(e).court !== undefined && (propsOf(e).court as MatchDayCourt).state === "free" && (propsOf(e).court as MatchDayCourt).queue.length === 0);

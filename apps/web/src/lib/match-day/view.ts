@@ -11,6 +11,7 @@ import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/you
 import { needsYouKey } from "@/components/v2/desk/needs-you";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallWarning } from "./call";
 import type {
+  CourtClosure,
   MatchDayCandidate,
   MatchDayCourt,
   MatchDayFindCourt,
@@ -401,7 +402,40 @@ export function warningText(dict: Dict, w: CallWarning, locale: Locale, tz: stri
       return t(dict, "matchDay.sheet.warn.restGap", { person: w.person_name, minutes: w.minutes, min: w.min_rest });
     case "past_day_end":
       return t(dict, "matchDay.sheet.warn.pastDayEnd", { court: w.court_name, time: fmtPublicTime(locale, tz, w.until) });
+    case "crosses_closure":
+      return t(dict, "matchDay.sheet.warn.crossesClosure", {
+        court: w.court_name,
+        from: fmtPublicTime(locale, tz, w.from),
+        until: fmtPublicTime(locale, tz, w.until),
+      });
+    case "court_closed":
+      return w.until === null
+        ? t(dict, "matchDay.sheet.warn.courtClosedToday", { court: w.court_name })
+        : t(dict, "matchDay.sheet.warn.courtClosedUntil", { court: w.court_name, time: fmtPublicTime(locale, tz, w.until) });
   }
+}
+
+/** A court card's closure line (E2 item 3): "Closed 14:00–15:00" for a break still to come, "Closed until 15:00" while shut and
+ *  reopening today, "Closed for the rest of today" while shut with no reopening. Times in the organisation's zone, the way every
+ *  other Match Day time prints. Null while the court is open with no break to come. */
+export function closureText(dict: Dict, closure: CourtClosure | null, locale: Locale, tz: string): string | null {
+  if (closure === null) return null;
+  if (closure.kind === "later") {
+    return t(dict, "matchDay.closure.later", { from: fmtPublicTime(locale, tz, closure.from), until: fmtPublicTime(locale, tz, closure.until) });
+  }
+  return closure.until === null
+    ? t(dict, "matchDay.closure.rest")
+    : t(dict, "matchDay.closure.until", { time: fmtPublicTime(locale, tz, closure.until) });
+}
+
+/** Why Call is off on a court that is closed now — the line beside the disabled buttons, announced to a screen reader. Null while
+ *  the court is open (a break still to come is a warning in the call preview, not a stop). */
+export function callPausedReason(dict: Dict, court: Pick<MatchDayCourt, "court_name" | "closure">, locale: Locale, tz: string): string | null {
+  const closure = court.closure;
+  if (closure === null || closure.kind !== "now") return null;
+  return closure.until === null
+    ? t(dict, "matchDay.closure.callPaused.rest", { court: court.court_name })
+    : t(dict, "matchDay.closure.callPaused.until", { court: court.court_name, time: fmtPublicTime(locale, tz, closure.until) });
 }
 
 // ---- Needs you, the scorer marks and the stream preview (task A4) ----------------------------------------------------------

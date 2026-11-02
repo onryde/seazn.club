@@ -1634,6 +1634,14 @@ export const FixtureCallPreview = z.object({
         min_rest: z.number().int().positive(),
       }),
       z.object({ kind: z.literal("past_day_end"), court_name: z.string(), until: z.iso.datetime({ offset: true }) }),
+      // Match Day E2 item 3: the court's closed windows (court_hours + court_exceptions) meet the match's expected span. A warning.
+      z.object({
+        kind: z.literal("crosses_closure"),
+        court_name: z.string(),
+        from: z.iso.datetime({ offset: true }),
+        until: z.iso.datetime({ offset: true }),
+      }),
+      z.object({ kind: z.literal("court_closed"), court_name: z.string(), until: z.iso.datetime({ offset: true }).nullable() }),
     ]),
   ),
 });
@@ -1689,6 +1697,13 @@ export const MatchDayCourt = z.object({
   queue: z.array(
     MatchDayFixture.extend({ planned_at: z.iso.datetime({ offset: true }), estimated_at: z.iso.datetime({ offset: true }) }),
   ),
+  // Match Day E2 item 3: the court's closure today, from the scheduler's usable windows; null while open with no break to come.
+  closure: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("now"), until: z.iso.datetime({ offset: true }).nullable() }),
+      z.object({ kind: z.literal("later"), from: z.iso.datetime({ offset: true }), until: z.iso.datetime({ offset: true }) }),
+    ])
+    .nullable(),
 });
 
 export const MatchDayView = z.object({

@@ -31,6 +31,7 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { appendDivisionEvent } from "@/server/engine-db";
 import { estimateQueue } from "@/lib/match-day/estimate";
+import { closureWarning, type UsableWindow } from "@/lib/match-day/closure";
 import { resolveVenueTz } from "@/lib/tz";
 import {
   CALL_REFUSAL,
@@ -159,6 +160,28 @@ export function todayIn(tz: string, now: Date): { day: string; from: Date; to: D
     from: new Date(zonedTimeToUtc(day, "00:00", tz)),
     to: new Date(zonedTimeToUtc(ymdAddDays(day, 1), "00:00", tz)),
   };
+}
+
+/**
+ * Each court's usable windows on the organisation's day `now` falls in, in epoch ms: the scheduler's own availability reader
+ * (`resolveCourtCalendars` loads `court_hours` + `court_exceptions`, `usableWindows` resolves them — exceptions override weekday
+ * hours, a court with no hours is open all day). The one place Match Day asks "when is this court open today": the call preview
+ * and the read model's court cards both go through it, so they cannot disagree (`lib/match-day/closure.ts` reads the windows).
+ */
+export async function courtWindowsToday(
+  tx: Tx,
+  courtIds: readonly string[],
+  tz: string,
+  now: Date,
+): Promise<Map<string, UsableWindow[]>> {
+  const { day } = todayIn(tz, now);
+  const calendars = new Map((await resolveCourtCalendars(tx, courtIds)).map((c) => [c.courtId, c]));
+  return new Map(
+    courtIds.map((id) => [
+      id,
+      usableWindows(calendars.get(id) ?? { courtId: id, hours: [], exceptions: [] }, { from: day, to: day }, { tz }),
+    ]),
+  );
 }
 
 /** One division's "today", as the instants [from, to). */
@@ -475,6 +498,8 @@ export async function undoCall(
  *    start is under the division's `perEntrantMinRest`. Only when the division declares one.
  *  - past_day_end: the queue's estimated end is after the court's last closing time today (court_hours/court_exceptions in the
  *    org's zone; a court with no hours is open to midnight).
+ *  - crosses_closure / court_closed (E2 item 3): the called match's span, now to now + its division's `matchMinutes`, meets a
+ *    closed window of the court (a break mid-day, or the court is shut already). Warnings: the organiser may confirm past them.
  */
 export async function previewCall(
   auth: AuthCtx,
@@ -499,7 +524,6 @@ export async function previewCall(
     };
     const tz = settings.orgTz;
     const start = now.getTime();
-    const { day } = todayIn(tz, now); // the court's hours are read on the organisation's day
     // Every division's day (any competition's match on the court is part of the queue), archived ones too: a court's occupancy
     // is org-wide.
     const days = await divisionDays(tx, tz, now, tx`true`);
@@ -548,14 +572,17 @@ export async function previewCall(
     if (shifts.length > 0) warnings.push({ kind: "pushes_later", count: shifts.length });
     warnings.push(...(await restGaps(tx, f, start, calledEnd, settings.config.perEntrantMinRest)));
 
-    const [calendar] = await resolveCourtCalendars(tx, [court.id]);
-    const windows = usableWindows(calendar ?? { courtId: court.id, hours: [], exceptions: [] }, { from: day, to: day }, { tz });
+    const windows = (await courtWindowsToday(tx, [court.id], tz, now)).get(court.id) ?? [];
     if (windows.length > 0) {
       const closes = Math.max(...windows.map((w) => w.to));
       if (cursor > closes) {
         warnings.push({ kind: "past_day_end", court_name: courtNames.get(court.id) ?? "", until: iso(closes) });
       }
     }
+    // The called match's own span, now to a match length on, against the court's closed windows (E2 item 3). Beside
+    // past_day_end, never instead: a break mid-day and the night's close are different warnings.
+    const closure = closureWarning(windows, courtNames.get(court.id) ?? "", start, calledEnd);
+    if (closure !== null) warnings.push(closure);
     return { shifts, warnings };
   });
 }

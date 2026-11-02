@@ -24,6 +24,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { EngineError } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { FixtureCallPreview } from "@/server/api-v1/schemas";
 import { moveFixture } from "../schedule";
 import { callFixtureToCourt, previewCall, undoCall } from "../match-day-call";
 import {
@@ -739,6 +740,59 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
       { kind: "past_day_end", court_name: "Court 1", until: "2026-11-07T11:00:00.000Z" },
       { kind: "pushes_later", count: 1 },
     ]);
+  });
+
+  it("E2-3 — warns (never refuses) when the called match's span meets a break in the court's hours, or the court is already shut", async () => {
+    const day = await seedDay(); // 30-minute matches
+    const { p1, p2 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    await place(day, f.id, 300, day.courts.c2);
+    // Court 1, Saturday, Amsterdam = UTC+1: 09:00–11:30 and 12:30–20:00 local = 08:00–10:30Z and 11:30–19:00Z. The break is
+    // 10:30Z–11:30Z; at(0) is 10:00Z.
+    await sql`
+      insert into court_hours (court_id, org_id, weekday, open_min, close_min)
+      values (${day.courts.c1}, ${day.orgId}, 6, ${9 * 60}, ${11 * 60 + 30}),
+             (${day.courts.c1}, ${day.orgId}, 6, ${12 * 60 + 30}, ${20 * 60})`;
+    const closureWarnings = async (minute: number) => {
+      const preview = await previewCall(day.auth, f.id, day.courts.c1, at(minute));
+      FixtureCallPreview.parse(JSON.parse(JSON.stringify(preview))); // the wire schema accepts both new kinds
+      return preview.warnings.filter((w) => w.kind === "crosses_closure" || w.kind === "court_closed");
+    };
+
+    // 10:00–10:30Z ends exactly as the break begins: no crossing. 10:05–10:35Z runs five minutes into it.
+    expect(await closureWarnings(0)).toEqual([]);
+    expect(await closureWarnings(5)).toEqual([{ kind: "crosses_closure", court_name: "Court 1", from: iso(30), until: iso(90) }]);
+    // Shut at the call: inside the break (until 11:30Z), and after the night's close (rest of today).
+    expect(await closureWarnings(40)).toEqual([{ kind: "court_closed", court_name: "Court 1", until: iso(90) }]);
+    expect(await closureWarnings(600)).toEqual([{ kind: "court_closed", court_name: "Court 1", until: null }]);
+    // The same call a minute-step later, once the break is over: nothing (the closure ended).
+    expect(await closureWarnings(90)).toEqual([]);
+
+    // A warning, never a refusal (owner: hard stops only for impossible): the call itself goes through on the shut court.
+    const out = await callFixtureToCourt(day.auth, f.id, day.courts.c1, at(40));
+    expect(out).toMatchObject({ fixture_id: f.id, court_id: day.courts.c1 });
+  });
+
+  it("E2-3 — an exception overrides the weekday hours (closed all day, or a single range), and a court with no calendar warns of nothing", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    await place(day, f.id, 300, day.courts.c3);
+    await sql`
+      insert into court_hours (court_id, org_id, weekday, open_min, close_min)
+      values (${day.courts.c1}, ${day.orgId}, 6, ${9 * 60}, ${20 * 60})`;
+    await sql`insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c1}, ${day.orgId}, '2026-11-07', true)`;
+    await sql`
+      insert into court_exceptions (court_id, org_id, date, closed, open_min, close_min)
+      values (${day.courts.c2}, ${day.orgId}, '2026-11-07', false, ${12 * 60}, ${14 * 60})`; // 11:00Z–13:00Z
+    const kinds = async (court: string, minute: number) =>
+      (await previewCall(day.auth, f.id, court, at(minute))).warnings.map((w) => w.kind).filter((k) => k === "court_closed" || k === "crosses_closure");
+
+    expect(await kinds(day.courts.c1, 0)).toEqual(["court_closed"]); // closed all day, despite its Saturday hours
+    expect(await kinds(day.courts.c2, 0)).toEqual(["court_closed"]); // 10:00Z: not open until 11:00Z
+    expect(await kinds(day.courts.c2, 70)).toEqual([]); // 11:10Z–11:40Z, inside its override range
+    expect(await kinds(day.courts.c3, 0)).toEqual([]); // no calendar at all: open all day
+    expect(await kinds(day.courts.c3, 700)).toEqual([]);
   });
 
   it("gives no shifts and no warnings for the court's own next match", async () => {

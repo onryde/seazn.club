@@ -25,7 +25,9 @@ import { DEFAULT_LOCALE, getDictionary, type Locale } from "@/lib/i18n";
 import { estimateQueue, rankCandidates } from "@/lib/match-day/estimate";
 import { withFindCourt } from "@/lib/match-day/view";
 import { routes } from "@/lib/routes";
+import { closureOf } from "@/lib/match-day/closure";
 import type {
+  CourtClosure,
   MatchDayCandidate,
   MatchDayCourt,
   MatchDayCourtState,
@@ -45,6 +47,7 @@ import { listDivisions } from "./divisions";
 import {
   callableCourtsByFixture,
   dayTable,
+  courtWindowsToday,
   divisionDays,
   IN_PLAY,
   liveCallSql,
@@ -179,6 +182,8 @@ interface BoardCourt {
   queue: BoardQueued[];
   /** The first division (competition order) with this court among its candidate courts. */
   candidate_sport: string | null;
+  /** The court's closure today, from the scheduler's usable windows (`closureOf`). */
+  closure: CourtClosure | null;
 }
 
 interface Board {
@@ -319,6 +324,8 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
          group by f.court_id`
     : [];
   const freeSince = new Map(finished.map((f) => [f.court_id, f.at]));
+  // When each court is open today: the scheduler's own reader (court_hours + court_exceptions, the organisation's zone).
+  const windowsOf = await courtWindowsToday(tx, courtIds, tz, now);
 
   const courts: BoardCourt[] = [];
   for (const courtId of courtIds) {
@@ -377,6 +384,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
       free_since: state === "free" ? (freeSince.get(courtId) ?? null) : null,
       queue,
       candidate_sport: candidateDivision.get(courtId) ?? null,
+      closure: closureOf(windowsOf.get(courtId) ?? [], now.getTime()),
     });
   }
 
@@ -499,6 +507,7 @@ function courtView(c: BoardCourt, streams: Record<string, "live" | "waiting">, e
     in_use_by: c.in_use_by,
     free_since: iso(c.free_since),
     queue,
+    closure: c.closure,
   };
 }
 

@@ -7231,5 +7231,13 @@
   "matchDay.list.freeFold.pitch.other": "Nog {count} velden vrij ({names})",
   "matchDay.list.freeFold.table.other": "Nog {count} tafels vrij ({names})",
   "matchDay.list.freeFold.board.other": "Nog {count} borden vrij ({names})",
-  "matchDay.list.freeFold.rink.other": "Nog {count} ijsbanen vrij ({names})"
+  "matchDay.list.freeFold.rink.other": "Nog {count} ijsbanen vrij ({names})",
+  "matchDay.closure.later": "Gesloten {from}–{until}",
+  "matchDay.closure.until": "Gesloten tot {time}",
+  "matchDay.closure.rest": "Gesloten voor de rest van vandaag",
+  "matchDay.closure.callPaused.until": "Gesloten tot {time}, dus er kan nog geen wedstrijd naar {court} worden opgeroepen.",
+  "matchDay.closure.callPaused.rest": "Gesloten voor de rest van vandaag, dus er kan geen wedstrijd naar {court} worden opgeroepen.",
+  "matchDay.sheet.warn.crossesClosure": "{court} is gesloten van {from} tot {until}, terwijl deze wedstrijd dan nog bezig zou zijn.",
+  "matchDay.sheet.warn.courtClosedUntil": "{court} is gesloten tot {time}.",
+  "matchDay.sheet.warn.courtClosedToday": "{court} is gesloten voor de rest van vandaag."
 }

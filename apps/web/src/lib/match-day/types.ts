@@ -82,6 +82,12 @@ export interface MatchDayQueued extends MatchDayFixture {
   estimated_at: string;
 }
 
+/** What a court card says about its hours today (Match Day E2 item 3; `lib/match-day/closure.ts` decides it from the scheduler's own
+ *  usable windows, `court_hours` + `court_exceptions`). ISO instants.
+ *  - now: the court is closed at the view's `now`; `until` is when it reopens, null when it does not open again today;
+ *  - later: open now, with a break still to come today (`from`..`until`). A court that only closes for the night has none. */
+export type CourtClosure = { kind: "now"; until: string | null } | { kind: "later"; from: string; until: string };
+
 export interface MatchDayCourt {
   court_id: string;
   /** The court's display label: venue-qualified only when two venues share a court name (lib/court-directory.ts). */
@@ -100,6 +106,8 @@ export interface MatchDayCourt {
   /** This competition's matches planned on the court today, unstarted and not called, in planned order. Their estimates
    *  count every competition's planned matches on the court, as courts are shared. */
   queue: MatchDayQueued[];
+  /** The court's closure today (`CourtClosure`); null while it is open with no break still to come. */
+  closure: CourtClosure | null;
 }
 
 export type MatchDayCandidateSource = "this_court" | "other_court" | "no_court";
