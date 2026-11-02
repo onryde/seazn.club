@@ -32,6 +32,7 @@ import { appendEvent } from "@/server/engine-db/append-event";
 import { FixtureCallPreview } from "@/server/api-v1/schemas";
 import { moveFixture } from "../schedule";
 import { callFixtureToCourt, previewCall, undoCall } from "../match-day-call";
+import { matchDayCandidates } from "../match-day";
 import {
   at,
   between,
@@ -999,7 +1000,7 @@ describe.skipIf(!HAS_DB)("R1: a call respects the division's candidate courts", 
       competitionId: a.id,
       division: "Mixed",
     });
-    return { a: a.fixtures[0]!, b: b.fixtures[0]! };
+    return { a: a.fixtures[0]!, b: b.fixtures[0]!, competitionId: a.id };
   }
 
   it("refuses NOT_CANDIDATE_COURT on a court the match's division does not play on — call and preview, either way across — and writes nothing; its own court takes it", async () => {
@@ -1031,6 +1032,34 @@ describe.skipIf(!HAS_DB)("R1: a call respects the division's candidate courts", 
     await callFixtureToCourt(day.auth, b.id, day.courts.c2, at(31));
     expect(await slotOf(a.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(31) });
     expect(await slotOf(b.id)).toMatchObject({ court_id: day.courts.c2, scheduled_at: iso(31) });
+  });
+
+  // Task F7 (owner ruling, B4 final round): a match is called onto the court it is ALREADY PLANNED ON — no refusal and no warning
+  // as a "move" — even once that court has stopped being a candidate (the scheduler keeps such an assignment valid). Only its own
+  // court: every other non-candidate still refuses. And this court's candidate list offers it, as the call would take it.
+  it("F7 — the match's own planned court takes its call, even when no longer a candidate; every other non-candidate still refuses", async () => {
+    const day = await seedDay();
+    const { a, competitionId } = await disjoint(day);
+    // EMPTY CASE FIRST (planned nowhere): Court 2 is not "Doubles"'s, so a call there refuses — the guard the exemption narrows.
+    expect((await refusal(previewCall(day.auth, a.id, day.courts.c2, at(31)))).code).toBe("NOT_CANDIDATE_COURT");
+    // Its own candidate court, planned there: a call onto it warns of nothing and moves it nowhere else.
+    await place(day, a.id, 60, day.courts.c1);
+    expect(await previewCall(day.auth, a.id, day.courts.c1, at(31))).toEqual({ shifts: [], warnings: [] });
+
+    // Now planned on Court 2 (a court the division dropped, or never had: the plan predates the change).
+    await place(day, a.id, 60, day.courts.c2);
+    expect(await previewCall(day.auth, a.id, day.courts.c2, at(31))).toEqual({ shifts: [], warnings: [] });
+    const offered = await matchDayCandidates(day.auth, competitionId, day.courts.c2, at(31));
+    expect(offered.find((c) => c.fixture.id === a.id)?.source, "Court 2's list offers the match planned on it").toBe("this_court");
+    // The control: Court 3 is still neither its candidate nor its plan.
+    expect((await refusal(previewCall(day.auth, a.id, day.courts.c3, at(31)))).code).toBe("NOT_CANDIDATE_COURT");
+    expect((await matchDayCandidates(day.auth, competitionId, day.courts.c3, at(31))).map((c) => c.fixture.id)).not.toContain(a.id);
+
+    await callFixtureToCourt(day.auth, a.id, day.courts.c2, at(31));
+    expect(await slotOf(a.id)).toMatchObject({ court_id: day.courts.c2, scheduled_at: iso(31) });
+    // Called, it holds Court 2; a call back to Court 1 (its candidate) is a move like any other — and is taken.
+    await callFixtureToCourt(day.auth, a.id, day.courts.c1, at(32));
+    expect(await slotOf(a.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(32) });
   });
 
   it("a division with NO courts configured plays on every court of the organisation (the resolver's empty-list rule); its required tags still narrow that", async () => {

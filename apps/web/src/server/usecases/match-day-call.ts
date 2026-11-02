@@ -276,7 +276,10 @@ async function assertCallable(tx: Tx, f: CallTarget, courtId: string, courtNames
   }
 
   // The court, first: may this match's division play on it at all (R1)? One tap must not put a match on another sport's venue.
-  if (!(await callableCourtsByFixture(tx, [f])).get(f.id)?.has(courtId)) {
+  // Except the court the match is ALREADY PLANNED ON (task F7, owner ruling B4 final round): calling it there moves nothing, so
+  // it takes the call even if the court has since stopped being a candidate (retagged, dropped from the division's list) — as
+  // the scheduler keeps such an assignment valid (schedule.ts, ruling 3).
+  if (courtId !== f.court_id && !(await callableCourtsByFixture(tx, [f])).get(f.id)?.has(courtId)) {
     const courtName = courtNames.get(courtId) ?? null;
     refuse(CALL_REFUSAL.NOT_CANDIDATE_COURT, `${courtName ?? "this court"} is not one of this division's courts`, {
       court_name: courtName,

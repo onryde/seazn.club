@@ -766,7 +766,9 @@ export async function matchDayCandidates(
       });
     }
     const allowed = await callableCourtsByFixture(tx, picked.map((p) => p.row));
-    const usable = picked.filter((p) => allowed.get(p.row.id)?.has(courtId) === true);
+    // A candidate for this court is one its division may play on, or one already planned on it (task F7: the call's own
+    // exemption, `assertCallable` — this court's queue never hides a match the call would take).
+    const usable = picked.filter((p) => p.row.court_id === courtId || allowed.get(p.row.id)?.has(courtId) === true);
     const busy = await whoIsBusy(tx, usable.map((p) => p.row));
     // Their round codes, as the board names them (E2 item 7), in the reader's language.
     const rounds = await readRounds(tx, usable.map((p) => p.row), dict);
