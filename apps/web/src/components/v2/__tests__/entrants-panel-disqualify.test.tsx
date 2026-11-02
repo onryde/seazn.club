@@ -157,26 +157,39 @@ describe("Entrants row: Disqualify sends the disqualification (ruling 258)", () 
     expect(textOf(banner[0]!)).toContain("entrant not found");
   });
 
-  it("every kind in the field, setup and started alike: the button is there and sends the same PATCH (owner rule: all formats, all kinds)", async () => {
+  it("every kind in the field: Disqualify is offered once the division has started, and NOT in setup (ruling 261: before the start it is a bare flip; Delete and Withdraw cover it)", async () => {
     confirmMock.mockImplementation(async () => true);
-    let checked = 0;
+    let checkedStarted = 0;
+    let checkedSetup = 0;
     for (const divisionStatus of ["setup", "active"]) {
       for (const kind of ["individual", "pair", "team"]) {
         for (const status of ["registered", "confirmed"]) {
           wire.calls.length = 0;
           const id = `${kind}-${status}`;
+          const label = `${divisionStatus} ${kind} ${status}`;
           const { rowOf } = mount([entrant(id, `Name ${id}`, { kind, status })], { divisionStatus });
-          const btn = byTestid(rowOf(id).tree(), "entrant-row-disqualify");
-          expect(btn, `${divisionStatus} ${kind} ${status}`).toHaveLength(1);
+          const row = rowOf(id).tree();
+          const btn = byTestid(row, "entrant-row-disqualify");
+          // The positive pair: the row DID render its controls, so an absent Disqualify is the gate and not an empty row.
+          expect(byTestid(row, "entrant-row-withdraw"), `${label}: Withdraw is offered either way`).toHaveLength(1);
+          if (divisionStatus === "setup") {
+            expect(btn, `${label}: no Disqualify before the start`).toHaveLength(0);
+            expect(byTestid(row, "entrant-row-delete"), `${label}: Delete is the setup-time exit`).toHaveLength(1);
+            checkedSetup++;
+            continue;
+          }
+          expect(btn, label).toHaveLength(1);
+          expect(byTestid(row, "entrant-row-delete"), `${label}: Delete is hidden once started`).toHaveLength(0);
           await (propsOf(btn[0]!).onClick as () => Promise<void>)();
-          expect(writes(), `${divisionStatus} ${kind} ${status}`).toEqual([
+          expect(writes(), label).toEqual([
             { url: `/api/v1/entrants/${id}`, options: { method: "PATCH", json: { status: "disqualified" } } },
           ]);
-          checked++;
+          checkedStarted++;
         }
       }
     }
-    expect(checked, `rows checked: ${checked}`).toBe(12);
+    expect(checkedSetup, `setup rows checked: ${checkedSetup}`).toBe(6);
+    expect(checkedStarted, `started rows checked: ${checkedStarted}`).toBe(6);
   });
 
   it("a departed entrant (withdrawn, disqualified) is offered Reinstate, not Disqualify; a viewer who cannot edit is offered nothing", () => {

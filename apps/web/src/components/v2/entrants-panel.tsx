@@ -1958,17 +1958,22 @@ export function EntrantTableRow({
                   >
                     {msg("entrants.row.withdraw")}
                   </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={onDisqualify}
-                    // Ruling 258: the cascade existed server-side (T15) with no control that sent it; the match
-                    // forfeit dialog's "disqualified" reason decides ONE match only.
-                    data-testid="entrant-row-disqualify"
-                    className="btn btn-danger px-2 py-1 text-xs"
-                  >
-                    {msg("entrants.row.disqualify")}
-                  </button>
+                  {/* Ruling 261: offered only once the division has started - the SAME flag that hides Delete (`deletable`:
+                      the division is still in setup). Before the start a disqualification is a bare status flip, which
+                      Delete and Withdraw already cover, and a third button pushed Delete under the scroll fade at 768. */}
+                  {!deletable && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={onDisqualify}
+                      // Ruling 258: the cascade existed server-side (T15) with no control that sent it; the match
+                      // forfeit dialog's "disqualified" reason decides ONE match only.
+                      data-testid="entrant-row-disqualify"
+                      className="btn btn-danger px-2 py-1 text-xs"
+                    >
+                      {msg("entrants.row.disqualify")}
+                    </button>
+                  )}
                 </>
               )}
               {deletable && (

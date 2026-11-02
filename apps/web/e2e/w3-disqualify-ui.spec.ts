@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, divisionPath, expectNoHorizontalScroll, fixturePath, scoreFixture, stageCardOf } from "./helpers";
 import { fill, uiEn } from "./match-room-kit";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
@@ -9,6 +9,11 @@ import { dismissCookieBanner } from "./scorepad-a11y-kit";
 // round 2. Now the Entrants row carries Disqualify beside Withdraw, and the forfeit dialog says its own reason is this match
 // only. Everything here is driven with the organiser's hands (the row's button, its confirm, the dialog's radios); the rig is
 // over the API. Whole file, never a -g slice (AGENTS.md rule 21).
+//
+// Scope, on purpose: ONE sport (generic) and INDIVIDUAL entrants only. The Entrants panel and the PATCH it sends are
+// sport-agnostic (no sport key reaches either), and the kinds (individual / pair / team) x statuses x setup / started sweep is
+// the unit test `entrants-panel-disqualify.test.tsx` - this file proves the seam end to end through a real browser, once per
+// cascade policy (Swiss walkover, league walkover). Ruling 261: the button exists only once the division has started.
 
 const STEP_MS = 20_000;
 const GENERIC_CONFIG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
@@ -105,6 +110,72 @@ async function disqualifyThroughTheScreen(page: Page, request: APIRequestContext
   return { row, res, body: (await res.json()) as { data?: { status?: string; cascade?: Record<string, unknown> } } };
 }
 
+/**
+ * Can this row control be tapped as the page FIRST PAINTS? No scrollIntoView, no horizontal manipulation of any kind: the
+ * entrants card is a `.scroll-x` box with a 24px `pointer-events:none` fade painted over its right edge, so a control that sits
+ * in that strip - or past the card's edge - is exactly the defect (ruling 261: a third button pushed Delete under the fade at
+ * 768). Only the PAGE is scrolled, and only vertically, to bring the row on screen. Measured: the card was never scrolled, the
+ * control lies inside the card clear of the fade, and the element at its centre is the control.
+ */
+async function reachAtFirstPaint(btn: Locator) {
+  return btn.evaluate((el) => {
+    const card = el.closest(".scroll-x");
+    if (card === null) return { error: "the control is not inside a .scroll-x card" } as const;
+    const top = el.getBoundingClientRect().top;
+    if (top < 0 || top > window.innerHeight - 48) window.scrollBy(0, top - window.innerHeight / 3);
+    const fadePx = Number.parseFloat(getComputedStyle(card, "::after").width) || 0;
+    const c = card.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return {
+      cardScrollLeft: card.scrollLeft,
+      fadePx,
+      clearOfFade: r.left >= c.left && r.right <= c.right - fadePx,
+      hit: at !== null && el.contains(at),
+    } as const;
+  });
+}
+
+/**
+ * The row's action controls on one division, at 1280, 768 and 320: the expected ones are there (and the others are not), the
+ * page never scrolls sideways, and each is tappable. At 1280 and 768 that is proven at FIRST PAINT (`reachAtFirstPaint`); at 320
+ * the card is a scroll card by design (a phone-width table scrolls inside its box), so there the control is scrolled into view
+ * and then hit-tested - that is a reachability check, not a first-paint one. Returns how many controls it proved tappable.
+ */
+async function rowActionsAtThreeWidths(page: Page, request: APIRequestContext, divisionId: string, name: string, present: string[], absent: string[]) {
+  let tapped = 0;
+  for (const width of [1280, 768, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(await divisionPath(request, divisionId, "?tab=entrants"));
+    await dismissCookieBanner(page);
+    const row = page.locator("tbody tr").filter({ hasText: name });
+    await expect(row).toHaveCount(1, { timeout: STEP_MS });
+    await expectNoHorizontalScroll(page);
+    for (const id of absent) await expect(row.getByTestId(id), `${width}: ${id} is not offered on this division`).toHaveCount(0);
+    for (const id of present) {
+      const btn = row.getByTestId(id);
+      await expect(btn, `${width}: ${id} is on the row`).toHaveCount(1);
+      if (width === 320) {
+        await btn.scrollIntoViewIfNeeded();
+        const hit = await btn.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return { onScreen: r.left >= 0 && r.right <= window.innerWidth + 1, hit: at !== null && el.contains(at) };
+        });
+        expect(hit, `${width}: ${id} can be tapped once its card is scrolled to it`).toEqual({ onScreen: true, hit: true });
+      } else {
+        const reach = await reachAtFirstPaint(btn);
+        expect(reach, `${width}: ${id} can be tapped at first paint, with no scrolling`).toMatchObject({ cardScrollLeft: 0, clearOfFade: true, hit: true });
+        // Anti-vacuity: the measurement SAW the fade (a pseudo-element read that came back 0 would make "clear of it" free).
+        expect((reach as { fadePx: number }).fadePx, `${width}: ${id}: the fade strip was measured`).toBeGreaterThan(0);
+      }
+      tapped++;
+    }
+    await expectNoHorizontalScroll(page);
+  }
+  return tapped;
+}
+
 /** The tag a DISQUALIFIED entrant's cascade walkover wears on the run sheet (T15 ruling 2): the walkover's "w/o", named in
  *  full as the disqualification, never as a withdrawal. */
 const dqTag = (row: ReturnType<Page["locator"]>) => row.locator(`span[role="img"][aria-label="${uiEn["forfeit.tagFull.disqualifiedWalkover"]!}"]`);
@@ -157,7 +228,7 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
     const railTrigger = card.getByTestId("stage-rail-trigger");
     if ((await railTrigger.isVisible()) && (await railTrigger.getAttribute("aria-expanded")) !== "true") await railTrigger.click();
     const pairNext = card.getByTestId("stage-generate");
-    await expect(pairNext, "round 2 is next to pair").toHaveText(/pair next round/i, { timeout: STEP_MS });
+    await expect(pairNext, "round 2 is next to pair").toHaveText(uiEn["schedule.pairNext"]!, { timeout: STEP_MS });
     await pairNext.click();
     await expect.poll(async () => (await sw.boards(2)).length, { timeout: 30_000, message: "round 2 was paired" }).toBe(2);
     const round2 = await sw.round(2);
@@ -212,34 +283,21 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
     await expect(dqTag(page.locator(`li[data-fixture-no="${theirs[0]!.fixture_no}"]`)), "a match that does not involve her").toHaveCount(0);
   });
 
-  test("the row's actions at 1280, 768 and 320 on a division still in setup (Withdraw, Disqualify and Delete): no page scroll, every one reachable by tap", async ({ page, request }) => {
+  // Ruling 261: Disqualify is offered only once the division has STARTED (the flag that hides Delete). Before the start a
+  // disqualification is a bare flip that Delete and Withdraw already cover, and the third button pushed Delete under the scroll
+  // fade at 768. So a setup division's row is Withdraw + Delete, a started one's is Withdraw + Disqualify.
+  test("a division still in setup: the row offers Withdraw and Delete and NO Disqualify; both tappable at first paint at 1280 and 768, by scrolling the card at 320", async ({ page, request }) => {
     test.setTimeout(180_000);
-    const d = await division(request, "DQ Reach", 4);
-    const name = d.names[0]!;
-    let checked = 0;
-    for (const width of [1280, 768, 320]) {
-      await page.setViewportSize({ width, height: 900 });
-      await page.goto(await divisionPath(request, d.divisionId, "?tab=entrants"));
-      await dismissCookieBanner(page);
-      const row = page.locator("tbody tr").filter({ hasText: name });
-      await expect(row).toHaveCount(1, { timeout: STEP_MS });
-      await expectNoHorizontalScroll(page);
-      for (const id of ["entrant-row-withdraw", "entrant-row-disqualify", "entrant-row-delete"]) {
-        const btn = row.getByTestId(id);
-        await expect(btn, `${width}: ${id} is on the row`).toHaveCount(1);
-        await btn.scrollIntoViewIfNeeded();
-        // Hit-test, not box size: the element at the button's centre is the button (or inside it), and it is on screen.
-        const hit = await btn.evaluate((el) => {
-          const r = el.getBoundingClientRect();
-          const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-          return { onScreen: r.left >= 0 && r.right <= window.innerWidth + 1, hit: at !== null && el.contains(at) };
-        });
-        expect(hit, `${width}: ${id} can be tapped`).toEqual({ onScreen: true, hit: true });
-        checked++;
-      }
-      await expectNoHorizontalScroll(page);
-    }
-    expect(checked, "controls checked").toBe(9);
+    const d = await division(request, "DQ Setup Konstantinopoulou", 4);
+    const tapped = await rowActionsAtThreeWidths(page, request, d.divisionId, d.names[0]!, ["entrant-row-withdraw", "entrant-row-delete"], ["entrant-row-disqualify"]);
+    expect(tapped, "controls proven tappable (2 per width x 3 widths)").toBe(6);
+  });
+
+  test("a started division: the row offers Withdraw and Disqualify and NO Delete; both tappable at first paint at 1280 and 768, by scrolling the card at 320", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const sw = await startedSwiss(request, "DQ Started Konstantinopoulou", 4, 2);
+    const tapped = await rowActionsAtThreeWidths(page, request, sw.divisionId, sw.names[0]!, ["entrant-row-withdraw", "entrant-row-disqualify"], ["entrant-row-delete"]);
+    expect(tapped, "controls proven tappable (2 per width x 3 widths)").toBe(6);
   });
 
   test("the forfeit dialog's disqualified reason says it decides this match only, at 1280 and 320; the walkover reason does not", async ({ page, request }) => {
