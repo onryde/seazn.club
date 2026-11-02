@@ -636,6 +636,14 @@ export function needsYouTone(items: readonly Pick<NeedsYouItem, "severity">[]): 
   return best;
 }
 
+/** Match Day as THIS reader may receive it (task G5; PB2 item 3): an organiser (`canEdit`, an editor's role) gets the view
+ *  whole; anyone else — a view-only member, an API key — gets no Needs-you rows and no owed-result count, the organiser's
+ *  to-do list. The ONE strip both doors use: the page's first paint (which is serialised into the response) and the poll that
+ *  follows it every few seconds. The rest of the board is the organiser's. */
+export function matchDayForReader<V extends Pick<MatchDayView, "needs_you" | "results_owed">>(view: V, canEdit: boolean): V {
+  return canEdit ? view : { ...view, needs_you: [], results_owed: 0 };
+}
+
 /** How many things need the organiser, by the header's own count (fix round 1, m1): every list row that is NOT an owed result,
  *  plus each MATCH that owes one — so "N need you" never reads fewer than the "M results owed" beside it (the desk folds all of
  *  a division's owed results into one row). */
