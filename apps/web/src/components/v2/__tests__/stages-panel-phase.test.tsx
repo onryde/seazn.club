@@ -84,7 +84,10 @@ describe("StagesPanel phase gating", () => {
 
   /**
    * The run sheet's MOUNTING filter, which nothing pinned until an e2e went
-   * red on 2026-09-20. `run-sheet-dates-and-court.spec.ts` seeded a knockout's
+   * red on 2026-09-20. (Match Day PB1, owner 2026-11-02: it is now "all" on a
+   * match day too - "today" is a chip the organiser chooses - so the match-day
+   * side below pins the NEW default, and the clock still decides only the
+   * phase, never the filter.) `run-sheet-dates-and-court.spec.ts` seeded a knockout's
    * semis on a pinned `2026-09-20`; when that date arrived the division became
    * `match_day`, the tab mounted on "today" instead of "all", and the "today"
    * predicate — timed AND dated today — dropped the UNTIMED final, so the
@@ -101,7 +104,7 @@ describe("StagesPanel phase gating", () => {
   const pressedFilter = (html: string): string | null =>
     /<button[^>]*data-filter="([a-z_]+)"[^>]*aria-pressed="true"/.exec(html)?.[1] ?? null;
 
-  it("mounts the run sheet on 'today' only on match day, and on 'all' otherwise", () => {
+  it("mounts the run sheet on 'all' on a match day, and on 'all' otherwise (PB1: the phase no longer picks the filter)", () => {
     const matchDayInput: PhaseInput = {
       divisionStatus: "active",
       stages: [
@@ -130,8 +133,10 @@ describe("StagesPanel phase gating", () => {
     const otherwise = renderToStaticMarkup(
       <StagesPanel {...baseProps} phase={dayBefore} fixtures={[fixture("s1", timed)]} />,
     );
-    expect(pressedFilter(onMatchDay)).toBe("today");
+    expect(pressedFilter(onMatchDay)).toBe("all");
     expect(pressedFilter(otherwise)).toBe("all");
+    // The sheet that mounted on All is not a sheet with no Today chip: the chip is there to choose, un-pressed, on a match day.
+    expect(onMatchDay).toMatch(/<button[^>]*data-filter="today"[^>]*aria-pressed="false"/);
   });
 
   it("renders stages by seq: a complete stage 1 stays above a pending stage 2", () => {

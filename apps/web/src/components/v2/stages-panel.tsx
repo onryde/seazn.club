@@ -639,14 +639,11 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   }, [divisionId, canEdit]);
   const boardSlotOptions = boardSlotOptionsFor(scheduleSettings, orgTz);
 
-  // Competition Desk W2 (Task 4) — the run sheet's own filter segment. Its
-  // DEFAULT is spec: "Today" on a match day, else "All" — read once at
-  // mount, same as every other `useState` initializer here; Task 7 replaces
-  // this local state with the `?filter=` URL param without touching
-  // `<RunSheet>`'s own `filter`/`onFilter` props. (Spec 2026-09-30 §2: the
-  // checkout return lands on the fixture page now, so D2's return branch —
-  // `initialRunSheetFilter` — is gone; this is its non-return branch.)
-  const [filter, setFilter] = useState<RunSheetFilter>(phase === "match_day" ? "today" : "all");
+  // Competition Desk W2 (Task 4) — the run sheet's own filter segment. It mounts on "All" ALWAYS (Match Day PB1, owner
+  // 2026-11-02): it used to open on "Today" on a match day, which hid every other round of the division behind a chip an
+  // organiser had to find. Match Day is where "today" lives now. (Spec 2026-09-30 §2: the checkout return lands on the fixture
+  // page, so D2's `initialRunSheetFilter` is gone.)
+  const [filter, setFilter] = useState<RunSheetFilter>("all");
   // Match Day C3: which of each stage's three settings panels (Match rules / Points / Tie-breaks) is open, as `${stageId}:${panel}`.
   // Owned here, like `addingTo` and `openRailFor`, so the header's buttons (stateless inline JSX: the test harness never walks a
   // nested component's render) and the panels they open share it. Several can be open at once.

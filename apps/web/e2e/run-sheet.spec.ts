@@ -439,7 +439,8 @@ test("regression (finding 3): a decided fixture with no recorded time never read
 });
 
 // CRITICAL 1 (fix round 1): the run sheet had no empty-filter state. The
-// default filter is "today" on a match day; a division whose real fixtures
+// filter was "today" on a match day (it opens on "all" since PB1; the state is
+// still reached by choosing Today); a division whose real fixtures
 // exist but none land on today's venue-zone day rendered a filter bar, a tz
 // caption, and NOTHING below it — the flagship surface reading as broken on
 // the one day it exists for. The same vacuous shape amendment 3 already paid
@@ -1204,11 +1205,10 @@ test("fix round 5: an in-play or settled row's time is not an affordance, but a 
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   const sheet = page.getByTestId("run-sheet");
   await expect(sheet).toBeVisible();
-  // EXPLICITLY "All". The default filter is "today" once the division reads
-  // as a match day, and an `in_play` fixture is exactly what can tip it
-  // there — with rows dated 2030 that would empty the sheet and turn every
-  // assertion below into a statement about the empty state instead. Clicking
-  // it is a no-op when "all" is already active.
+  // EXPLICITLY "All". The sheet has opened on "all" since PB1 whatever the day
+  // reads as (it used to open on "today" once an `in_play` fixture tipped the
+  // division into a match day, which with rows dated 2030 emptied the sheet).
+  // Kept as a guard: clicking it is a no-op when "all" is already active.
   await sheet.locator('[data-filter="all"]').click();
 
   const report: Record<string, unknown> = {};
@@ -2191,16 +2191,17 @@ test("court-tags trigger opens a modal containing the editor body, and clears th
 });
 
 // ---------------------------------------------------------------------------
-// Review finding M2 (rewritten for Match Day C3) - a stage's fixtures live IN its card, and the Today filter must not strand them.
+// Review finding M2 (rewritten for Match Day C3, again for PB1) - a stage's fixtures live IN its card, and the Today filter must not
+// strand them.
 //
 // Before C3 the stage card offered a "View N fixtures" trip to a division-wide sheet below; M2 was that label promising N rows and
-// the type filter (initialised to "today" on a match-day division) delivering fewer. The trip is gone - the rows are in the card -
-// but the same coupling stays: the sheet opens on Today, a stage's other fixtures are not today, and the organiser must (a) be told
-// the filter hides them and (b) reach every one of them, in THEIR stage's card, with one tap. Invisible to the unit suite twice
-// over: apps/web vitest is environment:"node" so the filter's onClick never runs, and the run-sheet unit tests drive <RunSheet>
-// with an explicit `filter` prop, which is precisely the coupling this lives in.
+// the type filter delivering fewer. The trip is gone - the rows are in the card. PB1 (owner, 2026-11-02): the sheet now opens on
+// "All" even on a match day, so every one of a stage's fixtures is in its card from the first paint; Today is a tap away and must
+// narrow the rows to the day, and "All" must bring them all back, in THEIR stage's card. Invisible to the unit suite twice over:
+// apps/web vitest is environment:"node" so the filter's onClick never runs, and the run-sheet unit tests drive <RunSheet> with an
+// explicit `filter` prop, which is precisely the coupling this lives in.
 // ---------------------------------------------------------------------------
-test("Review M2 (C3): the stage card holds its rows - no 'View N fixtures' - and 'All' brings every fixture into it, even when the sheet opened on Today", async ({
+test("Review M2 (C3, PB1): the stage card holds its rows - no 'View N fixtures' - the sheet opens on All on a match day, Today narrows it, All restores every fixture", async ({
   page,
   request,
 }) => {
@@ -2216,9 +2217,10 @@ test("Review M2 (C3): the stage card holds its rows - no 'View N fixtures' - and
   expect(started.status, `division start failed: ${JSON.stringify(started.error)}`).toBeLessThan(300);
 
   // One fixture TODAY: that is what puts the division in the match_day phase,
-  // which is what makes the type filter initialise to "today". Every other
-  // fixture is pushed to a date that filter excludes, so an un-cleared type
-  // filter can only ever show fewer than the stage holds.
+  // which used to make the filter open on "today". Every other fixture is
+  // pushed to a date that filter excludes, so a Today filter can only ever
+  // show fewer than the stage holds - and the sheet opening on All is the
+  // difference between N rows and 1 in the card on first paint.
   const today = new Date();
   today.setUTCHours(12, 0, 0, 0);
   await setFixtureScheduledAtSql(fixtureIds[0]!, today.toISOString());
@@ -2229,15 +2231,12 @@ test("Review M2 (C3): the stage card holds its rows - no 'View N fixtures' - and
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
   await dismissCookieBanner(page);
 
-  // The sheet really did open filtered - without this the test proves nothing,
-  // because a sheet that opened on "All" would pass the assertions below in
-  // both the fixed and the broken build.
+  // The premise, stated: this division IS in the match-day phase (the Today chip is there), and the sheet still opened on All.
   const todayChip = page.getByTestId("run-sheet-filter").locator('[data-filter="today"]');
+  const allChip = page.getByTestId("run-sheet-filter").locator('[data-filter="all"]');
   await expect(todayChip, "no Today chip - this division is not in the match-day phase").toBeVisible();
-  await expect(
-    todayChip,
-    "the run sheet did not open on Today, so this test cannot witness the defect",
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(allChip, "the run sheet did not open on All on a match day").toHaveAttribute("aria-pressed", "true");
+  await expect(todayChip, "the run sheet opened on Today").toHaveAttribute("aria-pressed", "false");
 
   // The retired trip is gone, and its words with it.
   // Final review G6: `stage-view-fixtures` is rendered by no source now, so a count-0 check on it could never fail. What replaced the
@@ -2248,12 +2247,18 @@ test("Review M2 (C3): the stage card holds its rows - no 'View N fixtures' - and
   ).toBeVisible();
   await expect(page.getByText(/View \d+ fixtures?/)).toHaveCount(0);
 
-  // Today keeps exactly the one fixture that is today, and it sits in its stage's card.
+  // On first paint (All) every fixture the stage holds is in its card.
   const inCards = page.locator('[data-testid="stage-run-sheet"] li[data-fixture-no]');
+  await expect
+    .poll(async () => inCards.count(), { message: "the sheet did not open with every fixture in the stage's card" })
+    .toBe(fixtureIds.length);
+
+  // Today keeps exactly the one fixture that is today, and it sits in its stage's card.
+  await todayChip.click();
   await expect.poll(async () => inCards.count(), { message: "Today did not keep the one fixture that is today" }).toBe(1);
 
   // 'All': every fixture the stage holds, in the card - not on a sheet elsewhere.
-  await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
+  await allChip.click();
   await expect
     .poll(async () => inCards.count(), { message: "'All' did not bring every fixture into its stage's card" })
     .toBe(fixtureIds.length);

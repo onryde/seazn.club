@@ -3,9 +3,9 @@
 // Several surfaces read the real clock against a fixture's `scheduled_at`:
 // the run sheet's row action (`fixtureRowAction`, src/lib/fixture-row-action.ts
 // — a fixture scheduled TODAY in the venue zone with nobody to score it offers
-// "Assign scorer", not "Score") and the division phase (`match_day`, which
-// also flips the fixtures tab's default filter to "today"). A spec that seeds a
-// LITERAL calendar date for such a fixture is a time bomb: green until the
+// "Assign scorer", not "Score") and the division phase (`match_day`, which used
+// to flip the fixtures tab's default filter to "today"; PB1 made it "all"). A
+// spec that seeds a LITERAL calendar date for such a fixture is a time bomb: green until the
 // calendar reaches it, red for exactly that day. journey-pro.spec.ts seeded
 // `Date.UTC(2026, 9, 12, 9, 0, 0)`, written 2026-09-05 as "well past today",
 // and main's e2e went red on 2026-10-12 itself.
