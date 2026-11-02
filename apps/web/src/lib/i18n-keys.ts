@@ -8477,6 +8477,7 @@ export type DictionaryKey =
   | "swiss.refusal.SWISS_FINISH_NOTHING_PLAYED"
   | "swiss.refusal.SWISS_FINISH_ROUND_UNDECIDED"
   | "swiss.refusal.SWISS_LATE_ENTRY_NOT_UNDOABLE"
+  | "swiss.refusal.SWISS_NO_LEGAL_PAIRING"
   | "swiss.refusal.SWISS_NO_ROUND_LEFT"
   | "swiss.refusal.SWISS_OVER"
   | "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED"

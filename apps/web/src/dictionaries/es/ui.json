@@ -2419,6 +2419,7 @@
   "swiss.refusal.SWISS_FINISH_NOTHING_PLAYED": "Aún no se ha completado ninguna ronda, así que no hay nada que terminar.",
   "swiss.refusal.STAGE_NOT_SWISS": "Esta no es una fase suiza.",
   "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED": "Los descansos solicitados de medio punto o de cero puntos aún no están disponibles. Si un jugador debe perderse una ronda, registra una incomparecencia en su partido.",
+  "swiss.refusal.SWISS_NO_LEGAL_PAIRING": "No se puede emparejar esta ronda: no queda ningún emparejamiento válido para estos jugadores.",
   "swiss.rounds.guidance.one": "Para {n} participantes: {count} ronda recomendada, como máximo {hardMax}.",
   "swiss.rounds.guidance.other": "Para {n} participantes: {count} rondas recomendadas, como máximo {hardMax}.",
   "swiss.rounds.shrunk.one": "Quedan {field} participantes, suficientes para {count} ronda como máximo. Puedes terminar la fase suiza con las rondas ya jugadas.",
