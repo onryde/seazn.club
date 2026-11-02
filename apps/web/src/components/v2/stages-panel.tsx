@@ -1039,15 +1039,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // new prop drilling. Byes excluded throughout, the SAME
         // `!isBye(toRunSheetFixture(f))` guard `unscheduled` above already
         // uses — the two counts must never disagree about what counts as a
-        // real fixture. `played` is `decided`/`finalized` only — `in_play`
-        // gets its OWN clause below (never folded into "played"), and the
-        // three VOID statuses (`VOID_STATUSES`, this file, below) fall into
-        // neither: a cancelled/abandoned/forfeited fixture is not "to
-        // schedule" (`isUnscheduledFixture` already excludes it by
-        // requiring `status === "scheduled"`) and is not "played" (no
-        // result), so it renders in neither of the counts line's clauses —
-        // scoped deliberately to the three clauses the brief names, not a
-        // fourth invented one.
+        // real fixture. "N done" is NOT filtered here: it is `roundDone`
+        // (below, beside `stageCounts`), the SAME number the stage's round
+        // bars add up to - a walkover, a settled abandonment and a
+        // cancellation are done, a match held for its settle is not.
+        // `in_play` gets its OWN clause (never folded into "done"), and a
+        // held match its own too. "N to schedule" is `isUnscheduledFixture`,
+        // which requires `status === "scheduled"`, so a settled match is
+        // never "to schedule" - no match is counted by two clauses.
         //
         // Owner ruling (this round, "remove the progress bar, keep the
         // counts line"): a solid-bar-plus-visual-weight summary earned its
