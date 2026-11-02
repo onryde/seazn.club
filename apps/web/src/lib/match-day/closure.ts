@@ -43,6 +43,23 @@ export function closureOf(windows: readonly UsableWindow[], now: number): CourtC
   return { kind: "now", until: next === undefined ? null : iso(next.from) };
 }
 
+/**
+ * A poll's closure, read again against the clock (fix round 1, m1). The server's `closure` is true at ITS `now`; the page polls
+ * every 90 seconds or slower, so a break that begins or ends in between would show the wrong card for up to a poll. This takes the
+ * snapshot and the client's clock and answers what it can know without the court's hours:
+ *  - `later` (a break from..until): still `later` until `from`, `now` (until the break ends) inside it, then null;
+ *  - `now` (closed until `until`): unchanged until `until`, then null; `until: null` (closed for the day) never reopens;
+ *  - null stays null.
+ * What it cannot know — a SECOND break after the one it holds, or the court opening into a window that has a break after it —
+ * is exactly what the next poll brings: the answer after a reopening is "open, no break known", never a guess.
+ */
+export function closureAtClock(closure: CourtClosure | null, now: number): CourtClosure | null {
+  if (closure === null) return null;
+  if (closure.kind === "now") return closure.until === null || now < Date.parse(closure.until) ? closure : null;
+  if (now < Date.parse(closure.from)) return closure;
+  return now < Date.parse(closure.until) ? { kind: "now", until: closure.until } : null;
+}
+
 /** Is the court closed at `now`? The one test the Call button and the call preview both ask. */
 export const closedNow = (c: { closure: CourtClosure | null }): boolean => c.closure !== null && c.closure.kind === "now";
 

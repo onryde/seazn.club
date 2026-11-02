@@ -47,6 +47,7 @@ import {
   needsYouOrder,
   needsYouTone,
   noCourtNoun,
+  courtsAtClock,
   orderCourts,
   parseVenueParam,
   resolveFocus,
@@ -62,6 +63,9 @@ import { NeedsYou } from "@/components/v2/desk/needs-you";
 import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court-focus";
 import { CourtList, NoCourtList } from "./court-list";
 import { VenueFilter } from "./venue-filter";
+
+/** How often the page re-reads the closures against its clock: a break is minutes, so a minute is exact enough (m1). */
+const CLOCK_TICK_MS = 60_000;
 
 export interface MatchDayShellProps {
   competitionId: string;
@@ -135,13 +139,25 @@ export function MatchDayShell({
   const live = isLive(view);
   useEffect(() => startBandPolling(live, () => void refresh(), browserBandPollDeps()), [live, refresh]);
 
+  // The clock (fix round 1, m1): a closure is true at the view's `now`, and a poll is 90 seconds or a quiet day's minutes away, so
+  // a break that begins or ends in between must show at once. Starts at the view's own `now` (the server and the first client render
+  // agree), then ticks each minute on the browser's clock. A clock running behind the server's cannot un-close a court: the
+  // closure was read at the view's `now`, and reading it at an earlier instant gives the same answer. Only courts whose closure
+  // moved are touched.
+  const [clock, setClock] = useState(() => Date.parse(initial.now));
+  useEffect(() => {
+    const id = setInterval(() => setClock(Date.now()), CLOCK_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+  const allCourts = useMemo(() => courtsAtClock(view.courts, clock), [view.courts, clock]);
+
   const filter = chosen.size === 0 ? null : chosen;
   // Listed by group — playing, called, up next, in use elsewhere, free — and the first of that list is the desktop's default focus.
-  const venueChoices = useMemo(() => venueOptions(view.courts), [view.courts]);
+  const venueChoices = useMemo(() => venueOptions(allCourts), [allCourts]);
   const venueFilterOn = venueChoices.length > 1;
   const courts = useMemo(
-    () => orderCourts(filterCourts(venueFilterOn ? scopeCourtNames(filterByVenues(view.courts, venues), venues) : view.courts, filter)),
-    [view.courts, venues, venueFilterOn, filter],
+    () => orderCourts(filterCourts(venueFilterOn ? scopeCourtNames(filterByVenues(allCourts, venues), venues) : allCourts, filter)),
+    [allCourts, venues, venueFilterOn, filter],
   );
   const noCourt = useMemo(() => filterNoCourt(view.playing_no_court, filter), [view.playing_no_court, filter]);
   const focus = resolveFocus(courts, noCourt, opened);
@@ -156,7 +172,7 @@ export function MatchDayShell({
   if (needsOpen && needsYou.length === 0) setNeedsOpen(false);
   /** A phone shows one court (or match) full-screen only while what it opened is still there. */
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
-  const noun = sharedNoun(courts.length > 0 ? courts : view.courts);
+  const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
   const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly };
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
@@ -183,7 +199,7 @@ export function MatchDayShell({
     if (courtId !== null) {
       // The court is named by the server whatever the venue filter lists: show its venue rather than send the organiser to a
       // "left the list" notice for a court that is simply not listed.
-      const venue = view.courts.find((c) => c.court_id === courtId)?.venue_id;
+      const venue = allCourts.find((c) => c.court_id === courtId)?.venue_id;
       if (venue !== undefined && !venues.has(venue)) chooseVenues(new Set([...venues, venue]));
       open(courtId);
     }

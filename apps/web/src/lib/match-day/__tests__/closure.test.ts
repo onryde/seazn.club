@@ -9,7 +9,8 @@
 //    closed at the call.
 // Anti-vacuity: the minute sweep reports how many minutes it checked; zero fails.
 import { describe, expect, it } from "vitest";
-import { closedNow, closureOf, closureWarning, type UsableWindow } from "../closure";
+import { closedNow, closureAtClock, closureOf, closureWarning, type UsableWindow } from "../closure";
+import type { CourtClosure } from "../types";
 
 const MIN = 60_000;
 /** A day's clock as epoch ms: 2026-11-07 00:00Z + hh:mm (a UTC day, the zone is irrelevant to the pure reader). */
@@ -187,5 +188,103 @@ describe("closureWarning — the call preview (a warning, never a refusal)", () 
     }
     expect(checked).toBe(24 * 60);
     expect(warned, "the sweep reaches both warning kinds").toBeGreaterThan(0);
+  });
+});
+
+// ---- Fix round 1, m1: the closure follows the CLIENT clock between polls ---------------------------------------------------
+// A poll's closure is true at the server's `now`; the page polls every 90 seconds (or slower on a quiet day), so a break that begins
+// or ends in between would show the wrong card. `closureAtClock` re-reads the snapshot against the clock: it needs only the
+// snapshot itself (the server sends the NEXT closure, not the whole day), so what it cannot know — a break after the one it holds —
+// waits for the next poll. The expected values below are the declared hours' (BREAK: open 09:00-14:00 and 15:00-22:00), written out,
+// and the sweep checks the snapshot against the server's own reader (`closureOf`) at every later minute.
+describe("closureAtClock — a poll's closure, read again against the clock", () => {
+  const SEG = (from: number, to: number, expected: CourtClosure | null, name: string) => ({ from, to, expected, name });
+  // The snapshot at 10:00 was "break 14:00-15:00 to come". Minutes are of the day.
+  const FROM_10: CourtClosure = { kind: "later", from: iso(14), until: iso(15) };
+  const FROM_10_TABLE = [
+    SEG(10 * 60, 14 * 60, FROM_10, "before the break"),
+    SEG(14 * 60, 15 * 60, { kind: "now", until: iso(15) }, "inside the break: it has begun"),
+    SEG(15 * 60, 24 * 60, null, "after the break: reopened (a later break is unknown until the next poll)"),
+  ];
+
+  it("a break to come: still to come until it begins, closed (until it ends) inside it, gone after", () => {
+    let checked = 0;
+    for (const seg of FROM_10_TABLE) {
+      for (let m = seg.from; m < seg.to; m++) {
+        expect(closureAtClock(FROM_10, at(0) + m * MIN), `${seg.name} @${m}`).toEqual(seg.expected);
+        checked++;
+      }
+    }
+    expect(checked).toBe(14 * 60);
+  });
+
+  it("closed now until 15:00 (snapshot at 14:30): closed until the minute it ends, open from then on", () => {
+    const snap: CourtClosure = { kind: "now", until: iso(15) };
+    let checked = 0;
+    for (let m = 14 * 60 + 30; m < 24 * 60; m++) {
+      expect(closureAtClock(snap, at(0) + m * MIN), `@${m}`).toEqual(m < 15 * 60 ? snap : null);
+      checked++;
+    }
+    expect(checked).toBe(9 * 60 + 30);
+  });
+
+  it("closed for the rest of today never reopens by the clock; an open court with no break stays open", () => {
+    const rest: CourtClosure = { kind: "now", until: null };
+    for (const m of [0, 22 * 60, 23 * 60 + 59]) expect(closureAtClock(rest, at(0) + m * MIN)).toEqual(rest);
+    for (const m of [0, 12 * 60, 23 * 60 + 59]) expect(closureAtClock(null, at(0) + m * MIN)).toBeNull();
+  });
+
+  it("the boundary minutes themselves: the break starts AT 14:00 and ends AT 15:00 (windows are [from, to))", () => {
+    expect(closureAtClock(FROM_10, at(13, 59))?.kind).toBe("later");
+    expect(closureAtClock(FROM_10, at(14))?.kind).toBe("now");
+    expect(closureAtClock(FROM_10, at(14, 59))?.kind).toBe("now");
+    expect(closureAtClock(FROM_10, at(15))).toBeNull();
+  });
+
+  it("the SEQUENCE a quiet page lives through, one minute tick at a time: later -> now -> open, and `closedNow` follows", () => {
+    const ticks = [at(13, 58), at(13, 59), at(14), at(14, 1), at(14, 59), at(15), at(15, 1)];
+    const states = ticks.map((t) => {
+      const c = closureAtClock(FROM_10, t);
+      return c === null ? "open" : closedNow({ closure: c }) ? "closed" : "break-to-come";
+    });
+    expect(states).toEqual(["break-to-come", "break-to-come", "closed", "closed", "closed", "open", "open"]);
+  });
+
+  it("sweep: from every snapshot minute, every later minute agrees with the server's own reader — except what only a poll can know (counted)", () => {
+    const TWO_BREAKS: UsableWindow[] = [win([9], [11]), win([12], [14]), win([15], [22])];
+    const rigs: [string, UsableWindow[]][] = [
+      ["one break", BREAK],
+      ["two breaks", TWO_BREAKS],
+      ["a single window", [win([9], [17])]],
+      ["none", []],
+      ["all day", ALL_DAY],
+    ];
+    let checked = 0;
+    let unknowable = 0;
+    for (const [name, windows] of rigs) {
+      for (let snap = 0; snap < 24 * 60; snap += 7) {
+        const snapshot = closureOf(windows, DAY0 + snap * MIN);
+        // When the snapshot's own closure is over, the server may already know a further one (a second break, or a break after the
+        // window it reopened into) that the snapshot never held. Only a poll can know it: the client says "open, no break known".
+        // A snapshot of "open, no break known" holds no end at all, so the whole rest of the day is the poll's to know.
+        const horizon = snapshot === null ? -Infinity : snapshot.until === null ? Infinity : Date.parse(snapshot.until);
+        for (let m = snap; m < 24 * 60; m += 5) {
+          const now = DAY0 + m * MIN;
+          const server = closureOf(windows, now);
+          const client = closureAtClock(snapshot, now);
+          if (now >= horizon) {
+            expect(client, `${name} snapshot@${snap} now@${m}`).toBeNull();
+            if (server !== null) unknowable++;
+          } else {
+            expect(client, `${name} snapshot@${snap} now@${m}`).toEqual(server);
+          }
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(1500);
+    // The exception is REACHED (a sweep that never meets it proves nothing about it) and is the minority.
+    expect(unknowable).toBeGreaterThan(0);
+    expect(unknowable).toBeLessThan(checked / 2);
   });
 });

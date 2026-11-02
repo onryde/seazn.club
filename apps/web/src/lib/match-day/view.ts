@@ -10,7 +10,7 @@ import type { Attention, Severity } from "@/lib/division-phase";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
 import { needsYouKey } from "@/components/v2/desk/needs-you";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview, type CallWarning } from "./call";
-import { closedNow } from "./closure";
+import { closedNow, closureAtClock } from "./closure";
 import type {
   CourtClosure,
   MatchDayCandidate,
@@ -64,6 +64,18 @@ export interface CourtCounts {
   courts: number;
   playing: number;
   free: number;
+}
+
+/**
+ * The courts as the clock sees them (fix round 1, m1): each court's closure read again at `nowMs` (`closureAtClock`), every other
+ * field untouched. A court whose closure did not move is the SAME object, so what is keyed on a court does not re-run on a minute
+ * that changed nothing for it.
+ */
+export function courtsAtClock(courts: readonly MatchDayCourt[], nowMs: number): MatchDayCourt[] {
+  return courts.map((c) => {
+    const closure = closureAtClock(c.closure, nowMs);
+    return JSON.stringify(closure) === JSON.stringify(c.closure) ? c : { ...c, closure };
+  });
 }
 
 /** "N courts · N playing · N free" (§6.3). Called and in-use courts count as courts, neither playing nor free — and so does a court

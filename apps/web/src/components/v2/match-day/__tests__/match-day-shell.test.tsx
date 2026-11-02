@@ -412,3 +412,102 @@ describe("E2-2 — the shell hands the list its courts in group order, and the d
     expect((parts(island.tree()).list.courts as MatchDayCourt[]).map((c) => c.court_id)).toEqual(["c-2", "c-1"]);
   });
 });
+
+describe("m1 — a closure follows the browser's clock between polls (fix round 1)", () => {
+  // The hours are declared here, then the clock is walked across them: Court 1 has a break 14:00-15:00 (a "later" closure at 13:58),
+  // Court 2 is closed until 14:30 at 14:00. Nothing re-polls; only the minute tick moves.
+  const later = { kind: "later" as const, from: "2026-10-31T14:00:00.000Z", until: "2026-10-31T15:00:00.000Z" };
+  const shutUntil = { kind: "now" as const, until: "2026-10-31T14:30:00.000Z" };
+  const closureOf = (island: { tree: () => ReactElement[] }, id: string) =>
+    (parts(island.tree()).list.courts as MatchDayCourt[]).find((c) => c.court_id === id)!.closure;
+  const orderOf = (island: { tree: () => ReactElement[] }) => (parts(island.tree()).list.courts as MatchDayCourt[]).map((c) => c.court_id);
+
+  const run = (fn: () => void) => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      fn();
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it("a break to come begins on the minute tick (later -> now), ends on a later one (now -> none), and the court changes group with it — no poll in between", () => {
+    run(() => {
+      vi.setSystemTime(Date.parse("2026-10-31T13:58:00.000Z"));
+      const island = renderIsland(
+        MatchDayShell,
+        props(view([court("c-1", "Court 1", { closure: later }), court("c-2", "Court 2")], "2026-10-31T13:58:00.000Z")),
+      );
+      expect(closureOf(island, "c-1")).toEqual(later);
+      expect(orderOf(island)).toEqual(["c-1", "c-2"]);
+
+      // 14:00:30 - the break has begun: the card is "closed now" and the court drops behind the free one.
+      vi.setSystemTime(Date.parse("2026-10-31T14:00:30.000Z"));
+      vi.advanceTimersByTime(60_000);
+      expect(closureOf(island, "c-1")).toEqual({ kind: "now", until: later.until });
+      expect(orderOf(island)).toEqual(["c-2", "c-1"]);
+      expect(net.calls).toEqual([]);
+
+      // 15:02 - it has reopened.
+      vi.setSystemTime(Date.parse("2026-10-31T15:02:00.000Z"));
+      vi.advanceTimersByTime(60_000);
+      expect(closureOf(island, "c-1")).toBeNull();
+      expect(orderOf(island)).toEqual(["c-1", "c-2"]);
+      expect(net.calls).toEqual([]);
+    });
+  });
+
+  it("a court closed until 14:30 reopens on the tick after 14:30, and not one before", () => {
+    run(() => {
+      vi.setSystemTime(Date.parse("2026-10-31T14:00:00.000Z"));
+      const island = renderIsland(MatchDayShell, props(view([court("c-1", "Court 1", { closure: shutUntil })], "2026-10-31T14:00:00.000Z")));
+      // Advancing the timers moves the fake clock a minute too, so each tick is set up one minute before the instant it reads.
+      const tickAt = (iso: string) => {
+        vi.setSystemTime(Date.parse(iso) - 60_000);
+        vi.advanceTimersByTime(60_000);
+      };
+      for (const at of ["14:10:00", "14:29:59"]) {
+        tickAt(`2026-10-31T${at}.000Z`);
+        expect(closureOf(island, "c-1"), at).toEqual(shutUntil);
+      }
+      tickAt("2026-10-31T14:30:00.000Z");
+      expect(closureOf(island, "c-1")).toBeNull();
+    });
+  });
+
+  it("a client clock BEHIND the view never un-closes a court the view already said was shut", () => {
+    run(() => {
+      // The browser thinks it is 13:00; the server's view, read at 14:10, says Court 1 is closed until 14:30.
+      vi.setSystemTime(Date.parse("2026-10-31T13:00:00.000Z"));
+      const island = renderIsland(MatchDayShell, props(view([court("c-1", "Court 1", { closure: shutUntil })], "2026-10-31T14:10:00.000Z")));
+      vi.advanceTimersByTime(60_000);
+      expect(closureOf(island, "c-1")).toEqual(shutUntil);
+    });
+  });
+
+  it("no court has a closure: the tick changes nothing (the same courts, in the same order)", () => {
+    run(() => {
+      vi.setSystemTime(Date.parse("2026-10-31T11:00:00.000Z"));
+      const island = renderIsland(MatchDayShell, props(view([C1, C2], "2026-10-31T11:00:00.000Z")));
+      const before = parts(island.tree()).list.courts as MatchDayCourt[];
+      vi.setSystemTime(Date.parse("2026-10-31T11:05:00.000Z"));
+      vi.advanceTimersByTime(60_000);
+      const after = parts(island.tree()).list.courts as MatchDayCourt[];
+      // The SAME court objects: a tick that changed nothing for a court hands it back untouched.
+      expect(after).toHaveLength(2);
+      after.forEach((c, i) => expect(c).toBe(before[i]));
+      expect(orderOf(island)).toEqual(["c-1", "c-2"]);
+    });
+  });
+
+  it("the focused court's panel follows too: the open court's closure is the clock's, not the poll's", () => {
+    run(() => {
+      vi.setSystemTime(Date.parse("2026-10-31T13:58:00.000Z"));
+      const island = renderIsland(MatchDayShell, props(view([court("c-1", "Court 1", { closure: later })], "2026-10-31T13:58:00.000Z")));
+      expect((parts(island.tree()).focus!.court as MatchDayCourt).closure).toEqual(later);
+      vi.setSystemTime(Date.parse("2026-10-31T14:05:00.000Z"));
+      vi.advanceTimersByTime(60_000);
+      expect((parts(island.tree()).focus!.court as MatchDayCourt).closure).toEqual({ kind: "now", until: later.until });
+    });
+  });
+});
