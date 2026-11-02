@@ -7221,5 +7221,15 @@
   "divset.rulesMoved": "Las reglas del partido, los puntos y los desempates se fijan en la pestaña Partidos, en Reglas de la división.",
   "divset.rulesMovedOnline": "Las reglas del partido, el juego en línea, los puntos y los desempates se fijan en la pestaña Partidos, en Reglas de la división.",
   "divset.rulesMovedLink": "Abrir Reglas de la división",
-  "matchDay.candidate.where.unscheduled": "Sin programar"
+  "matchDay.candidate.where.unscheduled": "Sin programar",
+  "matchDay.list.nounPlural.court": "Pistas",
+  "matchDay.list.nounPlural.pitch": "Campos",
+  "matchDay.list.nounPlural.table": "Mesas",
+  "matchDay.list.nounPlural.board": "Tableros",
+  "matchDay.list.nounPlural.rink": "Pistas de hielo",
+  "matchDay.list.freeFold.court.other": "{count} pistas más libres ({names})",
+  "matchDay.list.freeFold.pitch.other": "{count} campos más libres ({names})",
+  "matchDay.list.freeFold.table.other": "{count} mesas más libres ({names})",
+  "matchDay.list.freeFold.board.other": "{count} tableros más libres ({names})",
+  "matchDay.list.freeFold.rink.other": "{count} pistas de hielo más libres ({names})"
 }

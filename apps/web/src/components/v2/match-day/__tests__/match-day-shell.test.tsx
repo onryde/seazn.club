@@ -381,3 +381,30 @@ describe("B4 — a match on no court, opened, ended; Needs you's Find a court; a
     expect(island.tree().find((e) => e.type === NeedsYou)).toBeUndefined();
   });
 });
+
+describe("E2-2 — the shell hands the list its courts in group order, and the desktop opens on the first of them", () => {
+  it("playing, called, up next, then free — whatever order the server sent — and no court is lost on the way", () => {
+    const sent = [
+      court("c-1", "Court 1"),
+      court("c-2", "Court 2", { state: "called" }),
+      court("c-3", "Court 3", { state: "playing" }),
+      court("c-4", "Court 4"),
+    ];
+    const island = renderIsland(MatchDayShell, props(view(sent, "2026-10-31T11:00:00.000Z")));
+    const p = parts(island.tree());
+    const listed = (p.list.courts as MatchDayCourt[]).map((c) => c.court_id);
+    expect(listed).toEqual(["c-3", "c-2", "c-1", "c-4"]);
+    expect([...listed].sort()).toEqual(sent.map((c) => c.court_id).sort());
+    // The desktop's default focus is the head of that list: the court that is playing, not the first the server named.
+    expect(p.focus!.court).toMatchObject({ court_id: "c-3" });
+  });
+
+  it("a court that starts playing between two polls moves to the head, and the list follows the poll", async () => {
+    const island = renderIsland(MatchDayShell, props(view([C1, C2], "2026-10-31T11:00:00.000Z")));
+    expect((parts(island.tree()).list.courts as MatchDayCourt[]).map((c) => c.court_id)).toEqual(["c-1", "c-2"]);
+    net.next = view([C1, court("c-2", "Court 2", { state: "playing" })], "2026-10-31T11:00:30.000Z");
+    poll.tick!();
+    await settle();
+    expect((parts(island.tree()).list.courts as MatchDayCourt[]).map((c) => c.court_id)).toEqual(["c-2", "c-1"]);
+  });
+});

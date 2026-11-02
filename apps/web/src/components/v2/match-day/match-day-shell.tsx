@@ -45,6 +45,7 @@ import {
   needsYouOrder,
   needsYouTone,
   noCourtNoun,
+  orderCourts,
   resolveFocus,
   sharedNoun,
   type Opened,
@@ -117,7 +118,8 @@ export function MatchDayShell({
   useEffect(() => startBandPolling(live, () => void refresh(), browserBandPollDeps()), [live, refresh]);
 
   const filter = chosen.size === 0 ? null : chosen;
-  const courts = useMemo(() => filterCourts(view.courts, filter), [view.courts, filter]);
+  // Listed by group — playing, called, up next, in use elsewhere, free — and the first of that list is the desktop's default focus.
+  const courts = useMemo(() => orderCourts(filterCourts(view.courts, filter)), [view.courts, filter]);
   const noCourt = useMemo(() => filterNoCourt(view.playing_no_court, filter), [view.playing_no_court, filter]);
   const focus = resolveFocus(courts, noCourt, opened);
   const focused = focus.kind === "court" ? focus.court : null;
@@ -280,7 +282,9 @@ export function MatchDayShell({
             </div>
           )}
           <div data-testid="md-list" className={`grid min-w-0 gap-5 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
-            {courts.length > 0 && <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} onSelect={open} />}
+            {courts.length > 0 && (
+              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} locale={locale} onSelect={open} />
+            )}
             <NoCourtList
               fixtures={noCourt}
               noun={noCourtNoun(noCourt)}

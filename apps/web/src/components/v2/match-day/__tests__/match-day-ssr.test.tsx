@@ -634,7 +634,7 @@ describe("the court list", () => {
       court({ court_id: "c-4", court_name: "Court 4", state: "called", current: fx({ id: "d", stream: null, started_at: null }) }),
       court({ court_id: "c-5", court_name: "Court 5", state: "free", current: null }),
     ];
-    const html = renderToStaticMarkup(<CourtList courts={courts} selectedId="c-3" dict={dict} onSelect={() => {}} />);
+    const html = renderToStaticMarkup(<CourtList courts={courts} selectedId="c-3" dict={dict} locale="en" onSelect={() => {}} />);
     const rows = rowsOf(html, "md-court-row");
     expect(rows).toHaveLength(5);
     const withBadge = rows.map((r) => r.includes('data-md-stream="live"'));
@@ -649,7 +649,7 @@ describe("the court list", () => {
       court({ court_id: "c-3", state: "free", current: null }),
       court({ court_id: "c-4", state: "in_use_elsewhere", current: null, in_use_by: "Winter Open" }),
     ];
-    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} onSelect={() => {}} />), "md-court-row");
+    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />), "md-court-row");
     expect(rows[0]).toContain("Zara Khan v Ella Brooks");
     expect(rows[0]).toContain("data-md-row-score");
     expect(rows[1]).toContain(t(dict, "matchDay.state.called"));
@@ -660,7 +660,7 @@ describe("the court list", () => {
   it("V4 — a set sport's row: games won and the current game's points, compact — no brackets, no finished game, no monospace", () => {
     const summary = BADMINTON!;
     const rows = rowsOf(
-      renderToStaticMarkup(<CourtList courts={[goldenCourt("badminton", summary)]} selectedId={null} dict={dict} onSelect={() => {}} />),
+      renderToStaticMarkup(<CourtList courts={[goldenCourt("badminton", summary)]} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />),
       "md-court-row",
     );
     expect(rows).toHaveLength(1);
@@ -681,7 +681,7 @@ describe("the court list", () => {
     expect(football, "a football golden stream in play").not.toBeNull();
     expect(isSetSport(football!)).toBe(false);
     const row = rowsOf(
-      renderToStaticMarkup(<CourtList courts={[goldenCourt("football", football!)]} selectedId={null} dict={dict} onSelect={() => {}} />),
+      renderToStaticMarkup(<CourtList courts={[goldenCourt("football", football!)]} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />),
       "md-court-row",
     )[0]!;
     expect(row).toContain(`>${esc(football!.headline!)}</span>`);
@@ -689,7 +689,7 @@ describe("the court list", () => {
 
   it("marks the selected court, and only it", () => {
     const courts = [court({ court_id: "c-1" }), court({ court_id: "c-2" })];
-    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId="c-2" dict={dict} onSelect={() => {}} />), "md-court-row");
+    const rows = rowsOf(renderToStaticMarkup(<CourtList courts={courts} selectedId="c-2" dict={dict} locale="en" onSelect={() => {}} />), "md-court-row");
     expect(rows.map((r) => /aria-current="true"/.test(r.slice(0, r.indexOf(">"))))).toEqual([false, true]);
   });
 });
@@ -707,7 +707,7 @@ function levelText(big: string, attr: "mid" | "live"): string | null {
   return m === null ? null : m[1]!.replace(/&amp;/g, "&");
 }
 const rowScore = (c: MatchDayCourt): string => {
-  const html = renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} onSelect={() => {}} />);
+  const html = renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />);
   const at = html.indexOf("data-md-row-score");
   return at < 0 ? "" : html.slice(html.indexOf(">", at) + 1, html.indexOf("</span>", at));
 };
@@ -1293,7 +1293,7 @@ describe("A4 — the scorer's QR on a called or playing court", () => {
 });
 
 describe("A4 — no_scorer / not_recording mark the affected court's row", () => {
-  const rowOf = (c: MatchDayCourt) => renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} onSelect={() => {}} />);
+  const rowOf = (c: MatchDayCourt) => renderToStaticMarkup(<CourtList courts={[c]} selectedId={null} dict={dict} locale="en" onSelect={() => {}} />);
 
   it("EMPTY CASE FIRST: a playing court with no attention carries no mark", () => {
     const html = rowOf(court());
@@ -1306,7 +1306,7 @@ describe("A4 — no_scorer / not_recording mark the affected court's row", () =>
     for (const kind of SCORER_ATTENTIONS) {
       for (const [locale, d] of Object.entries(DICTS)) {
         const html = renderToStaticMarkup(
-          <CourtList courts={[court({ current: fx({ scorer_attention: kind }) })]} selectedId={null} dict={d} onSelect={() => {}} />,
+          <CourtList courts={[court({ current: fx({ scorer_attention: kind }) })]} selectedId={null} dict={d} locale="en" onSelect={() => {}} />,
         );
         expect(html, `${locale} ${kind}`).toContain(`data-scorer="${kind}"`);
         expect(html, `${locale} ${kind}`).toContain(`data-md-scorer="${kind}"`);

@@ -7221,5 +7221,15 @@
   "divset.rulesMoved": "Match rules, points and tie-breaks are set on the Fixtures tab, under Division rules.",
   "divset.rulesMovedOnline": "Match rules, online play, points and tie-breaks are set on the Fixtures tab, under Division rules.",
   "divset.rulesMovedLink": "Open Division rules",
-  "matchDay.candidate.where.unscheduled": "Not scheduled"
+  "matchDay.candidate.where.unscheduled": "Not scheduled",
+  "matchDay.list.nounPlural.court": "Courts",
+  "matchDay.list.nounPlural.pitch": "Pitches",
+  "matchDay.list.nounPlural.table": "Tables",
+  "matchDay.list.nounPlural.board": "Boards",
+  "matchDay.list.nounPlural.rink": "Rinks",
+  "matchDay.list.freeFold.court.other": "{count} more courts free ({names})",
+  "matchDay.list.freeFold.pitch.other": "{count} more pitches free ({names})",
+  "matchDay.list.freeFold.table.other": "{count} more tables free ({names})",
+  "matchDay.list.freeFold.board.other": "{count} more boards free ({names})",
+  "matchDay.list.freeFold.rink.other": "{count} more rinks free ({names})"
 }

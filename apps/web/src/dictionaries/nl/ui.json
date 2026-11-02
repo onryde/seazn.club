@@ -7221,5 +7221,15 @@
   "divset.rulesMoved": "Wedstrijdregels, punten en tiebreaks stel je in op het tabblad Wedstrijden, onder Divisieregels.",
   "divset.rulesMovedOnline": "Wedstrijdregels, online spelen, punten en tiebreaks stel je in op het tabblad Wedstrijden, onder Divisieregels.",
   "divset.rulesMovedLink": "Divisieregels openen",
-  "matchDay.candidate.where.unscheduled": "Niet gepland"
+  "matchDay.candidate.where.unscheduled": "Niet gepland",
+  "matchDay.list.nounPlural.court": "Banen",
+  "matchDay.list.nounPlural.pitch": "Velden",
+  "matchDay.list.nounPlural.table": "Tafels",
+  "matchDay.list.nounPlural.board": "Borden",
+  "matchDay.list.nounPlural.rink": "IJsbanen",
+  "matchDay.list.freeFold.court.other": "Nog {count} banen vrij ({names})",
+  "matchDay.list.freeFold.pitch.other": "Nog {count} velden vrij ({names})",
+  "matchDay.list.freeFold.table.other": "Nog {count} tafels vrij ({names})",
+  "matchDay.list.freeFold.board.other": "Nog {count} borden vrij ({names})",
+  "matchDay.list.freeFold.rink.other": "Nog {count} ijsbanen vrij ({names})"
 }

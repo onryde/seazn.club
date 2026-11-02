@@ -7221,5 +7221,15 @@
   "divset.rulesMoved": "Les règles du match, les points et les départages se règlent dans l'onglet Rencontres, sous Règles de la division.",
   "divset.rulesMovedOnline": "Les règles du match, le jeu en ligne, les points et les départages se règlent dans l'onglet Rencontres, sous Règles de la division.",
   "divset.rulesMovedLink": "Ouvrir Règles de la division",
-  "matchDay.candidate.where.unscheduled": "Non programmé"
+  "matchDay.candidate.where.unscheduled": "Non programmé",
+  "matchDay.list.nounPlural.court": "Terrains",
+  "matchDay.list.nounPlural.pitch": "Terrains",
+  "matchDay.list.nounPlural.table": "Tables",
+  "matchDay.list.nounPlural.board": "Plateaux",
+  "matchDay.list.nounPlural.rink": "Patinoires",
+  "matchDay.list.freeFold.court.other": "{count} autres terrains libres ({names})",
+  "matchDay.list.freeFold.pitch.other": "{count} autres terrains libres ({names})",
+  "matchDay.list.freeFold.table.other": "{count} autres tables libres ({names})",
+  "matchDay.list.freeFold.board.other": "{count} autres plateaux libres ({names})",
+  "matchDay.list.freeFold.rink.other": "{count} autres patinoires libres ({names})"
 }

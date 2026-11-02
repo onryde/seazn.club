@@ -127,6 +127,96 @@ export function filterCourts(courts: readonly MatchDayCourt[], divisions: Readon
   return out;
 }
 
+// ---- The court list's order and its fold (Match Day E2 item 2) -----------------------------------------------------------
+
+/** The court list's groups, in the order they are listed (owner 2026-11-01): what is on now, then what is about to be, then what
+ *  nobody has — so the list opens on the courts that need attention and the empty ones are the tail.
+ *  - playing, then called: the court's state;
+ *  - up_next: a FREE court with a queue of this competition's matches — nothing on it, something waiting for it;
+ *  - elsewhere: another competition has it (not free, so never folded into "free"; spec §7 "Which courts" — courts are shared);
+ *  - free: a free court with an empty queue. */
+export const COURT_GROUPS = ["playing", "called", "up_next", "elsewhere", "free"] as const;
+export type CourtGroup = (typeof COURT_GROUPS)[number];
+
+export function courtGroup(c: Pick<MatchDayCourt, "state" | "queue">): CourtGroup {
+  switch (c.state) {
+    case "playing":
+      return "playing";
+    case "called":
+      return "called";
+    case "in_use_elsewhere":
+      return "elsewhere";
+    case "free":
+      return c.queue.length > 0 ? "up_next" : "free";
+  }
+}
+
+/** The courts in list order: by group, and within a group in the order given (the server's court order, kept). A new array. */
+export function orderCourts(courts: readonly MatchDayCourt[]): MatchDayCourt[] {
+  const rank = new Map(COURT_GROUPS.map((g, i) => [g, i] as const));
+  return courts
+    .map((c, i) => ({ c, i, r: rank.get(courtGroup(c))! }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .map((x) => x.c);
+}
+
+/** A fold is worth a row only when it hides at least this many courts: "1 more court free (Court 5)" is longer than Court 5. */
+export const MIN_FOLDED = 2;
+
+/**
+ * The list as drawn: `shown` (everything but the folded courts, in list order) and `folded` — the free courts with an empty
+ * queue, in list order, which sit under ONE row ("5 more courts free (Courts 5–10)") that expands in place.
+ *  - when EVERY court is free and empty there is nothing to rank them against: the list is shown whole (empty `folded`);
+ *  - the court the organiser has open (`selectedId`) is never folded away from under them: it stays in `shown`;
+ *  - fewer than `MIN_FOLDED` folded courts is no fold.
+ * `courts` is already in list order (`orderCourts`).
+ */
+export function foldFreeCourts(
+  courts: readonly MatchDayCourt[],
+  selectedId: string | null,
+): { shown: MatchDayCourt[]; folded: MatchDayCourt[] } {
+  const foldable = (c: MatchDayCourt) => courtGroup(c) === "free";
+  const whole = { shown: [...courts], folded: [] as MatchDayCourt[] };
+  if (courts.every(foldable)) return whole;
+  const folded = courts.filter((c) => foldable(c) && c.court_id !== selectedId);
+  if (folded.length < MIN_FOLDED) return whole;
+  const gone = new Set(folded.map((c) => c.court_id));
+  return { shown: courts.filter((c) => !gone.has(c.court_id)), folded };
+}
+
+/**
+ * The folded courts' names as a person writes them: runs of consecutive numbers under one word collapse to a range — "Courts
+ * 5–10" — and anything else is listed by name ("Centre, Court 5–6, Court 9"). `singular` and `plural` are the sport's noun
+ * ("Court", "Courts"): a run under exactly that word reads with the plural, a run under any other word ("Hall A 1–4") keeps its
+ * own. Names arrive in list order and are never reordered.
+ */
+export function foldedNames(names: readonly string[], singular: string, plural: string): string {
+  // `from`/`to` keep the digits as typed ("05") and the number they mean (05 + 1 = 6).
+  type Run = { prefix: string; from: string; to: string; next: number; count: number; first: string };
+  const runs: Run[] = [];
+  for (const name of names) {
+    const m = /^(.*\D)\s*(\d+)$/.exec(name.trim());
+    if (m === null) {
+      runs.push({ prefix: "", from: "", to: "", next: Number.NaN, count: 1, first: name });
+      continue;
+    }
+    const prefix = m[1]!.trim();
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.prefix === prefix && last.next === Number(m[2])) {
+      last.to = m[2]!;
+      last.next = Number(m[2]) + 1;
+      last.count++;
+    } else runs.push({ prefix, from: m[2]!, to: m[2]!, next: Number(m[2]) + 1, count: 1, first: name });
+  }
+  return runs
+    .map((r) => {
+      if (r.count < 2) return r.first;
+      const word = r.prefix.localeCompare(singular, undefined, { sensitivity: "base" }) === 0 ? plural : r.prefix;
+      return `${word} ${r.from}–${r.to}`;
+    })
+    .join(", ");
+}
+
 /** The same filter on the "Playing, no court" group (B4): every match, or only the chosen divisions'. */
 export function filterNoCourt(fixtures: readonly MatchDayFixture[], divisions: ReadonlySet<string> | null): MatchDayFixture[] {
   return divisions === null ? [...fixtures] : fixtures.filter((f) => divisions.has(f.division_id));
