@@ -132,6 +132,7 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 // court/venue in this org" 404 in the product.
 import { VENUE_NOT_FOUND_CODE, COURT_NOT_FOUND_CODE } from "./venues";
 import {
+  cutEligiblePools,
   descriptorKey,
   descriptorLabel,
   destinationSlotsBySeed,
@@ -5633,6 +5634,11 @@ async function tablesForCompletedStage(
       rows: s.rows,
     }));
   }
+  // W3 T15 Carry A (controller ruling 2026-11-02): a Swiss source's departed entrants leave its cut and the next eligible
+  // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`). Every
+  // other kind is returned as it was: `config.qualified` keeps a departed group/league qualifier, and generation's
+  // `walkoverDepartedQualifiers` walks her opponent over.
+  pools = cutEligiblePools(stage.kind, pools, await departedEntrantIds(tx, divisionId));
   // roundLosers (a bracket-kind source's take rule) reads the completed
   // bracket's OWN fixtures, never the standings_snapshot (final ranks only,
   // not per-round results) — only a bracket-kind source has any, so this is
@@ -5935,7 +5941,7 @@ function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
  *  public board. Every membership taken from the STANDINGS therefore
  *  inherits withdrawn entrants and must intersect back against the field;
  *  membership taken from the field query already has. */
-async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Set<string>> {
+export async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Set<string>> {
   const rows = await tx<{ id: string }[]>`
     select id from entrants
     where division_id = ${divisionId} and status in ('withdrawn','disqualified')`;
@@ -6083,8 +6089,11 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // (see departedEntrantIds) — so without this an organiser is shown, and
     // pre-ticked into, a bracket seat for someone who has withdrawn.
     //
-    // Her SEAT is left empty rather than closed up: nobody is promoted into
-    // the vacancy (owner decision pending), so every surviving qualifier
+    // Except from a SWISS source (W3 T15 Carry A, controller ruling 2026-11-02): `sourcesToTables` has already taken her
+    // out of its tables, so the cut above was read without her and the next eligible entrant holds her place — a tie
+    // at the new boundary is flagged like any other. From any other source:
+    // her SEAT is left empty rather than closed up: nobody is promoted into
+    // the vacancy (owner decision pending for a group or league cut — W4/W5), so every surviving qualifier
     // keeps the seed and destination slot the engine gave her and the
     // bracket simply gets smaller. This is the offer only — the binding
     // refusal is confirmSeedProposal's, which also covers the `edits[]` and

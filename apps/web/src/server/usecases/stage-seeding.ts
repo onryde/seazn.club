@@ -34,9 +34,10 @@ import {
 } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
 import { HttpError } from "@/lib/errors";
+import { CUT_SKIPS_DEPARTED_KINDS } from "@/lib/table-withdrawal";
 import { loadCrossGroupRules } from "@/server/engine-db/competition";
 import { persistLotsDraws } from "@/server/engine-db/table-rules";
-import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables } from "./stages";
+import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables, departedEntrantIds } from "./stages";
 
 type Tx = postgres.TransactionSql;
 
@@ -68,6 +69,38 @@ export {
 export interface PoolTableRows {
   pool: string;
   rows: readonly StandingsRow[];
+}
+
+/** The tables a progression's CUT reads from one source (W3 T15 Carry A, controller ruling 2026-11-02): for a source
+ *  kind in `CUT_SKIPS_DEPARTED_KINDS` (lib/table-withdrawal.ts — Swiss alone; the scope guard), every
+ *  departed row is dropped and the rest renumbered 1..m in their table order — the table with the ineligible entrants
+ *  removed — and a tie that named a departed entrant names only the ones left; a tie with nobody left is no tie, so
+ *  its flag goes too (the engine flags a seat from `tieUnbroken` and `tieBreak.with`, progression.ts). Any other kind,
+ *  or a table with no departed row, is returned as it was. The stored standings are never touched: the public table
+ *  keeps her row, marked as departed; only the cut skips it. */
+export function cutEligiblePools<P extends PoolTableRows>(
+  sourceKind: string,
+  pools: readonly P[],
+  departed: ReadonlySet<string>,
+): P[] {
+  if (!CUT_SKIPS_DEPARTED_KINDS.has(sourceKind)) return [...pools];
+  return pools.map((p) => {
+    if (!p.rows.some((r) => departed.has(r.entrantId))) return p;
+    const kept = p.rows
+      .filter((r) => !departed.has(r.entrantId))
+      .sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER));
+    return {
+      ...p,
+      rows: kept.map((r, i): StandingsRow => {
+        const { tieBreak, tieUnbroken, ...rest } = r;
+        const row: StandingsRow = { ...rest, rank: i + 1 };
+        if (tieBreak === undefined) return tieUnbroken === undefined ? row : { ...row, tieUnbroken };
+        const others = tieBreak.with.filter((id) => !departed.has(id));
+        if (others.length === 0) return row;
+        return { ...row, tieBreak: { ...tieBreak, with: others }, ...(tieUnbroken === undefined ? {} : { tieUnbroken }) };
+      }),
+    };
+  });
 }
 
 /** Resolve a `ProgressionSource.stage` reference to a concrete, EARLIER
@@ -275,10 +308,13 @@ export async function sourcesToTables(
     // ids the next stage's roster does not contain. Shares the on_complete
     // path's reader rather than re-deriving it (see its doc comment,
     // stages.ts).
-    const pools =
+    const read =
       source.kind === "americano"
         ? await americanoPlacementTables(tx, source.id, target.division_id)
         : await sourceStandingsTables(tx, source);
+    // W3 T15 Carry A: a Swiss source's departed entrants leave its cut (the next eligible entrant backfills). The hash
+    // the proposal stores is over these tables, so a departure or a return after a draft stales it.
+    const pools = cutEligiblePools(source.kind, read, await departedEntrantIds(tx, target.division_id));
     const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
     // W2d T12 (spec §5.9, X-TB-7): the source's pinned cross-group order and stored draws — as tablesForCompletedStage.
     const crossGroup = REAL_TABLE_KINDS.has(source.kind) ? await loadCrossGroupRules(tx, source.id) : undefined;

@@ -36,7 +36,7 @@ import { inTheField } from "@/lib/entrant-field";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
-import { tableWithdrawalInputs } from "@/lib/table-withdrawal";
+import { CUT_SKIPS_DEPARTED_KINDS, tableWithdrawalInputs } from "@/lib/table-withdrawal";
 import { completionEngineStatus, rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
 import { EVERY_OUTCOME } from "@/server/engine-db/table-rules";
 import type { QualRowT, QualTableT } from "./competition-hub-schema";
@@ -534,14 +534,19 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // M3). That rests on a product rule decided elsewhere: a departed qualifier
   // still takes her place above the line — her seat is left empty and nobody
   // below is promoted into it (usecases/stages.ts computeSeedProposal, the
-  // "owner decision pending" comment on the departed filter). If that changes
-  // and the next entrant is promoted, a departed row above the line no longer
-  // takes a place, and Out must stop counting departed rows or it prints a
-  // false Out. (Through stays sound either way: an extra rival only makes it
-  // more cautious.)
+  // departed filter). In a league or group that is still the rule.
+  //
+  // In a SWISS table it is not (W3 T15 Carry A, controller ruling 2026-11-02:
+  // `CUT_SKIPS_DEPARTED_KINDS`): a departed entrant leaves the cut and the
+  // next eligible entrant backfills her place (usecases/stage-seeding.ts
+  // `cutEligiblePools`). So, as M3 foresaw, Out stops counting her: she is no
+  // rival for the cut, the race is run over the entrants still in the field,
+  // and the line falls under the cut-th of them. Her row stays in the table,
+  // with no status.
+  const contenders = CUT_SKIPS_DEPARTED_KINDS.has(i.stage.kind) ? ordered.filter((r) => active.get(r.entrantId) === true) : ordered;
   const engine: QualificationInput = {
-    rows: ordered.map((r) => ({ entrantId: r.entrantId, points: byWins ? r.won : r.points, active: active.get(r.entrantId) === true })),
-    remaining: new Map(ordered.map((r) => [r.entrantId, remainingOf(r.entrantId)])),
+    rows: contenders.map((r) => ({ entrantId: r.entrantId, points: byWins ? r.won : r.points, active: active.get(r.entrantId) === true })),
+    remaining: new Map(contenders.map((r) => [r.entrantId, remainingOf(r.entrantId)])),
     perMatch,
     cut,
     anyPlayed: tableFx.some(
@@ -560,7 +565,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   if (result === null) return null;
 
   const next = meta.nextStageName;
-  const orderedIds = ordered.map((r) => r.entrantId);
+  const orderedIds = contenders.map((r) => r.entrantId);
   const cascade = i.cascade as readonly TiebreakerKey[];
   // What-if OQ1: `wins` cannot split a points tie when every point came from
   // wins at one rate — read from the RULE's bounds in force (not the race's: a wins-first table's twin step is
@@ -666,9 +671,12 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // ("First place goes…" / "Top 2 go…"), the rounds left with the rounds.
   // One key pluralised on the rounds printed "Top 1 go through".
   const cutLine = i.plural("table.qual.cut", cut, { n: cut, next });
+  // The line renders after a row of the WHOLE table (departed rows included): under the cut-th contender. F3 above
+  // guarantees one exists (the cut is below the field still playing).
+  const cutIndex = ordered.indexOf(contenders[cut - 1]!) + 1;
   return {
     table: {
-      cutIndex: cut,
+      cutIndex,
       label: roundsLeft > 0 ? `${cutLine} · ${i.plural("table.qual.roundsLeft", roundsLeft)}` : cutLine,
       legend: {
         through: i.msg("table.qual.legend.through"),

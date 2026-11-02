@@ -41,7 +41,10 @@
 //   Final review I1 — a departed row frozen again, in the engine
 //   (`remainingOf` → 0 when inactive: M7, both I1 loss cases, Swiss) or in the
 //   builder (departed remaining → 0: the same four); a departed Swiss row read
-//   through the rounds formula (the Swiss I1 case).
+//   through the rounds formula (the Swiss I1 case — retired by W3 T15 Carry A:
+//   a departed Swiss row is no rival at all now). W3 T15 Carry A — the
+//   contenders filter dropped (departed Swiss rows race again) / applied to a
+//   league too (a league's line moves) / the line left at the cut's own index.
 //   Final review COPY — the cut key pluralised on the rounds left (the bug),
 //   the Out headline on a fixed `other`, the rounds count joined at 0, the
 //   rounds key pluralised on the cut. Final review M4a — tieDecidingKey asked
@@ -60,6 +63,7 @@ import {
   PointsRule,
   pointsRuleBounds,
   qualificationStatus,
+  tieRival,
   type StandingsRow,
 } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
@@ -935,20 +939,56 @@ describe("a departed row's unplayed fixtures (final review I1)", () => {
     const done = must(view(scene(won(3, "B", "D"), won(4, "D", "E"), 9, 4)));
     expect(done.rows.B).toMatchObject({ status: "out", label: "Out" });
   });
-  it("Swiss: a departed entrant's remaining is the boards it is seated on, never the rounds formula", () => {
-    // swiss4 with B withdrawn after two rounds (award mode). Swiss pairs only
-    // the field (generateStageFixturesWrite's `active` read), so B is in no
-    // round-3 board: nothing left, final on 3. A (6) is then Through (only C
-    // reaches 6), and C's one win clears everyone but A: Win and in.
+  it("Swiss (W3 T15 Carry A): a departed entrant is no rival for the cut — seated on a board or not — and the line falls under the cut-th entrant still in the field", () => {
+    // swiss4 with B withdrawn after two rounds. A departed entrant LEAVES a Swiss cut and the next eligible entrant
+    // backfills (controller ruling 2026-11-02, `CUT_SKIPS_DEPARTED_KINDS`), so the race for two places is A, C and D, one
+    // round each — the engine's own verdict over those three is the expected value. Before T15 B stayed a rival, and the
+    // board she still sat on (the seated case) made A only Win and in and C need help: a false caution, a row short.
     const s = swiss4();
-    const unseated = must(view({ ...s, statuses: { B: "withdrawn" } }));
-    expect(unseated.rows.B).toBeUndefined();
-    expect([unseated.rows.A!.status, unseated.rows.C!.status]).toEqual(["through", "win_k"]);
-    // Pair: B departed AFTER round 3 was paired, still seated against D — one
-    // unplayed board, best 6: A only Wins and in, C needs help.
+    const field = ["A", "C", "D"];
+    const raceInput = {
+      rows: field.map((id) => ({ entrantId: id, points: s.rows.find((r) => r.entrantId === id)!.points, active: true })),
+      remaining: new Map(field.map((id) => [id, 1])),
+      perMatch: BOUNDS,
+      cut: 2,
+      anyPlayed: true,
+      complete: false,
+    };
+    const race = qualificationStatus(raceInput)!;
+    const expected = field.map((id) => race.get(id)!.status.kind);
+    // The line renders under the second entrant still in the field (C), a row lower than the cut's own index.
+    const lineUnder = s.rows.findIndex((r) => r.entrantId === field[1]) + 1;
+    expect(lineUnder, "premise: B, departed, sits above the line").toBe(3);
     const early = s.fixtures.filter((f) => f.round_no < 3);
-    const seated = must(view({ ...s, fixtures: [...early, open(3, "A", "C"), open(3, "B", "D")], statuses: { B: "withdrawn" } }));
-    expect([seated.rows.A!.status, seated.rows.C!.status]).toEqual(["win_k", "needs_help"]);
+    let named = 0;
+    const scenes = [
+      { name: "unseated (paired after she left)", fixtures: s.fixtures },
+      { name: "seated against D (she left after round 3 was paired)", fixtures: [...early, open(3, "A", "C"), open(3, "B", "D")] },
+    ];
+    let checked = 0;
+    for (const sc of scenes) {
+      const v = must(view({ ...s, fixtures: sc.fixtures, statuses: { B: "withdrawn" } }));
+      expect(v.rows.B, `${sc.name}: her row has no status`).toBeUndefined();
+      expect(field.map((id) => v.rows[id]!.status), sc.name).toEqual(expected);
+      expect(v.table.cutIndex, `${sc.name}: the line is under C`).toBe(lineUnder);
+      // The what-if names the rival ACROSS the line among the field (the engine's `tieRival` over the race), never a
+      // contender on the same side of it.
+      for (const id of field) {
+        const rivalId = tieRival(raceInput, field, id);
+        const whatIf = v.rows[id]!.whatIf;
+        if (rivalId === null || whatIf === null) continue;
+        for (const other of field.filter((x) => x !== id && x !== rivalId)) expect(whatIf, `${sc.name}: ${id}'s what-if`).not.toContain(NAMES[other]!);
+        expect(whatIf).toContain(NAMES[rivalId]!);
+        named++;
+      }
+      checked++;
+    }
+    expect(checked).toBe(scenes.length);
+    expect(named, "anti-vacuity: a what-if was read").toBeGreaterThan(0);
+    // The positive pairs: with nobody departed the line is under the cut's own row; and a LEAGUE keeps a departed
+    // qualifier's place (M3, W4/W5 to rule on) — open4 is A 6, B 3, C 3, D 0 too.
+    expect(must(view(s)).table.cutIndex).toBe(2);
+    expect(must(view({ ...open4(), statuses: { B: "withdrawn" } })).table.cutIndex, "a league's line stays under rank 2").toBe(2);
   });
 });
 

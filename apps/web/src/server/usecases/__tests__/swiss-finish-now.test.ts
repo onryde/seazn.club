@@ -29,11 +29,11 @@ import { CreateStage } from "@/server/api-v1/schemas";
 import { rankedStageStandings } from "@/server/engine-db/competition";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
 import { undoDivision } from "../history";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, type SwissExistingFixture } from "../stages";
+import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures, type SwissExistingFixture } from "../stages";
 import { addSwissRound, finishSwissNow, judgeSwissFinish, listSwissRoundControls, patchSwissStage } from "../swiss-rounds-admin";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
@@ -477,26 +477,27 @@ describe.runIf(HAS_DB)("X-SW-26 Finish in sequence", () => {
       );
     }, 300_000);
 
-    it(`finish after the LEADER withdraws: the cut is the table read before less the departed — his seat goes dead, not backfilled (the departed-qualifier rule; open question for T15) (${s.sport})`, async () => {
+    it(`finish after the LEADER withdraws: the Swiss table keeps him, and the cut is that table less the departed — rank 5 backfills his place, a knockout of 4 (T15 Carry A) (${s.sport})`, async () => {
       // Fix round 1 (review m1): the last-placed entrant's withdrawal proved nothing (below the cut either way). The leader
-      // leaves between rounds 2 and 3. What Finish seeds is the table read BEFORE it, through the house's departed-qualifier
-      // rule (F14 / W2b dead seat): the withdrawn leader keeps his place in the ranked table, and the cut drops his seat
-      // without moving rank 5 up — 3 qualifiers for a knockout of 4. That rule is the CUT's, not Finish's: the plain
-      // completion below ("OPEN QUESTION … plain completion") does the same. Whether a departed qualifier should be
-      // backfilled is T15's question (withdrawal and disqualification cascades); this pins today's answer.
+      // leaves between rounds 2 and 3. T13 left this an open question and pinned a dead seat (3 qualifiers); T15 Carry A
+      // (controller ruling 2026-11-02) answers it: a withdrawn or disqualified entrant LEAVES a Swiss cut and the next
+      // eligible entrant backfills. The Swiss table still carries him, marked departed; only the cut skips him. The plain
+      // completion below ("Carry A control … plain completion") reads the same rule — it is the CUT's, not Finish's.
       const rig = await finishRig(s, 6, 5, { q: 4 });
       await playThrough(rig, 2);
       const leader = (await standingsNow(rig))[0]!.entrantId;
       await withdrawEntrantCascade(rig.auth, leader);
       const table = await standingsNow(rig);
-      expect(table[0]!.entrantId, "open question (T15): a withdrawn leader keeps his place in the ranked table").toBe(leader);
-      const top = table.slice(0, 4).map((r) => r.entrantId);
+      expect(table[0]!.entrantId, "the Swiss table keeps the withdrawn leader in his place").toBe(leader);
+      // The independent expected value: the table read before, the departed removed, then the top 4.
+      const expected = table.map((r) => r.entrantId).filter((id) => id !== leader).slice(0, 4);
+      expect(expected, "premise: rank 5 is the one who backfills").toContain(table[4]!.entrantId);
       const out = await finishSwissNow(rig.auth, rig.stageId);
       expect(out).toMatchObject({ finished_after: 2, completed: true });
       const proposal = await draftProposal(rig.koStageId!);
       const qualifiers = [...proposal.computed.qualifiers].sort((a, b) => a.rank - b.rank);
-      expect(qualifiers.map((q) => q.entrantId), "the table's top 4 less the departed — no backfill").toEqual(top.filter((id) => id !== leader));
-      expect(qualifiers.map((q) => q.rank), "ranks 2–4 qualify; rank 1's seat is dead").toEqual([2, 3, 4]);
+      expect(qualifiers.map((q) => q.entrantId), "the table's order less the departed, top 4 — rank 5 backfills").toEqual(expected);
+      expect(qualifiers.map((q) => q.rank), "all four seeds are held").toEqual([1, 2, 3, 4]);
     }, 300_000);
 
     it(`a scorer's take-back of an earlier round's result refuses Finish naming that board (the desk agrees); decided again, Finish goes through (${s.sport})`, async () => {
@@ -780,8 +781,9 @@ describe.runIf(HAS_DB)("finishSwissNow guards", () => {
     expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 3, shells_removed: 0, completed: true });
   }, 300_000);
 
-  it("OPEN QUESTION (T15) control — a plain completion, no Finish: a withdrawn leader keeps his place and the cut drops his seat without backfill, as Finish's does", async () => {
-    // Review m1, first step: is the 3-qualifier cut Finish's or the cut's? Reproduced without Finish — the same rule.
+  it("Carry A control (T15) — a plain completion, no Finish: a withdrawn leader keeps his place in the table and the cut backfills his seat from rank 5, as Finish's does", async () => {
+    // Review m1, first step: is the cut Finish's or the cut's? Reproduced without Finish — the same rule (T15 Carry A:
+    // a departed entrant leaves a Swiss cut and the next eligible entrant backfills).
     // Badminton only: the cut reads the ranked table, never the sport.
     const rig = await finishRig(BADMINTON, 6, 3, { q: 4 });
     await playThrough(rig, 2);
@@ -794,10 +796,11 @@ describe.runIf(HAS_DB)("finishSwissNow guards", () => {
     const table = await standingsNow(rig);
     const top = table.slice(0, 4).map((r) => r.entrantId);
     expect(top, "premise: the withdrawn leader is still above the cut after round 3").toContain(leader);
+    const expected = table.map((r) => r.entrantId).filter((id) => id !== leader).slice(0, 4);
     expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
     const qualifiers = [...(await draftProposal(rig.koStageId!)).computed.qualifiers].sort((a, b) => a.rank - b.rank);
-    expect(qualifiers.map((q) => q.entrantId), "the top 4 less the departed — no backfill").toEqual(top.filter((id) => id !== leader));
-    expect(qualifiers).toHaveLength(3);
+    expect(qualifiers.map((q) => q.entrantId), "the table's order less the departed, top 4 — rank 5 backfills").toEqual(expected);
+    expect(qualifiers).toHaveLength(4);
   }, 300_000);
 
   it("a later stage under way is SWISS_OVER (422) — its knockout has started (ruling 250's definition, T9's)", async () => {
@@ -825,6 +828,193 @@ describe.runIf(HAS_DB)("finishSwissNow guards", () => {
     expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 1, completed: true });
     expect(roundsIn(await rowsOf(rig.stageId))).toEqual([1]);
   });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W3 T15 Carry A (controller ruling 2026-11-02): a withdrawn or disqualified entrant LEAVES the knockout cut when a
+// Swiss stage completes — through Finish or through a normal Complete — and the next eligible entrant backfills. The
+// Swiss TABLE keeps her (marked departed); only the cut skips her. Every expected value is the table read with the
+// stage's own ranking, the ineligible entrants removed, then the top N — never the proposal's own answer.
+// ---------------------------------------------------------------------------------------------------------------------
+
+type Table = Awaited<ReturnType<typeof standingsNow>>;
+const idsOf = (t: Table) => t.map((r) => r.entrantId);
+/** The expected cut: the table's order with the ineligible removed, then the top `n`. */
+const cutLess = (t: Table, gone: readonly string[], n: number) => idsOf(t).filter((id) => !gone.includes(id)).slice(0, n);
+/** A draw of four seeded in rank order meets 1 v 4 and 2 v 3 (unordered pairs, boards in any order). */
+const fourDraw = (seeds: readonly string[]) => [[seeds[0]!, seeds[3]!].sort(), [seeds[1]!, seeds[2]!].sort()].sort();
+const qualifierIds = (p: Proposal) => [...p.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId);
+
+describe.runIf(HAS_DB)("T15 Carry A: a departed entrant leaves the Swiss cut; the next eligible entrant backfills", () => {
+  for (const s of SPORTS) {
+    it(`a withdrawal after the last round, before Complete: the cut skips her, rank 5 backfills, and the knockout draws over the backfilled seeds (${s.sport})`, async () => {
+      const rig = await finishRig(s, 6, 3, { q: 4 });
+      await playThrough(rig, 3);
+      expect((await stageState(rig.stageId)).status, "premise: every round decided, the stage not yet completed").toBe("active");
+      const table = await standingsNow(rig);
+      const leaving = table[1]!.entrantId;
+      await withdrawEntrantCascade(rig.auth, leaving);
+      expect(idsOf(await standingsNow(rig)), "the Swiss table keeps her, in her place").toEqual(idsOf(table));
+      const expected = cutLess(table, [leaving], 4);
+      expect(expected, "premise: rank 5 backfills").toContain(table[4]!.entrantId);
+      expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
+      const proposal = await draftProposal(rig.koStageId!);
+      expect(qualifierIds(proposal)).toEqual(expected);
+      await confirmAsRanked(rig, proposal);
+      expect((await koRoundOne(rig.koStageId!)).sort(), "the knockout seats the backfilled cut, 1 v 4 and 2 v 3").toEqual(fourDraw(expected));
+    }, 300_000);
+
+    it(`a DQ mid-Swiss: her round-3 board walks over, and at completion the cut skips her though the table still ranks her inside it (${s.sport})`, async () => {
+      const rig = await finishRig(s, 6, 3, { q: 4 });
+      await playThrough(rig, 2);
+      await pair(rig);
+      const dq = (await standingsNow(rig))[0]!.entrantId;
+      const board = boardsOf(await rowsOf(rig.stageId), 3).find((f) => f.home_entrant_id === dq || f.away_entrant_id === dq);
+      expect(board, "premise: the leader is seated in round 3").toBeTruthy();
+      await patchEntrant(rig.auth, dq, { status: "disqualified" });
+      expect((await rowsOf(rig.stageId)).find((f) => f.id === board!.id)!.status, "her round-3 board walked over (X-SW-23)").toBe("forfeited");
+      for (const f of boardsOf(await rowsOf(rig.stageId), 3).filter((x) => x.status === "scheduled")) await homeWins(rig, f);
+      const table = await standingsNow(rig);
+      expect(idsOf(table).slice(0, 4), "premise: the table still ranks her inside the cut").toContain(dq);
+      const expected = cutLess(table, [dq], 4);
+      expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
+      expect(qualifierIds(await draftProposal(rig.koStageId!))).toEqual(expected);
+    }, 300_000);
+
+    it(`two ineligible entrants inside the cut (one withdrawn, one disqualified): both are skipped, ranks 5 and 6 backfill (${s.sport})`, async () => {
+      const rig = await finishRig(s, 8, 3, { q: 4 });
+      await playThrough(rig, 3);
+      const table = await standingsNow(rig);
+      const [withdrawn, disqualified] = [table[0]!.entrantId, table[2]!.entrantId];
+      await withdrawEntrantCascade(rig.auth, withdrawn);
+      await patchEntrant(rig.auth, disqualified, { status: "disqualified" });
+      const expected = cutLess(table, [withdrawn, disqualified], 4);
+      expect(expected, "premise: ranks 5 and 6 backfill").toEqual([table[1]!, table[3]!, table[4]!, table[5]!].map((r) => r.entrantId));
+      expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
+      expect(qualifierIds(await draftProposal(rig.koStageId!))).toEqual(expected);
+    }, 300_000);
+
+    it(`an ineligible entrant exactly at the cut boundary (rank 4): rank 5 takes the fourth seat (${s.sport})`, async () => {
+      const rig = await finishRig(s, 6, 3, { q: 4 });
+      await playThrough(rig, 3);
+      const table = await standingsNow(rig);
+      const boundary = table[3]!.entrantId;
+      await withdrawEntrantCascade(rig.auth, boundary);
+      const expected = cutLess(table, [boundary], 4);
+      expect(expected[3], "premise: rank 5 is the fourth qualifier").toBe(table[4]!.entrantId);
+      expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
+      expect(qualifierIds(await draftProposal(rig.koStageId!))).toEqual(expected);
+    }, 300_000);
+
+    it(`the on_complete knockout: config.qualified is the table less the departed, and the drawn bracket seats the backfill with no walkover (${s.sport})`, async () => {
+      const rig = await finishRig(s, 6, 3, { onCompleteTop: 4 });
+      await playThrough(rig, 3);
+      const table = await standingsNow(rig);
+      const leaving = table[0]!.entrantId;
+      await withdrawEntrantCascade(rig.auth, leaving);
+      const expected = cutLess(table, [leaving], 4);
+      expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
+      const [ko] = await sql<{ config: { qualified?: string[] } }[]>`select config from stages where id = ${rig.koStageId!}`;
+      expect(ko!.config.qualified, "the seeded list skips her; rank 5 is in").toEqual(expected);
+      expect((await koRoundOne(rig.koStageId!)).sort(), "1 v 4 and 2 v 3 over the backfilled list").toEqual(fourDraw(expected));
+      const koRows = await sql<{ status: string }[]>`select status from fixtures where stage_id = ${rig.koStageId!} and round_no = 1`;
+      expect(koRows.map((f) => f.status), "no departed qualifier is walked over: every first-round line is open").toEqual(koRows.map(() => "scheduled"));
+    }, 300_000);
+  }
+
+  it("a tie at the cut boundary AFTER the backfill takes the SEEDING_TIE_UNRESOLVED path, never a silent pick (badminton — its cascade ends on the seed, so a level class stays unbroken, as the R3 tied-cut test above)", async () => {
+    // 6 entrants, round 1 won 21-10 21-12 on every board: three winners level, three losers level. A knockout of 3 cuts
+    // exactly under the winners — no boundary tie. One winner withdraws: the cut now takes the two winners left and ONE
+    // of the three level losers, so the tie is at the boundary only because of the backfill.
+    const rig = await finishRig(SPORTS[0], 6, 3, { q: 3 });
+    await playThrough(rig, 1);
+    const table = await standingsNow(rig);
+    expect(table.map((r) => r.won), "premise: three winners, three losers").toEqual([1, 1, 1, 0, 0, 0]);
+    expect(table.every((r) => r.tieUnbroken === true), "premise: both classes are unbroken ties").toBe(true);
+    const leaving = table[0]!.entrantId;
+    const losers = idsOf(table).slice(3);
+    await withdrawEntrantCascade(rig.auth, leaving);
+    expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 1, completed: true });
+    const proposal = await draftProposal(rig.koStageId!);
+    expect(qualifierIds(proposal), "the two winners left, then the first level loser — the engine's provisional pick").toEqual(cutLess(table, [leaving], 3));
+    const boundary = proposal.computed.ties.find((t) => t.entrantIds.some((id) => losers.includes(id)));
+    expect(boundary, "the boundary tie is flagged").toBeTruthy();
+    expect([...boundary!.entrantIds].sort(), "…naming the three level losers").toEqual([...losers].sort());
+    expect(proposal.computed.ties.flatMap((t) => t.entrantIds), "the departed winner is in no tie").not.toContain(leaving);
+    // Picking every tie but the boundary one is refused by name: never a silent pick.
+    const bySlot = new Map(proposal.computed.qualifiers.map((q) => [q.destinationSlot, q.entrantId]));
+    const pick = (t: { slots: string[] }) => ({ slots: t.slots, order: t.slots.map((x) => bySlot.get(x)!) });
+    const others = proposal.computed.ties.filter((t) => t !== boundary).map(pick);
+    await expect(confirmSeedProposal(rig.auth, rig.koStageId!, { proposalId: proposal.id, tiePicks: others })).rejects.toMatchObject({
+      status: 422,
+      code: "SEEDING_TIE_UNRESOLVED",
+      extra: { slots: boundary!.slots },
+    });
+    // The organiser picks the LAST level loser for the boundary seat: that pick, not the engine's, is seated.
+    const chosen = losers[2]!;
+    await confirmSeedProposal(rig.auth, rig.koStageId!, {
+      proposalId: proposal.id,
+      tiePicks: [...others, { slots: boundary!.slots, order: [chosen] }],
+    });
+    const seated = (await koRoundOne(rig.koStageId!)).flat();
+    expect(seated, "the picked loser is seated").toContain(chosen);
+    expect(seated.filter((id) => losers.includes(id)), "exactly one loser takes the boundary seat").toEqual([chosen]);
+    expect(seated).not.toContain(leaving);
+  }, 300_000);
+
+  it("in sequence: a departure written AFTER the draft (no refresh) stales it — 409, recompute and the backfill is offered; reinstated, the draft offers her again (badminton — the hash and the refresh read entrant status, never the sport)", async () => {
+    const rig = await finishRig(SPORTS[0], 6, 3, { q: 4 });
+    await playThrough(rig, 3);
+    const table = await standingsNow(rig);
+    expect(await completeStage(rig.auth, rig.stageId, { publish: false })).toMatchObject({ completed: true });
+    const draft = await draftProposal(rig.koStageId!);
+    expect(qualifierIds(draft), "premise: the full table's top 4").toEqual(idsOf(table).slice(0, 4));
+    // A legacy departure: the status written with no patch, so no draft refresh ran.
+    const leaving = table[2]!.entrantId;
+    await sql`update entrants set status = 'withdrawn' where id = ${leaving}`;
+    const bySlot = new Map(draft.computed.qualifiers.map((q) => [q.destinationSlot, q.entrantId]));
+    const tiePicks = draft.computed.ties.map((t) => ({ slots: t.slots, order: t.slots.map((x) => bySlot.get(x)!) }));
+    // Resolvable another way (recompute), so 409 — the cut it was computed over has changed.
+    await expect(confirmSeedProposal(rig.auth, rig.koStageId!, { proposalId: draft.id, tiePicks })).rejects.toMatchObject({
+      status: 409,
+      code: "SEEDING_PROPOSAL_STALE",
+    });
+    const recomputed = await computeSeedProposal(rig.auth, rig.koStageId!);
+    expect([...recomputed.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => q.entrantId), "recomputed: rank 5 backfills").toEqual(cutLess(table, [leaving], 4));
+    // Reinstated through the patch: the refresh recomputes, and she holds her place again.
+    await patchEntrant(rig.auth, leaving, { status: "confirmed" });
+    expect(qualifierIds(await draftProposal(rig.koStageId!)), "reinstated: the full table's top 4 again").toEqual(idsOf(table).slice(0, 4));
+  }, 300_000);
+
+  it("Swiss only: a LEAGUE cut keeps today's rule — a withdrawn leader's seat is dead and nobody backfills (badminton — the scope guard reads the source stage kind, never the sport)", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "League cut " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: "badminton", variant_key: "bwf", config: {} });
+    const kind = (builtinModules.find((m) => m.key === "badminton")!.entrantModel?.defaultKind ?? "individual") as Kind;
+    await createEntrants(auth, division.id, Array.from({ length: 5 }, (_, i) => entrantInput(kind, `L${i + 1}`, i + 1)));
+    const [league] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "League", config: {}, progression: null });
+    const [ko] = await createStages(auth, division.id, {
+      seq: 2,
+      kind: "knockout",
+      name: "KO",
+      config: {},
+      progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" },
+    });
+    await startDivision(auth, division.id);
+    if ((await rowsOf(league!.id)).length === 0) await generateStageFixtures(auth, league!.id);
+    await generateStageFixtures(auth, ko!.id);
+    const rig: Rig = { sport: SPORTS[0], auth, competitionId: comp.id, divisionId: division.id, stageId: league!.id, koStageId: ko!.id, kind, entrants: [] };
+    const open = (await rowsOf(league!.id)).filter((f) => f.home_entrant_id && f.away_entrant_id && f.status === "scheduled");
+    expect(open.length, "premise: a round robin of five").toBe(10);
+    for (const f of open) await homeWins(rig, f);
+    const table = await standingsNow(rig);
+    const leader = table[0]!.entrantId;
+    await withdrawEntrantCascade(auth, leader);
+    expect(await completeStage(auth, league!.id, { publish: false })).toMatchObject({ completed: true });
+    const qualifiers = [...(await draftProposal(ko!.id)).computed.qualifiers].sort((a, b) => a.rank - b.rank);
+    expect(qualifiers.map((q) => q.entrantId), "the top 4 less the departed — rank 5 is NOT promoted").toEqual(idsOf(table).slice(1, 4));
+    expect(qualifiers.map((q) => q.rank), "seed 1's place is dead").toEqual([2, 3, 4]);
+  }, 300_000);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
