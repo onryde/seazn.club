@@ -82,9 +82,10 @@ export type ReachAudience = (typeof REACH_AUDIENCES)[number];
 export type ReachState = "yes" | "after_publish" | "no";
 
 /**
- * WHO will find a competition, answered from the rules in this file and nothing
- * else — so the form's checklist cannot drift from what the listing queries,
- * the sitemap and the pages' robots actually do.
+ * WHO will find a competition, answered from the rules in this file — so the
+ * form's checklist cannot drift from what the listing queries, the sitemap and
+ * the pages' robots actually do. One reader has a floor this file does not
+ * model (showcase, below), and the form's copy says so.
  *
  *  - team:     org members always see their own competition.
  *  - link:     anyone holding the URL, from the moment it exists —
@@ -98,6 +99,17 @@ export type ReachState = "yes" | "after_publish" | "no";
  *              already implies public, which is the coupling the server
  *              enforces on the flag itself, so a stale flag on a non-public
  *              competition reads "no" without a second clause.
+ *
+ *              `after_publish` here is a CEILING, not a promise: the view also
+ *              asks a quality floor of any showcased competition — a decided or
+ *              finalized fixture, or a division past setup (a published
+ *              schedule) — plus a verified owner email, an active org and no
+ *              staff block (V306). That floor is about the competition's
+ *              progress, not its visibility or status, so it is not modelled
+ *              here; the form's row says "may appear once you publish and it has
+ *              a published schedule or a result", and
+ *              `competition-reach-db.test.ts` pins the floor against the real
+ *              view so that sentence cannot outlive it.
  */
 export function competitionReach(c: {
   visibility: string;

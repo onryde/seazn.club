@@ -82,6 +82,33 @@ async function seedOrg() {
   return { orgId, orgSlug: slug, auth };
 }
 
+/**
+ * The quality floor discovery asks of ANY showcased competition: a division
+ * past setup. Started while the competition is still a draft; `startDivision`
+ * leaves its status alone.
+ */
+async function startADivision(auth: AuthCtx, competitionId: string) {
+  const division = await createDivision(auth, competitionId, {
+    name: "Open",
+    sport_key: "generic",
+    variant_key: "score",
+    config: DIVISION_CONFIG,
+  });
+  await createEntrants(
+    auth,
+    division.id,
+    ["A", "B", "C", "D"].map((n, i) => ({
+      kind: "individual" as const,
+      display_name: n,
+      seed: i + 1,
+      members: [],
+    })),
+  );
+  const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
+  await generateStageFixtures(auth, stage!.id);
+  await startDivision(auth, division.id);
+}
+
 /** What the real readers say about one competition right now. */
 async function observe(orgId: string, id: string, slug: string, orgSlug: string) {
   const link = (await sql`select id from public_competitions_v where id = ${id}`).length > 0;
@@ -103,6 +130,7 @@ describe.skipIf(!HAS_DB)("competitionReach against the real readers (Match Day C
   it("every audience the server can observe reads the way the form prints it", async () => {
     const OBSERVABLE: Exclude<ReachAudience, "team">[] = ["link", "org", "search", "showcase"];
     let checked = 0;
+    const states = new Set<ReachState>();
 
     for (const choice of CHOICES) {
       const { orgId, orgSlug, auth } = await seedOrg();
@@ -120,28 +148,9 @@ describe.skipIf(!HAS_DB)("competitionReach against the real readers (Match Day C
       expect(created.visibility, "the create must not have been degraded").toBe(choice.visibility);
       expect(created.discoverable, "the showcase choice reached the row").toBe(choice.discoverable);
 
-      // The quality floor discovery asks of ANY showcased competition (a
-      // started division), so that "not showcased" below can only mean the
-      // draft rule. Started while still a draft; `startDivision` leaves it so.
-      const division = await createDivision(auth, created.id, {
-        name: "Open",
-        sport_key: "generic",
-        variant_key: "score",
-        config: DIVISION_CONFIG,
-      });
-      await createEntrants(
-        auth,
-        division.id,
-        ["A", "B", "C", "D"].map((n, i) => ({
-          kind: "individual" as const,
-          display_name: n,
-          seed: i + 1,
-          members: [],
-        })),
-      );
-      const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "L", config: {} });
-      await generateStageFixtures(auth, stage!.id);
-      await startDivision(auth, division.id);
+      // The floor is met here (a started division), so that "not showcased"
+      // below can only mean the draft rule. The floor itself is the next test.
+      await startADivision(auth, created.id);
       const [{ status: stillDraft }] = await sql<{ status: string }[]>`
         select status from competitions where id = ${created.id}`;
       expect(stillDraft, "starting a division must not publish the competition").toBe(NEW_COMPETITION_STATUS);
@@ -158,13 +167,46 @@ describe.skipIf(!HAS_DB)("competitionReach against the real readers (Match Day C
       for (const audience of OBSERVABLE) {
         const observed: ReachState = now[audience] ? "yes" : published[audience] ? "after_publish" : "no";
         expect(reach[audience], `${choice.visibility}/${choice.discoverable} ${audience}`).toBe(observed);
+        states.add(observed);
         checked += 1;
       }
     }
     // Anti-vacuity: 4 choices x 4 observable audiences, and the answers are not
-    // all the same one (some "yes", some "after_publish", some "no").
+    // all the same one — the readers gave a "yes", an "after_publish" and a "no".
     expect(checked).toBe(CHOICES.length * 4);
+    expect(states.size).toBeGreaterThan(1);
+    expect([...states].sort()).toEqual(["after_publish", "no", "yes"]);
     expect(REACH_AUDIENCES.length).toBe(5);
+  });
+
+  it("'after_publish' for the showcase is a CEILING: a published, public, showcased competition with nothing played is not on the home page (I1)", async () => {
+    // `competitionReach` does not model discovery's quality floor (a decided
+    // fixture or a division past setup), so the form words the Showcase row as
+    // "may appear once you publish and it has a published schedule or a result".
+    // This pins the floor the wording is about: the same competition, published
+    // and showcased, is found by every other reader but NOT by discovery until
+    // a division is started — and is, after.
+    const { orgId, orgSlug, auth } = await seedOrg();
+    const created = await createCompetition(auth, {
+      name: `Reach floor ${randomUUID().slice(0, 6)}`,
+      visibility: "public",
+      discoverable: true,
+      branding: {},
+      ends_on: "2030-12-31",
+    });
+    await sql`update competitions set status = 'published' where id = ${created.id}`;
+
+    const bare = await observe(orgId, created.id, created.slug, orgSlug);
+    expect(bare, "published + public: every reader but discovery finds it").toEqual({
+      link: true,
+      org: true,
+      search: true,
+      showcase: false,
+    });
+
+    await startADivision(auth, created.id);
+    const played = await observe(orgId, created.id, created.slug, orgSlug);
+    expect(played.showcase, "a started division clears the floor").toBe(true);
   });
 
   it("the server refuses showcase on a non-public competition, which is why the form never offers it", async () => {

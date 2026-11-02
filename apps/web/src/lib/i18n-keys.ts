@@ -1513,6 +1513,7 @@ export type DictionaryKey =
   | "comp.wizard.reach.org"
   | "comp.wizard.reach.search"
   | "comp.wizard.reach.showcase"
+  | "comp.wizard.reach.showcase.afterPublish"
   | "comp.wizard.reach.team"
   | "comp.wizard.reach.title"
   | "comp.wizard.reach.yes"

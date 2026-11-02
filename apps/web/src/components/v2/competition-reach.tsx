@@ -69,7 +69,14 @@ export function CompetitionReach({
                 {state === "yes" && <span className="sr-only">{msg("comp.wizard.reach.yes")}: </span>}
                 {state === "no" && <span className="sr-only">{msg("comp.wizard.reach.no")}: </span>}
                 {state === "after_publish"
-                  ? msg("comp.wizard.reach.afterPublish", { audience: label })
+                  ? msg(
+                      // The showcase view asks for more than a publish (a schedule or a
+                      // result), so its "later" says "may appear" and names the floor.
+                      audience === "showcase"
+                        ? "comp.wizard.reach.showcase.afterPublish"
+                        : "comp.wizard.reach.afterPublish",
+                      { audience: label },
+                    )
                   : label}
               </span>
             </li>
