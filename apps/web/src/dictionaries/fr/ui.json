@@ -7209,7 +7209,6 @@
   "stageCard.summary.differs": "Diffère de la division : {parts}",
   "stageCard.completeHint.one": "Terminer la phase se débloque quand le match est joué.",
   "stageCard.completeHint.other": "Terminer la phase se débloque quand les {count} matchs sont joués.",
-  "stageCard.completeInfo": "Pourquoi Terminer la phase n'est pas encore disponible",
   "div.detail.tiebreak.rule.set_diff.badminton": "différence de jeux",
   "div.detail.tiebreak.rule.set_diff.tabletennis": "différence de jeux",
   "div.detail.tiebreak.rule.set_diff.carrom": "différence de jeux",

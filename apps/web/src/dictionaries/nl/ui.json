@@ -7209,7 +7209,6 @@
   "stageCard.summary.differs": "Wijkt af van de divisie: {parts}",
   "stageCard.completeHint.one": "Fase afronden wordt beschikbaar zodra de wedstrijd is gespeeld.",
   "stageCard.completeHint.other": "Fase afronden wordt beschikbaar zodra alle {count} wedstrijden zijn gespeeld.",
-  "stageCard.completeInfo": "Waarom Fase afronden nog niet beschikbaar is",
   "div.detail.tiebreak.rule.set_diff.badminton": "gamesaldo",
   "div.detail.tiebreak.rule.set_diff.tabletennis": "gamesaldo",
   "div.detail.tiebreak.rule.set_diff.carrom": "gamesaldo",

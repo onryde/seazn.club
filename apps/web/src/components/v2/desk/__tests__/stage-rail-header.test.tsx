@@ -1,7 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
-import en from "@/dictionaries/en/ui.json";
 import { StageRail, type StageRailProps } from "../stage-rail";
 
 // Match Day E1 item 1 lives in its own file (fix round 1, I3): appended to `stage-rail.test.tsx` it collided with the W3 branch's own tests
@@ -16,9 +15,10 @@ const NEUTRAL = {
   swissPairingMenu: null,
 };
 
-// Match Day E1 item 1 (owner 2026-11-01): the actions live in the card's HEADER, the Complete reason sits behind an ⓘ, and a divider
-// separates the actions group from the settings buttons beside it. Static markup for the structure; `renderIsland` for the press.
-describe("StageRail - E1 item 1: header actions, the Complete ⓘ, the divider", () => {
+// Match Day E1 item 1 (owner 2026-11-01): the actions live in the card's HEADER, the Complete reason is on the waiting button (an ⓘ
+// beside it until PB1 retired that), and a divider separates the actions group from the settings buttons beside it. Static markup for
+// the structure; `renderIsland` for the press.
+describe("StageRail - E1 item 1: header actions, the Complete reason, the divider", () => {
   const active = { id: "s1", name: "League", kind: "league", seq: 1, status: "active" } as never;
   const complete = { ...(active as object), status: "complete" } as never;
   const rail = (over: Record<string, unknown> = {}) =>
@@ -39,15 +39,19 @@ describe("StageRail - E1 item 1: header actions, the Complete ⓘ, the divider",
     expect(sheet, "no md padding on the old card edge").not.toMatch(/\bmd:py-4\b/);
   });
 
-  it("the ⓘ: present only while Complete waits; it names the reason's id and carries the reason text; Complete uses aria-disabled", () => {
+  it("the reason (PB1: no ⓘ): present only while Complete waits; the Complete button itself names the reason's id; the bubble carries the text", () => {
     const waiting = rail();
-    const info = tag(waiting, "stage-complete-info");
-    expect(info, "the ⓘ is there while a match is open").not.toBeNull();
-    expect(info).toContain('aria-describedby="stage-complete-hint-s1"');
-    expect(info).toContain('aria-expanded="false"');
-    expect(info).toContain(`aria-label="${en["stageCard.completeInfo"]}"`);
-    expect(info).toMatch(/\bmin-h-11\b/);
-    expect(info).toMatch(/\bmin-w-11\b/);
+    expect(waiting, "the ⓘ trigger is retired").not.toContain("stage-complete-info");
+    const button = tag(waiting, "stage-complete") ?? "";
+    expect(button, "the greyed button owns the reason").toContain('aria-describedby="stage-complete-hint-s1"');
+    expect(button).toContain('aria-disabled="true"');
+    expect(button, "still on the 44px floor").toMatch(/\bmin-h-11\b/);
+    // Nothing but Complete itself is a button in the reason's wrapper (no second control to find the reason through).
+    const wrapperAt = waiting.indexOf("group/tip");
+    expect(wrapperAt, "premise: the waiting button is wrapped by the reason tip").toBeGreaterThan(-1);
+    const wrapper = waiting.slice(wrapperAt, waiting.indexOf("</span></span>", wrapperAt));
+    expect(wrapper.split("<button").length - 1, "exactly one button in the wrapper: Complete").toBe(1);
+    expect(wrapper).toContain('data-testid="stage-complete"');
     // The reason is a tooltip in the DOM the whole time - shown by hover/focus CSS, hidden otherwise - not a paragraph of its own.
     const reason = tag(waiting, "stage-complete-hint") ?? "";
     expect(reason).toContain('role="tooltip"');
@@ -58,10 +62,11 @@ describe("StageRail - E1 item 1: header actions, the Complete ⓘ, the divider",
     expect(reason).toMatch(/group-focus-within\/tip:block/);
     expect(waiting).toContain("Complete stage unlocks when all 4 matches are played.");
     expect(waiting, "the old inline <p> hint is gone").not.toMatch(/<p[^>]*data-testid="stage-complete-hint"/);
-    // The other side of it: nothing to explain, no ⓘ.
+    // The other side of it: nothing to explain, no bubble and no wrapper - and Complete is still there (the positive pair).
     const ready = rail({ counts: { played: 4, inPlay: 0, unplayed: 0 } });
-    expect(ready).not.toContain("stage-complete-info");
+    expect(tag(ready, "stage-complete"), "premise: Complete renders when it is ready").not.toBeNull();
     expect(ready).not.toContain("stage-complete-hint");
+    expect(ready).not.toContain("group/tip");
   });
 
   it("a press on a waiting Complete does nothing; on a ready one it sends 'complete'; a press in flight disables it outright", () => {

@@ -595,14 +595,17 @@ describe("E1 item 1: the header is [actions | divider | settings], the footer ro
     }
   });
 
-  it("the Complete reason is an ⓘ, not a paragraph: it names the button, and a stage that can complete has no ⓘ", () => {
+  it("the Complete reason is a bubble on the button, not a paragraph and not an ⓘ: the button names it, and a stage that can complete has none (PB1)", () => {
     const waiting = panel();
-    expect(tag(waiting, "stage-complete-info")).toContain('aria-describedby="stage-complete-hint-' + A + '"');
+    expect(waiting, "PB1: the ⓘ is retired").not.toContain("stage-complete-info");
     expect(tag(waiting, "stage-complete")).toContain('aria-describedby="stage-complete-hint-' + A + '"');
+    const reason = tag(waiting, "stage-complete-hint");
+    expect(reason, "the positive pair: the reason is on the card").toContain('role="tooltip"');
+    expect(reason).toContain('id="stage-complete-hint-' + A + '"');
     expect(waiting).not.toMatch(/<p[^>]*stage-complete-hint/);
     const done = panel({ fixtures: [fixture(A, 1, { status: "decided", outcome: DECIDED })] });
     expect(tag(done, "stage-complete")).not.toBeNull();
-    expect(done).not.toContain("stage-complete-info");
+    expect(done).not.toContain("stage-complete-hint");
   });
 });
 

@@ -1864,10 +1864,9 @@ test("Task 10 controller round / E1: every control the card header and foot offe
     await dismissCookieBanner(page);
 
     const card = page.locator("section.card[data-stage-id]").first();
-    // The seeded stage has fixtures but no result: Complete is there and WAITING (so its ⓘ is too), Delete and the settings buttons render.
+    // The seeded stage has fixtures but no result: Complete is there and WAITING (its reason is a bubble on the button itself since PB1: no ⓘ), Delete and the settings buttons render.
     const controls: [string, Locator][] = [
       ["stage-complete", card.getByTestId("stage-complete")],
-      ["stage-complete-info (the ⓘ)", card.getByTestId("stage-complete-info")],
       ["stage-delete", card.getByTestId("stage-delete")],
       ["stage-add-match", card.getByTestId("stage-add-match")],
       ["stage-tool-format", card.getByTestId("stage-tool-format")],
@@ -1882,7 +1881,7 @@ test("Task 10 controller round / E1: every control the card header and foot offe
       checked++;
     }
   }
-  expect(checked, "every control at both widths was measured").toBe(12);
+  expect(checked, "every control at both widths was measured").toBe(10);
   await expectNoHorizontalScroll(page);
 });
 

@@ -7209,7 +7209,6 @@
   "stageCard.summary.differs": "Difiere de la división: {parts}",
   "stageCard.completeHint.one": "Completar fase se activa cuando se juegue el partido.",
   "stageCard.completeHint.other": "Completar fase se activa cuando se jueguen los {count} partidos.",
-  "stageCard.completeInfo": "Por qué Completar fase aún no está disponible",
   "div.detail.tiebreak.rule.set_diff.badminton": "diferencia de juegos",
   "div.detail.tiebreak.rule.set_diff.tabletennis": "diferencia de juegos",
   "div.detail.tiebreak.rule.set_diff.carrom": "diferencia de juegos",

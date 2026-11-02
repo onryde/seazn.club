@@ -7398,7 +7398,6 @@ export type DictionaryKey =
   | "stage.swissLegend.rounds.other"
   | "stageCard.completeHint.one"
   | "stageCard.completeHint.other"
-  | "stageCard.completeInfo"
   | "stageCard.locked"
   | "stageCard.points.uniform"
   | "stageCard.summary.differs"

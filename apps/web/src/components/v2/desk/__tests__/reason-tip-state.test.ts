@@ -1,7 +1,7 @@
 // Match Day E1 fix round 1 (m4): Escape dismisses a bubble that hover or focus is holding up (WCAG 1.4.13), and the dismissal lasts
 // until the pointer and focus have both left and one of them returns. The transitions, every one, as pure functions.
 import { describe, expect, it } from "vitest";
-import { TIP_CLOSED, tipEscape, tipLeft, tipOutside, tipShown, tipToggle, type TipState } from "../info-tip-state";
+import { TIP_CLOSED, tipEscape, tipLeft, tipOutside, tipShown, tipToggle, type TipState } from "../reason-tip-state";
 
 describe("tipShown", () => {
   it("the whole table: tap shows it, hover/focus show it unless dismissed, nothing shows nothing", () => {

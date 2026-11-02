@@ -7209,7 +7209,6 @@
   "stageCard.summary.differs": "Differs from the division: {parts}",
   "stageCard.completeHint.one": "Complete stage unlocks when the match is played.",
   "stageCard.completeHint.other": "Complete stage unlocks when all {count} matches are played.",
-  "stageCard.completeInfo": "Why Complete stage is not available yet",
   "div.detail.tiebreak.rule.set_diff.badminton": "game difference",
   "div.detail.tiebreak.rule.set_diff.tabletennis": "game difference",
   "div.detail.tiebreak.rule.set_diff.carrom": "game difference",

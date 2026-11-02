@@ -446,8 +446,10 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await dismissCookieBanner(page);
     await expect(complete).toBeVisible();
     await expect(complete, "a held match is open: Complete is refused before it can be pressed").toBeDisabled();
-    // Match Day E1 item 1: the reason is behind an ⓘ now - hover it and the bubble is on screen, with the held-match count.
-    await page.getByTestId("stage-complete-info").hover();
+    // Match Day PB1: the reason is a bubble on the greyed Complete button itself (the ⓘ is gone) - hover it and the bubble is on screen.
+    await expect(page.getByTestId("stage-complete-info"), "PB1: the ⓘ is retired").toHaveCount(0);
+    await expect(page.getByTestId("stage-complete-hint"), "closed until asked").toBeHidden();
+    await complete.hover();
     await expect(page.getByTestId("stage-complete-hint")).toBeVisible();
     await expect(page.getByTestId("stage-progress-counts"), "the card says it is waiting for a decision").toContainText(ui("schedule.progress.held.one"));
 
