@@ -1,0 +1,1607 @@
+// Match Day A2 — the read model (`getMatchDay`), today's count (`countFixturesToday`) and a free court's candidates
+// (`matchDayCandidates`). Spec 2026-10-31-match-day-design.md §6.2, §7 ("Which courts", candidate order), §7.1.
+//
+// The rules under test, from the spec, not from the code:
+//  - the court list is the union of every division's candidate courts and every court holding one of THIS competition's
+//    matches that day;
+//  - a court's state comes from its matches' STATUS, from any competition (courts are org-level): one of this competition's
+//    matches in play → playing; called, with the call still holding → called; another competition's match playing or called →
+//    in use elsewhere, by that competition's name; else free. A call row whose match has since started is playing; one whose
+//    match has ended (any finished status the database declares) is free (task brief, Review Focus 4);
+//  - a court's queue is this competition's unstarted, uncalled matches planned on it today, in planned order, estimated at
+//    max(planned, end of the match before) — the match before counting every competition's planned matches on a shared court
+//    (§7 "Which courts", §7.1);
+//  - needs_you is the competition desk's own Needs-you list; results_owed its `result_missing` count;
+//  - "today" is decided per match, on the day `now` falls in that match's own zone: its division's venue zone, else the
+//    organisation's, else UTC (`resolveVenueTz`, the zone the desk's match_day phase reads the same division in — controller
+//    ruling I2). The view's `date` label stays the organisation's day;
+//  - an archived division is gone from the competition (as on the desk, which lists live divisions only): it adds no court, no
+//    queue row, no candidate and no count — but a match of it in play still holds its court, for every competition (I1);
+//  - candidates (§7): this court's own next match, other courts' next matches (and a called, unstarted match, which "can also be
+//    called to a different free court"), ready no-court matches in active stages; never a TBD side; a player busy elsewhere —
+//    a doubles partner counts, and for a side with no roster the side itself — blocks, with the person and the court named.
+//
+// Every expected time is worked by hand from the rule, in minutes after T0 (11:00 in Amsterdam). The sport sweep here is the
+// court noun of a football and a chess division (the brief's pair); the call path's own sports are A1's.
+//
+// Real Postgres required; skipped without DATABASE_URL (CI runs them).
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { foldMatchWithStoppage, initSquads, summaryOf, type EventEnvelope } from "@seazn/engine/core";
+import { resolvePositions } from "@seazn/engine/sport";
+import { badminton, setBasedServeContext, type SetBasedState } from "@seazn/engine/sports/setbased";
+import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
+import { sql, withTenant } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import enPublic from "@/dictionaries/en/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { venueNoun } from "@/lib/venue";
+import { needsYouItems } from "@/components/v2/desk/needs-you";
+import { routes } from "@/lib/routes";
+
+// A4 fix round 1, m3: the serve fold runs in a SAVEPOINT so a statement that fails inside it cannot abort the board's
+// transaction. A JS throw (the S1 guard test below) never aborts a transaction, so it cannot witness the savepoint; this
+// fault can — the real fold, preceded on one chosen fixture by a statement Postgres refuses, on the transaction the fold
+// is handed. Every other call is the real fold, untouched.
+const serveFault = vi.hoisted(() => ({ sqlFailOn: null as string | null, hits: 0 }));
+vi.mock("@/server/engine-db/serving", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/engine-db/serving")>();
+  return {
+    ...real,
+    servingSideOf: async (...args: Parameters<typeof real.servingSideOf>) => {
+      const [tx, fixtureId] = args;
+      if (fixtureId === serveFault.sqlFailOn) {
+        serveFault.hits++;
+        await tx`select 1 / 0`;
+      }
+      return real.servingSideOf(...args);
+    },
+  };
+});
+// C2 fix round 1, M5: the format lines are decorative on a polled read, so a throw from their reader must not take the board
+// down. The fault replaces the reader's answer with a throw while `formatFault.fail` is set; every other call is the real one.
+const formatFault = vi.hoisted(() => ({ fail: false, hits: 0 }));
+vi.mock("@/server/usecases/fixtures", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/usecases/fixtures")>();
+  return {
+    ...real,
+    fixtureFormatLines: async (...args: Parameters<typeof real.fixtureFormatLines>) => {
+      if (formatFault.fail) {
+        formatFault.hits++;
+        throw new Error("format lines fault (test)");
+      }
+      return real.fixtureFormatLines(...args);
+    },
+  };
+});
+import { log } from "@/server/logger";
+import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
+import { MatchDayView as MatchDayViewSchema } from "@/server/api-v1/schemas";
+import { apiSessionOnTarget, rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { youtubeWatchUrl } from "@/lib/youtube";
+import { appendEvent } from "@/server/engine-db/append-event";
+import { createCompetition } from "../competitions";
+import { getCompetitionDesk } from "../competition-desk";
+import { createDivision, listDivisions } from "../divisions";
+import { createEntrants } from "../entrants";
+import { createStages, generateStageFixtures } from "../stages";
+import { callFixtureToCourt, undoCall } from "../match-day-call";
+import { __setBoardReadHookForTests, countFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
+import { loadFixtureMatchRules } from "../fixtures";
+import { putScheduleSettings } from "../schedule";
+import { createCourt } from "../venues";
+import {
+  ORG_TZ,
+  at,
+  between,
+  iso,
+  person,
+  place,
+  seedCompetition,
+  seedDay,
+  setStatus,
+  type Comp,
+  type Day,
+  type Person,
+} from "./_match-day-seed";
+import { makeCommunityRig } from "./_rig";
+import { seedOnlineChessFixture } from "./_external-play-seed";
+
+const HAS_DB = !!process.env.DATABASE_URL;
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const client = g._sql;
+  g._sql = undefined;
+  await client?.end();
+});
+
+/** The pairs of the day's round robin: P1 = Ann & Bob, P2 = Cat & Dan, P3 = Eve & Fay, P4 = Gus & Hal. */
+const pairs = (day: Day) => {
+  const [p1, p2, p3, p4] = day.comp.pairs;
+  return { p1: p1!, p2: p2!, p3: p3!, p4: p4! };
+};
+
+async function addCourt(day: Day, venue: "hallA" | "hallB", name: string, sort: number): Promise<string> {
+  const c = await createCourt(day.auth, day.venues[venue], { name, sort, tags: [] });
+  day.venueOf[c.id] = day.venues[venue];
+  day.courtName[c.id] = name;
+  return c.id;
+}
+
+/** Started for real: a `core.start` score event at `minute` (the kick-off the read model reads) and the status it puts. */
+async function start(day: Day, fixtureId: string, minute: number): Promise<void> {
+  await sql`
+    insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+    values (${fixtureId}, ${day.orgId}, 1, 'core.start', '{}', ${at(minute)})`;
+  await setStatus(fixtureId, "in_play");
+}
+
+/** Ended in `status`, finishing at `minute`. The status trigger stamps the wall clock; the stamp is then set apart. */
+async function finish(fixtureId: string, status: string, minute: number): Promise<void> {
+  await setStatus(fixtureId, status);
+  await sql`update fixtures set finished_at = ${at(minute)} where id = ${fixtureId}`;
+}
+
+/** Another competition of the same org: four pairs of fresh people, the given courts and match length. */
+async function otherCompetition(day: Day, label: string, opts: { courts: string[]; matchMinutes?: number }): Promise<Comp> {
+  const people: Person[] = [];
+  for (const n of ["Ivo Ince", "Jo Judd", "Kai Kerr", "Lia Lowe", "Max Moss", "Nia Nash", "Oli Orr", "Pia Pratt"]) {
+    people.push(await person(day.orgId, n));
+  }
+  return seedCompetition(day.auth, label, [0, 2, 4, 6].map((i) => [people[i]!, people[i + 1]!]), opts);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Who serves (task A3 fix round 2, S1). The expected side is the ENGINE's: the pad's own call (`setBasedServeContext`,
+// skins/badminton.tsx) over a pure fold of the same recorded stream, never a rule typed here.
+// ---------------------------------------------------------------------------------------------------------------------------
+
+interface GoldenEvent {
+  type: string;
+  payload: unknown;
+  /** Test-local: the index of the event this one voids. */
+  voids?: number;
+}
+
+/** The badminton corpus's rally-by-rally stream: game 1 entered as its summary, game 2 point by point. */
+const BWF = (() => {
+  const corpus = goldenCorpora()
+    .map(({ corpus }) => corpus as { key: string; configs: Record<string, unknown>; streams: { config: string; events: GoldenEvent[] }[] })
+    .find((c) => c.key === "badminton")!;
+  const stream = corpus.streams.find(
+    (st) =>
+      st.events.some((e) => e.type === "badminton.game.summary") &&
+      st.events.filter((e) => e.type === "badminton.rally").length >= 20 &&
+      st.events.every((e) => e.type.startsWith("core.start") || e.type.startsWith("badminton.")),
+  )!;
+  return { cfg: badminton.configSchema.parse(corpus.configs[stream.config]), events: stream.events };
+})();
+
+const envelopesOf = (events: readonly GoldenEvent[]): EventEnvelope[] =>
+  events.map((e, i) => ({
+    id: `e-${i}`,
+    fixtureId: "f-golden",
+    seq: i,
+    type: e.type,
+    payload: e.payload,
+    recordedAt: new Date(Date.UTC(2026, 10, 7, 10, 0, i)).toISOString(),
+    recordedBy: null,
+    ...(e.voids === undefined ? {} : { voids: `e-${e.voids}` }),
+  }));
+
+/** The engine's fold of `events` as the corpus seats them ("H" home, "A" away): who it says serves next, and its summary. */
+function engineSays(events: readonly GoldenEvent[]): { serving: "home" | "away" | null; headline: string | undefined } {
+  const lineups = defaultLineupPair(resolvePositions(badminton, BWF.cfg));
+  const envelopes = envelopesOf(events);
+  const folded = foldMatchWithStoppage(badminton, BWF.cfg, lineups, envelopes);
+  const state = folded.state as SetBasedState;
+  const ctx = setBasedServeContext(badminton, { ...state, squads: state.squads ?? initSquads(lineups) }, envelopes);
+  return { serving: ctx.side, headline: summaryOf(badminton, folded).headline };
+}
+
+/** The void of event `i`, as the test's own events say it. */
+const voidOf = (i: number): GoldenEvent => ({ type: "core.void", payload: {}, voids: i });
+
+/** A badminton singles division of `day`'s competition on `courtId`: three players, its round robin's fixtures. */
+async function badmintonFixtures(day: Day, courtId: string): Promise<{ id: string; home: string; away: string }[]> {
+  const d = await createDivision(day.auth, day.comp.id, { name: "Singles", sport_key: "badminton", variant_key: "bwf", config: {} });
+  await createEntrants(
+    day.auth,
+    d.id,
+    ["Ivy Iles", "Jon Judd", "Kim Kerr"].map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })),
+  );
+  await putScheduleSettings(day.auth, d.id, {
+    config: { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [courtId], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
+  });
+  const [stage] = await createStages(day.auth, d.id, { seq: 1, kind: "league", name: "League", config: {} });
+  await generateStageFixtures(day.auth, stage!.id);
+  return sql<{ id: string; home: string; away: string }[]>`
+    select id, home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${stage!.id} order by round_no, seq_in_round`;
+}
+
+/** Records `events` on the fixture through the real write path, the corpus's "H"/"A" seated on its own sides. */
+async function record(day: Day, f: { id: string; home: string; away: string }, events: readonly GoldenEvent[]): Promise<void> {
+  const seat = (v: unknown): unknown =>
+    v === "H" ? f.home
+      : v === "A" ? f.away
+        : Array.isArray(v) ? v.map(seat)
+          : typeof v === "object" && v !== null ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, seat(x)])) : v;
+  for (const [i, e] of events.entries()) {
+    const voids = e.voids === undefined
+      ? undefined
+      : (await sql<{ id: string }[]>`select id from score_events where fixture_id = ${f.id} order by seq offset ${e.voids} limit 1`)[0]!.id;
+    await appendEvent(day.orgId, f.id, i, { type: e.type, payload: seat(e.payload), ...(voids === undefined ? {} : { voids }) });
+  }
+}
+
+/** An accepted official on the match: the desk's "has a scorer" (competition-desk.ts reads fixture_officials, any role). */
+async function nominate(day: Day, fixtureId: string): Promise<void> {
+  const [p] = await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${day.orgId}, 'Una Umpire') returning id`;
+  const [o] = await sql<{ id: string }[]>`
+    insert into officials (org_id, person_id, display_name, role_keys) values (${day.orgId}, ${p!.id}, 'Una Umpire', ${sql.json(["umpire"])})
+    returning id`;
+  await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+            values (${day.orgId}, ${fixtureId}, ${o!.id}, 'umpire', 'accepted')`;
+}
+
+/** A session in `state` on a connected channel (`rigApiTarget`), streaming into a YouTube broadcast YouTube has given an id —
+ *  the shape Go live leaves (session-video-url.test.ts drives the real one); written raw, since only the READ is under test.
+ *  Returns the broadcast's YouTube id. */
+async function onYouTube(
+  day: Day,
+  fixtureId: string,
+  state: string,
+  madeForKids: boolean,
+  privacy: "public" | "unlisted" | "private" = "unlisted",
+): Promise<string> {
+  const { targetId, connectionId } = await rigApiTarget(day.orgId, `Cam ${randomUUID().slice(0, 6)}`);
+  const sessionId = await apiSessionOnTarget(day.orgId, fixtureId, targetId, state);
+  const ytId = `v${randomUUID().replace(/-/g, "").slice(0, 10)}`;
+  const [b] = await sql<{ id: string }[]>`
+    insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id)
+    values (${madeForKids}, ${day.orgId}, ${connectionId}, ${fixtureId}, 'Match', ${privacy}, 'live', ${ytId}) returning id`;
+  await sql`update fixture_stream_sessions set youtube_broadcast_id = ${b!.id} where id = ${sessionId}`;
+  return ytId;
+}
+
+function courtOf(view: MatchDayView, courtId: string): MatchDayCourt {
+  const c = view.courts.find((x) => x.court_id === courtId);
+  if (!c) throw new Error(`court ${courtId} is not on the board`);
+  return c;
+}
+
+/** A queue as [fixture id, planned minute, estimated minute]. */
+const queueOf = (c: MatchDayCourt): [string, number, number][] =>
+  c.queue.map((q) => [q.id, (Date.parse(q.planned_at) - at(0).getTime()) / 60_000, (Date.parse(q.estimated_at) - at(0).getTime()) / 60_000]);
+
+describe.skipIf(!HAS_DB)("getMatchDay", () => {
+  it("the court list: every division's candidate courts, and every court holding one of this competition's matches today — not tomorrow's, not another competition's", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const c4 = await addCourt(day, "hallB", "Court 4", 1);
+    const c5 = await addCourt(day, "hallB", "Court 5", 2);
+    const f12 = between(day.comp, p1, p2);
+    await place(day, f12.id, 120, c4); // this competition, today, on a court its division does not list
+    await place(day, between(day.comp, p3, p4).id, 24 * 60 + 60, c5); // this competition, tomorrow
+    const other = await otherCompetition(day, "Other Cup", { courts: [c5] });
+    await place(day, other.fixtures[0]!.id, 60, c5); // another competition, today
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(0));
+
+    expect(view).toMatchObject({
+      competition_id: day.comp.id,
+      date: "2026-11-07",
+      tz: ORG_TZ,
+      now: iso(0),
+      fixtures_today: 1,
+    });
+    // Venue order, then court order: Hall A (sort 0) before Hall B (sort 1).
+    expect(view.courts.map((c) => [c.court_id, c.court_name, c.venue_name])).toEqual([
+      [day.courts.c1, "Court 1", "Hall A"],
+      [day.courts.c2, "Court 2", "Hall A"],
+      [day.courts.c3, "Court 3", "Hall B"],
+      [c4, "Court 4", "Hall B"],
+    ]);
+    expect(courtOf(view, c4)).toMatchObject({ state: "free", current: null, in_use_by: null, free_since: null, sport_noun: "court" });
+    expect(queueOf(courtOf(view, c4))).toEqual([[f12.id, 120, 120]]);
+    // Asked again, the same answer: a read.
+    expect(await getMatchDay(day.auth, day.comp.id, at(0))).toEqual(view);
+  });
+
+  it("E2-3 — a court's closure is the scheduler's own reading of court_hours and court_exceptions: a break to come, closed now, reopened, closed for the day — and none for a court with no calendar", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    const c4 = await addCourt(day, "hallB", "Court 4", 1);
+    await place(day, between(day.comp, p1, p2).id, 120, c4); // puts Court 4 on today's board
+    // Saturday 2026-11-07, Amsterdam = UTC+1. Court 1: 09:00–11:30 and 12:30–20:00 local = 08:00–10:30Z and 11:30–19:00Z, so the
+    // break is 10:30Z–11:30Z; at(0) is 10:00Z.
+    await sql`
+      insert into court_hours (court_id, org_id, weekday, open_min, close_min)
+      values (${day.courts.c1}, ${day.orgId}, 6, ${9 * 60}, ${11 * 60 + 30}),
+             (${day.courts.c1}, ${day.orgId}, 6, ${12 * 60 + 30}, ${20 * 60})`;
+    // Court 2: a Saturday calendar the date's CLOSED exception overrides (exceptions win over weekday hours).
+    await sql`
+      insert into court_hours (court_id, org_id, weekday, open_min, close_min)
+      values (${day.courts.c2}, ${day.orgId}, 6, ${9 * 60}, ${20 * 60})`;
+    await sql`
+      insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c2}, ${day.orgId}, '2026-11-07', true)`;
+    // Court 3: no Saturday hours, but a single override range on the date, 12:00–14:00 local = 11:00Z–13:00Z.
+    await sql`
+      insert into court_exceptions (court_id, org_id, date, closed, open_min, close_min)
+      values (${day.courts.c3}, ${day.orgId}, '2026-11-07', false, ${12 * 60}, ${14 * 60})`;
+    // Court 4: hours on Sundays only — a declared calendar that says "not Saturdays" (closed, not unrestricted).
+    await sql`
+      insert into court_hours (court_id, org_id, weekday, open_min, close_min)
+      values (${c4}, ${day.orgId}, 0, ${9 * 60}, ${20 * 60})`;
+
+    const closures = async (minute: number) => {
+      const view = await getMatchDay(day.auth, day.comp.id, at(minute));
+      // The wire schema accepts every closure the board produced (the route test parses with it too).
+      MatchDayViewSchema.parse(JSON.parse(JSON.stringify(view)));
+      return Object.fromEntries([day.courts.c1, day.courts.c2, day.courts.c3, c4].map((id) => [id, courtOf(view, id).closure]));
+    };
+    const rest = { kind: "now", until: null };
+
+    // 10:00Z: Court 1 open with the break to come; Court 2 shut (exception); Court 3 not open until 11:00Z; Court 4 shut all day.
+    expect(await closures(0)).toEqual({
+      [day.courts.c1]: { kind: "later", from: iso(30), until: iso(90) },
+      [day.courts.c2]: rest,
+      [day.courts.c3]: { kind: "now", until: iso(60) },
+      [c4]: rest,
+    });
+    // 10:40Z: Court 1 is IN the break, until 11:30Z; Court 3 still not open.
+    expect((await closures(40))[day.courts.c1]).toEqual({ kind: "now", until: iso(90) });
+    // 11:30Z: the break is over (a window is [from, to)): Court 1 open, no break left; Court 3 is open (its window is 11:00–13:00Z).
+    const reopened = await closures(90);
+    expect(reopened[day.courts.c1]).toBeNull();
+    expect(reopened[day.courts.c3]).toBeNull();
+    // 20:00Z (21:00 local): Court 1 closed for the night; Court 3 closed since 13:00Z.
+    const night = await closures(600);
+    expect(night[day.courts.c1]).toEqual(rest);
+    expect(night[day.courts.c3]).toEqual(rest);
+    // 07:30Z: before Court 1 opens (08:00Z).
+    expect((await closures(-150))[day.courts.c1]).toEqual({ kind: "now", until: iso(-120) });
+    expect(Object.keys(night), "anti-vacuity: four courts read").toHaveLength(4);
+  });
+
+  it("E2-5 — every court carries its venue, and venues_today lists the venues where THIS competition has a match today, in any state, in venue order", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    // Nothing placed: no venue has a match today.
+    const empty = await getMatchDay(day.auth, day.comp.id, at(0));
+    expect(empty.venues_today).toEqual([]);
+    for (const c of empty.courts) expect(c.venue_id, c.court_name).toBe(day.venueOf[c.court_id]);
+    expect(empty.courts).toHaveLength(3);
+
+    // Today at Hall B (Court 3); tomorrow at Hall A (Court 1): only Hall B counts.
+    await place(day, between(day.comp, p1, p2).id, 60, day.courts.c3);
+    await place(day, between(day.comp, p3, p4).id, 24 * 60 + 60, day.courts.c1);
+    expect((await getMatchDay(day.auth, day.comp.id, at(0))).venues_today).toEqual([day.venues.hallB]);
+
+    // Another competition's match today at Hall A is not this competition's.
+    const other = await otherCompetition(day, "Other Cup", { courts: [day.courts.c2] });
+    await place(day, other.fixtures[0]!.id, 90, day.courts.c2);
+    expect((await getMatchDay(day.auth, day.comp.id, at(0))).venues_today).toEqual([day.venues.hallB]);
+
+    // A match of this competition played earlier today at Hall A counts, whatever its state now; the list is in venue order.
+    const played = between(day.comp, p1, p3);
+    await place(day, played.id, -60, day.courts.c1);
+    await setStatus(played.id, "decided");
+    await sql`update fixtures set finished_at = ${iso(-30)} where id = ${played.id}`;
+    expect((await getMatchDay(day.auth, day.comp.id, at(0))).venues_today).toEqual([day.venues.hallA, day.venues.hallB]);
+  });
+
+  it("E2-3 — a court with no hours and no exceptions is open all day: no closure at any hour", async () => {
+    const day = await seedDay();
+    let checked = 0;
+    for (const minute of [-600, 0, 300, 600, 800]) {
+      const view = await getMatchDay(day.auth, day.comp.id, at(minute));
+      for (const c of view.courts) {
+        expect(c.closure, `${c.court_name} @${minute}`).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked).toBe(5 * 3);
+  });
+
+  it("Review Focus 4: a called court's state follows the match's STATUS — called, then playing once started, then free for every finished status the database declares", async () => {
+    const day = await seedDay();
+    const [check] = await sql<{ def: string }[]>`
+      select pg_get_constraintdef(oid) as def from pg_constraint where conname = 'fixtures_status_check'`;
+    const domain = [...check!.def.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!);
+    // One literal per line: the status-set sweep reads a list of status literals as a set it must classify.
+    const unstarted = "scheduled";
+    const playing = "in_play";
+    const finished = domain.filter((s) => s !== unstarted && s !== playing);
+    expect(finished).toContain("decided");
+    expect(finished).toContain("abandoned");
+    expect(finished).toContain("forfeited");
+    expect(finished.length).toBeLessThanOrEqual(day.comp.fixtures.length);
+
+    let checked = 0;
+    let lastPlayedFinish: number | null = null; // a cancelled match never used the court, so it frees nothing
+    for (const [i, status] of finished.entries()) {
+      const f = day.comp.fixtures[i]!;
+      const t = 10 * i;
+      await callFixtureToCourt(day.auth, f.id, day.courts.c1, at(t));
+      const called = courtOf(await getMatchDay(day.auth, day.comp.id, at(t + 1)), day.courts.c1);
+      expect(called, status).toMatchObject({
+        state: "called",
+        current: { id: f.id, called_at: iso(t), started_at: null },
+        free_since: null, // only a free court says since when
+      });
+      expect(called.queue, status).toEqual([]);
+
+      if (i === 0) {
+        await start(day, f.id, t + 2);
+        const playing = courtOf(await getMatchDay(day.auth, day.comp.id, at(t + 3)), day.courts.c1);
+        // The call row is still there; the status says playing, and the call no longer holds.
+        expect(await sql`select 1 from fixture_calls where fixture_id = ${f.id}`).toHaveLength(1);
+        expect(playing).toMatchObject({ state: "playing", current: { id: f.id, started_at: iso(t + 2), called_at: null } });
+      }
+
+      await finish(f.id, status, t + 5);
+      if (status !== "cancelled") lastPlayedFinish = t + 5;
+      const after = courtOf(await getMatchDay(day.auth, day.comp.id, at(t + 6)), day.courts.c1);
+      expect(after, status).toMatchObject({
+        state: "free",
+        current: null,
+        free_since: lastPlayedFinish === null ? null : iso(lastPlayedFinish),
+      });
+      checked++;
+    }
+    expect(checked).toBe(finished.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("another competition's match playing, or called, makes the court in use elsewhere by its name; this competition's queue there is estimated behind it and behind that competition's planned match", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const other = await otherCompetition(day, "Other Cup", { courts: [day.courts.c2, day.courts.c3], matchMinutes: 90 });
+    const [x, y, z, w] = other.pairs;
+    const xy = between(other, x!, y!);
+    const zw = between(other, z!, w!);
+    const xz = between(other, x!, z!);
+    await place(day, xy.id, 0, day.courts.c2);
+    await setStatus(xy.id, "in_play"); // no core.start: its kick-off is unknown, so it is taken as starting now
+    await place(day, zw.id, 200, day.courts.c1);
+    await callFixtureToCourt(day.auth, zw.id, day.courts.c3, at(5));
+    await place(day, xz.id, 70, day.courts.c2); // the other competition's planned match on the shared court
+    const f12 = between(day.comp, p1, p2);
+    const f34 = between(day.comp, p3, p4);
+    await place(day, f12.id, 60, day.courts.c2);
+    await place(day, f34.id, 80, day.courts.c2);
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(10));
+
+    expect(courtOf(view, day.courts.c2)).toMatchObject({ state: "in_use_elsewhere", in_use_by: other.name, current: null, free_since: null });
+    expect(courtOf(view, day.courts.c3)).toMatchObject({ state: "in_use_elsewhere", in_use_by: other.name, current: null });
+    expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "free", in_use_by: null, current: null });
+    // Court 2 is held until 10 + 90 = 100 (the other division's length). f12: max(60, 100) = 100, ends 130; the other
+    // competition's xz: max(70, 130) = 130, ends 220; f34: max(80, 220) = 220. xz is not listed: never controllable here.
+    expect(queueOf(courtOf(view, day.courts.c2))).toEqual([
+      [f12.id, 60, 100],
+      [f34.id, 80, 220],
+    ]);
+  });
+
+  it("a court's current match and its queue: the queue excludes the current and the called match, is in planned order, and moves back when a call is undone", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    const f13 = between(day.comp, p1, p3);
+    const f24 = between(day.comp, p2, p4);
+    const f34 = between(day.comp, p3, p4);
+    const f14 = between(day.comp, p1, p4);
+    const f23 = between(day.comp, p2, p3);
+    await place(day, f12.id, 0, day.courts.c1);
+    await start(day, f12.id, 5);
+    await place(day, f24.id, 90, day.courts.c1); // placed before f13, planned after it
+    await place(day, f13.id, 30, day.courts.c1);
+    await place(day, f23.id, 10, day.courts.c1);
+    await finish(f23.id, "decided", 25); // ended: in no queue
+    await place(day, f34.id, 45, day.courts.c1);
+    await callFixtureToCourt(day.auth, f34.id, day.courts.c2, at(20)); // leaves Court 1's queue, Court 2's current
+    await place(day, f14.id, 100, day.courts.c2);
+    const live = await sessionOnTarget(day.orgId, f12.id, await rigTarget(day.orgId, "Cam 1"), "live");
+    const warming = await sessionOnTarget(day.orgId, f14.id, await rigTarget(day.orgId, "Cam 2"), "warming");
+    expect([live, warming].every((s) => typeof s === "string")).toBe(true);
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(20));
+
+    const c1 = courtOf(view, day.courts.c1);
+    expect(c1.state).toBe("playing");
+    // Its console address (task A3: Open pad, the stream panel), read off the rows themselves — never off the read model.
+    const [address] = await sql<{ slug: string; fixture_no: number; round_no: number }[]>`
+      select d.slug, f.fixture_no, f.round_no from fixtures f join divisions d on d.id = f.division_id where f.id = ${f12.id}`;
+    // C2: the match's format, the organiser's match block's own line (the fixture page's reader), not a copy of it.
+    const block = await loadFixtureMatchRules(day.auth, f12.id, enPublic as Dict);
+    expect(block.effectiveLine, "premise: generic says a format").not.toBe("");
+    expect(c1.current).toEqual({
+      id: f12.id,
+      division_id: day.comp.divisionId,
+      division_name: "Doubles",
+      division_slug: address!.slug,
+      fixture_no: address!.fixture_no,
+      // E2 item 7: a league round is not coded; the board's own fallback names it from the row's round_no.
+      round: { code: `R${address!.round_no}`, label: `Round ${address!.round_no}`, coded: false },
+      sport_key: "generic",
+      stage_label: "League",
+      home: day.comp.pairs.find((p) => p.id === f12.home)!.name,
+      away: day.comp.pairs.find((p) => p.id === f12.away)!.name,
+      home_entrant_id: f12.home,
+      away_entrant_id: f12.away,
+      headline: null,
+      summary: null,
+      serving: null,
+      started_at: iso(5),
+      called_at: null,
+      stream: "live",
+      // A4: its live session is on a PASTED key (`rigTarget`), which names no YouTube video — no preview source; and it has a
+      // ledger, so no scorer attention.
+      scorer_attention: null,
+      live_video: null,
+      format_line: block.effectiveLine,
+    });
+    // Held until max(now 20, kick-off 5 + 30) = 35. f13: max(30, 35) = 35, ends 65; f24: max(90, 65) = 90.
+    expect(queueOf(c1)).toEqual([
+      [f13.id, 30, 35],
+      [f24.id, 90, 90],
+    ]);
+    const c2 = courtOf(view, day.courts.c2);
+    expect(c2).toMatchObject({ state: "called", current: { id: f34.id, called_at: iso(20), started_at: null, stream: null } });
+    // A called match holds the court for a match length from now: 20 + 30 = 50. f14: max(100, 50) = 100.
+    expect(queueOf(c2)).toEqual([[f14.id, 100, 100]]);
+    expect(c2.queue[0]!.stream).toBe("waiting");
+    expect(courtOf(view, day.courts.c3)).toMatchObject({ state: "free", current: null, queue: [], free_since: null });
+
+    // Undo call: Court 2 is free again, and f34 is back in Court 1's queue at its planned 45, estimated behind f13.
+    await undoCall(day.auth, f34.id);
+    const after = await getMatchDay(day.auth, day.comp.id, at(21));
+    expect(courtOf(after, day.courts.c2)).toMatchObject({ state: "free", current: null });
+    expect(queueOf(courtOf(after, day.courts.c2))).toEqual([[f14.id, 100, 100]]);
+    // Held until 35. f13: 35, ends 65; f34: max(45, 65) = 65, ends 95; f24: max(90, 95) = 95.
+    expect(queueOf(courtOf(after, day.courts.c1))).toEqual([
+      [f13.id, 30, 35],
+      [f34.id, 45, 65],
+      [f24.id, 90, 95],
+    ]);
+  });
+
+  it("a playing match carries the engine's whole folded summary and its sides' entrant ids (task A3 I1: the court's scoreboard)", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    await place(day, f12.id, 0, day.courts.c1);
+    // Through the real write path: the engine folds these and stores match_states.summary.
+    await appendEvent(day.orgId, f12.id, 0, { type: "core.start", payload: {} });
+    await appendEvent(day.orgId, f12.id, 1, { type: "generic.score", payload: { by: f12.home, points: 2 } });
+    await appendEvent(day.orgId, f12.id, 2, { type: "generic.score", payload: { by: f12.away, points: 1 } });
+
+    const current = courtOf(await getMatchDay(day.auth, day.comp.id, new Date()), day.courts.c1).current!;
+    const [stored] = await sql<{ summary: unknown }[]>`select summary from match_states where fixture_id = ${f12.id}`;
+    const summary = stored!.summary as { headline?: string; perSide?: { entrantId: string }[] };
+    // Not vacuous: the fold really published a two-sided summary.
+    expect(summary.perSide?.map((s) => s.entrantId)).toEqual([f12.home, f12.away]);
+    expect(current.summary).toEqual(summary);
+    expect(current.headline).toBe(summary.headline);
+    expect([current.home_entrant_id, current.away_entrant_id]).toEqual([f12.home, f12.away]);
+  });
+
+  it("S1 — a playing set-sport match says who serves next, as the engine's own serve reader says it over the ledger: after a void too; a non-set sport, a queued match: null", async () => {
+    // Two moments of game 2, found in the recorded stream (never picked by hand): one where the engine names HOME, and one
+    // where the last rally put HOME to serve and its void hands the serve back to AWAY — the void must move the answer. One of
+    // each side (A3 carry-in): an answer that is always "away", or always "home", reds one of the two courts.
+    const rallyEnds = BWF.events.flatMap((e, i) => (e.type === "badminton.rally" && i > BWF.events.findIndex((x) => x.type === "badminton.game.summary") ? [i + 1] : []));
+    const plainK = [...rallyEnds].reverse().find((k) => engineSays(BWF.events.slice(0, k)).serving === "home");
+    const voidK = [...rallyEnds].reverse().find(
+      (k) => engineSays(BWF.events.slice(0, k)).serving === "home" && engineSays([...BWF.events.slice(0, k), voidOf(k - 1)]).serving === "away",
+    );
+    expect(plainK, "a moment of game 2 the engine gives to home").toBeDefined();
+    expect(voidK, "a home rally whose void hands the serve back").toBeDefined();
+    const plain = BWF.events.slice(0, plainK);
+    const voided = [...BWF.events.slice(0, voidK), voidOf(voidK! - 1)];
+
+    const day = await seedDay();
+    const [fPlain, fVoided] = await badmintonFixtures(day, day.courts.c1);
+    await place(day, fPlain!.id, 0, day.courts.c1);
+    await place(day, fVoided!.id, 0, day.courts.c2);
+    await record(day, fPlain!, plain);
+    await record(day, fVoided!, voided);
+    // A generic match in play on court 3 (no serve in its sport), and one queued behind it.
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    const f34 = between(day.comp, p3, p4);
+    await place(day, f12.id, 0, day.courts.c3);
+    await place(day, f34.id, 30, day.courts.c3);
+    await appendEvent(day.orgId, f12.id, 0, { type: "core.start", payload: {} });
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(5));
+
+    let checked = 0;
+    for (const [court, f, events] of [[day.courts.c1, fPlain!, plain], [day.courts.c2, fVoided!, voided]] as const) {
+      const current = courtOf(view, court).current!;
+      expect(current.id).toBe(f.id);
+      const engine = engineSays(events);
+      // The DB fold is the same fold: same stream, same headline (so the same cfg) — the comparison below is like for like.
+      expect(current.summary?.headline, court).toBe(engine.headline);
+      expect(current.serving, court).toBe(engine.serving);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(courtOf(view, day.courts.c1).current!.serving).toBe("home");
+    expect(courtOf(view, day.courts.c2).current!.serving).toBe("away");
+    const generic = courtOf(view, day.courts.c3);
+    expect(generic.current!.id).toBe(f12.id);
+    expect(generic.current!.serving).toBeNull();
+    expect(generic.queue.map((q) => [q.id, q.serving])).toEqual([[f34.id, null]]);
+  });
+
+  it("S1 guard (SQL) — a statement that FAILS inside one court's fold does not abort the board's transaction: that court reads `serving` null, the next court's fold still runs", async () => {
+    const rallyEnds = BWF.events.flatMap((e, i) => (e.type === "badminton.rally" && i > BWF.events.findIndex((x) => x.type === "badminton.game.summary") ? [i + 1] : []));
+    const k = [...rallyEnds].reverse().find((n) => engineSays(BWF.events.slice(0, n)).serving !== null);
+    expect(k, "a moment of game 2 the engine has a server for").toBeDefined();
+    const events = BWF.events.slice(0, k);
+
+    const day = await seedDay();
+    const [fFirst, fNext] = await badmintonFixtures(day, day.courts.c1);
+    await place(day, fFirst!.id, 0, day.courts.c1);
+    await place(day, fNext!.id, 0, day.courts.c2);
+    await record(day, fFirst!, events);
+    await record(day, fNext!, events);
+    const before = await getMatchDay(day.auth, day.comp.id, at(5));
+    // Premise: Court 1's fold runs BEFORE Court 2's (the board's court order), so an aborted transaction would reach Court 2.
+    expect(before.courts.map((c) => c.court_id).indexOf(day.courts.c1)).toBeLessThan(before.courts.map((c) => c.court_id).indexOf(day.courts.c2));
+    expect(courtOf(before, day.courts.c2).current!.serving, "premise: Court 2's fold reads a server").not.toBeNull();
+
+    serveFault.sqlFailOn = fFirst!.id;
+    serveFault.hits = 0;
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(5));
+      expect(serveFault.hits, "the fault really fired, once").toBe(1);
+      expect(courtOf(view, day.courts.c1).current!.serving).toBeNull();
+      // Court 2's fold ran on a live transaction: the same server as before, and the court reads exactly as before.
+      expect(courtOf(view, day.courts.c2)).toEqual(courtOf(before, day.courts.c2));
+      expect(courtOf(view, day.courts.c2).current!.serving).toBe(engineSays(events).serving);
+    } finally {
+      serveFault.sqlFailOn = null;
+    }
+  });
+
+  it("S1 guard — one playing match whose fold throws leaves the rest of the board intact: its `serving` is null, every other court reads as before", async () => {
+    // The throw is a real one the fold makes on a real shape: a side whose entrant row went (the fixtures FK is `on delete set
+    // null`), which `loadFoldInputs` refuses with WRONG_PHASE "unassigned_entrant" (server/engine-db/fold.ts). Before the guard it
+    // escaped `getMatchDay` and the whole board answered 500.
+    const rallyEnds = BWF.events.flatMap((e, i) => (e.type === "badminton.rally" && i > BWF.events.findIndex((x) => x.type === "badminton.game.summary") ? [i + 1] : []));
+    const k = [...rallyEnds].reverse().find((n) => engineSays(BWF.events.slice(0, n)).serving !== null);
+    expect(k, "a moment of game 2 the engine has a server for").toBeDefined();
+    const events = BWF.events.slice(0, k);
+
+    const day = await seedDay();
+    const [fGood, fBroken] = await badmintonFixtures(day, day.courts.c1);
+    await place(day, fGood!.id, 0, day.courts.c1);
+    await place(day, fBroken!.id, 0, day.courts.c2);
+    await record(day, fGood!, events);
+    await record(day, fBroken!, events);
+    // A generic match called onto court 3: a court of another state, which must survive too.
+    const { p1, p2 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    await place(day, f12.id, 30, day.courts.c3);
+    await callFixtureToCourt(day.auth, f12.id, day.courts.c3, at(5));
+    const before = await getMatchDay(day.auth, day.comp.id, at(5));
+    expect(courtOf(before, day.courts.c2).current!.serving, "premise: the fold reads a server before the break").not.toBeNull();
+
+    await sql`update fixtures set away_entrant_id = null where id = ${fBroken!.id}`;
+    const view = await getMatchDay(day.auth, day.comp.id, at(5));
+
+    const broken = courtOf(view, day.courts.c2);
+    expect(broken.state).toBe("playing");
+    expect(broken.current!.id).toBe(fBroken!.id);
+    expect(broken.current!.serving).toBeNull();
+    // Every other court as the board read it before the break, field for field.
+    let checked = 0;
+    for (const c of before.courts) {
+      if (c.court_id === day.courts.c2) continue;
+      expect(courtOf(view, c.court_id), c.court_name).toEqual(c);
+      checked++;
+    }
+    expect(checked, "courts compared").toBeGreaterThanOrEqual(2);
+    expect(courtOf(view, day.courts.c1).current!.serving).toBe(engineSays(events).serving);
+    expect(courtOf(view, day.courts.c3).state).toBe("called");
+  });
+
+  it("C2 guard (M5) — a format-line read that throws leaves the board answering: every match as before but format_line null, and the fault logged", async () => {
+    const day = await seedDay();
+    const [f] = await badmintonFixtures(day, day.courts.c1);
+    await place(day, f!.id, 0, day.courts.c1);
+    await record(day, f!, BWF.events.slice(0, 12));
+    const before = await getMatchDay(day.auth, day.comp.id, at(5));
+    const playing = courtOf(before, day.courts.c1).current!;
+    expect(playing.id, "premise: the match is playing on court 1").toBe(f!.id);
+    expect(playing.format_line, "premise: its line reads before the fault").not.toBeNull();
+
+    const warn = vi.spyOn(log, "warn");
+    formatFault.fail = true;
+    formatFault.hits = 0;
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(5));
+      expect(formatFault.hits, "the faulty reader was asked").toBe(1);
+      const now = courtOf(view, day.courts.c1).current!;
+      expect(now.format_line).toBeNull();
+      // Nothing else moved: the board is the one read before the fault, with the decorative line left out.
+      expect({ ...view, courts: view.courts.map((c) => (c.current === null ? c : { ...c, current: { ...c.current, format_line: null } })) }).toEqual({
+        ...before,
+        courts: before.courts.map((c) => (c.current === null ? c : { ...c, current: { ...c.current, format_line: null } })),
+      });
+      expect(warn).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error), fixtureIds: [f!.id] }), expect.stringContaining("format lines failed"));
+    } finally {
+      formatFault.fail = false;
+      warn.mockRestore();
+    }
+  });
+
+  it("A4 — a playing match carries the desk's own scorer attention: no scorer (nobody nominated), not recording (the nominee silent past the grace); a match with a ledger, and every queued one, none — each mark is a Needs-you row of the same kind", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    const f34 = between(day.comp, p3, p4);
+    const f13 = between(day.comp, p1, p3);
+    const f24 = between(day.comp, p2, p4);
+    // A started division: a division still in `setup` raises no live-activity row at all (division-phase.ts's gate).
+    await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+    // In play with nothing recorded (a status the console's Start can leave before the first event), 40 minutes past kick-off.
+    await place(day, f12.id, -40, day.courts.c1);
+    await setStatus(f12.id, "in_play");
+    await place(day, f34.id, -40, day.courts.c2);
+    await setStatus(f34.id, "in_play");
+    await nominate(day, f34.id);
+    // In play with a ledger, and a match queued behind it.
+    await place(day, f13.id, -10, day.courts.c3);
+    await start(day, f13.id, -10);
+    await place(day, f24.id, 30, day.courts.c3);
+
+    // The authority: the desk's own attention rows, by match.
+    const desk = await getCompetitionDesk(day.auth, day.comp.id, at(0));
+    const deskKind = new Map<string, string>();
+    for (const d of desk.divisions.values()) {
+      for (const a of d.attention) if (a.kind === "no_scorer" || a.kind === "not_recording") for (const id of a.fixtureIds) deskKind.set(id, a.kind);
+    }
+    expect(deskKind.get(f12.id), "premise: the desk says nobody is scoring f12").toBe("no_scorer");
+    expect(deskKind.get(f34.id), "premise: the desk says f34's scorer is silent").toBe("not_recording");
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(0));
+    let checked = 0;
+    for (const [court, f] of [[day.courts.c1, f12], [day.courts.c2, f34], [day.courts.c3, f13]] as const) {
+      const current = courtOf(view, court).current!;
+      expect(current.id).toBe(f.id);
+      expect(current.scorer_attention, court).toBe(deskKind.get(f.id) ?? null);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(courtOf(view, day.courts.c3).queue.map((q) => [q.id, q.scorer_attention])).toEqual([[f24.id, null]]);
+    // One fact, two places: each kind on a court is a row of the list, naming that match's console.
+    for (const kind of ["no_scorer", "not_recording"] as const) {
+      expect(view.needs_you.filter((r) => r.kind === kind), kind).toHaveLength(1);
+    }
+  });
+
+  it("A4 — a playing match whose stream is LIVE carries the YouTube video it streams into, with that broadcast's made-for-kids stamp; a pasted key, a stream still warming, a PRIVATE broadcast: none", async () => {
+    const day = await seedDay();
+    const c4 = await addCourt(day, "hallA", "Court 4", 3);
+    const c5 = await addCourt(day, "hallA", "Court 5", 4);
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    const f34 = between(day.comp, p3, p4);
+    const f13 = between(day.comp, p1, p3);
+    const f24 = between(day.comp, p2, p4);
+    const f14 = between(day.comp, p1, p4);
+    for (const [f, c] of [[f12, day.courts.c1], [f34, day.courts.c2], [f13, day.courts.c3], [f24, c4], [f14, c5]] as const) {
+      await place(day, f.id, -10, c);
+      await start(day, f.id, -10);
+    }
+    // EMPTY CASE FIRST: a live stream on a pasted key names no video.
+    await sessionOnTarget(day.orgId, f13.id, await rigTarget(day.orgId, "Pasted cam"), "live");
+    const open = await onYouTube(day, f12.id, "live", false);
+    const kids = await onYouTube(day, f34.id, "live", true);
+    await onYouTube(day, f24.id, "warming", false);
+    // Fix round 1, m2: a PRIVATE broadcast cannot be watched by anyone but its owner — no preview, the scoreboard instead.
+    await onYouTube(day, f14.id, "live", false, "private");
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(0));
+    const expected: [string, string, MatchDayFixture["live_video"], string][] = [
+      [day.courts.c1, f12.id, { url: youtubeWatchUrl(open), made_for_kids: false }, "live"],
+      [day.courts.c2, f34.id, { url: youtubeWatchUrl(kids), made_for_kids: true }, "live"],
+      [day.courts.c3, f13.id, null, "live"],
+      [c4, f24.id, null, "waiting"],
+      [c5, f14.id, null, "live"],
+    ];
+    let checked = 0;
+    for (const [court, id, video, stream] of expected) {
+      const current = courtOf(view, court).current!;
+      expect(current.id).toBe(id);
+      expect(current.stream, court).toBe(stream);
+      expect(current.live_video, court).toEqual(video);
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("what holds a court ends no earlier than now: an overrunning match holds it until now; a called match for a match length from now", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f12 = between(day.comp, p1, p2);
+    const f13 = between(day.comp, p1, p3);
+    const f34 = between(day.comp, p3, p4);
+    const f14 = between(day.comp, p1, p4);
+    await place(day, f12.id, -40, day.courts.c1);
+    await start(day, f12.id, -40); // 30 minutes long, so due off at -10: overrunning at 20
+    await place(day, f13.id, 10, day.courts.c1);
+    await callFixtureToCourt(day.auth, f34.id, day.courts.c2, at(20));
+    await place(day, f14.id, 30, day.courts.c2);
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(20));
+
+    // Court 1 held until max(now 20, -40 + 30) = 20: f13 max(10, 20) = 20. Court 2 held until 20 + 30 = 50: f14 max(30, 50) = 50.
+    expect(queueOf(courtOf(view, day.courts.c1))).toEqual([[f13.id, 10, 20]]);
+    expect(queueOf(courtOf(view, day.courts.c2))).toEqual([[f14.id, 30, 50]]);
+  });
+
+  it("needs_you is the desk's own Needs-you list, in the reader's language; results_owed counts the matches past their time with no result", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+    // Two 30-minute matches planned at 11:00 and nothing recorded: at 12:00 both owe a result. The other four have no time.
+    await place(day, between(day.comp, p1, p2).id, 0, day.courts.c1);
+    await place(day, between(day.comp, p3, p4).id, 0, day.courts.c2);
+    const now = at(60);
+
+    const [slugs] = await sql<{ org: string; comp: string }[]>`
+      select o.slug as org, c.slug as comp from competitions c join organizations o on o.id = c.org_id where c.id = ${day.comp.id}`;
+    const desk = await getCompetitionDesk(day.auth, day.comp.id, now);
+    const divisions = (await listDivisions(day.auth, day.comp.id)).map((d) => ({ id: d.id, name: d.name, slug: d.slug }));
+    const en = needsYouItems(uiEn as unknown as Dict, desk, divisions, slugs!.org, slugs!.comp, "en");
+    const fr = needsYouItems({ ...uiEn, ...uiFr } as unknown as Dict, desk, divisions, slugs!.org, slugs!.comp, "fr");
+    expect(en.map((i) => i.kind)).toEqual(expect.arrayContaining(["result_missing", "unscheduled"]));
+    expect(fr.map((i) => i.title)).not.toEqual(en.map((i) => i.title));
+
+    // B4 fix round 1 (R2): the unscheduled row of a division with ready matches on no court also says "Find a court" — Court 1,
+    // the first free court on the list its division plays on (every court here is free: the two planned matches never started).
+    const matchDay = routes.competitionMatchDay(slugs!.org, slugs!.comp);
+    const findCourt = (items: typeof en, label: string) =>
+      items.map((i) =>
+        i.kind === "unscheduled" ? { ...i, alt: { label, href: `${matchDay}?court=${day.courts.c1}`, court_id: day.courts.c1 } } : i,
+      );
+    const view = await getMatchDay(day.auth, day.comp.id, now);
+    expect(view.needs_you).toEqual(findCourt(en, uiEn["matchDay.needsYou.findCourt.court"]));
+    expect(view.results_owed).toBe(2);
+    expect((await getMatchDay(day.auth, day.comp.id, now, { locale: "fr" })).needs_you).toEqual(
+      findCourt(fr, uiFr["matchDay.needsYou.findCourt.court"]),
+    );
+  });
+
+  it("the court noun follows the sport: a football division's court is a pitch, a chess division's a board", async () => {
+    const day = await seedDay();
+    const comp = await createCompetition(day.auth, { ends_on: "2030-12-31", name: "Two sports", visibility: "public", branding: {} });
+    const sports: [string, string, string, string][] = [
+      // sport, variant, court, the noun the spec names for it (§6.2: court, pitch, table, board)
+      ["football", "11-a-side", day.courts.c1, "pitch"],
+      ["boardgame", "classical", day.courts.c2, "board"],
+    ];
+    for (const [sport, variant, courtId] of sports) {
+      const d = await createDivision(day.auth, comp.id, { name: sport, sport_key: sport, variant_key: variant, config: {} });
+      await putScheduleSettings(day.auth, d.id, {
+        config: { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [courtId], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
+      });
+    }
+
+    const view = await getMatchDay(day.auth, comp.id, at(0));
+
+    expect(view.courts.map((c) => c.court_id)).toEqual([day.courts.c1, day.courts.c2]);
+    let checked = 0;
+    for (const [sport, , courtId, noun] of sports) {
+      expect(courtOf(view, courtId).sport_noun, sport).toBe(noun);
+      expect(courtOf(view, courtId).sport_noun, sport).toBe(venueNoun(sport));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a competition with no divisions: no courts, nothing playing with no court, nothing owed, no matches today", async () => {
+    const day = await seedDay();
+    const comp = await createCompetition(day.auth, { ends_on: "2030-12-31", name: "Empty", visibility: "public", branding: {} });
+    expect(await getMatchDay(day.auth, comp.id, at(0))).toEqual({
+      competition_id: comp.id,
+      date: "2026-11-07",
+      tz: ORG_TZ,
+      now: iso(0),
+      courts: [],
+      playing_no_court: [],
+      needs_you: [],
+      results_owed: 0,
+      fixtures_today: 0,
+      venues_today: [],
+    });
+  });
+
+  it("refuses a competition that is not the org's (404)", async () => {
+    const day = await seedDay();
+    const stranger = await seedDay();
+    const err = await getMatchDay(day.auth, stranger.comp.id, at(0)).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Task F2 (owner ruling 10-31 (2); A2 review m1): the board reads this competition's matches and what holds each court in TWO
+// statements, and under READ COMMITTED each has a snapshot of its own. A write landing between them used to leave a court held
+// by one of this competition's matches the first read never saw, and the poll threw ("holds a court but was not read") — a 500.
+// The gap is put in on purpose, by a hook that runs inside the board's transaction between its reads, writing on ANOTHER
+// connection (the pooled `sql`), as a scorer or a call does.
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("F2 — the board's two reads under READ COMMITTED", () => {
+  /** A match of the day's competition planned for TOMORROW on Court 1: today's read never lists it, so only a start between the
+   *  two reads puts it on a court the board holds. */
+  async function tomorrowsMatch(day: Day) {
+    const { p1, p2 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    await place(day, f.id, 24 * 60 + 60, day.courts.c1);
+    return f;
+  }
+
+  it("EMPTY CASE FIRST: with nothing written in the gap, the hook runs at both reads and the court is free", async () => {
+    const day = await seedDay();
+    await tomorrowsMatch(day);
+    const seen: string[] = [];
+    __setBoardReadHookForTests(async (after) => {
+      seen.push(after);
+    });
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "free", current: null });
+    } finally {
+      __setBoardReadHookForTests(null);
+    }
+    expect(seen, "anti-vacuity: the gap the next tests write into is real, and between these two reads").toEqual(["rows", "holders"]);
+  });
+
+  it("a match that STARTS between the two reads is read, not a 500: its court is playing, with it on", async () => {
+    const day = await seedDay();
+    const f = await tomorrowsMatch(day);
+    __setBoardReadHookForTests(async (after) => {
+      if (after === "rows") await setStatus(f.id, "in_play");
+    });
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      const c1 = courtOf(view, day.courts.c1);
+      expect(c1.state).toBe("playing");
+      expect(c1.current?.id).toBe(f.id);
+    } finally {
+      __setBoardReadHookForTests(null);
+    }
+    // The control: read again with no gap, the same court, the same match — the late read is the board's ordinary answer.
+    expect(courtOf(await getMatchDay(day.auth, day.comp.id, at(0)), day.courts.c1)).toMatchObject({ state: "playing", current: { id: f.id } });
+  });
+
+  it("a match CALLED between the two reads is read too: its court is called, with it on", async () => {
+    const day = await seedDay();
+    const f = await tomorrowsMatch(day);
+    __setBoardReadHookForTests(async (after) => {
+      if (after === "rows") await callFixtureToCourt(day.auth, f.id, day.courts.c2, at(0));
+    });
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(courtOf(view, day.courts.c2)).toMatchObject({ state: "called", current: { id: f.id } });
+    } finally {
+      __setBoardReadHookForTests(null);
+    }
+  });
+
+  it("a match that starts and is then DELETED inside the gap holds nothing: the court reads free, never a 500", async () => {
+    const day = await seedDay();
+    const f = await tomorrowsMatch(day);
+    let deleted = 0;
+    __setBoardReadHookForTests(async (after) => {
+      if (after === "rows") await setStatus(f.id, "in_play");
+      if (after === "holders") {
+        deleted = (await sql`delete from fixtures where id = ${f.id}`).count;
+      }
+    });
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "free", current: null });
+    } finally {
+      __setBoardReadHookForTests(null);
+    }
+    expect(deleted, "premise: the match was gone before the board read it").toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// B4 (owner ruling Q1, 2026-10-31): "Playing, no court". The competition page's retired live strip was the one place a match in
+// play with no court showed — an untimed bracket match, an online chess board. Match Day now lists every one at the bottom of
+// its court list. The rule, from the ruling (not the code): every `in_play` match of THIS competition with no court, in a live
+// (not archived) division, in kick-off order.
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("B4 — playing, no court", () => {
+  /** A generic knockout of four individuals in `day`'s competition, with no schedule settings: its two semi-finals (both sides
+   *  known, untimed and on no court, as generated) in draw order. */
+  async function knockout(day: Day, name: string): Promise<{ divisionId: string; semis: [string, string] }> {
+    const d = await createDivision(day.auth, day.comp.id, { name, sport_key: "generic", variant_key: "score", config: {} });
+    await createEntrants(
+      day.auth,
+      d.id,
+      ["Ada", "Bea", "Cy", "Di"].map((n, i) => ({ kind: "individual" as const, display_name: `${n} ${name}`, seed: i + 1, members: [] })),
+    );
+    const [stage] = await createStages(day.auth, d.id, { seq: 1, kind: "knockout", name: "Knockout", config: {} });
+    await generateStageFixtures(day.auth, stage!.id);
+    const semis = await sql<{ id: string }[]>`
+      select id from fixtures
+       where stage_id = ${stage!.id} and home_entrant_id is not null and away_entrant_id is not null
+       order by fixture_no`;
+    if (semis.length !== 2) throw new Error(`knockout: ${semis.length} ready matches, expected the two semi-finals`);
+    const [s1, s2] = semis;
+    const placed = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where id in ${sql([s1!.id, s2!.id])} and court_id is null and scheduled_at is null`;
+    if (placed[0]!.n !== 2) throw new Error("knockout: the semi-finals were generated with a court or a time");
+    return { divisionId: d.id, semis: [s1!.id, s2!.id] };
+  }
+
+  it("an untimed bracket match in play on no court is in the group, in kick-off order (nulls last); a match in play ON a court, an unstarted or finished one with no court, an archived division's and another competition's are not", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+    const ko = await knockout(day, "Cup");
+    const [semi1, semi2] = ko.semis;
+    // Kick-off order is not draw order: the second semi started first.
+    await start(day, semi2, -30);
+    await start(day, semi1, -15);
+    // In play with nothing recorded and nobody nominated (a status the console's Start can leave): no kick-off to order by.
+    const silent = between(day.comp, p3, p4).id;
+    await setStatus(silent, "in_play");
+    // The positive pair: a match in play ON a court is its court's, never the group's.
+    const onCourt = between(day.comp, p1, p2).id;
+    await place(day, onCourt, -20, day.courts.c1);
+    await start(day, onCourt, -20);
+
+    const excluded: [string, string][] = [];
+    excluded.push(["in play on a court", onCourt]);
+    const unstarted = between(day.comp, p2, p4).id; // no court, no time, never started: a "no court yet" candidate, not playing
+    excluded.push(["unstarted, no court", unstarted]);
+    const decided = between(day.comp, p1, p3).id;
+    await start(day, decided, -60);
+    await finish(decided, "decided", -5);
+    excluded.push(["finished, no court", decided]);
+    const plate = await knockout(day, "Plate");
+    await start(day, plate.semis[0], -25);
+    await sql`update divisions set archived_at = now() where id = ${plate.divisionId}`;
+    excluded.push(["an archived division's, in play, no court", plate.semis[0]]);
+    const other = await otherCompetition(day, "Other Cup", { courts: [day.courts.c3] });
+    await start(day, other.fixtures[0]!.id, -10);
+    excluded.push(["another competition's, in play, no court", other.fixtures[0]!.id]);
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(0));
+
+    expect(view.playing_no_court.map((f) => f.id)).toEqual([semi2, semi1, silent]);
+    // The wire: the published schema parses the group as it is served (the OpenAPI document's own shape).
+    expect(MatchDayViewSchema.parse(view).playing_no_court).toHaveLength(3);
+    // What a row and its panel read: the match, its division and stage, its real kick-off, and the desk's own scorer mark.
+    expect(view.playing_no_court[0]).toMatchObject({ division_name: "Cup", stage_label: "Knockout", started_at: iso(-30), called_at: null });
+    expect(view.playing_no_court[2]).toMatchObject({ started_at: null, scorer_attention: "no_scorer" });
+    expect(view.playing_no_court[0]!.scorer_attention).toBeNull(); // a recorded start is a ledger: someone is scoring
+    expect(view.needs_you.filter((r) => r.kind === "no_scorer"), "the mark is the Needs-you row's fact").toHaveLength(1);
+    expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "playing", current: { id: onCourt } });
+    let checked = 0;
+    for (const [label, id] of excluded) {
+      expect(view.playing_no_court.some((f) => f.id === id), label).toBe(false);
+      checked++;
+    }
+    expect(checked, "exclusions checked").toBe(5);
+
+    // The sequence: a semi ends — it leaves the group on the next read; the other stays.
+    await finish(semi2, "decided", 1);
+    expect((await getMatchDay(day.auth, day.comp.id, at(2))).playing_no_court.map((f) => f.id)).toEqual([semi1, silent]);
+  });
+
+  it("an online chess board in play: in the group, on an organisation with no courts at all", async () => {
+    const seed = await seedOnlineChessFixture({ onlinePlay: "lichess", linked: true, divisionStarted: true, scheduledAt: at(-20) });
+    const auth = { orgId: seed.orgId, via: "session", userId: seed.ownerUserId, role: "owner", keyId: null } as const;
+    const before = await getMatchDay(auth, seed.competitionId, at(0));
+    expect(before.courts, "premise: the organisation has no court").toEqual([]);
+    expect(before.playing_no_court, "a board not yet started is not playing").toEqual([]);
+
+    await setStatus(seed.fixtureId, "in_play");
+    const view = await getMatchDay(auth, seed.competitionId, at(0));
+    expect(view.courts).toEqual([]);
+    expect(view.playing_no_court.map((f) => [f.id, f.sport_key])).toEqual([[seed.fixtureId, "boardgame"]]);
+  });
+
+  it("every registered sport: a match in play with no court is in the group, on an organisation with no courts — and nothing at all is the empty case; it carries the match's format line, the organiser's match block's own (Match Day C2)", async () => {
+    let checked = 0;
+    let withLine = 0;
+    for (const sportModule of builtinModules) {
+      const rig = await makeCommunityRig(sportModule.key);
+      const [row] = await sql<{ competition_id: string }[]>`
+        select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${rig.fixtureId}`;
+      const competitionId = row!.competition_id;
+      // The empty case first: no court and nothing playing.
+      const empty = await getMatchDay(rig.auth, competitionId);
+      expect({ courts: empty.courts, playing: empty.playing_no_court }, sportModule.key).toEqual({ courts: [], playing: [] });
+
+      await setStatus(rig.fixtureId, "in_play");
+      const view = await getMatchDay(rig.auth, competitionId);
+      expect(view.courts, sportModule.key).toEqual([]);
+      expect(view.playing_no_court.map((f) => [f.id, f.sport_key]), sportModule.key).toEqual([[rig.fixtureId, sportModule.key]]);
+      // C2: the court focus's read-only Match format says what the fixture page's match block says (its `effectiveLine`).
+      const block = await loadFixtureMatchRules(rig.auth, rig.fixtureId, enPublic as Dict);
+      expect(view.playing_no_court[0]!.format_line, `${sportModule.key}: the match block's line`).toBe(block.effectiveLine === "" ? null : block.effectiveLine);
+      if (view.playing_no_court[0]!.format_line !== null) withLine++;
+      checked++;
+    }
+    expect(checked, "sports swept").toBe(builtinModules.length);
+    expect(withLine, "sports whose match says a format line").toBeGreaterThan(5);
+    expect(checked).toBeGreaterThan(5);
+  });
+});
+
+describe.skipIf(!HAS_DB)("countFixturesToday", () => {
+  it("counts this competition's matches on their division's day: not the day before or after, not a middle day with none, not a cancelled one; a match in play counts today", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const MIN = 60_000;
+    const minutesTo = (isoAt: string) => (Date.parse(isoAt) - at(0).getTime()) / MIN;
+    await place(day, between(day.comp, p1, p2).id, 0, day.courts.c1); // Sat 7 Nov, 11:00 Amsterdam
+    // 23:30Z on the 7th is 00:30 on Sun 8 Nov in Amsterdam: the zone decides which day it is.
+    await place(day, between(day.comp, p3, p4).id, minutesTo("2026-11-07T23:30:00.000Z"), day.courts.c1);
+    await place(day, between(day.comp, p1, p3).id, minutesTo("2026-11-10T10:00:00.000Z"), day.courts.c1); // Tue 10 Nov
+    const cancelled = between(day.comp, p2, p4).id;
+    await place(day, cancelled, 60, day.courts.c2);
+    await setStatus(cancelled, "cancelled"); // Sat 7 Nov, cancelled
+
+    // The division declares no zone of its own, so its day is the organisation's (Amsterdam).
+    const count = (isoAt: string) => withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, new Date(isoAt)));
+    const days: [string, number][] = [
+      ["2026-11-06T12:00:00.000Z", 0], // the day before
+      ["2026-11-07T12:00:00.000Z", 1], // the day of: 11:00, not the cancelled 12:00, not 00:30 tomorrow
+      ["2026-11-08T12:00:00.000Z", 1], // the 00:30
+      ["2026-11-09T12:00:00.000Z", 0], // a middle day with none
+      ["2026-11-10T12:00:00.000Z", 1],
+      ["2026-11-11T12:00:00.000Z", 0], // the day after
+    ];
+    let checked = 0;
+    for (const [isoAt, n] of days) {
+      expect(await count(isoAt), isoAt).toBe(n);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    // A match in play is a match today, whatever its planned day (here: none).
+    const playing = between(day.comp, p1, p4).id;
+    await setStatus(playing, "in_play");
+    expect(await count("2026-11-09T12:00:00.000Z")).toBe(1);
+    expect((await getMatchDay(day.auth, day.comp.id, new Date("2026-11-07T12:00:00.000Z"))).fixtures_today).toBe(2);
+    // The division's own zone, once it declares one: in UTC the 23:30Z match is on the 7th too — 10:00Z, 23:30Z and the
+    // match in play.
+    await sql`update schedule_settings set tz = 'UTC' where division_id = ${day.comp.divisionId}`;
+    expect(await count("2026-11-07T12:00:00.000Z")).toBe(3);
+  });
+
+  it("each match is today on its OWN division's day: a division far from the organisation's zone counts, queues and offers its matches on its venue's date, as the desk's match_day phase reads it", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    await sql`update schedule_settings set tz = 'Pacific/Auckland' where division_id = ${day.comp.divisionId}`;
+    // A running division: one still in setup reads "setting up" on the desk whatever its dates.
+    await sql`update divisions set status = 'active' where id = ${day.comp.divisionId}`;
+    const minutesTo = (isoAt: string) => (Date.parse(isoAt) - at(0).getTime()) / 60_000;
+    // now = 12:00Z on Sat 7 Nov 2026. Amsterdam is on CET (UTC+1, since 25 Oct): Sat 7 Nov 13:00. Auckland is on NZDT (UTC+13,
+    // since 27 Sep): Sun 8 Nov 01:00. The two zones are on different dates.
+    const now = new Date("2026-11-07T12:00:00.000Z");
+    const A = between(day.comp, p1, p2).id; // 08:00Z Sat 7: Amsterdam Sat 09:00 (its "today"), Auckland Sat 21:00 — yesterday
+    const B = between(day.comp, p3, p4).id; // 08:00Z Sun 8: Amsterdam Sun 09:00 (tomorrow), Auckland Sun 21:00 — today
+    const C = between(day.comp, p1, p3).id; // 10:30Z Sun 8: Amsterdam Sun 11:30 (tomorrow), Auckland Sun 23:30 — today
+    const D = between(day.comp, p2, p4).id; // no court, 05:00Z Sun 8: Amsterdam Sun 06:00 (a later day), Auckland Sun 18:00 — today
+    const E = between(day.comp, p1, p4).id; // no court, 11:00Z Sun 8: Auckland Mon 9 Nov 00:00 — a later day
+    const count = () => withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, now));
+    const deskPhase = async () => (await getCompetitionDesk(day.auth, day.comp.id, now)).divisions.get(day.comp.divisionId);
+
+    await place(day, A, minutesTo("2026-11-07T08:00:00.000Z"), day.courts.c1);
+    // Only A: on the organisation's date, not on the division's. Neither the count nor the desk calls this a match day.
+    const before = await deskPhase();
+    expect(before?.display_tz).toBe("Pacific/Auckland"); // premise: the desk reads this division in Auckland
+    expect(await count()).toBe(0);
+    expect(before?.phase).not.toBe("match_day");
+
+    await place(day, B, minutesTo("2026-11-08T08:00:00.000Z"), day.courts.c1);
+    await place(day, C, minutesTo("2026-11-08T10:30:00.000Z"), day.courts.c1);
+    await place(day, D, minutesTo("2026-11-08T05:00:00.000Z"), null);
+    await place(day, E, minutesTo("2026-11-08T11:00:00.000Z"), null);
+    expect(await count()).toBe(3); // B, C and D (planned today with no court yet); in Amsterdam's day it would be A alone
+    expect((await deskPhase())?.phase).toBe("match_day");
+
+    const view = await getMatchDay(day.auth, day.comp.id, now);
+    expect(view).toMatchObject({ date: "2026-11-07", tz: ORG_TZ, fixtures_today: 3 }); // the label stays the organisation's day
+    // Court 1 is free: B at its plan (minute 1320), C at max(1470, 1320 + 30) = 1470. A was yesterday in Auckland.
+    expect(queueOf(courtOf(view, day.courts.c1))).toEqual([
+      [B, 1320, 1320],
+      [C, 1470, 1470],
+    ]);
+    const offered = (await matchDayCandidates(day.auth, day.comp.id, day.courts.c1, now)).map((c) => c.fixture.id);
+    expect(offered).toContain(D);
+    expect(offered).not.toContain(E);
+  });
+
+  it("an archived division adds no court, queue row, candidate or count; its match in play still holds its court — on its own competition's board and on another competition's", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const c4 = await addCourt(day, "hallB", "Court 4", 1);
+    // A live division of the same competition, on Court 1 only, with no matches: the board's one candidate court.
+    const live = await createDivision(day.auth, day.comp.id, {
+      name: "Live",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await putScheduleSettings(day.auth, live.id, {
+      config: { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [day.courts.c1], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
+    });
+    // The seeded division (candidate courts 1-3), about to be archived: a match planned today on Court 4, two in play — on
+    // Court 1 and on Court 2 — and three ready matches with no court (never placed).
+    const f13 = between(day.comp, p1, p3).id;
+    await place(day, f13, 30, c4);
+    const f34 = between(day.comp, p3, p4).id;
+    await place(day, f34, 0, day.courts.c1);
+    await start(day, f34, 0);
+    const f12 = between(day.comp, p1, p2).id;
+    await place(day, f12, 0, day.courts.c2);
+    await start(day, f12, 0);
+    const other = await otherCompetition(day, "Other Cup", { courts: [day.courts.c1, day.courts.c2] });
+    const [x, y] = other.pairs;
+    const xy = between(other, x!, y!).id;
+    await place(day, xy, 20, day.courts.c1);
+    await sql`update divisions set archived_at = now() where id = ${day.comp.divisionId}`;
+
+    const view = await getMatchDay(day.auth, day.comp.id, at(10));
+    // Court 1 alone: not Courts 2-3 (the archived division's candidates), not Court 4 (its match today), not Court 2 (its
+    // match in play). Its match in play on Court 1 is still what holds Court 1.
+    expect(view.courts.map((c) => c.court_id)).toEqual([day.courts.c1]);
+    expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "playing", current: { id: f34 }, queue: [] });
+    expect(view.fixtures_today).toBe(0);
+    expect(await withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, at(10)))).toBe(0);
+    expect(await matchDayCandidates(day.auth, day.comp.id, day.courts.c1, at(10))).toEqual([]);
+
+    // Another competition's board: both matches in play hold their courts. Court 1 is held until max(10, 0 + 30) = 30, so
+    // its planned xy waits: max(20, 30) = 30.
+    const theirs = await getMatchDay(day.auth, other.id, at(10));
+    expect(courtOf(theirs, day.courts.c1)).toMatchObject({ state: "in_use_elsewhere", in_use_by: day.comp.name });
+    expect(courtOf(theirs, day.courts.c2)).toMatchObject({ state: "in_use_elsewhere", in_use_by: day.comp.name });
+    expect(queueOf(courtOf(theirs, day.courts.c1))).toEqual([[xy, 20, 30]]);
+  });
+});
+
+/** A candidate as the fields a person reads. */
+const seen = (c: MatchDayCandidate) => ({
+  id: c.fixture.id,
+  source: c.source,
+  from: c.from_court_name,
+  waiting: c.waiting_minutes,
+  behind: c.behind_minutes,
+  blocked: c.blocked,
+});
+
+describe.skipIf(!HAS_DB)("matchDayCandidates", () => {
+  it("ranks this court's next match, other courts' next READY matches and ready no-court matches; leaves out a TBD side and a court's later matches; blocks on a busy doubles PARTNER by person", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const [ann, bob] = day.people;
+    const f12 = between(day.comp, p1, p2);
+    const f13 = between(day.comp, p1, p3);
+    const f14 = between(day.comp, p1, p4);
+    const f23 = between(day.comp, p2, p3);
+    const f24 = between(day.comp, p2, p4);
+    const f34 = between(day.comp, p3, p4);
+    await place(day, f14.id, 30, day.courts.c3); // the target court's own next match
+    await place(day, f12.id, 5, day.courts.c1); // first in Court 1's queue, but a side is still to be decided
+    await sql`update fixtures set away_entrant_id = null where id = ${f12.id}`;
+    await place(day, f23.id, 10, day.courts.c1); // Court 1's next READY match
+    await place(day, f24.id, 70, day.courts.c1); // Court 1's later match: not a candidate
+    // Bob — Ann's partner in P1 — plays in another competition, with someone else, on Court 2. P1 itself plays nowhere.
+    const xan = await person(day.orgId, "Xan Xu");
+    const yul = await person(day.orgId, "Yul Yates");
+    const zed = await person(day.orgId, "Zed Zane");
+    const mixed = await seedCompetition(day.auth, "Mixed", [[bob!, xan], [yul, zed]], { courts: [day.courts.c2] });
+    await place(day, mixed.fixtures[0]!.id, 0, day.courts.c2);
+    await setStatus(mixed.fixtures[0]!.id, "in_play");
+    expect(ann!.name).toBe("Ann Archer");
+
+    const ranked = await matchDayCandidates(day.auth, day.comp.id, day.courts.c3, at(20));
+
+    const bobOnCourt2 = { kind: "player_busy", person_name: "Bob Bell", court_name: "Court 2" };
+    // Court 1 is free from 20: the TBD f12 max(5, 20) = 20, ends 50; f23 max(10, 50) = 50: 30 to wait, 40 behind.
+    // f14 on Court 3: max(30, 20) = 30, 10 to wait.
+    expect(ranked.map(seen)).toEqual([
+      { id: f23.id, source: "other_court", from: "Court 1", waiting: 30, behind: 40, blocked: null },
+      { id: f34.id, source: "no_court", from: null, waiting: 0, behind: 0, blocked: null },
+      { id: f14.id, source: "this_court", from: null, waiting: 10, behind: 0, blocked: bobOnCourt2 },
+      { id: f13.id, source: "no_court", from: null, waiting: 0, behind: 0, blocked: bobOnCourt2 },
+    ]);
+    expect(ranked[0]!.fixture).toMatchObject({ division_name: "Doubles", sport_key: "generic", stage_label: "League", stream: null });
+  });
+
+  it("another sport — football teams with no roster: a team playing elsewhere blocks its other matches by the TEAM's name", async () => {
+    const day = await seedDay();
+    const football = await seedCompetition(day.auth, "Cup", [], {
+      courts: [day.courts.c1, day.courts.c2, day.courts.c3],
+      teams: ["Ajax", "Benfica", "Celtic"],
+    });
+    const [ajax, benfica, celtic] = football.pairs;
+    const ab = between(football, ajax!, benfica!);
+    await place(day, ab.id, 0, day.courts.c1);
+    await setStatus(ab.id, "in_play");
+
+    const ranked = await matchDayCandidates(day.auth, football.id, day.courts.c3, at(20));
+
+    expect(ranked.map((c) => c.source)).toEqual(["no_court", "no_court"]);
+    expect(Object.fromEntries(ranked.map((c) => [c.fixture.id, c.blocked]))).toEqual({
+      [between(football, ajax!, celtic!).id]: { kind: "player_busy", person_name: "Ajax", court_name: "Court 1" },
+      [between(football, benfica!, celtic!).id]: { kind: "player_busy", person_name: "Benfica", court_name: "Court 1" },
+    });
+  });
+
+  it("a called, unstarted match is a candidate on another free court, not blocked by its own call; its players block their other matches", async () => {
+    const day = await seedDay();
+    const { p1, p3, p4 } = pairs(day);
+    const f34 = between(day.comp, p3, p4);
+    await callFixtureToCourt(day.auth, f34.id, day.courts.c1, at(10));
+
+    const ranked = await matchDayCandidates(day.auth, day.comp.id, day.courts.c2, at(12));
+
+    const mine = ranked.find((c) => c.fixture.id === f34.id);
+    expect(mine && seen(mine)).toEqual({ id: f34.id, source: "other_court", from: "Court 1", waiting: 0, behind: 0, blocked: null });
+    expect(mine!.fixture.called_at).toBe(iso(10));
+    // Eve (P3) is called onto Court 1: first by name of the busy P3 and P4 people in f13.
+    const f13 = ranked.find((c) => c.fixture.id === between(day.comp, p1, p3).id);
+    expect(f13?.blocked).toEqual({ kind: "player_busy", person_name: "Eve Ellis", court_name: "Court 1" });
+  });
+
+  // Match Day E2 item 1. The planned time each source prints is the match's OWN plan (its queue slot on its court, or its
+  // `scheduled_at` with no court), set by hand here and read back — not a value the read model computes. A call replaced the plan.
+  it("E2-1 — a candidate carries its planned time: the queue slot on its court, a no-court match's own time, null with none or once called", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f14 = between(day.comp, p1, p4);
+    const f23 = between(day.comp, p2, p3);
+    const f34 = between(day.comp, p3, p4);
+    const f13 = between(day.comp, p1, p3);
+    await place(day, f14.id, 30, day.courts.c3); // this court's own next match, planned 30
+    await place(day, f23.id, 10, day.courts.c1); // Court 1's next, planned 10
+    await place(day, f34.id, 5, null); // a time, no court yet
+    // f13 and the rest keep no time and no court.
+    const ranked = await matchDayCandidates(day.auth, day.comp.id, day.courts.c3, at(20));
+    const plannedOf = (id: string) => ranked.find((c) => c.fixture.id === id)?.planned_at;
+    expect(plannedOf(f14.id)).toBe(iso(30));
+    expect(plannedOf(f23.id)).toBe(iso(10));
+    expect(plannedOf(f34.id)).toBe(iso(5));
+    expect(plannedOf(f13.id)).toBeNull();
+    // Every source was checked, and each source has an answer with a time and one without (a sweep that checks nothing fails).
+    expect(new Set(ranked.map((c) => c.source))).toEqual(new Set(["this_court", "other_court", "no_court"]));
+    expect(ranked.filter((c) => c.planned_at !== null).length).toBeGreaterThanOrEqual(3);
+    expect(ranked.filter((c) => c.planned_at === null).length).toBeGreaterThanOrEqual(1);
+
+    // After a call onto Court 1 the call REPLACED the plan: the called match, now offered on another court, has none.
+    await callFixtureToCourt(day.auth, f34.id, day.courts.c1, at(21));
+    const after = await matchDayCandidates(day.auth, day.comp.id, day.courts.c2, at(22));
+    const called = after.find((c) => c.fixture.id === f34.id)!;
+    expect(called.source).toBe("other_court");
+    expect(called.fixture.called_at).toBe(iso(21));
+    expect(called.planned_at).toBeNull();
+  });
+
+  it("no-court matches only from active stages, none planned for a later day, none with a TBD side; nothing ready → an empty list", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const tomorrow = between(day.comp, p1, p2);
+    await place(day, tomorrow.id, 24 * 60, null); // a time tomorrow, no court
+    const tbd = between(day.comp, p3, p4);
+    await sql`update fixtures set home_entrant_id = null where id = ${tbd.id}`; // a side still to be decided
+    const before = await matchDayCandidates(day.auth, day.comp.id, day.courts.c1, at(0));
+    expect(before.map((c) => c.source)).toEqual(Array(4).fill("no_court"));
+    expect(before.map((c) => c.fixture.id)).not.toContain(tomorrow.id);
+    expect(before.map((c) => c.fixture.id)).not.toContain(tbd.id);
+
+    await sql`update stages set status = 'pending' where id = ${day.comp.stageId}`;
+    expect(await matchDayCandidates(day.auth, day.comp.id, day.courts.c1, at(0))).toEqual([]);
+  });
+
+  it("refuses a court that is not the org's, or is archived (404)", async () => {
+    const day = await seedDay();
+    const stranger = await seedDay();
+    await sql`update courts set archived_at = now() where id = ${day.courts.c3}`;
+    let checked = 0;
+    for (const courtId of [stranger.courts.c1, day.courts.c3]) {
+      const err = await matchDayCandidates(day.auth, day.comp.id, courtId, at(0)).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(HttpError);
+      expect((err as HttpError).status).toBe(404);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+// B4 fix round 1 (controller rulings R1, R2; spec §7 "Which courts", §9). A free court's candidates are only matches its division
+// may play on — the scheduler's own per-match candidate set (court-candidates.ts) — by every arm (its own queue, another court's
+// next or called match, no court yet). The expected sets are the divisions' configured courts (the INPUT), and the resolver's
+// declared empty-list rule (every court of the organisation), never what the code under test returns.
+async function splitDay(day: Day) {
+  const ps: Person[] = [];
+  for (const n of ["Ivy Ives", "Jon Joy", "Kim Kerr", "Lou Lane", "Max Moss", "Ned Nash", "Ola Orr", "Pia Pratt", "Quin Quay", "Rae Ross", "Sol Stone", "Tia Tran"]) {
+    ps.push(await person(day.orgId, n));
+  }
+  const pair = (i: number): Person[] => [ps[i]!, ps[i + 1]!];
+  // "Doubles" plays on Court 1 only; "Mixed" on Court 2 only; "Open" has no courts configured.
+  const a = await seedCompetition(day.auth, "Split Day", [pair(0), pair(2)], { courts: [day.courts.c1] });
+  const b = await seedCompetition(day.auth, "Split Day", [pair(4), pair(6), pair(8)], {
+    courts: [day.courts.c2],
+    competitionId: a.id,
+    division: "Mixed",
+  });
+  const open = await seedCompetition(day.auth, "Split Day", [pair(10), [ps[0]!, ps[5]!]], {
+    courts: [],
+    competitionId: a.id,
+    division: "Open",
+  });
+  return { competitionId: a.id, a, b, open };
+}
+
+describe.skipIf(!HAS_DB)("R1 — candidates respect the division's candidate courts", () => {
+  it("two divisions on disjoint courts: neither's match is offered on the other's court by any arm; a division with no courts configured is offered on every court", async () => {
+    const day = await seedDay();
+    const { competitionId, a, b, open } = await splitDay(day);
+    const [b0, b1, b2] = b.fixtures;
+    // Mixed's first match is Court 2's queue (this_court there; the other_court arm for any other court).
+    await place(day, b0!.id, 60, day.courts.c2);
+    const ids = async (courtId: string) =>
+      (await matchDayCandidates(day.auth, competitionId, courtId, at(20))).map((c) => c.fixture.id).sort();
+    const sorted = (xs: string[]) => [...xs].sort();
+    const offered = {
+      c1: await ids(day.courts.c1),
+      c2: await ids(day.courts.c2),
+      c3: await ids(day.courts.c3),
+    };
+    expect(offered).toEqual({
+      c1: sorted([a.fixtures[0]!.id, open.fixtures[0]!.id]),
+      c2: sorted([b0!.id, b1!.id, b2!.id, open.fixtures[0]!.id]),
+      c3: [open.fixtures[0]!.id],
+    });
+    // Anti-vacuity: every division's match was offered somewhere.
+    expect(new Set(Object.values(offered).flat()).size).toBe(a.fixtures.length + b.fixtures.length + open.fixtures.length);
+  });
+
+  it("a match CALLED onto its own court is offered on another court of its division, and on no court it may not use", async () => {
+    const day = await seedDay();
+    const { competitionId, b } = await splitDay(day);
+    const extra = await createCourt(day.auth, day.venues.hallA, { name: "Court 4", sort: 9, tags: [] });
+    await putScheduleSettings(day.auth, b.divisionId, {
+      config: { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [day.courts.c2, extra.id], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] },
+    });
+    const called = b.fixtures[0]!;
+    await callFixtureToCourt(day.auth, called.id, day.courts.c2, at(10));
+    const on = async (courtId: string) =>
+      (await matchDayCandidates(day.auth, competitionId, courtId, at(20))).find((c) => c.fixture.id === called.id)?.source ?? null;
+    expect({ court4: await on(extra.id), court1: await on(day.courts.c1), court3: await on(day.courts.c3) }).toEqual({
+      court4: "other_court",
+      court1: null,
+      court3: null,
+    });
+  });
+});
+
+describe.skipIf(!HAS_DB)("R2 — Find a court opens a court the division can use", () => {
+  it("disjoint divisions: each division's link names ITS court; a division with no courts configured, the first free court of all; once none it can use is free, the page itself", async () => {
+    const day = await seedDay();
+    const { competitionId, a, b, open } = await splitDay(day);
+    const courtOf = async (divisionId: string) => (await findCourtForDivision(day.auth, competitionId, divisionId, at(20)))?.court_id;
+    // Every court free: Doubles plays on Court 1 only, Mixed on Court 2 only, Open on all three (list order: Court 1 first).
+    expect({ a: await courtOf(a.divisionId), b: await courtOf(b.divisionId), open: await courtOf(open.divisionId) }).toEqual({
+      a: day.courts.c1,
+      b: day.courts.c2,
+      open: day.courts.c1,
+    });
+    // Court 1 taken (another competition's match in play): Doubles has no usable court free — the page (null); Open moves on.
+    const other = await seedCompetition(
+      day.auth,
+      "Club Night",
+      [
+        [await person(day.orgId, "Uma Uhl"), await person(day.orgId, "Vic Vale")],
+        [await person(day.orgId, "Wyn West"), await person(day.orgId, "Xen Xu")],
+      ],
+      { courts: [day.courts.c1] },
+    );
+    await place(day, other.fixtures[0]!.id, 0, day.courts.c1);
+    await setStatus(other.fixtures[0]!.id, "in_play");
+    expect({ a: await courtOf(a.divisionId), b: await courtOf(b.divisionId), open: await courtOf(open.divisionId) }).toEqual({
+      a: null,
+      b: day.courts.c2,
+      open: day.courts.c2,
+    });
+    expect(await findCourtForDivision(day.auth, competitionId, a.divisionId, at(20))).toEqual({ court_id: null, noun: "court" });
+  });
+
+  it("I2 (fix round 1) — Find a court prefers a free court that is OPEN now; a court shut by its hours is the fallback, only when no other free court can take the match", async () => {
+    const day = await seedDay();
+    const { competitionId, a, b, open } = await splitDay(day);
+    const courtOf = async (divisionId: string) => (await findCourtForDivision(day.auth, competitionId, divisionId, at(20)))?.court_id;
+    // Declared: Doubles plays on Court 1 only, Mixed on Court 2 only, Open on all three (list order Court 1, 2, 3) - the R2 test's split.
+    const all = async () => ({ a: await courtOf(a.divisionId), b: await courtOf(b.divisionId), open: await courtOf(open.divisionId) });
+    expect(await all(), "premise: nothing shut, the first free court of each").toEqual({ a: day.courts.c1, b: day.courts.c2, open: day.courts.c1 });
+
+    // Court 1 shut for the day (a closed exception on the board's date): Open skips it for Court 2; Doubles, whose ONLY court it is,
+    // keeps it (a warn-only closure never takes the link away); Mixed is untouched.
+    await sql`insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c1}, ${day.orgId}, '2026-11-07', true)`;
+    expect(await all()).toEqual({ a: day.courts.c1, b: day.courts.c2, open: day.courts.c2 });
+
+    // Courts 1 and 2 both shut: Open goes to Court 3, the last open one.
+    await sql`insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c2}, ${day.orgId}, '2026-11-07', true)`;
+    expect(await all()).toEqual({ a: day.courts.c1, b: day.courts.c2, open: day.courts.c3 });
+
+    // Every court shut: the first free court of the division's list, shut or not - never "none" for a court that exists.
+    await sql`insert into court_exceptions (court_id, org_id, date, closed) values (${day.courts.c3}, ${day.orgId}, '2026-11-07', true)`;
+    expect(await all()).toEqual({ a: day.courts.c1, b: day.courts.c2, open: day.courts.c1 });
+
+    // A court shut but TAKEN is not free either way: Court 3 playing (another competition) leaves Open on Court 1.
+    const other = await seedCompetition(
+      day.auth,
+      "Club Night",
+      [
+        [await person(day.orgId, "Uma Uhl"), await person(day.orgId, "Vic Vale")],
+        [await person(day.orgId, "Wyn West"), await person(day.orgId, "Xen Xu")],
+      ],
+      { courts: [day.courts.c3] },
+    );
+    await place(day, other.fixtures[0]!.id, 0, day.courts.c3);
+    await setStatus(other.fixtures[0]!.id, "in_play");
+    expect(await courtOf(open.divisionId)).toBe(day.courts.c1);
+  });
+
+  it("a TBD-only knockout: no ready match on no court, so no link at all (null) — its unscheduled row keeps the schedule board alone; a football division asks for a pitch", async () => {
+    const day = await seedDay();
+    const { competitionId, a } = await splitDay(day);
+    // Doubles' one match loses a side: nothing of it can be called anywhere.
+    await sql`update fixtures set away_entrant_id = null where division_id = ${a.divisionId}`;
+    expect(await findCourtForDivision(day.auth, competitionId, a.divisionId, at(20))).toBeNull();
+
+    const football = await seedCompetition(day.auth, "Split Day", [], {
+      courts: [day.courts.c3],
+      teams: ["Rovers", "United"],
+      competitionId,
+    });
+    expect(await findCourtForDivision(day.auth, competitionId, football.divisionId, at(20))).toEqual({
+      court_id: day.courts.c3,
+      noun: "pitch",
+    });
+
+    // On the day (a match planned today), Match Day's Needs you: Doubles' unscheduled row has no Find a court; Football's has
+    // one, in its word, to Court 3.
+    const today = await seedCompetition(day.auth, "Split Day", [[await person(day.orgId, "Yva Yu"), await person(day.orgId, "Zia Zorn")], [await person(day.orgId, "Abe Ash"), await person(day.orgId, "Bea Bly")]], {
+      courts: [day.courts.c2],
+      competitionId,
+      division: "Today",
+    });
+    await place(day, today.fixtures[0]!.id, 30, day.courts.c2);
+    const view = await getMatchDay(day.auth, competitionId, at(20));
+    const unscheduled = view.needs_you.filter((i) => i.kind === "unscheduled");
+    const alts = Object.fromEntries(unscheduled.map((i) => [i.title.split(" · ")[0], i.alt ?? null]));
+    expect(Object.keys(alts).sort(), "premise: both divisions owe an unscheduled row").toEqual(expect.arrayContaining(["Doubles", "Teams"]));
+    expect(alts.Doubles).toBeNull();
+    expect(alts.Teams).toMatchObject({ label: uiEn["matchDay.needsYou.findCourt.pitch"], court_id: day.courts.c3 });
+  });
+});

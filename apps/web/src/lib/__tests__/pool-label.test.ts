@@ -10,7 +10,7 @@ import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
-import { poolLabel } from "@/lib/pool-label";
+import { poolLabel, poolLabelsInOrder } from "@/lib/pool-label";
 
 const FILES: Record<string, Record<string, string>> = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic };
 
@@ -49,5 +49,33 @@ describe("poolLabel", () => {
       }
     }
     expect(checked).toBe(12);
+  });
+});
+
+// Match Day E1 fix round 1 (m2): the run sheet names a pool on each round's bar. The page hands it the division's pools in display order
+// with their labels, built by the two authorities (`poolLabel`, `comparePools`) - never a third spelling of either.
+describe("poolLabelsInOrder", () => {
+  const POOLS = [
+    { id: "p-c", key: "C", name: "Pool C" },
+    { id: "p-a", key: "A", name: "Pool A" },
+    { id: "p-b", key: "B", name: "Pool B" },
+    { id: "p-10", key: "10", name: "Pool 10" },
+    { id: "p-2", key: "2", name: "Pool 2" },
+  ];
+
+  it("the empty case: no pools, no labels", () => {
+    expect(poolLabelsInOrder(enPublic, [])).toEqual([]);
+  });
+
+  it("every locale: display order (key, natural), each label the locale's own word from the dictionary file", () => {
+    let checked = 0;
+    for (const [locale, file] of Object.entries(FILES)) {
+      const out = poolLabelsInOrder(file, POOLS);
+      expect(out.map((p) => p.id), `${locale}: order`).toEqual(["p-2", "p-10", "p-a", "p-b", "p-c"]);
+      expect(out.map((p) => p.label), `${locale}: labels`).toEqual(["2", "10", "A", "B", "C"].map((key) => file["table.poolLabel"].replace("{key}", key)));
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    expect(poolLabelsInOrder(frPublic, POOLS)[2]!.label).not.toBe(poolLabelsInOrder(enPublic, POOLS)[2]!.label);
   });
 });

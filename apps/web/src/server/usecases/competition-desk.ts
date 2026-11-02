@@ -27,6 +27,7 @@ import {
 } from "@/lib/division-phase";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
 import { rowAwaitsSettle, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { kickoffsOf } from "@/server/engine-db/kickoff";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { listDivisionCardStats, type NextFixture } from "./card-stats";
 import { listDivisions } from "./divisions";
@@ -98,16 +99,29 @@ export interface CompetitionDesk {
    *  SQL with no real `core.start` sorts after every one that has actually
    *  kicked off). Built from the SAME per-division `rows` this function
    *  already filters to compute `in_play` above, so the count and the list
-   *  can never drift into two authorities for one fact (spec's "one shape,
-   *  two doors"; `desk.in_play === desk.in_play_fixtures.length` always). */
+   *  can never drift into two authorities for one fact
+   *  (`desk.in_play === desk.in_play_fixtures.length` always).
+   *
+   *  No page in this app reads it any more: the competition page's live strip
+   *  that rendered it was retired by Match Day (B1), and live matches are
+   *  Match Day's now — on their courts, or in its "Playing, no court" group
+   *  (B4). It stays because the public desk API returns it
+   *  (`GET /competitions/{id}/desk`, schemas.ts `CompetitionDesk`); removing it is a
+   *  wire change, not a tidy-up. */
   in_play_fixtures: DeskInPlayFixture[];
   /** The soonest `next` across every division, EXCLUDING a division whose own
-   *  `next` is the fixture currently in play — that fixture already has its
-   *  own card in `in_play_fixtures`, and "up next" (the band's one dashed
-   *  card, design doc §W3) means genuinely not yet started. Derived from the
-   *  same per-division `next` (`resolveDivisionNext` below) every row in
-   *  `divisions` already carries. */
+   *  `next` is the fixture currently in play (already in `in_play_fixtures`):
+   *  "up next" means genuinely not yet started. Derived from the same
+   *  per-division `next` (`resolveDivisionNext` below) every row in
+   *  `divisions` already carries. Like `in_play_fixtures`, read by no page
+   *  since the live strip went (B1) and kept for the desk API's callers. */
   up_next: DeskNextFixture | null;
+  /** Match Day B1 (spec 2026-10-31 §9): how many of this competition's matches are today — Match Day's own count, A2's
+   *  `countFixturesToday` (match-day.ts), read in this desk's transaction at this desk's `now` (controller ruling R2: one count,
+   *  two surfaces). Each match is today on its own division's day (venue zone, else the organisation's, else UTC); a match in
+   *  play counts whatever day it was planned for; a cancelled match and an archived division's never do. The competition
+   *  page's match-day gate: above zero, it shows Open Match Day and the Needs-you list lives in Match Day (`needsYouHome`). */
+  fixtures_today: number;
   divisions: Map<string, DeskDivision>;
   /** Same instant every division's phase was resolved against (SSR-stable).
    *  `competitionPhase` filters on it too, so the masthead's "earliest next
@@ -213,7 +227,9 @@ type FixtureRaw = {
    *  state yet, or its engine publishes no headline. */
   headline: string | null;
   /** When core.start was recorded — the fixture's REAL kick-off. `fixtures`
-   *  has no such column (V214), and `scheduled_at` is a plan, not an event. */
+   *  has no such column (V214), and `scheduled_at` is a plan, not an event.
+   *  The LAST active core.start, voids applied (`kickoffsOf`, task F3); set
+   *  after the query, in play only. */
   started_at: string | Date | null;
   /** The SAME instant as `started_at`, rendered by Postgres at MICROSECOND
    *  precision. It exists purely to sort by: `started_at` reaches JS as a
@@ -307,7 +323,10 @@ export async function getCompetitionDesk(
     hasFeature(auth.orgId, "discipline.enforced", competitionId),
   ]);
   const ids = divisions.map((d) => d.id);
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial } = await withTenant(auth.orgId, async (tx) => {
+  // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
+  // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
+  const { countFixturesToday } = await import("./match-day");
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -405,16 +424,15 @@ export async function getCompetitionDesk(
               -- started_at also removes the shape where an in-play fixture
               -- with no scheduled_at could answer nothing about its own clock:
               -- a fixture cannot be in play without a core.start.
+              --
+              -- Match Day task F3 (owner ruling 10-31 (3)): the kick-off is
+              -- no longer min(recorded_at) here. It is the LAST active
+              -- core.start, voids applied by the engine (kickoffsOf, read
+              -- after this query), the one reader Match Day shares.
               select fixture_id,
                      count(*) filter (where type <> 'core.start') as n,
-                     min(recorded_at) filter (where type = 'core.start') as started_at,
-                     -- Sort key, microsecond precision. See FixtureRaw.started_at_key:
-                     -- the Date this column becomes in JS has already lost the
-                     -- microseconds by the time the comparator runs.
-                     to_char(
-                       min(recorded_at) filter (where type = 'core.start') at time zone 'UTC',
-                       'YYYY-MM-DD"T"HH24:MI:SS.US'
-                     ) as started_at_key
+                     null::timestamptz as started_at,
+                     null::text as started_at_key
                 from score_events
                where fixture_id = any(
                  select id from fixtures where division_id = any(${ids}) and status = 'in_play'
@@ -423,6 +441,16 @@ export async function getCompetitionDesk(
             ) e on e.fixture_id = f.id
            where f.division_id = any(${ids})`
       : [];
+    // The kick-off of each match in play, and its microsecond sort key: kickoffsOf (task F3), shared with Match Day.
+    const kickoffs = await kickoffsOf(
+      tx,
+      fixtures.filter((f) => f.status === "in_play").map((f) => f.id),
+    );
+    for (const f of fixtures) {
+      const k = f.status === "in_play" ? kickoffs.get(f.id) : undefined;
+      f.started_at = k?.at ?? null;
+      f.started_at_key = k?.key ?? null;
+    }
     const settings = ids.length
       ? await tx<SettingsRaw[]>`
           select division_id, tz, (config ->> 'matchMinutes')::int as match_minutes
@@ -436,9 +464,25 @@ export async function getCompetitionDesk(
            where f.division_id = any(${ids})
              and fo.response is distinct from 'declined'`
       : [];
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial };
+    // Match Day A4 fix round 1, I1 (controller ruling): a scoring link IS a scorer — spec 2026-10-31 §9 makes the device
+    // link THE scorer path, and a match being scored on a phone must not read "No scorer" until its first point. ACTIVE
+    // is the device-link usecase's own rule (device-links.ts `newestLiveLink` / `resolveDeviceLinkToken`): not revoked,
+    // and no expiry or one still ahead — measured at this desk's `now`, the one clock every other row here reads. Only
+    // in-play fixtures are asked: hasScorer is read by no_scorer / not_recording alone, both in-play-only.
+    const fixturesWithLink = ids.length
+      ? await tx<FixtureWithOfficialRaw[]>`
+          select distinct dl.fixture_id
+            from device_links dl
+            join fixtures f on f.id = dl.fixture_id
+           where f.division_id = any(${ids})
+             and f.status = 'in_play'
+             and dl.revoked_at is null
+             and (dl.expires_at is null or dl.expires_at > ${now})`
+      : [];
+    const fixturesToday = await countFixturesToday(tx, competitionId, now);
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday };
   });
-  const fixturesWithScorer = new Set(fixturesWithOfficial.map((a) => a.fixture_id));
+  const fixturesWithScorer = new Set([...fixturesWithOfficial, ...fixturesWithLink].map((a) => a.fixture_id));
   // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
   // read with the privileged client, for these divisions only — the ones listDivisions just proved are this org's.
   const onlineIds = new Set(
@@ -607,8 +651,9 @@ export async function getCompetitionDesk(
   // produced four distinct millisecond values.
   inPlayFixtures.sort((a, b) => {
     // Two-key sort. The MICROSECOND key first, never the millisecond ISO
-    // string the payload carries: `started_at` is min(recorded_at), a
-    // microsecond timestamptz, but it reaches JS as a Date and the ISO string
+    // string the payload carries: `started_at` is the kick-off (the LAST
+    // non-voided core.start, `kickoffsOf`, task F3), a microsecond
+    // timestamptz, but it reaches JS as a Date and the ISO string
     // built from it truncates. Two kick-offs 100us apart inside one
     // millisecond used to compare EQUAL here.
     //
@@ -653,7 +698,14 @@ export async function getCompetitionDesk(
     },
     "competition_desk_built",
   );
-  return { in_play: inPlayTotal, in_play_fixtures: inPlayFixtures, up_next: upNext, divisions: out, now: nowIso };
+  return {
+    in_play: inPlayTotal,
+    in_play_fixtures: inPlayFixtures,
+    up_next: upNext,
+    fixtures_today: fixturesToday,
+    divisions: out,
+    now: nowIso,
+  };
 }
 
 /** The competition-level pill's phase: either a ranked/counted state, or a

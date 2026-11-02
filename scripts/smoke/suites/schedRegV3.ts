@@ -520,11 +520,11 @@ export async function schedRegV3Suite(
   );
   check("division fixtures page renders (free)", fFixtures.status === 200);
 
-  // Competition Desk W2 (Task 4): the fixtures tab renders as a run sheet — a
-  // day group only appears once at least one fixture is SCHEDULED
-  // (`buildRunSheet` drops an empty/all-unscheduled division's sheet
-  // entirely, spec "Error and empty states"), so this generates + times one
-  // fixture on the SAME free-path division the check above already used.
+  // Competition Desk W2 (Task 4), as Match Day E1 item 1 left it: the fixtures tab renders as a run sheet, and a NON-bracket
+  // stage (this league) groups its rows under a bar per ROUND, not under a day heading. The bar says when the round is on
+  // (`data-run-sheet-round-dates`) only once a fixture is SCHEDULED, so this generates one, reads the tab with the fixture
+  // still untimed, then times it and reads the tab again: the first read pins that the date is not there by default (so the
+  // second cannot pass on something else), the second that the bar carries the date and a row follows it.
   await v1(
     free,
     `/api/v1/divisions/${fDiv.id}/entrants`,
@@ -537,15 +537,25 @@ export async function schedRegV3Suite(
   const fGen = v1data<{ fixtures: { id: string }[] }>(
     await v1(free, `/api/v1/stages/${fStage.id}/generate`, "POST", {}),
   );
+  const fixturesTab = `/o/${freeOrg.slug}/c/${fComp.slug}/d/${fDiv.slug}?tab=fixtures`;
+  const untimedSheet = await html(free, fixturesTab);
+  // Anchor on `="` — React serialises an omitted prop as `"$undefined"`, so a
+  // bare `data-run-sheet-round-dates` probe would pass in both states.
+  check(
+    "p56: before the fixture is timed the round bar and its row are there, with no date on the bar",
+    untimedSheet.status === 200 &&
+      /data-testid="run-sheet-round-bar"[\s\S]*?<li data-fixture-no="\d+"/.test(untimedSheet.body) &&
+      !untimedSheet.body.includes('data-run-sheet-round-dates="'),
+  );
   await v1(free, `/api/v1/fixtures/${fGen.fixtures[0].id}`, "PATCH", {
     scheduled_at: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
   });
-  const runSheet = await html(free, `/o/${freeOrg.slug}/c/${fComp.slug}/d/${fDiv.slug}?tab=fixtures`);
-  // Anchor on `="` — React serialises an omitted prop as `"$undefined"`, so a
-  // bare `data-run-sheet-day` probe would pass in both states.
+  const runSheet = await html(free, fixturesTab);
   check(
-    "p56: fixtures tab renders the run sheet with a day group",
-    runSheet.status === 200 && runSheet.body.includes('data-run-sheet-day="'),
+    "p56: fixtures tab renders the run sheet with a round bar carrying the date, then a row",
+    runSheet.status === 200 &&
+      runSheet.body.includes('data-run-sheet-block="rounds"') &&
+      /data-testid="run-sheet-round-bar"[\s\S]*?data-run-sheet-round-dates="[^"]+"[\s\S]*?<li data-fixture-no="\d+"/.test(runSheet.body),
   );
 
   // Dual payments on community: offline fees were always plan-free, and since

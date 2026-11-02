@@ -1,6 +1,6 @@
 // W2c Task 18 (S3, ST-G8) - the decisions the stage points section makes, as pure functions with unit killers
 // (`__tests__/stage-points-model.test.ts`, `__tests__/stage-points-w2d-model.test.ts`). The section itself
-// (`stage-points-section.tsx`) renders what these answer.
+// (`rules/points-editor.tsx`, scope "stage", on the stage card) renders what these answer.
 //
 // Client-safe like `stage-row-model.ts`: no "use client", no JSX, no `@/server` import.
 //
@@ -360,6 +360,20 @@ export type PointsBasis = "own" | "pin" | "division";
 export function pointsBasis(stored: unknown, pinned: unknown): PointsBasis {
   if (storedPointsRule(stored) !== null) return "own";
   return pinInForce(stored, pinned) === null ? "division" : "pin";
+}
+
+/**
+ * Match Day C3 (spec §12 item 12, "a stage that differs says so"): does this stage pay something other than what the division's
+ * live layers would pay it? It plays its own rule, else its pin's (I1), else the live layers' (`pointsBasis`); it differs when
+ * that is not the rule a stage with neither would play (`StagePointsContext.rule`, the sport's own for the stage). An own rule
+ * that pays what the division pays does not differ. A kind with no table, and a cfg the sport refuses, say nothing.
+ */
+export function pointsDiffer(module: AnySportModule, divisionConfig: unknown, stage: StageShape, stored: unknown, pinned: unknown): boolean {
+  if (!stageTakesPoints(stage.kind)) return false;
+  const ctx = stagePointsContext(module, divisionConfig, stage);
+  if (ctx === null) return false;
+  const playing = storedPointsRule(stored) ?? pinInForce(stored, pinned) ?? ctx.rule;
+  return canonical(playing) !== canonical(ctx.rule);
 }
 
 /** Points ↔ the rule's stored unit. */

@@ -2,7 +2,7 @@ export const dynamic = "force-dynamic";
 // Division console (PROMPT-15 task 1): entrants & rosters, fixture console
 // (per stage: generate/complete/schedule), standings with the cascade trace.
 import Link from "@/components/ui/console-link";
-import { Globe, MonitorPlay, Printer, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
 import { StatusChip, divisionChipState } from "@/components/ui/status-chip";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
@@ -27,6 +27,7 @@ import { divisionLockedFields } from "@/server/usecases/rule-locks";
 import { isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { listDivisionFixtures, listFixtureHeadlines } from "@/server/usecases/fixtures";
 import { BracketPanel } from "@/components/v2/bracket-panel";
+import { bracketPlacement } from "@/lib/bracket-view";
 import { listEntrants, listLichessLinkGaps, DEPARTED_STATUSES } from "@/server/usecases/entrants";
 import { summariseLinkGaps } from "@/lib/online-link-gaps";
 import { log } from "@/server/logger";
@@ -42,15 +43,19 @@ import { openStreamStates } from "@/server/usecases/stream-sessions";
 import { resolveVenueTz } from "@/lib/tz";
 import { divisionScoringClosed, fixtureAwaitsSeedDraw, resolvePhase, type DivisionStatus } from "@/lib/division-phase";
 import { defaultMatchMinutes, listFixturesAwaitingSettle } from "@/server/usecases/competition-desk";
+import { competitionFixturesToday, findCourtForDivision } from "@/server/usecases/match-day";
+import { findCourtHref } from "@/lib/match-day/view";
+import { needsYouHome } from "@/components/v2/desk/needs-you";
+import { DeskOpenMenu, type DeskOpenItem } from "@/components/v2/desk/desk-open-menu";
 import { comparePools } from "@/lib/pool-order";
-import { poolLabel } from "@/lib/pool-label";
+import { poolLabel, poolLabelsInOrder } from "@/lib/pool-label";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
 import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
-import { effectiveEntrantModel } from "@seazn/engine/sport";
+import { effectiveEntrantModel, type TableStageKind, type TiebreakerKey } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
 import { withTenant } from "@/lib/db";
@@ -62,6 +67,7 @@ import type { StageDraft } from "@/lib/format-templates";
 import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
+import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
 import { entrantListLocked } from "@/lib/open-entry-stages";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
@@ -306,10 +312,10 @@ export default async function DivisionPage({
   const editable = canEdit && !billingFrozen;
   const sportModule = resolveModule(division.sport_key, division.module_version);
   // Effective entrant model (sport default ← config.entrants override) — shared
-  // by the entrants panel (add form + roster editor) and the Settings tab.
+  // by the entrants panel (add form + roster editor) and the entrant kinds block above it (Match Day C4: it left Settings).
   // Chess is individual-only (owner ruling 2026-10-26): a division saved before the ruling may still carry a widened
   // `config.entrants`, so the stored override is NOT read for chess - the panels offer individual entry only. The
-  // stored value itself is untouched (Settings > Entrants names it and offers Reset).
+  // stored value itself is untouched (the kinds block names it and offers Reset).
   const entrantModel = effectiveEntrantModel(
     sportModule.entrantModel ?? null,
     isChessSport(division.sport_key) ? null : division.config,
@@ -510,6 +516,21 @@ export default async function DivisionPage({
   // It asks no plan question: scoring is free on every plan (owner, 2026-10-19), and the server's own gate stays.
   const pointsDict = fixturesPublicDict === undefined ? undefined : pointsLineDict(fixturesPublicDict);
 
+  // The fixtures tab's group-stage cards name the pool on each round's bar ("Group A - Round 1"): the division's pools in display order,
+  // each labelled from its key in this viewer's words (`poolLabelsInOrder` = the pool-order and pool-label authorities). Only a group
+  // stage has pools, so a division without one reads nothing.
+  const groupStageIds = stages.filter((s) => s.kind === "group").map((s) => s.id);
+  const fixturePools =
+    tab === "fixtures" && fixturesPublicDict !== undefined && groupStageIds.length > 0
+      ? poolLabelsInOrder(
+          fixturesPublicDict,
+          await withTenant(auth.orgId, (tx) =>
+            tx<{ id: string; key: string; name: string }[]>`
+              select id, key, name from pools where stage_id in ${tx(groupStageIds)}`,
+          ),
+        )
+      : undefined;
+
   // Standings per table stage (+ per pool), with pool labels.
   const tableStages = stages.filter((s) => TABLE_KINDS.has(s.kind));
   const standings =
@@ -586,9 +607,19 @@ export default async function DivisionPage({
   // hint (T20: "start the division" only makes sense where a round could be opened), which is wanted before there are fixtures, so
   // the ask is made when either the card or the hint needs the answer.
   const awaitsStart = editable && divisionScoringClosed(division.status);
+  // ONE answer per render, however many parts of the tab read it: the panel's predicate (here) and the Division rules strip's Online
+  // play select (`onlineChessOn`, below). A second `await onlineChessOffered(auth)` would be hidden by the helper's 60 s PostHog
+  // cache, so only the arbiter-entry-link and online-start-hint-wiring suites, which spy on the helper itself, can see it.
+  let chessFlag: Promise<boolean> | undefined;
+  const clubOffersOnlineChess = () => (chessFlag ??= onlineChessOffered(auth));
   const clubOffered =
     tab === "fixtures" &&
-    (await arbiterPanelOffered(auth, { canEdit, sport_key: division.sport_key, config: division.config }, () => fixtures.length > 0 || awaitsStart));
+    (await arbiterPanelOffered(
+      auth,
+      { canEdit, sport_key: division.sport_key, config: division.config },
+      () => fixtures.length > 0 || awaitsStart,
+      clubOffersOnlineChess,
+    ));
   const arbiterOffered = clubOffered && fixtures.length > 0;
   // The division plays online and has not been started, so no round can be opened yet (`listOpenRounds` answers none until it
   // starts): the first stage card says to start it. The Start button is on this tab, so the hint stays here.
@@ -612,8 +643,10 @@ export default async function DivisionPage({
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
   // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
   // (The queue no longer offers the invite resend: the server refuses it for every held board - 409 BOARD_HELD.)
+  // Match Day C2: the Online play select moved with the match format into the Division rules strip (the fixtures tab); the
+  // camera policy it gates stays in Settings - so both tabs ask.
   const onlineChessOn =
-    division.sport_key === "boardgame" && tab === "settings" && canEdit ? await onlineChessOffered(auth) : false;
+    division.sport_key === "boardgame" && ((tab === "settings" && canEdit) || (tab === "fixtures" && editable)) ? await clubOffersOnlineChess() : false;
   // The warning under the Online play select (owner ruling 2026-10-25: switching to online with players who cannot be paired
   // WARNS, it never blocks) names whoever in the field holds no Lichess link, and, in a sentence of its own, whoever holds one
   // that cannot play and must be reconnected. Read wherever that select renders - the SAME gate as `onlineChessOn`, so a club
@@ -621,7 +654,7 @@ export default async function DivisionPage({
   // exactly when it is not. A courtesy beside the form, not the form: a reader that throws is logged and the tab renders without
   // the warning, rather than the whole Settings tab answering 500 over a hint.
   let lichessGaps: ReturnType<typeof summariseLinkGaps> | undefined;
-  if (onlineChessOn) {
+  if (onlineChessOn && tab === "fixtures") {
     try {
       lichessGaps = summariseLinkGaps(await listLichessLinkGaps(auth, id));
     } catch (err) {
@@ -633,15 +666,69 @@ export default async function DivisionPage({
   // thing: the attention count is the column title's own function over the same two lists (C6), and the phase is the column's
   // own reader of the open rounds.
   const arbiterHref = arbiterOffered ? routes.divisionArbiter(orgSlug, compSlug, divSlug) : null;
+  // Match Day B2 (spec 2026-10-31 §9): on a match day an unscheduled match's row says "Find a court", into Match Day. A match day
+  // is the one rule the competition page's Open Match Day asks (`needsYouHome` of the day's fixture count), and the link goes
+  // to the same organiser-only page, so it is read for the organiser - `editable`, the gate Set time beside it already has -
+  // and on the one tab that draws the run sheet. Anyone else reads nothing: no query, no link.
+  // B4 fix round 1 (R2): where it leads is Match Day's own "Find a court" for this division (`findCourtForDivision`, the helper
+  // its Needs you reads): the first free court one of the division's ready no-court matches may be called onto (`?court=`), or
+  // the page itself when none is free — and no link at all when the division has no such match.
+  const findCourt =
+    tab === "fixtures" && editable && needsYouHome(await competitionFixturesToday(auth, competition.id)) === "match_day"
+      ? await findCourtForDivision(auth, competition.id, division.id)
+      : null;
+  const matchDayHref = findCourt === null ? null : findCourtHref(routes.competitionMatchDay(orgSlug, compSlug), findCourt.court_id);
   const arbiterEntryLine = arbiterOffered
     ? entryLine(entryStatus(openViews, attentionCount(needsOrganiserExternalPlay, flaggedExternalPlay.boards), new Date().getTime()))
     : null;
+
+  // Match Day C5b: the header's "Open" menu - the three tools that were buttons, with the labels, hrefs, new tabs, arrows and
+  // accessible names they had, gated as they were (Slideshow always; the public page and the QR poster only on a non-private
+  // competition; nothing on `canEdit`). The competition page builds the same menu from the competition's own routes.
+  //   G9: View Public Page goes straight to this division's public view - the HUB with the division selected, not the standalone
+  //   division page (owner ruling 2026-09-17; that page is slated for a 308 into the hub). Both spellings are the hub's own:
+  //   "matches" is one of `deriveHubTabs`' ids (`lib/matches-hub.ts`), and `?division=` is what `readDivisionParam` reads and
+  //   `competition-landing.tsx` seeds into the Matches tab. Its accessible name is the DIVISION's (`aria.viewPublic`).
+  //   v3/10 #3: the QR is the division-scoped poster PDF for the venue wall.
+  // No Match Day item: this header never linked Match Day (its "Find a court" link lives in the run sheet), and C5b adds none.
+  const openItems: DeskOpenItem[] = [
+    {
+      id: "slideshow",
+      label: t(dict, "action.slideshow"),
+      ariaLabel: t(dict, "aria.slideshowNewTab"),
+      href: routes.slideshowDivision(id),
+      newTab: true,
+      arrow: true,
+    },
+    ...(competition.visibility !== "private"
+      ? [
+          {
+            id: "public" as const,
+            label: t(dict, "action.viewPublic"),
+            ariaLabel: t(dict, "aria.viewPublic"),
+            href: `/shared/${orgSlug}/${competition.slug}?tab=matches&division=${divSlug}`,
+            newTab: true,
+            arrow: true,
+            plainAnchor: true,
+          },
+          {
+            id: "qr" as const,
+            label: t(dict, "action.qr"),
+            ariaLabel: t(dict, "aria.qrPoster"),
+            href: `/shared/${orgSlug}/${competition.slug}/poster.pdf?division=${divSlug}`,
+            newTab: true,
+            arrow: true,
+            plainAnchor: true,
+          },
+        ]
+      : []),
+  ];
 
   return (
     <>
       <main className="mx-auto max-w-6xl px-4 py-8">
         <div className="mb-6">
-          <div className="mt-1 flex flex-wrap items-center gap-3">
+          <div className="relative mt-1 flex flex-wrap items-center gap-3">
             <h1 className="page-title">
               {division.name}
             </h1>
@@ -654,16 +741,18 @@ export default async function DivisionPage({
             <StatusChip state={divisionChipState(division.status)} locale={locale} />
             {billingFrozen && <StatusChip state="frozen" locale={locale} />}
             <div className="flex-1" />
-            {/* Icon + label on desktop, icon-only under `sm` (v3/02 pattern 5). */}
-            <Link
-              href={routes.slideshowDivision(id)}
-              target="_blank"
-              aria-label={t(dict, "aria.slideshowNewTab")}
-              className="btn btn-ghost gap-1.5"
-            >
-              <MonitorPlay className="h-4 w-4" strokeWidth={1.75} />
-              <span className="hidden sm:inline">{t(dict, "action.slideshow")} ↗</span>
-            </Link>
+            {/* Match Day C5b (owner approved 2026-11-01): Slideshow, View Public Page and the QR poster were three buttons
+                here - icon-only under `sm` (v3/02 pattern 5), unlabelled tiles on a phone. They are ONE "Open" menu now, the
+                competition page's own component, in the place Slideshow sat (see `openItems` above). Unlike the competition
+                page this header has no phone fold, so it is NOT hidden below `md`: one menu at every width, each destination
+                once. Below `md` the panel opens as a full-width sheet under this row (`max-md:static` here, the row is
+                `relative`) rather than under the trigger, whose x depends on how the title and chips wrap. */}
+            <DeskOpenMenu
+              className="max-md:static"
+              panelClassName="max-md:inset-x-0 max-md:w-auto max-md:max-w-none"
+              label={t(dict, "desk.tools.open")}
+              items={openItems}
+            />
             {/* Division-level registration nav link removed (RS001
                 demolition); RS004 built the competition-level Registration
                 hub as its replacement but deliberately left this page's own
@@ -676,7 +765,7 @@ export default async function DivisionPage({
                 (UserPlus) — same destination, same concept, one fewer
                 dictionary key.
                 NOT gated on competition.visibility, unlike View Public/QR
-                below: this is an ORGANISER surface behind /o/, not the
+                in the Open menu above: this is an ORGANISER surface behind /o/, not the
                 public register link the deleted surface used to gate — a
                 private competition still has registrants to manage.
                 requireDivisionPage already routes through
@@ -688,41 +777,11 @@ export default async function DivisionPage({
             <Link
               href={routes.competitionRegistration(orgSlug, compSlug, "registrants", id)}
               aria-label={t(dict, "aria.registration")}
-              className="btn btn-ghost gap-1.5"
+              className="btn btn-ghost gap-1.5 max-md:min-h-11"
             >
               <UserPlus className="h-4 w-4" strokeWidth={1.75} />
               <span className="hidden sm:inline">{t(dict, "action.registration")}</span>
             </Link>
-            {competition.visibility !== "private" && (
-              // G9: straight to this division's public view — which is now the
-              // HUB with the division selected, not the standalone division
-              // page (owner ruling 2026-09-17; that page is slated for a 308
-              // into the hub). Both spellings are the hub's own: "matches" is
-              // one of `deriveHubTabs`' ids (`lib/matches-hub.ts`), and
-              // `?division=` is what `readDivisionParam` reads and
-              // `competition-landing.tsx` seeds into the Matches tab.
-              <a
-                href={`/shared/${orgSlug}/${competition.slug}?tab=matches&division=${divSlug}`}
-                target="_blank"
-                aria-label={t(dict, "aria.viewPublic")}
-                className="btn btn-ghost gap-1.5"
-              >
-                <Globe className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "action.viewPublic")} ↗</span>
-              </a>
-            )}
-            {competition.visibility !== "private" && (
-              // v3/10 #3: division-scoped QR poster PDF for the venue wall.
-              <a
-                href={`/shared/${orgSlug}/${competition.slug}/poster.pdf?division=${divSlug}`}
-                target="_blank"
-                aria-label={t(dict, "aria.qrPoster")}
-                className="btn btn-ghost gap-1.5"
-              >
-                <Printer className="h-4 w-4" strokeWidth={1.75} />
-                <span className="hidden sm:inline">{t(dict, "action.qr")}</span>
-              </a>
-            )}
           </div>
           {/* v8: primary actions live on their own row under the title —
               Start / Schedule / Invite wrap cleanly at 390px. */}
@@ -805,37 +864,57 @@ export default async function DivisionPage({
         </nav>
 
         {tab === "entrants" && (
-          <EntrantsPanel
-            divisionId={id}
-            entrants={entrants}
-            logoUrls={entrantLogos}
-            canEdit={editable}
-            positionGroups={lineupCatalog.groups}
-            roles={lineupCatalog.roles ?? []}
-            // RS007/V380 dropped `divisions.eligibility` (jsonb) — the real
-            // first-class columns, so EntrantsPanel's badge reflects every
-            // division's actual restriction instead of always reading empty.
-            eligibility={{
-              category: division.category,
-              age_min: division.age_min,
-              age_max: division.age_max,
-              eligibility_note: division.eligibility_note,
-            }}
-            entrantModel={entrantModel}
-            suspensions={entrantSuspensions}
-            rosterLocked={entrantListLocked(division.status, stages.map((s) => s.kind))}
-            viewerPlan={viewerPlan}
-            divisionStatus={division.status}
-          />
+          <div className="space-y-6">
+            {/* Match Day C4 (owner, 2026-10-31): the entrant kinds left Settings for the top of this tab, organiser only - they decide
+                what the add-entrant form below offers. `canEdit` here is the PAGE-level organiser (a viewer never gets the block);
+                the block itself is handed `editable`, so a billing-frozen club's organiser sees it read-only, as Settings showed it.
+                Match Day E1 item 7 (owner): it opens by default on a division with NO entrants - the organiser is about to add the
+                first one and this is what the form offers - and stays folded under its one summary row once there is a roster. A row
+                counts whatever its status (a withdrawn entrant keeps its row): this asks "has anyone been added", not "who is playing". */}
+            {canEdit && (
+              <EntrantKindsSettings
+                divisionId={id}
+                sportKey={division.sport_key}
+                config={division.config}
+                entrantModel={entrantModel}
+                canEdit={editable}
+                defaultOpen={entrants.length === 0}
+              />
+            )}
+            <EntrantsPanel
+              divisionId={id}
+              entrants={entrants}
+              logoUrls={entrantLogos}
+              canEdit={editable}
+              positionGroups={lineupCatalog.groups}
+              roles={lineupCatalog.roles ?? []}
+              // RS007/V380 dropped `divisions.eligibility` (jsonb) — the real
+              // first-class columns, so EntrantsPanel's badge reflects every
+              // division's actual restriction instead of always reading empty.
+              eligibility={{
+                category: division.category,
+                age_min: division.age_min,
+                age_max: division.age_max,
+                eligibility_note: division.eligibility_note,
+              }}
+              entrantModel={entrantModel}
+              suspensions={entrantSuspensions}
+              rosterLocked={entrantListLocked(division.status, stages.map((s) => s.kind))}
+              viewerPlan={viewerPlan}
+              divisionStatus={division.status}
+            />
+          </div>
         )}
 
         {tab === "fixtures" && (
           <>
-            {/* PROMPT-62: two-sided tree for each knockout stage, above the
-                flat list (which keeps scheduling + Documents). Renders nothing
-                until the bracket is generated or for non-single-elim shapes. */}
+            {/* PROMPT-62: the bracket tree for each knockout stage, above the flat list. Match Day E1 item 3 (owner 2026-11-01): a
+                single-elimination tree (and a page playoff) is no longer drawn here - it opens INSIDE its stage's card, from the
+                header's Bracket button, so the page does not draw it a second time. What stays here is what a card does not
+                draw: the double-elimination layout and the stepladder's rung list. `bracketPlacement` is the one predicate both
+                sides read, so a stage is drawn in exactly one place or none (it also draws nothing until the bracket exists). */}
             {stages
-              .filter((st) => BRACKET_STAGE_KINDS.has(st.kind))
+              .filter((st) => bracketPlacement(st.kind, fixtures.filter((f) => f.stage_id === st.id)) === "page")
               .map((st) => (
                 <div key={st.id} className="mb-6">
                   <BracketPanel
@@ -914,6 +993,11 @@ export default async function DivisionPage({
               stages={stages}
               fixtures={fixtures}
               entrantNames={entrantNames}
+              // Match Day E1 item 3: the crests and scoreline headlines the card's bracket tree draws with (the same maps the
+              // page-level tree was handed before it moved into the card).
+              entrantBadges={entrantLogos}
+              headlines={headlines}
+              pools={fixturePools}
               activeEntrantIds={activeEntrantIds}
               entrantSeeds={entrantSeeds}
               venues={panelVenues}
@@ -943,6 +1027,24 @@ export default async function DivisionPage({
               onlinePlay={runSheetOnlinePlay}
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
+              matchDayHref={matchDayHref}
+              rulesStrip={{
+                divisionId: id,
+                sportKey: division.sport_key,
+                variantKey: division.variant_key,
+                divisionConfig: (division.config ?? {}) as Record<string, unknown>,
+                // The stored division order as is (`DivisionRow.tiebreakers` is already `string[] | null`): null is "the sport's".
+                divisionTiebreakers: division.tiebreakers as TiebreakerKey[] | null,
+                tableKinds: [...new Set(stages.map((s) => s.kind).filter(stageTakesPoints))] as TableStageKind[],
+                canEdit: editable,
+                ruleDict,
+                pointsDict,
+                // The variant select and the started-stage locks are an editor's: a reader sees the format read-only.
+                variants: editable ? await listVariantOptions(auth, division.sport_key) : [],
+                lockedFields: editable ? await divisionLockedFields(auth, id) : [],
+                onlineChessOffered: onlineChessOn,
+                lichessGaps,
+              }}
             />
           </>
         )}
@@ -1129,8 +1231,6 @@ export default async function DivisionPage({
             }}
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
-            lichessGaps={lichessGaps}
-            variants={await listVariantOptions(auth, division.sport_key)}
             // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
             // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).
             structureLocked={formatAlreadyLocked(fixtures.length)}
@@ -1147,13 +1247,6 @@ export default async function DivisionPage({
               progression: (st.progression ?? null) as unknown as StageDraft["progression"],
             }))}
             canEdit={editable}
-            entrantModel={entrantModel}
-            entrantModelSource={
-              (() => {
-                const e = (division.config as { entrants?: unknown } | null)?.entrants;
-                return e && typeof e === "object" ? "override" : "sport";
-              })()
-            }
             divisionPathPrefix={`/o/${orgSlug}/c/${compSlug}/d/`}
             fixturesHref={routes.division(orgSlug, compSlug, divSlug, "fixtures")}
             autoPosts={division.auto_posts}

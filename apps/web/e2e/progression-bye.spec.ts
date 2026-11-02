@@ -6,6 +6,7 @@ import {
   TAG,
   divisionPath,
   expectNoHorizontalScroll,
+  openBracket,
   screenshotAtWidths,
 } from "./helpers";
 
@@ -212,7 +213,8 @@ test("a progression-seeded bye reads as a bye on the run sheet and in the bracke
   await expect(byeRow).not.toContainText(UI_EN["bracket.tbd"] ?? "TBD");
 
   // ── The bracket panel ────────────────────────────────────────────────────
-  const bracket = page.getByTestId("bracket-panel");
+  // Match Day E1 item 3: the tree opens inside the knockout stage's card from its Bracket button (closed by default), no longer above it.
+  const bracket = await openBracket(page);
   await expect(bracket).toBeVisible();
   const bracketText = (await bracket.innerText()).replace(/\s+/g, " ");
   console.log("bracket panel text:", bracketText.slice(0, 600));

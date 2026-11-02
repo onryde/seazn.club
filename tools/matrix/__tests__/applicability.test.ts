@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 import { SPORT_RULES, configKeysFor } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { stageKeysFor } from "@seazn/engine/sport";
 import { REFUSED_CELL_REASON, ROW_KEYS, SPORT_KEYS, TEMPLATE_ROW_KEYS, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
-import { templatesForSport } from "../../../apps/web/src/lib/format-templates.ts";
+import { STAGE_TEMPLATES, templatesForSport } from "../../../apps/web/src/lib/format-templates.ts";
 import {
   ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, P6_SPORTS, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, gapReason, planL3, rowCounts, scenarioCounts, stageFactsOf,
   type CellFacts, type PlannedCase, type Rule, type WitnessCell,
@@ -595,17 +595,28 @@ describe("applicability — the cells the product refuses (chess is individual-o
     expect(refused.sort()).toEqual([...REFUSED_CELLS].sort());
     expect(REFUSED_REASON.test(REFUSED_CELL_REASON)).toBe(true);
   });
-  it("on every template row the matrix refuses exactly what the builder does not offer (format-templates templatesForSport), every sport", () => {
+  // The Triple round robin is offered to NO sport (owner ruling 2026-11-01, Match Day D1 legs Option A), but it is not
+  // refused: the API still takes legs up to 8 and divisions stored as one still play it. So its row stays planned, and the
+  // parity below is "refused exactly where the builder does not offer it for a SPORT reason". RETIRED_ROWS is the ruling's
+  // literal; the product's own `retired` marks must equal it.
+  const RETIRED_ROWS = ["triple_rr"];
+  it("on every template row the matrix refuses exactly what the builder does not offer (format-templates templatesForSport), every sport — a retired template stays planned", () => {
+    expect(STAGE_TEMPLATES.filter((t) => t.retired).map((t) => t.key)).toEqual(RETIRED_ROWS);
     let judged = 0;
     let unoffered = 0;
+    let retired = 0;
     for (const row of TEMPLATE_ROW_KEYS) for (const s of SPORT_KEYS) {
       const offered = templatesForSport(s).some((t) => t.key === row);
-      expect(refusedCell(row, s) === null, `${row}|${s}`).toBe(offered);
+      const isRetired = RETIRED_ROWS.includes(row);
+      expect(offered && isRetired, `${row}|${s}: a retired template is offered`).toBe(false);
+      expect(refusedCell(row, s) === null, `${row}|${s}`).toBe(offered || isRetired);
       judged++;
-      if (!offered) unoffered++;
+      if (isRetired) retired++;
+      else if (!offered) unoffered++;
     }
     expect(judged).toBe(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length);
     expect(unoffered).toBe(REFUSED_CELLS.length);
+    expect(retired).toBe(RETIRED_ROWS.length * SPORT_KEYS.length);
   });
   it("a refused cell plans no L3 case and drops EVERY L3 id with the refusal as the reason, kind inapplicable, even LIFECYCLE", () => {
     expect(base.cases.filter((c) => isRefusedCell(c.cell))).toEqual([]);

@@ -51,15 +51,18 @@ import {
   addEntrantsViaApi,
   apiJson,
   competitionPath,
+  closeStagePanel,
   createCompetitionViaUi,
   divisionPath,
+  openStagePanel,
 } from "../helpers";
 // Directive-free and JSX-free on purpose (design §T0), which is why a spec can
 // import it. The picker's own option label, so a rename of "Best of 3" moves
 // this file with it instead of leaving it asserting yesterday's copy.
-import { SINGLE_SET_POINTS_LABEL, SPORT_RULES, ruleOptionLabel } from "../../src/lib/match-rules";
+import { SINGLE_SET_POINTS_LABEL, SPORT_RULES } from "../../src/lib/match-rules";
 // The dictionary key of a variant label is the map's, not `variant.<sport>.<key>`: `bwf-3x15` is `variant.badminton.bwf3x15`.
 import { variantWordKey } from "../../src/lib/variant-label-keys";
+import { openPanels } from "../helpers/rules-strip";
 
 /** Every user-facing string this file asserts comes from the dictionary the
  *  product renders — never retyped here (house pattern: run-sheet.spec.ts,
@@ -170,17 +173,13 @@ function stageSheet(page: Page, heading: string) {
     .filter({ has: page.getByRole("heading", { name: heading, exact: true }) });
 }
 
-/** The summary line the row renders for a given effective `bestOf` and state
- *  clause — assembled the way `StageFormatRow` assembles it
- *  (`${stageFormatHeadline(...)} · ${clause}`), from the SAME option-label
- *  lookup, so neither half is a string typed into this file. */
-/** A locked stage's header carries the format alone: the lock is stated once, in the lock line below it (T17 review M-2). */
-function lockedSummary(bestOf: number): string {
-  return ruleOptionLabel(SPORT, "bestOf", String(bestOf)) ?? String(bestOf);
-}
-function summaryLine(bestOf: number, clauseKey: string): string {
-  const headline = ruleOptionLabel(SPORT, "bestOf", String(bestOf)) ?? String(bestOf);
-  return `${headline} · ${L[clauseKey]}`;
+/** What the card's one-line summary OPENS with for a stage at this best-of: the format clause, in the public line's own words
+ *  (`format.sets.bestOf`, and `format.rules.oneGame` for a single game) - read from the public dictionary, not typed here. The
+ *  rest of the line (points, ties) is the sport's and is not this journey's claim. Match Day C3: the old row's "· Same as
+ *  division" / "· Stage override" clause is gone - the card says it DIFFERS in its own line (`stage-differs`). */
+function summaryHead(bestOf: number): RegExp {
+  const head = bestOf === 1 ? P["format.rules.oneGame"]! : P["format.sets.bestOf"]!.replace("{n}", String(bestOf));
+  return new RegExp(`^${head.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:,| ·|$)`);
 }
 
 async function readStages(request: APIRequestContext): Promise<StageRow[]> {
@@ -204,10 +203,9 @@ async function setBestOfInUi(
   page: Page,
   heading: string,
   bestOf: number,
-  expectedClauseKey: string,
 ): Promise<void> {
   const sheet = stageSheet(page, heading);
-  await sheet.getByTestId("stage-format-edit").click();
+  await openStagePanel(sheet, "format");
   const picker = sheet.getByLabel(BEST_OF_LABEL);
   await expect(picker).toBeVisible({ timeout: STEP_MS });
   await picker.selectOption(String(bestOf));
@@ -215,10 +213,8 @@ async function setBestOfInUi(
   // `onSaved` fires `router.refresh()`, so the row restates itself without a
   // reload — which is the behaviour an organiser actually gets, and worth
   // asserting rather than navigating past.
-  await expect(sheet.getByTestId("stage-format-summary")).toHaveText(
-    summaryLine(bestOf, expectedClauseKey),
-    { timeout: STEP_MS },
-  );
+  await expect(sheet.getByTestId("stage-format-summary")).toHaveText(summaryHead(bestOf), { timeout: STEP_MS });
+  await expect(sheet.getByTestId("stage-differs"), "the stage now says it differs from the division").toBeVisible({ timeout: STEP_MS });
 }
 
 test("an organiser gives the league stage its own match format, and the Finals beside it keeps the division's", async ({
@@ -331,7 +327,7 @@ test("an organiser gives the league stage its own match format, and the Finals b
   await page.goto(await divisionPath(request, divId, "?tab=fixtures"));
   const league = stageSheet(page, LEAGUE_HEADING);
   const finals = stageSheet(page, FINALS_HEADING);
-  const inherited = summaryLine(divisionBestOf, "schedule.stageFormat.inherited");
+  const inherited = summaryHead(divisionBestOf);
 
   // Opening state, both cards: inherited, and stating the division's number.
   await expect(league.getByTestId("stage-format")).toHaveAttribute(
@@ -340,13 +336,15 @@ test("an organiser gives the league stage its own match format, and the Finals b
     { timeout: STEP_MS },
   );
   await expect(league.getByTestId("stage-format-summary")).toHaveText(inherited);
+  await expect(league.getByTestId("stage-differs"), "inherited: nothing differs from the division").toHaveCount(0);
   await expect(finals.getByTestId("stage-format")).toHaveAttribute(
     "data-stage-format-state",
     "inherited",
   );
   await expect(finals.getByTestId("stage-format-summary")).toHaveText(inherited);
+  await expect(finals.getByTestId("stage-differs")).toHaveCount(0);
 
-  await setBestOfInUi(page, LEAGUE_HEADING, LEAGUE_BEST_OF, "schedule.stageFormat.overridden");
+  await setBestOfInUi(page, LEAGUE_HEADING, LEAGUE_BEST_OF);
   await expect(league.getByTestId("stage-format")).toHaveAttribute(
     "data-stage-format-state",
     "overridden",
@@ -508,11 +506,12 @@ test("the format lock is per stage: the played stage refuses, the stage that has
     "locked",
     { timeout: STEP_MS },
   );
-  await expect(league.getByTestId("stage-format-summary")).toHaveText(
-    lockedSummary(LEAGUE_BEST_OF),
-  );
-  await expect(league.getByTestId("stage-format-edit")).toHaveCount(0);
+  await expect(league.getByTestId("stage-format-summary")).toHaveText(summaryHead(LEAGUE_BEST_OF));
+  // The Match rules button still opens the panel (a started stage READS it), but the panel offers no Save and no reset.
+  await openStagePanel(league, "format");
+  await expect(league.getByTestId("stage-format-save")).toHaveCount(0);
   await expect(league.getByTestId("stage-format-clear")).toHaveCount(0);
+  await closeStagePanel(league, "format");
 
   // DIRECTION 2 — the stage beside it, in the SAME division, at the SAME
   // moment, after the division has already started. It is still offered, and
@@ -522,16 +521,14 @@ test("the format lock is per stage: the played stage refuses, the stage that has
     "data-stage-format-state",
     "inherited",
   );
-  await expect(finals.getByTestId("stage-format-edit")).toBeVisible();
-  await setBestOfInUi(page, FINALS_HEADING, FINALS_BEST_OF, "schedule.stageFormat.overridden");
+  await expect(finals.getByTestId("stage-tool-format")).toBeAttached();
+  await setBestOfInUi(page, FINALS_HEADING, FINALS_BEST_OF);
   await expect(finals.getByTestId("stage-format")).toHaveAttribute(
     "data-stage-format-state",
     "overridden",
   );
   // The locked card did not move while its neighbour was being edited.
-  await expect(league.getByTestId("stage-format-summary")).toHaveText(
-    lockedSummary(LEAGUE_BEST_OF),
-  );
+  await expect(league.getByTestId("stage-format-summary")).toHaveText(summaryHead(LEAGUE_BEST_OF));
 
   // The same two directions on the endpoint itself, one call apart, so the
   // 409 is read against a 200 rather than on its own.
@@ -668,9 +665,9 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   });
   await page.goto(await divisionPath(request, divId, "?tab=fixtures"));
   const finals = stageSheet(page, FINALS_HEADING);
-  await setBestOfInUi(page, FINALS_HEADING, 1, "schedule.stageFormat.overridden");
+  await setBestOfInUi(page, FINALS_HEADING, 1);
 
-  await finals.getByTestId("stage-format-edit").click();
+  await openStagePanel(finals, "format");
   const single = finals.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true });
   await expect(single).toBeVisible({ timeout: STEP_MS });
   // The control SET: one points field, and neither of the pair it replaces.
@@ -717,9 +714,7 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   });
   await finals.getByTestId("stage-format-save").click();
   await expect(finals.getByTestId("stage-format-save")).toHaveCount(0, { timeout: STEP_MS });
-  await expect(finals.getByTestId("stage-format-summary")).toHaveText(
-    summaryLine(1, "schedule.stageFormat.overridden"),
-  );
+  await expect(finals.getByTestId("stage-format-summary")).toHaveText(summaryHead(1));
   // The record: BOTH keys at the number typed. `finalSetTo` is the one a best
   // of 1 is played to; `setTo` rides along so the pair can never disagree.
   await expect
@@ -731,7 +726,7 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   // still in flight: the editor hydrates from the PUT's own answer until the props catch up. (A reload here, or waiting
   // for the refresh, would read what the server stored and hide exactly that.)
   expect(heldRefreshes.length, "the hold caught the save's refresh: the reopen below is mid-refresh").toBeGreaterThan(0);
-  await finals.getByTestId("stage-format-edit").click();
+  await openStagePanel(finals, "format");
   await expect(single).toHaveValue(String(BO1_POINTS));
   await finals.getByTestId("stage-format-cancel").click(); // while the editor is open, its Cancel is the only way out
   releaseRefresh();
@@ -774,11 +769,8 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
 
   await page.goto(await divisionPath(request, bo1DivId, "?tab=fixtures"));
   const poolSheet = stageSheet(page, "1. Pool");
-  await expect(poolSheet.getByTestId("stage-format-summary")).toHaveText(
-    summaryLine(1, "schedule.stageFormat.overridden"),
-    { timeout: STEP_MS },
-  );
-  await poolSheet.getByTestId("stage-format-edit").click();
+  await expect(poolSheet.getByTestId("stage-format-summary")).toHaveText(summaryHead(1), { timeout: STEP_MS });
+  await openStagePanel(poolSheet, "format");
   const inheritedSingle = poolSheet.getByRole("spinbutton", {
     name: SINGLE_SET_POINTS_LABEL,
     exact: true,
@@ -800,7 +792,7 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
 
   // An edit: both keys at the number typed, and NO best-of pinned — the stage
   // keeps inheriting the division's format.
-  await poolSheet.getByTestId("stage-format-edit").click();
+  await openStagePanel(poolSheet, "format");
   await inheritedSingle.fill(String(BO1_INHERITED_POINTS));
   await poolSheet.getByTestId("stage-format-save").click();
   await expect(poolSheet.getByTestId("stage-format-save")).toHaveCount(0, { timeout: STEP_MS });
@@ -818,22 +810,24 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
     config: { bestOf: 1, setTo: dead, finalSetTo: played },
   });
   expect(divSeed.status, `seeding the division's mismatched pair → ${JSON.stringify(divSeed.error)}`).toBe(200);
+  // Match Day C2: the division's match format is edited on the Division rules strip (Fixtures tab), not in Settings.
+  const rules = page.getByTestId("division-rules-strip");
   const openSettingsFormat = async () => {
-    await page.goto(await divisionPath(request, bo1DivId, "?tab=settings"));
-    await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-    await page.getByRole("button", { name: /Format/ }).click();
+    await page.goto(await divisionPath(request, bo1DivId, "?tab=fixtures"));
+    await expect(rules).toBeVisible({ timeout: STEP_MS });
+    await openPanels(rules, "format");
   };
   await openSettingsFormat();
-  const settingsSingle = page.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true });
+  const settingsSingle = rules.getByRole("spinbutton", { name: SINGLE_SET_POINTS_LABEL, exact: true });
   await expect(settingsSingle).toHaveValue(String(played), { timeout: STEP_MS });
 
   // 3a. "Default" on the best-of picker with the points left UNTOUCHED: the
   // save must still align the stored pair to the number played. Typing first
   // (3b) would copy the value to both keys on its own and hide whether the
   // save path is told what a blank best-of falls back to (review, 2026-09-25).
-  await page.getByLabel(BEST_OF_LABEL).selectOption("");
+  await rules.getByLabel(BEST_OF_LABEL).selectOption("");
   await expect(settingsSingle).toHaveValue(String(played));
-  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await rules.getByTestId("division-rules-format-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
   await expect
     .poll(
@@ -847,13 +841,13 @@ test("best of 1: ONE 'Points to win' field — on a stage that overrides to it, 
   // 3b. Typing a new number writes both keys.
   await openSettingsFormat();
   await expect(settingsSingle).toHaveValue(String(played), { timeout: STEP_MS });
-  await expect(page.getByRole("spinbutton", { name: ANY_POINTS_FIELD })).toHaveCount(1);
+  await expect(rules.getByRole("spinbutton", { name: ANY_POINTS_FIELD })).toHaveCount(1);
   await settingsSingle.fill(String(BO1_SETTINGS_POINTS));
   // "Default" on the picker keeps the SAVED best-of here, so the single field
   // must survive it — the grid is told what a blank falls back to.
-  await page.getByLabel(BEST_OF_LABEL).selectOption("");
+  await rules.getByLabel(BEST_OF_LABEL).selectOption("");
   await expect(settingsSingle).toHaveValue(String(BO1_SETTINGS_POINTS));
-  await page.getByRole("button", { name: L["divset.saveRules"], exact: true }).click();
+  await rules.getByTestId("division-rules-format-save").click();
   await expect(page.getByText(L["divset.notice.rulesSaved"])).toBeVisible({ timeout: STEP_MS });
   await expect
     .poll(

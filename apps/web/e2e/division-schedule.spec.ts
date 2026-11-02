@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { TAG, apiJson, activeOrg, seedVenueWithCourts, setDateTime } from "./helpers";
+import { dayLabel } from "../src/lib/day-label";
 
 // PROMPT-33 item 4 (v3/04 §3), re-anchored for Competition Desk W2 (Task 4):
 // the division fixtures page's run sheet groups fixtures by day, renders
@@ -84,49 +85,39 @@ test("the run sheet groups fixtures by day and prints them in the competition tz
   const url = `/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`;
   await page.goto(url);
 
-  // Round grouping (item 1) — the run sheet (Competition Desk W2) keeps
-  // "Round {n}" as an in-row label (Task 4 supplement C2 reuses
-  // `schedule.round`, never a second key), so this line was PREDICTED to
-  // survive and was verified by running the spec, not by reasoning about it
-  // (Task 4 supplement C6).
-  await expect(page.getByText("Round 1", { exact: false }).first()).toBeVisible();
-  // The round-dates bar is retired WITH the run sheet (W2): both places that
-  // rendered `data-testid="round-dates"` (the round-grouped non-bracket list
-  // and the bracket stage's own round sections) are gone from
-  // `stages-panel.tsx`. The fact this line was protecting — that a scheduled
-  // fixture prints its date where the organiser reads it — now lives on the
-  // day group header, keyed by the day the seed itself put the fixtures on
-  // (never a typed constant, so this stays a witness if the seed ever moves).
-  await expect(page.locator(`[data-run-sheet-day="${dayKey}"]`)).toBeVisible();
+  // Round grouping (item 1) - Match Day E1 item 1: the stage card groups its rows under a header BAR per round ("Round 1 - 0 of 2 done - Tue 15
+  // Sep - 09:00-10:00"). The bar names the round and, since the day headings left the stage card, the day the round is played on.
+  const bars = page.getByTestId("run-sheet-round-bar");
+  await expect(bars.first()).toBeVisible();
+  await expect(bars.first()).toContainText("Round 1");
+  // The day the seed put the fixtures on, derived from the seed (never a typed constant, so this stays a witness if the seed ever
+  // moves), is on the first round's bar.
+  await expect(page.locator("[data-run-sheet-round-dates]").first()).toContainText(dayLabel(dayKey, "en"));
+  await expect(page.locator("[data-run-sheet-day]"), "no day headings in a stage card").toHaveCount(0);
 
   // Timezone honesty (item 2): competition tz caption (moved into the run
-  // sheet's own filter segment, Task 4 supplement C2 — same testid), and the
-  // 09:00Z fixture renders as nine o'clock ("09:00" or "9:00 AM") — NOT
+  // sheet's own filter segment, Task 4 supplement C2 - same testid), and the
+  // 09:00Z fixture renders as nine o'clock ("09:00" or "9:00 AM") - NOT
   // 18:00/6:00 PM Tokyo browser time.
   await expect(page.getByTestId("tz-caption")).toHaveText("Times shown in UTC");
   await expect(page.getByText(/\b0?9:00/).first()).toBeVisible();
   await expect(page.getByText(/18:00|6:00\s?PM/)).toHaveCount(0);
 
-  // Unscheduled section pinned with count + CTA (item 3) — this header stays
-  // in `stages-panel.tsx` through Task 4 on purpose (Task 5 moves it to the
-  // stage rail), so `capacity-precheck.spec.ts` keeps its anchor too.
-  //
-  // The copy is "To schedule in this stage" since max-effort review finding 11:
-  // it used to read "Not scheduled yet" beside the run sheet's own "Not yet
-  // scheduled" — a word-for-word transposition on one screen, over two
-  // different numbers. Naming the scope is what makes the two reconcilable.
-  await expect(page.getByText("To schedule in this stage")).toBeVisible();
-  // ...and the sheet's own division-wide heading is still there, distinct.
-  await expect(page.getByText("Not yet scheduled")).toBeVisible();
-  // Owner ruling (competition desk W3, "remove auto-schedule from the fixtures
-  // page"): the "Auto-schedule remaining" CTA no longer exists here at all —
-  // scheduling lives on the Schedule page, which owns the full
-  // `AutoScheduleMode` flow. What this page keeps is the FACT (the unscheduled
-  // count) wrapped in a link to where the action moved, so the assertion is
-  // repointed at that rather than deleted.
-  const unscheduledLink = page.getByTestId("stage-unscheduled-count");
-  await expect(unscheduledLink).toBeVisible();
-  await expect(unscheduledLink.locator("..")).toHaveAttribute("href", /\/schedule$/);
+  // The unscheduled leftover (item 3). Match Day E1 item 1 removed the "To schedule in this stage N ->" footer and the "Not yet scheduled"
+  // group: the count is in the card's counts line, and the leftover row is in its round saying "No time yet".
+  await expect(page.getByTestId("stage-progress-counts")).toContainText("1 to schedule");
+  // E1 fix round 1 (m3): that clause is the way to the schedule page the removed footer used to be - a real link, not just words.
+  const toScheduleLink = page.getByTestId("stage-progress-to-schedule");
+  await expect(toScheduleLink, "the clause is the link").toHaveText("1 to schedule");
+  await expect(toScheduleLink).toHaveAttribute("href", /\/schedule$/);
+  const leftover = gen.data!.fixtures.find((f) => f.id === ids[ids.length - 1]!)!;
+  await expect(page.locator(`[data-fixture-no="${leftover.fixture_no}"]`)).toContainText("No time yet");
+  await expect(page.getByText("Not yet scheduled"), "the group is gone").toHaveCount(0);
+  await expect(page.getByText("To schedule in this stage"), "the footer is gone").toHaveCount(0);
+  // Final review G6: `stage-unscheduled-count` is rendered by no source now, so asserting it absent could never fail. What replaced the
+  // footer is asserted instead: the clause above is in the counts line, and it is the only "to schedule" door on the page.
+  await expect(page.getByTestId("stage-progress-counts").getByTestId("stage-progress-to-schedule")).toHaveCount(1);
+  await expect(page.getByTestId("stage-progress-to-schedule"), "no second door where the footer was").toHaveCount(1);
 
   // Inline "Set time" (item 5, re-aimed — fix round 1) -> notice grows an
   // Undo that restores the slot. The ONLY unscheduled fixture is the one
@@ -227,12 +218,7 @@ test("a division with an END date and no start date still renders its fixtures t
   await page.goto(`/o/${org.slug}/c/${comp.data!.slug}/d/${div.data!.slug}?tab=fixtures`);
 
   // The page rendered its own content — not a boundary, not a blank shell.
-  // Copy changed by max-effort review finding 11 (see the note above).
-  await expect(page.getByText("To schedule in this stage")).toBeVisible();
-  // Same owner ruling as the first test in this file: the CTA is gone from the
-  // fixtures page; the unscheduled count and its link to /schedule are what
-  // remain true and worth pinning.
-  const unscheduledLink = page.getByTestId("stage-unscheduled-count");
-  await expect(unscheduledLink).toBeVisible();
-  await expect(unscheduledLink.locator("..")).toHaveAttribute("href", /\/schedule$/);
+  // Match Day E1 item 1: the footer is gone; the unscheduled count is in the card's counts line.
+  await expect(page.getByTestId("stage-progress-counts")).toContainText(/\d+ to schedule/);
+  await expect(page.getByText("To schedule in this stage")).toHaveCount(0);
 });

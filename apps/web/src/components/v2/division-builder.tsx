@@ -6,7 +6,12 @@
 // override object, validated server-side by the pinned module's configSchema.
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MatchRuleFields, buildRuleOverride, rulesFor } from "./match-rules";
+import { MatchFormatEditor, buildRuleOverride, rulesFor } from "./rules/match-format-editor";
+import { PointsEditor, divisionPointsDirty, divisionPointsOf, divisionPointsPatch, hydrateDivisionPoints } from "./rules/points-editor";
+import { TiebreaksEditor, divisionOrderRefusals } from "./rules/tiebreaks-editor";
+import { stageTakesPoints } from "./stage-rules/stage-points-model";
+import { moduleFor } from "@/lib/rule-scope";
+import type { TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import { ruleFormState } from "./match-rules-state";
 import { ruleContextFor } from "@/lib/match-rules";
 import {
@@ -31,6 +36,8 @@ import { defaultMatchMinutes } from "@/lib/match-length";
 import { pickVariant } from "@/lib/preferred-variant";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
 import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
+import { LegsChoice } from "@/components/v2/legs-choice";
+import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/format-bounds";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
 import { CourtMultiPicker } from "@/components/v2/shared/court-multi-picker";
 // P9: BOARD-side Venue — no calendar (see court-multi-picker.tsx).
@@ -73,34 +80,10 @@ const TEMPLATE_FAMILY: Record<string, string> = {
   swiss_knockout: "swiss_knockout",
   knockout: "knockout",
   double_elim: "double_elim",
-  triple_rr: "league",
   americano: "americano",
   mexicano: "americano",
   ladder: "ladder",
 };
-
-// The Top N values the wizard's qualifier <select> offers, per template.
-// ONE declaration, because the list is read TWICE — to render the options
-// and to decide whether a carried-over `qualified` is still valid when the
-// organiser switches template. The two used to be separate literals; a
-// value offered by one and rejected by the other is how a chosen Top N
-// silently snaps back to 4.
-function qualifierOptionsFor(templateKey: string): readonly number[] {
-  if (templateKey === "group_stepladder") return [3, 4, 5, 6];
-  // Swiss Knockout's finals half is the GENERIC single-elimination bracket
-  // (scheduling/bracket.ts pads to nextPowerOfTwo and byes the leaders), so
-  // an odd Top N is a real shape rather than an error — 3 especially: the
-  // qualifying winner waits while second plays third. The other templates
-  // here feed brackets an organiser expects to be clean powers of two.
-  //
-  // The top of this list is load-bearing: format.swiss_knockout.body.1
-  // promises "anything from 2 to 32" in all four locales, and the Settings
-  // tab's own Top N input is min 2 / max 32. A wizard that stopped at 16 made
-  // the marketing copy false and left the largest brackets reachable only
-  // after the division already existed.
-  if (templateKey === "swiss_knockout") return [2, 3, 4, 6, 8, 12, 16, 24, 32];
-  return [2, 4, 8, 16];
-}
 
 // Recommendation slug → wizard template key (strip picks land here).
 const FAMILY_TEMPLATE: Record<string, string> = {
@@ -269,6 +252,10 @@ export function DivisionBuilder({
   );
   // Match-rule values keyed by RuleField.key; "" = keep the variant default.
   const [ruleValues, setRuleValues] = useState<Record<string, string>>({});
+  // Match Day C2: the division's points and tie-break order, set on the Format tab with the same editors the Division rules
+  // strip shows. null = untouched: the create sends the variant's own points and no order (the sport's).
+  const [pointsValues, setPointsValues] = useState<Record<string, string> | null>(null);
+  const [tiebreakOrder, setTiebreakOrder] = useState<TiebreakerKey[] | null>(null);
 
   // Eligibility template (doc 06 §2): age cutoff + category + note. RS007/
   // V380: these map onto the first-class columns (category/age_max/
@@ -318,6 +305,9 @@ export function DivisionBuilder({
   const [previewError, setPreviewError] = useState<string | null>(null);
 
   const [error, setError] = useState<string | null>(null);
+  // Match Day E1 item 8 (D1): a refusal of a format knob (formatBoundProblem) remembers the knob values it was raised for, so it can be
+  // dropped the moment the organiser changes the box it names (see the render-phase clear below).
+  const [formatRefusal, setFormatRefusal] = useState<{ text: string; knobs: string } | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   // Parallel to paywallFeature rather than folded into one object, so every
   // existing `paywallFeature === "..."` comparison (the archived-slot
@@ -332,6 +322,8 @@ export function DivisionBuilder({
     const firstVariant = next ? pickVariant(next.key, next.variants) : "";
     setVariantKey(firstVariant);
     setRuleValues({}); // rules are sport-specific
+    setPointsValues(null);
+    setTiebreakOrder(null);
     // Chess is offered no americano/mexicano (templatesForSport): a pick the new sport is not offered falls back to
     // league rather than staying selected behind a card that is no longer rendered.
     setTemplate((t) => templateAfterSportChange(t, key));
@@ -371,20 +363,57 @@ export function DivisionBuilder({
     };
   }
 
+  // Templates whose second stage is sized by the `qualified` knob, so the
+  // wizard has to show the Top N control. swiss_knockout is here for the
+  // same reason league_ko is: without it the builder would silently ship
+  // every Swiss Knockout as a Top 4 (the state's default) with no control
+  // on screen saying so — the same "no control anywhere that says so" trap
+  // the swiss rounds knob already avoids in format-templates.ts.
+  // group_playoffs is NOT here: the Page playoff is a fixed four. Nor are
+  // ko_plate and qualifying_main, which read `qualified` too (the Plate's
+  // round-1-losers count, the Main draw's intake) at their own default of 4:
+  // buildStages sends them that, never a Top N typed for another template.
+  // Declared above buildStages, which runs during render (draftTableKinds).
+  const hasSecondStage =
+    template === "league_ko" ||
+    template === "groups_ko" ||
+    template === "group_stepladder" ||
+    template === "swiss_knockout";
+  // The Format tab's other bounded number knobs, shown per template. The JSX and formatBoundProblem read these same two,
+  // so a knob is judged exactly when it is on screen.
+  const showPools = template === "groups_ko";
+  const showRounds = template === "swiss" || template === "swiss_playoff" || template === "swiss_knockout";
+
+  /** The first VISIBLE format knob outside FORMAT_BOUNDS, as a sentence naming it, or null (fix round 1, M1). Whole
+   *  numbers only: a cleared box (Number("") === 0), 40 and 3.5 are all refused here, before any POST, rather than
+   *  clamped into a value the organiser did not type or sent to fail after the division exists. A knob the template does
+   *  not show is not judged: buildStages does not read it (the Top N) or the template ignores it. */
+  function formatBoundProblem(): string | null {
+    const shown: [FormatBoundKey, number, MessageKey][] = [];
+    if (showPools) shown.push(["pools", poolCount, "wizard.pools"]);
+    if (showRounds) shown.push(["swissRounds", swissRounds, "wizard.rounds"]);
+    if (hasSecondStage) shown.push(["qualify", qualified, "wizard.qualify"]);
+    for (const [field, value, label] of shown) {
+      if (!withinFormatBounds(field, value)) {
+        const { min, max } = FORMAT_BOUNDS[field];
+        return msg("wizard.err.formatBound", { field: msg(label), min, max });
+      }
+    }
+    return null;
+  }
+
   function buildStages(): StageDraft[] {
-    // B (round-4 review): poolCount is a free `<input type="number" min={2}
-    // max={8}>` — HTML `min` doesn't stop a cleared field reading as
-    // Number("")===0, which mints groups_ko's take rule with n:Infinity
-    // (serialises as n:null over the wire) instead of a clean validation
-    // message. qualified is a fixed <select> here (always one of a known-good
-    // set) so this is defence-in-depth for it, not a live gap — same guard as
-    // division-settings.tsx's free-text qualified input, for one shared
-    // clampKnob (format-templates.ts) rather than two divergent ones.
+    // B (round-4 review): poolCount and qualified are free number inputs bounded by FORMAT_BOUNDS — HTML `min` doesn't
+    // stop a cleared field reading as Number("")===0, which mints groups_ko's take rule with n:Infinity (serialises as
+    // n:null over the wire) instead of a clean validation message. The same guard as division-settings.tsx's, for one
+    // shared clampKnob (format-templates.ts) over one set of bounds (format-bounds.ts) rather than two divergent ones.
+    // The Top N is read only where it is on screen (hasSecondStage): it carries across the templates that show it, and
+    // a template that does not show it gets the templates' default 4 rather than a value the organiser cannot see.
     return applyStandingsCarry(
       buildTemplateStages(template, {
-        qualified: clampKnob(qualified, 2, 32),
+        qualified: hasSecondStage ? clampKnob(qualified, FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max) : 4,
         swissRounds,
-        poolCount: clampKnob(poolCount, 2, 8),
+        poolCount: clampKnob(poolCount, FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max),
         legs,
       }),
       standingsCarry,
@@ -402,6 +431,13 @@ export function DivisionBuilder({
     const ruleProblem = ruleProblemText();
     if (ruleProblem !== null) {
       setError(ruleProblem);
+      return;
+    }
+    // So is the Format tab: going back to Basics is free and Basics -> Scheduling checks Basics only, so a Top N of 3.5
+    // could otherwise reach the stages POST - which refuses it after the division itself was created, leaving it empty.
+    const formatProblem = formatBoundProblem();
+    if (formatProblem !== null) {
+      refuse(formatProblem);
       return;
     }
 
@@ -423,8 +459,18 @@ export function DivisionBuilder({
     // Only rules the user actually set become overrides; the rest stay on
     // the variant's defaults. The variant's preset hands a scaled field its scale (`ruleContextFor`: cricket's overs
     // count in the variant's over length, five on The Hundred) - and only that: no best-of or "Default" reads it.
-    const variant = sport?.variants.find((v) => v.key === variantKey);
-    const overrides = buildRuleOverride(sportKey, ruleValues, ruleContextFor(sportKey, variant?.config));
+    const overrides: Record<string, unknown> = { ...ruleOverrides };
+    // The Format tab's points, laid over the points the config keeps (only once the organiser touched a box).
+    if (pointsValues !== null && divisionPointsDirty(sportKey, builderPoints, pointsValues)) {
+      overrides.points = divisionPointsPatch(sportKey, builderPoints, pointsValues);
+    }
+    // The Format tab's tie-break order, asked again of the structure it is sent with (fix round 1, M6): a template changed
+    // since the order was edited can leave no table to rank (the editor is gone, the order with it) or a kind the order does
+    // not fit - sent as it stands, the order would ride into a division that cannot use it.
+    const sentOrder =
+      tiebreakOrder !== null && sportModule !== null && draftTableKinds.length > 0 && divisionOrderRefusals(sportModule, builderCfg, draftTableKinds, tiebreakOrder).length === 0
+        ? tiebreakOrder
+        : null;
 
     setBusy(true);
     // Declared here, outside try{}, purely so the catch block below can
@@ -444,6 +490,9 @@ export function DivisionBuilder({
             sport_key: sportKey,
             variant_key: variantKey,
             config: overrides,
+            // The Format tab's tie-break order: the division's own (`divisions.tiebreakers`), the field every stage on
+            // "Use the division's order" reads. Absent while untouched: the sport's.
+            ...(sentOrder === null ? {} : { tiebreakers: sentOrder }),
             ...eligibilityPatch(),
           },
         },
@@ -508,6 +557,17 @@ export function DivisionBuilder({
   }
 
   const hint = variantHint(sportKey, variantKey, locale);
+  // What the division will be created with (the variant's preset under the rules typed on Basics): the Format tab's points
+  // and tie-breaks read it, and the create sends the same overrides.
+  const sportModule = moduleFor(sportKey);
+  const variantPreset = sport?.variants.find((v) => v.key === variantKey)?.config;
+  const ruleOverrides = buildRuleOverride(sportKey, ruleValues, ruleContextFor(sportKey, variantPreset));
+  const builderCfg: Record<string, unknown> = {
+    ...(variantPreset ?? {}),
+    ...Object.fromEntries(Object.entries(ruleOverrides).filter(([, v]) => v !== undefined)),
+  };
+  const builderPoints = sportModule === null ? undefined : divisionPointsOf(sportModule, builderCfg);
+  const draftTableKinds = [...new Set(buildStages().map((s) => s.kind).filter(stageTakesPoints))] as TableStageKind[];
   // W2e Task 29: what the rule grid knows before Create - the write doors' refusals beside their fields, the fields this variant
   // has no use for, the detail a switch holds. The values are laid over the variant's own preset, as the server will lay them.
   const ruleState = ruleFormState({
@@ -543,6 +603,10 @@ export function DivisionBuilder({
       const n = Number(maxAge);
       if (!Number.isInteger(n) || n <= 0) return msg("wizard.err.maxAge");
     }
+    if (t === "format") {
+      const formatProblem = formatBoundProblem();
+      if (formatProblem !== null) return formatProblem;
+    }
     if (t === "scheduling") {
       if (!(matchMinutes >= 1)) return msg("wizard.err.matchLength");
       // No "must pick at least one court" gate any more (P9 scope item 5):
@@ -553,10 +617,18 @@ export function DivisionBuilder({
     return null;
   }
 
+  /** Raise a refusal into the form's one error slot. One that is a format-knob refusal (the same sentence `formatBoundProblem` says now)
+   *  is remembered with the knobs it was raised for, so it goes when they change; any other error is never tagged, so a knob change
+   *  cannot touch it. */
+  function refuse(text: string) {
+    setError(text);
+    if (text === formatBoundProblem()) setFormatRefusal({ text, knobs: boundKnobs });
+  }
+
   function goNext() {
     const err = tabError(tab);
     if (err) {
-      setError(err);
+      refuse(err);
       return;
     }
     setError(null);
@@ -575,8 +647,26 @@ export function DivisionBuilder({
   if (shownPreview && shownPreview.knobs !== knobs) setPreview(null);
   const preview = shownPreview?.phases ?? null;
 
+  // Match Day E1 item 8 (D1): the same render-phase clear for a format refusal. It is about the bounded knobs (and the template, which
+  // decides which of them are on screen); when any of them changes, the sentence about the old value goes - from the form's error slot
+  // and from the example's - and only if the slot still holds THAT sentence, so an unrelated error raised since is never touched. A
+  // clear, not a hidden value: putting the old value back does not resurrect it.
+  const boundKnobs = JSON.stringify([template, qualified, swissRounds, poolCount]);
+  if (formatRefusal !== null && formatRefusal.knobs !== boundKnobs) {
+    setFormatRefusal(null);
+    if (error === formatRefusal.text) setError(null);
+    if (previewError === formatRefusal.text) setPreviewError(null);
+  }
+
   async function runPreview() {
     setPreviewError(null);
+    // The example draws the stages Create would send, so a knob Create refuses draws nothing either.
+    const formatProblem = formatBoundProblem();
+    if (formatProblem !== null) {
+      setPreviewError(formatProblem);
+      setFormatRefusal({ text: formatProblem, knobs: boundKnobs });
+      return;
+    }
     setPreviewBusy(true);
     const drawnFor = knobs;
     try {
@@ -597,25 +687,13 @@ export function DivisionBuilder({
     if (TAB_ORDER.indexOf(key) > tabIndex) {
       const err = tabError(tab);
       if (err) {
-        setError(err);
+        refuse(err);
         return;
       }
     }
     setError(null);
     setTab(key);
   }
-  // Templates whose second stage is sized by the `qualified` knob, so the
-  // wizard has to show the Top N control. swiss_knockout is here for the
-  // same reason league_ko is: without it the builder would silently ship
-  // every Swiss Knockout as a Top 4 (the state's default) with no control
-  // on screen saying so — the same "no control anywhere that says so" trap
-  // the swiss rounds knob already avoids in format-templates.ts.
-  // group_playoffs is NOT here: the Page playoff is a fixed four.
-  const hasSecondStage =
-    template === "league_ko" ||
-    template === "groups_ko" ||
-    template === "group_stepladder" ||
-    template === "swiss_knockout";
   const showStandingsCarry = templateHasProgression(template);
 
   return (
@@ -676,6 +754,9 @@ export function DivisionBuilder({
               value={variantKey}
               onChange={(e) => {
                 setVariantKey(e.target.value);
+                setPointsValues(null);
+                // The order was edited against the old variant's cascade (fix round 1, M6): it starts again from the sport's.
+                setTiebreakOrder(null);
                 if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(sportKey, e.target.value));
               }}
               aria-describedby={hint === undefined ? undefined : "division-variant-hint"}
@@ -703,7 +784,9 @@ export function DivisionBuilder({
             </h3>
             <p className="mt-0.5 text-xs text-slate-400">{msg("wizard.matchRulesHint")}</p>
             <div className="mt-3">
-              <MatchRuleFields sportKey={sportKey} values={ruleValues} onChange={setRuleValues} state={ruleState} />
+              {sportModule !== null && (
+                <MatchFormatEditor scope="division" mode="edit" sportKey={sportKey} module={sportModule} values={ruleValues} onChange={setRuleValues} state={ruleState} />
+              )}
             </div>
           </div>
         )}
@@ -721,7 +804,7 @@ export function DivisionBuilder({
               value={maxAge}
               onChange={(e) => setMaxAge(e.target.value)}
               placeholder={msg("wizard.ageOpen")}
-              className="input"
+              className="input min-h-11"
             />
           </label>
           <label className="block">
@@ -747,7 +830,7 @@ export function DivisionBuilder({
               max={31}
               value={cutoffDay}
               onChange={(e) => setCutoffDay(e.target.value)}
-              className="input"
+              className="input min-h-11"
               disabled={!maxAge}
             />
           </label>
@@ -826,15 +909,9 @@ export function DivisionBuilder({
                 type="radio"
                 name="template"
                 checked={template === t.key}
-                onChange={() => {
-                  setTemplate(t.key);
-                  // Keep the qualifier valid for the template's option list.
-                  if (t.key === "group_playoffs" && qualified !== 4) {
-                    setQualified(4); // the Page system is a fixed 4-team shape
-                  } else if (!qualifierOptionsFor(t.key).includes(qualified)) {
-                    setQualified(4);
-                  }
-                }}
+                // The Top N carries across the templates that show it (hasSecondStage), which all take the same
+                // range (FORMAT_BOUNDS.qualify). A template that does not show it is sent the default 4 (buildStages).
+                onChange={() => setTemplate(t.key)}
                 className="sr-only"
               />
               {/* F3 Task 6: t.key is a plain `string` (STAGE_TEMPLATES isn't
@@ -861,58 +938,54 @@ export function DivisionBuilder({
             template === "league_ko" ||
             template === "groups_ko" ||
             template === "group_stepladder") && (
-            <label className="block">
-              <span className="label">{msg("wizard.legs")}</span>
-              <select
-                value={legs}
-                onChange={(e) => setLegs(Number(e.target.value))}
-                className="select"
-              >
-                <option value={1}>{msg("wizard.legsSingle")}</option>
-                <option value={2}>{msg("wizard.legsHomeAway")}</option>
-              </select>
-            </label>
+            // Match Day D1: the same Once / Home & away control as Settings (legs-choice.tsx), two columns wide so
+            // "Home & away" keeps one line.
+            <div className="sm:col-span-2">
+              <LegsChoice legend={msg("wizard.legs")} legendClassName="label" value={legs} onChange={setLegs} />
+            </div>
           )}
-          {template === "groups_ko" && (
+          {showPools && (
             <label className="block">
               <span className="label">{msg("wizard.pools")}</span>
               <input
                 type="number"
-                min={2}
-                max={8}
+                data-format-bound="pools"
+                min={FORMAT_BOUNDS.pools.min}
+                max={FORMAT_BOUNDS.pools.max}
                 value={poolCount}
                 onChange={(e) => setPoolCount(Number(e.target.value))}
-                className="input"
+                className="input min-h-11"
               />
             </label>
           )}
-          {["swiss", "swiss_playoff", "swiss_knockout"].includes(template) && (
+          {showRounds && (
             <label className="block">
               <span className="label">{msg("wizard.rounds")}</span>
               <input
                 type="number"
-                min={1}
-                max={15}
+                data-format-bound="swissRounds"
+                min={FORMAT_BOUNDS.swissRounds.min}
+                max={FORMAT_BOUNDS.swissRounds.max}
                 value={swissRounds}
                 onChange={(e) => setSwissRounds(Number(e.target.value))}
-                className="input"
+                className="input min-h-11"
               />
             </label>
           )}
           {hasSecondStage && (
             <label className="block">
               <span className="label">{msg("wizard.qualify")}</span>
-              <select
+              {/* Match Day D1: any Top N in FORMAT_BOUNDS.qualify, the range Settings takes. Was a fixed list per
+                  template, so a Top 6 league or a Top 10 stepladder could only be set after the division existed. */}
+              <input
+                type="number"
+                data-format-bound="qualify"
+                min={FORMAT_BOUNDS.qualify.min}
+                max={FORMAT_BOUNDS.qualify.max}
                 value={qualified}
                 onChange={(e) => setQualified(Number(e.target.value))}
-                className="select"
-              >
-                {qualifierOptionsFor(template).map((n) => (
-                  <option key={n} value={n}>
-                    {msg("schedule.topN", { n })}
-                  </option>
-                ))}
-              </select>
+                className="input min-h-11"
+              />
             </label>
           )}
           {showStandingsCarry && (
@@ -1026,6 +1099,36 @@ export function DivisionBuilder({
             </div>
           )}
         </div>
+        {/* Match Day C2: the division's points and tie-break order, with the editors the Division rules strip and the stage
+            cards use. Offered while the structure keeps a table (a bracket ranks nobody). */}
+        {sportModule !== null && draftTableKinds.length > 0 && (
+          <div className="space-y-5 border-t border-slate-100 pt-4" data-testid="division-builder-rules">
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold text-slate-700">{msg("stagePoints.title")}</h3>
+              <PointsEditor
+                scope="division"
+                mode="edit"
+                module={sportModule}
+                divisionConfig={builderCfg}
+                value={pointsValues ?? hydrateDivisionPoints(sportKey, builderPoints)}
+                onChange={setPointsValues}
+                kinds={draftTableKinds}
+              />
+            </div>
+            <div className="space-y-2">
+              <h3 className="text-xs font-semibold text-slate-700">{msg("stageTiebreaks.title")}</h3>
+              <TiebreaksEditor
+                scope="division"
+                mode="edit"
+                module={sportModule}
+                value={tiebreakOrder}
+                onChange={setTiebreakOrder}
+                divisionConfig={builderCfg}
+                kinds={draftTableKinds}
+              />
+            </div>
+          </div>
+        )}
       </section>
 
       <section className={`card space-y-4 p-6 ${tab === "scheduling" ? "" : "hidden"}`}>
@@ -1048,7 +1151,7 @@ export function DivisionBuilder({
                 setMatchMinutesTouched(true);
                 setMatchMinutes(Number(e.target.value) || 30);
               }}
-              className="input w-full"
+              className="input min-h-11 w-full"
             />
             <span className="mt-0.5 block text-xs text-slate-400">{msg("wizard.matchLengthHint")}</span>
           </label>
@@ -1153,7 +1256,8 @@ export function DivisionBuilder({
         <button
           type="button"
           onClick={() => router.push(routes.competition(orgSlug, compSlug))}
-          className="btn btn-ghost"
+          // Match Day E1 item 8 (D1): the nav row's buttons hold the 44px floor (the bare `.btn` is 38px).
+          className="btn btn-ghost min-h-11"
         >
           {msg("wizard.cancel")}
         </button>
@@ -1162,7 +1266,7 @@ export function DivisionBuilder({
             <button
               type="button"
               onClick={() => setTab(TAB_ORDER[tabIndex - 1]!)}
-              className="btn btn-ghost"
+              className="btn btn-ghost min-h-11"
             >
               {msg("wizard.back")}
             </button>
@@ -1173,7 +1277,7 @@ export function DivisionBuilder({
               data-testid="division-builder-create"
               onClick={() => void submit()}
               disabled={busy || !name.trim() || !sportKey || !variantKey}
-              className="btn btn-primary"
+              className="btn btn-primary min-h-11"
             >
               {busy ? msg("wizard.creating") : msg("wizard.create")}
             </button>
@@ -1182,7 +1286,7 @@ export function DivisionBuilder({
               type="button"
               data-testid="division-builder-next"
               onClick={goNext}
-              className="btn btn-primary"
+              className="btn btn-primary min-h-11"
             >
               {msg("wizard.next")}
             </button>

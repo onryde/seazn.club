@@ -46,6 +46,8 @@ function panel(over: Record<string, unknown> = {}): string {
       orgTz="UTC"
       canExport={false}
       viewerPlan={{ plan: "pro", isStaff: false } as never}
+      // Match Day C3: the sections open from the header's buttons; these tests are about what the opened panel mounts.
+      initialOpenPanels={["points", "tiebreaks"]}
       {...over}
     />,
   );
@@ -95,11 +97,14 @@ describe("the Tie-breaks section is on a TABLE stage's card, after Points, and o
 });
 
 describe("the lock is the server's list (OC2)", () => {
-  it("listed in formatLockedStageIds: locked, the 🔒 line naming the stage; not listed: the editor; a viewer: read-only", () => {
+  it("listed in formatLockedStageIds: locked, ONE 🔒 line in organiser words; not listed: the editor; a viewer: read-only", () => {
     const rules = rulesFor("league");
     const locked = panel({ stages: stageOf("league", "Spring League"), stageTableRules: rules, formatLockedStageIds: [A] });
     expect(stateOf(locked)).toBe("locked");
-    expect(locked).toContain(UI["stageTiebreaks.locked"]!.replace("{stage}", "Spring League"));
+    expect(locked).toContain(UI["stageCard.locked"]!);
+    // Review I3: the card's one lock line is the summary's; the opened tie-breaks section is locked and says nothing of its own.
+    expect(locked.split('data-testid="stage-tiebreaks-locked"').length - 1, "the section repeats no lock line").toBe(0);
+    expect(locked.split('data-testid="stage-locked"').length - 1, "one lock line on the card").toBe(1);
     expect(stateOf(panel({ stageTableRules: rules }))).toBe("editor");
     expect(stateOf(panel({ stageTableRules: rules, formatLockedStageIds: [B] })), "another stage's lock").toBe("editor");
     expect(stateOf(panel({ stageTableRules: rules, canEdit: false }))).toBe("readonly");
@@ -115,7 +120,7 @@ describe("the cross-group line reads the panel's stage rows (§5.9)", () => {
     name: "Knockout",
     config: {},
     progression: { sources: [{ stage: "previous", take }] },
-    status: "setup",
+    status: "pending",
   });
 
   it("a group stage the next stage takes a best-Nth from shows it; a top-N take does not", () => {

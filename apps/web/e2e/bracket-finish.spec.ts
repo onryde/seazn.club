@@ -386,9 +386,11 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     const lg = await staged(request, "generic", "score", "league", ["W2a Ana", "W2a Ben", "W2a Cy"]);
     expect(lg.ready.length, "a three-entrant round robin has three fixtures").toBe(3);
     const [held, ...rest] = lg.ready;
-    await post(request, held!.id, "core.start");
-    await post(request, held!.id, "core.abandon", { reason: "rain" });
-    expect((await read(request, held!.id)).status).toBe("abandoned");
+    // Match Day C3: the card's Complete button is DISABLED while any match is open - a held one included - so the organiser
+    // cannot press it into a refusal from a fresh page. The refusal-by-name is what a STALE tab still gets: the page renders with
+    // every match settled (Complete enabled), then a result is taken back and the match is abandoned behind it.
+    const heldResult = await post(request, held!.id, "generic.result", { p1Score: 2, p2Score: 1 });
+    expect((await read(request, held!.id)).status, "rig: the match is played at first").toBe("decided");
     for (const f of rest) {
       await post(request, f.id, "generic.result", { p1Score: 2, p2Score: 1 });
       expect((await read(request, f.id)).status, "the other matches are played").toBe("decided");
@@ -402,6 +404,13 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await page.goto(`${division}?tab=fixtures`);
     await dismissCookieBanner(page);
     await expect(complete).toBeVisible();
+    await expect(complete, "every match is settled: Complete is enabled on this page").toBeEnabled();
+    // The page is now stale: the result is voided and the match is abandoned behind it, so it is held.
+    const heldEventId = (heldResult.data as { event_id: string }).event_id;
+    await post(request, held!.id, "core.void", { event_id: heldEventId });
+    await post(request, held!.id, "core.start");
+    await post(request, held!.id, "core.abandon", { reason: "rain" });
+    expect((await read(request, held!.id)).status, "rig: the match is now held").toBe("abandoned");
     await complete.click();
     const warning = page.getByTestId("schedule-warning");
     await expect(warning, "named by its players, in the organiser's words").toHaveText(ui("schedule.error.completeHeldOne", { matches: heldNames }));
@@ -412,9 +421,41 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await post(request, held!.id, "core.settle", { winner: held!.home_entrant_id, method: "organiser" });
     expect((await read(request, held!.id)).status, "the settle decided it").toBe("decided");
     await page.reload();
+    await expect(complete, "settled: every match is played, Complete is enabled again").toBeEnabled();
     await complete.click();
     await expect.poll(stageStatus, "settled, the league completes").toEqual(["complete"]);
     await expect(page.getByTestId("schedule-warning")).toHaveCount(0);
+  });
+
+  test("X-AB-5 (C3 review I2): on a FRESH page a plain-abandoned (held) match keeps the card's Complete disabled and is counted as waiting for a decision; the settle unlocks it", async ({ page, request }) => {
+    // Seam: `listFixturesAwaitingSettle` (the division page) -> `awaitingSettle` -> the panel's counts -> `stageActions`. The held
+    // match is stored `abandoned`, a status the card reads as settled, so only the page's own list can lock Complete over it.
+    const lg = await staged(request, "generic", "score", "league", ["W2a Ana", "W2a Ben", "W2a Cy"]);
+    expect(lg.ready.length, "a three-entrant round robin has three fixtures").toBe(3);
+    const [held, ...rest] = lg.ready;
+    await post(request, held!.id, "core.start");
+    await post(request, held!.id, "core.abandon", { reason: "rain" });
+    expect((await read(request, held!.id)).status).toBe("abandoned");
+    for (const f of rest) {
+      await post(request, f.id, "generic.result", { p1Score: 2, p2Score: 1 });
+      expect((await read(request, f.id)).status, "the other matches are played").toBe("decided");
+    }
+    const complete = page.getByTestId("stage-complete");
+    const division = (await fixturePath(request, held!.id)).split("/f/")[0]!;
+    await page.goto(`${division}?tab=fixtures`);
+    await dismissCookieBanner(page);
+    await expect(complete).toBeVisible();
+    await expect(complete, "a held match is open: Complete is refused before it can be pressed").toBeDisabled();
+    // Match Day E1 item 1: the reason is behind an ⓘ now - hover it and the bubble is on screen, with the held-match count.
+    await page.getByTestId("stage-complete-info").hover();
+    await expect(page.getByTestId("stage-complete-hint")).toBeVisible();
+    await expect(page.getByTestId("stage-progress-counts"), "the card says it is waiting for a decision").toContainText(ui("schedule.progress.held.one"));
+
+    await post(request, held!.id, "core.settle", { winner: held!.home_entrant_id, method: "organiser" });
+    await page.reload();
+    await expect(complete, "settled: nothing is open, Complete is enabled").toBeEnabled();
+    await expect(page.getByTestId("stage-complete-hint")).toHaveCount(0);
+    await expect(page.getByTestId("stage-progress-counts")).not.toContainText(ui("schedule.progress.held.one"));
   });
 
   test("Review Focus 2: a double submit of the settle dialog sends one settle", async ({ page, request }) => {

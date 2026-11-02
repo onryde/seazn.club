@@ -104,12 +104,13 @@ describe("CK-BO-2 the stage row's editor (stageFormatEditorValues / stageFormatS
 });
 
 describe("CK-BO-2 the stage row hands its editor the division's config when it OPENS", () => {
-  // The editor hydrates on a click, and apps/web vitest has no DOM to click (class 2): `StageFormatRow.openEditor` is not
-  // reachable from a node test, and the browser half is CI's e2e. What a node test CAN pin is the call itself - the one
-  // line that carries the division's config into `stageFormatEditorValues`. A source scan is the weak witness, named as one.
-  it("CK-BO-2 openEditor passes divisionConfig to stageFormatEditorValues (a call that drops it reads a Hundred stage in sixes)", () => {
+  // The editor hydrates on a click, and apps/web vitest has no DOM to click (class 2): `StageFormatRow`'s `hydrateFrom` (the
+  // Match format panel's open, cancel and save-reset all read through it) is not reachable from a node test, and the browser half
+  // is CI's e2e. What a node test CAN pin is the call itself - the one line that carries the division's config into
+  // `stageFormatEditorValues`. A source scan is the weak witness, named as one.
+  it("CK-BO-2 the panel's hydrate passes divisionConfig to stageFormatEditorValues (a call that drops it reads a Hundred stage in sixes)", () => {
     const panel = readFileSync(new URL("../stages-panel.tsx", import.meta.url), "utf8");
-    const calls = panel.match(/stageFormatEditorValues\(sportKey, \{ \.\.\.stageConfig, rules \}[^)]*\)/g) ?? [];
+    const calls = panel.match(/stageFormatEditorValues\(sportKey, \{ \.\.\.stageConfig, rules: inForce \}[^)]*\)/g) ?? [];
     expect(calls, "the editor opens through exactly one call").toHaveLength(1);
     expect(calls[0]).toContain(", divisionConfig)");
   });

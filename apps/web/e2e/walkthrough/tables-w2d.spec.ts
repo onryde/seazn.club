@@ -29,8 +29,9 @@ import { DERIVED_METRICS, LEVEL_RANK, isHeadToHeadKey, validateCascade, type Cas
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
-import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, fixturePath } from "../helpers";
+import { TAG, addEntrantsViaApi, apiJson, divisionPath, expectNoHorizontalScroll, fixturePath, openStagePanel, stageCardOf } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
+import { openPanels } from "../helpers/rules-strip";
 import { closeOpenContexts } from "../spectator-public-helpers";
 import { API_CALL_MS, activeOrgSlug, dictString, division, entrants, eventStream, person, publicCompetition, spectator } from "../spectator-w2-kit";
 
@@ -47,7 +48,6 @@ const say = (key: string, vars: Record<string, string | number> = {}): string =>
   return raw.replace(/\{(\w+)\}/g, (hole, name: string) => (name in vars ? String(vars[name]) : hole));
 };
 const stepWord = (key: string): string => say(`div.detail.tiebreak.rule.${key}`);
-const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** A derived column as the engine declares it: its label (a notation column's header IS the label in every locale,
  *  standings-view.ts `NOTATION_HEADERS`) and the decimals its cell prints. */
@@ -291,6 +291,7 @@ async function openFold(section: Locator): Promise<void> {
 async function openEditor(page: Page, request: APIRequestContext, divisionId: string, stageId: string, state = "editor"): Promise<Locator> {
   await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, stageId), "tiebreaks"); // Match Day C3: opened from the card's Tie-breaks button
   const section = page.getByTestId(`stage-tiebreaks-${stageId}`);
   await expect(section).toBeAttached({ timeout: STEP_MS });
   await expect(section).toHaveAttribute("data-state", state, { timeout: STEP_MS });
@@ -371,6 +372,7 @@ async function savePoints(page: Page, request: APIRequestContext, r: Rig, stageI
   expect([before.points.source, before.points.pinnedAt], "before the save the pending stage plays the sport's rule").toEqual(["sport", null]);
   await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
+  await openStagePanel(stageCardOf(page, stageId), "points"); // Match Day C3: opened from the card's Points button
   const section = page.getByTestId(`stage-points-${stageId}`);
   await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
   const useDivision = section.getByTestId("stage-points-use-division");
@@ -716,6 +718,7 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
     // Saved, the stage plays its own bonus of 2. The chip would now pay the shoot-out winner 2 rather than 3, so it is
     // offered, not pressed.
     await page.reload({ waitUntil: "load" });
+    await openStagePanel(stageCardOf(page, stageId), "points");
     const saved = page.getByTestId(`stage-points-${stageId}`);
     await expect(saved, "the pending stage's editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
     await expect(saved.getByTestId("stage-points-preset-pro_league"), "the own bonus differs from the chip's: it is offered, not pressed").toHaveAttribute("aria-pressed", "false", { timeout: STEP_MS });
@@ -1302,23 +1305,36 @@ test("pin: a started stage's public table does not move after the division defau
   const visitor = await spectator(browser, { width: 1280, height: 900 });
   await expectPublicTable(visitor, r.path, before, "pin: before the change");
 
-  // The division default changes. Points through Settings → Format (a win now pays 4): the save lands and says the started
-  // stage keeps what it started with.
-  await page.goto(await divisionPath(request, r.divisionId, "?tab=settings"), { waitUntil: "load" });
+  // The division default changes, on the Division rules strip of the Fixtures tab (Match Day C2: the rules left Settings).
+  // Points in its Points panel (a win now pays 4): the save lands and says the started stage keeps what it started with.
+  await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
-  await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-  await page.getByRole("button", { name: new RegExp(`^${escapeRe(say("divset.format"))}`) }).click();
-  const win = page.getByRole("spinbutton", { name: say("divset.win") });
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: STEP_MS });
+  await openPanels(strip, "points", "tiebreaks");
+  const pointsPanel = strip.getByTestId("division-rules-panel-points");
+  const win = pointsPanel.getByRole("spinbutton", { name: say("divset.win") });
   await expect(win, "the division's win points, as stored (generic 3/1/0)").toHaveValue("3");
   await win.fill("4");
-  await page.getByRole("button", { name: say("divset.saveRules") }).click();
-  await expect(page.getByText(say("divset.notice.rulesSaved"))).toBeVisible({ timeout: STEP_MS });
-  await expect(page.getByTestId(`division-kept-pinned-${stageId}`)).toHaveText(say("divset.keptPinned", { stage: "League" }));
-  // The order: Settings carries no division order editor (spec §9), so its one door, PATCH /divisions/{id}.
-  const patched = await apiJson<Record<string, unknown>>(request, `/api/v1/divisions/${r.divisionId}`, "PATCH", { tiebreakers: EDITED });
-  expect(patched.status, `the division order saves: ${JSON.stringify(patched.error)}`).toBe(200);
+  await pointsPanel.getByTestId("division-points-save").click();
+  await expect(pointsPanel.getByText(say("divset.notice.rulesSaved"))).toBeVisible({ timeout: STEP_MS });
+  await expect(pointsPanel.getByTestId(`division-kept-pinned-${stageId}`)).toHaveText(say("divset.keptPinned", { stage: "League" }));
+  // The order, in its Tie-breaks panel (the division's own order editor, spec §12 C2): goals for moved above the difference
+  // with the same arrow the stage editor uses, saved through the strip's one door, PATCH /divisions/{id} {tiebreakers}.
+  const orderPanel = strip.getByTestId("division-rules-panel-tiebreaks");
+  await orderPanel.getByTestId(`stage-tiebreaks-down-${forFirst(sportDefault).at}`).click();
+  const patchSent = page.waitForRequest(
+    (q) => q.method() === "PATCH" && new URL(q.url()).pathname === `/api/v1/divisions/${r.divisionId}`,
+    { timeout: STEP_MS },
+  );
+  await orderPanel.getByTestId("division-tiebreaks-save").click();
+  expect((await patchSent).postDataJSON(), "the strip sends the edited order, and only it").toEqual({ tiebreakers: EDITED });
+  await expect(orderPanel.getByText(say("divset.notice.rulesSaved"))).toBeVisible({ timeout: STEP_MS });
+  await expect(orderPanel.getByTestId(`division-kept-pinned-${stageId}`), "the save names the pinned stage it did not reach").toHaveText(
+    say("divset.keptPinned", { stage: "League" }),
+  );
+  const patched = await apiJson<{ tiebreakers?: unknown }>(request, `/api/v1/divisions/${r.divisionId}`);
   expect(patched.data?.tiebreakers, "the division's order landed").toEqual(EDITED);
-  expect(JSON.stringify(patched.data?.stagesKeptPinned ?? null), "the save names the pinned stage it did not reach").toContain(stageId);
   const held = await servedRules(request, stageId);
   expect([held.tiebreakers.keys, held.tiebreakers.pinnedAt, held.points.rule.win.regulation], "the pin holds").toEqual([[...sportDefault], pin.tiebreakers.pinnedAt, 3]);
 

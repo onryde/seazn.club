@@ -40,7 +40,6 @@ import type { ReactNode } from "react";
 import { renderIsland, propsOf, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
@@ -69,15 +68,14 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
 
 const en = enUi as Record<string, string>;
 
-const INDIVIDUAL_ONLY: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
+type Stages = Parameters<typeof DivisionSettings>[0]["stages"];
 
-function mount() {
+/** A division stored as a Triple round robin: the one structure whose format select lists EVERY template, because the
+ *  retired one (owner ruling 2026-11-01, Match Day D1) stays listed for the division that plays it. So the option sweeps
+ *  below mount it, and the retired template's copy keeps its four-locale check. */
+const STORED_TRIPLE: Stages = [{ name: "Triple RR", kind: "league", config: { legs: 3 }, progression: null }];
+
+function mount(stages: Stages = []) {
   return renderIsland(DivisionSettings, {
     division: {
       id: "d1",
@@ -89,17 +87,14 @@ function mount() {
       logo_storage_path: null,
     },
     orgId: "org1",
-    variants: [{ key: "standard", name: "Standard" }],
     structureLocked: false,
     lockedFields: [],
-    stages: [],
+    stages,
     canEdit: true,
     divisionPathPrefix: "/o/org/c/comp/d/",
     fixturesHref: "/o/org/c/comp/d/div/fixtures",
     embed: <div />,
     danger: <div />,
-    entrantModel: INDIVIDUAL_ONLY,
-    entrantModelSource: "sport",
     autoPosts: false,
     canAutoPost: false,
     showSeeds: true,
@@ -139,15 +134,19 @@ const NON_ENGLISH = [
 describe("division settings' format picker renders dictionary copy, not the old hardcoded field (F3 Task 6)", () => {
   it("sanity check: the format <select>'s options are reachable even though its enclosing Group defaults closed", () => {
     activeDict.current = en;
-    const options = optionsOf(mount());
+    const options = optionsOf(mount(STORED_TRIPLE));
     expect(options.length).toBe(STAGE_TEMPLATES.length);
     expect(options.length).toBeGreaterThanOrEqual(14);
+    expect(options.map((o) => propsOf(o).value)).toContain("triple_rr");
+    // A new division is not offered the retired template, and lists every other.
+    const fresh = optionsOf(mount()).map((o) => propsOf(o).value);
+    expect(fresh).toEqual(STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr"));
   });
 
   for (const [locale, dict] of NON_ENGLISH) {
     it(`renders every STAGE_TEMPLATES option label in ${locale}, not the English literal`, () => {
       activeDict.current = dict as Record<string, string>;
-      const options = optionsOf(mount());
+      const options = optionsOf(mount(STORED_TRIPLE));
       expect(options.length).toBe(STAGE_TEMPLATES.length);
 
       for (const opt of options) {

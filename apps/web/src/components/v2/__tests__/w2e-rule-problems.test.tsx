@@ -40,7 +40,7 @@ vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
   };
 });
 
-import { MatchRuleFields } from "@/components/v2/match-rules";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 
 type Cfg = Record<string, unknown>;
 const moduleOf = (key: string): AnySportModule => builtinModules.find((m) => m.key === key)!;

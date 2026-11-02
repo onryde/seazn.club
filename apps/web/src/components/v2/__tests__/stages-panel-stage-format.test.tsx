@@ -17,8 +17,8 @@ import {
   stageFormatSaveFragment,
   stageRulesInForce,
 } from "@/components/v2/stages-panel";
-import { MatchRuleFields } from "@/components/v2/match-rules";
-import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
+import { StageRuleFields } from "@/components/v2/rules/match-format-editor";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
@@ -82,6 +82,8 @@ function panel(over: Record<string, unknown> = {}): string {
       orgTz="UTC"
       canExport={false}
       viewerPlan={{ plan: "pro", isStaff: false } as never}
+      // Match Day C3: the sections open from the header's buttons; these tests are about what the opened panel mounts.
+      initialOpenPanels={["format", "points", "tiebreaks"]}
       {...over}
     />,
   );
@@ -90,9 +92,16 @@ function panel(over: Record<string, unknown> = {}): string {
 /** The row's own band, so an assertion cannot accidentally match copy that
  *  belongs to another part of the card. */
 function formatRow(html: string): string {
-  const start = html.indexOf('data-testid="stage-format"');
+  const start = html.indexOf('data-testid="stage-format-row-');
   expect(start).toBeGreaterThan(-1);
-  return html.slice(start, html.indexOf("</div>", html.indexOf("</div>", start) + 1));
+  const end = html.indexOf('data-testid="stage-rail"', start);
+  return html.slice(start, end === -1 ? undefined : end);
+}
+/** The one-line summary only (the part of the row that is always on the card, panels closed or open). */
+function summaryLine(html: string): string {
+  const m = /data-testid="stage-format-summary">([^<]*)</.exec(html);
+  expect(m, "the summary line is on the card").not.toBeNull();
+  return m![1]!.replace(/&#x27;/g, "'");
 }
 
 function stageWith(rules: Record<string, unknown> | null): Record<string, unknown>[] {
@@ -109,45 +118,54 @@ function stageWith(rules: Record<string, unknown> | null): Record<string, unknow
   ];
 }
 
-describe("the three states of the Match format row", () => {
-  it("inherited — states the division's number and offers only Edit", () => {
+describe("the three states of the stage's Match format (Match Day C3: one summary line, the editor in a panel)", () => {
+  it("inherited - the summary states the division's number; no 'differs' line; the panel offers Save but no reset", () => {
     const html = panel();
     expect(html).toContain('data-stage-format-state="inherited"');
     const row = formatRow(html);
-    expect(row).toContain("Best of 3");
-    expect(row).toContain("Same as division");
-    expect(row).toContain('data-testid="stage-format-edit"');
+    expect(summaryLine(html)).toContain("Best of 3");
+    // The retired Edit button and its "Same as division" clause: the header's Match format button opens the panel instead.
+    expect(row).not.toContain("Same as division");
+    expect(html).not.toContain('data-testid="stage-format-edit"');
+    expect(html).toContain('data-testid="stage-tool-format"');
+    expect(row).not.toContain('data-testid="stage-differs"');
+    expect(row).toContain('data-testid="stage-format-save"');
     // Nothing to reset when nothing is overridden.
     expect(row).not.toContain('data-testid="stage-format-clear"');
   });
 
-  it("overridden — states the STAGE's number, not the division's, and offers the reset", () => {
+  it("overridden - the summary states the STAGE's number, not the division's; it says it differs; the panel offers the reset", () => {
     // The division says 3 and the stage says 1: the summary must show the one
     // the stage will actually be played at. A test where both agreed could not
     // witness the difference.
     const html = panel({ stages: stageWith({ bestOf: 1 }) });
     expect(html).toContain('data-stage-format-state="overridden"');
     const row = formatRow(html);
-    expect(row).toContain("Best of 1");
-    expect(row).not.toContain("Best of 3");
-    expect(row).toContain("Stage override");
+    expect(summaryLine(html)).toContain("Best of 1");
+    expect(summaryLine(html)).not.toContain("Best of 3");
+    expect(row).not.toContain("Stage override");
+    expect(row).toContain('data-testid="stage-differs"');
+    expect(row).toContain((enUi as Record<string, string>)["stageCard.summary.differs"]!.replace("{parts}", (enUi as Record<string, string>)["rulesStrip.format"]!));
     expect(row).toContain('data-testid="stage-format-clear"');
   });
 
-  it("locked — no Edit and no reset, whatever the fixtures say", () => {
+  it("locked - no Save and no reset, whatever the fixtures say; the lock is said in the summary", () => {
     const html = panel({
       stages: stageWith({ bestOf: 1 }),
       formatLockedStageIds: [STAGE_ID],
     });
     expect(html).toContain('data-stage-format-state="locked"');
     const row = formatRow(html);
-    expect(row).toContain("Best of 1");
-    // M-2: the lock is stated ONCE, in the lock line; the header carries the format alone, no state clause.
-    expect(row).not.toContain("Stage override");
-    expect(row).not.toContain("Same as division");
-    expect(row).not.toContain("Locked");
-    expect(html.match(/has started/g)?.length, "one statement of the lock").toBe(1);
-    expect(row).not.toContain('data-testid="stage-format-edit"');
+    expect(summaryLine(html)).toContain("Best of 1");
+    // M-2 / Match Day item 4 + review I3: the card says the lock ONCE - the summary line's. The opened section (the format panel is
+    // open here) stays locked and says nothing of its own.
+    expect(summaryLine(html)).not.toContain("Stage override");
+    expect(summaryLine(html)).not.toContain("Same as division");
+    expect(row.split('data-testid="stage-locked"').length - 1, "one lock line in the summary").toBe(1);
+    expect(html.split('data-testid="stage-format-locked"').length - 1, "the opened format section repeats nothing").toBe(0);
+    expect(formatRow(html), "the section is still locked: its chips read, nothing writes").toContain('data-mode="locked"');
+    expect(html.split('data-testid="stage-locked"').length - 1 + html.split('data-testid="stage-format-locked"').length - 1, "ONE lock line on the card").toBe(1);
+    expect(row).not.toContain('data-testid="stage-format-save"');
     expect(row).not.toContain('data-testid="stage-format-clear"');
   });
 
@@ -171,15 +189,31 @@ describe("the three states of the Match format row", () => {
       ],
     });
     expect(html).toContain('data-stage-format-state="inherited"');
-    expect(formatRow(html)).toContain("Same as division");
+    expect(summaryLine(html)).toContain("Best of 3");
+    expect(formatRow(html)).not.toContain('data-testid="stage-differs"');
   });
 
   it("a viewer reads the line and gets no controls", () => {
     const html = panel({ canEdit: false, stages: stageWith({ bestOf: 1 }) });
     const row = formatRow(html);
-    expect(row).toContain("Best of 1");
-    expect(row).not.toContain('data-testid="stage-format-edit"');
+    expect(summaryLine(html)).toContain("Best of 1");
+    expect(row).not.toContain('data-testid="stage-format-save"');
     expect(row).not.toContain('data-testid="stage-format-clear"');
+  });
+
+  it("panels closed (the page's default): the summary is on the card and no panel is; opening one is the header button's job", () => {
+    const html = panel({ initialOpenPanels: [] });
+    expect(summaryLine(html)).toContain("Best of 3");
+    for (const id of ["stage-format-editor", "stage-format-save", `stage-points-${STAGE_ID}`, `stage-tiebreaks-${STAGE_ID}`]) {
+      expect(html, id).not.toContain(`data-testid="${id}"`);
+    }
+    const tool = /<button[^>]*data-testid="stage-tool-format"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(tool).toContain('aria-expanded="false"');
+    expect(tool).toContain(`aria-controls="stage-panel-${STAGE_ID}-format"`);
+    // The same stage with the panel open: the toggle says so and the panel the toggle controls is there.
+    const open = panel({ initialOpenPanels: ["format"] });
+    expect(/<button[^>]*data-testid="stage-tool-format"[^>]*>/.exec(open)?.[0]).toContain('aria-expanded="true"');
+    expect(open).toContain(`id="stage-panel-${STAGE_ID}-format"`);
   });
 });
 
@@ -198,7 +232,7 @@ describe("the row is offered for EVERY sport (W2c Task 17: the STAGE_RULES_SPORT
           stages: [{ id: STAGE_ID, seq: 1, kind, name: "Stage", config: {}, progression: null, status: "active" }],
         });
         rendered++;
-        if (!html.includes(`data-testid="stage-format-row-${STAGE_ID}"`) || !html.includes('data-testid="stage-format-edit"'))
+        if (!html.includes(`data-testid="stage-format-row-${STAGE_ID}"`) || !html.includes('data-testid="stage-tool-format"') || !html.includes('data-testid="stage-format-save"'))
           missing.push(`${m.key}/${kind}`);
       }
     expect(missing).toEqual([]);
@@ -256,23 +290,54 @@ describe("the row is offered for EVERY sport (W2c Task 17: the STAGE_RULES_SPORT
   });
 });
 
+describe("the abandon policy is always said (review m6: the line no longer carries it, the opened panel does)", () => {
+  // The summary line states format - points - ties; the abandon policy is the panel's to say. In the read-only (locked) Match format
+  // panel it is one of the chips, whatever the sport. The policy is the ENGINE's own default (`configSchema.parse({})`), its words
+  // are the public dictionary's.
+  it("sweep: every sport that offers an abandon policy says its declared one in the locked panel's chips", () => {
+    const ruleDict = rulesLineDict(enPublic as Dict);
+    let checked = 0;
+    for (const m of builtinModules) {
+      const offered = m.abandonOptions ?? [];
+      if (offered.length === 0) continue;
+      // The engine's own declared cfg for the sport (a sport whose schema needs fields has no `{}` default).
+      const cfg = declaredCfgs(m)[0]!.cfg as Record<string, unknown>;
+      const policy = (m.configSchema.parse(cfg) as Record<string, unknown>).abandonPolicy;
+      if (typeof policy !== "string" || !offered.includes(policy)) continue;
+      const html = panel({ sportKey: m.key, divisionConfig: cfg, formatLockedStageIds: [STAGE_ID], ruleDict });
+      const chips = /data-testid="stage-format-chips"[^>]*>([\s\S]*?)<\/ul>/.exec(html)?.[1] ?? "";
+      expect(chips, `${m.key}: the locked panel carries chips`).not.toBe("");
+      const said = rulesChipText(ruleDict, { key: `format.rules.abandon.${policy}` } as never);
+      expect(said, `${m.key}: premise: the dictionary has words for ${policy}`).not.toBe("");
+      expect(chips.replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " "), `${m.key}: the abandon policy "${policy}" is said`).toContain(said);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: sports whose abandon policy was checked").toBeGreaterThan(0);
+  });
+});
+
 describe("the lock line (S4) and the read-only view", () => {
-  it("a locked stage says so BEFORE anyone tries: one line, a link to the fixtures, no edit control", () => {
-    const html = panel({ stages: stageWith({ bestOf: 1 }), formatLockedStageIds: [STAGE_ID] });
-    expect(html).toContain('data-testid="stage-format-locked"');
-    expect(html).toContain("This stage has started");
-    expect(html.match(/has started/g)?.length, "one statement of the lock (M-2)").toBe(1);
-    expect(html).toContain("See the fixtures");
-    expect(html).toContain('data-testid="stage-format-view"'); // read the rules without being able to change them
-    expect(html).not.toContain('data-testid="stage-format-edit"');
+  it("a locked stage says so BEFORE anyone tries: one line in organiser words, no link to the tab it is on, no edit control; the format stays readable", () => {
+    const html = panel({ stages: stageWith({ bestOf: 1 }), formatLockedStageIds: [STAGE_ID], ruleDict: rulesLineDict(enPublic as Dict) });
+    const UI = enUi as Record<string, string>;
+    expect(html).toContain('data-testid="stage-locked"');
+    const line = html.slice(html.indexOf('data-testid="stage-locked"'), html.indexOf("</p>", html.indexOf('data-testid="stage-locked"')));
+    expect(line, "Match Day item 4: 'Locked: the stage has started'").toContain(UI["stageCard.locked"]!);
+    expect(line, "Match Day item 3: the lock line links nowhere").not.toMatch(/<(a|button)\b/);
+    expect(html).not.toContain('data-testid="stage-format-view"'); // the chips ARE the read-only view (item 2: said once)
+    expect(formatRow(html)).toContain('data-testid="stage-format-chips"');
+    expect(html).not.toContain('data-testid="stage-format-save"');
   });
 
-  it("an unlocked stage shows no lock line, and a viewer gets the read-only view but not the lock line", () => {
-    expect(panel({ stages: stageWith({ bestOf: 1 }) })).not.toContain('data-testid="stage-format-locked"');
-    const viewer = panel({ canEdit: false, stages: stageWith({ bestOf: 1 }) });
+  it("an unlocked stage shows no lock line, and a viewer reads the format (chips) but gets no lock line and no edit", () => {
+    expect(panel({ stages: stageWith({ bestOf: 1 }) })).not.toContain('data-testid="stage-locked"');
+    const viewer = panel({ canEdit: false, stages: stageWith({ bestOf: 1 }), ruleDict: rulesLineDict(enPublic as Dict) });
+    expect(viewer).not.toContain('data-testid="stage-locked"');
     expect(viewer).not.toContain('data-testid="stage-format-locked"');
-    expect(viewer).toContain('data-testid="stage-format-view"');
-    expect(viewer).not.toContain('data-testid="stage-format-edit"');
+    expect(viewer).toContain('data-testid="stage-format-chips"');
+    // With the public dictionary the summary speaks the public line's words (the stage plays ONE game), not the bare headline.
+    expect(summaryLine(viewer)).toMatch(/^1 game/);
+    expect(viewer).not.toContain('data-testid="stage-format-save"');
   });
 });
 
@@ -284,6 +349,18 @@ describe("the deciders notice on the row reads the RESOLVED cfg (carry G1) and t
   const footballDivision = { ...mod("football").configSchema.parse({}) } as Record<string, unknown>;
   const chessVariant = Object.keys(mod("boardgame").variants)[0]!;
   const chessDivision = { ...mod("boardgame").configSchema.parse(mod("boardgame").variants[chessVariant]) } as Record<string, unknown>;
+
+  it("the notice is on the CLOSED card too (a stage that holds level matches says so without opening anything), and exactly once whether the panel is open or not", () => {
+    const off = decidersOffRules(mod("football"), Object.keys(mod("football").variants)[0]!);
+    const stages = koStage(off);
+    const count = (html: string) => html.split('data-testid="stage-deciders-off"').length - 1;
+    const closed = panel({ sportKey: "football", divisionConfig: footballDivision, stages, initialOpenPanels: [] });
+    const open = panel({ sportKey: "football", divisionConfig: footballDivision, stages, initialOpenPanels: ["format"] });
+    expect(count(closed), "closed card").toBe(1);
+    expect(count(open), "open panel: the panel's, not a second one").toBe(1);
+    // the positive pair: the knockout preset (deciders on) says nothing, closed
+    expect(count(panel({ sportKey: "football", divisionConfig: footballDivision, stages: koStage(stageDefaultsFor(mod("football"), "knockout", null)), initialOpenPanels: [] }))).toBe(0);
+  });
 
   it("football: every decider off holds the match (notice); the knockout preset does not; a league never says it", () => {
     const off = decidersOffRules(mod("football"), Object.keys(mod("football").variants)[0]!);
@@ -328,7 +405,7 @@ describe("the deciders notice on the row reads the RESOLVED cfg (carry G1) and t
   });
 });
 
-describe("the collapsed row's chips say the stage's EFFECTIVE format in the public line's words (I-1)", () => {
+describe("the stage says its EFFECTIVE format in the public line's words (I-1): in the summary line, and as chips in the read-only panel", () => {
   const ruleDict = rulesLineDict(enPublic as Dict);
   const football = builtinModules.find((m) => m.key === "football")!;
   // A division that plays extra time (15-minute halves), so a stage that inherits it has a chip to show and a stage that
@@ -348,8 +425,11 @@ describe("the collapsed row's chips say the stage's EFFECTIVE format in the publ
     const list = html.slice(start, html.indexOf("</ul>", start));
     return [...list.matchAll(/<li[^>]*>([^<]*)<\/li>/g)].map((m) => m[1]!.replace(/&#x27;/g, "'"));
   };
+  // Chips are the READ-ONLY panel's view of the format (Match Day C3: the open editor has fields instead, the summary line has the
+  // same words in one line) - so these tests read the panel as a viewer would, and the summary line separately.
   const withChips = (over: Record<string, unknown>): string =>
-    panel({ sportKey: "football", divisionConfig: division, ruleDict, ...over });
+    panel({ sportKey: "football", divisionConfig: division, ruleDict, canEdit: false, ...over });
+  const summaryOf = (html: string): string => /data-testid="stage-format-summary">([^<]*)</.exec(html)?.[1]?.replace(/&#x27;/g, "'") ?? "";
 
   it("rulesLineDict keeps exactly the rules-line keys, so the whole public dictionary does not cross into the client", () => {
     const keys = Object.keys(ruleDict);
@@ -365,11 +445,24 @@ describe("the collapsed row's chips say the stage's EFFECTIVE format in the publ
     const overridden = chipsOf(withChips({ stages: stage({ extraTime: { enabled: true, halfMinutes: stageMinutes } }) }));
     expect(overridden).toContain(chip("format.rules.decider.extraTime", { n: stageMinutes }));
     expect(overridden).not.toContain(chip("format.rules.decider.extraTime", { n: divisionMinutes }));
+    // The summary line carries the format's headline (periods), not the deciders: the chips are where extra time is read.
+    const line = summaryOf(withChips({ stages: stage({ halfMinutes: 30 }) }));
+    expect(line, "the stage's own halves, in the public line's words").toContain(chip("format.rules.period.halves", { minutes: 30 }));
     const inherited = chipsOf(withChips({ stages: stage(null) }));
     expect(inherited, "a football knockout with no rules plays the division's extra time").toContain(chip("format.rules.decider.extraTime", { n: divisionMinutes }));
     // the abandon policy is always said, in the stage's value
     expect(overridden).toContain(chip("format.rules.abandon.replay"));
     expect(chipsOf(withChips({ stages: stage({ abandonPolicy: "award" }) }))).toContain(chip("format.rules.abandon.award"));
+  });
+
+  it("a knockout's summary line says how a level match ends (its deciders ARE its format), in the public line's words", () => {
+    const extra = chip("format.rules.decider.extraTime", { n: divisionMinutes }).toLowerCase();
+    const ko = summaryOf(withChips({ stages: stage(null, "knockout") })).toLowerCase();
+    expect(ko, "the division plays extra time and a knockout inherits it").toContain(extra);
+    // and a stage that sets its own number says THAT one (the line follows the STAGE's resolved rules, not the division's)
+    const own = summaryOf(withChips({ stages: stage({ extraTime: { enabled: true, halfMinutes: divisionMinutes + 5 } }, "knockout") })).toLowerCase();
+    expect(own).toContain(chip("format.rules.decider.extraTime", { n: divisionMinutes + 5 }).toLowerCase());
+    expect(own).not.toContain(extra);
   });
 
   it("a locked stage still shows its chips, and a viewer reads them too", () => {
@@ -390,7 +483,7 @@ describe("the collapsed row's chips say the stage's EFFECTIVE format in the publ
   it("no dictionary slice, no chips - and the row still renders (the page owns passing it)", () => {
     const html = withChips({ ruleDict: undefined, stages: stage({ halfMinutes: 30 }) });
     expect(html).not.toContain('data-testid="stage-format-chips"');
-    expect(html).toContain('data-testid="stage-format-edit"');
+    expect(html).toContain('data-testid="stage-tool-format"');
   });
 
   it("every sport says something for its stage, in the real dictionary's words, never a raw key (counted)", () => {
@@ -399,7 +492,7 @@ describe("the collapsed row's chips say the stage's EFFECTIVE format in the publ
     for (const m of builtinModules)
       for (const kind of ["league", "knockout"]) {
         const cfg = declaredCfgs(m)[0]!.cfg as Record<string, unknown>;
-        const chips = chipsOf(panel({ sportKey: m.key, divisionConfig: cfg, ruleDict, stages: stage(null, kind) }));
+        const chips = chipsOf(panel({ sportKey: m.key, divisionConfig: cfg, ruleDict, canEdit: false, stages: stage(null, kind) }));
         rendered++;
         for (const c of chips) expect(c.startsWith("format.rules."), `${m.key}/${kind}: a raw key ${c}`).toBe(false);
         if (chips.length > 0) withAny.add(m.key);
@@ -792,5 +885,33 @@ describe("the card keeps its property of having no phone branch", () => {
     const row = formatRow(html);
     expect(row).not.toMatch(/\smax-md:/);
     expect(row).not.toMatch(/\smd:hidden"/);
+  });
+});
+
+describe("Match Day C2 — the Division rules strip heads the Fixtures tab, with or without a stage", () => {
+  const strip = {
+    divisionId: "d1",
+    sportKey: "badminton",
+    variantKey: null,
+    divisionConfig: { bestOf: 3 },
+    divisionTiebreakers: null,
+    tableKinds: [],
+    canEdit: true,
+    variants: [],
+    lockedFields: [],
+    onlineChessOffered: false,
+  };
+  it("no stage yet: the strip is still there (the division's rules are edited nowhere else), above the empty line", () => {
+    const html = panel({ stages: [], rulesStrip: strip });
+    expect(html).toContain('data-testid="division-rules-strip"');
+    expect(html.indexOf('data-testid="division-rules-strip"')).toBeLessThan(html.indexOf(enUi["schedule.noStages"] as string));
+    // The empty case's own line is unchanged, and no strip prop means no strip.
+    const bare = panel({ stages: [] });
+    expect(bare).toContain(enUi["schedule.noStages"] as string);
+    expect(bare).not.toContain('data-testid="division-rules-strip"');
+  });
+  it("with a stage: the strip, once", () => {
+    const html = panel({ rulesStrip: strip });
+    expect(html.split('data-testid="division-rules-strip"').length - 1).toBe(1);
   });
 });

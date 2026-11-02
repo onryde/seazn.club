@@ -60,7 +60,7 @@ const seatsOf = (f: { home_entrant_id: string | null; away_entrant_id: string | 
   if (f.home_entrant_id === null || f.away_entrant_id === null) throw new Error("test: an unseated fixture");
   return [f.home_entrant_id, f.away_entrant_id];
 };
-/** The builder's "Home and away" legs option (division-builder.tsx legs select). */
+/** The builder's "Home and away" legs option (division-builder.tsx legs control, components/v2/legs-choice.tsx). */
 const HOME_AWAY = { ...BUILDER_DEFAULT_KNOBS, legs: 2 };
 /** C(n,2): one leg of a round robin over n entrants — the engine's pairing count, never read from the fake. */
 const pairs = (n: number) => (n * (n - 1)) / 2;

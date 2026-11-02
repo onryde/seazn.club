@@ -67,12 +67,16 @@ describe("StagesPanel — the stage body has no two-column track for either view
     expect(html).not.toMatch(twoColumnTrack);
   });
 
-  it("both viewers render the same stage-sheet/stage-rail testids regardless — the grid wrapper is gone, not the divs", () => {
+  it("the stage-sheet is there for both viewers; the rail (an edit surface) only for the editor - and neither gets a column", () => {
     const editorHtml = renderToStaticMarkup(<StagesPanel {...baseProps} canEdit />);
     const viewerHtml = renderToStaticMarkup(<StagesPanel {...baseProps} canEdit={false} />);
-    for (const html of [editorHtml, viewerHtml]) {
-      expect(html).toContain('data-testid="stage-sheet"');
-      expect(html).toContain('data-testid="stage-rail"');
-    }
+    for (const html of [editorHtml, viewerHtml]) expect(html).toContain('data-testid="stage-sheet"');
+    // E1 item 1: the rail moved INTO the header (still the editor's alone: StageRail returns null for a viewer), so the viewer's header
+    // has no stage-rail element at all - a positive pair with the editor's, which has it.
+    expect(editorHtml).toContain('data-testid="stage-rail"');
+    expect(viewerHtml).not.toContain('data-testid="stage-rail"');
+    const headerEnd = editorHtml.indexOf("data-testid=\"stage-progress");
+    expect(editorHtml.indexOf('data-testid="stage-rail"'), "the rail sits in the card's header, inside the sheet").toBeGreaterThan(editorHtml.indexOf('data-testid="stage-sheet"'));
+    expect(headerEnd === -1 || editorHtml.indexOf('data-testid="stage-rail"') < headerEnd, "and before the progress body").toBe(true);
   });
 });

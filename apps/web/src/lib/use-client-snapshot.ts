@@ -107,6 +107,39 @@ export function useLocalStorageItem(key: string): string | null {
   return useSyncExternalStore(subscribeToStorage, () => readLocalStorageItem(key), noItem);
 }
 
+/** Read a `sessionStorage` item, or `null` when storage throws (Safari private mode throws on the accessor itself, and a
+ *  sandboxed frame refuses it) — the tab's remembered choice is a convenience and must never stop a page from rendering. */
+export function readSessionStorageItem(key: string): string | null {
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/** Write a `sessionStorage` item; `false` when storage refused it. */
+export function writeSessionStorageItem(key: string, value: string): boolean {
+  try {
+    window.sessionStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A `sessionStorage` item, hydration-safe: `null` on the server, during hydration, when absent, when storage throws, and
+ * always for a `null` key (a caller that only sometimes remembers a choice still calls the hook unconditionally). This
+ * tab's own write shows on the next render; `sessionStorage` is per tab, so another tab's never arrives.
+ */
+export function useSessionStorageItem(key: string | null): string | null {
+  return useSyncExternalStore(
+    subscribeToStorage,
+    () => (key === null ? null : readSessionStorageItem(key)),
+    noItem,
+  );
+}
+
 /**
  * Whether `query` matches, live (a resize or rotation re-renders). `false` on
  * the server and during hydration.

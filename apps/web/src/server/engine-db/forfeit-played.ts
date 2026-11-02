@@ -5,7 +5,8 @@ import "server-only";
 // `awarded-state.ts` derives no such fact (an event-less award, ruling 116, has no ledger: nothing played), so this is
 // the one place the server asks it. Two readers share it: the standings fold (`engine-db/competition.ts`) and the
 // public qualification view's loaders (`public-site/division-qualification.ts`), so the table and its what-if cannot
-// disagree about where the rule's awarded score lands.
+// disagree about where the rule's awarded score lands. A third, `playedFactsOf`, asks it of any fixture: Match Day's rest
+// warning (`match-day-call.ts` restGaps, task F6) counts a previous match only if it was played.
 import type postgres from "postgres";
 import { EngineError, playRecorded, type MatchOutcome } from "@seazn/engine/core";
 import { forfeitShaped } from "@seazn/engine/competition";
@@ -39,6 +40,31 @@ export async function forfeitPlayedFacts(
   const ledgers = new Map<string, { id: string; type: string; voids: string | null }[]>(ids.map((id) => [id, []]));
   for (const r of rows) ledgers.get(r.fixture_id)?.push(r);
   for (const [id, ledger] of ledgers) out.set(id, playRecorded(ledger, module_));
+  return out;
+}
+
+/**
+ * fixture id → `playRecorded` of its ledger, under EACH fixture's own sport module (Match Day task F6, owner ruling 10-31 (5):
+ * a person's previous match gives them rest to count from only if it was PLAYED — a walkover, or an abandon before the first
+ * sport event, was not). Unlike `forfeitPlayedFacts` every fixture is asked, whatever its outcome, and the fixtures may be of
+ * different divisions (a person plays in several), so the module comes with each. ONE query for the lot, none for an empty
+ * list; a fixture with no ledger at all had nothing played.
+ */
+export async function playedFactsOf(
+  db: Queryable,
+  fixtures: readonly { id: string; module: { readonly startIsPlay?: boolean } }[],
+): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>();
+  if (fixtures.length === 0) return out;
+  const ids = [...new Set(fixtures.map((f) => f.id))];
+  const rows = await db<{ fixture_id: string; id: string; type: string; voids: string | null }[]>`
+    select fixture_id, id, type, voids_event_id as voids
+    from score_events
+    where fixture_id in ${db(ids)}
+    order by fixture_id, seq`;
+  const ledgers = new Map<string, { id: string; type: string; voids: string | null }[]>(ids.map((id) => [id, []]));
+  for (const r of rows) ledgers.get(r.fixture_id)?.push(r);
+  for (const f of fixtures) out.set(f.id, playRecorded(ledgers.get(f.id) ?? [], f.module));
   return out;
 }
 

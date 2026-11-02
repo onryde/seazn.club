@@ -20,8 +20,8 @@ import type { Dict } from "@/lib/i18n-constants";
 import { SPORT_RULES, SINGLE_SET_POINTS_LABEL_KEY, ruleOptionText, visibleRuleFields, type RuleField } from "@/lib/match-rules";
 import { stageFieldsFor } from "@/lib/rule-scope";
 import type { RefusedField } from "@/lib/rule-errors";
-import { MatchRuleFields } from "../match-rules";
-import { StageRuleFields } from "../stage-rules/stage-rule-fields";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
+import { StageRuleFields } from "@/components/v2/rules/match-format-editor";
 import { resolvedStageCfg } from "../stage-rules/stage-row-model";
 import { refusedLines } from "../division-settings-locks";
 

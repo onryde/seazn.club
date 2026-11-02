@@ -63,6 +63,7 @@ import {
   createCompetitionViaUi,
   divisionPath,
   expectNoHorizontalScroll,
+  openBracket,
   scoreFixture,
 } from "../helpers";
 // A genuinely signed-out context with the cookie banner already dismissed —
@@ -322,8 +323,10 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // --------------------------------------------- what the organiser now sees
   await visit(page, await divisionPath(request, divisionId, "?tab=fixtures"));
   const sheet = page.getByTestId("run-sheet");
-  const tree = page.getByTestId("bracket-panel");
   await expect(sheet, "the draw list never rendered").toBeVisible({ timeout: STEP_MS });
+  // Match Day E1 item 3: the tree opens inside the Finals stage's card from its Bracket button (closed by default). `tree` is a lazy
+  // locator, so it follows the card across the navigation below once the tree is opened again.
+  const tree = await openBracket(page, finalsId);
   await expect(tree, "the bracket tree never rendered").toBeVisible({ timeout: STEP_MS });
 
   // The SAME match on both panels, tied by its per-division ordinal —
@@ -386,6 +389,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
 
   // THROUGH THE SCREEN: the organiser confirms the draw.
   await visit(page, await divisionPath(request, divisionId, "?tab=fixtures"));
+  await openBracket(page, finalsId); // a fresh load closes the card's tree again; the checks after the confirm read it
   const panel = page.locator('[data-progression-state="draft"]');
   await expect(panel, "the seeding proposal panel never appeared").toBeVisible({ timeout: STEP_MS });
   const confirmBtn = panel.getByRole("button", { name: L["progression.confirmCta"]!, exact: true });
@@ -570,6 +574,7 @@ test("an organiser builds a League + Finals draw, reads who feeds each seat, and
   // replaced every label with a name, or none of them, passes half of this.
   await visit(page, await divisionPath(request, divisionId, "?tab=fixtures"));
   await expect(sheet).toBeVisible({ timeout: STEP_MS });
+  await openBracket(page, finalsId); // every fresh load closes the card's tree: this is the third load, so open it a third time
   for (const where of [finalInList, finalInTree]) {
     await expect(where).toContainText(semiWinner);
     await expect(where, "the resolved seat still advertises its feeder").not.toContainText(R1_1);

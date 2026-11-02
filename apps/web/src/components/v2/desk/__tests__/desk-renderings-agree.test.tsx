@@ -373,7 +373,7 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
       // fixture list is DERIVED from the count (see `inPlayFixtures`), never
       // an empty array beside a non-zero one (review m8).
       const desk: CompetitionDesk = {
-        in_play: r.desk.in_play, in_play_fixtures: inPlayFixtures(r.desk.in_play), up_next: null,
+        in_play: r.desk.in_play, in_play_fixtures: inPlayFixtures(r.desk.in_play), up_next: null, fixtures_today: 0,
         divisions: new Map([["d1", r.desk]]), now: NOW,
       };
       const cp = competitionPhase(desk);
@@ -430,7 +430,7 @@ const inPlayFixtures = (n: number, divisionId = "d1"): DeskInPlayFixture[] =>
     it("4: a red attention always has a Needs-you row of the same kind, with an action", () => {
       const items = needsYouItems(
         en,
-        { in_play: r.desk.in_play, in_play_fixtures: inPlayFixtures(r.desk.in_play), up_next: null, divisions: new Map([["d1", r.desk]]), now: NOW },
+        { in_play: r.desk.in_play, in_play_fixtures: inPlayFixtures(r.desk.in_play), up_next: null, fixtures_today: 0, divisions: new Map([["d1", r.desk]]), now: NOW },
         [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en",
       );
       // registrations_waiting is aggregated to ONE competition-level row, so
@@ -510,7 +510,7 @@ describe("the needs_draw action names a button the seed-proposal panel is showin
     };
     const items = needsYouItems(
       en,
-      { in_play: 0, in_play_fixtures: [], up_next: null, divisions: new Map([["d1", desk]]), now: NOW },
+      { in_play: 0, in_play_fixtures: [], up_next: null, fixtures_today: 0, divisions: new Map([["d1", desk]]), now: NOW },
       [{ id: "d1", name: "Premier", slug: "premier" }], "org", "comp", "en",
     );
     const label = items.find((i) => i.kind === "needs_draw")?.action.label;

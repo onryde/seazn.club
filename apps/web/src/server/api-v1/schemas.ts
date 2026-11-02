@@ -35,6 +35,9 @@ import { patchOf } from "../../lib/zod-patch.ts";
 import { ENTRANT_NAME_MAX } from "../../lib/entrant-roster-name.ts";
 // The player name limit, shared with the directory's rename field (persons-panel.tsx).
 import { PERSON_NAME_MAX } from "../../lib/person-name.ts";
+// Match Day D1: the format fields' bounds, shared with the division builder and the Settings Format group. Import-free,
+// so the standalone generator loads it like the files above.
+import { FORMAT_BOUNDS } from "../../lib/format-bounds.ts";
 // Task 9 (spectator surface W1) — the match-centre document schema, reused
 // verbatim as `PublicFixtureSummary.match_centre`'s type below rather than
 // restated: match-centre-schema.ts is pure Zod with no imports beyond zod
@@ -1179,7 +1182,11 @@ export const StageConfig = z
   .strictObject({
     ...TOP_LEVEL_DECIDER_REFUSALS,
     // League / group shape.
-    legs: z.number().int().min(1).max(8).optional(),
+    // Floor from FORMAT_BOUNDS (Match Day D1). The ceiling stays 8 on the server, the generator's own clamp (usecases/stages.ts,
+    // "Jul3/08 §2: legs > 2 allowed"), by owner ruling Option A (2026-11-01): the builder offers 1-2 only (LegsChoice), and
+    // Triple round robin is retired from the list, but a stored division with 3 or more legs keeps playing it, so the door
+    // must not refuse the value it already holds.
+    legs: z.number().int().min(FORMAT_BOUNDS.legs.min).max(8).optional(),
     pools: z.strictObject({ count: z.number().int().min(1) }).optional(),
     // Knockout shape. `byes` are entrant ids; `slotOrder` is a draw order with
     // `null` for an empty slot — the two fields §18.2 was raised about.
@@ -1190,8 +1197,9 @@ export const StageConfig = z
     // Americano / Mexicano.
     mode: z.enum(["americano", "mexicano"]).optional(),
     courtCount: z.number().int().min(1).optional(),
-    // Swiss (also `rounds`).
-    rounds: z.number().int().min(1).optional(),
+    // Swiss (also `rounds`). Floor from FORMAT_BOUNDS (Match Day D1); no ceiling here, because Americano's `rounds`
+    // is this same key and is not bounded by the Swiss rounds field.
+    rounds: z.number().int().min(FORMAT_BOUNDS.swissRounds.min).optional(),
     chess: z.boolean().optional(),
     // Which pairing model the swiss generator uses. Mirrors the engine's
     // `SwissConstraints.pairing` (packages/engine/src/scheduling/swiss.ts) —
@@ -1627,6 +1635,177 @@ export type PatchFixture = z.infer<typeof PatchFixture>;
  *  share (`@/lib/stream-url`, R16) — never a second host list here. */
 export const PutFixtureStream = z.object({ streamUrl: streamUrlSchema }).strict();
 export type PutFixtureStream = z.infer<typeof PutFixtureStream>;
+
+/** Match Day (spec 2026-10-31 §7): POST /fixtures/{id}/call and POST /fixtures/{id}/call/preview — the court to call the match
+ *  onto, now. `.strict()` for the reason `PatchFixture` documents. */
+export const CallFixtureInput = z.object({ court_id: CourtId }).strict();
+export type CallFixtureInput = z.infer<typeof CallFixtureInput>;
+
+/** POST /fixtures/{id}/call's answer: the match is on `court_id`, called (and timed) at `called_at`. */
+export const FixtureCalled = z.object({
+  fixture_id: Uuid,
+  court_id: CourtId,
+  called_at: z.iso.datetime({ offset: true }),
+});
+
+/** DELETE /fixtures/{id}/call's answer: the court and time the match is back on, as they were before the call (null when it had
+ *  none). */
+export const FixtureCallUndone = z.object({
+  fixture_id: Uuid,
+  court_id: CourtId.nullable(),
+  scheduled_at: z.iso.datetime({ offset: true }).nullable(),
+});
+
+export const MatchDayRound = z.object({
+  // The schedule board's chip text for the match's round ("QF", "SF", "F", "3rd", or its fallback "R2"), its full name ("Semi-finals",
+  // "Round 2") in the reader's language, and whether the board codes it (a bracket role).
+  code: z.string().min(1),
+  label: z.string().min(1),
+  coded: z.boolean(),
+});
+
+/** POST /fixtures/{id}/call/preview's answer (spec §7.1): the target court's matches the call pushes past their planned time
+ *  (planned times are never written: `estimated_at` is an estimate), and the warnings the organiser confirms past (§7.2). The
+ *  shape is `CallPreview` in lib/match-day/call.ts; the route test parses the real answer with this schema. */
+export const FixtureCallPreview = z.object({
+  shifts: z.array(
+    z.object({
+      fixture_id: Uuid,
+      label: z.string(),
+      round: MatchDayRound,
+      planned_at: z.iso.datetime({ offset: true }),
+      estimated_at: z.iso.datetime({ offset: true }),
+    }),
+  ),
+  warnings: z.array(
+    z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("pushes_later"), count: z.number().int().positive() }),
+      z.object({
+        kind: z.literal("rest_gap"),
+        person_name: z.string(),
+        minutes: z.number().int().nonnegative(),
+        min_rest: z.number().int().positive(),
+      }),
+      z.object({ kind: z.literal("past_day_end"), court_name: z.string(), until: z.iso.datetime({ offset: true }) }),
+      // Match Day E2 item 3: the court's closed windows (court_hours + court_exceptions) meet the match's expected span. A warning.
+      z.object({
+        kind: z.literal("crosses_closure"),
+        court_name: z.string(),
+        from: z.iso.datetime({ offset: true }),
+        until: z.iso.datetime({ offset: true }),
+      }),
+      z.object({
+        kind: z.literal("court_closed"),
+        court_name: z.string(),
+        until: z.iso.datetime({ offset: true }).nullable(),
+        since: z.iso.datetime({ offset: true }).nullable(),
+      }),
+    ]),
+  ),
+});
+
+/** Match Day's read model (spec 2026-10-31 §6.2, §7, §7.1, task A2). The shapes are lib/match-day/types.ts's; the route test
+ *  parses each real answer with these. A match as Match Day shows it. */
+export const MatchDayFixture = z.object({
+  id: Uuid,
+  division_id: Uuid,
+  division_name: z.string(),
+  division_slug: z.string(),
+  fixture_no: z.number().int().positive(),
+  sport_key: z.string(),
+  stage_label: z.string(),
+  round: MatchDayRound,
+  home: z.string().nullable(),
+  away: z.string().nullable(),
+  home_entrant_id: Uuid.nullable(),
+  away_entrant_id: Uuid.nullable(),
+  headline: z.string().nullable(),
+  // `match_states.summary`, the shape PublicFixtureSummarySchema declares (defined further down this module, so restated).
+  summary: z
+    .object({
+      headline: z.string().optional(),
+      perSide: z.array(z.object({ entrantId: z.string(), line: z.string() })).optional(),
+      detail: z.unknown().optional(),
+    })
+    .nullable(),
+  // Who serves the next rally of a playing set-sport match, as the engine's serve reader says it over the ledger; null for
+  // any other match, a sport with no serve, or when the engine does not know.
+  serving: z.enum(["home", "away"]).nullable(),
+  started_at: z.iso.datetime({ offset: true }).nullable(),
+  called_at: z.iso.datetime({ offset: true }).nullable(),
+  stream: z.enum(["live", "waiting"]).nullable(),
+  // The desk's scorer attention for the match (in play, nothing recorded: nobody nominated, or the nominee silent past the grace).
+  scorer_attention: z.enum(["no_scorer", "not_recording"]).nullable(),
+  // While its stream is live: the YouTube video the stream goes into and that broadcast's made-for-kids stamp; null otherwise.
+  live_video: z.object({ url: z.string(), made_for_kids: z.boolean() }).nullable(),
+  // Match Day C2: the format a playing match plays, in the fixture page's own rules line (the court's read-only Match format);
+  // null for a match not in play, and for a format the line has no words for.
+  format_line: z.string().nullable(),
+});
+
+export const MatchDayCourt = z.object({
+  court_id: Uuid,
+  court_name: z.string(),
+  // Match Day E2 item 5: the venue filter's key.
+  venue_id: Uuid,
+  venue_name: z.string(),
+  // lib/venue.ts's VENUE_NOUNS (the route test pins the two equal; this module may not import @/).
+  sport_noun: z.enum(["court", "pitch", "table", "board", "rink"]),
+  state: z.enum(["playing", "called", "free", "in_use_elsewhere"]),
+  current: MatchDayFixture.nullable(),
+  in_use_by: z.string().nullable(),
+  free_since: z.iso.datetime({ offset: true }).nullable(),
+  queue: z.array(
+    MatchDayFixture.extend({ planned_at: z.iso.datetime({ offset: true }), estimated_at: z.iso.datetime({ offset: true }) }),
+  ),
+  // Match Day E2 item 3: the court's closure today, from the scheduler's usable windows; null while open with no break to come.
+  closure: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("now"), until: z.iso.datetime({ offset: true }).nullable() }),
+      z.object({ kind: z.literal("later"), from: z.iso.datetime({ offset: true }), until: z.iso.datetime({ offset: true }) }),
+    ])
+    .nullable(),
+});
+
+export const MatchDayView = z.object({
+  competition_id: Uuid,
+  date: z.iso.date(),
+  tz: z.string(),
+  now: z.iso.datetime({ offset: true }),
+  courts: z.array(MatchDayCourt),
+  // B4 (owner ruling Q1): this competition's matches in play with no court, in live divisions, in kick-off order.
+  playing_no_court: z.array(MatchDayFixture),
+  needs_you: z.array(
+    z.object({
+      key: z.string(),
+      severity: z.enum(["red", "amber", "slate"]),
+      kind: z.string(),
+      title: z.string(),
+      sub: z.string(),
+      action: z.object({ label: z.string(), href: z.string() }),
+      // B4: Match Day's "Find a court" on an unscheduled row — only when the division has a ready match with no court; the
+      // court it opens (the first free one that match may use), or null for the page's list.
+      alt: z.object({ label: z.string(), href: z.string(), court_id: Uuid.nullable() }).optional(),
+    }),
+  ),
+  results_owed: z.number().int().nonnegative(),
+  fixtures_today: z.number().int().nonnegative(),
+  // Match Day E2 item 5: the venues where this competition has a match today (the venue filter's default selection).
+  venues_today: z.array(Uuid),
+});
+
+export const MatchDayCandidate = z.object({
+  fixture: MatchDayFixture,
+  source: z.enum(["this_court", "other_court", "no_court"]),
+  from_court_name: z.string().nullable(),
+  waiting_minutes: z.number().int().nonnegative(),
+  behind_minutes: z.number().int().nonnegative(),
+  // The match's planned time, when it has one (a match called elsewhere has none: the call replaced it).
+  planned_at: z.iso.datetime({ offset: true }).nullable(),
+  blocked: z
+    .object({ kind: z.literal("player_busy"), person_name: z.string(), court_name: z.string().nullable() })
+    .nullable(),
+});
 
 /** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3; D16, §5.6.4) — the request names ONE PLAYER's meeting by the
  *  ENTRANT side (a board has a meeting per player, and nothing reads a meeting by colour, which a pairing card can swap).
@@ -2505,12 +2684,15 @@ export const CompetitionDesk = z.object({
   // always (competition-desk.test.ts's Task 6 case pins this).
   in_play_fixtures: z.array(DeskInPlayFixture),
   up_next: DeskNextFixture.nullable(),
+  // Match Day B1: how many of the competition's matches are today, each on its own division's day, plus any in play — Match
+  // Day's own count (`countFixturesToday`). Above zero, the competition is on its match day.
+  fixtures_today: z.number().int().nonnegative(),
   // The usecase's own type is `Map<string, DeskDivision>` — a bare Map
   // serialises to `{}` over JSON (no own enumerable properties), so the
   // route converts it with `Object.fromEntries` before this schema ever
   // sees it. Left loosely typed rather than a full `DeskDivision` mirror:
   // no consumer of this wire contract reads inside `divisions` yet (the W3
-  // band reads only in_play/in_play_fixtures/up_next), and DeskDivision's
+  // band, retired by Match Day B1, read only in_play/in_play_fixtures/up_next), and DeskDivision's
   // own shape (division-phase.ts's `Attention` discriminated union, etc.)
   // has no established Zod schema to reuse — inventing one is out of this
   // task's scope.

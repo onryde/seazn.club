@@ -155,7 +155,7 @@ beforeEach(() => {
 
 describe("competition overview — the Registration nav entry", () => {
   it("shows live counts computed from the existing card-stats query: 2 open divisions of 3, 17 registered, 3 awaiting confirmation", async () => {
-    const tree = walk(await Page({ params }));
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({}) }));
     const entry = tree.find((e) => e.type === RegistrationHubNavEntry);
     expect(entry).toBeTruthy();
     const props = navProps(entry!);
@@ -192,7 +192,7 @@ describe("competition overview — the Registration nav entry", () => {
     h.stats = new Map(
       [...h.defaultStats()].map(([id, s]) => [id, { ...s, awaiting_confirmation: 0 }]),
     );
-    const tree = walk(await Page({ params }));
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({}) }));
     const entry = tree.find((e) => e.type === RegistrationHubNavEntry);
     const props = navProps(entry!);
     expect(props.awaiting).toBe(false);
@@ -212,15 +212,15 @@ describe("competition overview — the Registration nav entry", () => {
   // 404s them), so canEdit is the wrong question here entirely.
   it("shows the entry to a viewer — canEdit does not gate it any more", async () => {
     h.canEdit = false;
-    const tree = walk(await Page({ params }));
+    const tree = walk(await Page({ params, searchParams: Promise.resolve({}) }));
     expect(tree.some((e) => e.type === RegistrationHubNavEntry)).toBe(true);
   });
 
   it("points a viewer at the same hub URL as an editor", async () => {
     h.canEdit = false;
-    const viewerHref = navProps(walk(await Page({ params })).find((e) => e.type === RegistrationHubNavEntry)!).href;
+    const viewerHref = navProps(walk(await Page({ params, searchParams: Promise.resolve({}) })).find((e) => e.type === RegistrationHubNavEntry)!).href;
     h.canEdit = true;
-    const editorHref = navProps(walk(await Page({ params })).find((e) => e.type === RegistrationHubNavEntry)!).href;
+    const editorHref = navProps(walk(await Page({ params, searchParams: Promise.resolve({}) })).find((e) => e.type === RegistrationHubNavEntry)!).href;
     expect(viewerHref).toBe(editorHref);
   });
 });

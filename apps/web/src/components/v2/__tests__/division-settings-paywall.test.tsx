@@ -10,7 +10,7 @@
 // OTHER accordion), per the brief's "any run()-wrapped action, since the fix
 // is at run() level".
 //
-// Same harness as division-settings-entrants.test.tsx (router + confirm
+// Same harness as division-settings-public-page.test.tsx (router + confirm
 // mocked) but the INTERACTIVE hook harness, not renderToStaticMarkup — a
 // click has to actually re-run the component's state, which a static render
 // can't do.
@@ -43,15 +43,6 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 import { DivisionSettings } from "@/components/v2/division-settings";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { ApiV1Error } from "@/lib/client-v1";
-import type { EffectiveEntrantModel } from "@seazn/engine/sport";
-
-const ENTRANT_MODEL: EffectiveEntrantModel = {
-  kinds: ["individual"],
-  defaultKind: "individual",
-  squadNumbers: false,
-  captain: false,
-  maxTeamMembers: null,
-};
 
 const baseProps = {
   division: {
@@ -73,8 +64,6 @@ const baseProps = {
   fixturesHref: "/o/org/c/comp/d/div/fixtures",
   embed: null,
   danger: null,
-  entrantModel: ENTRANT_MODEL,
-  entrantModelSource: "sport",
   autoPosts: false,
   // true — canAutoPost:false renders a SECOND, static <UpgradeGate
   // feature="news.auto"/> (:919) unconditionally, unrelated to run()'s

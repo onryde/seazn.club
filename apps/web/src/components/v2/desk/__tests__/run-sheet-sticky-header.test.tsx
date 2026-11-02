@@ -88,7 +88,6 @@ function sheetHtml(filter: RunSheetFilter = "all"): string {
       filter={filter}
       onFilter={() => {}}
       stageId={null}
-      onStageFilter={() => {}}
     />,
   );
 }

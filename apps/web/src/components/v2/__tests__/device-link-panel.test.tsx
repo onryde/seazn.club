@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { DeviceLinkPanel } from "@/components/v2/device-link-panel";
 import { SeaznQrImage } from "@/components/v2/seazn-qr-image";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { messages } from "@/lib/messages";
 import { t as tRuntime } from "@/lib/i18n-runtime";
 
@@ -601,5 +601,114 @@ describe("device-link panel — a finished match offers nothing to hand over (ow
     expect(byTestId(island.tree(), "device-link-mint"), "Create is still offered").toBeDefined();
     expect(byTestId(island.tree(), "device-link-match-over")).toBeUndefined();
     expect(island.text()).toContain(t("dlink.error.rateLimited"));
+  });
+});
+
+// Match Day A4 fix round 1, V5: `compact` — the hand-over a court needs at a glance (the button, then the QR and Copy) with
+// everything else behind ONE "More" fold; and `onChanged` — a host re-reads after a change this panel made succeeded (a live
+// link IS a scorer, so Match Day's "No scorer" mark has to go). Same state and handlers as the full panel, so the guarantees
+// above (ensure, ask-first, localised refusals) are the full panel's; what is pinned here is WHERE each control sits.
+describe("device-link panel — compact (Match Day): the button and the QR up front, the rest behind More", () => {
+  const COMPACT = { ...PROPS, embedded: true, compact: true };
+  /** Every element inside the More fold, and the fold itself. */
+  function moreOf(tree: ReactElement[]) {
+    const more = byTestId(tree, "device-link-more");
+    if (more === undefined) throw new Error("no More fold rendered");
+    return { more, inside: new Set(walk(propsOf(more).children as never)) };
+  }
+
+  it("EMPTY CASE FIRST — no link: Create is up front; the explainer is inside a closed More; nothing else", async () => {
+    api.active = null;
+    const island = renderIsland(DeviceLinkPanel, COMPACT);
+    await flush();
+    const tree = island.tree();
+    const { more, inside } = moreOf(tree);
+    expect(more.type).toBe("details");
+    expect(propsOf(more).open, "More starts closed").toBeUndefined();
+    const mint = byTestId(tree, "device-link-mint")!;
+    expect(inside.has(mint), "Create is not behind More").toBe(false);
+    // The explainer, by the dictionary's own words up to its {scorer} slot.
+    const head = String(messages["dlink.desc"]).split("{scorer}")[0]!;
+    expect(head.length).toBeGreaterThan(10);
+    expect(textOf(propsOf(more).children as never)).toContain(head);
+    // ...and only there: the panel's whole text holds it exactly once.
+    expect(island.text().split(head).length - 1).toBe(1);
+  });
+
+  it("Create → the QR and Copy up front; the pad URL, 'same QR', Revoke now behind More — and the host hears of it ONCE", async () => {
+    api.active = null;
+    const onChanged = vi.fn();
+    const island = renderIsland(DeviceLinkPanel, { ...COMPACT, onChanged });
+    await flush();
+    expect(onChanged, "reading the link is not a change").not.toHaveBeenCalled();
+    api.active = SEALED;
+    click(byTestId(island.tree(), "device-link-mint"));
+    await flush();
+    expect(api.posts).toEqual(["/api/v1/fixtures/f1/device-links"]);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    const tree = island.tree();
+    const { inside } = moreOf(tree);
+    const qr = dlinkQr(tree);
+    expect(qr, "the QR rendered").toBeDefined();
+    expect(inside.has(qr!), "the QR is up front").toBe(false);
+    const copies = tree.filter((el) => propsOf(el)["data-testid"] === "device-link-copy");
+    expect(copies, "exactly one Copy").toHaveLength(1);
+    expect(inside.has(copies[0]!), "Copy is up front").toBe(false);
+    expect(textOf(propsOf(copies[0]!).children as never)).toBe(t("dlink.copy"));
+    let behind = 0;
+    for (const id of ["device-link-url", "device-link-revoke-now"]) {
+      const el = byTestId(tree, id);
+      expect(el, id).toBeDefined();
+      expect(inside.has(el!), `${id} is behind More`).toBe(true);
+      behind++;
+    }
+    expect(behind).toBe(2);
+    expect(textOf(propsOf(byTestId(tree, "device-link-url")!).children as never)).toBe(`${ORIGIN}/score/dl_sealed_secret`);
+  });
+
+  it("a live link: Show QR up front; Revoke and Revoke & reissue behind More; a confirmed revoke tells the host, Keep does not", async () => {
+    const onChanged = vi.fn();
+    const island = renderIsland(DeviceLinkPanel, { ...COMPACT, onChanged });
+    await flush();
+    let tree = island.tree();
+    const { inside } = moreOf(tree);
+    const at = (id: string) => {
+      const el = byTestId(tree, id);
+      expect(el, `${id} renders`).toBeDefined();
+      return inside.has(el!);
+    };
+    expect(at("device-link-show")).toBe(false);
+    expect(at("device-link-revoke")).toBe(true);
+    expect(at("device-link-reissue")).toBe(true);
+    click(byTestId(tree, "device-link-revoke"));
+    click(byTestId(island.tree(), "device-link-keep"));
+    await flush();
+    expect(onChanged, "backing out changed nothing").not.toHaveBeenCalled();
+    click(byTestId(island.tree(), "device-link-revoke"));
+    click(byTestId(island.tree(), "device-link-revoke-confirm"));
+    await flush();
+    expect(api.deletes).toEqual(["/api/v1/fixtures/f1/device-links/l1"]);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    tree = island.tree();
+    expect(byTestId(tree, "device-link-mint"), "nothing live: Create again").toBeDefined();
+  });
+
+  it("a refused Create does not tell the host anything changed", async () => {
+    api.active = null;
+    api.refuse = { status: 503, code: "KEK_MISSING", message: "no key" };
+    const onChanged = vi.fn();
+    const island = renderIsland(DeviceLinkPanel, { ...COMPACT, onChanged });
+    await flush();
+    click(byTestId(island.tree(), "device-link-mint"));
+    await flush();
+    expect(api.posts).toHaveLength(1);
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("the FULL panel (every other host) has no More fold — compact is opt-in", async () => {
+    const island = renderIsland(DeviceLinkPanel, PROPS);
+    await flush();
+    expect(byTestId(island.tree(), "device-link-more")).toBeUndefined();
+    expect(byTestId(island.tree(), "device-link-show")).toBeDefined();
   });
 });

@@ -1,6 +1,9 @@
 // The frozen row list of the format × sport matrix (design §3; R11 — changing
 // it is a reviewed diff, never a runtime draw). Rows are the 16 builder
-// templates in offered-matrix order, then the 5 API-only shapes. Columns are
+// templates in offered-matrix order, then the 5 API-only shapes. One template
+// row, triple_rr, is no longer OFFERED by the builder (owner ruling 2026-11-01:
+// STAGE_TEMPLATES marks it `retired`), but it stays a row: the API still takes
+// it and stored divisions still play it. Columns are
 // the engine's own registry order (builtinModules), which is the order the
 // offered matrix was written in.
 //
@@ -54,8 +57,8 @@ export const BUILDER_DEFAULT_KNOBS: Readonly<TemplateKnobs> = Object.freeze({
   legs: 1,
 });
 
-/** The builder's clampKnob bounds (division-builder.tsx:386, 388) — pinned by
- *  catalogue.test.ts. */
+/** The builder's clampKnob bounds (division-builder.tsx buildStages, FORMAT_BOUNDS.qualify / .pools in
+ *  apps/web/src/lib/format-bounds.ts) — a mirror pinned to FORMAT_BOUNDS by catalogue.test.ts. */
 export const BUILDER_KNOB_BOUNDS: Readonly<Record<"qualified" | "poolCount", Readonly<{ min: number; max: number }>>> = Object.freeze({
   qualified: Object.freeze({ min: 2, max: 32 }),
   poolCount: Object.freeze({ min: 2, max: 8 }),

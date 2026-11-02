@@ -15,7 +15,7 @@ import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { SPORT_RULES, buildRuleOverride, clearedSequenceKeys, hydrateRuleValues, visibleRuleFields } from "@/lib/match-rules";
 import { moveSequenceItem, sequenceItems, sequenceValue } from "../stage-rules/sequence-field";
-import { MatchRuleFields } from "../match-rules";
+import { MatchRuleFields } from "@/components/v2/rules/match-format-editor";
 
 const render = (sportKey: string, values: Record<string, string> = {}): string =>
   renderToStaticMarkup(

@@ -7,6 +7,7 @@ import {
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ATTENTION_SEVERITY, DRAW_DOORS, NOT_RECORDING_GRACE_MINUTES, type Attention } from "../src/lib/division-phase";
+import { needsYouInMatchDay, needsYouOnCompetitionPage } from "./needs-you-home";
 
 /** The SHIPPED English strings, read the way `board-v3.spec.ts` reads them —
  *  a JSON `import` needs an import attribute Playwright's loader does not
@@ -197,6 +198,10 @@ type Row = {
    *  never an English literal typed into the test. */
   label: string;
   build: (request: APIRequestContext) => Promise<Rig>;
+  /** Match Day B1 (spec §9): the state `build` leaves is a match day (a match in play, or one planned today), so the row lives
+   *  in Match Day's list — reached through the competition page's one line — and not on the competition page. Declared, never
+   *  sniffed off the page: a build that stops (or starts) being a match day reds the helper instead of quietly switching. */
+  matchDay?: true;
   /** What the landing page must offer for the work the row names. */
   land: (page: Page) => Promise<void>;
 };
@@ -298,6 +303,7 @@ const ROWS: Row[] = [
     kind: "no_scorer",
     // M2: this used to read "Assign scorer", an action nobody can take.
     label: en["desk.needsYou.no_scorer.action"],
+    matchDay: true,
     build: async (request) => {
       const rig = await leagueOfFour(request, "noscorer");
       expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status).toBe(200);
@@ -316,6 +322,7 @@ const ROWS: Row[] = [
     id: "not_recording",
     kind: "not_recording",
     label: en["desk.needsYou.not_recording.action"],
+    matchDay: true,
     build: async (request) => {
       const rig = await leagueOfFour(request, "notrec");
       expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status).toBe(200);
@@ -347,7 +354,10 @@ const ROWS: Row[] = [
     build: async (request) => {
       const rig = await leagueOfFour(request, "result");
       expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status).toBe(200);
-      await setFixtureScheduledAtSql(rig.fixtureIds[0]!, new Date(Date.now() - 6 * 3600_000).toISOString());
+      // B1: 26 hours ago — always an earlier calendar day (no day is longer than 25 hours), so this is never a match day and
+      // the row is the competition page's whatever the clock says. (Six hours ago was today for most of the day and not for
+      // the rest, which would move the row between surfaces with the time of the run.)
+      await setFixtureScheduledAtSql(rig.fixtureIds[0]!, new Date(Date.now() - 26 * 3600_000).toISOString());
       return { compSlug: rig.comp.slug, divSlug: rig.div.slug };
     },
     // The console's own result door. Its LABEL is the sport's
@@ -445,7 +455,9 @@ test.describe("competition desk: every action label lands on the control it name
       const org = await activeOrg(page);
       const rig = await row.build(request);
       await page.goto(`/o/${org.slug}/c/${rig.compSlug}`);
-      const needs = page.getByTestId("desk-needs-you");
+      // B1: one home per row — Match Day's list on a match day, the competition page's otherwise; each helper asserts the
+      // other surface lists nothing.
+      const needs = row.matchDay ? await needsYouInMatchDay(page) : await needsYouOnCompetitionPage(page);
       // Print the asserted CONTENT beside the gate: a green gate on the
       // wrong page state is worse than a red one.
       const rowEl = needs.locator(`[data-attention="${row.kind}"]`);

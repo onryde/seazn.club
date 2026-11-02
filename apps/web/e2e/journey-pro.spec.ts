@@ -310,10 +310,20 @@ test.describe.serial("pro lifecycle", () => {
     // 308 into the hub). The spellings are the hub's own: "matches" is a
     // `deriveHubTabs` id and `?division=` is what `readDivisionParam` reads.
     await page.goto(await divisionPath(page.request, divisionId));
+    // Match Day C5b: the link is an item of the header's "Open" menu (with Slideshow and the QR poster), folded away until the
+    // menu is opened - so open it, and look for the link INSIDE it.
+    // The toggle paints before the page hydrates, and a click that lands in that gap is dropped (the menu never opens, the assertion
+    // below then waits on a link that is not there). So retry the open until the toggle itself reports `aria-expanded="true"` - and
+    // never click an already-open one, which would close it (Match Day C5b M1).
+    const openToggle = page.getByTestId("desk-open-menu-toggle");
+    await expect(async () => {
+      if ((await openToggle.getAttribute("aria-expanded")) !== "true") await openToggle.click({ timeout: 5_000 });
+      await expect(openToggle).toHaveAttribute("aria-expanded", "true", { timeout: 2_000 });
+    }).toPass({ timeout: 20_000 });
     await expect(
-      page.locator(
-        `a[href="/shared/${orgSlug}/${competitionSlug}?tab=matches&division=${divisionSlug}"]`,
-      ),
+      page
+        .getByTestId("desk-open-menu")
+        .locator(`a[href="/shared/${orgSlug}/${competitionSlug}?tab=matches&division=${divisionSlug}"]`),
     ).toBeVisible({ timeout: 20_000 });
 
     // Public competition page lists the division.

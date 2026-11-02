@@ -255,11 +255,30 @@ describe("refusedLines on best of 1 (the points pair collapses to one control)",
     }
   });
 
-  it("the form's call site names from visibleRuleFields over the SAME values and inherited config its grid renders (the wiring, not the helper)", () => {
-    const src = readFileSync(new URL("../division-settings.tsx", import.meta.url), "utf8");
-    expect(src).toMatch(/refusedLines\(\s*visibleRuleFields\(division\.sport_key, ruleValues, inheritedCfg\)/);
-    expect(src, "the grid reads the same inherited config").toMatch(/inherited=\{inheritedCfg\}/);
-    expect(src, "no crash-trap index into the table (T20-2)").not.toMatch(/SPORT_RULES\[[^\]]+\]\s*\?\?/);
+  // Match Day C2 moved the match rules, their lock and their refusal lines out of Settings into the Division rules strip
+  // (`rules/division-rules-strip.tsx`); C2 fix round 1 (I1) made the lock ONE line per section, decided over the fields the
+  // grid draws. So the wiring is the strip's: both of its readings - the refused-line names and the section's lock - are
+  // asked over the SAME values and inherited config (and, for the lock, the same omitted fields and form state) that its
+  // editing grid is handed. Asked of the source, whitespace-blind: a call site that reads another config compiles and passes
+  // every helper test.
+  it("the strip's call sites read the SAME values and inherited config its grid renders: the refused-line names and the section's one lock (the wiring, not the helper)", () => {
+    const strip = readFileSync(new URL("../rules/division-rules-strip.tsx", import.meta.url), "utf8");
+    // The refused-line names: visibleRuleFields over the grid's values and inherited config.
+    expect(strip).toMatch(/refusedLines\(\s*visibleRuleFields\(\s*sportKey\s*,\s*ruleValues\s*,\s*inheritedCfg\s*\)/);
+    // The section's one lock line: every field the grid draws, the grid's own list over the same four inputs.
+    expect(strip).toMatch(/divisionGridFields\(\s*sportKey\s*,\s*ruleValues\s*,\s*inheritedCfg\s*,\s*omitted\s*,\s*ruleState\s*\)\.map\(\s*\(f\)\s*=>\s*lockLineFor\(/);
+    // ...and the editing grid is handed exactly those: values, inherited config, omitted fields and form state.
+    const grid = strip.match(/<MatchFormatEditor\s[^>]*?mode="edit"[^>]*?\/>/s)?.[0];
+    expect(grid, "the strip mounts the editing grid").toBeDefined();
+    expect(grid).toMatch(/\bvalues=\{ruleValues\}/);
+    expect(grid, "the grid reads the same inherited config").toMatch(/\binherited=\{inheritedCfg\}/);
+    expect(grid).toMatch(/\bomit=\{omitted\}/);
+    expect(grid).toMatch(/\bstate=\{ruleState\}/);
+    expect(strip, "no crash-trap index into the table (T20-2)").not.toMatch(/SPORT_RULES\[[^\]]+\]\s*\?\?/);
+    // Settings no longer holds the wiring (the move is real, not a copy left behind), and keeps no crash trap either.
+    const settings = readFileSync(new URL("../division-settings.tsx", import.meta.url), "utf8");
+    expect(settings, "the refused lines left Settings with the match rules").not.toMatch(/refusedLines\(/);
+    expect(settings, "no crash-trap index into the table (T20-2)").not.toMatch(/SPORT_RULES\[[^\]]+\]\s*\?\?/);
   });
 });
 

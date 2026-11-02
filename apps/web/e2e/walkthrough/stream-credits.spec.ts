@@ -356,46 +356,26 @@ async function expectTappable(page: Page, loc: Locator, label: string): Promise<
 
 const shot = (page: Page, name: string) => page.screenshot({ path: test.info().outputPath(name), fullPage: true });
 
-/** The "Now playing" strip's accessible name — how the recorded defect below is found, from the dictionary. */
-const NOW_PLAYING = en("schedule.nowPlaying");
 /** The checkout sheet's close button — the shared `Modal`'s header close, whose accessible name is HARDCODED English
  *  (`components/modal.tsx`: `aria-label="Close"`), not a dictionary key. So there is no dictionary value to read: a key
  *  that happens to say "Close" elsewhere would be a coincidence, not the source. Recorded in walkthrough-report-B.md
  *  (an untranslated screen-reader label in every locale); the day it moves into the dictionaries, read it from there. */
 const MODAL_CLOSE_LABEL = "Close";
 
-/** D1's measured geometry: stages-panel.tsx:778-815, clipped by html overflow-x:clip. At 320 px the "Now playing"
- *  strip's content reaches 56 px past the viewport, every run (two `max-w-[9rem]` names in a non-wrapping
- *  `inline-flex` — a bounded width, so a fixed number). The exemption holds for THAT much and no more: a strip that
- *  grows past it reds instead of hiding behind the recorded defect. The cap bounds the AMOUNT, not the number of boxes:
- *  a second offender INSIDE the strip is excused while the total stays within D1_OVERFLOW_PX + D1_SLACK_PX (60 px); one
- *  anywhere else is never excused (`outside` below). */
-const D1_OVERFLOW_PX = 56;
-/** Sub-pixel rounding and font metrics between machines — not room for a second defect. */
-const D1_SLACK_PX = 4;
-
 /**
- * No content past the viewport — `helpers.ts expectNoHorizontalScroll`'s measurement and containment rule, with ONE
- * named, CHECKED, CAPPED exemption, and the stream panel held strictly on top.
+ * No content past the viewport — `helpers.ts expectNoHorizontalScroll`'s measurement and containment rule, with the
+ * stream panel held strictly on top.
  *
  * The page cannot actually SCROLL sideways: `html, body { overflow-x: clip }` (globals.css) cuts off anything wider
  * than the viewport. So the measurement lifts the clip for one read — what it finds is content the organiser cannot
  * see, which is the defect class, whether or not a scrollbar would have shown it.
  *
- * DEFECT D1 (walkthrough-report-B.md; pre-existing, NOT this lane's code, and already noticed by
- * stream-overlay.spec.ts's community test): at 320 px the "Now playing" strip's content is clipped by D1_OVERFLOW_PX.
- * Every rig here is a LIVE hockey fixture, so the strip is always on the page. Rather than go red for a strip this
- * file cannot move — or scope the check to the panel and stop seeing the page at all — clipped content is excused
- * ONLY when every uncontained box past the viewport sits inside that strip AND the amount is D1's own (AGENTS.md class
- * 23: an exemption nobody checks hides the next overflow). The day D1 is fixed, the exemption simply stops being used;
- * its use is annotated on the test so a run says when it leaned on it.
- *
- * Amended 2026-09-30 (spec §2): the Phone tab now lives on the FIXTURE page, which carries no Now-playing strip, so the
- * exemption is not expected to be used here — it stays, still capped and still checked, rather than being deleted
- * under a move that did not fix D1.
+ * DEFECT D1 (walkthrough-report-B.md) used to be excused here, capped at 56 px: at 320 px the division Fixtures tab's
+ * "Now playing" strip clipped its content. Match Day B1 (spec 2026-10-31 §9) deleted the strip, so the exemption went
+ * with it — nothing is excused now, and any box past the viewport reds.
  */
 async function expectNoPageScroll(page: Page): Promise<void> {
-  const seen = await page.evaluate((nowPlaying) => {
+  const seen = await page.evaluate(() => {
     const html = document.documentElement;
     const body = document.body;
     const vw = html.clientWidth;
@@ -419,37 +399,22 @@ async function expectNoPageScroll(page: Page): Promise<void> {
       return true;
     };
     const offenders = Array.from(body.querySelectorAll("*")).filter((el) => past(el) && uncontained(el));
-    const strip = Array.from(document.querySelectorAll("section[aria-label]")).find(
-      (s) => s.getAttribute("aria-label") === nowPlaying,
-    );
     const panel = document.querySelector('[data-testid="stream-panel"]');
     const panelBoxes = panel ? [panel, ...Array.from(panel.querySelectorAll("*"))] : [];
     return {
       vw,
       overflowPx,
-      excused: offenders.filter((el) => strip?.contains(el)).length,
-      outside: offenders.filter((el) => !strip?.contains(el)).map(describe),
+      offenders: offenders.map(describe),
       panelChecked: panelBoxes.length,
       panelPast: panelBoxes.filter(past).map(describe),
     };
-  }, NOW_PLAYING);
+  });
   // Anti-vacuity: a check of a panel that is not there is no check.
   expect(seen.panelChecked, `${seen.vw}: no stream panel box was measured`).toBeGreaterThan(10);
   expect(seen.panelPast, `${seen.vw}: a stream panel box reaches past the viewport`).toEqual([]);
-  expect(seen.outside, `${seen.vw}: ${seen.overflowPx}px of content is clipped from outside the recorded D1 strip`).toEqual([]);
-  if (seen.overflowPx > 1) {
-    // Excused only because EVERY offender is in the strip — and there must be one, or the overflow is unexplained.
-    expect(seen.excused, `${seen.vw}: ${seen.overflowPx}px of content clipped with no offender found at all`).toBeGreaterThan(0);
-    // …and only as much as D1 itself clips: growth is a new defect, not D1.
-    expect(
-      seen.overflowPx,
-      `${seen.vw}: the Now-playing strip clips ${seen.overflowPx}px, more than D1's measured ${D1_OVERFLOW_PX}px`,
-    ).toBeLessThanOrEqual(D1_OVERFLOW_PX + D1_SLACK_PX);
-    test.info().annotations.push({
-      type: "known-defect",
-      description: `D1: the Now-playing strip's content is clipped by ${seen.overflowPx}px at ${seen.vw}px (${seen.excused} boxes)`,
-    });
-  }
+  expect(seen.offenders, `${seen.vw}: ${seen.overflowPx}px of content is clipped`).toEqual([]);
+  // A clip with no box to blame is still a clip.
+  expect(seen.overflowPx, `${seen.vw}: ${seen.overflowPx}px of content past the viewport`).toBeLessThanOrEqual(1);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

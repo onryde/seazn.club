@@ -67,6 +67,9 @@ export interface TemplateKnobs {
 
 export const STAGE_TEMPLATES: {
   key: string;
+  /** Kept for what already reads it (a division stored with it, the seeds, the format matrix), but offered to no sport:
+   *  templatesForSport leaves it out unless it is the structure a division already plays. */
+  retired?: true;
   build: (knobs: TemplateKnobs) => StageDraft[];
 }[] = [
   {
@@ -249,7 +252,13 @@ export const STAGE_TEMPLATES: {
     ],
   },
   {
+    // Retired from the offer (owner ruling 2026-11-01, Match Day D1 legs Option A): the builder and Settings offer legs 1
+    // or 2 only, and through the builder this template never built its three legs anyway (buildTemplateStages stamps
+    // the legs knob on every league stage). The server still takes legs up to 8 (Jul3/08, usecases/stages.ts), and a
+    // division stored as one still shows it in Settings (detectTemplate, templatesForSport `current`). Kept rather than
+    // deleted: the seeds, the format matrix catalogue and stored divisions read it.
     key: "triple_rr",
+    retired: true,
     build: () => [{ kind: "league", name: "Triple RR", config: { legs: 3 }, progression: null }],
   },
   {
@@ -303,17 +312,21 @@ export const STAGE_TEMPLATES: {
 const KIND_PROBE_KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
 
 /** The templates the division builder and the Settings format select OFFER for a sport, in STAGE_TEMPLATES order: a
- *  template any of whose stages is a kind the sport refuses is left out (chess is individual-only, owner ruling
- *  2026-10-26, follow-up to #1027: americano and mexicano mint pair entrants, so chess is offered neither). Read off
- *  each template's OWN stage graph, never a list of keys, so a later template carrying such a stage is left out too.
- *  `current` (Settings: the structure the division already plays) is kept even when refused, so a division stored
- *  before the ruling still shows what it is; re-applying it is refused by the server (assertStageKindsAllowed). */
+ *  `retired` template is left out for every sport (Triple round robin, owner ruling 2026-11-01), and so is a template
+ *  any of whose stages is a kind the sport refuses (chess is individual-only, owner ruling 2026-10-26, follow-up to
+ *  #1027: americano and mexicano mint pair entrants, so chess is offered neither). The refusal is read off each
+ *  template's OWN stage graph, never a list of keys, so a later template carrying such a stage is left out too.
+ *  `current` (Settings: the structure the division already plays) is kept either way, so a division stored before a
+ *  ruling still shows what it is. Re-applying a refused kind is refused by the server (assertStageKindsAllowed); a
+ *  retired template re-applies as it is stored. */
 export function templatesForSport(
   sportKey: string | null | undefined,
   current: string | null = null,
 ): typeof STAGE_TEMPLATES {
   return STAGE_TEMPLATES.filter(
-    (t) => t.key === current || !t.build(KIND_PROBE_KNOBS).some((s) => sportRefusesStageKind(sportKey, s.kind)),
+    (t) =>
+      t.key === current ||
+      (!t.retired && !t.build(KIND_PROBE_KNOBS).some((s) => sportRefusesStageKind(sportKey, s.kind))),
   );
 }
 

@@ -27,6 +27,8 @@ const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: 
 const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }] };
 const FOOTBALL: SportOption = { key: "football", name: "Football", variants: [{ key: "score", name: "Score", system: true }] };
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
+// Retired from every sport's offer (owner ruling 2026-11-01, Match Day D1): triple-rr-retired.test.tsx sweeps it.
+const OFFERED_KEYS = STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr");
 
 /** The builder, opening on `sports[0]`. */
 function mount(sports: SportOption[]) {
@@ -69,7 +71,7 @@ describe("the division builder: switching Sport to Chess drops an americano/mexi
   it("harness guard: badminton renders every card, and a picked americano/mexicano is the one checked card", () => {
     for (const k of REFUSED_FOR_CHESS) {
       const h = mount([BADMINTON, CHESS]);
-      expect(cards(h).map((c) => c.key)).toEqual(STAGE_TEMPLATES.map((t) => t.key));
+      expect(cards(h).map((c) => c.key)).toEqual(OFFERED_KEYS);
       expect(checked(h), "the builder opens at league").toEqual(["league"]);
       pickTemplate(h, k);
       expect(checked(h), k).toEqual([k]);
@@ -84,7 +86,7 @@ describe("the division builder: switching Sport to Chess drops an americano/mexi
       selectSport(h, "badminton", "boardgame");
       const keys = cards(h).map((c) => c.key);
       for (const r of REFUSED_FOR_CHESS) expect(keys, `${k}: ${r} card`).not.toContain(r);
-      expect(keys).toHaveLength(STAGE_TEMPLATES.length - REFUSED_FOR_CHESS.length);
+      expect(keys).toHaveLength(OFFERED_KEYS.length - REFUSED_FOR_CHESS.length);
       // Not "nothing checked behind a missing card": league is the pick, the one checked radio.
       expect(checked(h), k).toEqual(["league"]);
       checkedCases++;

@@ -1,0 +1,178 @@
+"use client";
+// Match Day's playing court (spec 2026-10-31 §6.2, task A3). The dark panel at the top of a playing court IS the sport's
+// scoreboard: the public match page's own `LiveScoreBody`, fed the engine's whole folded summary and both sides' names, so a
+// set sport shows games in large type with the set table and who serves, a football pitch its goals and periods, cricket its
+// innings — never a badminton widget (§5). Its corner carries the match's stream: the Live badge and a link to watch while one
+// is live, "+ Connect a stream" while none is up (owner pick C1: no empty black video box, ever). Both links open the match's
+// console page with its stream panel open — the existing per-match stream flow (§8 Phase 1).
+//
+// "Live" on this page means a STREAM is live (the list's red badge, the corner link). The panel's own status line says the
+// match is in play, in the public dictionary's own words for that status (review V1).
+//
+// A SET sport's large type is Match Day's own (review V3, `scoreLine`): the sets or games won, and beside them the live level —
+// the current game's points, and for tennis the games of the set in play too — readable across a hall. The levels come from the
+// one structured reader the public match page's large type also uses (`scoreLevels`, lib/score/levels.ts; task B3), never the
+// headline. So for a set sport this draws the slab and asks `LiveScoreBody` for its set table only (`suppressScorebug`). Every
+// other sport keeps its own scorebug.
+//
+// Who serves (S1): a set kernel's summary never says, so the wire carries the engine's serve reader's answer (`serving`); tennis's
+// summary says it itself. Either is written into the summary's `detail.serving` — the field the public scorebug's own marker
+// reads — so the set table marks the server exactly as the public page marks tennis's, and the slab names them.
+import Link from "@/components/ui/console-link";
+import { LiveScoreBody } from "@/components/public-site/live-score";
+import type { Dict } from "@/lib/i18n-constants";
+import { t } from "@/lib/i18n-runtime";
+import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
+import { servingSide } from "@/lib/public-site";
+import type { MatchDayFixture, MatchDaySummary } from "@/lib/match-day/types";
+import { scoreLine } from "@/lib/match-day/view";
+import { levelWords, liveLabel } from "@/lib/score/levels";
+
+/** `LiveScoreBody` prints a decided outcome's sentence from these; a playing court's match has no outcome (it is passed
+ *  `outcome: null`), so no template is ever read. */
+const NO_OUTCOME: DecidedOutcomeTemplates = { tie: "", plain: "", shootoutPlain: "", byMethod: {} };
+
+/** The summary with the wire's server written where the public scorebug reads one; unchanged when the wire does not know. */
+function withServing(summary: MatchDaySummary, serving: MatchDayFixture["serving"]): MatchDaySummary {
+  if (serving === null) return summary;
+  const detail = typeof summary.detail === "object" && summary.detail !== null ? summary.detail : {};
+  return { ...summary, detail: { ...detail, serving } };
+}
+
+export function CourtScoreboard({
+  fixture,
+  label,
+  streamHref,
+  dict,
+  scoreDict,
+  readOnly = false,
+}: {
+  fixture: MatchDayFixture;
+  /** The panel's accessible name: "Score on Court 3", or for a match on no court (B4) "Score: Ana v Ben". */
+  label: string;
+  /** The match's console page with its stream panel open. */
+  streamHref: string;
+  dict: Dict;
+  /** The `public` dictionary's scoreboard words (`matchCentre.*`, `forfeit.*`), in the reader's language. */
+  scoreDict: Dict;
+  /** A view-only reader (B4, owner ruling Q1b): a stream that is up still shows, but "+ Connect a stream" — an organiser's
+   *  action — is not offered. */
+  readOnly?: boolean;
+}) {
+  // LiveScoreBody prints `matchCentre.status.live` over an in-play match; here that word belongs to streams.
+  const panelDict: Dict = { ...scoreDict, "matchCentre.status.live": t(scoreDict, "matchCentre.status.in_play") };
+  const entrantNames: Record<string, string> = {};
+  if (fixture.home_entrant_id !== null && fixture.home !== null) entrantNames[fixture.home_entrant_id] = fixture.home;
+  if (fixture.away_entrant_id !== null && fixture.away !== null) entrantNames[fixture.away_entrant_id] = fixture.away;
+  const line = scoreLine(fixture);
+  const summary = fixture.summary === null ? null : withServing(fixture.summary, fixture.serving);
+  const serving = summary === null ? null : servingSide(summary);
+  const servingName = serving === "home" ? fixture.home : serving === "away" ? fixture.away : null;
+  const stream =
+    fixture.stream === "live" ? (
+      <Link
+        href={streamHref}
+        className="inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-medium ring-1 ring-inset ring-red-100 hover:bg-red-50 md:min-h-0 md:bg-white/10 md:py-1 md:ring-0 md:hover:bg-white/15"
+      >
+        <span data-md-stream="live" className="inline-flex items-center gap-1.5 font-semibold text-red-700 md:text-court-ink">
+          <span aria-hidden className="h-2 w-2 rounded-full bg-red-500" />
+          {t(dict, "matchDay.stream.live")}
+        </span>
+        <span className="text-slate-600 md:text-court-muted">{t(dict, "matchDay.stream.watch")}</span>
+      </Link>
+    ) : fixture.stream === "waiting" ? (
+      <Link
+        href={streamHref}
+        className="inline-flex min-h-11 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200 hover:bg-slate-50 md:min-h-0 md:bg-white/10 md:py-1 md:text-court-ink md:ring-0 md:hover:bg-white/15"
+      >
+        <span aria-hidden className="h-2 w-2 rounded-full bg-amber-400" />
+        {t(dict, "matchDay.stream.waiting")}
+      </Link>
+    ) : readOnly ? null : (
+      <Link
+        href={streamHref}
+        className="inline-flex min-h-11 items-center rounded-full px-2 text-xs font-medium text-purple-700 underline-offset-2 hover:underline md:min-h-0 md:py-1 md:text-court-muted md:hover:text-court-ink"
+      >
+        {t(dict, "matchDay.stream.connect")}
+      </Link>
+    );
+  return (
+    <section
+      data-testid="md-scoreboard"
+      aria-label={label}
+      // Phones: the headline steps down one size (LiveScoreBody sets it at text-5xl for a full-width match page; a 320 column
+      // broke "1 – 0 (14-9)" at its hyphen), and the stream link sits above the panel, where a 44 px target cannot cover the
+      // score. From md it is the panel's corner.
+      //
+      // `min-w-0`: this section is an item of the focus panel's grid, whose automatic minimum is its content's, and the set
+      // table's (names capped at 10rem, two set columns) is wider than a 320 column's 248px — the whole page grew 26px sideways.
+      // With the floor off the table sits in its own scroll region (as on the public page), and on a phone its name column is
+      // capped at 7rem, which is what lets a 40-character pair name and the live set's column both fit in 248px.
+      className="relative flex min-w-0 flex-col max-md:[&_.text-5xl]:text-4xl max-md:[&_th[scope=row]]:max-w-28"
+    >
+      {stream !== null && (
+        <div className="mb-2 flex justify-end md:absolute md:right-5 md:top-5 md:z-10 md:mb-0 md:max-w-[60%]">{stream}</div>
+      )}
+      {line === null || summary === null ? (
+        // Started, but its engine has published no scoreline yet. `LiveScoreBody` would print "Not started" under its own
+        // status line for a summary with no headline — a contradiction on a court that is playing — so this says what is true.
+        <div className="rounded-2xl bg-court p-5 text-court-ink shadow-lg sm:p-6">
+          <p className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300">
+            <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
+            {t(scoreDict, "matchCentre.status.in_play")}
+          </p>
+          <p className="font-display text-2xl font-semibold">{t(dict, "matchDay.focus.noScore")}</p>
+        </div>
+      ) : line.kind === "sets" ? (
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-2xl bg-court text-court-ink shadow-lg">
+            <div className="p-5 sm:p-6">
+              <p className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.22em] text-emerald-300">
+                <span className="animate-live-pulse h-2 w-2 rounded-full bg-emerald-400" />
+                {t(scoreDict, "matchCentre.status.in_play")}
+              </p>
+              <p
+                data-testid="md-score-large"
+                className="flex flex-wrap items-baseline gap-x-5 gap-y-2 font-display font-bold tabular-nums leading-none"
+              >
+                <span className="text-5xl tracking-tight sm:text-6xl">{`${line.levels.won[0]} – ${line.levels.won[1]}`}</span>
+                {line.levels.mid !== null && (
+                  <span data-md-score-mid className="text-3xl text-court-ink/75 sm:text-4xl">{`${line.levels.mid[0]}–${line.levels.mid[1]}`}</span>
+                )}
+                {line.levels.live !== null && (
+                  <span data-md-score-live className="text-3xl text-court-ink/75 sm:text-4xl">{liveLabel(line.levels.live, levelWords(scoreDict))}</span>
+                )}
+              </p>
+              {servingName !== null && (
+                <p data-md-serving className="mt-4 flex min-w-0 items-baseline gap-2 font-display text-lg font-semibold sm:text-xl">
+                  <span aria-hidden className="text-amber-300">●</span>
+                  <span className="min-w-0 [overflow-wrap:anywhere]">
+                    {`${servingName} `}
+                    <span className="font-medium text-court-muted">{t(scoreDict, "matchCentre.serving")}</span>
+                  </span>
+                </p>
+              )}
+            </div>
+            <div aria-hidden className="h-1 bg-emerald-400" />
+          </div>
+          <LiveScoreBody
+            data={{ status: "in_play", summary, outcome: null }}
+            entrantNames={entrantNames}
+            sportKey={fixture.sport_key}
+            decidedTemplates={NO_OUTCOME}
+            dict={panelDict}
+            suppressScorebug
+          />
+        </div>
+      ) : (
+        <LiveScoreBody
+          data={{ status: "in_play", summary, outcome: null }}
+          entrantNames={entrantNames}
+          sportKey={fixture.sport_key}
+          decidedTemplates={NO_OUTCOME}
+          dict={panelDict}
+        />
+      )}
+    </section>
+  );
+}

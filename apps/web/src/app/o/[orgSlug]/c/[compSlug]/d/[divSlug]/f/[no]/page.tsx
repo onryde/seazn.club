@@ -12,6 +12,7 @@ import {
   getLineup,
   listEvents,
   loadFixtureMatchRules,
+  fixtureFormatLines,
   loadFixturePadCfg,
 } from "@/server/usecases/fixtures";
 import { getDivision } from "@/server/usecases/divisions";
@@ -164,7 +165,8 @@ export default async function FixturePage({
   // is not billing-frozen), and the session read runs only for an organiser: a scorer's or viewer's refresh pays nothing.
   const frozen = competition.frozen ?? false;
   const locale = await resolveLocale();
-  const [streamContext, openStreams, matchRules] = await Promise.all([
+  const organiserRules = offersMatchRules({ canEdit, frozen });
+  const [streamContext, openStreams, matchRules, formatLine] = await Promise.all([
     loadStreamPanelContext({
       auth,
       competitionId: competition.id,
@@ -177,7 +179,15 @@ export default async function FixturePage({
     canEdit ? openStreamStates(auth, [id]) : Promise.resolve({} as Awaited<ReturnType<typeof openStreamStates>>),
     // W2c Task 19 (S2): the match rules block's facts - organisers only, like the other organiser controls (settle, forfeit):
     // the writer is organiser auth, so a block shown to a scorer would only earn a 403. A billing-frozen competition shows none.
-    offersMatchRules({ canEdit, frozen }) ? loadFixtureMatchRules(auth, id, await getDictionary(locale, "public")) : Promise.resolve(null),
+    organiserRules ? loadFixtureMatchRules(auth, id, await getDictionary(locale, "public")) : Promise.resolve(null),
+    // Match Day C2: everyone else reads the match's format line alone (one query, the same resolver as the block's line), for
+    // the read-only Match format card. A failing read costs only that line, never the page.
+    organiserRules
+      ? Promise.resolve(null)
+      : getDictionary(locale, "public")
+          .then((dict) => fixtureFormatLines(auth, [id], dict))
+          .then((lines) => lines.get(id) ?? null)
+          .catch(() => null),
   ]);
   const streamMode = fixtureStreamMode({
     canEdit,
@@ -333,6 +343,7 @@ export default async function FixturePage({
           stream={streamMount}
           streamReturn={first(sp.stream) === "open"}
           matchRules={matchRules === null ? undefined : matchRulesBlockProps(id, matchRules)}
+          matchFormatLine={formatLine ?? undefined}
           viewerPlan={viewerPlan}
         />
       </main>
