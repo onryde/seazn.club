@@ -112,6 +112,7 @@ const ctx: MatchDayCtx = {
   scoreDict: publicEn as Dict,
   viewerPlan: "pro",
   readOnly: false,
+  frozen: false,
 };
 
 const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({
@@ -1556,7 +1557,7 @@ const noCourtList = (fixtures: MatchDayFixture[], openLabel = t(dict, "matchDay.
     />,
   );
 
-const shellWith = (v: MatchDayView, o: { readOnly?: boolean; focusCourtId?: string | null } = {}) =>
+const shellWith = (v: MatchDayView, o: { readOnly?: boolean; frozen?: boolean; focusCourtId?: string | null } = {}) =>
   renderToStaticMarkup(
     <MatchDayShell
       competitionId="comp-1"
@@ -1859,6 +1860,67 @@ describe("B4 — Q1(b): a view-only member sees the day and nothing that writes"
     expect(html).not.toContain('data-testid="md-needs-you"');
     // The editor's page with the same rows has the button: the difference is the role, not the rows.
     expect(shellWith({ ...view([court()]), needs_you: rows, results_owed: 0 })).toContain('data-testid="md-needs-you-toggle"');
+  });
+});
+
+// Task F1 (owner ruling 10-31 (1)): a BILLING-frozen competition (over its organisation's `competitions.max_active`) offers no
+// Call and no Undo call — the server refuses both with a 402 (match-day-call.test.ts, "the billing freeze") — and says why. The
+// rest of the page is untouched: the scorer QR, the pad and the stream links are not the call path.
+describe("F1 — a billing-frozen competition: no Call, no Undo call", () => {
+  const frozenCtx: MatchDayCtx = { ...ctx, frozen: true };
+  const CALLED = () => court({ state: "called", current: fx({ started_at: null, headline: null, called_at: "2026-10-31T11:31:00.000Z" }) });
+  const focusWith = (c: MatchDayCourt, x: MatchDayCtx) =>
+    renderToStaticMarkup(
+      <CourtFocus ctx={x} court={c} backLabel="All courts" onBack={() => {}} onChanged={() => {}} onRefused={() => {}} refreshKey="k" divisions={null} />,
+    );
+
+  it("EMPTY CASE FIRST (not frozen): Undo call on a called court, a call button per callable candidate, no frozen line", () => {
+    expect(focusWith(CALLED(), ctx)).toContain('data-testid="md-undo-call"');
+    const candidates = [cand({}, { id: "x-1" }), cand({ source: "no_court", from_court_name: null }, { id: "x-2" })];
+    const html = renderToStaticMarkup(<CandidateRows ctx={ctx} court={court({ state: "free", current: null })} candidates={candidates} onCall={() => {}} />);
+    expect(html.match(/<button/g) ?? []).toHaveLength(2);
+    expect(shellWith(view([court()]))).not.toContain('data-testid="md-frozen"');
+  });
+
+  it("frozen: the called court has no Undo call, but keeps its panel, its scorer QR and 'Open pad'", () => {
+    const html = focusWith(CALLED(), frozenCtx);
+    expect(html).toContain(`>${t(dict, "matchDay.called.title")}<`);
+    expect(html).not.toContain('data-testid="md-undo-call"');
+    expect(html).not.toContain(`>${esc(t(dict, "matchDay.called.undo"))}<`);
+    // Not the call path: scoring and the pad stay.
+    expect(html).toContain('data-testid="md-scorer"');
+    expect(html).toContain(`>${t(dict, "matchDay.focus.openPad")}<`);
+    const playing = focusWith(court(), frozenCtx);
+    expect(playing).toContain('data-testid="md-scorer"');
+    expect(playing).toContain(`>${esc(t(dict, "matchDay.stream.connect"))}<`);
+  });
+
+  it("frozen: a free court still lists its candidates, with no call button at all", () => {
+    const candidates = [cand({}, { id: "x-1" }), cand({ source: "no_court", from_court_name: null }, { id: "x-2" })];
+    const html = renderToStaticMarkup(
+      <CandidateRows ctx={frozenCtx} court={court({ state: "free", current: null })} candidates={candidates} onCall={() => {}} />,
+    );
+    expect(rowsOf(html, "md-candidate")).toHaveLength(2);
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain(`>${esc(t(dict, "matchDay.candidate.call", { court: "Court 3" }))}<`);
+  });
+
+  it("the page says why — in the editor's page only (a viewer is told the page is view-only already) — and the words exist in all four locales", () => {
+    const html = shellWith(view([court()]), { frozen: true });
+    expect(html).toContain(`>${esc(t(dict, "matchDay.frozen"))}<`);
+    expect(html).toContain('data-testid="md-frozen"');
+    const viewer = shellWith(view([court()]), { frozen: true, readOnly: true });
+    expect(viewer).not.toContain('data-testid="md-frozen"');
+    expect(viewer).toContain('data-testid="md-read-only"');
+    // The shell hands the fact to every panel: its focused CALLED court has no Undo.
+    expect(shellWith(view([CALLED()]), { frozen: true })).not.toContain('data-testid="md-undo-call"');
+    expect(shellWith(view([CALLED()]))).toContain('data-testid="md-undo-call"');
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS)) {
+      expect(typeof d["matchDay.frozen"] === "string" && d["matchDay.frozen"] !== "", locale).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });
 

@@ -85,6 +85,8 @@ export interface MatchDayShellProps {
   viewerPlan: ViewerPlan;
   /** A member who may view but not edit (B4, owner ruling Q1b): the page with nothing that writes. */
   readOnly?: boolean;
+  /** The competition is billing-frozen (task F1): no Call and no Undo call, and the page says why. */
+  frozen?: boolean;
   /** `?court=<id>`: the court to open first (Needs you's "Find a court" link, opened another way). Ignored when not on the list. */
   focusCourtId?: string | null;
   /** `?venue=`: the venue filter's choice as the URL wrote it ("all", or venue ids), absent for the default (E2 item 5). */
@@ -103,6 +105,7 @@ export function MatchDayShell({
   scoreDict,
   viewerPlan,
   readOnly = false,
+  frozen = false,
   focusCourtId = null,
   venueParam = null,
 }: MatchDayShellProps) {
@@ -179,7 +182,7 @@ export function MatchDayShell({
   /** A phone shows one court (or match) full-screen only while what it opened is still there. */
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
-  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly };
+  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen };
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
 
@@ -254,6 +257,12 @@ export function MatchDayShell({
             {readOnly && (
               <p data-testid="md-read-only" className="mt-2 text-xs text-slate-600">
                 {t(dict, "matchDay.readOnly")}
+              </p>
+            )}
+            {/* A viewer is told the page is view-only already; the freeze is the editor's news (task F1). */}
+            {frozen && !readOnly && (
+              <p data-testid="md-frozen" className="mt-2 text-xs text-amber-800">
+                {t(dict, "matchDay.frozen")}
               </p>
             )}
           </div>

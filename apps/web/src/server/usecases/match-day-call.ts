@@ -26,6 +26,11 @@ import "server-only";
 // `schedule_edited` (the shape moveFixture writes, so history can undo it) and bumps `divisions.seq`, so a board or an AI plan
 // loaded before the call is refused as stale instead of writing over it. They do NOT honour the division's schedule freeze
 // (`schedule_locked`): the freeze guards planning edits, and the day must still run.
+//
+// The BILLING freeze is a different thing and they DO honour it (owner ruling 10-31 (1), Match Day task F1): a competition over
+// its organisation's `competitions.max_active` is read-only (`frozenCompetitionIds` + `assertNotFrozen`, the guard every
+// schedule write runs — moveFixture's own, schedule.ts), so a call, its Undo and the preview of a call each refuse it with the
+// guard's own 402. Two different freezes, two different answers: never conflate `schedule_locked` with this one.
 import type postgres from "postgres";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -45,6 +50,7 @@ import {
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { dayKeyInTz, usableWindows, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling";
 import { candidateCourtsByFixture, requiredCourtTagsByFixture, resolveCourtCalendars } from "./court-candidates";
+import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { readRounds, roundOf } from "./match-day-rounds";
 import {
   afterScheduleWrite,
@@ -416,7 +422,8 @@ export async function whoIsBusy(
  * that no longer holds (the board has moved the match since) is history: the slot recorded is the one the board left.
  *
  * Deliberately NOT refused on a frozen division (`schedule_locked`, moveFixture's 422 SCHEDULE_LOCKED): the freeze guards
- * planning edits, and the day must still run (controller ruling R-m3, 2026-10-31).
+ * planning edits, and the day must still run (controller ruling R-m3, 2026-10-31). Refused 402 on a BILLING-frozen competition
+ * (`assertNotFrozen`, task F1), as every schedule write is.
  */
 export async function callFixtureToCourt(
   auth: AuthCtx,
@@ -424,8 +431,12 @@ export async function callFixtureToCourt(
   courtId: string,
   now: Date = new Date(),
 ): Promise<{ fixture_id: string; court_id: string; called_at: string }> {
+  // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy (`getLimit`), and `withTenant` pins a pooled
+  // connection for its whole callback (entitlement-freeze.ts). Keyed on the ORG, so it needs no id the transaction reads.
+  const frozen = await frozenCompetitionIds(auth.orgId);
   const out = await withTenant(auth.orgId, async (tx) => {
     const f = await readFixture(tx, auth.orgId, fixtureId, true);
+    assertNotFrozen(frozen, f.competition_id);
     const court = await targetCourt(tx, courtId);
     const courtNames = await courtNamesById(tx);
     await assertCallable(tx, f, court.id, courtNames);
@@ -458,14 +469,17 @@ export async function callFixtureToCourt(
  * Undo call: the match goes back to the court, venue and time it had before it was called, nulls included (a match that had no
  * court has none again), and the call is gone. Refused once the match has started: a playing match stays where it is playing.
  * Refused NOT_CALLED when the call no longer holds (the board has moved the match since): the board's edit is the match's place
- * now, and Undo call must not write over it. Like the call, not refused on a frozen division.
+ * now, and Undo call must not write over it. Like the call, not refused on a frozen division (`schedule_locked`), and refused
+ * 402 on a billing-frozen competition.
  */
 export async function undoCall(
   auth: AuthCtx,
   fixtureId: string,
 ): Promise<{ fixture_id: string; court_id: string | null; scheduled_at: string | null }> {
+  const frozen = await frozenCompetitionIds(auth.orgId); // before the transaction: see callFixtureToCourt
   const out = await withTenant(auth.orgId, async (tx) => {
     const f = await readFixture(tx, auth.orgId, fixtureId, true);
+    assertNotFrozen(frozen, f.competition_id);
     const call = await readCall(tx, f.id);
     if (!call) refuse(CALL_REFUSAL.NOT_CALLED, "this match is not called");
     assertUnstarted(f);
@@ -513,8 +527,11 @@ export async function previewCall(
 ): Promise<CallPreview> {
   // Read before the transaction (a file, not a connection): the round names printed inside it are in the reader's language.
   const dict = await getDictionary(opts.locale ?? DEFAULT_LOCALE, "ui");
+  const frozen = await frozenCompetitionIds(auth.orgId); // before the transaction: see callFixtureToCourt
   return withTenant(auth.orgId, async (tx) => {
     const f = await readFixture(tx, auth.orgId, fixtureId, false);
+    // The call's own refusal: a preview never offers a call that would be refused.
+    assertNotFrozen(frozen, f.competition_id);
     const court = await targetCourt(tx, courtId);
     const courtNames = await courtNamesById(tx);
     await assertCallable(tx, f, court.id, courtNames);

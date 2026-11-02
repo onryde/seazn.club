@@ -5,6 +5,7 @@
 // button (§7.2's hard stop); every other one has "Call to Court N", which opens the call sheet's knock-on preview. Only the
 // top-ranked callable one carries the primary button; the rest are secondary (review V2: one primary action per list).
 // A view-only reader (task B4, `ctx.readOnly`) sees the same list with no call buttons: what could start here, not a door to it.
+// So does every reader of a billing-frozen competition (`ctx.frozen`, task F1): the server refuses its calls with a 402.
 import { useCallback, useEffect, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicTime } from "@/lib/format";
@@ -186,7 +187,7 @@ export function CandidateRows({
                   </div>
                   {c.blocked !== null ? (
                     <p className="text-xs font-medium text-slate-700 md:text-right">{blockedReason(dict, c.blocked)}</p>
-                  ) : ctx.readOnly ? null : (
+                  ) : ctx.readOnly || ctx.frozen ? null : (
                     <button
                       type="button"
                       data-md-primary={c.fixture.id === primary ? "true" : undefined}

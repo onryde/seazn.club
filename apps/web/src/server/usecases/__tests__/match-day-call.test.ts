@@ -21,9 +21,13 @@
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
 import { afterAll, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { sql } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
+import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
+import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import { FixtureCallPreview } from "@/server/api-v1/schemas";
 import { moveFixture } from "../schedule";
 import { callFixtureToCourt, previewCall, undoCall } from "../match-day-call";
@@ -639,6 +643,71 @@ describe.skipIf(!HAS_DB)("a call on the division's ledger", () => {
     expect(await slotOf(f.id)).toMatchObject({ court_id: day.courts.c1, scheduled_at: iso(31) });
     await undoCall(day.auth, f.id);
     expect(await slotOf(f.id)).toMatchObject({ court_id: day.courts.c2, scheduled_at: iso(120) });
+  });
+});
+
+// Task F1 (owner ruling 10-31 (1)): a competition over its organisation's `competitions.max_active` is read-only — the BILLING
+// freeze every schedule write refuses with a 402 (moveFixture's `assertNotFrozen`). A call, its Undo and the preview of a call
+// refuse it too; another competition of the same org that is NOT frozen calls as ever. (The schedule freeze above is the other
+// freeze, and calls still bypass that one.)
+describe.skipIf(!HAS_DB)("the billing freeze (task F1)", () => {
+  it("refuses a frozen competition's call, Undo and preview with the guard's own 402 and writes nothing; an unfrozen competition of the same org still calls", async () => {
+    const day = await seedDay();
+    const { p1, p2, p3, p4 } = pairs(day);
+    const called = between(day.comp, p1, p2);
+    const waiting = between(day.comp, p3, p4);
+    await place(day, called.id, 120, day.courts.c2);
+    await place(day, waiting.id, 150, day.courts.c2);
+    const people = await Promise.all(["Uma Underwood", "Vic Vance", "Wyn West", "Xan Xiong"].map((n) => person(day.orgId, n)));
+    const other = await seedCompetition(day.auth, "Club Night", [[people[0]!, people[1]!], [people[2]!, people[3]!]], {
+      courts: [day.courts.c3],
+    });
+    const g = other.fixtures[0]!;
+
+    // Before the freeze: the call this test will try to Undo.
+    await callFixtureToCourt(day.auth, called.id, day.courts.c1, at(31));
+
+    // Over quota = a DOWNGRADE, so raw SQL fillers (createCompetition enforces the quota itself). Fillers are created after
+    // both competitions and nothing has scored, so the OLDEST — the day's — is the least recently active and freezes
+    // (scoring-engine-epoch.test.ts 13c, event-import-freeze.test.ts).
+    await setOrgPlan(day.orgId, "community");
+    await invalidateOrgEntitlements(day.orgId);
+    const limit = await getLimit(day.orgId, "competitions.max_active");
+    expect(limit, "premise: the community plan has a competitions ceiling").not.toBeNull();
+    for (let i = 0; i < (limit as number) - 1; i++) {
+      const suffix = randomUUID().slice(0, 8);
+      await sql`
+        insert into competitions (org_id, name, slug, status)
+        values (${day.orgId}, ${"Filler " + suffix}, ${"filler-" + suffix}, 'draft')`;
+    }
+    expect([...(await frozenCompetitionIds(day.orgId))], "premise: exactly the day's competition is frozen").toEqual([day.comp.id]);
+
+    const before = { called: await slotOf(called.id), waiting: await slotOf(waiting.id), seq: (await ledgerOf(day.comp.divisionId, called.id)).seq };
+    const attempts = [
+      ["undo", () => undoCall(day.auth, called.id)],
+      ["call", () => callFixtureToCourt(day.auth, waiting.id, day.courts.c1, at(40))],
+      ["preview", () => previewCall(day.auth, waiting.id, day.courts.c1, at(40))],
+    ] as const;
+    for (const [what, attempt] of attempts) {
+      const err = await refusal(attempt());
+      expect(err, what).toBeInstanceOf(PaymentRequiredError);
+      expect(err.status, what).toBe(402);
+      expect((err as PaymentRequiredError).featureKey, what).toBe("competitions.max_active");
+    }
+    expect(attempts.length, "anti-vacuity: refusals checked").toBe(3);
+    // Nothing moved: the called match stays called where it was, the other keeps its plan, no ledger row, no call row.
+    expect(await slotOf(called.id)).toEqual(before.called);
+    expect(await slotOf(waiting.id)).toEqual(before.waiting);
+    expect((await ledgerOf(day.comp.divisionId, called.id)).seq).toBe(before.seq);
+    expect(await callRows(called.id)).toHaveLength(1);
+    expect(await callRows(waiting.id)).toEqual([]);
+
+    // The positive pair, in the same frozen org: the competition that is not frozen previews, calls and undoes as ever.
+    expect(await previewCall(day.auth, g.id, day.courts.c3, at(40))).toEqual({ shifts: [], warnings: [] });
+    await callFixtureToCourt(day.auth, g.id, day.courts.c3, at(40));
+    expect(await slotOf(g.id)).toMatchObject({ court_id: day.courts.c3, scheduled_at: iso(40) });
+    await undoCall(day.auth, g.id);
+    expect(await slotOf(g.id)).toMatchObject({ court_id: null, scheduled_at: null });
   });
 });
 

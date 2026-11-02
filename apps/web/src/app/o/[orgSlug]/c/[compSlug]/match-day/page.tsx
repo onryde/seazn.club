@@ -8,10 +8,14 @@ export const dynamic = "force-dynamic";
 // The write doors refuse a viewer on their own (`requireResourceAuth(…, "write")`; read-only-staff.test.ts); hiding them here
 // is the page being honest, never the guard. A non-member gets the 404 `requireOrgPage` gives every console page.
 //
+// A BILLING-frozen competition (over the organisation's `competitions.max_active`; task F1) offers no Call and no Undo call: the
+// server refuses both with a 402. The fact is the one the competition page reads (`getCompetition(…).frozen`).
+//
 // `?court=<id>` opens that court (B4: Needs you's "Find a court" names the free court whose candidates it means).
 // `?venue=<id>,<id>` (or `all`) is the venue filter's choice (E2 item 5); absent, the venues with a match today.
 import { requireCompetitionPage } from "@/server/page-auth";
 import { getMatchDay } from "@/server/usecases/match-day";
+import { getCompetition } from "@/server/usecases/competitions";
 import { orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listDivisions } from "@/server/usecases/divisions";
@@ -34,12 +38,13 @@ export default async function MatchDayPage({
   const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/match-day" });
   const id = page.competition.id;
   const locale = await resolveLocale();
-  const [ui, pub, view, divisions, planKey] = await Promise.all([
+  const [ui, pub, view, divisions, planKey, competition] = await Promise.all([
     getDictionary(locale, "ui"),
     getDictionary(locale, "public"),
     getMatchDay(page.auth, id, new Date(), { locale }),
     listDivisions(page.auth, id),
     orgPlanKey(page.auth.orgId),
+    getCompetition(page.auth, id),
   ]);
   return (
     <main className="mx-auto max-w-6xl px-4 py-6 md:py-8">
@@ -58,6 +63,7 @@ export default async function MatchDayPage({
         scoreDict={pickDictPrefixes(pub, ["matchCentre.", "forfeit."])}
         viewerPlan={viewerPlanFrom(planKey)}
         readOnly={!page.canEdit}
+        frozen={competition.frozen === true}
         focusCourtId={typeof court === "string" ? court : null}
         venueParam={venue ?? null}
       />

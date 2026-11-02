@@ -29,6 +29,7 @@ const ctx: MatchDayCtx = {
   scoreDict: publicEn as Dict,
   viewerPlan: "pro",
   readOnly: false,
+  frozen: false,
 };
 
 const fx = (o: Partial<MatchDayFixture> = {}): MatchDayFixture => ({

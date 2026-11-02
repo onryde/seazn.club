@@ -7193,6 +7193,7 @@
   "matchDay.focus.openMatch": "Abrir el partido",
   "matchDay.back.list": "Volver a la lista",
   "matchDay.readOnly": "Solo lectura. Llamar partidos y los enlaces de anotador son para los organizadores de la competición.",
+  "matchDay.frozen": "Solo lectura: tu organización supera el límite de competiciones activas de su plan, así que aquí no se pueden llamar partidos ni deshacer llamadas. Archiva una competición o mejora tu plan para dirigir la jornada desde esta página.",
   "matchDay.needsYou.findCourt.court": "Buscar una pista",
   "matchDay.needsYou.findCourt.pitch": "Buscar un campo",
   "matchDay.needsYou.findCourt.table": "Buscar una mesa",

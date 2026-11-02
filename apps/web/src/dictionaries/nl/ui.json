@@ -7193,6 +7193,7 @@
   "matchDay.focus.openMatch": "Wedstrijd openen",
   "matchDay.back.list": "Terug naar de lijst",
   "matchDay.readOnly": "Alleen bekijken. Wedstrijden oproepen en scorerlinks zijn voor de organisatoren van de competitie.",
+  "matchDay.frozen": "Alleen-lezen: je organisatie zit boven de limiet van actieve competities van haar abonnement, dus wedstrijden kunnen hier niet worden opgeroepen of teruggezet. Archiveer een competitie of upgrade je abonnement om de dag vanaf deze pagina te leiden.",
   "matchDay.needsYou.findCourt.court": "Baan zoeken",
   "matchDay.needsYou.findCourt.pitch": "Veld zoeken",
   "matchDay.needsYou.findCourt.table": "Tafel zoeken",

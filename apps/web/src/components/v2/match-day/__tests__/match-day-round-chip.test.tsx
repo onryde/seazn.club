@@ -44,6 +44,7 @@ const ctx: MatchDayCtx = {
   scoreDict: publicEn as Dict,
   viewerPlan: "pro",
   readOnly: false,
+  frozen: false,
 };
 
 /** The generated 8-entrant knockout (QF x4, SF x2, final, bronze) and the rounds the board's own function gives it. */

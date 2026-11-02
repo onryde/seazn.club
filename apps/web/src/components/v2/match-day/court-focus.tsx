@@ -24,6 +24,7 @@
 //    no Undo call, no Call (candidate-list.tsx), no scorer QR (showing it mints a link), no "+ Connect a stream" and no stream
 //    settings; "Open pad" reads "Open match", since the console decides what that reader may do there. The server refuses
 //    every one of those writes on its own (read-only-staff.test.ts); hiding them is the page being honest, not the guard.
+//  - a billing-frozen competition (`ctx.frozen`, task F1) offers no Undo call and no Call: the server refuses both (402).
 import { useState } from "react";
 import Link from "@/components/ui/console-link";
 import { apiV1 } from "@/lib/client-v1";
@@ -62,6 +63,10 @@ export interface MatchDayCtx {
   viewerPlan: ViewerPlan;
   /** A view-only reader (B4, owner ruling Q1b): every panel shows, nothing that writes does. */
   readOnly: boolean;
+  /** The competition is BILLING-frozen (over its organisation's `competitions.max_active`; task F1): the server refuses a call
+   *  and its Undo with a 402, so neither is offered. The fact the competition page reads (`getCompetition(…).frozen`). Only the
+   *  call path: the scorer QR, the pad and the stream links are not Match Day's to withhold. */
+  frozen: boolean;
 }
 
 /** The match's console page: its pad and its per-match stream panel. */
@@ -367,7 +372,7 @@ function CalledPanel({
           {t(dict, "matchDay.called.at", { time: fmtPublicTime(ctx.locale, ctx.tz, fixture.called_at) })}
         </p>
       )}
-      {!ctx.readOnly && (
+      {!ctx.readOnly && !ctx.frozen && (
         <button
           type="button"
           data-testid="md-undo-call"
