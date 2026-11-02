@@ -2,12 +2,15 @@
 // accepts a per-entrant bye request, and the one door a client would reach for — a stage config naming `requestedByes`
 // — refuses by name, with guidance (record a walkover on the player's board).
 //
-// Two halves:
+// Three parts:
 //  1. The refusal, driven through the REAL consumers: the create/replace/patch route handlers parse the real schemas
 //     (`CreateStages`, `PatchSwissStage`) and answer through the real `v1()` envelope. The usecases and the auth door are
 //     mocked (this file has no DB); what it proves is the wire — status, the NAMED code, the guidance sentence, the
 //     field — and that nothing reaches a usecase. A fixture on both ends would prove the fixture.
-//  2. The deferral: the published request surface (`openapi/v1.json`) names no per-entrant bye request anywhere.
+//  2. The deferral: the published request surface (`openapi/v1.json`) DECLARES no per-entrant bye request property anywhere
+//     (see the known limits at the sweep: declared names only).
+//  3. The shared issue walker (`pathOfIssueMessage`) still serves the stage-decider reader beside the new one, and the
+//     precedence between the two is pinned (pure tests, no DB).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +20,9 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { isSwissRefusalCode, SWISS_REFUSALS, swissRefusalKey } from "@/lib/swiss-refusals";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
+import { TOP_LEVEL_STAGE_DECIDERS } from "@/lib/top-level-stage-deciders";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import type { createStages as CreateFn, replaceStages as ReplaceFn } from "@/server/usecases/stages";
 import type { patchSwissStage as PatchFn } from "@/server/usecases/swiss-rounds-admin";
@@ -27,6 +32,7 @@ const AUTH: AuthCtx = { orgId: "org1", via: "session", userId: "user1", role: "o
 const createMock = vi.hoisted(() => vi.fn<typeof CreateFn>());
 const replaceMock = vi.hoisted(() => vi.fn<typeof ReplaceFn>());
 const patchMock = vi.hoisted(() => vi.fn<typeof PatchFn>());
+const rulesMock = vi.hoisted(() => vi.fn());
 const authMock = vi.hoisted(() => vi.fn(async () => AUTH));
 vi.mock("@/server/usecases/stages", () => ({
   createStages: createMock,
@@ -36,10 +42,12 @@ vi.mock("@/server/usecases/stages", () => ({
   getStageWithTableRules: vi.fn(),
 }));
 vi.mock("@/server/usecases/swiss-rounds-admin", () => ({ patchSwissStage: patchMock }));
+vi.mock("@/server/usecases/stage-rules", () => ({ putStageRules: rulesMock }));
 vi.mock("@/server/api-v1/auth", () => ({ requireResourceAuth: authMock }));
 
 import { POST as CREATE, PUT as REPLACE } from "@/app/api/v1/divisions/[id]/stages/route";
 import { PATCH } from "@/app/api/v1/stages/[id]/route";
+import { PUT as PUT_RULES } from "@/app/api/v1/stages/[id]/rules/route";
 
 /** The brief's sentence (task-18-brief.md), typed here: the table row is the code under test, never the oracle. */
 const GUIDANCE =
@@ -75,6 +83,7 @@ beforeEach(() => {
   createMock.mockReset();
   replaceMock.mockReset();
   patchMock.mockReset();
+  rulesMock.mockReset();
   authMock.mockReset();
   authMock.mockResolvedValue(AUTH);
   createMock.mockResolvedValue([{ id: "s1" }] as never);
@@ -172,8 +181,79 @@ describe("X-SW-18 requested half/zero byes are refused by name, with guidance", 
   });
 });
 
+// T18 review M1/M2. `http.ts` reads two named body refusals through ONE issue walker (`pathOfIssueMessage`): the stage
+// decider's (W2c) and the requested bye's (T18). The decider reader's only other witness through the v1 envelope is
+// DB-gated (stage-points.test.ts), so with its branch dead the DB-free scoped run stayed green. These pin it, no DB.
+describe("the stage-decider reader still works beside the requested-bye reader, and wins when both are named", () => {
+  /** The sentence `http.ts` documents for a top-level decider: where the key was sent, and where it goes. */
+  const movedSentence = (field: string, target: string) =>
+    `${field}: a stage's deciders are its match rules — set it under the stage's rules, as ${target}`;
+
+  it("a top-level decider is refused by its own name (STAGE_DECIDER_MOVED, saying where it goes) on create, replace and the rules PUT", async () => {
+    // Every decider the engine declares for any sport (the set the schema refuses), never a list typed here.
+    expect(TOP_LEVEL_STAGE_DECIDERS.length, "premise: the engine declares top-level deciders").toBeGreaterThan(0);
+    let checked = 0;
+    for (const key of TOP_LEVEL_STAGE_DECIDERS) {
+      const rulesReq = json(`http://localhost/api/v1/stages/${STAGE_ID}/rules`, "PUT", { [key]: true });
+      const doors: { label: string; field: string; target: string; send: () => Promise<Response> }[] = [
+        { label: "POST one stage", field: `config.${key}`, target: `config.rules.${key}`, send: () => CREATE(stagesReq("POST", swissStage({ [key]: true })), divCtx) },
+        { label: "POST a list", field: `[0].config.${key}`, target: `[0].config.rules.${key}`, send: () => CREATE(stagesReq("POST", [swissStage({ [key]: true })]), divCtx) },
+        { label: "PUT one stage", field: `config.${key}`, target: `config.rules.${key}`, send: () => REPLACE(stagesReq("PUT", swissStage({ [key]: true })), divCtx) },
+        { label: "PUT a list", field: `[0].config.${key}`, target: `[0].config.rules.${key}`, send: () => REPLACE(stagesReq("PUT", [swissStage({ [key]: true })]), divCtx) },
+        { label: "PUT the rules", field: key, target: `rules.${key}`, send: () => PUT_RULES(rulesReq, stageCtx) },
+      ];
+      for (const door of doors) {
+        const where = `${door.label} naming ${key}`;
+        const res = await door.send();
+        const body = (await res.json()) as ErrorEnvelope;
+        expect(res.status, where).toBe(400);
+        // The decider keeps the wire code the generic validation has (it was never given its own): the NAME is the sentence.
+        expect(body.error.code, where).toBe("VALIDATION");
+        expect(body.error.message, where).toBe(movedSentence(door.field, door.target));
+        expect(body.error.field, where).toBe(door.field);
+        expect(JSON.stringify(body.error.issues), `${where}: the schema's own STAGE_DECIDER_MOVED issue rides on the envelope`).toContain(STAGE_DECIDER_MOVED);
+        checked++;
+      }
+    }
+    expect(createMock).not.toHaveBeenCalled();
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(rulesMock).not.toHaveBeenCalled();
+    // Anti-vacuity: every declared decider x 5 doors.
+    expect(checked).toBe(TOP_LEVEL_STAGE_DECIDERS.length * 5);
+  });
+
+  it("a body naming BOTH a top-level decider and requestedByes gets the decider's refusal (precedence pinned, both issues raised)", async () => {
+    let checked = 0;
+    for (const key of TOP_LEVEL_STAGE_DECIDERS) {
+      // requestedByes FIRST in the JSON, so the outcome is the reader's order and not the body's.
+      const res = await CREATE(stagesReq("POST", swissStage({ requestedByes: [{ entrantId: "ent-1", value: 0.5 }], [key]: true })), divCtx);
+      const body = (await res.json()) as ErrorEnvelope;
+      expect(res.status, key).toBe(400);
+      expect(body.error.code, key).toBe("VALIDATION");
+      expect(body.error.message, key).toBe(movedSentence(`config.${key}`, `config.rules.${key}`));
+      expect(body.error.field, key).toBe(`config.${key}`);
+      // The premise: the requested-bye issue WAS raised, so the decider won a contest and not an empty field.
+      const issues = JSON.stringify(body.error.issues);
+      expect(issues, `${key}: the bye issue is on the envelope`).toContain(SWISS_REFUSALS.SWISS_REQUESTED_BYES_DEFERRED.message);
+      expect(issues, `${key}: the decider issue is on the envelope`).toContain(STAGE_DECIDER_MOVED);
+      checked++;
+    }
+    expect(createMock).not.toHaveBeenCalled();
+    expect(checked, "anti-vacuity: deciders checked").toBe(TOP_LEVEL_STAGE_DECIDERS.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------------
-// The deferral: no API operation accepts a per-entrant bye request.
+// The deferral: no API operation DECLARES a per-entrant bye request property.
+//
+// KNOWN LIMITS (T18 review, checked by running the schemas 2026-11-02) — what this sweep proves and what it does not:
+//  - It matches DECLARED property names only. The entrant doors (POST /divisions/{id}/entrants, PATCH /entrants/{id}) are
+//    non-strict objects: a body naming an undeclared key such as `requestedByes` is ACCEPTED (201 / 200) and the key is
+//    silently dropped. "No operation declares it" is not "every operation refuses it": the named refusal covers the
+//    stage-config doors (create, replace, PATCH /stages/{id}) only.
+//  - PUT /stages/{id}/rules (a strict object spreading only the decider refusals) answers a body naming `requestedByes`
+//    the generic unknown-key 400 "Invalid input", not SWISS_REQUESTED_BYES_DEFERRED.
 // ---------------------------------------------------------------------------------------------------------------------
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -273,8 +353,8 @@ const OPENAPI_PATH = join(__dirname, "..", "..", "..", "..", "..", "..", "openap
 const published = JSON.parse(readFileSync(OPENAPI_PATH, "utf8")) as Doc;
 const print = (m: Match) => `${m.op} ${m.path} ${JSON.stringify(m.schema)}`;
 
-describe("X-SW-18 the deferral: no API operation accepts a per-entrant bye request", () => {
-  it("X-SW-18 no API operation accepts a per-entrant bye request", () => {
+describe("X-SW-18 the deferral: no API operation declares a per-entrant bye request property", () => {
+  it("X-SW-18 no API operation declares a per-entrant bye request property", () => {
     const sweep = requestByeNames(published);
     // The sweep's whole output, so a reader sees what it matched (and a failure shows every match, not the first).
     console.info(
