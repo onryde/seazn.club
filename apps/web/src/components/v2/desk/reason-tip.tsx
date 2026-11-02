@@ -12,7 +12,10 @@
 //     is `role="tooltip"` whether it is showing or not.
 // Below `md` the bubble opens IN FLOW under the control (it sits in a scrolling bottom sheet there, which would clip an absolutely-placed
 // bubble); from `md` it floats under the control, and a transparent bridge over the gap keeps it up while the pointer crosses to it
-// (WCAG 1.4.13 "hoverable").
+// (WCAG 1.4.13 "hoverable"). HOVER reveals it from `md` only: below it there is no pointer to hover with, and the bottom sheet grows
+// UPWARD when the in-flow bubble appears - a hover reveal would slide the control from under the very press that follows the hover (the
+// press then lands on the bubble, which is not a press on the control). Focus and the tap reveal it there; a press's own focus slides the
+// control too, but a click whose press and release land on different elements is dispatched to their common ancestor - the wrapper.
 import { useEffect, useRef, useState } from "react";
 import { TIP_CLOSED, tipEscape, tipLeft, tipOutside, tipToggle, type TipState } from "./reason-tip-state";
 
@@ -86,7 +89,7 @@ export function WithReasonTip({
         id={id}
         data-testid={reasonTestId}
         data-open={open ? "true" : "false"}
-        className={`${open ? "block" : dismissed ? "hidden" : "hidden group-hover/tip:block group-focus-within/tip:block"} min-w-0 text-xs leading-snug text-slate-700 max-md:basis-full max-md:rounded-lg max-md:bg-slate-50 max-md:px-3 max-md:py-2 md:absolute md:left-0 md:top-full md:z-30 md:mt-1 md:w-64 md:max-w-[calc(100vw-2rem)] md:rounded-xl md:border md:border-purple-100 md:bg-white md:p-3 md:shadow-lg md:before:absolute md:before:inset-x-0 md:before:-top-1.5 md:before:h-1.5`}
+        className={`${open ? "block" : dismissed ? "hidden" : "hidden md:group-hover/tip:block group-focus-within/tip:block"} min-w-0 text-xs leading-snug text-slate-700 max-md:basis-full max-md:rounded-lg max-md:bg-slate-50 max-md:px-3 max-md:py-2 md:absolute md:left-0 md:top-full md:z-30 md:mt-1 md:w-64 md:max-w-[calc(100vw-2rem)] md:rounded-xl md:border md:border-purple-100 md:bg-white md:p-3 md:shadow-lg md:before:absolute md:before:inset-x-0 md:before:-top-1.5 md:before:h-1.5`}
       >
         {reason}
       </span>

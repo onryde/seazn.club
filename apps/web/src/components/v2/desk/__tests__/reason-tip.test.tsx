@@ -51,8 +51,10 @@ describe("WithReasonTip - the bubble on a greyed control (PB1)", () => {
     expect(propsOf(r.bubble()).id).toBe("why");
     expect(r.isOpen()).toBe(false);
     expect(r.klass()).toMatch(/\bhidden\b/);
-    expect(r.klass()).toContain("group-hover/tip:block");
-    expect(r.klass()).toContain("group-focus-within/tip:block");
+    // Hover reveals it from `md` only (below it the in-flow bubble would slide the control from under a press); focus at every width.
+    expect(r.klass()).toMatch(/(^|\s)md:group-hover\/tip:block(\s|$)/);
+    expect(r.klass()).not.toMatch(/(^|\s)group-hover\/tip:block(\s|$)/);
+    expect(r.klass()).toMatch(/(^|\s)group-focus-within\/tip:block(\s|$)/);
     // The only control inside is the one handed in - no second button to find the reason through.
     const buttons = r.island.tree().filter((e) => e.type === "button");
     expect(buttons).toHaveLength(1);
