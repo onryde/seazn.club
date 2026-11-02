@@ -3791,6 +3791,8 @@ export type DictionaryKey =
   | "matchDay.focus.started"
   | "matchDay.free.allBlocked.one"
   | "matchDay.free.allBlocked.other"
+  | "matchDay.free.closedWaiting.one"
+  | "matchDay.free.closedWaiting.other"
   | "matchDay.free.count.one"
   | "matchDay.free.count.other"
   | "matchDay.free.failed"

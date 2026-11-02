@@ -389,6 +389,28 @@ export function emptyCountText(dict: Dict, listed: number, locale: Locale): stri
   return listed === 0 ? t(dict, "matchDay.free.nothingWaiting") : plural(dict, "matchDay.free.allBlocked", listed, locale);
 }
 
+/**
+ * The free court panel's line under its title once its candidates are in (fix round 1, I1). An open court says how many could
+ * start here now. A court SHUT right now never does — its hours say otherwise: it names the closure first ("Closed for the rest
+ * of today."), then what is waiting and that calling one asks for a confirmation (R0); with none callable it falls back to the
+ * empty-case words (nothing waiting / all blocked), still behind the closure. A break still to come is not a closure NOW.
+ */
+export function freeCourtLine(
+  dict: Dict,
+  court: Pick<MatchDayCourt, "closure">,
+  candidates: readonly MatchDayCandidate[],
+  locale: Locale,
+  tz: string,
+): string {
+  const callable = callableCount(candidates);
+  const shut = court.closure !== null && court.closure.kind === "now" ? closureText(dict, court.closure, locale, tz) : null;
+  if (shut === null) {
+    return callable === 0 ? emptyCountText(dict, candidates.length, locale) : plural(dict, "matchDay.free.count", callable, locale);
+  }
+  const rest = callable === 0 ? emptyCountText(dict, candidates.length, locale) : plural(dict, "matchDay.free.closedWaiting", callable, locale);
+  return `${shut}. ${rest}`;
+}
+
 /** The one candidate whose call is the primary action (review V2): the top-ranked one that is not blocked. The list arrives in
  *  rank order (estimate.ts `rankCandidates`: unblocked first, then this court, other courts, no court), so it is the first
  *  unblocked; null when every one is blocked. */

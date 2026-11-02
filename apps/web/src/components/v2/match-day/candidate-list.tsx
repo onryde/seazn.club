@@ -8,14 +8,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicTime } from "@/lib/format";
-import { plural, t } from "@/lib/i18n-runtime";
+import { t } from "@/lib/i18n-runtime";
 import type { MatchDayCandidate, MatchDayCandidateSource, MatchDayCourt } from "@/lib/match-day/types";
 import {
   blockedReason,
-  callableCount,
   candidateWhere,
-  emptyCountText,
   filterCandidates,
+  freeCourtLine,
   isCandidateList,
   matchLabel,
   primaryCandidateId,
@@ -125,9 +124,7 @@ export function FreeCourtBody({
             ? t(dict, "matchDay.free.loading")
             : load.status === "failed"
               ? t(dict, "matchDay.free.failed")
-              : callableCount(load.candidates) === 0
-                ? emptyCountText(dict, load.candidates.length, ctx.locale)
-                : plural(dict, "matchDay.free.count", callableCount(load.candidates), ctx.locale)}
+              : freeCourtLine(dict, court, load.candidates, ctx.locale, ctx.tz)}
         </p>
         {load.status === "failed" && (
           <button type="button" onClick={onRetry} className="btn mt-3 min-h-11 border border-white/30 text-court-ink hover:bg-white/10">

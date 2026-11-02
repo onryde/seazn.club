@@ -29,6 +29,7 @@ import {
   filterCourts,
   callConfirmLabel,
   filterNoCourt,
+  freeCourtLine,
   headerCountParts,
   scoreLine,
   withFindCourt,
@@ -2014,6 +2015,53 @@ describe("E2-3 — a court's closure", () => {
     const html = body(free5(NOW_UNTIL), [cand({ blocked: busy }, { id: "b-1" }), cand({}, { id: "x-2" })]);
     expect(html).toContain(t(dict, "matchDay.candidate.blocked", { person: "Zara Khan", court: "Court 3" }));
     expect(callButtons(html)).toHaveLength(1);
+  });
+
+  it("I1: a court shut NOW never says matches 'could start here now' — it names the closure, then what is waiting and that calling asks you to confirm (plural 1, 2, 5)", () => {
+    const n = (k: number) => Array.from({ length: k }, (_, i) => cand({}, { id: `c-${i}` }));
+    expect(body(free5(NOW_REST), n(2))).toContain("Closed for the rest of today. 2 matches are waiting; calling one here asks you to confirm.");
+    expect(body(free5(NOW_UNTIL), n(1))).toContain("Closed until 15:00. 1 match is waiting; calling it here asks you to confirm.");
+    expect(body(free5(NOW_REST), n(5))).toContain("Closed for the rest of today. 5 matches are waiting; calling one here asks you to confirm.");
+    let checked = 0;
+    for (const closure of [NOW_UNTIL, NOW_REST]) {
+      for (const k of [0, 1, 2, 5]) {
+        expect(body(free5(closure), n(k)), `${closure.until ?? "rest"} x${k}`).not.toMatch(/could start here now/);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("I1: shut now with nothing callable falls back to the empty-case words, behind the closure; an open court and a break still to come read as before", () => {
+    const busy = { kind: "player_busy" as const, person_name: "Zara Khan", court_name: "Court 3" };
+    expect(body(free5(NOW_REST), [])).toContain("Closed for the rest of today. Nothing is waiting to be played here today.");
+    expect(body(free5(NOW_UNTIL), [cand({ blocked: busy }, { id: "b-1" }), cand({ blocked: busy }, { id: "b-2" })])).toContain(
+      "Closed until 15:00. 2 matches are waiting, but none can start yet. Each one shows why below.",
+    );
+    // Open courts, and a break still to come, keep "could start here now" — the court is not shut.
+    expect(body(free5(null), [cand({}, { id: "c-1" }), cand({}, { id: "c-2" })])).toContain("2 matches could start here now.");
+    expect(body(free5(LATER), [cand({}, { id: "c-1" })])).toContain("1 match could start here now.");
+    expect(body(free5(LATER), [cand({}, { id: "c-1" })])).not.toContain("Closed");
+  });
+
+  it("I1: every locale reads the closed-court line in its own words, none a raw key, and none says the court 'could start now' (counted)", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS) as [ "en" | "es" | "fr" | "nl", Dict ][]) {
+      const lines = new Set<string>();
+      for (const k of [1, 2, 5]) {
+        const line = freeCourtLine(d, free5(NOW_UNTIL), Array.from({ length: k }, (_, i) => cand({}, { id: `c-${i}` })), locale, "Europe/London");
+        expect(line, `${locale} x${k}`).not.toMatch(/matchDay\.|[{}]/);
+        expect(line, `${locale} x${k}`).toContain(t(d, "matchDay.closure.until", { time: "15:00" }));
+        expect(line, `${locale} x${k}`).toContain(String(k));
+        lines.add(line);
+        checked++;
+      }
+      expect(lines.size, locale).toBe(3);
+      // Not the open court's line.
+      const open = freeCourtLine(d, free5(null), [cand({}, { id: "c-0" })], locale, "Europe/London");
+      expect(freeCourtLine(d, free5(NOW_UNTIL), [cand({}, { id: "c-0" })], locale, "Europe/London"), locale).not.toContain(open);
+    }
+    expect(checked).toBe(4 * 3);
   });
 
   it("every locale: each closure form and each warning reads in the reader's language, none left a raw key (counted)", () => {

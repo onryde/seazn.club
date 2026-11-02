@@ -7110,6 +7110,8 @@
   "matchDay.free.since": "Libre depuis {time}.",
   "matchDay.free.count.one": "{count} match pourrait commencer ici maintenant.",
   "matchDay.free.count.other": "{count} matchs pourraient commencer ici maintenant.",
+  "matchDay.free.closedWaiting.one": "{count} match attend ; l'appeler ici demande une confirmation.",
+  "matchDay.free.closedWaiting.other": "{count} matchs attendent ; en appeler un ici demande une confirmation.",
   "matchDay.free.nothingWaiting": "Aucun match n'attend d'être joué ici aujourd'hui.",
   "matchDay.free.allBlocked.one": "{count} match attend, mais il ne peut pas encore commencer. Il indique pourquoi ci-dessous.",
   "matchDay.free.allBlocked.other": "{count} matchs attendent, mais aucun ne peut encore commencer. Chacun indique pourquoi ci-dessous.",
