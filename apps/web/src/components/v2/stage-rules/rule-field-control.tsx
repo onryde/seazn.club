@@ -109,7 +109,9 @@ export function RuleFieldControl({
           placeholder={inheritedPlaceholder(msg("rules.default"), inherited?.[field.key])}
           aria-describedby={described}
           aria-invalid={invalidMark}
-          className="input"
+          // Match Day E1 fix round 1 (m7): the 44px tap floor is the control's own - the shared `.input` is 42px, and only one editor's
+          // wrapper used to lift it, so the strip, the builder and the fixture's rules block drew a 42px field under the same label.
+          className="input min-h-11"
         />
       ) : (
         <select
@@ -119,7 +121,7 @@ export function RuleFieldControl({
           aria-describedby={described}
           aria-invalid={invalidMark}
           // Match Day E1 item 4: full width below md, capped at 20rem from md (a choice list is not a 700px bar), always a block.
-          className="select block w-full md:max-w-xs"
+          className="select block min-h-11 w-full md:max-w-xs"
         >
           <option value="">{msg("rules.default")}</option>
           {/* D9 (owner ruling 2026-09-18) - a SAVED value this select cannot offer must be shown, not swallowed.

@@ -7051,6 +7051,82 @@ test("W2c match rules block at every width: the fold opens, the controls hold th
   await fits("locked");
 });
 
+// Match Day E1 fix round 1 (m7): the 44px tap floor holds for EVERY control of EVERY rules panel - the stage card's Match rules / Points /
+// Tie-breaks panels and the Division rules strip's three - not just the few controls each earlier test happened to name. The panels are
+// opened through the product's own buttons; every visible select, input, button and link inside each is hit-tested (`assertTapFloor`:
+// height, and `elementFromPoint` at both edges). Counted: a panel that yields no control, or a run that measures too few, is a FAILURE,
+// not a pass (TEST-STRATEGY anti-vacuity).
+test("E1 fix 1 m7: every control in every rules panel (the stage card's three, the Division rules strip's three) holds the 44px floor, counted", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `E1 rules floor ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Eleven",
+    // Football, not a set sport: a set sport keeps no win/draw/loss points, so the Division rules strip's Points panel is a read-only
+    // summary with nothing to tap. Football's is the editor (three number boxes + Save) - the panel this test exists to measure.
+    sport_key: "football",
+    variant_key: "11-a-side",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  const stageId = stage.data!.id;
+  await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+
+  const CONTROLS = 'select, input:not([type="hidden"]), textarea, button, a[href], [role="switch"]';
+  /** Open a phone fold inside `root` when its toggle is the visible kind (gated on visibility, never a width literal). */
+  const openFolds = async (root: Locator): Promise<void> => {
+    const toggles = root.locator('[data-role="phone-disclosure-toggle"]');
+    for (let i = 0; i < (await toggles.count()); i++) {
+      const t = toggles.nth(i);
+      if ((await t.isVisible()) && (await t.getAttribute("aria-expanded")) !== "true") await t.click();
+    }
+  };
+  /** Every visible control in `root` holds the floor; returns how many were measured. */
+  const measure = async (root: Locator, label: string): Promise<number> => {
+    await expect(root, `${label} is on screen`).toBeVisible({ timeout: 20_000 });
+    await openFolds(root);
+    const all = root.locator(CONTROLS);
+    const n = await all.count();
+    let measured = 0;
+    for (let i = 0; i < n; i++) {
+      const c = all.nth(i);
+      if (!(await c.isVisible())) continue;
+      // A checkbox / radio is drawn small on purpose and tapped through its <label> (the pattern the points editor uses: a 20px box inside
+      // a min-h-11 label): the label is the target, so it is what is measured. A bare one with no label is measured as itself, and fails.
+      const bare = await c.evaluate((el) => el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio"));
+      const wrapper = c.locator("xpath=ancestor::label[1]");
+      await assertTapFloor(bare && (await wrapper.count()) === 1 ? wrapper : c, `${label} control ${i}`);
+      measured++;
+    }
+    return measured;
+  };
+
+  const strip = page.getByTestId("division-rules-strip");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await openPanels(strip, "format", "points", "tiebreaks");
+  const card = stageCardOf(page, stageId);
+  for (const panel of ["format", "points", "tiebreaks"] as const) await openStagePanel(card, panel);
+
+  const counts: Record<string, number> = {};
+  for (const panel of ["format", "points", "tiebreaks"] as const) {
+    counts[`strip ${panel}`] = await measure(strip.getByTestId(`division-rules-panel-${panel}`), `strip ${panel} panel`);
+    counts[`card ${panel}`] = await measure(page.locator(`#stage-panel-${stageId}-${panel}`), `stage card ${panel} panel`);
+  }
+  for (const [panel, n] of Object.entries(counts)) expect(n, `${panel}: the panel yielded controls to measure`).toBeGreaterThan(0);
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  expect(total, `controls measured across the six panels (${JSON.stringify(counts)})`).toBeGreaterThan(20);
+  await expectNoHorizontalScroll(page);
+});
+
 // W2c Task 20 (S4): the division's rule lock lines at every width (Match Day C2: on the Division rules strip's Match rules
 // panel, on the Fixtures tab - they left Settings with the match rules). A started stage locks the match-rule fields, and the
 // section says so ONCE ("Locked: Pool A has started and plays this format"; C2 fix round 1, I1 - never a line per field). The lines are plain text in the existing

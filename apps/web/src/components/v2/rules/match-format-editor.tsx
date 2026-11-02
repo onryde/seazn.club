@@ -112,8 +112,8 @@ export function StageRuleFields({
   const edit = (key: string, raw: string) => onChange(setRuleValue(sportKey, values, key, raw, divisionConfig));
 
   return (
-    // The row's own controls hold the 44px tap floor (the shared `.select` / `.input` are 42px): scoped to this editor
-    // so the division builder, which shares RuleFieldControl, keeps its look.
+    // The fields' own controls hold the 44px tap floor now (RuleFieldControl, E1 fix round 1 m7); this rule is what is left of the
+    // old editor-scoped lift and covers any other input or select this grid draws.
     <div className="space-y-4 [&_input]:min-h-11 [&_select]:min-h-11">
       {visible
         .filter((s) => s.fields.length > 0)
