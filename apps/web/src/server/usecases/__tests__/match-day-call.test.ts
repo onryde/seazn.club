@@ -965,6 +965,33 @@ describe.skipIf(!HAS_DB)("previewCall", () => {
     expect(await kinds(day.courts.c3, 700)).toEqual([]);
   });
 
+  // Task F9 (1) (E2 re-review): a court shut for the REST of the day says so once (court_closed, no reopening time) — "the queue
+  // runs past the day's end" is the same fact, so it is not said again. A court that reopens keeps both: they are two facts.
+  it("F9 (1) — a court shut for the rest of the day gives court_closed alone; one that reopens later keeps past_day_end beside it", async () => {
+    const day = await seedDay(); // 30-minute matches
+    const { p1, p2, p3, p4 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    await place(day, f.id, 300, day.courts.c3);
+    // Court 2 today: open 12:00–14:00 Amsterdam = 11:00Z–13:00Z only. A match queued on it at 12:50Z runs to 13:20Z, past its close.
+    await sql`
+      insert into court_exceptions (court_id, org_id, date, closed, open_min, close_min)
+      values (${day.courts.c2}, ${day.orgId}, '2026-11-07', false, ${12 * 60}, ${14 * 60})`;
+    await place(day, between(day.comp, p3, p4).id, 170, day.courts.c2);
+    const closing = async (minute: number) =>
+      (await previewCall(day.auth, f.id, day.courts.c2, at(minute))).warnings.filter((w) => w.kind === "court_closed" || w.kind === "past_day_end");
+
+    // EMPTY CASE FIRST: a court with no calendar warns of neither, at any hour.
+    expect((await previewCall(day.auth, f.id, day.courts.c3, at(700))).warnings.filter((w) => w.kind === "court_closed" || w.kind === "past_day_end")).toEqual([]);
+    // 10:00Z: shut, but it OPENS at 11:00Z — and the queue still runs past 13:00Z. Two facts, two warnings.
+    expect(await closing(0)).toEqual([
+      { kind: "past_day_end", court_name: "Court 2", until: iso(180) },
+      { kind: "court_closed", court_name: "Court 2", until: iso(60), since: null },
+    ]);
+    // 13:20Z: shut for the rest of the day (since 13:00Z) — the queue (now from 13:20Z) is past the close too, but that is the
+    // same fact: court_closed alone.
+    expect(await closing(200)).toEqual([{ kind: "court_closed", court_name: "Court 2", until: null, since: iso(180) }]);
+  });
+
   it("gives no shifts and no warnings for the court's own next match", async () => {
     const day = await seedDay();
     const { p1, p2, p3, p4 } = pairs(day);

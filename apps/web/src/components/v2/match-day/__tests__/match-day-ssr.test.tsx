@@ -2250,9 +2250,10 @@ describe("E2-3 — a court's closure", () => {
 
   it("I1: a court shut NOW never says matches 'could start here now' — it names the closure, then what is waiting and that calling asks you to confirm (plural 1, 2, 5)", () => {
     const n = (k: number) => Array.from({ length: k }, (_, i) => cand({}, { id: `c-${i}` }));
-    expect(body(free5(NOW_REST), n(2))).toContain("Closed for the rest of today. 2 matches are waiting; calling one here asks you to confirm.");
-    expect(body(free5(NOW_UNTIL), n(1))).toContain("Closed until 15:00. 1 match is waiting; calling it here asks you to confirm.");
-    expect(body(free5(NOW_REST), n(5))).toContain("Closed for the rest of today. 5 matches are waiting; calling one here asks you to confirm.");
+    // The count reads "{callable} of {total} waiting can be called here" since task F9 (2) (none blocked here: callable = total).
+    expect(body(free5(NOW_REST), n(2))).toContain("Closed for the rest of today. 2 of 2 waiting can be called here; calling one asks you to confirm.");
+    expect(body(free5(NOW_UNTIL), n(1))).toContain("Closed until 15:00. 1 of 1 waiting can be called here; calling it asks you to confirm.");
+    expect(body(free5(NOW_REST), n(5))).toContain("Closed for the rest of today. 5 of 5 waiting can be called here; calling one asks you to confirm.");
     let checked = 0;
     for (const closure of [NOW_UNTIL, NOW_REST]) {
       for (const k of [0, 1, 2, 5]) {
@@ -2310,6 +2311,32 @@ describe("E2-3 — a court's closure", () => {
       expect(freeCourtLine(d, free5(NOW_UNTIL), [cand({}, { id: "c-0" })], locale, "Europe/London"), locale).not.toContain(open);
     }
     expect(checked).toBe(4 * 3);
+  });
+
+  // Task F9 (2) (E2 re-review; ruling "{callable} of {total} waiting can be called here"): the closed court's list holds the
+  // blocked matches too, so its count is the callable ones OF the whole list — never the callable count alone, as if it were all.
+  it("F9 (2) — the closed court's count reads 'callable of total waiting', in every locale, plural on the callable (counted)", () => {
+    const busy = { kind: "player_busy" as const, person_name: "Omar Ali", court_name: "Court 1" };
+    const list = (callable: number, total: number) =>
+      Array.from({ length: total }, (_, i) => cand(i < callable ? {} : { blocked: busy }, { id: `c-${i}` }));
+    const shapes: [number, number][] = [[1, 1], [1, 3], [2, 3], [3, 3]];
+    let checked = 0;
+    for (const [locale, d] of Object.entries(DICTS) as ["en" | "es" | "fr" | "nl", Dict][]) {
+      const lines = new Set<string>();
+      for (const [callable, total] of shapes) {
+        const line = freeCourtLine(d, free5(NOW_UNTIL), list(callable, total), locale, "Europe/London");
+        const where = `${locale} ${callable} of ${total}`;
+        expect(line, where).not.toMatch(/matchDay\.|[{}]/);
+        // Both numbers, callable first: the order every locale's copy states them in.
+        expect(line, where).toMatch(new RegExp(`(^|\\D)${callable}\\D.*(^|\\D)${total}(\\D|$)`));
+        if (locale === "en") expect(line, where).toContain(`${callable} of ${total} waiting can be called here`);
+        lines.add(line);
+        checked++;
+      }
+      // 1 of 1 and 1 of 3 differ (the total is read), 2 of 3 and 3 of 3 too (the callable is).
+      expect(lines.size, locale).toBe(shapes.length);
+    }
+    expect(checked).toBe(4 * shapes.length);
   });
 
   it("every locale: each closure form and each warning reads in the reader's language, none left a raw key (counted)", () => {

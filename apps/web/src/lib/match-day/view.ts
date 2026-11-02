@@ -442,7 +442,12 @@ export function freeCourtLine(
   if (shut === null) {
     return callable === 0 ? emptyCountText(dict, candidates.length, locale) : plural(dict, "matchDay.free.count", callable, locale);
   }
-  const rest = callable === 0 ? emptyCountText(dict, candidates.length, locale) : plural(dict, "matchDay.free.closedWaiting", callable, locale);
+  // "{callable} of {total} waiting can be called here" (task F9 (2)): the list holds the blocked ones too, so the count says how
+  // many of it a call could take, never the callable count as if it were the whole list.
+  const rest =
+    callable === 0
+      ? emptyCountText(dict, candidates.length, locale)
+      : plural(dict, "matchDay.free.closedWaiting", callable, locale, { callable, total: candidates.length });
   return `${shut}. ${rest}`;
 }
 

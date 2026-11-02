@@ -518,7 +518,7 @@ export async function undoCall(
  *  - rest_gap: per player of the called match, when the gap to their previous match's finish or to their next match's planned
  *    start is under the division's `perEntrantMinRest`. Only when the division declares one.
  *  - past_day_end: the queue's estimated end is after the court's last closing time today (court_hours/court_exceptions in the
- *    org's zone; a court with no hours is open to midnight).
+ *    org's zone; a court with no hours is open to midnight). Not beside a court_closed with no reopening time (F9 (1)).
  *  - crosses_closure / court_closed (E2 item 3): the called match's span, now to now + its division's `matchMinutes`, meets a
  *    closed window of the court (a break mid-day, or the court is shut already). Warnings: the organiser may confirm past them.
  * Each shift carries its match's round as the schedule board names it, in the reader's `opts.locale` (E2 item 7).
@@ -614,15 +614,18 @@ export async function previewCall(
     warnings.push(...(await restGaps(tx, f, start, calledEnd, settings.config.perEntrantMinRest)));
 
     const windows = (await courtWindowsToday(tx, [court.id], tz, now)).get(court.id) ?? [];
-    if (windows.length > 0) {
+    // The called match's own span, now to a match length on, against the court's closed windows (E2 item 3). Beside
+    // past_day_end, never instead: a break mid-day and the night's close are different warnings — except when the court is
+    // shut for the REST of the day (court_closed with no reopening time; task F9 (1)): then "runs past the day's end" is that
+    // same fact again, and one fact gives one warning.
+    const closure = closureWarning(windows, courtNames.get(court.id) ?? "", start, calledEnd);
+    const shutForTheDay = closure !== null && closure.kind === "court_closed" && closure.until === null;
+    if (windows.length > 0 && !shutForTheDay) {
       const closes = Math.max(...windows.map((w) => w.to));
       if (cursor > closes) {
         warnings.push({ kind: "past_day_end", court_name: courtNames.get(court.id) ?? "", until: iso(closes) });
       }
     }
-    // The called match's own span, now to a match length on, against the court's closed windows (E2 item 3). Beside
-    // past_day_end, never instead: a break mid-day and the night's close are different warnings.
-    const closure = closureWarning(windows, courtNames.get(court.id) ?? "", start, calledEnd);
     if (closure !== null) warnings.push(closure);
     return { shifts, warnings };
   });
