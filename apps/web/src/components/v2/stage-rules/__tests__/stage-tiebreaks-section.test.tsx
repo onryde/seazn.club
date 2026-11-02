@@ -226,7 +226,7 @@ describe("errors inline (spec §9 Errors)", () => {
     // Buchholz needs a Swiss stage (§5.5 rule 3): a chess division order carrying it is refused on a league stage.
     const rules = tableRulesOf(boardgame, "league", { division: ["points", "buchholz", "lots"] });
     const html = render(boardgame, "league", rules);
-    const why = UI["rules.err.tiebreakKeyInvalid"]!.replace("{step}", stepWord("buchholz", "boardgame")).replace("{reason}", UI["rules.err.tiebreak.reason.stage_format"]!);
+    const why = UI["rules.err.tiebreakKeyInvalid"]!.replace("{step}", stepWord("buchholz", boardgame.key)).replace("{reason}", UI["rules.err.tiebreak.reason.stage_format"]!);
     expect(text(tagOf(html, "stage-tiebreaks-refusal-1") + html.slice(html.indexOf('data-testid="stage-tiebreaks-refusal-1"')))).toContain(why);
     expect(has(html, "stage-tiebreaks-refusal-0") || has(html, "stage-tiebreaks-refusal-2"), "only the refused step").toBe(false);
     expect(text(html)).toContain(UI["stageTiebreaks.inheritedHint"]!);
@@ -238,15 +238,35 @@ describe("errors inline (spec §9 Errors)", () => {
 });
 
 describe("the cross-group line (§5.9)", () => {
-  it("a pooled stage a later stage takes a best-Nth from: 'Between groups: …' with no head-to-head step; otherwise none", () => {
+  it("a pooled stage a later stage takes a best-Nth from: 'Between groups: …' with no head-to-head step; otherwise none (sweep: every sport, group)", () => {
+    let checked = 0;
+    let withSteps = 0;
+    for (const m of builtinModules) {
+      const rules = tableRulesOf(m, "group");
+      const steps = rules.crossGroup.keys.filter((k) => !isHeadToHeadKey(k));
+      const pooledHtml = render(m, "group", rules, { pooled: true, bestNth: true });
+      if (steps.length > 0) {
+        const line = text(tagOf(pooledHtml, "stage-tiebreaks-cross-group") + pooledHtml.slice(pooledHtml.indexOf('data-testid="stage-tiebreaks-cross-group"')));
+        expect(line, m.key).toContain(UI["stageTiebreaks.crossGroup"]!.replace("{steps}", steps.map((k) => stepWord(k, m.key)).join(", ")));
+        withSteps++;
+      } else expect.unreachable(`${m.key}: every sport's cross-group order carries a non-head-to-head step (the empty case is pinned below)`);
+      expect(has(render(m, "group", rules, { pooled: true, bestNth: false }), "stage-tiebreaks-cross-group"), `${m.key}: no best-Nth`).toBe(false);
+      expect(has(render(m, "league", tableRulesOf(m, "league"), { pooled: false, bestNth: true }), "stage-tiebreaks-cross-group"), `${m.key}: not pooled`).toBe(false);
+      checked++;
+    }
+    expect(checked, "sports").toBe(builtinModules.length);
+    expect(withSteps, "sports whose cross-group order has steps").toBeGreaterThan(0);
+    expect(tableRulesOf(football, "group").crossGroup.keys.filter((k) => !isHeadToHeadKey(k)).length, "premise: football (the case this test began with) has cross-group steps, so the sweep covers it").toBeGreaterThan(0);
+  });
+
+  it("the empty case: a cross-group order of head-to-head steps only has no line to show, so none is drawn", () => {
     const rules = tableRulesOf(football, "group");
-    const html = render(football, "group", rules, { pooled: true, bestNth: true });
-    const line = text(tagOf(html, "stage-tiebreaks-cross-group") + html.slice(html.indexOf('data-testid="stage-tiebreaks-cross-group"')));
-    const steps = rules.crossGroup.keys.filter((k) => !isHeadToHeadKey(k));
-    expect(steps.length, "premise: football's cross-group order has steps").toBeGreaterThan(0);
-    expect(line).toContain(UI["stageTiebreaks.crossGroup"]!.replace("{steps}", steps.map((k) => stepWord(k, "football")).join(", ")));
-    expect(has(render(football, "group", rules, { pooled: true, bestNth: false }), "stage-tiebreaks-cross-group")).toBe(false);
-    expect(has(render(football, "league", tableRulesOf(football, "league"), { pooled: false, bestNth: true }), "stage-tiebreaks-cross-group")).toBe(false);
+    const h2h = tableRulesOf(football, "league").tiebreakers.keys.find(isHeadToHeadKey);
+    expect(h2h, "premise: football's league order has a head-to-head step to build the empty case from").toBeDefined();
+    const onlyH2h: StageTableRules = { ...rules, crossGroup: { keys: [h2h!] } };
+    expect(has(render(football, "group", onlyH2h, { pooled: true, bestNth: true }), "stage-tiebreaks-cross-group")).toBe(false);
+    // The positive pair: the same stage with a real step shows the line.
+    expect(has(render(football, "group", rules, { pooled: true, bestNth: true }), "stage-tiebreaks-cross-group")).toBe(true);
   });
 });
 
