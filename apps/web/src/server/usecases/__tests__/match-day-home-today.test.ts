@@ -192,11 +192,30 @@ describe.skipIf(!HAS_DB)("competitionsFixturesToday — the org home's today dec
     expect(read.counts.get(comp.id)).toBe(3);
     expect(read.next.get(comp.id)).toMatchObject({ fixture_id: overdue, in_play: true, ...(await names(overdue!)) });
 
-    // Everything today played or cancelled: still counted where Match Day counts it, but nothing left to headline.
+    // A played match never headlines (C7 re-review I1). Back to the two planned for today, the overdue one off the day again.
+    await setStatus(overdue!, "scheduled");
+    await setStatus(later!, "scheduled");
+    read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.counts.get(comp.id), "premise: today's two, the overdue one not counted").toBe(2);
+    expect(read.next.get(comp.id)?.fixture_id, "premise: the 10:00 one leads").toBe(earlier);
+    // The 10:00 match is decided while the 11:00 is still to start: it stays counted (Match Day still shows it), but the
+    // headline moves on to the 11:00, the match the competition actually plays next.
+    await setStatus(earlier!, "decided");
+    read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.counts.get(comp.id)).toBe(2);
+    expect(read.next.get(comp.id)).toMatchObject({ fixture_id: later, in_play: false, ...(await names(later!)) });
+    // Both of today's matches played: the competition still has a row (count 2), and nothing on it to headline.
+    await setStatus(later!, "decided");
+    read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.counts.get(comp.id), "the row exists: a played match is still a match today").toBe(2);
+    expect(read.next.has(comp.id)).toBe(false);
+
+    // No row at all: today's two cancelled and the overdue one finalized leave nothing counted, so no headline either.
     await setStatus(overdue!, "finalized");
     await setStatus(later!, "cancelled");
     await setStatus(earlier!, "cancelled");
     read = await competitionsFixturesToday(auth, [comp.id], SUN_EARLY);
+    expect(read.counts.has(comp.id)).toBe(false);
     expect(read.next.has(comp.id)).toBe(false);
   });
 
