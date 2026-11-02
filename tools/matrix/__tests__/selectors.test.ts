@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FINALIZE_TESTID, SEND_NOW_TESTID, START_MATCH_TESTID, selectorForTapStep, type TapStep } from "../../bench/lib/drivers/scorer.ts";
-import { MissingLabel, DATA, NAME, PAD_PINS, TEMPLATE_CARD, TESTID, UnreadableLiteral, UnrenderableName, literalText, renderedName, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
+import { MissingLabel, DATA, NAME, PAD_PINS, TEMPLATE_CARD, TESTID, UnreadableLiteral, UnrenderableName, literalText, markText, renderedName, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
 import { TEMPLATE_ROW_KEYS, type TemplateRowKey } from "../lib/catalogue.ts";
 
@@ -83,7 +83,7 @@ describe("selectors are pinned to the product's text", () => {
   it("every dictionary-pinned name is the en dictionary's value, and no key is a placeholder", () => {
     let plain = 0;
     let publicDict = 0;
-    const wrong = Object.entries(NAME).filter(([, n]) => "dictKey" in n && !("rendered" in n && n.rendered !== undefined)).filter(([, n]) => {
+    const wrong = Object.entries(NAME).filter(([, n]) => "dictKey" in n && !("rendered" in n && n.rendered !== undefined) && !("marked" in n && n.marked !== undefined)).filter(([, n]) => {
       plain++;
       if (!("dictKey" in n)) return false;
       if (dictOf(n) === "public") publicDict++;
@@ -110,9 +110,10 @@ describe("selectors are pinned to the product's text", () => {
   });
 
   // M-4: a label the component decorates in a template literal —
-  // competition-wizard.tsx renders `${msg("comp.wizard.endsOn")} *` — has an
-  // accessible name that is NOT the dictionary value, and an exact-name
-  // locator built from the bare value clicks nothing.
+  // template-gallery.tsx renders `${msg("comp.wizard.endsOn")} *` — has a label
+  // text that is NOT the dictionary value, and an exact-name locator built
+  // from the bare value clicks nothing. (The blank wizard's Ends on is the
+  // other kind, marked by a shared component: see the `marked` test below.)
   /** The product's template literal around `msg("<key>")` in `file`, read from the product — never from selectors.ts. */
   const productTemplate = (file: string, key: string) => {
     const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -132,18 +133,71 @@ describe("selectors are pinned to the product's text", () => {
       if (n.text !== `${before}${ui[n.dictKey]}${after}`) out.push(`${k}: text ${JSON.stringify(n.text)} is not ${JSON.stringify(`${before}${ui[n.dictKey]}${after}`)}`);
       return out;
     });
-    // W1-driving Task 13: the template sheet's Ends on is the same decorated label (template-gallery.tsx:458).
-    expect(decorated).toBe(2);
+    // W1-driving Task 13: the template sheet's Ends on is the one decorated label left (template-gallery.tsx:458);
+    // Match Day C8 moved the blank wizard's off the template literal (below).
+    expect(decorated).toBe(1);
     expect(wrong).toEqual([]);
-    // Witness, read off competition-wizard.tsx:244 and en "comp.wizard.endsOn": "Ends on" today.
-    expect(NAME.endsOn.text).toBe("Ends on *");
+    // Witness, read off template-gallery.tsx and en "comp.wizard.endsOn": "Ends on" today.
     expect(NAME.templateEndsOn.text).toBe("Ends on *");
+  });
+
+  // Match Day C8: the blank wizard hands the BARE label to DateTimeField with
+  // `requiredMark`, which appends an aria-hidden star inside the same <label>.
+  // getByLabel reads that label's text with the star in it, so the harness's
+  // name is the en value + the star, read from the component's own markup.
+  it("a label a shared field marks required is the en value plus the star the field renders, and both ends are pinned in the product", () => {
+    const ui = enUi();
+    const flat = (rel: string) => src(rel).replace(/\s+/g, " ");
+    let marked = 0;
+    const wrong = Object.entries(NAME).flatMap(([k, n]) => {
+      if (!("dictKey" in n) || !("marked" in n) || n.marked === undefined) return [];
+      marked++;
+      const out: string[] = [];
+      // The call site: the one element that passes this label also turns the mark on.
+      const call = src(n.file);
+      const at = call.indexOf(`label={msg("${n.dictKey}")}`);
+      const open = call.lastIndexOf("<DateTimeField", at);
+      const close = call.indexOf("/>", at);
+      if (at < 0 || open < 0 || close < 0) out.push(`${k}: ${n.file} passes "${n.dictKey}" as a label of no DateTimeField`);
+      else if (!/\brequiredMark\b/.test(call.slice(open, close))) out.push(`${k}: the DateTimeField passing "${n.dictKey}" does not turn requiredMark on`);
+      // The component: with the mark on, the star follows the label text inside the label's own span.
+      const star = n.marked.needle;
+      if (!new RegExp("\\{requiredMark \\? \\( <> \\{label\\} " + star.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + " </> \\)").test(flat(n.marked.file))) {
+        out.push(`${k}: ${n.marked.file} does not render {label} then ${star} under requiredMark`);
+      }
+      // The derived text is the en value then exactly the star's text (the one thing selectors.ts reads from the needle).
+      const text = /^<span aria-hidden="true">([^<>{}]+)<\/span>$/.exec(star)?.[1];
+      if (n.text !== `${ui[n.dictKey]}${text}`) out.push(`${k}: text ${JSON.stringify(n.text)} is not ${JSON.stringify(`${ui[n.dictKey]}${text}`)}`);
+      return out;
+    });
+    expect(marked).toBe(1); // anti-vacuity: the blank wizard's Ends on
+    expect(wrong).toEqual([]);
+    // Witness: the label text Playwright matches today.
+    expect(NAME.endsOn.text).toBe("Ends on *");
+    // markText refuses what is not one aria-hidden span, by name.
+    expect(markText('<span aria-hidden="true"> *</span>')).toBe(" *");
+    const cannot = [' *', '<span> *</span>', '<span aria-hidden="true"></span>', '<span aria-hidden="true"> </span>', '<span aria-hidden="true">{x}</span>'];
+    for (const n of cannot) expect(() => markText(n), n).toThrow(UnreadableLiteral);
+    expect(cannot.length).toBe(5);
+  });
+
+  // Match Day C8 (review M1): the blank wizard's Name label now ends in the same
+  // aria-hidden star. The harness fills that field by its placeholder, never by
+  // label, so the star moves nothing — and a pin on the wizard's Name LABEL would
+  // need the star pinned like Ends on's. Guard, not a comment.
+  it("no pin reads the blank wizard's Name by its label (the harness fills it by placeholder, so the star is not in any name)", () => {
+    const wizardNameLabel = Object.entries(NAME).filter(([, n]) => "dictKey" in n && n.dictKey === "comp.wizard.name.label" && n.file.endsWith("v2/competition-wizard.tsx"));
+    expect(wizardNameLabel).toEqual([]);
+    // The placeholder pin the harness does use is still the wizard's, and the wizard still renders it as the input's placeholder.
+    expect(NAME.competitionNamePlaceholder).toMatchObject({ dictKey: "comp.wizard.name.placeholder", file: "apps/web/src/components/v2/competition-wizard.tsx" });
+    expect(src("apps/web/src/components/v2/competition-wizard.tsx")).toContain('placeholder={msg("comp.wizard.name.placeholder")}');
+    expect(Object.keys(NAME).length).toBeGreaterThan(0);
   });
 
   it("a dictionary name its component decorates must declare it: no plain dictKey pin whose key the file renders inside a template", () => {
     let plain = 0;
     const wrong = Object.entries(NAME).flatMap(([k, n]) => {
-      if (!("dictKey" in n) || ("rendered" in n && n.rendered !== undefined)) return [];
+      if (!("dictKey" in n) || ("rendered" in n && n.rendered !== undefined) || ("marked" in n && n.marked !== undefined)) return [];
       plain++;
       const found = productTemplate(n.file, n.dictKey);
       return found.length === 0 ? [] : [`${k}: ${n.file} renders ${found[0]![0]} — pin it with \`rendered\`, the bare value is not its name`];

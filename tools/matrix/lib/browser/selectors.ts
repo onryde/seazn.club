@@ -16,8 +16,9 @@ export type TestidPin = { readonly id: string } & Pin & { readonly via?: Pin };
  *  and the component that passes it; a hardcoded English one is a Pin. A
  *  dictionary label the component decorates in a template literal carries
  *  `rendered`, that literal verbatim, and its `text` is derived from it (see
- *  `decorated` below). */
-export type NamePin = { readonly text: string } & ({ readonly dictKey: string; readonly file: string; readonly rendered?: string; readonly dict?: Dictionary } | Pin);
+ *  `decorated` below). One a shared field component marks required carries
+ *  `marked`, that component's own star markup (see `markedRequired` below). */
+export type NamePin = { readonly text: string } & ({ readonly dictKey: string; readonly file: string; readonly rendered?: string; readonly marked?: Pin; readonly dict?: Dictionary } | Pin);
 /** Which en dictionary a label lives in: the organiser UI's (`ui.json`, the
  *  default) or the public site's (`public.json`). */
 export type Dictionary = "ui" | "public";
@@ -43,6 +44,17 @@ const CONFIRM_DIALOG: Pin = Object.freeze({ file: `${V2}/confirm-dialog.tsx`, ne
  *  retyped, so a dictionary edit moves it. Read lazily, like templateLabel. */
 function decorated(dictKey: string, file: string, rendered: string): { readonly text: string; readonly dictKey: string; readonly file: string; readonly rendered: string } {
   return { dictKey, file, rendered, get text(): string { return renderedName(dictKey, rendered); } };
+}
+
+/** A dictionary label a SHARED field component marks required: the field renders
+ *  the label's text and then an `aria-hidden` star inside the same <label>
+ *  (datetime-field.tsx `requiredMark`), and the call site (`file`) turns that on.
+ *  The harness fills by getByLabel, which reads the label's TEXT with the
+ *  aria-hidden star in it (getByRole's accessible name leaves the star out, so
+ *  this is not the role name). The star is read out of `mark.needle`, the
+ *  component's own markup, never typed; selectors.test.ts pins both ends. */
+function markedRequired(dictKey: string, file: string, mark: Pin): { readonly text: string; readonly dictKey: string; readonly file: string; readonly marked: Pin } {
+  return { dictKey, file, marked: mark, get text(): string { return `${enLabel(dictKey)}${markText(mark.needle)}`; } };
 }
 
 /** A dictionary label the component renders as is. Its name is DERIVED on
@@ -134,9 +146,11 @@ export const NAME = names({
   sportSelect: { text: "Sport", dictKey: "wizard.sport", file: `${V2}/division-builder.tsx` },
   variantSelect: { text: "Variant", dictKey: "wizard.variant", file: `${V2}/division-builder.tsx` },
   formatTab: { text: "Format", dictKey: "wizard.tab.format", file: `${V2}/division-builder.tsx` },
-  // The field's accessible name is "Ends on *" — the required star is the
-  // component's, not the dictionary's (review M-4).
-  endsOn: decorated("comp.wizard.endsOn", `${V2}/competition-wizard.tsx`, "`${msg(\"comp.wizard.endsOn\")} *`"),
+  // The field's label reads "Ends on *" — the required star is the component's,
+  // not the dictionary's (review M-4). Match Day C8: the wizard no longer builds a
+  // template literal, it hands the bare label to DateTimeField with `requiredMark`,
+  // which appends the aria-hidden star (so a screen reader hears "required", not "star").
+  endsOn: markedRequired("comp.wizard.endsOn", `${V2}/competition-wizard.tsx`, { file: `${V2}/shared/datetime-field.tsx`, needle: '<span aria-hidden="true"> *</span>' }),
   // "Create competition", not the brief's "Create" (re-pinned at Step 0; "Create" is clubs.list.create).
   createCompetition: { text: "Create competition", dictKey: "comp.wizard.create", file: `${V2}/competition-wizard.tsx` },
   // Two more for Task 5's createCompetitionUi (its brief asks for them here).
@@ -236,6 +250,14 @@ function enLabel(key: string, dict: Dictionary = "ui"): string {
 export function literalText(needle: string): string {
   const text = /^"([^"]+)"$/.exec(needle)?.[1] ?? /^<(\w+)[^<>]*>([^<>{}]+)<\/\1>$/.exec(needle)?.[2];
   if (text === undefined || text.trim() !== text) throw new UnreadableLiteral(needle);
+  return text;
+}
+
+/** The star a required mark carries: the text of the one `aria-hidden` span in
+ *  `needle`. Refuses anything else rather than guess what is rendered. */
+export function markText(needle: string): string {
+  const text = /^<span aria-hidden="true">([^<>{}]+)<\/span>$/.exec(needle)?.[1];
+  if (text === undefined || text.trim() === "") throw new UnreadableLiteral(needle);
   return text;
 }
 
