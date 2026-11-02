@@ -144,6 +144,16 @@ export interface ForfeitTag {
  *  as a plain walkover (I4). Absent, the reader words the award by its reason alone, as before. */
 export type ForfeitEntrantStatuses = Readonly<Record<string, string | undefined>>;
 
+/** W3 T15 ruling 2 — the statuses `forfeitTag` reads, from a row that joined only its award's LOSER's status (`/me`'s
+ *  `listMyFixtures`, `forfeit_loser_status`): her id → her status; none when the row names no loser or holds no status. */
+export function forfeitLoserStatuses(row: {
+  readonly outcome: unknown;
+  readonly forfeit_loser_status: string | null;
+}): ForfeitEntrantStatuses | undefined {
+  const loser = (row.outcome as { loser?: unknown } | null)?.loser;
+  return typeof loser === "string" && row.forfeit_loser_status !== null ? { [loser]: row.forfeit_loser_status } : undefined;
+}
+
 const ABANDON_KINDS: ReadonlySet<string> = new Set(ABANDON_RESULT_KINDS);
 const ABANDON_METHODS: ReadonlySet<string> = new Set(ABANDON_WIN_METHODS);
 

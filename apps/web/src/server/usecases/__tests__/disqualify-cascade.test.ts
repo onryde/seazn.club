@@ -39,7 +39,11 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, getEntrant, patchEntrant } from "../entrants";
 import { startDivision } from "../schedule";
-import { scoreEvent } from "../scoring";
+import { finalizeFixture, scoreEvent } from "../scoring";
+import { listMyFixtures } from "../me";
+import { tip } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { forfeitLedgerOfReason, forfeitLoserStatuses } from "@/lib/forfeit-tag";
+import { outcomeTagWords } from "@/lib/outcome-text";
 import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { WithdrawCascadeReport } from "@/server/api-v1/schemas";
@@ -543,6 +547,55 @@ describe.runIf(HAS_DB)("W3 T15 I4: a disqualified entrant's walkover reads as a 
         }
       }
       expect(surfaces, "every surface, both reasons").toBe(BOARDS.length * 8);
+    }, 120_000);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W3 T15 ruling 2 (controller, 2026-11-02): a DQ'd entrant is never labelled "withdrew" anywhere. The player's own /me
+// lists a finalized result with its tag, named in full; the page reads the LOSER's status beside the row
+// (`listMyFixtures`' `forfeit_loser_status`) through `forfeitLoserStatuses`, and words a DISQUALIFIED loser's cascade
+// walkover as the plain walkover (it is no organiser surface: I4's public posture). The page's render is
+// `app/me/__tests__/me-page-results-forfeit.test.tsx`; this is the real producer: the PATCH, the cascade, the organiser's
+// finalize, the real `listMyFixtures` row.
+// ---------------------------------------------------------------------------------------------------------------------
+describe.runIf(HAS_DB)("W3 T15 ruling 2: /me reads the loser's status beside a finalized cascade walkover", () => {
+  for (const s of SPORTS) {
+    it(`listMyFixtures carries it; the page's reader names the DQ's walkover plainly, the withdrawal's as before (${s.sport})`, async () => {
+      const { r, dq, owed, opponent } = await midSwiss(s);
+      const other = boardsOf(await rowsOf(r.stageId), 2).find((f) => f.id !== owed.id && f.status === "scheduled");
+      expect(other, "premise: a second open round-2 board, for the withdrawn twin").toBeDefined();
+      const wd = other!.away_entrant_id!;
+      const wdOpponent = other!.home_entrant_id!;
+      await patchEntrant(r.auth, dq, { status: "disqualified" });
+      await withdrawEntrantCascade(r.auth, wd);
+      // /me lists finalized results only; the organiser finalizes each decided walkover from the console.
+      for (const id of [owed.id, other!.id]) await finalizeFixture(r.auth, id, await tip(id));
+
+      const BOARDS = [
+        { id: owed.id, winner: opponent, loser: dq, status: "disqualified", fullKey: "forfeit.tagFull.walkover" },
+        { id: other!.id, winner: wdOpponent, loser: wd, status: "withdrawn", fullKey: "forfeit.tagFull.withdrew" },
+      ] as const;
+      const msg = (k: string, v?: Record<string, string | number>) => msgFor("en", k as MessageKey, v);
+      let checked = 0;
+      for (const b of BOARDS) {
+        // A player on the WINNER's side: a user linked to one of its members.
+        const [{ person_id }] = await sql<{ person_id: string }[]>`
+          select person_id from entrant_members where entrant_id = ${b.winner} limit 1`;
+        const [{ id: player }] = await sql<{ id: string }[]>`
+          insert into users (email, display_name, email_verified)
+          values (${`dq-me-${randomUUID().slice(0, 8)}@test.local`}, 'Pat', true) returning id`;
+        await sql`update persons set user_id = ${player} where id = ${person_id}`;
+        const row = (await listMyFixtures(player)).results.find((x) => x.id === b.id);
+        expect(row, `${b.status}: the finalized walkover is listed`).toBeDefined();
+        expect(row!.outcome, `${b.status}: premise, the cascade's award`).toEqual({ kind: "award", winner: b.winner, loser: b.loser, reason: WITHDREW });
+        expect(row!.forfeit_loser_status, `${b.status}: the loser's status`).toBe(b.status);
+        const words = outcomeTagWords(msg as never, row!.outcome, forfeitLedgerOfReason(row!.abandon_reason), row!, forfeitLoserStatuses(row!));
+        expect(words?.full, `${b.status}: the page's expansion`).toBe(msgFor("en", b.fullKey));
+        checked++;
+      }
+      expect(checked).toBe(BOARDS.length);
+      expect(msgFor("en", BOARDS[0].fullKey), "premise: the plain walkover says no withdrawal").not.toMatch(/withdr/i);
     }, 120_000);
   }
 });

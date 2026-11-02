@@ -168,7 +168,9 @@ const EXEMPT: readonly Exemption[] = [
   { file: "src/server/engine-db/fed-seats.ts", fn: "writePlan", sites: 1, reason: "the cascade's dead-seat write" },
   { file: "src/server/engine-db/fed-seats.ts", fn: "writeRevives", sites: 1, reason: "the cascade's revive write" },
   // Keyed by the forfeit KIND (`forfeitCopyKind`, the classifier forfeitTag reads): her award's reason is `withdrew`.
-  { file: "src/components/v2/scorepad/v3/ribbon.ts", fn: "coreRibbonKey", sites: 1, reason: "the pad ribbon's copy by forfeit kind; her award is `withdrew`, never `bye`" },
+  // W3 T15 ruling 2: the second site is a withdrawal BY a disqualified seat reading as the disqualification — still keyed
+  // by kind `withdrew`, never `bye`.
+  { file: "src/components/v2/scorepad/v3/ribbon.ts", fn: "coreRibbonKey", sites: 2, reason: "the pad ribbon's copy by forfeit kind (a disqualified seat's withdrawal reads the disqualification); her award is `withdrew`, never `bye`" },
   { file: "src/lib/event-copy.ts", fn: "forfeitSentence", sites: 2, reason: "the timeline's copy by forfeit kind; her award is `withdrew`, never `bye`" },
 ];
 

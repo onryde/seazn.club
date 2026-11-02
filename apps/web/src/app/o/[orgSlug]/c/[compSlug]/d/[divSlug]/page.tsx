@@ -940,6 +940,8 @@ export default async function DivisionPage({
               stages={stages}
               fixtures={fixtures}
               entrantNames={entrantNames}
+              // W3 T15 ruling 2: the run sheet words a DISQUALIFIED entrant's cascade walkover as the disqualification.
+              entrantStatuses={entrantStatuses}
               activeEntrantIds={activeEntrantIds}
               entrantSeeds={entrantSeeds}
               entrantSwissFirstRounds={entrantSwissFirstRounds}

@@ -106,3 +106,38 @@ describe("the fixture console hands the held block the line's next-match read (l
     expect(block![0]).toContain("feedsNextMatch={fixture.feeds_next_match}");
   });
 });
+
+// W3 T15 ruling 2 (controller, 2026-11-02): the organiser's run sheet and fixture console word a DISQUALIFIED entrant's
+// cascade walkover as a disqualification, never a withdrawal — from her status, which only the pages read. The rows'
+// and the console's own behaviour is driven by render (run-sheet-row.test.tsx, fixture-console-decided-line.test.tsx);
+// this is the link from each page to them, which no static render of a client component can see.
+describe("the organiser pages hand the entrants' statuses to the readers that word a disqualification (W3 T15 ruling 2)", () => {
+  it("division page → StagesPanel → RunSheet → every RunSheetRow", () => {
+    const page = read("app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx");
+    const mount = page.match(/<StagesPanel\s[\s\S]*?\/>/);
+    expect(mount, "the division page mounts the StagesPanel").not.toBeNull();
+    expect(mount![0]).toContain("entrantStatuses={entrantStatuses}");
+    // The statuses are the raw roster read, one per entrant (the same map the qualification view reads).
+    expect(page).toMatch(/const entrantStatuses = Object\.fromEntries\(entrants\.map\(\(e\) => \[e\.id, e\.status\]\)\)/);
+
+    const panel = read("components/v2/stages-panel.tsx");
+    const sheet = panel.match(/<RunSheet\s[\s\S]*?\/>/); // `\s`, not `\b`: the file mentions "`<RunSheet>`" in comments
+    expect(sheet, "the StagesPanel mounts the RunSheet").not.toBeNull();
+    expect(sheet![0]).toContain("entrantStatuses={entrantStatuses}");
+
+    // Every site that hands a row its names hands it the statuses too: the three direct mounts and the day wrapper
+    // (whose `...rest` reaches the row).
+    const runSheet = read("components/v2/desk/run-sheet.tsx");
+    const names = [...runSheet.matchAll(/entrantNames=\{entrantNames\}/g)].length;
+    const statuses = [...runSheet.matchAll(/entrantStatuses=\{entrantStatuses\}/g)].length;
+    expect(names, "premise: the sheet hands rows their names").toBeGreaterThanOrEqual(4);
+    expect(statuses, `rows handed statuses: ${statuses} of ${names}`).toBe(names);
+  });
+
+  it("the fixture page hands each side its status", () => {
+    const page = read("app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/f/[no]/page.tsx");
+    const side = page.match(/async function side\([\s\S]*?\n  \}\n/);
+    expect(side, "the fixture page builds its sides").not.toBeNull();
+    expect(side![0]).toContain("status: entrant.status,");
+  });
+});

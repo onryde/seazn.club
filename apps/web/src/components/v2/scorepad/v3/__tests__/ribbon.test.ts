@@ -13,7 +13,8 @@
 //     `@/lib/scoring-vocab` is the only way to reach it without registering
 //     a real key, which is out of this task's scope.
 import { describe, it, expect, vi } from "vitest";
-import { buildRibbon, ribbonKeyFor, type MsgFn } from "../ribbon";
+import { buildRibbon, FORFEIT_RIBBON_KEY, ribbonKeyFor, type MsgFn } from "../ribbon";
+import { messages } from "@/lib/messages";
 
 vi.mock("@/lib/scoring-vocab", () => ({
   PAD_LABEL_KEYS: ["pad.cricket.ribbon.wicket"],
@@ -156,5 +157,47 @@ describe("buildRibbon — detail parameter (D2)", () => {
     };
     const r = buildRibbon("core.award", {}, () => "?", tCore, "Player of the Match");
     expect(r.text).toBe("Award recorded — Player of the Match");
+  });
+});
+
+// W3 T15 ruling 2 (controller, 2026-11-02): a disqualification runs the withdrawal cascade, which records
+// `core.forfeit{by: <her seat>, reason: "withdrew"}` against her open board. The organiser's console lists that row in its
+// Activity panel, and must never label her as having withdrawn: a forfeit BY a seat the caller names as disqualified reads
+// as the disqualification. Expected keys come from the declared map (`FORFEIT_RIBBON_KEY`), never from the branch.
+describe("buildRibbon — a disqualified side's cascade forfeit reads as a disqualification (W3 T15 ruling 2)", () => {
+  const tKey: MsgFn = (k, v) => (k === "pad.ribbon.fallback" ? `${v!.event} recorded` : `KEY:${k}`);
+  const cascade = (by: string) => ({ by, reason: "withdrew" });
+
+  it("both seats: disqualified reads the disqualification line; withdrawn (and no statuses) keep the withdrawal line", () => {
+    let checked = 0;
+    for (const seat of ["home", "away"] as const) {
+      const dq = buildRibbon("core.forfeit", cascade(seat), (id) => id, tKey, undefined, new Set([seat]));
+      expect(dq.text, `${seat}: disqualified`).toBe(`KEY:${FORFEIT_RIBBON_KEY.disqualified}`);
+      // The pair: the other seat disqualified, and no seats named — both today's withdrawal line.
+      const other = seat === "home" ? "away" : "home";
+      expect(buildRibbon("core.forfeit", cascade(seat), (id) => id, tKey, undefined, new Set([other])).text, `${seat}: the OTHER seat disqualified`).toBe(`KEY:${FORFEIT_RIBBON_KEY.withdrew}`);
+      expect(buildRibbon("core.forfeit", cascade(seat), (id) => id, tKey).text, `${seat}: nothing held`).toBe(`KEY:${FORFEIT_RIBBON_KEY.withdrew}`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("only the withdrawal moves: every other reason by a disqualified seat keeps its own line", () => {
+    const REASONS = ["walkover", "retired", "disqualified"] as const;
+    let checked = 0;
+    for (const reason of REASONS) {
+      expect(buildRibbon("core.forfeit", { by: "home", reason }, (id) => id, tKey, undefined, new Set(["home"])).text, reason).toBe(`KEY:${FORFEIT_RIBBON_KEY[reason]}`);
+      checked++;
+    }
+    expect(checked).toBe(REASONS.length);
+  });
+
+  it("a withdrawal line's text and the disqualification's differ in the real catalog (en), and the DQ line says no withdrawal", () => {
+    const en = messages as Record<string, string>;
+    const wd = en[FORFEIT_RIBBON_KEY.withdrew]!;
+    const dq = en[FORFEIT_RIBBON_KEY.disqualified]!;
+    expect([typeof wd, typeof dq]).toEqual(["string", "string"]);
+    expect(dq).not.toBe(wd);
+    expect(dq).not.toMatch(/withdr/i);
   });
 });

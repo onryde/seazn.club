@@ -991,6 +991,9 @@ export const MyResult = z.object({
   home_entrant_id: Uuid.nullable(),
   away_entrant_id: Uuid.nullable(),
   abandon_reason: z.string().nullable(),
+  /** W3 T15 ruling 2 — the status of the outcome's LOSER (an award's), else null: /me words a disqualified opponent's
+   *  walkover (reason `withdrew`, the withdrawal cascade's) as the plain walkover, never a withdrawal. */
+  forfeit_loser_status: z.string().nullable(),
 });
 
 export const MyTeam = z.object({

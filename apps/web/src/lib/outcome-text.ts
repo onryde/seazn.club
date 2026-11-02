@@ -113,6 +113,16 @@ export const FORFEIT_TAG_FULL_KEY = {
   abandoned: "forfeit.tagFull.abandoned",
 } as const satisfies Record<ForfeitTagKind, MessageKey>;
 
+/** W3 T15 ruling 2 (controller, 2026-11-02): the organiser's expansions — the run sheet's and the fixture console's. A
+ *  disqualification runs the withdrawal cascade (T15, RB3-17), whose award carries reason `withdrew` (the engine has no
+ *  unplayed `disqualified` forfeit, PF-2); `forfeitTag` reads that award over a DISQUALIFIED loser as `walkover_plain`
+ *  when it is handed her status. A DQ'd entrant is never labelled as having withdrawn, and where an organiser surface
+ *  states the reason it says she was disqualified. Every other kind expands as the house map does. */
+export const ORGANISER_TAG_FULL_KEY = {
+  ...FORFEIT_TAG_FULL_KEY,
+  walkover_plain: "forfeit.tagFull.disqualifiedWalkover",
+} as const satisfies Record<ForfeitTagKind, MessageKey>;
+
 /** The tag `outcomeText` prints for this result and its expansion, or null when it prints none (a bye, a played
  *  result, no result). Read through `forfeitTag`, the one reader, with the same ledger the line was built with. */
 export function outcomeTagWords(
@@ -123,7 +133,10 @@ export function outcomeTagWords(
   /** W3 T15 review I4: entrant id → status — a public surface's cascade walkover over a DISQUALIFIED entrant expands
    *  as the plain walkover, never "withdrew". */
   statuses?: ForfeitEntrantStatuses,
+  /** W3 T15 ruling 2: whose expansions — the house map (public, and the player's own /me), or the organiser's
+   *  (`ORGANISER_TAG_FULL_KEY`: that walkover expands as the disqualification). */
+  fullKeys: Readonly<Record<ForfeitTagKind, MessageKey>> = FORFEIT_TAG_FULL_KEY,
 ): { word: string; full: string } | null {
   const tag = forfeitTag(outcome, ledger, seats, statuses);
-  return tag === null ? null : { word: msg(tag.tagKey), full: msg(FORFEIT_TAG_FULL_KEY[tag.kind]) };
+  return tag === null ? null : { word: msg(tag.tagKey), full: msg(fullKeys[tag.kind]) };
 }

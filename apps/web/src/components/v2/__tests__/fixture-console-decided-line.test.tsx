@@ -211,3 +211,59 @@ describe("the console's decided line names its tag in full (audit 4.3)", () => {
     expect(line).not.toContain('role="img"');
   });
 });
+
+// W3 T15 ruling 2 (controller, 2026-11-02): a disqualification runs the withdrawal cascade, which records
+// `core.forfeit{by: <her seat>, reason: "withdrew"}` on her open board. The console never labels her as having withdrawn:
+// the decided line keeps the walkover's "w/o" and names the reason in full as the DISQUALIFICATION, and the Activity
+// panel's row for that forfeit reads as the disqualification. Her status arrives on her side (`SideInfo.status`, the
+// fixture page's `getEntrant`). The withdrawal keeps today's words. Expected strings come from the en dictionary.
+describe("a disqualified entrant's cascade walkover: the console says disqualified, never withdrew (W3 T15 ruling 2)", () => {
+  const FORFEIT = [ev("ev-1", 1, "core.forfeit", { by: "home", reason: "withdrew" })];
+  const award = { kind: "award", winner: AWAY.id, loser: HOME.id, reason: "withdrew" };
+  const render = (status: string | undefined) =>
+    renderToStaticMarkup(
+      <FixtureConsole
+        fixture={{ id: "f1", status: "forfeited", scheduled_at: null, venue_name: null, court_name: null, round_no: 2 }}
+        sport={sport}
+        home={{ ...HOME, ...(status === undefined ? {} : { status }) }}
+        away={{ ...AWAY, status: "registered" }}
+        initialState={{ status: "forfeited", last_seq: 1, summary: null, state: null, outcome: award }}
+        initialEvents={FORFEIT}
+        canEdit
+        canOrganise
+        stageKind="league"
+        recorderNames={{}}
+        audit={null}
+        viewerPlan="community"
+      />,
+    );
+  const decided = (html: string) => /<p[^>]*data-testid="console-decided-line"[^>]*>([\s\S]*?)<\/p>/.exec(html)?.[1] ?? null;
+  const activity = (html: string) => /<ul[^>]*id="v3-activity-list"[^>]*>([\s\S]*?)<\/ul>/.exec(html)?.[1] ?? null;
+  const named = (full: string) => `<span role="img" aria-label="${full}" title="${full}">${word("forfeit.tag.walkover")}</span>`;
+
+  it("disqualified: the decided line's tag names the disqualification; the Activity row reads the disqualification; nowhere a withdrawal", () => {
+    const html = render("disqualified");
+    const line = decided(html);
+    const rows = activity(html);
+    expect(line, "a decided line is printed").not.toBeNull();
+    expect(rows, "the Activity panel lists the forfeit").not.toBeNull();
+    expect(line!.replace(/<[^>]+>/g, ""), "the walkover's result").toBe(tagged(AWAY.name, "forfeit.tag.walkover"));
+    expect(line, "the tag names the disqualification").toContain(named(word("forfeit.tagFull.disqualifiedWalkover")));
+    expect(rows, "the Activity row reads the disqualification").toContain(word("pad.ribbon.core.forfeit.disqualified"));
+    for (const [where, text] of [["decided line", line!], ["activity", rows!]] as const) {
+      expect(text.toLowerCase(), `${where}: nowhere a withdrawal`).not.toMatch(/withdr/);
+    }
+  });
+
+  it("the pair: withdrawn — and a side with no status — keep today's withdrawal expansion and Activity line", () => {
+    let checked = 0;
+    for (const status of ["withdrawn", undefined]) {
+      const html = render(status);
+      expect(decided(html), `${status}: the withdrawal's expansion`).toContain(named(word("forfeit.tagFull.withdrew")));
+      expect(activity(html), `${status}: the withdrawal's Activity line`).toContain(word("pad.ribbon.core.forfeit.withdrew"));
+      expect(activity(html), `${status}: not the disqualification's`).not.toContain(word("pad.ribbon.core.forfeit.disqualified"));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});

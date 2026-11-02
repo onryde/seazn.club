@@ -2968,6 +2968,7 @@ export type DictionaryKey =
   | "forfeit.tagFull.abandonedDls"
   | "forfeit.tagFull.abandonedNoResult"
   | "forfeit.tagFull.disqualified"
+  | "forfeit.tagFull.disqualifiedWalkover"
   | "forfeit.tagFull.doubleWalkover"
   | "forfeit.tagFull.retired"
   | "forfeit.tagFull.walkover"

@@ -37,7 +37,7 @@ import { PadSuspensionBanner } from "@/components/discipline/pad-suspension-bann
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { scoringErrorText, decidedOutcomeText, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import { forfeitLedgerOf, forfeitTag, unseatedWithdrew } from "@/lib/forfeit-tag";
-import { outcomeTagWords, outcomeText } from "@/lib/outcome-text";
+import { ORGANISER_TAG_FULL_KEY, outcomeTagWords, outcomeText } from "@/lib/outcome-text";
 import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import { scoreStatusLabel } from "@/lib/score-status-label";
 import { resolveSlotLabel } from "@/lib/slot-label";
@@ -267,6 +267,10 @@ export interface SideInfo {
   /** W2b D-R9: the entrant has LEFT THE FIELD — withdrawn or disqualified (`DEPARTED_STATUSES`, loop-F tidy) — so the
    *  settle dialog never offers them. Optional for the same reason as `kind`. */
   withdrawn?: boolean;
+  /** W3 T15 ruling 2: the entrant's status (`entrants.status`), so a DISQUALIFIED side's cascade walkover is worded as
+   *  the disqualification — the decided line's expansion and its Activity row — never as a withdrawal. Optional for the
+   *  same reason as `kind`; absent, the console words a walkover by its reason alone, as before. */
+  status?: string;
   members: MemberIn[];
   lineup: LineupSlotIn[];
 }
@@ -1026,6 +1030,11 @@ export function FixtureConsole({
   // the content-track sizing, so the chip's width cannot inflate the `auto` "vs" track and starve the names (it did).
   // Read off the live outcome and the seats.
   const seatsOf = { outcome: live.outcome, home_entrant_id: home?.id ?? null, away_entrant_id: away?.id ?? null };
+  // W3 T15 ruling 2: each seated side's status — a DISQUALIFIED side's cascade walkover is never worded as a withdrawal.
+  const sideStatuses = Object.fromEntries([home, away].flatMap((s) => (s?.status === undefined ? [] : [[s.id, s.status]])));
+  const disqualifiedSides = new Set(
+    (["home", "away"] as const).filter((seat) => (seat === "home" ? home : away)?.status === "disqualified"),
+  );
   const seatWithdrew = (seat: "home" | "away") =>
     (seat === "home" ? fixture.home_unseated_name : fixture.away_unseated_name) != null && unseatedWithdrew(seatsOf, seat);
   const withdrawnSeat = seatWithdrew("home") || seatWithdrew("away");
@@ -1069,7 +1078,7 @@ export function FixtureConsole({
   const voidedIds = new Set(events.flatMap((e) => (e.type === "core.void" && e.voids_event_id !== null ? [e.voids_event_id] : [])));
   const forfeitLedger = forfeitLedgerOf(events.filter((e) => e.type !== "core.void" && !voidedIds.has(e.id)));
   // Design audit 4.3: the tag in that line, with its expansion (accessible name and tooltip).
-  const decidedTag = outcomeTagWords(msg, outcome, forfeitLedger, seatsOf);
+  const decidedTag = outcomeTagWords(msg, outcome, forfeitLedger, seatsOf, sideStatuses, ORGANISER_TAG_FULL_KEY);
   const decidedLine =
     forfeitTag(outcome, forfeitLedger, seatsOf) !== null
       ? outcomeText(msg, outcome, entrantNames, forfeitLedger, seatsOf)
@@ -1459,6 +1468,7 @@ export function FixtureConsole({
         t={msg}
         authority
         collapsible
+        disqualifiedSides={disqualifiedSides}
         resolveDetail={activityDetail}
         // R7-46. Reads through the ref at call time rather than closing over a
         // value, so the panel does not need to re-render when the pad's view

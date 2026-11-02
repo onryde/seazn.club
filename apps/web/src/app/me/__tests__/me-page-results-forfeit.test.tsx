@@ -39,6 +39,7 @@ const result = (id: string, entrant: string, opponent: string, headline: string,
   // (`page.tsx` `headline()`); the DB scene's real row has the same shape.
   entrant_name: entrant, opponent_name: opponent, player_home: true, scheduled_at: null, summary: { headline } as unknown as MyResult["summary"], outcome,
   home_entrant_id: `e-${entrant.toLowerCase()}`, away_entrant_id: `e-${opponent.toLowerCase()}`, abandon_reason: abandonReason,
+  forfeit_loser_status: null,
 });
 const RESULTS: MyResult[] = [
   result("dw", "Falcons", "Hawks", "0 — 0", { kind: "double_walkover" }),
@@ -51,6 +52,10 @@ const RESULTS: MyResult[] = [
   result("legacy", "Ospreys", "Larks", "2 — 0", { kind: "award", winner: "e-ospreys", method: "walkover" }),
   // Loop R2 N-5: a credited walkover with NO stored summary (no match_states row behind the award) — no headline.
   { ...result("nosum", "Swifts", "Terns", "", { kind: "award", winner: "e-swifts", loser: "e-terns", reason: "walkover" }), summary: null },
+  // W3 T15 ruling 2: the withdrawal cascade's award (reason `withdrew`), finalized by the organiser — over a DISQUALIFIED
+  // loser (a DQ runs the cascade since T15) and over a withdrawn one. `forfeit_loser_status` is the loser's status.
+  { ...result("wdq", "Herons", "Rooks", "2 — 0", { kind: "award", winner: "e-herons", loser: "e-rooks", reason: "withdrew" }), forfeit_loser_status: "disqualified" },
+  { ...result("wwd", "Plovers", "Jays", "2 — 0", { kind: "award", winner: "e-plovers", loser: "e-jays", reason: "withdrew" }), forfeit_loser_status: "withdrawn" },
 ];
 /** The credited results and the tag each owes, by the house key tables (never the page's own words). */
 const TAGGED = { wo: "walkover", ret: "retired", dq: "disqualified", dls: "abandoned_dls", legacy: "walkover" } as const;
@@ -119,7 +124,7 @@ describe("/me results — a double walkover prints its tag, never the stored 0 �
       const full = msgFor(at, "forfeit.tagFull.doubleWalkover");
       if (at === "fr") expect(tag, "premise: the French tag differs from the English").not.toBe(msgFor("en", "forfeit.tag.doubleWalkover"));
       const got = await scores(at);
-      expect(Object.keys(got), "every line was read").toEqual(["dw", "wo", "won", "ret", "dq", "dls", "legacy", "nosum"]);
+      expect(Object.keys(got), "every line was read").toEqual(["dw", "wo", "won", "ret", "dq", "dls", "legacy", "nosum", "wdq", "wwd"]);
       expect(got.dw!.text, `${at}: the double walkover prints the house tag`).toBe(tag);
       expect(got.dw!.li, `${at}: and nowhere the stored 0 — 0`).not.toContain("0 — 0");
       expect([got.dw!.symbol?.role, got.dw!.symbol?.label], `${at}: a symbol named by the full words`).toEqual(["img", full]);
@@ -160,6 +165,20 @@ describe("/me results — a double walkover prints its tag, never the stored 0 �
       expect(got.wo!.symbol?.label, `${at}: premise, a walkover is tagged`).toBe(msgFor(at, FORFEIT_TAG_FULL_KEY.walkover));
       expect([got.nosum!.text, got.nosum!.symbol], `${at}: the dash, no tag`).toEqual(["—", null]);
       expect(got.nosum!.li, `${at}: and nowhere the tag's word`).not.toContain(msgFor(at, FORFEIT_TAG_KEY.walkover));
+    });
+
+    // W3 T15 ruling 2 (controller, 2026-11-02): the player's own page never labels a DISQUALIFIED opponent as having
+    // withdrawn. It is no organiser surface, so it reads as every public surface reads her (I4, ruling 116 prescribes no
+    // DQ copy): the plain walkover's expansion. The withdrawal keeps its own. Each locale's withdrawal word is its own
+    // dictionary's ("withdrew" expansion less the walkover's), never the page's.
+    it(`${at}: W3 T15 ruling 2 — a disqualified opponent's cascade walkover is named the plain walkover, never a withdrawal; a withdrawn one's keeps its words`, async () => {
+      const got = await scores(at);
+      const wd = msgFor(at, "forfeit.tagFull.withdrew").replace(msgFor(at, "forfeit.tagFull.walkover"), "").replace(/[—–-]/gu, "").trim();
+      expect(wd.length, `${at}: premise, the locale words a withdrawal`).toBeGreaterThan(0);
+      expect([got.wdq!.symbol?.role, got.wdq!.symbol?.label], `${at}: disqualified — the plain walkover`).toEqual(["img", msgFor(at, "forfeit.tagFull.walkover")]);
+      expect(got.wdq!.li.toLowerCase(), `${at}: nowhere "${wd}"`).not.toContain(wd.toLowerCase());
+      expect(got.wdq!.text, `${at}: the score, then the walkover's tag`).toBe(`2 — 0${msgFor(at, "forfeit.tag.walkover")}`);
+      expect([got.wwd!.symbol?.role, got.wwd!.symbol?.label], `${at}: withdrawn — today's withdrawal expansion`).toEqual(["img", msgFor(at, "forfeit.tagFull.withdrew")]);
     });
   }
 });

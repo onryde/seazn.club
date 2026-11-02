@@ -17449,6 +17449,16 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "forfeit_loser_status": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -17469,7 +17479,8 @@
                               "outcome",
                               "home_entrant_id",
                               "away_entrant_id",
-                              "abandon_reason"
+                              "abandon_reason",
+                              "forfeit_loser_status"
                             ],
                             "additionalProperties": false
                           }
@@ -17578,7 +17589,8 @@
                         "outcome": null,
                         "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                        "abandon_reason": "example"
+                        "abandon_reason": "example",
+                        "forfeit_loser_status": "example"
                       }
                     ],
                     "teams": [

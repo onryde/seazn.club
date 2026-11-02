@@ -118,6 +118,7 @@ import { isRunningRootSwiss } from "@/lib/open-entry-stages";
 // docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
 // this file's own former copies are deleted below.
 import { buildRunSheet, isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
+import type { ForfeitEntrantStatuses } from "@/lib/forfeit-tag";
 import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { isOnlineGameExists } from "@/lib/open-round";
 import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
@@ -284,6 +285,10 @@ interface Props {
   stages: StageRow[];
   fixtures: FixtureRow[];
   entrantNames: Record<string, string>;
+  /** W3 T15 ruling 2 — entrant id → status (the page's roster read), threaded to the run sheet's rows only: a
+   *  DISQUALIFIED entrant's cascade walkover is worded as the disqualification, never as a withdrawal. Optional, so the
+   *  existing `stages-panel-*.test.tsx` props stay valid; absent, a walkover is worded by its reason alone. */
+  entrantStatuses?: ForfeitEntrantStatuses;
   /** The ids of the entrants who are IN THE FIELD — the division roster
    *  filtered to the server's own `status in ('registered','confirmed')`
    *  predicate (the page derives it as the complement of `DEPARTED_STATUSES`,
@@ -539,7 +544,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, divisionStatus, swissRoundControls }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, divisionStatus, swissRoundControls, entrantStatuses }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1777,6 +1782,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         nowMs={nowMs}
         matchMinutes={matchMinutes}
         entrantNames={entrantNames}
+        entrantStatuses={entrantStatuses}
         courtNames={courtNamesById}
         // R35 — the panel already holds these for `StageCourtTagsEditor` and
         // the (retired) FixtureLine picker; they now reach each row's inline
