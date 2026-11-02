@@ -1063,11 +1063,20 @@ describe("the console, the run sheet and the public page", () => {
     // The held chip's target: the arbiter panel on this board when the page offers it, else the board's card in the queue.
     const ONLINE_HELD = "arbiterHref ?? `#${queueRowAnchor(fixture.id)}`";
     const hrefs = jsxHrefExpressions(body);
+    // Match Day B2's "Find a court" leaves the console too, ON PURPOSE: a ghost sibling of Set time that opens the Match Day page
+    // the division page hands down (`matchDayHref`). Gated on the facts that make a row a candidate there (its action is
+    // `set_time`, it holds no court, no side is still to be drawn), so every other row has none and the identity link stays the
+    // fallback. Split it off by its own shape like the online held chip, and hold the gate to its text.
+    const FIND_COURT = "findCourtHref";
+    expect(row, "Find a court is offered only to a Set-time row that holds no court and has no side to draw").toMatch(
+      /const findCourtHref =\s*matchDayHref !== undefined && action\.kind === "set_time" && fixture\.court_id === null && !awaitingDraw \? matchDayHref : null;/,
+    );
     // The identity link, the run-sheet action link, the stream chip, which
-    // opens the same console with its Stream panel up (`?stream=open`), and the online held chip.
-    expect(hrefs).toEqual(["href", "`${href}?stream=open`", ONLINE_HELD, "href"]);
-    for (const h of hrefs.filter((x) => x !== ONLINE_HELD)) expect(h === "href" || h.startsWith("`${href}?"), `${h} leaves the fixture console`).toBe(true);
-    expect(src(`${V2}/stages-panel.tsx`)).toContain("hrefFor={(f) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)}");
+    // opens the same console with its Stream panel up (`?stream=open`), the online held chip, and Find a court.
+    expect(hrefs).toEqual(["href", "`${href}?stream=open`", ONLINE_HELD, "href", FIND_COURT]);
+    for (const h of hrefs.filter((x) => x !== ONLINE_HELD && x !== FIND_COURT)) expect(h === "href" || h.startsWith("`${href}?"), `${h} leaves the fixture console`).toBe(true);
+    // E1 moved the panel's run-sheet props into one object (`hrefFor: …`), the same address as the JSX prop it was.
+    expect(src(`${V2}/stages-panel.tsx`)).toContain("hrefFor: (f: { fixture_no: number }) => routes.fixture(orgSlug, compSlug, divSlug, f.fixture_no)");
     // set_time is the one row action that is a <button>, not a link.
     expect(row).toMatch(/<button\s+type="button"\s+data-row-action="set_time"/);
   });
