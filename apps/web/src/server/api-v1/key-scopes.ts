@@ -260,6 +260,8 @@ const RULES: RouteRule[] = [
   { method: "POST", path: "/stages/:id/unpair", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/swiss/add-round", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/swiss/finish", scope: "manage", pin: "stage" },
+  // W3 T17 (RB3-19): organiser-only, like its Swiss siblings — a desk warning, not public data (GET, but `manage`: cf. assign-targets).
+  { method: "GET", path: "/stages/:id/swiss-cut", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/officials/source", scope: "manage", pin: "stage" },
   { method: "POST", path: "/stages/:id/rebuild", scope: "manage", pin: "stage" },
   // Per-stage match-format override (design 2026-09-17 §T3). Same scope and

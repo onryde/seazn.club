@@ -30,6 +30,8 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * withdrawal — her open board walks over, played results stand, a second PATCH is idempotent.
  * T16 (SW-L11): the public hub document carries a Swiss table's "Round X of N" verdict (`tables[].swissRound`), read
  * anonymously.
+ * T17 (X-SW-25; RB3-19): a correction after the knockout began never moves a bracket seat, and `GET /stages/{id}/swiss-cut`
+ * names who today's table would have cut instead (`drift: {out, in}`), null before the correction.
  * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
@@ -52,8 +54,10 @@ export async function w3SwissASuite(): Promise<void> {
   // decided, then ends the Swiss after the last decided round, completes the stage, an undo barrier) + T14: 1 (a PATCH
   // naming a seat on a round-2 board is refused 400 and the row reads back unchanged) + T15: 1 (a PATCH to disqualified
   // mid-Swiss walks her open board over, round 1 stands, and a second PATCH rewrites nothing) + T16: 1 (the public hub
-  // names a Swiss table's round: round 2 of 3, in play, in its document, read anonymously).
-  const EXPECTED_CHECKS = 21;
+  // names a Swiss table's round: round 2 of 3, in play, in its document, read anonymously) + T17: 1 (a correction that
+  // moves the Swiss cut after the knockout began leaves every bracket seat, and the swiss-cut route names who is out and
+  // who is in — null before the correction).
+  const EXPECTED_CHECKS = 22;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -968,6 +972,97 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a SW-L11: the public hub document names a Swiss table's round — round 2 of 3, in play — read anonymously" +
           (ok ? "" : ` — division ${divId ?? "none"} (${divSlug || "no slug"}), org ${orgSlug || "none"}, latest round ${latest} ${latestStatuses.join("/")}, hub ${hubRes.status} tables ${tables.length} swissRound ${JSON.stringify(tables[0]?.swissRound ?? null)}`),
+        ok,
+      );
+    }
+
+    // Check 22 (T17, X-SW-25; RB3-19): a correction AFTER the knockout began never moves a bracket seat, and the desk's
+    // warning has its data. On check 18's division (the community plan's caps leave no room for a division of its own): its
+    // Swiss was finished after round 1 (two walkovers: Q-home wins each board), so the table is the two winners on 3 and
+    // the two losers on 0. A Top 2 knockout is added after it (rankRange 1-2, setup timing), seeded from the confirmed
+    // proposal and begun by deciding its Final. Before any correction the swiss-cut route answers `drift: null`. Then board
+    // A's walkover is taken back (core.void) and given the other way — the loser of A now wins it — which moves A's away
+    // player into the top two and A's home player out. Expected values are derived from the rows read BEFORE the
+    // correction, never from the route: out = A's home, in = A's away; every knockout seat reads back as it was.
+    {
+      type Seat = Fx & { home_entrant_id: string | null; away_entrant_id: string | null; status: string };
+      const divId = fourFieldDivId;
+      const swissId = swissFiveStageId;
+      const swissRows = async () =>
+        (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === swissId);
+      // seq 3: the division already holds check 4's Swiss (seq 1) and check 17's (seq 2, the one that was finished).
+      const koStageRes = await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", {
+        seq: 3,
+        kind: "knockout",
+        name: "Knockout",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      });
+      const koId = v1data<{ id: string } | undefined>(koStageRes)?.id;
+      const koGen = await v1(owner, `/api/v1/stages/${koId}/generate`, "POST");
+      const proposalRes = await v1(owner, `/api/v1/stages/${koId}/seed-proposal`, "POST");
+      const proposal = v1data<
+        { id: string; computed: { qualifiers: { entrantId: string; destinationSlot: string }[]; ties: { slots: string[] }[] } } | undefined
+      >(proposalRes);
+      const bySlot = new Map((proposal?.computed.qualifiers ?? []).map((q) => [q.destinationSlot, q.entrantId]));
+      // A pick per flagged tie, in the table's own slot order (the two winners are level on the walkover points).
+      const tiePicks = (proposal?.computed.ties ?? []).map((t) => ({ slots: t.slots, order: t.slots.map((slot) => bySlot.get(slot)) }));
+      const confirmRes = await v1(owner, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal?.id, tiePicks });
+      const koRows = async () =>
+        (v1data<Seat[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === koId);
+      const seatsOf = (rows: Seat[]) => rows.map((f) => `${f.id}|${f.home_entrant_id ?? "-"}|${f.away_entrant_id ?? "-"}`).join(",");
+      type Drift = { drift?: { out?: string[]; in?: string[] } | null };
+      const swissCut = async () => v1(owner, `/api/v1/stages/${swissId}/swiss-cut`);
+
+      const final = (await koRows()).find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
+      // Round 1's two boards (a walkover each: the home side won), read before anything moves.
+      const boards = (await swissRows()).filter((f) => f.round_no === 1 && f.home_entrant_id !== null && f.away_entrant_id !== null);
+      const boardA = boards[0];
+      const drift0 = await swissCut();
+      const decidedFinal = final ? await appendScoreEvent(owner, final.id, "generic.result", { p1Score: 2, p2Score: 1 }) : undefined;
+      const drift1 = await swissCut();
+      const seatsBefore = seatsOf(await koRows());
+
+      // The correction: take A's walkover back and give it the other way. Distinct keys (no idempotency replay of the first
+      // forfeit): the raw route, on the fixture's current sequence.
+      const ledger = v1data<{ id: string; type: string }[] | undefined>(await v1(owner, `/api/v1/fixtures/${boardA?.id}/events?since_seq=0`)) ?? [];
+      const forfeit = ledger.find((e) => e.type === "core.forfeit");
+      const tip = async () => v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${boardA?.id}/state`)).last_seq;
+      const voided = forfeit
+        ? await v1(owner, `/api/v1/fixtures/${boardA?.id}/events`, "POST", {
+            expected_seq: await tip(),
+            type: "core.void",
+            payload: { event_id: forfeit.id },
+          })
+        : undefined;
+      const regiven = await v1(owner, `/api/v1/fixtures/${boardA?.id}/events`, "POST", {
+        expected_seq: await tip(),
+        type: "core.forfeit",
+        payload: { by: boardA?.home_entrant_id, reason: "walkover" },
+      });
+      const drift2 = await swissCut();
+      const d2 = v1data<Drift | undefined>(drift2)?.drift;
+      const seatsAfter = seatsOf(await koRows());
+      const ok =
+        divId !== undefined && swissId !== undefined && koStageRes.status === 201 && koId !== undefined && koGen.status === 200 &&
+        proposalRes.status === 201 && confirmRes.status === 200 &&
+        // the premise: a begun knockout with a real Final, and a Swiss that finished with two walkover boards
+        final !== undefined && decidedFinal !== undefined && decidedFinal.status < 300 && boards.length === 2 &&
+        boardA?.home_entrant_id != null && boardA.away_entrant_id != null &&
+        forfeit !== undefined && voided !== undefined && voided.status < 300 && regiven.status < 300 &&
+        // null before the correction (the knockout not begun, then begun with the table unchanged)
+        drift0.status === 200 && v1data<Drift | undefined>(drift0)?.drift === null &&
+        drift1.status === 200 && v1data<Drift | undefined>(drift1)?.drift === null &&
+        // the warning's data after it: A's home out, A's away in; the bracket stands
+        drift2.status === 200 && d2 != null && d2.out?.join() === boardA.home_entrant_id && d2.in?.join() === boardA.away_entrant_id &&
+        seatsBefore !== "" && seatsAfter === seatsBefore;
+      w3Check(
+        "w3a X-SW-25: a correction after the knockout began leaves every bracket seat, and GET swiss-cut names who is out and who is in — drift null before it" +
+          (ok ? "" : ` — ko stage ${koStageRes.status} ${koId ?? JSON.stringify(koStageRes.json).slice(0, 200)}, generate ${koGen.status}, proposal ${proposalRes.status} ${JSON.stringify(proposalRes.json).slice(0, 160)}, confirm ${confirmRes.status} ${JSON.stringify(confirmRes.json).slice(0, 200)}, final ${final?.id ?? "none"} ${decidedFinal?.status ?? "-"}, boards ${boards.length}, void ${voided?.status ?? "none"} ${JSON.stringify(voided?.json).slice(0, 160)}, regiven ${regiven.status} ${JSON.stringify(regiven.json).slice(0, 160)}, drift ${drift0.status}/${JSON.stringify(drift0.json).slice(0, 80)} ${drift1.status}/${JSON.stringify(drift1.json).slice(0, 80)} ${drift2.status}/${JSON.stringify(drift2.json).slice(0, 200)}, seats same ${seatsAfter === seatsBefore}`),
         ok,
       );
     }

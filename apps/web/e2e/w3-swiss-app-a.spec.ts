@@ -1795,3 +1795,148 @@ test.describe("public Swiss shows Round X of N", () => {
     });
   }
 });
+
+// X-SW-25 (W3 T17, RB3-19): a correction to a Swiss result AFTER its knockout began never moves a bracket seat — the bracket
+// stands — and the desk says so. The cut here is a Top 3 of four; the Swiss's last board (P3 v P4) is taken back and given to
+// P4, which puts P4 in today's top three and P3 out. Driven end to end: the real scorer events, the real Complete + confirmed
+// seeding, the real void; the warning is read off the organiser's Fixtures tab, names not ids, at three widths.
+test.describe("X-SW-25 the desk warns after a cut-changing correction", () => {
+  for (const sport of LATE_SPORTS) {
+    test(`a correction that moves the Swiss cut after the knockout began leaves the bracket and warns the organiser (${sport.key})`, async ({
+      page,
+      request,
+    }) => {
+      test.setTimeout(300_000);
+      const resultType = sport.key === "boardgame" ? "boardgame.result" : "badminton.game.summary";
+      const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+        ends_on: "2030-12-31",
+        name: `Cut drift ${sport.key} ${TAG}`,
+        visibility: "private",
+      });
+      expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+      const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+        name: "Open",
+        sport_key: sport.key,
+        variant_key: sport.variant,
+        config: sport.config,
+      });
+      expect(div.status, JSON.stringify(div.error)).toBe(201);
+      const divisionId = div.data!.id;
+      const names = [1, 2, 3, 4].map((n) => `Drift P${n} ${TAG}`);
+      const added = await apiJson<{ id: string; display_name: string }[]>(
+        request,
+        `/api/v1/divisions/${divisionId}/entrants`,
+        "POST",
+        names.map((display_name, i) => ({ kind: "individual", display_name, seed: i + 1, members: [] })),
+      );
+      expect(added.status, JSON.stringify(added.error)).toBe(201);
+      const ids = names.map((n) => added.data!.find((e) => e.display_name === n)!.id);
+      const [, , p3, p4] = ids as [string, string, string, string];
+      const nameOf = new Map(names.map((n, i) => [ids[i]!, n] as const));
+      const swiss = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+        seq: 1,
+        kind: "swiss",
+        name: "Swiss",
+        config: { rounds: 3 },
+      });
+      expect(swiss.status, JSON.stringify(swiss.error)).toBe(201);
+      const ko = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+        seq: 2,
+        kind: "knockout",
+        name: "Knockout",
+        config: {},
+        progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }],
+          placement: "rank_order",
+          timing: "setup",
+        },
+      });
+      expect(ko.status, JSON.stringify(ko.error)).toBe(201);
+      const swissId = swiss.data!.id;
+      const koId = ko.data!.id;
+      expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+      expect((await apiJson(request, `/api/v1/stages/${koId}/generate`, "POST")).status, "the knockout's TBD bracket").toBe(200);
+
+      const rowsOf = async (stageId: string) =>
+        ((await stageFixtures(request, divisionId, stageId)) as Seated[]).sort(
+          (a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round,
+        );
+      const lower = (f: Seated) => (ids.indexOf(f.home_entrant_id!) < ids.indexOf(f.away_entrant_id!) ? f.home_entrant_id! : f.away_entrant_id!);
+      const real = (f: Seated) => !isByeRow(f) && f.home_entrant_id !== null && f.away_entrant_id !== null;
+      // Rounds 1-3: the lower-numbered side wins every board, so the table is P1 (3 wins), P2 (2), P3 (1), P4 (0).
+      for (let r = 1; r <= 3; r++) {
+        expect((await apiJson(request, `/api/v1/stages/${swissId}/generate`, "POST")).status, `pair round ${r}`).toBe(200);
+        const boards = (await rowsOf(swissId)).filter((f) => f.round_no === r && real(f));
+        expect(boards, `round ${r}: two boards`).toHaveLength(2);
+        for (const f of boards) await sport.win(request, f, lower(f));
+      }
+      const done = await apiJson<{ completed: boolean }>(request, `/api/v1/stages/${swissId}/complete`, "POST");
+      expect([done.status, done.data?.completed], JSON.stringify(done.error)).toEqual([200, true]);
+      const proposal = await apiJson<{ id: string; computed: { qualifiers: { entrantId: string }[] } }>(
+        request,
+        `/api/v1/stages/${koId}/seed-proposal`,
+        "POST",
+      );
+      expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
+      expect(
+        proposal.data!.computed.qualifiers.map((q) => nameOf.get(q.entrantId)),
+        "premise: the cut is P1, P2, P3",
+      ).toEqual(names.slice(0, 3));
+      const confirmed = await apiJson(request, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal.data!.id });
+      expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+
+      // Before the knockout has a result there is nothing to warn about, on the API and on the desk.
+      const drift0 = await apiJson<{ drift: unknown }>(request, `/api/v1/stages/${swissId}/swiss-cut`);
+      expect([drift0.status, drift0.data?.drift], JSON.stringify(drift0.error)).toEqual([200, null]);
+      const warning = page.getByTestId("swiss-cut-drift-warning");
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+      // The positive anchor first (the Swiss card reads complete), so the absence below is read off a loaded desk.
+      await expect(page.locator(`[data-stage-id="${swissId}"]`).getByText(uiEn["schedule.sstatus.complete"]!, { exact: true })).toBeVisible({
+        timeout: 20_000,
+      });
+      await expect(warning, "no warning before the knockout has a result").toHaveCount(0);
+
+      // The knockout begins: its one real line (the semi-final, P2 v P3) is decided.
+      const seatsOf = async () => (await rowsOf(koId)).map((f) => `${f.id}|${f.home_entrant_id ?? "-"}|${f.away_entrant_id ?? "-"}`);
+      const semi = (await rowsOf(koId)).filter(real);
+      expect(semi, "premise: one real semi-final line (a Top 3 pads to four)").toHaveLength(1);
+      await sport.win(request, semi[0]!, lower(semi[0]!));
+      const drift1 = await apiJson<{ drift: unknown }>(request, `/api/v1/stages/${swissId}/swiss-cut`);
+      expect([drift1.status, drift1.data?.drift], "knockout begun, table unchanged: no drift").toEqual([200, null]);
+      const seatsBefore = await seatsOf();
+
+      // The correction: take back P3 v P4 (P3 won it as the lower number) and give it to P4.
+      const board = (await rowsOf(swissId)).find((f) => real(f) && [f.home_entrant_id, f.away_entrant_id].sort().join() === [p3, p4].sort().join())!;
+      expect(board, "premise: P3 and P4 meet once").toBeTruthy();
+      const ledger = await apiJson<{ id: string; type: string; payload: Record<string, unknown> }[]>(
+        request,
+        `/api/v1/fixtures/${board.id}/events?since_seq=0`,
+      );
+      const taken = new Set((ledger.data ?? []).filter((e) => e.type === "core.void").map((e) => e.payload.event_id));
+      const live = (ledger.data ?? []).filter((e) => e.type === resultType && !taken.has(e.id));
+      expect(live.length, "premise: the board holds a result to take back").toBeGreaterThan(0);
+      for (const e of live.reverse()) await scoreAt(request, board.id, "core.void", { event_id: e.id });
+      await sport.win(request, board, p4);
+
+      const drift2 = await apiJson<{ drift: { out: string[]; in: string[] } | null }>(request, `/api/v1/stages/${swissId}/swiss-cut`);
+      expect([drift2.status, drift2.data?.drift], JSON.stringify(drift2.error)).toEqual([200, { out: [p3], in: [p4] }]);
+      expect(await seatsOf(), "the bracket stands: no seat moved").toEqual(seatsBefore);
+
+      const copy = fill("swiss.cutDrift.warning.one", { in: nameOf.get(p4)!, out: nameOf.get(p3)! });
+      for (const width of [1280, 768, 320] as const) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+        await expect(warning, `at ${width}`).toBeVisible({ timeout: 20_000 });
+        await expect(warning, `at ${width}: the names, not the ids`).toHaveText(copy);
+        await expectNoHorizontalScroll(page);
+        const box = await warning.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, vw: document.documentElement.clientWidth };
+        });
+        expect(box.left, `at ${width}: starts inside the page`).toBeGreaterThanOrEqual(0);
+        expect(box.right, `at ${width}: ends inside the page`).toBeLessThanOrEqual(box.vw);
+      }
+    });
+  }
+});

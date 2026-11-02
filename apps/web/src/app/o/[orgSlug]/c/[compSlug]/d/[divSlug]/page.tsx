@@ -20,6 +20,7 @@ import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
+import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
@@ -453,6 +454,20 @@ export default async function DivisionPage({
   // read on this tab only, and only when the division holds a Swiss.
   const swissRoundControls =
     tab === "fixtures" && editable && stages.some((s) => s.kind === "swiss") ? await listSwissRoundControls(auth, id) : {};
+  // W3 T17 (RB3-19, X-SW-25): who a correction moved across a COMPLETED Swiss's cut after its knockout began — the amber
+  // "the bracket stands" notice in that Swiss's card. An organiser's warning, read on this tab only; a Swiss with no drift
+  // (every Swiss until its knockout has a result and a correction moves the table) is absent from the map.
+  const swissCutDrift = Object.fromEntries(
+    tab === "fixtures" && editable
+      ? (
+          await Promise.all(
+            stages
+              .filter((s) => s.kind === "swiss" && s.status === "complete")
+              .map(async (s) => [s.id, await getSwissCutDrift(auth, s.id)] as const),
+          )
+        ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
+      : [],
+  );
   // W2d final review I1: the points each PINNED table stage pays - its pin's, which a division points save after generate
   // never reaches (`rule-locks.ts` lets that save through). The stage points card says these, never `division.config`.
   // Read for the stages the card is mounted on (`stageTakesPoints`), for an organiser and a viewer alike (both see it).
@@ -974,6 +989,7 @@ export default async function DivisionPage({
               arbiterHref={arbiterHref}
               divisionStatus={division.status}
               swissRoundControls={swissRoundControls}
+              swissCutDrift={swissCutDrift}
             />
           </>
         )}

@@ -2421,6 +2421,8 @@
   "swiss.lateEntry.joinNextRound.other": "{count} participants tardifs rejoignent le prochain tour",
   "swiss.lateEntry.joinedAfterLast.one": "{count} participant tardif est arrivé après le dernier tour",
   "swiss.lateEntry.joinedAfterLast.other": "{count} participants tardifs sont arrivés après le dernier tour",
+  "swiss.cutDrift.warning.one": "Un résultat a été corrigé après le début de la phase à élimination directe. Le tableau reste inchangé. Au classement actuel, {in} se qualifierait à la place de {out}.",
+  "swiss.cutDrift.warning.other": "Un résultat a été corrigé après le début de la phase à élimination directe. Le tableau reste inchangé. Au classement actuel, {in} se qualifieraient à la place de {out}.",
   "stage.more.addLatePlayer": "Ajouter un joueur en retard",
   "stage.more.addLatePlayer.hint": "Place quelqu'un arrivé après le tirage.",
   "stage.more.addRound": "Ajouter un tour",

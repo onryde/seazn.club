@@ -2872,6 +2872,14 @@ export const FinishSwissResult = z.object({
   seed_proposal: z.object({ id: Uuid, status: z.string() }).optional(),
 });
 
+/** GET /stages/{id}/swiss-cut (W3 T17, RB3-19, X-SW-25) — who a correction moved across a completed Swiss's cut after its
+ *  knockout began. `drift` is null when nothing moved (or there is nothing to compare: a running Swiss, an unseated or
+ *  unbegun bracket). `out` held a seat in the bracket and would not make today's cut; `in` would and holds none — entrant
+ *  ids, in table order. The bracket itself never moves. */
+export const SwissCutDriftResult = z.object({
+  drift: z.object({ out: z.array(Uuid), in: z.array(Uuid) }).nullable(),
+});
+
 /** POST /stages/{id}/open-round (T19, D12) — the organiser opens one round
  *  of an online-play stage: stamps it and invites its players. */
 export const OpenRoundInput = z.object({ roundNo: z.number().int().positive() }).strict();

@@ -8065,6 +8065,8 @@ export type DictionaryKey =
   | "swatch.Midnight"
   | "swatch.Ocean"
   | "swatch.Teal"
+  | "swiss.cutDrift.warning.one"
+  | "swiss.cutDrift.warning.other"
   | "swiss.finish.owed"
   | "swiss.finish.reopened"
   | "swiss.lateEntry.inviteOwed"

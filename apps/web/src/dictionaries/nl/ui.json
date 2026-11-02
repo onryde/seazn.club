@@ -2421,6 +2421,8 @@
   "swiss.lateEntry.joinNextRound.other": "{count} late deelnemers doen mee vanaf de volgende ronde",
   "swiss.lateEntry.joinedAfterLast.one": "{count} late deelnemer kwam na de laatste ronde",
   "swiss.lateEntry.joinedAfterLast.other": "{count} late deelnemers kwamen na de laatste ronde",
+  "swiss.cutDrift.warning.one": "Er is een uitslag gecorrigeerd nadat de knock-out begon. Het schema blijft staan. Op de huidige stand zou {in} zich plaatsen in plaats van {out}.",
+  "swiss.cutDrift.warning.other": "Er is een uitslag gecorrigeerd nadat de knock-out begon. Het schema blijft staan. Op de huidige stand zouden {in} zich plaatsen in plaats van {out}.",
   "stage.more.addLatePlayer": "Late speler toevoegen",
   "stage.more.addLatePlayer.hint": "Plaatst iemand die na de loting kwam.",
   "stage.more.addRound": "Ronde toevoegen",

@@ -101,6 +101,7 @@ import {
 // never from a count of the fixture rows.
 import { swissLegendRound, swissStageLegend, swissLegendText } from "@/lib/swiss-legend";
 import { lateEntryNoticeText, swissLatecomerCounts, swissLatecomerLines } from "@/lib/swiss-late-entry-notice";
+import { swissCutDriftText, type SwissCutDrift } from "@/lib/swiss-cut-drift";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
 // `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
@@ -427,6 +428,10 @@ interface Props {
    *  rail's "Rounds: N · Edit" chip and More menu item, and the chess switch on a boardgame Swiss card. Optional: absent
    *  ⇒ none of the three (a viewer; the pre-existing panel tests). */
   swissRoundControls?: Record<string, SwissRoundControl>;
+  /** W3 T17 (RB3-19, X-SW-25) — per Swiss stage id, who a correction moved across the cut AFTER the knockout began
+   *  (`getSwissCutDrift`, read by the division page for an organiser on this tab; a stage with no drift is absent). Drives
+   *  the amber "the bracket stands" notice in that stage's card. Optional: absent ⇒ none (a viewer; the older panel tests). */
+  swissCutDrift?: Readonly<Record<string, SwissCutDrift>>;
 }
 
 // PROMPT-66: stage kinds that accept an ad-hoc match (standings fold every
@@ -544,7 +549,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, divisionStatus, swissRoundControls, entrantStatuses }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1384,6 +1389,22 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     );
                   })()}
                 </header>
+
+                {/* W3 T17 (RB3-19, X-SW-25) — a result of this Swiss was corrected after its knockout began: the bracket
+                    stands (no seat moves), and the desk says who today's table would have cut instead. The house amber
+                    notice (the roster-drift banner's treatment), polite (role="status"), never a dialog. The sentence and
+                    its name lists are `swissCutDriftText` (lib/swiss-cut-drift.ts), so a test can read them. */}
+                {canEdit && stage.kind === "swiss" && swissCutDrift?.[stage.id] && (
+                  <div
+                    role="status"
+                    data-testid="swiss-cut-drift-warning"
+                    className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                  >
+                    <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
+                      {swissCutDriftText(swissCutDrift[stage.id]!, entrantNames, locale, msgPlural)}
+                    </p>
+                  </div>
+                )}
 
                 {/* F3 Task 5 (5a/5b) — the board no longer matches the roster:
                     a withdrawn entrant is still named on a fixture, an added
