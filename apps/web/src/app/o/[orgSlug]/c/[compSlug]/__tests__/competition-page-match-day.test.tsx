@@ -11,7 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Attention, DivisionPhase } from "@/lib/division-phase";
 import type { CompetitionDesk, DeskNextFixture } from "@/server/usecases/competition-desk";
 
-const h = vi.hoisted(() => ({ desk: null as CompetitionDesk | null, canEdit: true, visibility: "private" as "private" | "public" }));
+const h = vi.hoisted(() => ({ desk: null as CompetitionDesk | null, canEdit: true, visibility: "private" as "private" | "public", locale: "en" }));
 
 vi.mock("@/server/page-auth", () => ({
   requireCompetitionPage: async () => ({
@@ -54,7 +54,7 @@ vi.mock("@/server/usecases/competition-desk", async (importOriginal) => ({
 }));
 vi.mock("@/server/public-site/data", () => ({ resolveLogoUrl: () => null }));
 vi.mock("@/lib/currency-server", () => ({ preferredCurrency: async () => "usd" }));
-vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
+vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => h.locale }));
 vi.mock("@/lib/db", () => ({
   sql: (strings: TemplateStringsArray | unknown[]) => {
     if (!Array.isArray(strings) || !("raw" in strings)) return { __fragment: strings };
@@ -68,6 +68,9 @@ import { CompetitionPassProvider } from "@/components/competition-pass-provider"
 import { plural, t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import { needsYouAt, needsYouHome, needsYouItems } from "@/components/v2/desk/needs-you";
 import { needsYouButtonParts } from "@/lib/match-day/view";
@@ -146,6 +149,7 @@ beforeEach(() => {
   h.desk = null;
   h.canEdit = true;
   h.visibility = "private";
+  h.locale = "en";
 });
 
 /** One owed result across three matches, plus one other row: Match Day's header counts this as 1 + 3 = 4 (ruling m1 — every
@@ -605,5 +609,39 @@ describe("the Match Day door, off the day and on it (C5 addition)", () => {
       }
     }
     expect(checked, "anti-vacuity: 4 desks x 2 roles x 2 visibilities").toBe(16);
+  });
+});
+
+// PB1 item 1 (owner, 2026-11-02): the header door to the competition-wide board is labelled "Multi Schedule Board" — it opens
+// the board across every division, and the bare "Schedule Board" read as the per-division one. The aria-label and the visible
+// label are two keys that must say the same thing, in all four locales.
+describe("the header's schedule door says Multi (PB1)", () => {
+  const DICTS = { en, es, fr, nl } as Record<string, Record<string, string>>;
+
+  it("en reads Multi Schedule Board, as label and as aria-label; the other locales are translated, not left English", async () => {
+    const html = await render(deskWith({ fixturesToday: 0 }));
+    const tag = tagOf(html, "desk-tool-schedule");
+    expect(tag).toContain('aria-label="Multi Schedule Board"');
+    expect(subtreeOf(html, "desk-tool-schedule")).toContain(">Multi Schedule Board<");
+    for (const loc of ["es", "fr", "nl"]) {
+      for (const key of ["action.scheduleBoard", "aria.scheduleBoard"]) {
+        expect(DICTS[loc]![key], `${loc} ${key} is not English`).not.toBe(en[key as keyof typeof en]);
+      }
+    }
+  });
+
+  it("sweep locale: the door's aria-label and visible text are that locale's two keys, and they agree", async () => {
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(DICTS)) {
+      h.locale = loc;
+      const html = await render(deskWith({ fixturesToday: 0 }));
+      const tag = tagOf(html, "desk-tool-schedule");
+      expect(tag, `${loc}: the door rendered`).not.toBeNull();
+      expect(tag).toContain(`aria-label="${dict["aria.scheduleBoard"]}"`);
+      expect(subtreeOf(html, "desk-tool-schedule")).toContain(`>${dict["action.scheduleBoard"]}<`);
+      expect(dict["aria.scheduleBoard"], `${loc}: label and aria-label say the same thing`).toBe(dict["action.scheduleBoard"]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
   });
 });

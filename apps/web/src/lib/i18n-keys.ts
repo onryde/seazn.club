@@ -6571,6 +6571,7 @@ export type DictionaryKey =
   | "schedule.complete"
   | "schedule.courts.tabLabel"
   | "schedule.delete"
+  | "schedule.divisionTitle"
   | "schedule.editTime"
   | "schedule.error.completeHeldMany"
   | "schedule.error.completeHeldOne"

@@ -49,17 +49,15 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import { HealthTabLabel } from "@/components/v2/board/health-panel";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { msgFor } from "@/lib/messages-i18n";
-import { DEFAULT_LOCALE } from "@/lib/i18n";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { unseatedForfeitLoser, unseatedWithdrew } from "@/lib/forfeit-tag";
 // P6 fix round 2: resolveLocale() now falls back safely (resolve-locale.ts)
 // when there is no real Next.js request — the direct-invocation shape this
 // repo's own tests use for a server-component "page" function (see
-// officials-loads-deferred.test.tsx's `renderTab` helper, no jsdom). Only
-// AWAITED on the officials tab (matches wantsOfficials/marksEnabled just
-// below — same "don't pay for it on tabs that never show it" discipline
-// #230 item 4 established, and the one this file's own deferred-load test
-// guards).
+// officials-loads-deferred.test.tsx's `renderTab` helper, no jsdom). It is
+// awaited on every tab (the page title is localised); the DATA loads below
+// (wantsOfficials/marksEnabled) keep #230 item 4's "don't pay for it on tabs
+// that never show it" discipline, which this file's deferred-load test guards.
 
 const TABS = ["board", "health", "settings", "courts", "constraints", "officials", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -184,7 +182,10 @@ export default async function DivisionSchedulePage({
   // organiser's own locale (cookie -> users.locale -> header -> en), NOT
   // org.default_locale: that fallback is documented as "for public league
   // pages only" (resolve-locale.ts), and this page is org-authed.
-  const officialsLocale = tab === "officials" ? await resolveLocale() : DEFAULT_LOCALE;
+  //
+  // Resolved on EVERY tab now (it was officials-only): the page title below is a
+  // dictionary string on all of them, and it was hardcoded English before.
+  const pageLocale = await resolveLocale();
   const officialsMeta =
     tab === "officials"
       ? await withTenant(auth.orgId, async (tx) => {
@@ -263,7 +264,7 @@ export default async function DivisionSchedulePage({
         <div className="mb-4">
           <div className="mt-1 flex flex-wrap items-center gap-3">
             <h1 className="page-title">
-              Schedule — {division.name}
+              {msgFor(pageLocale, "schedule.divisionTitle", { name: division.name })}
             </h1>
             {/* Exports used to sit here as five loose buttons, duplicating a
                 Documents menu that already existed on the fixtures view. One
@@ -368,7 +369,7 @@ export default async function DivisionSchedulePage({
           fixtures={fixtures.map((f) => {
             const names = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
             const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
-              msgFor(officialsLocale, k, v);
+              msgFor(pageLocale, k, v);
             // R116-4 (owner ruling 116): an empty seat a walkover was won over names HER, never its bye label.
             const homeId = f.home_entrant_id ?? unseatedForfeitLoser(f, "home");
             const awayId = f.away_entrant_id ?? unseatedForfeitLoser(f, "away");
