@@ -27,6 +27,7 @@ import {
   courtCounts,
   courtGroup,
   foldFreeCourts,
+  foldLabel,
   headerCountParts,
   foldedNames,
   orderCourts,
@@ -291,6 +292,64 @@ describe("the fold row in every locale and every noun (counted)", () => {
   });
 });
 
+describe("m5 — the fold label: a range when the names make ONE, else the count and the venue", () => {
+  const at = (n: number, venue: { id: string; name: string }, o: Partial<MatchDayCourt> = {}) =>
+    court(n, { venue_id: venue.id, venue_name: venue.name, ...o });
+  const HALL = { id: "v-hall", name: "City Sports Hall" };
+  const ANNEX = { id: "v-annex", name: "Annex" };
+  const label = (courts: MatchDayCourt[], d: Dict = dict, locale: Locale = "en") => foldLabel(d, locale, courts, sharedNounOf(courts));
+  const sharedNounOf = (courts: MatchDayCourt[]) => (courts[0]?.sport_noun ?? "court") as (typeof VENUE_NOUNS)[number];
+
+  it("one run: the names are the label, as before ('6 more courts free (Courts 5–10)')", () => {
+    expect(label([5, 6, 7, 8, 9, 10].map((n) => at(n, HALL)))).toBe("6 more courts free (Courts 5–10)");
+    expect(label([at(3, HALL), at(4, HALL)])).toBe("2 more courts free (Courts 3–4)");
+  });
+
+  it("names that cannot be ranged, all in ONE venue: '4 free courts · City Sports Hall' - the brief's own example", () => {
+    expect(label([at(2, HALL), at(4, HALL), at(6, HALL), at(9, HALL)])).toBe("4 free courts · City Sports Hall");
+    // Two runs are not one range either.
+    expect(label([5, 6, 8, 9, 10].map((n) => at(n, HALL)))).toBe("5 free courts · City Sports Hall");
+    // Names with no number.
+    expect(label([at(1, HALL, { court_name: "Centre" }), at(2, HALL, { court_name: "Show Court" })])).toBe("2 free courts · City Sports Hall");
+  });
+
+  it("across venues: the count alone - '4 free courts' - with no venue picked over the others", () => {
+    const mixed = [at(1, HALL, { court_name: "Court 1 (City Sports Hall)" }), at(1, ANNEX, { court_name: "Court 1 (Annex)" }), at(3, HALL), at(7, ANNEX)];
+    expect(label(mixed)).toBe("4 free courts");
+    // One run across two venues is still a run (the names say it all): 'Courts 3–4'.
+    expect(label([at(3, HALL), at(4, ANNEX)])).toBe("2 more courts free (Courts 3–4)");
+  });
+
+  it("the sport's own noun, and every locale (counted): the count form reads in the reader's words, never a raw key, the venue after a middle dot", () => {
+    let checked = 0;
+    for (const noun of VENUE_NOUNS) {
+      for (const [locale, d] of Object.entries(DICTS) as [Locale, Dict][]) {
+        const courts = [2, 4, 6].map((n) => at(n, HALL, { sport_noun: noun }));
+        const text = foldLabel(d, locale, courts, noun);
+        expect(text, `${locale} ${noun}`).toContain("3");
+        expect(text, `${locale} ${noun}`).toMatch(/ · City Sports Hall$/);
+        expect(text, `${locale} ${noun}`).not.toMatch(/[{}]|matchDay\./);
+        // Not the ranged form: no parenthesised names.
+        expect(text, `${locale} ${noun}`).not.toContain("(");
+        checked++;
+      }
+    }
+    expect(checked).toBe(VENUE_NOUNS.length * 4);
+    expect(label([2, 4, 6].map((n) => at(n, HALL, { sport_noun: "pitch", court_name: `Pitch ${n}` })), dict, "en")).toBe("3 free pitches · City Sports Hall");
+  });
+
+  it("as drawn: the folded row carries the count-and-venue label, and opening it lists EVERY folded court by name", () => {
+    const day = orderCourts([playing(1), ...[4, 6, 9, 12].map((n) => at(n, HALL))]);
+    const html = renderToStaticMarkup(<CourtList courts={day} selectedId={null} dict={dict} locale="en" tz="Europe/London" onSelect={() => {}} />);
+    expect(html).toContain("4 free courts · City Sports Hall");
+    const island = renderIsland(CourtList, { courts: day, selectedId: null, dict, locale: "en" as Locale, tz: "Europe/London", onSelect: () => {} });
+    const toggle = () => island.tree().find((e) => propsOf(e)["data-testid"] === "md-court-fold-toggle")!;
+    (propsOf(toggle()).onClick as () => void)();
+    const listed = island.tree().filter((e) => propsOf(e).court !== undefined && (propsOf(e).court as MatchDayCourt).state === "free").map((e) => (propsOf(e).court as MatchDayCourt).court_name);
+    expect(listed).toEqual(["Court 4", "Court 6", "Court 9", "Court 12"]);
+  });
+});
+
 describe("m2 — a closed court is not counted free", () => {
   it("the header's free count leaves closed courts out; courts and playing are unchanged", () => {
     const day = [playing(1), called(2), free(3), upNext(4), closed(5), closed(6, { queue: [queued("q-6")] }), elsewhere(7)];
@@ -378,10 +437,11 @@ describe("the court list as drawn", () => {
     expect(html).not.toContain('data-testid="md-court-fold"');
   });
 
-  it("the open court stays on the list and the fold's label follows it", () => {
+  it("the open court stays on the list and the fold's label follows it - the names no longer form ONE range, so the label is the count and the venue (m5)", () => {
     const html = render(tenCourts, "c-7");
     expect(rowsOf(html)).toEqual(["c-1", "c-2", "c-3", "c-4", "c-7"]);
-    expect(html).toContain("5 more courts free (Courts 5–6, Courts 8–10)");
+    expect(html).toContain("5 free courts · Main Hall");
+    expect(html).not.toContain("Courts 5–6, Courts 8–10");
   });
 
   it("a football day says pitches: the sport's own noun in the row and its range", () => {

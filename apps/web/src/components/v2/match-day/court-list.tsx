@@ -15,7 +15,7 @@ import { useId, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { ATTENTION_SEVERITY } from "@/lib/division-phase";
 import type { Dict, Locale } from "@/lib/i18n-constants";
-import { plural, t } from "@/lib/i18n-runtime";
+import { t } from "@/lib/i18n-runtime";
 import type { MatchDayCourt, MatchDayFixture, VenueNoun } from "@/lib/match-day/types";
 import {
   closureText,
@@ -23,7 +23,7 @@ import {
   courtGroup,
   courtScorerAttention,
   foldFreeCourts,
-  foldedNames,
+  foldLabel,
   matchLabel,
   matchMeta,
   scoreLine,
@@ -84,9 +84,7 @@ export function CourtList({
           >
             <span aria-hidden className={`h-2.5 w-2.5 shrink-0 rounded-full ${DOT.free}`} />
             <span className="min-w-0 text-sm [overflow-wrap:anywhere]">
-              {plural(dict, `matchDay.list.freeFold.${noun}`, folded.length, locale, {
-                names: foldedNames(folded.map((c) => c.court_name), t(dict, `matchDay.noun.${noun}`), t(dict, `matchDay.list.nounPlural.${noun}`)),
-              })}
+              {foldLabel(dict, locale, folded, noun)}
             </span>
             <svg
               aria-hidden

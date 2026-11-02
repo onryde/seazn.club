@@ -212,6 +212,11 @@ export function foldFreeCourts(
  * own. Names arrive in list order and are never reordered.
  */
 export function foldedNames(names: readonly string[], singular: string, plural: string): string {
+  return foldedNameRuns(names, singular, plural).join(", ");
+}
+
+/** `foldedNames` as its pieces - one per run or loose name - so a caller can tell ONE range ("Courts 5–10") from a list. */
+export function foldedNameRuns(names: readonly string[], singular: string, plural: string): string[] {
   // `from`/`to` keep the digits as typed ("05") and the number they mean (05 + 1 = 6).
   type Run = { prefix: string; from: string; to: string; next: number; count: number; first: string };
   const runs: Run[] = [];
@@ -229,13 +234,25 @@ export function foldedNames(names: readonly string[], singular: string, plural: 
       last.count++;
     } else runs.push({ prefix, from: m[2]!, to: m[2]!, next: Number(m[2]) + 1, count: 1, first: name });
   }
-  return runs
-    .map((r) => {
-      if (r.count < 2) return r.first;
-      const word = r.prefix.localeCompare(singular, undefined, { sensitivity: "base" }) === 0 ? plural : r.prefix;
-      return `${word} ${r.from}–${r.to}`;
-    })
-    .join(", ");
+  return runs.map((r) => {
+    if (r.count < 2) return r.first;
+    const word = r.prefix.localeCompare(singular, undefined, { sensitivity: "base" }) === 0 ? plural : r.prefix;
+    return `${word} ${r.from}–${r.to}`;
+  });
+}
+
+/**
+ * The fold row's label (fix round 1, m5). When the folded names make ONE range the names say it all ("6 more courts free
+ * (Courts 5–10)"). When they do not - two runs, loose numbers, names with no number, a suffix the server adds for two venues - a
+ * list of them is a wall of text on a phone, so the label is the count alone ("4 free courts"), with the venue after a middle dot
+ * when every folded court sits in the same one ("4 free courts · City Sports Hall"). The names are listed when the fold is opened.
+ */
+export function foldLabel(dict: Dict, locale: Locale, folded: readonly Pick<MatchDayCourt, "court_name" | "venue_id" | "venue_name">[], noun: VenueNoun): string {
+  const runs = foldedNameRuns(folded.map((c) => c.court_name), t(dict, `matchDay.noun.${noun}`), t(dict, `matchDay.list.nounPlural.${noun}`));
+  if (runs.length === 1) return plural(dict, `matchDay.list.freeFold.${noun}`, folded.length, locale, { names: runs[0]! });
+  const count = plural(dict, `matchDay.list.freeFoldCount.${noun}`, folded.length, locale);
+  const venues = new Set(folded.map((c) => c.venue_id));
+  return venues.size === 1 ? `${count} · ${folded[0]!.venue_name}` : count;
 }
 
 // ---- The venue filter (Match Day E2 item 5) -------------------------------------------------------------------------------
