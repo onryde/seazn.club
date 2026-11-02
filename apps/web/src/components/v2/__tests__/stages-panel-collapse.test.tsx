@@ -276,6 +276,19 @@ describe("PB1 item 3: the attention seam - a completed card with something to re
     expect(expandedOf(withPanel), "a panel opened (a deep link) is never folded away").toBe("true");
     expect(bodyHidden(withPanel, A)).toBe(false);
   });
+
+  // Review m2: the open-match reason is `inPlay + unplayed`, a held match counting in `inPlay`. Each term gets a case of its own, so
+  // dropping one of them is seen (the in_play case above witnesses `inPlay`).
+  it("each kind of open match on its own: one still to play (scheduled), one held for its settle - and the control, the same abandon settled", () => {
+    const toPlay = panel({ fixtures: [...playedFixtures(A), fixture(A, 4, { status: "scheduled", outcome: null })] });
+    expect(expandedOf(toPlay), "a match still to come").toBe("true");
+    expect(bodyHidden(toPlay, A)).toBe(false);
+    const abandon = fixture(A, 4, { status: "abandoned", outcome: null });
+    const held = panel({ fixtures: [...playedFixtures(A), abandon], awaitingSettle: [abandon.id] });
+    expect(expandedOf(held), "a match held for the organiser's verdict").toBe("true");
+    const settled = panel({ fixtures: [...playedFixtures(A), abandon] });
+    expect(expandedOf(settled), "control: the same abandon, nobody awaiting a verdict - settled, so folded").toBe("false");
+  });
 });
 
 describe("PB1 item 3: the tap, and the card that completes", () => {
