@@ -260,7 +260,9 @@ test("general fields persist across the reload, and the rename that regenerates 
     // never asked for. That mutant is invisible to the youth test (it seeds a
     // youth division), invisible to case #10 (it starts public, so the second
     // conjunct is already false), and there is no other coverage of this
-    // component anywhere in the tree — `competition-wizard.tsx` mounts it too.
+    // component anywhere in the tree. (The New competition form no longer
+    // mounts it: since Match Day C8 it uses `visibility-segmented.tsx`, so this
+    // settings page is the picker's only mount.)
     //
     // Order matters. `toBeChecked()` FIRST: an interstitial holds the radio at
     // its old value (`pick()` returns before `onChange`), so a public radio

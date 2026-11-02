@@ -3152,6 +3152,16 @@ test("Match Day C8: the New competition form and the first-division screen hold 
 
   // --- empty form -----------------------------------------------------------
   await holds("empty form");
+  // Every project here is below `lg` (1024), where the form is the ONE column it
+  // always was: the description under the decisions, same left edge, same width.
+  // (The two-column composition from `lg` is measured by the walkthrough.)
+  const decisionsBox = (await form.getByTestId("new-competition-decisions").boundingBox())!;
+  const descriptionBox = (await form.getByTestId("new-competition-description").boundingBox())!;
+  expect(descriptionBox.y, `the description sits below the decisions at ${w}px`).toBeGreaterThanOrEqual(
+    decisionsBox.y + decisionsBox.height,
+  );
+  expect(Math.abs(descriptionBox.x - decisionsBox.x), `one column at ${w}px: same left edge`).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(descriptionBox.width - decisionsBox.width), `one column at ${w}px: same width`).toBeLessThanOrEqual(1.5);
   await assertTapFloor(page.getByPlaceholder(uiEn["comp.wizard.name.placeholder"]!), "name input");
   await assertTapFloor(form.getByLabel(uiEn["comp.wizard.startsOn"]!), "Starts on");
   await assertTapFloor(form.getByLabel(new RegExp(`^${uiEn["comp.wizard.endsOn"]}`)), "Ends on");
@@ -3194,6 +3204,21 @@ test("Match Day C8: the New competition form and the first-division screen hold 
   await expect(form.getByText(uiEn["showcase.consent"]!)).toBeVisible();
   await expect(form.getByTestId("competition-reach").locator("li[data-audience]")).toHaveCount(5);
   await holds("Public + showcase + consent open");
+  // axe on the richest state of the form: the radio group, the switch, the
+  // disclosure, the date pair and the editor are all on screen. Serious and
+  // critical only, scoped to the form, as the page-level sweep above does.
+  {
+    const results = await new AxeBuilder({ page })
+      .include('[data-testid="new-competition-form"]')
+      .withTags(["wcag2a", "wcag2aa"])
+      .analyze();
+    expect(results.passes.length, "axe ran its rules over the form").toBeGreaterThan(0);
+    const blocking = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+    expect(
+      blocking.map((v) => `${v.id}: ${v.nodes[0]?.html}`),
+      `axe serious/critical on the New competition form at ${w}px`,
+    ).toEqual([]);
+  }
 
   // --- Private: showcase off, with the reason --------------------------------
   await form.locator("label").filter({ has: page.getByRole("radio", { name: vis("private"), exact: true }) }).click();
@@ -3212,6 +3237,18 @@ test("Match Day C8: the New competition form and the first-division screen hold 
   await assertTapFloor(page.getByTestId("first-division-add"), "Add division");
   await assertTapFloor(page.getByTestId("first-division-later"), "Later");
   await notClipped('[data-testid="first-division-prompt"]', "the first-division screen");
+  {
+    const results = await new AxeBuilder({ page })
+      .include('[data-testid="first-division-prompt"]')
+      .withTags(["wcag2a", "wcag2aa"])
+      .analyze();
+    expect(results.passes.length, "axe ran its rules over the first-division screen").toBeGreaterThan(0);
+    const blocking = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+    expect(
+      blocking.map((v) => `${v.id}: ${v.nodes[0]?.html}`),
+      `axe serious/critical on the first-division screen at ${w}px`,
+    ).toEqual([]);
+  }
 });
 
 // ---------------------------------------------------------------------------

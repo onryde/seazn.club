@@ -31,6 +31,10 @@ import {
 } from "@/lib/competition-listing";
 import { Visibility } from "@/server/api-v1/schemas";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
+import Link from "@/components/ui/console-link";
 import type { Dict } from "@/lib/i18n-constants";
 
 vi.mock("next/navigation", () => ({
@@ -147,6 +151,36 @@ describe("the form is one column in the owner's order", () => {
 });
 
 // ── dates ────────────────────────────────────────────────────────────────────
+
+describe("required fields are marked, and the mark is not part of the accessible name (M1)", () => {
+  it("exactly the fields createBlocker can block on carry an aria-hidden asterisk; optional ones carry none", () => {
+    // Which fields are required comes from the rules library, not from a list
+    // typed here: a field is required iff leaving it blank (the rest filled) blocks Create.
+    const full = { name: "Autumn Open", startsOn: "", endsOn: "2026-11-15" };
+    const required = (["name", "startsOn", "endsOn"] as const).filter(
+      (f) => createBlocker({ ...full, [f]: "" }) !== null,
+    );
+    expect(required).toEqual(["name", "endsOn"]);
+
+    const island = mount();
+    const labels = island.tree().filter((el) => el.type === "span" && propsOf(el).className === "label");
+    const marked = labels.filter((el) =>
+      walk(propsOf(el).children as ReactNode).some((c) => c.type === "span" && propsOf(c)["aria-hidden"] === "true" && textOf(c).includes("*")),
+    );
+    // The text each marked label reads WITHOUT its mark — the accessible name.
+    const names = marked.map((el) => textOf(el).replace("*", "").replace(/\s+/g, " ").trim());
+    expect(names).toEqual([msg("comp.wizard.name.label"), msg("comp.wizard.endsOn")]);
+    // Anti-vacuity: the unmarked set is non-empty and includes the optional Start.
+    const unmarked = labels.filter((el) => !marked.includes(el)).map((el) => textOf(el));
+    expect(unmarked).toContain(msg("comp.wizard.startsOn"));
+    // No asterisk is baked into any label STRING (it would be read aloud).
+    for (const el of labels) {
+      for (const c of [propsOf(el).children].flat() as ReactNode[]) {
+        if (typeof c === "string") expect(c).not.toContain("*");
+      }
+    }
+  });
+});
 
 describe("Ends on follows Starts on", () => {
   it("starts empty, takes the first Start picked, and keeps following it", () => {
@@ -284,6 +318,22 @@ describe("<CompetitionReach> — Who will find it", () => {
     const pub = rowsOf(renderToStaticMarkup(<CompetitionReach visibility="public" discoverable />));
     const org = pub.find((r) => r.audience === "org")!;
     expect(org.text).toContain(msg("comp.wizard.reach.afterPublish", { audience: msg("comp.wizard.reach.org") }));
+    // The Showcase row's "later" is a CEILING, not a promise (I1): the home page
+    // also wants a published schedule or a result, so it says "may appear" and
+    // names that floor — in its own sentence, not the generic one.
+    const showcase = pub.find((r) => r.audience === "showcase")!;
+    expect(showcase.state).toBe("after_publish");
+    expect(showcase.text).toContain(
+      msg("comp.wizard.reach.showcase.afterPublish", { audience: msg("comp.wizard.reach.showcase") }),
+    );
+    expect(showcase.text).not.toBe(
+      msg("comp.wizard.reach.afterPublish", { audience: msg("comp.wizard.reach.showcase") }),
+    );
+    expect(showcase.text).toMatch(/schedule|result/i);
+    // …and no other row borrows it.
+    for (const r of pub.filter((r) => r.state === "after_publish" && r.audience !== "showcase")) {
+      expect(r.text, r.audience).not.toMatch(/schedule|result/i);
+    }
     const team = pub.find((r) => r.audience === "team")!;
     expect(team.text).toContain(`${msg("comp.wizard.reach.yes")}`);
     expect(team.text).toContain(msg("comp.wizard.reach.team"));
@@ -292,6 +342,23 @@ describe("<CompetitionReach> — Who will find it", () => {
     expect(renderToStaticMarkup(<CompetitionReach visibility="public" discoverable={false} />)).toContain(
       msg("comp.wizard.reach.title"),
     );
+  });
+});
+
+describe("the Showcase row's 'later' sentence exists in all four languages and is its own (I1)", () => {
+  it("showcase.afterPublish differs from the generic afterPublish, and both take {audience}", () => {
+    const dicts = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as unknown as Record<string, Record<string, string>>;
+    let checked = 0;
+    for (const [locale, d] of Object.entries(dicts)) {
+      const generic = d["comp.wizard.reach.afterPublish"]!;
+      const showcase = d["comp.wizard.reach.showcase.afterPublish"]!;
+      expect(showcase, locale).toBeTruthy();
+      expect(showcase, locale).not.toBe(generic);
+      expect(generic, locale).toContain("{audience}");
+      expect(showcase, locale).toContain("{audience}");
+      checked += 1;
+    }
+    expect(checked).toBe(4);
   });
 });
 
@@ -405,7 +472,7 @@ describe("Create is disabled until the form can be created, and says what is mis
     order: msg("comp.validation.endsBeforeStarts"),
   };
 
-  it("Create stays disabled while the create is in flight, so a second press cannot make a second competition", async () => {
+  it("Create is disabled and relabelled while the create is in flight, and one create posts once", async () => {
     let release!: (made: unknown) => void;
     vi.mocked(apiV1).mockReset();
     vi.mocked(apiV1).mockReturnValue(new Promise((resolve) => (release = resolve)) as never);
@@ -564,6 +631,29 @@ describe("after Create: Add your first division", () => {
     expect(island.tree().some((el) => el.type === FirstDivisionPrompt)).toBe(false);
     expect(island.text()).toContain("was created as private");
   });
+
+  it("a degraded create still offers 'Add division' (to the new, private competition) beside Continue", async () => {
+    vi.mocked(apiV1).mockResolvedValue({
+      id: "c1",
+      slug: "autumn-open",
+      visibility: "private",
+      discoverable: false,
+      public_quota_degraded: { feature_key: "dashboard.public.max", limit: 2 },
+    } as never);
+    const island = mount();
+    typeName(island, "Autumn Open");
+    typeEnd(island, "2026-11-15");
+    await submit(island);
+    const add = island.tree().find((el) => el.type === Link && propsOf(el)["data-testid"] === "public-quota-add-division")!;
+    expect(add).toBeDefined();
+    expect(propsOf(add).href).toBe(routes.divisionNew("riverside", "autumn-open"));
+    expect(textOf(add)).toBe(msg("comp.wizard.created.add"));
+    // Continue is still there, still a button (the e2e taps it by role), now the quieter one.
+    const cont = island.tree().find((el) => el.type === "button" && textOf(el) === msg("comp.wizard.publicDegraded.continue"))!;
+    expect(cont).toBeDefined();
+    expect(propsOf(cont).className).toMatch(/btn-ghost/);
+    expect(propsOf(add).className).toMatch(/btn-primary/);
+  });
 });
 
 describe("<FirstDivisionPrompt>", () => {
@@ -619,9 +709,7 @@ describe("<FirstDivisionPrompt>", () => {
     expect(checked).toBe(3);
   });
 
-  it("moves focus to its heading so a screen reader lands on the new screen", () => {
-    const src = readFileSync(new URL("../first-division-prompt.tsx", import.meta.url), "utf8");
-    expect(src).toMatch(/\.focus\(\)/);
+  it("its heading is focusable (tabindex -1); that focus() is actually CALLED is first-division-prompt-focus.test.tsx", () => {
     expect(render()).toMatch(/<h2[^>]*tabindex="-1"/);
   });
 });

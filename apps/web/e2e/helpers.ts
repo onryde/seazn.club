@@ -2486,11 +2486,11 @@ export async function createCompetitionViaUi(
   // ahead of now — everything created here has to stay a RUNNING competition,
   // or the Event Pass surfaces under test would render their locked state.
   await page.getByLabel(/^Ends on/i).fill("2030-12-31");
-  // Visibility is a radio-card group. The wizard defaults to PUBLIC since V396
+  // Visibility is a segmented group of three native radios (C8). The wizard defaults to PUBLIC since V396
   // (entitlements v18 W2 T15/F) — it defaulted to private before — so callers
   // that want anything else must be explicit, and this helper always selects
-  // explicitly rather than depending on either default. The input hides behind
-  // the styled card, so click the wrapping label and verify the radio took.
+  // explicitly rather than depending on either default. The input is visually
+  // hidden behind its segment, so click the wrapping label and verify the radio took.
   // The radio is named by its label, and "unlisted" is labelled "Link only"
   // (visibility.unlisted.label) — `^unlisted` has never matched a radio.
   const radio = page.getByRole("radio", {

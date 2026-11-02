@@ -9,6 +9,12 @@
 // Each segment WRAPS its radio (visually hidden, still focusable), so a click on
 // the label picks it, arrow keys walk the group natively, and the radio's
 // accessible name is the label alone.
+//
+// The group is a <fieldset> with a <legend> over three native radios of one
+// name: that IS a radio group to assistive tech (the browser exposes it as
+// `radiogroup`-equivalent with the legend as its name), so it carries no ARIA
+// role of its own. A `role="radiogroup"` + `role="radio"` rebuild would only add
+// what the platform already gives, and lose the native arrow-key walk.
 import { Globe, Link2, Lock, type LucideIcon } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { VISIBILITY_OPTIONS, type VisibilityKey } from "@/components/ui/visibility-picker";

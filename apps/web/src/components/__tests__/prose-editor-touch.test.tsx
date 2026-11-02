@@ -19,6 +19,14 @@ function editorHtml(touch?: boolean): string {
   );
 }
 
+function fillHtml(fill?: boolean): string {
+  return renderToStaticMarkup(
+    <DictProvider dict={dict} locale="en">
+      <ProseEditor value="" onChange={() => {}} orgId="org-1" {...(fill === undefined ? {} : { fill })} />
+    </DictProvider>,
+  );
+}
+
 function buttonHtml(touch?: boolean): string {
   return renderToStaticMarkup(
     <ToolbarButton label="Bold" onClick={() => {}} {...(touch === undefined ? {} : { touch })}>
@@ -57,5 +65,37 @@ describe("ProseEditor touch mode", () => {
     // Anti-vacuity: the toolbar has eleven buttons; zero would pass 0 === 0.
     expect(all).toBe(11);
     expect(touched).toBe(all);
+  });
+});
+
+// The New competition form puts the description in its own column from `lg` and
+// asks the editor to fill it. Opt-in, and below `lg` it must change nothing.
+describe("ProseEditor fill mode", () => {
+  it("fills its parent from lg with a 28rem floor when fill is on", () => {
+    const html = fillHtml(true);
+    expect(html).toContain("lg:min-h-[28rem]");
+    expect(html).toContain("lg:flex-1");
+    expect(html).toContain("lg:flex-col");
+  });
+
+  it("is untouched by default and when fill is false", () => {
+    for (const html of [fillHtml(), fillHtml(false)]) {
+      expect(html).not.toContain("28rem");
+      expect(html).not.toContain("lg:flex-1");
+    }
+  });
+
+  it("changes only lg: classes — below lg the markup is byte-identical with fill on or off", () => {
+    // Drop every `lg:` class token; an element left with no classes loses the attribute.
+    const strip = (html: string) =>
+      html.replace(/ class="([^"]*)"/g, (_m, classes: string) => {
+        const kept = classes.split(" ").filter((c) => c !== "" && !c.startsWith("lg:"));
+        return kept.length ? ` class="${kept.join(" ")}"` : "";
+      });
+    const off = fillHtml(false);
+    const on = fillHtml(true);
+    expect(on).not.toBe(off); // anti-vacuity: fill really changed something
+    expect(strip(on)).toBe(strip(off));
+    expect(off, "the default markup carries no lg: class at all").not.toContain("lg:");
   });
 });

@@ -35,6 +35,13 @@ interface Props {
    *  four editors (org about, payment instructions, news, competition settings)
    *  keep the compact toolbar they were laid out around. */
   touch?: boolean;
+  /** Opt-in: from `lg` the editor stretches to fill the height its parent gives
+   *  it (a flex column), with a 28rem floor, and the writing area takes the
+   *  slack so a click anywhere in the box lands in the text. Below `lg` — and
+   *  by default everywhere — nothing changes: the box is as tall as its text
+   *  (`min-h-40`). The New competition form puts the description in its own
+   *  column beside the other fields. */
+  fill?: boolean;
 }
 
 export function ToolbarButton({
@@ -111,7 +118,7 @@ function EditorDialog({
   );
 }
 
-export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle, touch = false }: Props) {
+export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle, touch = false, fill = false }: Props) {
   const msg = useMsg();
   const [tab, setTab] = useState<"write" | "preview">("write");
   const [previewHtml, setPreviewHtml] = useState("");
@@ -241,7 +248,11 @@ export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle,
   const remaining = DESCRIPTION_MAX - value.length;
 
   return (
-    <div className="rounded-lg border border-purple-200 bg-white transition focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-200">
+    <div
+      className={`rounded-lg border border-purple-200 bg-white transition focus-within:border-purple-500 focus-within:ring-2 focus-within:ring-purple-200${
+        fill ? " lg:flex lg:min-h-[28rem] lg:flex-1 lg:flex-col" : ""
+      }`}
+    >
       {/* Write / Preview tabs */}
       <div className="flex items-center justify-between border-b border-purple-100 px-2 py-1">
         <div role="tablist" aria-label={msg("editor.mode")} className="flex gap-1">
@@ -317,7 +328,10 @@ export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle,
               </ToolbarButton>
             </div>
           )}
-          <EditorContent editor={editor} />
+          <EditorContent
+            editor={editor}
+            className={fill ? "lg:flex lg:min-h-0 lg:flex-1 lg:flex-col lg:[&>.ProseMirror]:flex-1" : undefined}
+          />
           <input
             ref={fileRef}
             type="file"
@@ -336,7 +350,7 @@ export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle,
           )}
         </>
       ) : (
-        <div style={previewStyle} className="min-h-40 rounded-b-lg px-3 py-2">
+        <div style={previewStyle} className={`min-h-40 rounded-b-lg px-3 py-2${fill ? " lg:flex-1" : ""}`}>
           {previewHtml ? (
             <CompetitionProse html={previewHtml} />
           ) : (

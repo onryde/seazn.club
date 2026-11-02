@@ -5,6 +5,7 @@
 // POSTs /api/v1/competitions, then shows "Add your first division".
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "@/components/ui/console-link";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -109,10 +110,6 @@ export function CompetitionWizard({
     // customer's language, before the round trip. Deliberately NOT the native
     // `required` attribute: that fires the browser's own English tooltip and
     // preempts this message entirely.
-    if (blocker === "endsOn" || blocker === "both") {
-      setError(msg("comp.wizard.endsOn.required"));
-      return;
-    }
     if (blocker) {
       setError(msg(BLOCKER_KEY[blocker]));
       return;
@@ -205,11 +202,21 @@ export function CompetitionWizard({
           </p>
         )}
         <UpgradeGate feature={PUBLIC_DASHBOARD_FEATURE} viewerPlan={viewerPlan} />
-        <div className="flex justify-end">
+        {/* The competition EXISTS (private), so the organiser's next step is the
+            same one a public create offers: add the first division. Continue
+            stays, as a button, for "I'll look at it first". */}
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Link
+            href={routes.divisionNew(orgSlug, degraded.slug)}
+            data-testid="public-quota-add-division"
+            className="btn btn-primary min-h-11"
+          >
+            {msg("comp.wizard.created.add")}
+          </Link>
           <button
             type="button"
             onClick={() => router.push(routes.competition(orgSlug, degraded.slug))}
-            className="btn btn-primary"
+            className="btn btn-ghost min-h-11"
           >
             {msg("comp.wizard.publicDegraded.continue")}
           </button>
@@ -221,79 +228,109 @@ export function CompetitionWizard({
   if (created) return <FirstDivisionPrompt orgSlug={orgSlug} created={created} />;
 
   return (
-    <div className="max-w-2xl">
-      <form onSubmit={submit} data-testid="new-competition-form" className="card space-y-5 p-5 sm:p-6">
-        <label className="block">
-          <span className="label">{msg("comp.wizard.name.label")}</span>
-          <input
-            autoFocus
-            required
-            maxLength={200}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={msg("comp.wizard.name.placeholder")}
-            className="input min-h-11"
-          />
-        </label>
+    <div className="max-w-2xl lg:max-w-none">
+      {/* One DOM, two compositions. Below `lg` this is the single column it has
+          always been (`max-lg:space-y-5` between the two groups). From `lg` it is
+          a grid: the decisions on the left (name, dates, who can see it, who will
+          find it, showcase), the description on the right with the editor
+          stretching to the left column's height, and one footer row across both.
+          Source order IS tab order and reading order: Name .. Showcase,
+          Description, then the footer. Every grid child is `min-w-0`, or a long
+          name or a wide toolbar would push the page wider than the card. */}
+      <form
+        onSubmit={submit}
+        data-testid="new-competition-form"
+        className="card p-5 max-lg:space-y-5 sm:p-6 lg:grid lg:grid-cols-[minmax(0,26.5rem)_minmax(0,1fr)] lg:gap-x-10 lg:gap-y-6 lg:p-8"
+      >
+        <div className="min-w-0 space-y-5 lg:col-start-1 lg:row-start-1" data-testid="new-competition-decisions">
+          <label className="block">
+            {/* Required, so marked: the asterisk is aria-hidden (the input's own
+                `required` is what assistive tech is told). */}
+            <span className="label">
+              {msg("comp.wizard.name.label")}
+              <span aria-hidden="true"> *</span>
+            </span>
+            <input
+              autoFocus
+              required
+              maxLength={200}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={msg("comp.wizard.name.placeholder")}
+              className="input min-h-11"
+            />
+          </label>
 
-        {/* Side by side from 360px; at 320 they stack, because two native date
-            inputs at ~124px each clip their own text. `[&_input]:min-h-11` is
-            the phone tap floor for the shared date control. */}
-        <div className="grid gap-5 min-[360px]:grid-cols-2 [&_input]:min-h-11">
-          <DateTimeField
-            kind="date"
-            label={msg("comp.wizard.startsOn")}
-            value={startsOn}
-            onChange={pickStart}
-          />
-          <div>
-            {/* #376: mandatory — see submit() for why the message is ours and not
-                the browser's native `required` tooltip. `required` here is exactly
-                that policy: DateTimeField emits `aria-required` and never the
-                native attribute, so the screen-reader signal survives without the
-                tooltip that would preempt our localized message. */}
+          {/* Side by side from 360px; at 320 they stack, because two native date
+              inputs at ~124px each clip their own text. `[&_input]:min-h-11` is
+              the phone tap floor for the shared date control. */}
+          <div className="grid gap-5 min-[360px]:grid-cols-2 [&_input]:min-h-11">
             <DateTimeField
               kind="date"
-              label={`${msg("comp.wizard.endsOn")} *`}
-              required
-              min={startsOn || undefined}
-              value={endsOn}
-              onChange={setEndsOn}
+              label={msg("comp.wizard.startsOn")}
+              value={startsOn}
+              onChange={pickStart}
             />
-            {!endsOn && (
-              <p className="mt-1 text-xs text-slate-500">{msg("comp.wizard.endsOn.help")}</p>
-            )}
+            <div>
+              {/* #376: mandatory — see submit() for why the message is ours and not
+                  the browser's native `required` tooltip. `required` here is exactly
+                  that policy: DateTimeField emits `aria-required` and never the
+                  native attribute, so the screen-reader signal survives without the
+                  tooltip that would preempt our localized message. */}
+              <DateTimeField
+                kind="date"
+                label={msg("comp.wizard.endsOn")}
+                required
+                requiredMark
+                min={startsOn || undefined}
+                value={endsOn}
+                onChange={setEndsOn}
+              />
+              {!endsOn && (
+                <p className="mt-1 text-xs text-slate-500">{msg("comp.wizard.endsOn.help")}</p>
+              )}
+            </div>
           </div>
+
+          {/* From `lg` the footer's own rule closes the card, so this group drops its
+              bottom rule (two hairlines 25px apart read as a mistake). */}
+          <div className="space-y-5 border-y border-purple-100 py-5 lg:border-b-0 lg:pb-0">
+            <VisibilitySegmented value={visibility} onChange={pickVisibility} />
+            <CompetitionReach visibility={visibility} discoverable={showcaseOn} />
+            <div className="border-t border-dashed border-purple-200 pt-4">
+              <ShowcaseOptIn visibility={visibility} checked={showcaseOn} onChange={setDiscoverable} />
+            </div>
+          </div>
+
         </div>
 
-        <div className="space-y-5 border-y border-purple-100 py-5">
-          <VisibilitySegmented value={visibility} onChange={pickVisibility} />
-          <CompetitionReach visibility={visibility} discoverable={showcaseOn} />
-          <div className="border-t border-dashed border-purple-200 pt-4">
-            <ShowcaseOptIn visibility={visibility} checked={showcaseOn} onChange={setDiscoverable} />
-          </div>
-        </div>
-
-        <div>
+        <div className="min-w-0 lg:col-start-2 lg:row-start-1 lg:flex lg:flex-col" data-testid="new-competition-description">
           <span className="label">{msg("comp.wizard.description.label")}</span>
           {/* The editor competition settings uses after creation: TipTap,
               Markdown in and out, Preview through the public pipeline. 10rem
-              minimum (its `min-h-40`), then it grows with the text. */}
+              minimum (its `min-h-40`) and growing with the text on a phone; from
+              `lg` (`fill`) it takes the height of the left column, 28rem at the
+              least, so a long description gets the room the page has to spare. */}
           <ProseEditor
             value={description}
             onChange={setDescription}
             orgId={orgId}
             placeholder={msg("comp.wizard.description.placeholder")}
             touch
+            fill
           />
         </div>
 
-        {paywall && <UpgradeGate feature={paywall.feature} viewerPlan={viewerPlan} />}
+        {paywall && (
+          <div className="min-w-0 lg:col-span-2">
+            <UpgradeGate feature={paywall.feature} viewerPlan={viewerPlan} />
+          </div>
+        )}
         {error && (
-          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600 lg:col-span-2">{error}</p>
         )}
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center lg:col-span-2 lg:border-t lg:border-purple-100 lg:pt-5">
           <p
             id="create-blocker"
             data-testid="create-blocker"

@@ -34,9 +34,11 @@ import { uiEn, fill } from "../match-room-kit";
  *
  * ## Widths
  *
- * 1280 and 320, whole file. At 320 the Starts/Ends pair stacks, the segmented
+ * 1280, 1024 and 320, whole file. 1024 is the first width of the two-column
+ * composition (the editor beside the other fields), 1023 the last of the single
+ * column. At 320 the Starts/Ends pair stacks, the segmented
  * control drops its icons, and the editor toolbar wraps with 44px buttons;
- * every step below runs the same at both, and the 44px floor is asserted at 320
+ * every step below runs the same at all three, and the 44px floor is asserted at 320
  * (below `lg`, where the editor's `touch` mode applies).
  */
 
@@ -47,7 +49,8 @@ const NAV_MS = 20_000;
 const ACT_MS = 2_500;
 const budget = (navs: number, acts: number) => Math.max(60_000, navs * NAV_MS + acts * ACT_MS);
 
-const WIDTHS = [1280, 320] as const;
+// 1024 is the boundary itself: the first width at which the form is two columns.
+const WIDTHS = [1280, 1024, 320] as const;
 
 type Visibility = "private" | "unlisted" | "public";
 type Audience = "team" | "link" | "org" | "search" | "showcase";
@@ -75,15 +78,102 @@ async function expectReach(form: Locator, expected: Record<Audience, State>, why
     const row = rows.nth(AUDIENCES.indexOf(audience));
     await expect(row, `${why}: ${audience}`).toHaveAttribute("data-state", expected[audience]);
     // The words, not just the attribute: a state is never colour or icon alone.
+    // The Showcase row's "later" is a ceiling ("may appear once you publish and
+    // it has a published schedule or a result"), every other row's is a plain
+    // "once you publish": two keys, so two sentences.
     const text =
       expected[audience] === "after_publish"
-        ? fill("comp.wizard.reach.afterPublish", { audience: LABEL(audience) })
+        ? fill(audience === "showcase" ? "comp.wizard.reach.showcase.afterPublish" : "comp.wizard.reach.afterPublish", {
+            audience: LABEL(audience),
+          })
         : LABEL(audience);
     await expect(row, `${why}: ${audience} wording`).toContainText(text);
     if (expected[audience] !== "after_publish") {
       await expect(row.getByText(`${uiEn[`comp.wizard.reach.${expected[audience]}`]}:`, { exact: false })).toHaveCount(1);
     }
   }
+}
+
+/**
+ * What a finger gets: the control's painted box AND whether the 44px extent
+ * of a square centred on it (both axes) hit-tests to the control. `boundingBox()` measures paint; only
+ * `elementFromPoint` says what a tap at a point would actually land on.
+ */
+async function expectTapTarget(control: Locator, label: string) {
+  await control.scrollIntoViewIfNeeded();
+  const got = await control.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    // The four edge midpoints of a 44px square (1px inside, so an edge pixel is
+    // not the test) and the middle. Not the corners: the buttons are rounded, so
+    // a point 1px inside the box's corner is outside its painted shape and
+    // hit-tests to whatever is behind it.
+    const probes = [[-21, 0], [21, 0], [0, -21], [0, 21], [0, 0]] as const;
+    const hits = probes.map(([dx, dy]) => {
+      const at = document.elementFromPoint(cx + dx, cy + dy);
+      return !!at && (at === el || el.contains(at));
+    });
+    return { w: r.width, h: r.height, hits };
+  });
+  expect(Math.min(got.w, got.h), `${label} is ${got.w}x${got.h}px`).toBeGreaterThanOrEqual(44);
+  expect(got.hits, `${label}: the 44px extent on both axes must hit-test to it`).toEqual([true, true, true, true, true]);
+}
+
+/** The breakpoint the editor's `touch` floor and this form's two columns both use (Tailwind `lg`). */
+const LG = 1024;
+
+/**
+ * The composition at this width, measured: from `lg` two columns inside a card
+ * as wide as the header above it, the description beside the decisions with the
+ * editor as tall as the left column (28rem at the least); below `lg` one column,
+ * the description under the decisions. Boxes, not class names — a class that
+ * does not apply passes a class check and fails this.
+ */
+async function expectComposition(page: Page, form: Locator, width: number) {
+  const decisions = form.getByTestId("new-competition-decisions");
+  const descriptionCol = form.getByTestId("new-competition-description");
+  const editor = descriptionCol.locator(":scope > div");
+  await expect(editor, "the description column holds exactly one editor box").toHaveCount(1);
+  const [f, d, c, e] = await Promise.all([
+    form.boundingBox(),
+    decisions.boundingBox(),
+    descriptionCol.boundingBox(),
+    editor.boundingBox(),
+  ]);
+  for (const [what, box] of [["form", f], ["decisions", d], ["description", c], ["editor", e]] as const) {
+    expect(box, `${what} has no box at ${width}px`).not.toBeNull();
+  }
+  if (width >= LG) {
+    const header = await page.locator("header > div").first().boundingBox();
+    expect(header, "the header container").not.toBeNull();
+    // The card spans the header's content box (the header pads 16px each side).
+    expect(Math.abs(f!.x - (header!.x + 16)), `card left ${f!.x} vs header content ${header!.x + 16}`).toBeLessThanOrEqual(1.5);
+    expect(Math.abs(f!.width - (header!.width - 32)), `card ${f!.width}px vs header content ${header!.width - 32}px`).toBeLessThanOrEqual(1.5);
+    // Side by side: the description starts to the right of the decisions, on the same row.
+    expect(c!.x, "description column is right of the decisions").toBeGreaterThanOrEqual(d!.x + d!.width);
+    expect(Math.abs(c!.y - d!.y), "both columns start on one row").toBeLessThanOrEqual(1.5);
+    // The decisions column is the narrow one (about 420-460px), the editor gets the rest.
+    expect(d!.width).toBeGreaterThanOrEqual(400);
+    expect(d!.width).toBeLessThanOrEqual(470);
+    expect(e!.width, "the editor has more room than the old 670px card gave the whole form").toBeGreaterThan(d!.width);
+    // The editor stretches to the left column's height, and never below 28rem.
+    expect(e!.height, "editor min height").toBeGreaterThanOrEqual(448 - 1);
+    expect(Math.abs(e!.y + e!.height - (d!.y + d!.height)), "editor bottom meets the left column's bottom").toBeLessThanOrEqual(2);
+  } else {
+    // One column: stacked, the same width, description below.
+    expect(c!.y, "description sits below the decisions").toBeGreaterThanOrEqual(d!.y + d!.height);
+    expect(Math.abs(c!.x - d!.x), "same left edge").toBeLessThanOrEqual(1.5);
+    expect(Math.abs(c!.width - d!.width), "same width").toBeLessThanOrEqual(1.5);
+  }
+  // Tab order is the DOM order: the last control of the left column hands focus to the description's first.
+  const lastLeft = decisions.locator("button, input, [tabindex='0'], summary").last();
+  await lastLeft.focus();
+  await page.keyboard.press("Tab");
+  expect(
+    await descriptionCol.evaluate((col) => col.contains(document.activeElement)),
+    "Tab from the end of the decisions lands in the description",
+  ).toBe(true);
 }
 
 async function tapVisibility(form: Locator, v: Visibility) {
@@ -143,6 +233,13 @@ for (const width of WIDTHS) {
         // 1. From the org home, tap New competition.
         const form = await openBlankForm(page, org.slug);
         await expectNoHorizontalScroll(page);
+        await expectComposition(page, form, width);
+
+        // Required fields (Name, Ends) are marked, optional Starts is not, and the
+        // mark is aria-hidden so it is not part of the accessible name.
+        await expect(form.locator('label:has(input[maxlength="200"]) > .label > span[aria-hidden="true"]')).toHaveText("*");
+        await expect(form.locator('label:has(input[type="date"][aria-required="true"]) > .label > span[aria-hidden="true"]')).toHaveText("*");
+        await expect(form.locator('label:has(input[type="date"]:not([aria-required])) span[aria-hidden="true"]')).toHaveCount(0);
 
         const nameInput = form.getByPlaceholder(uiEn["comp.wizard.name.placeholder"]!);
         const starts = form.getByLabel(uiEn["comp.wizard.startsOn"]!);
@@ -218,20 +315,22 @@ for (const width of WIDTHS) {
           // The phone floor of the editor's `touch` mode, hit-tested on the
           // buttons about to be tapped.
           for (const label of [uiEn["editor.bold"]!, uiEn["editor.italic"]!, uiEn["editor.link"]!]) {
-            const box = await form.getByRole("button", { name: label, exact: true }).boundingBox();
-            expect(box, `${label} has no box`).not.toBeNull();
-            expect(Math.min(box!.width, box!.height), `${label} is ${box!.width}x${box!.height}px`).toBeGreaterThanOrEqual(44);
+            await expectTapTarget(form.getByRole("button", { name: label, exact: true }), label);
           }
         }
         const description = await typeDescription(page, form);
         await expectNoHorizontalScroll(page);
 
         // 7. Create. The wire body is the third witness to what the screen holds.
-        const posted = page.waitForRequest(
-          (r) => r.method() === "POST" && /\/api\/v1\/competitions$/.test(new URL(r.url()).pathname),
-        );
+        const isCreate = (r: { method(): string; url(): string }) =>
+          r.method() === "POST" && /\/api\/v1\/competitions$/.test(new URL(r.url()).pathname);
+        const posted = page.waitForRequest(isCreate);
+        const made = page.waitForResponse((r) => isCreate(r.request()));
         await create.click();
         const body = (await posted).postDataJSON() as Record<string, unknown>;
+        // The id comes off the 201 itself, so the cleanup below holds even if a
+        // later step throws before the list is read.
+        createdId = ((await (await made).json()) as { data: { id: string } }).data.id;
         expect(body.visibility).toBe("public");
         expect(body.discoverable).toBe(true);
         expect(body.starts_on).toBe(startC);
@@ -256,8 +355,7 @@ for (const width of WIDTHS) {
 
         // The record agrees with what was done.
         const list = await apiJson<{ items: { id: string; slug: string }[] }>(page.request, "/api/v1/competitions?limit=100");
-        createdId = list.data!.items.find((c) => c.slug === slug)?.id ?? null;
-        expect(createdId, `competition '${slug}' is not in the org's list`).not.toBeNull();
+        expect(list.data!.items.find((c) => c.slug === slug)?.id, `competition '${slug}' is not in the org's list`).toBe(createdId);
         const row = await apiJson<{
           name: string;
           visibility: string;
@@ -292,30 +390,44 @@ for (const width of WIDTHS) {
       const org = await activeOrg(page);
       const name = `C8 Later ${width} ${TAG}`;
 
-      const form = await openBlankForm(page, org.slug);
-      await form.getByPlaceholder(uiEn["comp.wizard.name.placeholder"]!).fill(name);
-      await form.getByLabel(new RegExp(`^${uiEn["comp.wizard.endsOn"]}`)).fill("2030-12-31");
-      const description = await typeDescription(page, form);
-      await form.getByRole("button", { name: uiEn["comp.wizard.create"]!, exact: true }).click();
+      let createdId: string | null = null;
+      try {
+        const form = await openBlankForm(page, org.slug);
+        await form.getByPlaceholder(uiEn["comp.wizard.name.placeholder"]!).fill(name);
+        await form.getByLabel(new RegExp(`^${uiEn["comp.wizard.endsOn"]}`)).fill("2030-12-31");
+        const description = await typeDescription(page, form);
+        const made = page.waitForResponse(
+          (r) => r.request().method() === "POST" && /\/api\/v1\/competitions$/.test(new URL(r.url()).pathname),
+        );
+        await form.getByRole("button", { name: uiEn["comp.wizard.create"]!, exact: true }).click();
+        createdId = ((await (await made).json()) as { data: { id: string } }).data.id;
 
-      const prompt = page.getByTestId("first-division-prompt");
-      await expect(prompt).toBeVisible({ timeout: 20_000 });
-      await expect(prompt).not.toContainText(uiEn["comp.wizard.created.showcased"]!);
-      const slug = (await prompt.getByTestId("first-division-later").getAttribute("href"))!.match(/\/c\/([^/?]+)$/)![1]!;
+        const prompt = page.getByTestId("first-division-prompt");
+        await expect(prompt).toBeVisible({ timeout: 20_000 });
+        await expect(prompt).not.toContainText(uiEn["comp.wizard.created.showcased"]!);
+        const slug = (await prompt.getByTestId("first-division-later").getAttribute("href"))!.match(/\/c\/([^/?]+)$/)![1]!;
 
-      // 9. Later: the competition page, its own heading and its Add division link.
-      await prompt.getByTestId("first-division-later").click();
-      await page.waitForURL(new RegExp(`/o/${org.slug}/c/${slug}$`), { timeout: 20_000 });
-      await expect(page.getByRole("heading", { name })).toBeVisible({ timeout: 20_000 });
-      await expect(page.getByRole("link", { name: /add division/i })).toBeVisible();
-      await expectNoHorizontalScroll(page);
+        // 9. Later: the competition page, its own heading and its Add division link.
+        await prompt.getByTestId("first-division-later").click();
+        await page.waitForURL(new RegExp(`/o/${org.slug}/c/${slug}$`), { timeout: 20_000 });
+        await expect(page.getByRole("heading", { name })).toBeVisible({ timeout: 20_000 });
+        await expect(page.getByRole("link", { name: /add division/i })).toBeVisible();
+        await expectNoHorizontalScroll(page);
 
-      // The description, rendered where the public reads it.
-      await page.goto(`/shared/${org.slug}/${slug}`);
-      const main = page.getByRole("main");
-      await expect(main).toContainText(description.plain.trim());
-      await expect(main.locator("strong", { hasText: description.bold })).toBeVisible();
-      await expectNoHorizontalScroll(page);
+        // The description, rendered where the public reads it.
+        await page.goto(`/shared/${org.slug}/${slug}`);
+        const main = page.getByRole("main");
+        await expect(main).toContainText(description.plain.trim());
+        await expect(main.locator("strong", { hasText: description.bold })).toBeVisible();
+        await expectNoHorizontalScroll(page);
+      } finally {
+        // This one opens on Public (the default) and is a draft on a shared org:
+        // it counts against dashboard.public.max until it is taken private.
+        if (createdId) {
+          const res = await apiJson(page.request, `/api/v1/competitions/${createdId}`, "PATCH", { visibility: "private" });
+          expect(res.status, "cleanup: take the public draft private").toBeLessThan(300);
+        }
+      }
     });
   });
 }
