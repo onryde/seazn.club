@@ -207,6 +207,14 @@ interface Board {
   courtNames: Map<string, string>;
 }
 
+/** Test-only (task F2): runs inside `readBoard`'s transaction right after the named read, so a test can put a concurrent write
+ *  in the READ COMMITTED gap between two of its statements. Null in production. */
+type BoardReadHook = (after: "rows" | "holders") => Promise<void>;
+let boardReadHook: BoardReadHook | null = null;
+export function __setBoardReadHookForTests(fn: BoardReadHook | null): void {
+  boardReadHook = fn;
+}
+
 /** A kick-off as a sort key: a match with no recorded kick-off sorts after every one that has one. */
 const kickoffKey = (r: Pick<FixtureRow, "started_at">): number =>
   r.started_at === null ? Infinity : new Date(r.started_at).getTime();
@@ -264,7 +272,8 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
   const liveCallOf = (fixture: postgres.Fragment) => tx`
     (select fc.called_at from fixture_calls fc join fixtures g on g.id = fc.fixture_id
       where fc.fixture_id = ${fixture} and ${liveCallSql(tx)})`;
-  const rows = await tx<FixtureRow[]>`
+  // This competition's matches, as the board reads them, picked by `which`.
+  const readRows = (which: postgres.Fragment) => tx<FixtureRow[]>`
     select f.id, f.division_id, d.name as division_name, d.slug as division_slug, d.sport_key,
            s.id as stage_id, s.kind as stage_kind, s.name as stage_name, s.status as stage_status,
            f.status, f.court_id, f.scheduled_at, f.home_entrant_id, f.away_entrant_id,
@@ -279,15 +288,17 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
       left join entrants a on a.id = f.away_entrant_id
       left join match_states ms on ms.fixture_id = f.id
       left join ${dayTable(tx, compDays)} on w.division_id = f.division_id
-     where d.competition_id = ${competitionId}
-       and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to)
-            or f.status = ${IN_PLAY}
-            or ${liveCallOf(tx`f.id`)} is not null
-            ${opts.noCourt
-              ? tx`or (f.status = ${MOVABLE_STATUS} and f.court_id is null and w.division_id is not null
-                       and (f.scheduled_at is null or f.scheduled_at < w.day_to))`
-              : tx``})`;
+     where d.competition_id = ${competitionId} and (${which})`;
+  const rows = await readRows(tx`
+    (f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to)
+      or f.status = ${IN_PLAY}
+      or ${liveCallOf(tx`f.id`)} is not null
+      ${opts.noCourt
+        ? tx`or (f.status = ${MOVABLE_STATUS} and f.court_id is null and w.division_id is not null
+                 and (f.scheduled_at is null or f.scheduled_at < w.day_to))`
+        : tx``}`);
   const rowsById = new Map(rows.map((r) => [r.id, r]));
+  await boardReadHook?.("rows");
 
   // The court set: every live division's candidate courts, and every court one of their matches today is on. A match of an
   // archived division in play (read above: it may hold one of these courts) adds no court of its own.
@@ -316,6 +327,18 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
           join divisions d on d.id = g.division_id join competitions c on c.id = d.competition_id
          where ${liveCallSql(tx)} and fc.court_id in ${tx(courtIds)}`
     : [];
+  await boardReadHook?.("holders");
+  // READ COMMITTED (task F2, A2 review m1): `rows` and `holders` are two statements, each on a snapshot of its own. One of this
+  // competition's matches that started, or was called, BETWEEN them holds a court here that `rows` never saw — the poll used to
+  // throw on it and answer 500. Such a match is read now, by id; one gone by then (deleted in the gap) holds nothing.
+  const unread = [...new Set(holders.filter((h) => h.competition_id === competitionId && !rowsById.has(h.id)).map((h) => h.id))];
+  if (unread.length > 0) {
+    for (const r of await readRows(tx`f.id in ${tx(unread)}`)) {
+      rows.push(r);
+      rowsById.set(r.id, r);
+    }
+  }
+  const held = holders.filter((h) => h.competition_id !== competitionId || rowsById.has(h.id));
   const planned = courtIds.length
     ? await tx<PlannedRow[]>`
         select f.id, f.court_id, f.division_id, f.scheduled_at
@@ -341,7 +364,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
   for (const courtId of courtIds) {
     // Playing before called; this competition's own before another's; then by id.
     const holder =
-      holders
+      held
         .filter((h) => h.court_id === courtId)
         .sort(
           (a, b) =>
@@ -364,6 +387,7 @@ async function readBoard(tx: Tx, competitionId: string, now: Date, opts: { noCou
       if (holder.competition_id === competitionId) {
         state = holder.rank === 0 ? "playing" : "called";
         current = rowsById.get(holder.id) ?? null;
+        // `held` keeps only this competition's holders whose row was read (above), so this is the invariant, not a branch.
         if (current === null) throw new Error(`match-day: this competition's match ${holder.id} holds a court but was not read`);
       } else {
         state = "in_use_elsewhere";

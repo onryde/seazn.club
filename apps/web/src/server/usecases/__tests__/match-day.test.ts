@@ -89,7 +89,7 @@ import { createDivision, listDivisions } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
-import { countFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
+import { __setBoardReadHookForTests, countFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
 import { loadFixtureMatchRules } from "../fixtures";
 import { putScheduleSettings } from "../schedule";
 import { createCourt } from "../venues";
@@ -937,6 +937,91 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     );
     expect(err).toBeInstanceOf(HttpError);
     expect((err as HttpError).status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Task F2 (owner ruling 10-31 (2); A2 review m1): the board reads this competition's matches and what holds each court in TWO
+// statements, and under READ COMMITTED each has a snapshot of its own. A write landing between them used to leave a court held
+// by one of this competition's matches the first read never saw, and the poll threw ("holds a court but was not read") — a 500.
+// The gap is put in on purpose, by a hook that runs inside the board's transaction between its reads, writing on ANOTHER
+// connection (the pooled `sql`), as a scorer or a call does.
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("F2 — the board's two reads under READ COMMITTED", () => {
+  /** A match of the day's competition planned for TOMORROW on Court 1: today's read never lists it, so only a start between the
+   *  two reads puts it on a court the board holds. */
+  async function tomorrowsMatch(day: Day) {
+    const { p1, p2 } = pairs(day);
+    const f = between(day.comp, p1, p2);
+    await place(day, f.id, 24 * 60 + 60, day.courts.c1);
+    return f;
+  }
+
+  it("EMPTY CASE FIRST: with nothing written in the gap, the hook runs at both reads and the court is free", async () => {
+    const day = await seedDay();
+    await tomorrowsMatch(day);
+    const seen: string[] = [];
+    __setBoardReadHookForTests(async (after) => {
+      seen.push(after);
+    });
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "free", current: null });
+    } finally {
+      __setBoardReadHookForTests(null);
+    }
+    expect(seen, "anti-vacuity: the gap the next tests write into is real, and between these two reads").toEqual(["rows", "holders"]);
+  });
+
+  it("a match that STARTS between the two reads is read, not a 500: its court is playing, with it on", async () => {
+    const day = await seedDay();
+    const f = await tomorrowsMatch(day);
+    __setBoardReadHookForTests(async (after) => {
+      if (after === "rows") await setStatus(f.id, "in_play");
+    });
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      const c1 = courtOf(view, day.courts.c1);
+      expect(c1.state).toBe("playing");
+      expect(c1.current?.id).toBe(f.id);
+    } finally {
+      __setBoardReadHookForTests(null);
+    }
+    // The control: read again with no gap, the same court, the same match — the late read is the board's ordinary answer.
+    expect(courtOf(await getMatchDay(day.auth, day.comp.id, at(0)), day.courts.c1)).toMatchObject({ state: "playing", current: { id: f.id } });
+  });
+
+  it("a match CALLED between the two reads is read too: its court is called, with it on", async () => {
+    const day = await seedDay();
+    const f = await tomorrowsMatch(day);
+    __setBoardReadHookForTests(async (after) => {
+      if (after === "rows") await callFixtureToCourt(day.auth, f.id, day.courts.c2, at(0));
+    });
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(courtOf(view, day.courts.c2)).toMatchObject({ state: "called", current: { id: f.id } });
+    } finally {
+      __setBoardReadHookForTests(null);
+    }
+  });
+
+  it("a match that starts and is then DELETED inside the gap holds nothing: the court reads free, never a 500", async () => {
+    const day = await seedDay();
+    const f = await tomorrowsMatch(day);
+    let deleted = 0;
+    __setBoardReadHookForTests(async (after) => {
+      if (after === "rows") await setStatus(f.id, "in_play");
+      if (after === "holders") {
+        deleted = (await sql`delete from fixtures where id = ${f.id}`).count;
+      }
+    });
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "free", current: null });
+    } finally {
+      __setBoardReadHookForTests(null);
+    }
+    expect(deleted, "premise: the match was gone before the board read it").toBe(1);
   });
 });
 
