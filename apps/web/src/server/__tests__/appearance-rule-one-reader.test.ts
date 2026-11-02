@@ -84,7 +84,7 @@ const EXEMPT: readonly Exemption[] = [
   // Inputs, pickers and invalidation — they place people, never count a match.
   { file: "src/server/usecases/player-stats.ts", fn: "playerStatsInputsMd5", sites: 1, reason: "the stats cache key's inputs (rosters, sheets): a digest, credits nothing" },
   { file: "src/server/engine-db/lineups.ts", fn: "loadLineupPairsForDivision", sites: 1, reason: "the fold's lineup inputs for the engine; credits nothing" },
-  { file: "src/app/score/[token]/page.tsx", fn: "ScorePadPage", sites: 1, reason: "the device pad's fixture and squads; credits nothing" },
+  { file: "src/server/usecases/scan-fixture.ts", fn: "readScanFixture", sites: 1, reason: "the device pad's fixture and squads (the scan page and the device-link bootstrap read it; moved here from ScorePadPage unchanged); credits nothing" },
   { file: "src/server/usecases/match-reports.ts", fn: "myFixtureSquad", sites: 1, reason: "the official's match-report person picker over both squads; credits nothing" },
   { file: "src/server/public-site/revalidate.ts", fn: "firePersonRevalidate", sites: 1, reason: "cache invalidation: every fixture naming the person, over-inclusive by design; credits nothing" },
   // Online chess (external play): who sits at a board, or whose Lichess game a fixture is — never who appeared.
