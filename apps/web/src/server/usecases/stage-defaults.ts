@@ -19,6 +19,7 @@ import { HttpError } from "@/lib/errors";
 import { TOP_LEVEL_STAGE_DECIDERS } from "@/lib/top-level-stage-deciders";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { storedStageRules } from "@/lib/stage-decider-off";
+import { defaultSwissChess } from "@/lib/swiss-draw";
 import { randomInt } from "node:crypto";
 import { refuseStagePoints, refuseUnsettableKeys, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
 
@@ -45,6 +46,15 @@ const withoutNullPoints = (config: Record<string, unknown>): Record<string, unkn
  *  while the key was usually absent). A seed sent is kept. */
 const withRngSeed = (config: Record<string, unknown>): Record<string, unknown> =>
   config.rngSeed === undefined || config.rngSeed === null ? { ...config, rngSeed: randomInt(0, 2 ** 31) } : config;
+
+/** W3 Task 8 (BG-SW-1, REC RB3-10; SW-H3) — a NEW Swiss stage on a chess division is stored with `chess: true` when the
+ *  create sends no `chess` (one sent, `false` included, is kept). Here, beside `withRngSeed`, because this is the one door
+ *  every create path shares (`createStages` and `replaceStages` through `stageConfigsAtCreate`, and a template's stages
+ *  through `instantiateTemplate` — the boardgame `swiss11` template among them), so there is one default, never a second.
+ *  Pair reads the STORED value (`cfg.chess === true`), so a stage stored before this default with `chess` unset keeps its
+ *  colours off (orchestrator ruling m5). */
+const withSwissChessDefault = (sportKey: string, kind: StageKind, config: Record<string, unknown>): Record<string, unknown> =>
+  kind === "swiss" && config.chess === undefined && defaultSwissChess(sportKey) ? { ...config, chess: true } : config;
 
 /** W2c Task 13b (R-13b-1; D3) — every whole decider any sport declares, refused at a stage config's TOP level. The
  *  engine-derived set lives in `lib/top-level-stage-deciders.ts`, shared with the API schema's named refusals, so the
@@ -89,7 +99,8 @@ export function withStageDefaults(
  *
  * W2c Task 13 (ST-G8): `config.points` is asked the stage PUT's points questions too (`refuseStagePoints`): RULE_NOT_SETTABLE
  * on a bracket kind or for a walkover score the sport's table never reads, CONFIG_INVALID for metrics the sport does not
- * emit. Stored as sent, as before. W2d Task 10: a config with no `rngSeed` is given one (`withRngSeed`).
+ * emit. Stored as sent, as before. W2d Task 10: a config with no `rngSeed` is given one (`withRngSeed`). W3 Task 8: a
+ * Swiss stage on a chess division with no `chess` is given `chess: true` (`withSwissChessDefault`).
  */
 export function validatedStageConfig(
   module: AnySportModule,
@@ -118,5 +129,5 @@ export function validatedStageConfig(
   }
   const points = sentPoints(config);
   if (points !== undefined) refuseStagePoints(module, kind, PointsRule.parse(points));
-  return withRngSeed(out);
+  return withSwissChessDefault(sportKey, kind, withRngSeed(out));
 }

@@ -9,7 +9,9 @@ import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
-import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
+import { fixtureHasResultSql, playedFixtureIds, swissByeShellSql } from "./fixture-results-sql";
+import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
+import { swissRefusal } from "./swiss-refusal";
 import { requireFeature } from "@/lib/entitlements";
 import { cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit, type RateLimitConfig } from "@/lib/rate-limit";
@@ -88,7 +90,7 @@ import {
 } from "./court-candidates";
 import { buildEngineConstraints } from "./engine-constraints";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { generateStageFixturesUnpublished } from "./stages";
+import { generateStageFixturesUnpublished, refuseSwissRoundsAboveMaxAtStart } from "./stages";
 import { schedulingAiModel, toRuleFixture } from "./schedule-ai";
 
 type Tx = postgres.TransactionSql;
@@ -177,28 +179,34 @@ export const OCCUPYING = ["scheduled", "in_play", "decided", "finalized", "forfe
  *  this one, so there is no way for them to disagree about what "fixed" means. */
 export const FIXED_OCCUPYING = OCCUPYING.filter((s) => s !== MOVABLE_STATUS);
 
-/** Whether the board, the solver and an apply may move `f`: `scheduled`, and
- *  holding no result. `played` is history's played set (`playedFixtureIds`,
- *  ./fixture-results-sql.ts). The status alone cannot say it: a start taken
- *  back walks the status to `scheduled` and leaves its events behind. History
- *  refuses to undo any step that touches such a row, so a move written to one
- *  would leave an Undo that nothing can get past (review 3 of #857, N1). */
-export function isMovable(f: { id: string; status: string }, played: ReadonlySet<string>): boolean {
-  return f.status === MOVABLE_STATUS && !played.has(f.id);
+/** Whether the board, the solver and an apply may move `f`: `scheduled`,
+ *  holding no result, and not a Swiss bye shell. `played` is history's played
+ *  set (`playedFixtureIds`, ./fixture-results-sql.ts). The status alone cannot
+ *  say it: a start taken back walks the status to `scheduled` and leaves its
+ *  events behind. History refuses to undo any step that touches such a row, so
+ *  a move written to one would leave an Undo that nothing can get past (review
+ *  3 of #857, N1). A Swiss stage mints its round's bye row as a `scheduled`
+ *  shell before Pair (`sw-r{N}-bye`), and a bye is not played: it takes no
+ *  court and no time (W3 T3, SW-M13, X-SW-29; `isSwissByeShellExtKey`, the one
+ *  bye-shell predicate). */
+export function isMovable(f: { id: string; status: string; ext_key: string | null }, played: ReadonlySet<string>): boolean {
+  return f.status === MOVABLE_STATUS && !played.has(f.id) && !isSwissByeShellExtKey(f.ext_key);
 }
 
-/** A `scheduled` fixture that holds a result all the same. An apply skips it
- *  silently, the way a rain-delay shift does, and counts it. */
-export function heldInPlace(f: { id: string; status: string }, played: ReadonlySet<string>): boolean {
+/** A `scheduled` fixture no builder may move all the same: one that holds a
+ *  result, or a Swiss bye shell (`isMovable`). An apply skips it silently, the
+ *  way a rain-delay shift does, and counts it — so a stale proposal naming a
+ *  bye shell writes nothing to it and the rest of the apply lands. */
+export function heldInPlace(f: { id: string; status: string; ext_key: string | null }, played: ReadonlySet<string>): boolean {
   return f.status === MOVABLE_STATUS && !isMovable(f, played);
 }
 
-/** `isMovable`, as SQL: `scheduled` and holding no result. For the counts
- *  that price, drop or size a run (competition-schedule-ai.ts,
- *  schedule-ai-preview.ts), so they count exactly what a builder moves.
- *  `on` names the `fixtures` row in the enclosing query. */
+/** `isMovable`, as SQL: `scheduled`, holding no result, and not a Swiss bye
+ *  shell. For the counts that price, drop or size a run
+ *  (competition-schedule-ai.ts, schedule-ai-preview.ts), so they count exactly
+ *  what a builder moves. `on` names the `fixtures` row in the enclosing query. */
 export function movableFixtureSql(tx: Tx, on = "f") {
-  return tx`(${tx(on)}.status = ${MOVABLE_STATUS} and not ${fixtureHasResultSql(tx, on)})`;
+  return tx`(${tx(on)}.status = ${MOVABLE_STATUS} and not ${fixtureHasResultSql(tx, on)} and not ${swissByeShellSql(tx, on)})`;
 }
 
 /** The English sentence behind a refused board move or pin. Clients say it in
@@ -640,29 +648,59 @@ export async function divisionLockState(
   return { frozen: row?.schedule_locked ?? false, scopes: row?.locked_scopes ?? [] };
 }
 
+/** The stage kinds `stages.ts` generates as a ROUND ROBIN (`generate()`'s
+ *  league/group branch): 1-based rounds, one sequence per stage or per pool.
+ *  Read as text by the format matrix's model (tools/matrix product-text.ts,
+ *  #879's positional reconcile), so keep it one array literal. */
+export const ROUND_ROBIN_STAGE_KINDS: readonly string[] = ["league", "group"];
+
+/** The stage kinds whose `round_no` is a real ROUND SEQUENCE, so scheduling
+ *  orders by it (`roundRobinStageIds`, below): the round robins, and swiss
+ *  (W3 T3b). */
+export const ROUND_SEQUENCE_STAGE_KINDS: readonly string[] = [...ROUND_ROBIN_STAGE_KINDS, "swiss"];
+
 /**
- * Which of a division's stages are round-robin-generated — `kind in
- * ('league', 'group')`, `stages.ts`'s own `generate()` switch (everything
- * else — knockout/page_playoff/double_elim/stepladder, plus swiss/americano/
- * ladder generated outside that switch entirely — is bracket- or
- * round-sequence-shaped some OTHER way).
+ * Which of a division's stages play a real ROUND SEQUENCE, so their
+ * `round_no` is an ordering input to scheduling: `ROUND_SEQUENCE_STAGE_KINDS`
+ * (league, group, swiss). The name predates `swiss` joining (W3 T3b,
+ * 2026-10-31) and was kept because every placement path imports it; read it
+ * as "round-sequence stage ids".
  *
- * C1 (2026-08-12 round-order design): round attaches to round-robin-
- * generated fixtures ONLY. `fixtures.round_no` is one shared column
- * populated for EVERY stage kind (a bracket's own round, a swiss round, a
- * stepladder leg — F1 (2026-08-17) names every one of them by position via
- * roundRole()/roundRoleLabel(), never derived from this column alone), so
- * which stages may forward it as a scheduling ORDERING input is
+ * `league`/`group` are `stages.ts`'s own round-robin `generate()` branch
+ * (a pooled group is one sequence per pool — the order key carries the pool).
+ * `swiss` is round-sequenced the same way: a Swiss stage mints every round as
+ * a TBD-v-TBD shell at Generate, and round r+1 cannot be paired until round r
+ * is complete, so a round-2 board ahead of round 1 is a schedule nobody can
+ * play — and with no entrants on the shells, nothing BUT round order keeps
+ * the auto pass from laying them down in fixture-ID order (it did, before
+ * T3b). The tails of `swiss_playoff`/`swiss_knockout` are separate
+ * `page_playoff`/`knockout` stages and stay OUT, as every bracket does: a
+ * bracket is ordered by its winner/loser feed edges (`feedDependencies`),
+ * not by round number. Everything else (double_elim, stepladder, americano,
+ * ladder) stays out too.
+ *
+ * C1 (2026-08-12 round-order design): `fixtures.round_no` is one shared
+ * column populated for EVERY stage kind (a bracket's own round, a swiss
+ * round, a stepladder leg — F1 (2026-08-17) names every one of them by
+ * position via roundRole()/roundRoleLabel(), never derived from this column
+ * alone), so which stages may forward it as a scheduling ORDERING input is
  * not derivable from a `FixtureLite` row alone; this is the one query that
  * resolves it, so `toAssignment` and the schedulable builder can both ask
  * it the SAME question rather than guessing from the row itself. Without
  * this gate, a division that mixes a league stage with a stepladder — the
  * design doc's own motivating symptom — would compare the two stages'
- * independent 1-based round sequences as if they were one.
+ * independent 1-based round sequences as if they were one. Two stages in
+ * this set are still never compared with each other: the order key is
+ * `(division, stage, pool)` (`roundRobinSequenceKey`, calendar.ts).
+ *
+ * WHAT IT ENFORCES is C1's rule and nothing stronger: a later round starts
+ * no earlier than an earlier round STARTS (ties legal). A Swiss round really
+ * needs the previous round to have ENDED; that end floor needs the engine's
+ * three placement sides (CP-SAT model, greedy, verifier) and is not here.
  */
 export async function roundRobinStageIds(tx: Tx, divisionId: string): Promise<Set<string>> {
   const rows = await tx<{ id: string }[]>`
-    select id from stages where division_id = ${divisionId} and kind in ('league', 'group')`;
+    select id from stages where division_id = ${divisionId} and kind in ${tx(ROUND_SEQUENCE_STAGE_KINDS)}`;
   return new Set(rows.map((r) => r.id));
 }
 
@@ -706,7 +744,7 @@ export function roundRobinSequenceKey(f: Pick<FixtureLite, "division_id" | "stag
  *  proposed side) — the set composition has to be identical on both sides or
  *  the write gate reads every pre-existing violation among the siblings as
  *  newly introduced and blocks a move that never touched them (see each call
- *  site's own comment). `keys` empty (a non-round-robin move) short-circuits
+ *  site's own comment). `keys` empty (a move in no round sequence) short-circuits
  *  to no widening at all, matching prior behaviour exactly. */
 export function roundRobinSequenceSiblings(
   all: readonly FixtureLite[],
@@ -866,15 +904,26 @@ export function peopleOf(
  *  `roundNo` is gated on `roundRobinStageIds`, an OPTIONAL 4th parameter —
  *  not read unconditionally off `f.round_no` the way `movable` reads off
  *  `f.schedule_locked`, because `fixtures.round_no` is one shared column
- *  populated for EVERY stage kind (bracket rounds, swiss rounds, stepladder
- *  legs all reuse it for display), and forwarding it for a non-round-robin
- *  stage would compare two independent round sequences as if they were one
+ *  populated for EVERY stage kind (bracket rounds and stepladder legs reuse
+ *  it for display), and forwarding it for a stage outside the round-sequence
+ *  set (league, group, swiss — `ROUND_SEQUENCE_STAGE_KINDS`) would compare
+ *  two independent round sequences as if they were one
  *  — the design doc's own motivating symptom. Omitted (not `undefined`)
- *  when the parameter itself is omitted: existing callers that do not pass
- *  it keep their exact pre-C1 behaviour, and round-order enforcement is
- *  correctly inert wherever it is not threaded through (`competition-
- *  schedule-apply.ts`, `schedule-ai.ts`'s AI-plan path, `person-merge.ts` —
- *  deferred this session; see the task report).
+ *  when the parameter itself is omitted: a caller that does not pass it
+ *  keeps the pre-C1 behaviour, and round order is inert on that call. The
+ *  board paths pass it (autoSchedule, applySchedule, moveFixture,
+ *  validateScheduleIn, `competition-schedule-apply.ts`, `person-merge.ts`;
+ *  `schedule-ai.ts` gates its pack's `roundNos` on the same set). Two calls
+ *  do not, on purpose: `siblingAssignments` (other divisions' cards, in no
+ *  round sequence of this one) and `schedule-ai.ts`'s obstacle list (a court
+ *  booking with no ids, which orders nothing).
+ *
+ *  A Swiss bye row never carries `roundNo`, even on a round-sequence stage
+ *  (W3 T3b). A bye is not play — it takes no court and no time
+ *  (`isSwissByeShellExtKey`, SWISS_BYE_NOT_PLACEABLE) — so it is no round's
+ *  board. One that holds a slot anyway (a legacy row, a history Undo of a
+ *  pre-T3 step) must not read as "round 2 starts before round 1" on the
+ *  board, nor squeeze the solver as a pinned round-2 row.
  *
  *  `stageId` (C1 fix-loop, Finding 2) is stamped UNCONDITIONALLY, the same
  *  way `divisionId` is — `fixtures.stage_id` is `NOT NULL`, no gate needed.
@@ -883,7 +932,7 @@ export function peopleOf(
  *  rows that already carry a `roundNo`, so a `stageId` on a round-less
  *  Assignment is simply never consulted. `calendar.ts`'s own comment on the
  *  grouping key explains WHY it is needed at all — `poolId` alone cannot
- *  tell two round-robin-kind stages in one division apart when neither has
+ *  tell two round-sequence stages in one division apart when neither has
  *  a pool (two `league` stages, say), which is exactly the shape
  *  `roundRobinStageIds` itself already has to return a SET for. */
 export function toAssignment(
@@ -911,7 +960,7 @@ export function toAssignment(
     ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
     divisionId: f.division_id,
     stageId: f.stage_id,
-    ...(roundRobinStageIds?.has(f.stage_id) ? { roundNo: f.round_no } : {}),
+    ...(roundRobinStageIds?.has(f.stage_id) && !isSwissByeShellExtKey(f.ext_key) ? { roundNo: f.round_no } : {}),
     movable: !f.schedule_locked,
   };
 }
@@ -1663,7 +1712,7 @@ export async function autoSchedule(
       // is, for the same reason (round is now a HARD constraint elsewhere,
       // not merely an ordering hint, so a bracket/stepladder stage's own
       // display-numbering round_no must not ride along as if it meant
-      // round-robin order).
+      // round order; the set is league, group and swiss — W3 T3b).
       ...(roundRobin.has(f.stage_id) ? { roundNo: f.round_no } : {}),
       ...(f.pool_id !== null ? { poolId: f.pool_id } : {}),
       divisionId: f.division_id,
@@ -2725,12 +2774,12 @@ export async function applySchedule(
         // C1 fix-loop (Finding 2): unconditional, same as `divisionId` just
         // above — `divisionFixtures` (below) is DIVISION-WIDE, so `all`, and
         // therefore `proposed`/`currentSlots`/`untouched`, can carry more
-        // than one round-robin-kind stage's fixtures in ONE call. This is
+        // than one round-sequence stage's fixtures in ONE call. This is
         // the actual WRITE gate (the comment above `roundRobin`'s own
         // assignment explains why it has to be judged HERE), so it is the
         // one place this omission would have mattered most: without it,
         // `calendar.ts`'s grouping key falls back to `(divisionId, poolId)`
-        // and two unpooled round-robin stages compare as one sequence again.
+        // and two unpooled round-sequence stages compare as one sequence again.
         stageId: f.stage_id,
         // C1 (2026-08-12 round-order design). Same shape as `toAssignment`
         // again — `f.round_no` is the fixture's own round, gated on stage
@@ -3054,7 +3103,7 @@ export async function moveFixture(
     const [fixture] = await tx<
       (FixtureLite & { competition_id: string })[]
     >`
-      select f.id, f.stage_id, f.division_id, f.round_no, f.home_entrant_id,
+      select f.id, f.stage_id, f.division_id, f.round_no, f.ext_key, f.home_entrant_id,
              f.away_entrant_id, f.scheduled_at, f.court_id, f.venue_id,
              f.court_label, f.venue, f.pool_id,
              f.status, f.schedule_locked, f.winner_to_fixture, f.loser_to_fixture,
@@ -3077,6 +3126,14 @@ export async function moveFixture(
     }
 
     const movesTimetable = patch.scheduled_at !== undefined || patch.court_id !== undefined;
+    // W3 T3 (SW-M13, X-SW-29): a Swiss bye is not played, so it takes no court, no time and no pin — seated or not, and
+    // named, ahead of the status gate below (a seated bye is `forfeited`, which would refuse it with the generic
+    // sentence). Taking a legacy slot OFF one (a bye placed before V485) is not placing it, and stays open.
+    const places = (patch.scheduled_at !== undefined && patch.scheduled_at !== null)
+      || (patch.court_id !== undefined && patch.court_id !== null)
+      || (patch.venue_id !== undefined && patch.venue_id !== null)
+      || patch.schedule_locked === true;
+    if (places && isSwissByeShellExtKey(fixture.ext_key)) throw swissRefusal("SWISS_BYE_NOT_PLACEABLE");
     if (movesTimetable && fixture.status !== MOVABLE_STATUS) {
       throw new HttpError(422, `fixture is ${fixture.status} — decided fixtures are immutable`);
     }
@@ -3897,6 +3954,10 @@ export async function startDivision(
       from stages s where s.division_id = ${divisionId}
       order by s.seq limit 1`;
     if (!firstStage) throw new HttpError(422, "division has no stages to start");
+    // W3 T11 (X-SW-16): a Swiss above its field's hard maximum is refused here, before Start's first write (the
+    // quick-start Generate below runs in its own transaction). A withdrawal racing past this read is caught by the Pair's
+    // own judgement (`swissGen`), which every Generate runs. An active division's Start is a no-op, never refused.
+    if (division.status !== "active") await refuseSwissRoundsAboveMaxAtStart(tx, divisionId);
     // Read here, ACTED ON below — see the two guards further down. The freeze
     // does not bind the start TRANSITION (that is deliberate: the design's own
     // customer story is freeze-then-publish, and `schedule-board.tsx` gates its
@@ -3951,9 +4012,10 @@ export async function startDivision(
         ? ms(settings.config.startAt)
         : roundToMinute(Date.now());
       const step = settings.config.roundMinutes * MS_PER_MIN;
+      // A Swiss bye shell takes no rolling time (W3 T3, X-SW-29): a bye is not played.
       const rounds = await tx<{ round_no: number }[]>`
         select distinct round_no from fixtures
-        where stage_id = ${pre.firstStage.id} and scheduled_at is null
+        where stage_id = ${pre.firstStage.id} and scheduled_at is null and not ${swissByeShellSql(tx, "fixtures")}
         order by round_no`;
       // The sweep below writes `scheduled_at` across the first stage, which is
       // a schedule edit whatever door it came through — so a frozen board
@@ -3969,7 +4031,7 @@ export async function startDivision(
         await tx`
           update fixtures set scheduled_at = ${iso(startAt + i * step)}, schedule_source = 'auto'
           where stage_id = ${pre.firstStage.id} and round_no = ${r.round_no}
-            and scheduled_at is null`;
+            and scheduled_at is null and not ${swissByeShellSql(tx, "fixtures")}`;
       }
     }
 

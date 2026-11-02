@@ -92,6 +92,7 @@ import { useState, type CSSProperties } from "react";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
+import { swissRoundKey, type SwissRoundStateName } from "@/lib/swiss-round-state";
 import type { TableColumnT, TableViewT } from "@/server/public-site/competition-hub-schema";
 import { StandingsPopover } from "./standings-popover";
 import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
@@ -124,6 +125,29 @@ const MEDAL: Record<number, string> = {
   2: "bg-slate-300 text-slate-900",
   3: "bg-orange-300 text-orange-950",
 };
+
+// W3 T16 (SW-L11): the Swiss table's "Round X of N" chip - the heading's second line. The four states say themselves
+// before the words are read: a ring (set, nobody on court), a solid dot (play under way), a tick on a soft fill (the
+// round is done) and a tick on the page's own ink (the table is final). Every colour is a house token, so an org's theme
+// recolours it; the chip is a flex box with `max-w-full` and a shrinkable text span, so a long sentence in a narrow
+// locale wraps inside the card at 320 instead of widening the page.
+const SWISS_CHIP_LOOK: Record<SwissRoundStateName, string> = {
+  // a ring, not a border: the four chips are the same height, so a table moving from one state to the next does not shift
+  paired: "ring-1 ring-inset ring-accent-line text-accent-strong",
+  in_play: "bg-accent text-accent-ink",
+  complete: "bg-accent-soft text-accent-strong",
+  final: "bg-ink text-canvas",
+};
+
+function SwissRoundMarker({ state }: { state: SwissRoundStateName }) {
+  if (state === "paired") return <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full border border-current" />;
+  if (state === "in_play") return <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-current" />;
+  return (
+    <svg aria-hidden viewBox="0 0 12 12" className="h-3 w-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2.5 6.5 5 9l4.5-5.5" />
+    </svg>
+  );
+}
 
 /** Width for a numeric column, from the widest thing it has to hold — its own
  *  notation or any of its cells. A single class for every column either wastes
@@ -373,10 +397,40 @@ export function StandingsTableView({
 
   return (
     <section data-testid={testid} className="space-y-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 className="min-w-0 truncate font-display text-lg font-semibold text-ink">
+      {/* W3 T16: a Swiss table's heading row also holds its round chip, on a line of its own. It lives INSIDE this row,
+          not beside it: a new child of the section would shift every popover's `useId` below it (a `null` slot counts),
+          and the no-chip table is pinned byte-for-byte by the goldens. The wrap and the tighter row gap exist only
+          when there is a chip, so every other table's heading is the exact markup it always was. */}
+      <div
+        className={`flex items-baseline justify-between ${view.swissRound ? "flex-wrap gap-x-3 gap-y-1" : "gap-3"}`}
+      >
+        {/* With a chip the row can wrap, and a wrapping row decides by the heading's WORDS (its content width), not by what
+            it could shrink to: a 30-character stage name pushed "Full division" onto a line of its own at 320. `flex-1
+            basis-0` makes the heading's wrap size zero, so only the chip's full-width line wraps and the heading
+            truncates beside the link exactly as every other table's does. Appended only with a chip: the string is
+            otherwise the one the goldens pin. */}
+        <h3
+          className={`min-w-0 truncate font-display text-lg font-semibold text-ink${view.swissRound ? " flex-1 basis-0" : ""}`}
+        >
           {view.caption}
         </h3>
+        {view.swissRound ? (
+          // `order-last` + a full-width basis: the chip's own line, though it sits second in the tree (read straight
+          // after the heading, before the "Full division" link). The wrapper is the line; the chip inside it is only
+          // as wide as its words.
+          <div className="order-last basis-full">
+            <p
+              data-testid={`${testid}-swiss-round`}
+              data-state={view.swissRound.state}
+              className={`flex w-fit max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold leading-tight ${SWISS_CHIP_LOOK[view.swissRound.state]}`}
+            >
+              <SwissRoundMarker state={view.swissRound.state} />
+              <span className="min-w-0 break-words">
+                {t(dict, swissRoundKey(view.swissRound), { round: view.swissRound.round, of: view.swissRound.of })}
+              </span>
+            </p>
+          </div>
+        ) : null}
         {showFullLink ? (
           // `inline-flex min-h-11 items-center` is the 44px tap floor, the
           // same shape `match-centre/info-tab.tsx` uses. W2 contact sheet

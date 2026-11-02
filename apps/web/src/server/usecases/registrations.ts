@@ -61,6 +61,8 @@ import { queueStaffAlert } from "./staff-alert";
 // own hook cannot fire — this is what refreshes a seeding draft that still
 // names the registrant (review finding F3).
 import { markFieldChangeSeedProposalsStale } from "./stages";
+// W3 T9 (X-SW-13): a confirmed entry or a promotion into a running Swiss is an automatic arrival — case (c) only.
+import { admitSwissLateEntrant } from "./swiss-late-entry";
 import {
   FIRST_PAID_EARN,
   recordEarnGrant,
@@ -972,6 +974,8 @@ export async function materialise(
   reg: RegistrationRow,
   entrantKind: string,
   seatGate?: SeatGate,
+  /** W3 T9: how the entrant arrives, for its `swiss_late_entry` row — a promotion out of the waitlist says so. */
+  arrival: "registration" | "waitlist" = "registration",
 ): Promise<string | null> {
   if (reg.entrant_id) return reg.entrant_id;
   // RS009 — a SOLO SIGN-UP is not a team of one, and must not become an
@@ -1081,6 +1085,11 @@ export async function materialise(
     const seated = await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${entrant.id}`;
     await seatGate.assertRoster(tx, reg.division_id, seated.map((m) => m.person_id));
   }
+  // W3 T9 (X-SW-13, ruling 250): a division whose Swiss is running takes this entrant as a late player — automatically,
+  // so case (c) only: they join the next round's Pair and no published pairing moves. Never refused: with no round
+  // left, or the Swiss over, the arrival is recorded as joining after the last round (Review Focus 4: a payment that has
+  // moved cannot be un-taken by a 409). Null before Start, or with no running Swiss.
+  await admitSwissLateEntrant(tx, null, reg.division_id, entrant.id, arrival);
   await tx`
     update registrations
     set entrant_id = ${entrant.id}, status = 'confirmed', updated_at = now()
@@ -1440,7 +1449,7 @@ export async function promoteWaitlistedRow(
   // counted toward the public entrant list, while `notifyPromoted` (below)
   // still emailed the registrant as if they were in.
   if (promotionSeats(settings)) {
-    await materialise(tx, row, settings.entrant_kind, seatGate);
+    await materialise(tx, row, settings.entrant_kind, seatGate, "waitlist");
     const [confirmed] = await tx<RegistrationWithGroupRow[]>`
       select ${regGroupCols(tx)}
       from registrations r join registration_groups g on g.id = r.group_id

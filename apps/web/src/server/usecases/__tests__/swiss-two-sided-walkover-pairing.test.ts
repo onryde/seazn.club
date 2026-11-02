@@ -5,31 +5,39 @@
 // or retirement (see `lib/fixture-bye.ts`). swissGen's history fold used to
 // treat ANY award as a bye, so after A beat H by walkover:
 //   - A was recorded as having had a BYE;
-//   - the pair was never added to `played`, so A and H could meet again;
 //   - H appeared in no round-1 row, so the implicit-bye pass credited the
-//     ABSENT player a pairing point, lifting H into the winners' score group.
-// A two-sided award is a played match. Only `isOneSidedAwardBye` rows are byes.
+//     ABSENT player a pairing point, lifting H into the winners' score group
+//     — and the 2026-09-24 fold then re-paired A v H on that phantom point.
+// A two-sided award is a BOARD, not a bye. Only `isOneSidedAwardBye` rows are
+// byes. The 09-24 fix also counted the walkover as a MEETING (no rematch);
+// W3 T7 reverses that half (X-SW-15, rulebook P-A2, RB3-2): a walkover was not
+// played, so A and H have not met and may be paired again. What still stands
+// is the half that was the defect: no bye for A, no phantom point for H.
 //
 // Each case drives the real producers — the Forfeit button's `core.forfeit`
 // and the scorer's quick result through `scoreEvent` — into the real consumer,
 // `generateStageFixtures`. Three shapes, because each kills a different wrong
 // reading (see each case), and one sample is not a sweep:
 //   1. rank_adjacent, seed 6 walks over to seed 3 — the production shape; the
-//      old fold re-paired A v H here.
+//      old fold re-paired A v H here on H's phantom point.
 //   2. fold, same walkover — only the winner's +1 for the award puts A in the
 //      winners' group and so on seed 4 (not seed 5) when A floats down.
 //   3. fold + chess, seed 3 walks over to seed 6 — H is then the first
-//      candidate for A, so only the `played` entry stops a rematch; and the
-//      colours show that a forfeited game assigns no colour (the engine's own
-//      rule: tiebreakers.ts colour history skips byes/forfeits, boardgame
-//      DOMAIN.md "A forfeited game is excluded from colour history").
+//      candidate for A. Until W3 T7 the `played` entry stopped that rematch;
+//      under P-A2 the walkover is not a meeting, so the fold now seats A v H
+//      again. And a forfeited game assigns no colour (the engine's own rule:
+//      tiebreakers.ts colour history skips byes/forfeits, boardgame DOMAIN.md
+//      "A forfeited game is excluded from colour history"), read off the
+//      engine's input.
 //
 // The walkover winner is also ineligible for a LATER pairing-allocated bye
-// (FIDE C.04.1(d), owner-approved 2026-09-24): eligibility only — no bye
-// score, and the walkover stays a played match. See the last describe.
-import { afterAll, describe, expect, it } from "vitest";
+// (FIDE C.04.1(d), owner-approved 2026-09-24; rulebook P-A4): eligibility
+// only — no bye score. See the last describe.
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import type { SwissHistory } from "@seazn/engine/scheduling";
 import { sql } from "@/lib/db";
+import { applyRoundOneColourLot, swissColourLot, swissDrawSeed } from "@/lib/swiss-draw";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -37,7 +45,7 @@ import { createEntrants } from "../entrants";
 import { getFixtureState } from "../fixtures";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -74,11 +82,16 @@ interface Rig {
   id: (name: string) => string;
   /** entrant id → "S1".."S6". */
   name: (id: string | null) => string;
+  /** The stage's chess colours (`config.chess === true`): round 1 is then coloured by the stage's lot (W3 T8, BG-SW-1). */
+  chess: boolean;
+  /** Chess only: the colour board 1's upper player takes (`swissColourLot`); null without chess. */
+  lot: "white" | "black" | null;
 }
 
 /** `count` individuals seeded S1..S<count> in a 3-round swiss, started,
- *  round 1 paired. */
-async function pairedRoundOne(config: Record<string, unknown>, count = 6): Promise<Rig> {
+ *  round 1 paired. With `lot` (chess only), the stage is re-minted until its own colour lot is that one (review m2:
+ *  a random stage id ran ONE lot branch per CI run; each try is a fair coin, so a few tries suffice). */
+async function pairedRoundOne(config: Record<string, unknown>, count = 6, lot?: "white" | "black"): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -103,22 +116,26 @@ async function pairedRoundOne(config: Record<string, unknown>, count = 6): Promi
       members: [],
     })),
   );
-  const [stage] = await createStages(auth, division.id, {
-    seq: 1,
-    kind: "swiss",
-    name: "Swiss",
-    config: { rounds: 3, ...config },
-    progression: null,
-  });
+  const input = { seq: 1, kind: "swiss" as const, name: "Swiss", config: { rounds: 3, ...config }, progression: null };
+  let [stage] = await createStages(auth, division.id, input);
+  let tries = 1;
+  while (lot !== undefined && swissColourLot(swissDrawSeed(stage!.id)) !== lot && tries < 40) {
+    [stage] = await replaceStages(auth, division.id, [input]); // before Start: a new stage, a new id, a new lot
+    tries++;
+  }
+  if (lot !== undefined) expect(swissColourLot(swissDrawSeed(stage!.id)), `rig: a stage drawing ${lot} (${tries} tries)`).toBe(lot);
   await startDivision(auth, division.id); // mints the shells
   await generateStageFixtures(auth, stage!.id); // Pair round 1
   const byName = new Map(entrants.map((e) => [e.display_name, e.id]));
   const byId = new Map(entrants.map((e) => [e.id, e.display_name]));
+  const chess = config.chess === true;
   return {
     auth,
     stageId: stage!.id,
     id: (n) => byName.get(n)!,
     name: (i) => (i === null ? "-" : (byId.get(i) ?? i)),
+    chess,
+    lot: chess ? swissColourLot(swissDrawSeed(stage!.id)) : null,
   };
 }
 
@@ -130,18 +147,6 @@ async function forfeitBy(auth: AuthCtx, fixtureId: string, by: string): Promise<
     type: "core.forfeit",
     payload: { by, reason: "walkover" },
   });
-}
-
-/** The scorer's quick result: the HOME side wins 21-10, 21-10. */
-async function homeWins(auth: AuthCtx, fixtureId: string): Promise<void> {
-  await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
-  for (const seq of [1, 2]) {
-    await scoreEvent(auth, fixtureId, {
-      expected_seq: seq,
-      type: "badminton.game.summary",
-      payload: { home: 21, away: 10 },
-    });
-  }
 }
 
 /** The quick result, won by `winner` whichever side it sits on. */
@@ -161,22 +166,32 @@ const boardOf = (rows: FixtureRow[], round: number, who: string) =>
   rows.find((f) => f.round_no === round && (f.home_entrant_id === who || f.away_entrant_id === who))!;
 
 /**
- * Round 1 is a fold (1v4, 2v5, 3v6) whatever the stored mode. `noShow`
- * forfeits its board; the other two boards go to the home side (seeds 1, 2).
+ * Round 1 is a fold (1v4, 2v5, 3v6) whatever the stored mode — upper seed at home, or with chess colours on, coloured by
+ * the stage's lot (W3 T8, BG-SW-1: board 1's upper player takes the lot's colour and the boards alternate; home is
+ * White). `noShow` forfeits its board; the other two boards go to the UPPER seed (seeds 1, 2), whichever side it sits.
  * Returns the walkover winner A and the no-show H.
  */
 async function playRoundOne(rig: Rig, noShow: string): Promise<{ A: string; H: string }> {
   const r1 = (await fixturesOf(rig.stageId)).filter((f) => f.round_no === 1);
-  expect(r1.map((f) => `${rig.name(f.home_entrant_id)} v ${rig.name(f.away_entrant_id)}`)).toEqual([
-    "S1 v S4",
-    "S2 v S5",
-    "S3 v S6",
-  ]);
+  const fold = [
+    { home: "S1", away: "S4" },
+    { home: "S2", away: "S5" },
+    { home: "S3", away: "S6" },
+  ];
+  const expected = rig.lot === null ? fold : applyRoundOneColourLot(fold, rig.lot);
+  expect(r1.map((f) => `${rig.name(f.home_entrant_id)} v ${rig.name(f.away_entrant_id)}`)).toEqual(
+    expected.map((p) => `${p.home} v ${p.away}`),
+  );
   const H = rig.id(noShow);
   const walkover = boardOf(r1, 1, H);
   const A = walkover.home_entrant_id === H ? walkover.away_entrant_id! : walkover.home_entrant_id!;
   await forfeitBy(rig.auth, walkover.id, H);
-  for (const f of r1) if (f.id !== walkover.id) await homeWins(rig.auth, f.id);
+  const seedNo = (id: string | null) => Number(rig.name(id).slice(1));
+  for (const f of r1) {
+    if (f.id === walkover.id) continue;
+    const upper = seedNo(f.home_entrant_id) < seedNo(f.away_entrant_id) ? f.home_entrant_id! : f.away_entrant_id!;
+    await wins(rig.auth, f, upper);
+  }
 
   // The premise this file exists for: a TWO-SIDED award, not a bye row and
   // not a `win`/forfeit. If a kernel ever changes that, this goes red first.
@@ -195,16 +210,17 @@ async function pairRoundTwo(rig: Rig): Promise<FixtureRow[]> {
 const shape = (rig: Rig, rows: FixtureRow[]) =>
   rows.map((f) => `${rig.name(f.home_entrant_id)} v ${rig.name(f.away_entrant_id)}`);
 
-describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a played match, not a bye", () => {
-  it("rank_adjacent (the production shape): A and H are not re-paired, and H pairs among the round-1 losers", async () => {
+describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a board, not a bye (and, W3 T7, not a meeting)", () => {
+  it("rank_adjacent (the production shape): no phantom point lifts H beside A, and H pairs among the round-1 losers", async () => {
     const rig = await pairedRoundOne({ pairing: "rank_adjacent" });
     const { A, H } = await playRoundOne(rig, "S6");
     expect(rig.name(A)).toBe("S3");
 
     const r2 = await pairRoundTwo(rig);
-    // No rematch. Before the fix this board was `S3 v S6` — A v H again.
+    // Before the 09-24 fix this board was `S3 v S6` — A v H on H's phantom bye point. A and H MAY meet again since W3 T7
+    // (P-A2: a walkover is not a meeting); here they do not because the scores keep them apart, not because they met.
     const hBoard = boardOf(r2, 2, H);
-    expect([rig.name(hBoard.home_entrant_id), rig.name(hBoard.away_entrant_id)], "A meets H once only").not.toContain(
+    expect([rig.name(hBoard.home_entrant_id), rig.name(hBoard.away_entrant_id)], "the 0-point H is not paired up with A").not.toContain(
       rig.name(A),
     );
     // No phantom point for the absent H: H's opponent is a round-1 LOSER.
@@ -230,26 +246,47 @@ describe.runIf(HAS_DB)("swiss Pair next — a two-sided walkover is a played mat
     expect(shape(rig, r2)).toEqual(["S1 v S2", "S3 v S4", "S5 v S6"]);
   });
 
-  it("fold + chess: H is A's first candidate, so only `played` stops the rematch; the forfeit gives neither side a colour", async () => {
-    const rig = await pairedRoundOne({ chess: true });
+  it.each(["white", "black"] as const)("fold + chess (lot %s): H is A's first candidate and the walkover is not a meeting (P-A2), so A meets H again; the forfeit gives neither side a colour", async (lot) => {
+    const rig = await pairedRoundOne({ chess: true }, 6, lot);
+    expect(rig.lot, "premise: the requested lot").toBe(lot);
     // Seed 3 no-shows against seed 6, so the no-show H sits at the TOP of the
     // 0 group — the first candidate for A when A floats down.
     const { A, H } = await playRoundOne(rig, "S3");
     expect([rig.name(A), rig.name(H)]).toEqual(["S6", "S3"]);
 
-    const r2 = await pairRoundTwo(rig);
+    const engine = await import("@seazn/engine/scheduling");
+    const spy = vi.spyOn(engine, "pairRound");
+    let history: SwissHistory;
+    let r2: FixtureRow[];
+    try {
+      r2 = await pairRoundTwo(rig);
+      expect(spy.mock.calls.length, "anti-vacuity: the Pair called the engine once").toBe(1);
+      history = spy.mock.calls[0]![1];
+    } finally {
+      spy.mockRestore();
+    }
+    // W3 T7 (X-SW-15, P-A2): the pair has not met. Until T7 this asserted the opposite ("A meets H once only").
     const hBoard = boardOf(r2, 2, H);
-    expect([rig.name(hBoard.home_entrant_id), rig.name(hBoard.away_entrant_id)], "A meets H once only").not.toContain(
-      rig.name(A),
+    expect([rig.name(hBoard.home_entrant_id), rig.name(hBoard.away_entrant_id)].sort(), "A and H meet again").toEqual(
+      [rig.name(A), rig.name(H)].sort(),
     );
-    // Home is White. Round 1 gave S1, S2 (and the forfeited S3) White.
-    //   S2 v S1 — both prefer Black after one White; the upper board S1 gets it.
-    //   S4 v S6 — S4 (Black in R1) prefers White; S6 has NO colour history
-    //             because its only game was a forfeit, so S4 gets White. Had
-    //             the forfeit recorded S6 as Black, both would claim White and
-    //             the upper board S6 would take it (S6 v S4).
-    //   S5 v S3 — S5 (Black in R1) takes White; S3 has no colour either.
-    expect(shape(rig, r2)).toEqual(["S2 v S1", "S4 v S6", "S5 v S3"]);
+    // The forfeit holds no colour: the engine is handed none for either side, and White for the two played games' hosts.
+    expect([history.colours?.get(A), history.colours?.get(H)], "a forfeited game assigns no colour").toEqual([undefined, undefined]);
+    // Board 1's upper player S1 took the lot's colour (W3 T8, BG-SW-1); S4 the other.
+    const s1 = rig.lot === "white" ? "W" : "B";
+    expect([history.colours?.get(rig.id("S1")), history.colours?.get(rig.id("S4"))], "the played boards' colours").toEqual([
+      [s1],
+      [s1 === "W" ? "B" : "W"],
+    ]);
+    // Home is White. Groups: S1, S2, A on 1; H, S4, S5 on 0. The 1-group is odd, so its lowest, A, floats down. Round 1 by
+    // lot: board 1 S1 has the lot's colour, board 2 S2 the other (S5 the lot's), board 3 the walkover (no colour).
+    //   S1 v S2 — opposite colours, so each takes the one it lacks: S2 is White after a white lot, S1 after a black one.
+    //   S6 v S3 — A takes the top of the 0 group, H (seed 3), now legal: neither holds a colour, so the upper board
+    //             (A, on 1) takes White.
+    //   S4 v S5 — opposite colours again: S4 (board 1's other colour) is White after a white lot, S5 after a black one.
+    expect(shape(rig, r2)).toEqual(
+      rig.lot === "white" ? ["S2 v S1", "S6 v S3", "S4 v S5"] : ["S1 v S2", "S6 v S3", "S5 v S4"],
+    );
   });
 });
 

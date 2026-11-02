@@ -353,6 +353,8 @@ export async function buildDivisionSlides(
   // division youth policy OR the roster's own consent opt-out (RS008),
   // whichever is stricter — resolvePersonDisplayName is the single
   // canonical resolver for both axes at once.
+  // W3 T15 review I4: a DISQUALIFIED entrant's cascade walkover expands as a plain one on the screen, never "withdrew".
+  const statuses: Record<string, string | undefined> = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
   const names = Object.fromEntries(
     entrants.map((e) => [
       e.id,
@@ -413,7 +415,7 @@ export async function buildDivisionSlides(
   const scoreOf = (f: (typeof fixtures)[number]): { line: string | null; tag?: string; statusTag?: { word: string; full: string } } =>
     creditsNobody(f.outcome)
       ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") }
-      : { line: lineOf.get(f.id) ?? null, ...statusTagOf(lookup, f) };
+      : { line: lineOf.get(f.id) ?? null, ...statusTagOf(lookup, f, statuses) };
 
   // Fix round 3 (Important 4): `lookup` (this org's REAL locale, resolved
   // above from `orgLocale`) — was `msg` (client-safe English, always),
@@ -597,6 +599,10 @@ export interface PublicSlideInput {
      *  Absent/false never masks, matching `resolvePersonDisplayName`'s own
      *  "absence is never an opt-out" contract. */
     opted_out?: boolean;
+    /** W3 T15 review I4: the entrant's status (`public_entrants_v`, departed included since V412) — a DISQUALIFIED
+     *  entrant's cascade walkover is never expanded as "withdrew". Optional: both /present pages spread
+     *  `getPublicDivision`'s entrants, which carry it; absent reads the outcome alone. */
+    status?: string;
   }[];
   /** P6 fix round 1, finding #2 (CRITICAL) — spectator-facing locale (v5
    *  i18n §4), `PublicOrg.default_locale` (same field data.ts:502-503
@@ -613,8 +619,10 @@ export interface PublicSlideInput {
 function statusTagOf(
   lookup: SlotLabelLookup,
   f: { outcome: unknown; abandon_reason?: string | null; home_entrant_id: string | null; away_entrant_id: string | null },
+  /** W3 T15 review I4: entrant id → status — a cascade walkover over a DISQUALIFIED entrant expands as a plain one. */
+  statuses: Readonly<Record<string, string | undefined>>,
 ): { statusTag?: { word: string; full: string } } {
-  const words = outcomeTagWords(lookup, f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+  const words = outcomeTagWords(lookup, f.outcome, forfeitLedgerOfReason(f.abandon_reason), f, statuses);
   return words === null ? {} : { statusTag: words };
 }
 
@@ -642,6 +650,8 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   // PublicSlideInput's own doc comments), so this is correct even for a
   // caller that predates `kind`/`opted_out`/`youth`/`player_name_display`
   // and passes none of them (every field defaults to "never mask").
+  // W3 T15 review I4: a DISQUALIFIED entrant's cascade walkover expands as a plain one on the screen, never "withdrew".
+  const statuses: Record<string, string | undefined> = Object.fromEntries(data.entrants.map((e) => [e.id, e.status]));
   const names = Object.fromEntries(
     data.entrants.map((e) => [
       e.id,
@@ -703,7 +713,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   const publicScoreOf = (f: PublicSlideInput["fixtures"][number]): { line: string | null; tag?: string; statusTag?: { word: string; full: string } } =>
     creditsNobody(f.outcome)
       ? { line: null, tag: lookup("forfeit.tag.doubleWalkover") }
-      : { line: f.summary?.headline ?? null, ...statusTagOf(lookup, { ...f, outcome: f.outcome ?? null }) };
+      : { line: f.summary?.headline ?? null, ...statusTagOf(lookup, { ...f, outcome: f.outcome ?? null }, statuses) };
   const item = (f: PublicSlideInput["fixtures"][number]): FixtureSlideItem => ({
     home: f.home_entrant_id
       ? (names[f.home_entrant_id] ?? resolveSlotLabel(null, lookup, "schedule.tbd"))

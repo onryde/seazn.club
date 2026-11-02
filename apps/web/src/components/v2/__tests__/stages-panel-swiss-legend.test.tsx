@@ -322,3 +322,48 @@ describe("StagesPanel — Swiss shape legend", () => {
     expect(tag).toContain("min-w-0");
   });
 });
+
+// W3 T10 (T9 concern): the panel hands the legend the stage id, the entrants' first rounds and the round the next Pair
+// seats — the same field the pairing menu beside it reads (T9 m8). A latecomer whose first round is 2 is not in round
+// 1's field; once round 1 is seated, round 2 is the one sized and they are in it.
+describe("StagesPanel — Swiss legend with a late player (W3 T10)", () => {
+  const board = (round: number, seq: number, home: string | null, away: string | null) => ({
+    ...shells(1)[0]!,
+    id: `r${round}b${seq}`,
+    round_no: round,
+    seq_in_round: seq,
+    fixture_no: (round - 1) * 2 + seq,
+    home_entrant_id: home,
+    away_entrant_id: away,
+    ext_key: `sw-r${round}-b${seq}`,
+  });
+  const late = { e5: { swiss_first_round: 2, swiss_first_round_stage_id: "s1" } };
+
+  it("round 1 waiting: 4 entrants in its field — no bye clause", () => {
+    const html = renderToStaticMarkup(
+      <StagesPanel
+        {...baseProps}
+        canEdit
+        stages={[swissStage()]}
+        fixtures={[board(1, 1, null, null), board(1, 2, null, null), board(2, 1, null, null), board(2, 2, null, null)]}
+        activeEntrantIds={ids(5)}
+        entrantSwissFirstRounds={late}
+      />,
+    );
+    expect(legendOf(html)).toBe("3 rounds · 2 matches per round · 4 fixtures");
+  });
+
+  it("round 1 seated, round 2 waiting: the latecomer is in — the bye clause appears", () => {
+    const html = renderToStaticMarkup(
+      <StagesPanel
+        {...baseProps}
+        canEdit
+        stages={[swissStage()]}
+        fixtures={[board(1, 1, "e1", "e3"), board(1, 2, "e2", "e4"), board(2, 1, null, null), board(2, 2, null, null)]}
+        activeEntrantIds={ids(5)}
+        entrantSwissFirstRounds={late}
+      />,
+    );
+    expect(legendOf(html)).toBe("3 rounds · 2 matches + 1 bye per round · 4 fixtures");
+  });
+});

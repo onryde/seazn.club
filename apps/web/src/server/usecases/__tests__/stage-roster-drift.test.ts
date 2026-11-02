@@ -644,6 +644,34 @@ describe.skipIf(!HAS_DB)("F3 Task 5 (5b) — rebuildStageFixtures", () => {
 
     const after = await getStageRosterDrift(auth, stage!.id);
     expect(after).toEqual({ ghosts: [], unplaced: [], attachments: NO_ATTACH });
+    // W3 T1 (X-RB-1): nothing was laid out, and every position survived (3 → 3).
+    expect(out.slots).toEqual({ kept: 0, freed: 0, unscheduled: 0 });
+  });
+
+  // W3 T1 (X-RB-1) + fix round 1: the slot report on the drift path's other
+  // direction — a late registration with nobody withdrawn, on a stage nobody
+  // laid out. The board grows new positions, but every fixture was unscheduled
+  // before the rebuild and still is, so the rebuild left NOTHING unscheduled:
+  // kept 0, freed 0, unscheduled 0 — the shape the desk reads as "say nothing
+  // about slots" (stages-panel-roster-drift.test.tsx drives this same shape).
+  it("X-RB-1 a growth rebuild of a stage nobody laid out reports no slot change at all", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId } = await seedDivision(auth, ["A", "B", "C"]);
+    const [stage] = await createStages(auth, divisionId, {
+      seq: 1, kind: "league", name: "L", config: {}, progression: null,
+    });
+    await generateStageFixtures(auth, stage!.id);
+    const positions = async () =>
+      (await sql<{ p: string }[]>`
+        select concat_ws('|', pool_id, round_no, seq_in_round) as p from fixtures where stage_id = ${stage!.id}`).map((r) => r.p);
+    const before = new Set(await positions());
+    await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "D", seed: 4, members: [] }]);
+
+    const out = await rebuildStageFixtures(auth, stage!.id);
+
+    const fresh = (await positions()).filter((p) => !before.has(p)).length;
+    expect(fresh).toBeGreaterThan(0); // anti-vacuity: the board really did grow new positions
+    expect(out.slots).toEqual({ kept: 0, freed: 0, unscheduled: 0 });
   });
 });
 

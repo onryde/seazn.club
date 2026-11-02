@@ -53,8 +53,11 @@ function dictionary(dictKey: string, file: string, dict: Dictionary = "ui"): { r
 
 /** A hardcoded English label (no dictionary key to pin). Its name is DERIVED
  *  from `needle`, the product's own literal — a quoted string or an element's
- *  text — never retyped (Task 5). */
-function hardcoded(file: string, needle: string): { readonly text: string } & Pin {
+ *  text — never retyped (Task 5). NAME holds none today (W3 T10 localised the
+ *  add-entrant form, the last three); the helper stays exported so the pin
+ *  sweeps are proven on a sample, and a hardcoded label that returns is pinned
+ *  the same way. */
+export function hardcoded(file: string, needle: string): { readonly text: string } & Pin {
   return { file, needle, get text(): string { return literalText(needle); } };
 }
 
@@ -127,9 +130,10 @@ export function templateCardTestid(key: string): string {
 }
 
 export const NAME = names({
-  // Hardcoded English in the product (scout C; no dictionary key to pin): the
-  // quoted literal is the submit button's, not the section heading's text node.
-  addEntrant: { text: "Add entrant", file: `${V2}/entrants-panel.tsx`, needle: '"Add entrant"' },
+  // W3 T10 localised the add-entrant form: the submit button is `entrants.add.submit` ("Add entrant"), a dictionary pin
+  // (it was hardcoded English before). The section heading `entrants.add.title` renders the same words in an <h3>, which
+  // is not a button, so the page object's role=button lookup is not ambiguous.
+  addEntrant: dictionary("entrants.add.submit", `${V2}/entrants-panel.tsx`),
   withdrawConfirm: { text: "Withdraw entrant", dictKey: "confirm.withdrawEntrant.label", file: `${V2}/entrants-panel.tsx` },
   sportSelect: { text: "Sport", dictKey: "wizard.sport", file: `${V2}/division-builder.tsx` },
   variantSelect: { text: "Variant", dictKey: "wizard.variant", file: `${V2}/division-builder.tsx` },
@@ -143,10 +147,11 @@ export const NAME = names({
   competitionNamePlaceholder: { text: "Summer Championship 2026", dictKey: "comp.wizard.name.placeholder", file: `${V2}/competition-wizard.tsx` },
   // The unlisted option renders as "Link only" (visibility-picker.tsx OPTIONS).
   visibilityUnlisted: { text: "Link only", dictKey: "visibility.unlisted.label", file: "apps/web/src/components/ui/visibility-picker.tsx" },
-  // Task 5. The add-entrant form's two field labels are hardcoded English
-  // (entrants-panel.tsx NewEntrantFields) — a concern routed, not fixed here.
-  entrantName: hardcoded(`${V2}/entrants-panel.tsx`, '<span className="label">Name</span>'),
-  entrantSeed: hardcoded(`${V2}/entrants-panel.tsx`, '<span className="label">Seed</span>'),
+  // Task 5. The add-entrant form's two field labels (entrants-panel.tsx NewEntrantFields): hardcoded English when this was
+  // written, `entrants.add.name` / `entrants.add.seed` since W3 T10 - each still the text of a wrapping <label>, so
+  // getByLabel finds the input.
+  entrantName: dictionary("entrants.add.name", `${V2}/entrants-panel.tsx`),
+  entrantSeed: dictionary("entrants.add.seed", `${V2}/entrants-panel.tsx`),
   // The organiser standings tab's no-table note (d/[divSlug]/page.tsx), and the
   // public page's champion banner label (public dictionary).
   standingsEmpty: dictionary("div.detail.standings.empty", ORG_DIVISION_PAGE),

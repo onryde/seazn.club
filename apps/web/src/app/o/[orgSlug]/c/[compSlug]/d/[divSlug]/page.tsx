@@ -19,6 +19,9 @@ import { listPinnedStagePoints, listStageQualificationMeta, type StageQualMetaRo
 import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
+import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
+import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
+import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
@@ -58,7 +61,7 @@ import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { effectiveEntrantModel, type TableStageKind, type TiebreakerKey } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { seedingSourceReady } from "@/lib/seeding-source-ready";
-import { withTenant } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { DivisionDangerZone } from "@/components/v2/division-danger-zone";
 import { EmbedSnippet } from "@/components/v2/embed-snippet";
 import { DivisionSettings } from "@/components/v2/division-settings";
@@ -68,7 +71,8 @@ import { formatAlreadyLocked } from "@/lib/format-already-locked";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
-import { entrantListLocked } from "@/lib/open-entry-stages";
+import { divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
+import { roundOpensOfDivisions } from "@/server/external-play/round-open";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
@@ -356,13 +360,19 @@ export default async function DivisionPage({
   // a value that is neither departed nor in the field.
   //
   // Feeds StagesPanel's swiss shape legend and its round-1 pairing menu, and
-  // nothing else. Ids, not a count: a swiss stage carrying `config.qualified`
+  // (its count, W3 T11) the Settings tab's Swiss round guidance — nothing
+  // else. Ids, not a count: a swiss stage carrying `config.qualified`
   // pairs only the qualifiers still in the field, which is an intersection.
   const activeEntrantIds = entrants.filter((e) => !DEPARTED_STATUSES.has(e.status)).map((e) => e.id);
   // Swiss round-1 pairing, review ruling R1: the menu's hint prints seed
   // NUMBERS only when the field's seeds really are 1..N in pairing order, so
   // it needs each entrant's seed. `listEntrants` already selects `seed`.
   const entrantSeeds = Object.fromEntries(entrants.map((e) => [e.id, e.seed]));
+  // W3 T9 (T8 review m8): each entrant's first Swiss round and its stage, so the pairing menu reads the round's field
+  // exactly as the server pairs it (`listEntrants` selects both since T9).
+  const entrantSwissFirstRounds = Object.fromEntries(
+    entrants.map((e) => [e.id, { swiss_first_round: e.swiss_first_round, swiss_first_round_stage_id: e.swiss_first_round_stage_id }]),
+  );
   const BRACKET_STAGE_KINDS = new Set(["knockout", "double_elim", "stepladder", "page_playoff"]);
   const hasKnockout = stages.some((s) => BRACKET_STAGE_KINDS.has(s.kind));
   // P6/D4b task B — the proposal panel, one per propose/confirm-at-setup
@@ -446,6 +456,25 @@ export default async function DivisionPage({
   // row is not shown at all: another tab, or a viewer who cannot edit).
   const formatLockedStages =
     tab === "fixtures" && editable ? await formatLockedStageIds(auth, id) : [];
+  // W3 T12 Phase 2 (X-SW-17, BG-SW-1): each Swiss stage's round count, chess switch and "Add a round" state as the writes
+  // judge them, for the rail's "Rounds: N · Edit" chip, its More menu and the chess switch — an organiser's controls, so
+  // read on this tab only, and only when the division holds a Swiss.
+  const swissRoundControls =
+    tab === "fixtures" && editable && stages.some((s) => s.kind === "swiss") ? await listSwissRoundControls(auth, id) : {};
+  // W3 T17 (RB3-19, X-SW-25): who a correction moved across a COMPLETED Swiss's cut after its knockout began — the amber
+  // "the bracket stands" notice in that Swiss's card. An organiser's warning, read on this tab only; a Swiss with no drift
+  // (every Swiss until its knockout has a result and a correction moves the table) is absent from the map.
+  const swissCutDrift = Object.fromEntries(
+    tab === "fixtures" && editable
+      ? (
+          await Promise.all(
+            stages
+              .filter((s) => s.kind === "swiss" && s.status === "complete")
+              .map(async (s) => [s.id, await getSwissCutDrift(auth, s.id)] as const),
+          )
+        ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
+      : [],
+  );
   // W2d final review I1: the points each PINNED table stage pays - its pin's, which a division points save after generate
   // never reaches (`rule-locks.ts` lets that save through). The stage points card says these, never `division.config`.
   // Read for the stages the card is mounted on (`stageTakesPoints`), for an organiser and a viewer alike (both see it).
@@ -639,6 +668,18 @@ export default async function DivisionPage({
     onlineDesk ? listRunSheetOnlinePlay(auth, id) : {},
     arbiterOffered ? listOpenRounds(auth, id) : [],
   ]);
+  // W3 T10: on the Entrants tab of a started division with a running root Swiss, an add is a LATE add — the form says
+  // so and reads the add's `late_entry` back. A bye taken in a round already opened for online play owes the pair an
+  // invite, so a chess division's opened rounds ride along (keys `${stageId}:${round}`, `roundKey`).
+  // `stage_round_opens` is SEALED (V451: no app_user grant): inside `withTenant` the read is refused (42501) and the tab
+  // crashed (CI run 41328392447). Read with the privileged client, as competition-desk.ts does, for this one division
+  // only — the one requireDivisionPage just proved is this org's.
+  const swissLateEntry =
+    tab === "entrants" && editable && divisionTakesSwissLateEntry(division.status, stages)
+      ? {
+          openOnlineRounds: division.sport_key === "boardgame" ? [...(await roundOpensOfDivisions(sql, [id])).keys()] : [],
+        }
+      : null;
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
   // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
@@ -799,9 +840,9 @@ export default async function DivisionPage({
               fixtures={fixtures}
               entrantNames={entrantNames}
               // Whether starting really closes the entrant list — open-format
-              // stages (ladder/americano) keep it open, so the confirmation
-              // must not claim otherwise. Already loaded above.
-              stageKinds={stages.map((s) => s.kind)}
+              // stages (ladder/americano) and a root Swiss keep it open, so the
+              // confirmation must not claim otherwise. Already loaded above.
+              stages={stages}
               // Whether starting also moves the PARENT competition published
               // → live. `startDivision` guards that on the competition's
               // current status, so the confirmation needs it to know whether
@@ -899,9 +940,10 @@ export default async function DivisionPage({
               }}
               entrantModel={entrantModel}
               suspensions={entrantSuspensions}
-              rosterLocked={entrantListLocked(division.status, stages.map((s) => s.kind))}
+              rosterLocked={entrantListLocked(division.status, stages)}
               viewerPlan={viewerPlan}
               divisionStatus={division.status}
+              swissLateEntry={swissLateEntry}
             />
           </div>
         )}
@@ -993,6 +1035,8 @@ export default async function DivisionPage({
               stages={stages}
               fixtures={fixtures}
               entrantNames={entrantNames}
+              // W3 T15 ruling 2: the run sheet words a DISQUALIFIED entrant's cascade walkover as the disqualification.
+              entrantStatuses={entrantStatuses}
               // Match Day E1 item 3: the crests and scoreline headlines the card's bracket tree draws with (the same maps the
               // page-level tree was handed before it moved into the card).
               entrantBadges={entrantLogos}
@@ -1000,6 +1044,7 @@ export default async function DivisionPage({
               pools={fixturePools}
               activeEntrantIds={activeEntrantIds}
               entrantSeeds={entrantSeeds}
+              entrantSwissFirstRounds={entrantSwissFirstRounds}
               venues={panelVenues}
               rosterDrift={rosterDrift}
               canEdit={editable}
@@ -1027,6 +1072,13 @@ export default async function DivisionPage({
               onlinePlay={runSheetOnlinePlay}
               onlineAwaitsStart={onlineAwaitsStart}
               arbiterHref={arbiterHref}
+              divisionStatus={division.status}
+              swissRoundControls={swissRoundControls}
+              swissCutDrift={swissCutDrift}
+              // Match Day PB1 x W3 T17: a COMPLETED stage's card starts as one line, and the cut-drift warning lives on a completed
+              // Swiss - so the cards that carry it are listed here and start open. `swissCutDriftStageIds` reads the SAME predicate
+              // the card draws the notice from (`swissCutDriftOf`), so the two cannot disagree.
+              attentionStageIds={swissCutDriftStageIds(stages, editable, swissCutDrift)}
               matchDayHref={matchDayHref}
               rulesStrip={{
                 divisionId: id,
@@ -1231,6 +1283,7 @@ export default async function DivisionPage({
             }}
             orgId={auth.orgId}
             onlineChessOffered={onlineChessOn}
+            swissField={activeEntrantIds.length}
             // W2c Task 20 (S4): two locks, two sources. The stage STRUCTURE locks on any fixture row (replaceStages); the
             // RULES lock per field and per STARTED stage that inherits them - the same read the save asks (patchDivision).
             structureLocked={formatAlreadyLocked(fixtures.length)}

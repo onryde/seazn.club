@@ -37,12 +37,13 @@ import {
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { LegsChoice } from "@/components/v2/legs-choice";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { ViewerPlan } from "@/lib/viewer-plan";
+import { swissRoundsDefault, swissRoundsGuidanceLine } from "@/lib/swiss-rounds";
 
 // One option label per declared camera policy (lib/camera-policy.ts is the
 // vocabulary; camera-policy-copy.test.ts sweeps it against all four locales).
@@ -286,6 +287,7 @@ export function DivisionSettings({
   showSeeds,
   viewerPlan,
   onlineChessOffered,
+  swissField,
 }: {
   division: DivisionSettingsInfo;
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
@@ -328,8 +330,15 @@ export function DivisionSettings({
   /** T20: the club is offered online chess (the PostHog flag `online-chess`, asked by the page). Off ⇒ the camera control
    *  is not rendered at all (the Online play select itself is in the Division rules strip, Match Day C2). */
   onlineChessOffered: boolean;
+  /** W3 T11 (X-SW-16): the field a root Swiss would pair — the division's active entrants (the page's
+   *  `activeEntrantIds`). Read only where the Rounds box renders, i.e. before Start (`structureLocked` hides it), when no
+   *  late-entry stamp can exist yet. Under 2 (or absent) ⇒ no guidance line, and a switch to a Swiss seeds the band for a
+   *  field of up to 8. */
+  swissField?: number;
 }) {
   const msg = useMsg();
+  // W3 T11 (X-SW-16): the Swiss Rounds field's guidance line is counted ("for 6 entrants").
+  const plural = useMsgPlural();
   // The Format section names the division's sport and variant as WORDS (`sport.<key>`, `variant.<sport>.<variant>`),
   // never the stored keys: the key is the identity (`boardgame`), the word is what the organiser reads ("Chess").
   const sportName = sportLabel(division.sport_key, msg);
@@ -349,8 +358,10 @@ export function DivisionSettings({
     ((stages.find((st) => st.kind === "group")?.config as { pools?: { count?: number } } | null)?.pools?.count) ?? 2,
   );
   const [swissRounds, setSwissRounds] = useState(
-    ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ?? 5,
+    ((stages.find((st) => st.kind === "swiss")?.config as { rounds?: number } | null)?.rounds) ??
+      swissRoundsDefault(swissField),
   );
+  const swissGuidance = swissField === undefined ? null : swissRoundsGuidanceLine(swissField, plural);
   const templateHasSwissRounds = ["swiss", "swiss_playoff", "swiss_knockout"].includes(template);
   const [legs, setLegs] = useState(
     ((stages.find((st) => st.kind === "league" || st.kind === "group")?.config as { legs?: number } | null)?.legs) ?? 1,
@@ -754,20 +765,34 @@ export function DivisionSettings({
                   </label>
                 )}
                 {templateHasSwissRounds && (
-                  <label className="block text-xs text-slate-500">
-                    {msg("divset.rounds")}
-                    <input
-                      type="number"
-                      data-format-bound="swissRounds"
-                      min={FORMAT_BOUNDS.swissRounds.min}
-                      max={FORMAT_BOUNDS.swissRounds.max}
-                      disabled={!canEdit}
-                      value={swissRounds}
-                      data-testid="division-settings-swiss-rounds"
-                      onChange={(e) => setSwissRounds(Number(e.target.value))}
-                      className="input mt-1 w-full"
-                    />
-                  </label>
+                  <div>
+                    <label className="block text-xs text-slate-500">
+                      {msg("divset.rounds")}
+                      <input
+                        type="number"
+                        data-format-bound="swissRounds"
+                        min={FORMAT_BOUNDS.swissRounds.min}
+                        max={FORMAT_BOUNDS.swissRounds.max}
+                        disabled={!canEdit}
+                        value={swissRounds}
+                        data-testid="division-settings-swiss-rounds"
+                        onChange={(e) => setSwissRounds(Number(e.target.value))}
+                        {...(swissGuidance !== null ? { "aria-describedby": "division-settings-swiss-rounds-guidance" } : {})}
+                        className="input mt-1 w-full"
+                      />
+                    </label>
+                    {/* W3 T11 (X-SW-16): the field's guidance, OUTSIDE the label so it describes the box rather than
+                        joining its accessible name. */}
+                    {swissGuidance !== null && (
+                      <p
+                        id="division-settings-swiss-rounds-guidance"
+                        data-testid="division-settings-swiss-rounds-guidance"
+                        className="mt-0.5 text-[11px] text-slate-500"
+                      >
+                        {swissGuidance}
+                      </p>
+                    )}
+                  </div>
                 )}
                 {["league", "league_ko", "groups_ko"].includes(template) && (
                   // Match Day D1: the builder's Once / Home & away control (legs-choice.tsx). A stored value past the

@@ -78,6 +78,8 @@ const FIXTURES = [
 ] as unknown as BoardFixture[];
 
 type LaunchProps = Parameters<typeof LaunchActions>[0];
+/** Stage rows as the page passes them: root stages (no progression, empty config). */
+const stagesOf = (...kinds: string[]) => kinds.map((kind) => ({ kind, progression: null, config: {} }));
 
 const baseProps = (over: Partial<LaunchProps> = {}): LaunchProps => ({
   divisionId: "d1",
@@ -88,7 +90,7 @@ const baseProps = (over: Partial<LaunchProps> = {}): LaunchProps => ({
   canEdit: true,
   fixtures: FIXTURES,
   entrantNames: { e1: "Alpha", e2: "Bravo" },
-  stageKinds: ["league"],
+  stages: stagesOf("league"),
   competitionStatus: "published",
   competitionVisibility: "public",
   viewerPlan: "community",
@@ -174,16 +176,16 @@ describe("Start tournament confirms first", () => {
     // `enrollEntrants` exempts the WHOLE division when ANY stage is a ladder
     // or americano, so the mixed case is exempt too — the line would be false
     // there, and a dialog that lies once is not read again.
-    const closed = renderIsland(LaunchActions, baseProps({ stageKinds: ["league", "knockout"] }));
+    const closed = renderIsland(LaunchActions, baseProps({ stages: stagesOf("league", "knockout") }));
     await pressStart(closed);
     const closedProps = confirmProps(closed.tree());
-    expect(closedProps.entrantsLock).toBe(true);
+    expect(closedProps.entrantsLine).toBe("closes");
     const closedHtml = renderDialog(closedProps);
     expect(closedHtml).toContain(esc(enDict["launch.confirm.entrants"] as string));
     expect(closedHtml).toContain('data-testid="start-confirm-entrants"');
 
     for (const stageKinds of [["ladder"], ["americano"], ["knockout", "ladder"]]) {
-      const open = renderIsland(LaunchActions, baseProps({ stageKinds }));
+      const open = renderIsland(LaunchActions, baseProps({ stages: stagesOf(...stageKinds) }));
       await pressStart(open);
       const html = renderDialog(confirmProps(open.tree()));
       expect(html, `stages ${stageKinds.join("+")}`).not.toContain(
@@ -197,6 +199,37 @@ describe("Start tournament confirms first", () => {
       expect(html).toContain(esc(enDict["launch.confirm.format"] as string));
       expect(html).toContain(esc(enDict["launch.confirm.rules"] as string));
     }
+  });
+
+  it("on a root Swiss says late entrants can still join, never that the list closes", async () => {
+    // W3 T9 (ruling 250): a running root Swiss takes a late player, so "Entrant list closes … no one new can be added"
+    // would be false there. The line is REPLACED, not dropped: the organiser is owed what stays open.
+    let checked = 0;
+    for (const stages of [stagesOf("swiss"), stagesOf("swiss", "knockout")]) {
+      const island = renderIsland(LaunchActions, baseProps({ stages }));
+      await pressStart(island);
+      const props = confirmProps(island.tree());
+      expect(props.entrantsLine).toBe("swiss_late");
+      for (const locale of Object.keys(DICTS)) {
+        const html = renderDialog(props, locale);
+        const label = `${stages.map((s) => s.kind).join("+")} ${locale}`;
+        expect(html, label).not.toContain(esc(DICTS[locale]!["launch.confirm.entrants"] as string));
+        expect(html, label).toContain(esc(DICTS[locale]!["launch.confirm.entrantsSwiss"] as string));
+        expect(html, label).toContain('data-testid="start-confirm-entrants-swiss"');
+        expect(html, label).not.toContain('data-testid="start-confirm-entrants"');
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: both shapes in every locale").toBe(2 * Object.keys(DICTS).length);
+    expect(Object.keys(DICTS).length).toBe(4);
+
+    // The negative pair: a Swiss fed by an earlier stage has a fixed field, so the list does close.
+    const fed = renderIsland(
+      LaunchActions,
+      baseProps({ stages: [{ kind: "league", progression: null, config: {} }, { kind: "swiss", progression: { from: "s1", top: 4 }, config: {} }] }),
+    );
+    await pressStart(fed);
+    expect(confirmProps(fed.tree()).entrantsLine).toBe("closes");
   });
 
   it("names the competition promotion only when the competition is published", async () => {

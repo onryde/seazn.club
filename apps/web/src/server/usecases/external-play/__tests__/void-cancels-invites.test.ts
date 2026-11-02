@@ -99,6 +99,7 @@ import { startDivision } from "../../schedule";
 import { scoreEvent } from "../../scoring";
 import { createStages, deleteStage, generateStageFixtures, rebuildStageFixtures, replaceStages, unpairSwissRound } from "../../stages";
 import { withdrawEntrantCascade } from "../../withdrawal";
+import { finishSwissNow } from "../../swiss-rounds-admin";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -159,6 +160,53 @@ async function openedLeague(fixtures: number): Promise<SeedOnlineChessRoundResul
   const out = await openRound({ stageId: r.stageId, roundNo: r.roundNo, actorUserId: r.ownerUserId });
   expect(out, "premise: the real open invited the round").toMatchObject({ opened: true });
   return r;
+}
+/** An online chess LEAGUE whose boards the REAL generator minted (`generateStageFixtures`), so the ledger's
+ *  `fixtures_generated` row names them and an Undo of it DELETES them (history.ts `fixtures_cleared`). Plus ONE board inserted
+ *  beside them in round 1 between two entrants added after the generation: no ledger row names it, so no Undo deletes it — the
+ *  positive pair. Round 1 is opened through the real open; the provider answers 503, so every invite stays `queued`. */
+async function openedGeneratedLeague(players = 4) {
+  const owner = await seedOwner();
+  const ownerUserId = owner.userId;
+  if (!ownerUserId) throw new Error("seedOwner returned a session with no userId");
+  const competition = await createCompetition(owner, {
+    name: "G-1 League",
+    visibility: "public",
+    branding: {},
+    starts_on: "2026-10-01",
+    ends_on: "2026-10-02",
+  });
+  const division = await createDivision(owner, competition.id, {
+    name: "Open",
+    sport_key: "boardgame",
+    variant_key: "classical",
+    config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
+  });
+  const entrant = async (name: string, seed?: number) => {
+    const p = await seedPlayer(owner.orgId, name, `g-${randomUUID().slice(0, 10)}`, true);
+    const [e] = await createEntrants(owner, division.id, [
+      { display_name: name, kind: "individual", ...(seed ? { seed } : {}), members: [{ person_id: p.personId, is_captain: false, roles: [] }] },
+    ]);
+    const [u] = await sql<{ email: string }[]>`select email from users where id = ${p.userId}`;
+    mail.retry.add(u!.email);
+    return e!.id;
+  };
+  for (let i = 0; i < players; i++) await entrant(`G${i + 1}`, i + 1);
+  const [stage] = await createStages(owner, division.id, { seq: 1, kind: "league", name: "RR", config: {}, progression: null });
+  await generateStageFixtures(owner, stage!.id);
+  const generated = (await sql<{ id: string }[]>`select id from fixtures where stage_id = ${stage!.id} order by id`).map((f) => f.id);
+  const [{ seq }] = await sql<{ seq: number }[]>`
+    select coalesce(max(seq_in_round), 0)::int + 1 as seq from fixtures where stage_id = ${stage!.id} and round_no = 1`;
+  const [spared] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, home_entrant_id, away_entrant_id)
+    values (${stage!.id}, ${division.id}, ${owner.orgId}, 1, ${seq}, ${`g1-spared-${randomUUID().slice(0, 6)}`}, 'scheduled',
+            ${await entrant("Spare W")}, ${await entrant("Spare B")})
+    returning id`;
+  await sql`update fixtures set scheduled_at = ${new Date("2026-10-01T12:10:00.000Z")} where stage_id = ${stage!.id}`;
+  await startDivision(owner, division.id);
+  const out = await openRound({ stageId: stage!.id, roundNo: 1, actorUserId: ownerUserId });
+  expect(out, "premise: the real open invited the round").toMatchObject({ opened: true });
+  return { orgId: owner.orgId, owner, divisionId: division.id, stageId: stage!.id, generated, spared: spared!.id };
 }
 /** The premise every case starts from: the open left `n` rows, every one still queued after a 503, each with its body. */
 async function expectQueuedRows(orgId: string, atLeast: number): Promise<Row[]> {
@@ -674,27 +722,71 @@ describe.skipIf(!HAS_DB)("a deleted fixture takes its queued invites with it (G-
     expect(await fixtureIdsOfStage(r.stageId), "premise: the boards are gone").toEqual([]);
   });
 
-  it("undoing the generation (the history step that deletes the boards) ends the round's queued invites fixture_deleted", async () => {
+  // W3 T5 (#835, rule X-SW-28): Undo of the Pair now clears the round's seats through the same `clearSwissFixtureSeats` an
+  // Unpair uses, so it ends the queued invites `round_voided` with every board left standing. This case used to assert the
+  // opposite — "the first [step] only unseats" while every invite stayed queued — which was the #835 defect itself: the
+  // Pair's Undo did nothing at all, and the invites survived until the step that deleted the boards.
+  it("undoing the Pair ends the round's queued invites round_voided and keeps the boards; the step that deletes them ends nothing more", async () => {
     const s = await openedSwiss(4);
     const before = await expectQueuedRows(s.orgId, 4);
     const boards = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${s.stageId}`)[0]!.n;
     const shells = await boards();
     expect(shells, "premise: the round's shells exist").toBeGreaterThan(0);
 
-    // The ledger is: shells minted, the round seated, the schedule published, the division started. Undo walks it back; the step
-    // that DELETES the boards is the second generation's (the first one only unseats).
+    // The ledger is: shells minted, the round seated, the schedule published, the division started. Undo walks it back
+    // newest-first; the first step that touches an invite is the Pair's.
     let steps = 0;
-    while ((await boards()) === shells && steps < 5) {
+    while ((await rowsOf(s.orgId)).every((r) => r.status === "queued") && steps < 5) {
       await undoDivision(s.owner, s.divisionId);
       steps += 1;
-      if ((await boards()) === shells) {
-        expect((await rowsOf(s.orgId)).every((r) => r.status === "queued"), `step ${steps} deleted no board, so no invite ended`).toBe(true);
-      }
+    }
+    expect(await boards(), "the Pair's Undo keeps every board").toBe(shells);
+    const voided = await rowsOf(s.orgId);
+    expect(voided.map((x) => x.id)).toEqual(before.map((x) => x.id));
+    expect(expectVoided(voided, ROUND_VOIDED)).toBe(before.length);
+
+    // Then the generation that minted the shells: its Undo deletes the boards, and finds no queued invite left to end.
+    while ((await boards()) === shells && steps < 10) {
+      await undoDivision(s.owner, s.divisionId);
+      steps += 1;
     }
     expect(await boards(), "premise: an undo step deleted the boards").toBeLessThan(shells);
     const after = await rowsOf(s.orgId);
     expect(after.map((x) => x.id)).toEqual(before.map((x) => x.id));
-    expect(expectVoided(after, FIXTURE_DELETED)).toBe(before.length);
+    expect(expectVoided(after, ROUND_VOIDED), "already ended; the delete re-ends none").toBe(before.length);
+  });
+
+  // T5 re-review n1: the Swiss case above can no longer reach history's delete-cancel with a queued invite (the Pair's Undo ends
+  // them first), so this is that cancel's witness: a league whose boards the generator minted, undone back past its generation.
+  it("undoing a league's generation deletes its boards and ends their queued invites fixture_deleted; a board it does not delete keeps its invites", async () => {
+    const g = await openedGeneratedLeague(4);
+    const before = await expectQueuedRows(g.orgId, 4);
+    const onGenerated = before.filter((r) => g.generated.includes(fixtureOf(r)));
+    const onSpared = before.filter((r) => fixtureOf(r) === g.spared);
+    expect(onGenerated.length, "premise: round 1's generated boards were invited").toBeGreaterThan(0);
+    expect(onSpared.length, "premise: the spared board was invited").toBe(2);
+    expect(onGenerated.length + onSpared.length, "premise: every invite is on one of the two").toBe(before.length);
+    const live = async () =>
+      (await sql<{ id: string }[]>`select id from fixtures where id = any(${g.generated}::uuid[])`).map((f) => f.id);
+
+    let steps = 0;
+    while ((await live()).length === g.generated.length && steps < 5) {
+      await undoDivision(g.owner, g.divisionId);
+      steps += 1;
+      if ((await live()).length === g.generated.length) {
+        expect((await rowsOf(g.orgId)).every((r) => r.status === "queued"), `step ${steps} deleted no board, so no invite ended`).toBe(true);
+      }
+    }
+    expect(await live(), "the Undo of the generation deleted every board it minted").toEqual([]);
+    const after = await rowsOf(g.orgId);
+    expect(after.map((x) => x.id)).toEqual(before.map((x) => x.id));
+    expect(
+      expectVoided(after.filter((r) => g.generated.includes(fixtureOf(r))), FIXTURE_DELETED),
+      "every invite on a deleted board ended fixture_deleted",
+    ).toBe(onGenerated.length);
+    const kept = after.filter((r) => fixtureOf(r) === g.spared);
+    expect(kept.map((r) => r.status), "positive pair: the board the Undo did not delete keeps its invites queued").toEqual(["queued", "queued"]);
+    expect((await sql`select 1 from fixtures where id = ${g.spared}`).length, "and the board itself").toBe(1);
   });
 
   it("deleting a competition ends the queued invites of its boards fixture_deleted, after its delete and in the same transaction, naming boards read before it (T6 review m3)", async () => {
@@ -835,5 +927,44 @@ describe.skipIf(!HAS_DB)("the paths that would delete an opened, invited round's
     await deleteDivision(s.owner, s.divisionId);
     const [gone] = await sql<{ n: number }[]>`select count(*)::int as n from divisions where id = ${s.divisionId}`;
     expect(gone!.n, "archived 31 days: the division is purged").toBe(0);
+  });
+});
+
+// W3 T13 Fix round 1 (review m2): "Finish the Swiss now" deletes the rounds past k, and its seat-clear
+// (`clearSwissFixtureSeats`) is what ends a dropped board's queued invites — the outbox holds text seat refs, never a foreign
+// key, so the delete alone would leave them to be sent. Through the REAL open, Pair, scoring and `finishSwissNow`.
+describe.skipIf(!HAS_DB)("Finish the Swiss now and a round's queued invites (W3 T13)", () => {
+  it("an opened round is a start, so Finish keeps it and ends nothing; a queued invite on a round Finish drops ends round_voided", async () => {
+    const s = await openedSwiss(4); // 4 players: 2 boards a round, 3 rounds; round 1 opened, its invites queued
+    const r1 = await sql<{ id: string; home_entrant_id: string }[]>`
+      select id, home_entrant_id from fixtures where stage_id = ${s.stageId} and round_no = 1 and away_entrant_id is not null order by seq_in_round`;
+    for (const b of r1) {
+      await scoreEvent(s.owner, b.id, { expected_seq: 0, type: "core.start", payload: {} });
+      await scoreEvent(s.owner, b.id, { expected_seq: 1, type: "boardgame.result", payload: { winner: b.home_entrant_id, method: "resign" } });
+    }
+    await generateStageFixtures(s.owner, s.stageId); // Pair next: round 2
+    const r2 = (await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${s.stageId} and round_no = 2 and away_entrant_id is not null order by seq_in_round`).map((f) => f.id);
+    expect(r2, "premise: round 2 is paired").toHaveLength(2);
+    expect(await openRound({ stageId: s.stageId, roundNo: 2, actorUserId: s.ownerUserId }), "premise: the real open invited round 2").toMatchObject({ opened: true });
+    const refs = new Set(r2.flatMap((id) => [chessSeatRef(id, "white"), chessSeatRef(id, "black")]));
+    const round2Rows = async () => (await rowsOf(s.orgId)).filter((r) => refs.has(r.ref_id));
+    const queued = await round2Rows();
+    expect(queued.length, "premise: round 2's invites are queued").toBeGreaterThanOrEqual(4);
+    expect(queued.map((r) => r.status), "premise: every one queued").toEqual(queued.map(() => "queued"));
+
+    // T9: a bridge row is a start, so the opened round stays — Finish names its boards and ends nothing.
+    await expect(finishSwissNow(s.owner, s.stageId)).rejects.toMatchObject({ status: 409, code: "SWISS_FINISH_ROUND_UNDECIDED" });
+    expect((await round2Rows()).map((r) => `${r.id}|${r.status}`), "refused: no invite moved").toEqual(queued.map((r) => `${r.id}|${r.status}`));
+
+    // Planted: the bridge rows gone while the invites stand — the one shape in which Finish meets a queued invite on a board
+    // it drops (nothing ties the two rows together but the seat ref).
+    await sql`delete from fixture_external_play where fixture_id = any(${r2}::uuid[])`;
+    expect(await finishSwissNow(s.owner, s.stageId)).toMatchObject({ finished_after: 1 });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where id = any(${r2}::uuid[])`;
+    expect(n, "round 2's boards are gone").toBe(0);
+    const after = await round2Rows();
+    expect(after.map((r) => r.id), "the same rows, none added and none lost").toEqual(queued.map((r) => r.id));
+    expect(expectVoided(after, ROUND_VOIDED), "anti-vacuity: every round-2 invite was checked").toBe(queued.length);
   });
 });

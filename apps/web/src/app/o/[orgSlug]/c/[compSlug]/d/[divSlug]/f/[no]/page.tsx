@@ -131,6 +131,9 @@ export default async function FixturePage({
       // Left the field — withdrawn OR disqualified (the ONE departed vocabulary): the settle dialog never offers her,
       // as the server refuses a settle naming either (append-event.ts C17, loop-F tidy).
       withdrawn: DEPARTED_STATUSES.has(entrant.status),
+      // W3 T15 ruling 2: her status itself, so the console words a DISQUALIFIED side's cascade walkover as the
+      // disqualification (its decided line and Activity row), never as a withdrawal.
+      status: entrant.status,
       members: entrant.members as SideInfo["members"],
       lineup: lineup.slots as LineupSlotIn[],
     };

@@ -17,6 +17,7 @@ import { configIssuesOf } from "@/lib/config-issue-copy";
 import { refusedFieldsOf } from "@/lib/rule-errors";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
+import { SWISS_REFUSALS, SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "@/lib/swiss-refusals";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { runRequestContext } from "@/server/request-context";
@@ -198,6 +199,13 @@ async function v1Inner<T>(
       if (moved !== null) {
         return errorResponse(requestId, 400, "VALIDATION", moved.message, { field: moved.field, issues: err.issues });
       }
+      // W3 T18 (RB3-7(c), X-SW-18): a requested half/zero bye is deferred — the key is refused by NAME, with the guidance,
+      // in place of the generic "Invalid input". The status and the sentence are the table row's.
+      const deferred = swissRequestedByesOf(err.issues);
+      if (deferred !== null) {
+        const row = SWISS_REFUSALS.SWISS_REQUESTED_BYES_DEFERRED;
+        return errorResponse(requestId, row.status, "SWISS_REQUESTED_BYES_DEFERRED", row.message, { field: deferred.field, issues: err.issues });
+      }
       return errorResponse(requestId, 400, "VALIDATION", "Invalid input", {
         issues: err.issues,
       });
@@ -370,16 +378,30 @@ const pathText = (path: readonly PropertyKey[]): string =>
  * place it goes — `config.rules.<key>` on a stage, `rules.<key>` in the stage PUT's body. Null for any other refusal.
  */
 export function stageDeciderMovedOf(issues: readonly IssueLike[], prefix: readonly PropertyKey[] = []): { field: string; message: string } | null {
+  const path = pathOfIssueMessage(issues, STAGE_DECIDER_MOVED, prefix);
+  if (path === null) return null;
+  const key = String(path[path.length - 1]);
+  const field = pathText(path);
+  const target = pathText([...path.slice(0, -1), "rules", key]);
+  return { field, message: `${field}: a stage's deciders are its match rules — set it under the stage's rules, as ${target}` };
+}
+
+/** W3 T18 (RB3-7(c), X-SW-18): the first `requestedByes` refusal (the never-schema's own sentence, `StageConfig` and
+ *  `PatchSwissStage`) in a refusal, walked through union arms as `stageDeciderMovedOf` is: the field as the client sent it
+ *  (`config.requestedByes`, `[0].config.requestedByes`, `requestedByes`). Null for any other refusal. */
+export function swissRequestedByesOf(issues: readonly IssueLike[]): { field: string } | null {
+  const path = pathOfIssueMessage(issues, SWISS_REQUESTED_BYES_DEFERRED_MESSAGE, []);
+  return path === null ? null : { field: pathText(path) };
+}
+
+/** The full body path of the first issue (union arms walked) whose message is exactly `message`; null when none is. A
+ *  message is a key's own never-schema sentence, so equality names the key without matching on its spelling. */
+function pathOfIssueMessage(issues: readonly IssueLike[], message: string, prefix: readonly PropertyKey[]): readonly PropertyKey[] | null {
   for (const issue of issues) {
     const path = [...prefix, ...issue.path];
-    if (issue.message === STAGE_DECIDER_MOVED && path.length > 0) {
-      const key = String(path[path.length - 1]);
-      const field = pathText(path);
-      const target = pathText([...path.slice(0, -1), "rules", key]);
-      return { field, message: `${field}: a stage's deciders are its match rules — set it under the stage's rules, as ${target}` };
-    }
+    if (issue.message === message && path.length > 0) return path;
     for (const arm of issue.errors ?? []) {
-      const found = stageDeciderMovedOf(arm, path);
+      const found = pathOfIssueMessage(arm, message, path);
       if (found !== null) return found;
     }
   }

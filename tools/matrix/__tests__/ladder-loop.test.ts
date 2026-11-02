@@ -729,7 +729,11 @@ describe("playLadder's guards and the fake's refusals (review m-2, m-6)", () => 
 
   it("the fake's withdraw refuses as the product does: an unknown entrant is a 404 (entrants.ts getEntrant), a repeat a codeless 409 (withdrawal.ts)", async () => {
     const product = readFileSync(resolve(REPO, "apps/web/src/server/usecases/withdrawal.ts"), "utf8");
-    expect(product).toContain('throw new HttpError(409, "entrant is already withdrawn");');
+    // W3 T15 (RB3-17, X-SW-23) gave the cascade an `as` ("withdrawn" | "disqualified") and the refusal its status's name:
+    // `entrant is already ${as}`, with `as` defaulting to "withdrawn" - the harness's withdraw never passes one, so the sentence
+    // the fake answers is the template at its default.
+    expect(product).toContain('const as = opts.as ?? "withdrawn";');
+    expect(product).toContain("if (entrant.status === as) {\n    throw new HttpError(409, `entrant is already ${as}`);");
     const d = new FakeLadderDriver();
     const ctx = ctxFor(d, "LIFECYCLE");
     const setup = await setUpDivision(ctx, new Recorder(), 3);

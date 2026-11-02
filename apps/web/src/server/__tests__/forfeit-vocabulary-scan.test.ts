@@ -82,6 +82,7 @@ const PAYLOAD_FLOOR = 79;
 const UNREAD_WRITERS: Record<string, { writes: number; why: string }> = {
   "apps/web/src/components/v2/fixture-console.tsx": { writes: 1, why: "`{ by, reason }` from the forfeit dialog's chips: a `WriterForfeitReason`, the engine's phase guard less PF-2's cascade-only reasons (Task 11)" },
   "apps/web/src/components/v2/scorepad/v3/__tests__/authority-only-tiles.test.ts": { writes: 1, why: "an empty `{}` tile payload, classified and never posted" },
+  "apps/web/src/components/v2/scorepad/v3/__tests__/ribbon.test.ts": { writes: 1, why: "W3 T15 ruling 2's `{ by: \"home\", reason }`: `reason` drawn from its own `REASONS` tuple (`walkover` | `retired` | `disqualified`, each a member of FORFEIT_REASONS and a key of FORFEIT_RIBBON_KEY), handed to `buildRibbon` for its label line and never posted" },
   "apps/web/src/lib/__tests__/event-copy.test.ts": { writes: 1, why: "a reason-less copy fixture: rendered as a line, never posted" },
   "apps/web/src/lib/__tests__/event-copy-forfeit.test.ts": { writes: 1, why: "a reason-less legacy fixture (Task 12's fallback pair): rendered as a line, never posted" },
   "apps/web/src/lib/__tests__/forfeit-tag.test.ts": { writes: 1, why: "Task 13's per-reason fold: `reason` drawn from FORFEIT_REASONS itself, folded in memory, never posted" },

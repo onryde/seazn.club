@@ -17,8 +17,9 @@ import {
   SWISS_PAIRINGS,
   type SwissPairingMode,
 } from "@/lib/swiss-pairing";
-import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
+import { latestSwissRoundWithAnySeat, nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import { swissActiveFieldSize } from "@/lib/swiss-legend";
+import { swissRoundField, type EntrantSwissFirstRounds } from "@/lib/swiss-late-entry";
 
 /** What the split button's menu needs; `null` when there is no menu. */
 export type SwissPairingMenu = {
@@ -35,6 +36,16 @@ export type SwissPairingMenu = {
   fieldSize: number;
   /** R1 — whether the hint may print seed NUMBERS. */
   seedsNumbered: boolean;
+  /** X-SW-22 (W3 T8) — round 1 seats an unseeded entrant by the stage's seeded random draw (`swissFieldDrawn`); false
+   *  in every later round. */
+  unseededDrawn: boolean;
+  /** Review m1 — a drawn round 1 whose field also holds a seeded entrant: the seeds go first, then the draw. False
+   *  whenever `unseededDrawn` is. */
+  seededAheadOfDraw: boolean;
+  /** X-SW-30 (W3 T14, SW-L12): from round 2 on, the read-only mode line also says how to change a pairing — Unpair, then
+   *  Pair next. True only when the caller said Unpair is the way (`swissPairingMenuFor`'s `changeByUnpair`) and the
+   *  round is read-only. Optional so a hand-built menu (a test's literal) reads as no line; the producer always sets it. */
+  changeHint?: boolean;
 };
 
 /** The keys this module reads — the whole surface in one place, typed as a
@@ -43,15 +54,24 @@ export type SwissPairingMessageKey =
   | "schedule.pairing.pair"
   | "schedule.pairing.hintFoldGeneric"
   | "schedule.pairing.hintAdjacentGeneric"
+  | "schedule.pairing.hintFoldDrawn"
+  | "schedule.pairing.hintAdjacentDrawn"
+  | "schedule.pairing.hintFoldSeededDrawn"
+  | "schedule.pairing.hintAdjacentSeededDrawn"
   | "schedule.pairing.fold"
   | "schedule.pairing.adjacent"
-  | "schedule.pairing.default";
+  | "schedule.pairing.default"
+  | "schedule.pairing.drawnAtRandom"
+  | "schedule.pairing.changeHint";
 export type SwissPairingT = (key: SwissPairingMessageKey, vars?: Record<string, string | number>) => string;
 
 /** How many pairs the hint names before it trails off. */
 export const SWISS_PAIRING_HINT_PAIRS = 3;
 
 type EntrantSeeds = Readonly<Record<string, number | null | undefined>>;
+/** W3 T9 (T8 review m8): each entrant's stored first Swiss round and the stage it belongs to (V486/V487), by id. The
+ *  type lives beside the field helper both desk readers use (`swissRoundField`, lib/swiss-late-entry.ts). */
+export type { EntrantSwissFirstRounds };
 
 /**
  * R1 — may the hint print seed numbers? `roundOnePairs` returns seed
@@ -92,6 +112,24 @@ export function swissFieldSeedsNumbered(
 }
 
 /**
+ * X-SW-22 (W3 T8) — does round 1 draw an unseeded entrant? Mirrors `swissGen` (usecases/stages.ts): round 1 orders an
+ * unseeded entrant by the stage's seeded random draw (`lib/swiss-draw.ts`) whenever the field it pairs holds one. A stage
+ * carrying `config.qualified` ranks its qualifiers by qualification order, so it is never drawn. A missing seed reads as
+ * unseeded, as in `swissFieldSeedsNumbered`.
+ */
+export function swissFieldDrawn(
+  config: Record<string, unknown>,
+  activeEntrantIds: readonly string[] | undefined,
+  entrantSeeds: EntrantSeeds | undefined,
+): boolean {
+  if (!activeEntrantIds || !entrantSeeds) return false;
+  if (Array.isArray(config.qualified)) return false;
+  // Below two the Pair is refused (STAGE_NOT_READY): there is no round 1 to draw — stated, not inherited from `some`.
+  if (activeEntrantIds.length < 2) return false;
+  return activeEntrantIds.some((id) => (entrantSeeds[id] ?? null) === null);
+}
+
+/**
  * The menu for one stage, or `null` when there is none: not Swiss, no shells
  * yet (the first Generate mints them — the server refuses a pick there), or
  * R3 — no round waiting to be paired.
@@ -102,11 +140,27 @@ export function swissPairingMenuFor(args: {
   fixtures: Parameters<typeof nextUnseatedSwissRound>[0];
   activeEntrantIds: readonly string[] | undefined;
   entrantSeeds: EntrantSeeds | undefined;
+  /** W3 T9 (T8 review m8): the stage this menu is for and each entrant's stored first round. The round's field is the
+   *  server's — `swissFieldForRound` (usecases/stages.ts) over the same two predicates (`swissFirstRoundIn`,
+   *  `inSwissRoundField`) — so a late player whose first round is still ahead neither draws round 1 here nor counts in
+   *  it. Absent: everyone plays from round 1, as before any late entry. */
+  stageId?: string;
+  entrantFirstRounds?: EntrantSwissFirstRounds;
+  /** X-SW-30 (W3 T14, SW-L12): the caller's verdict that Unpair is how this stage's pairing is changed right now — a
+   *  running root Swiss (`isRunningRootSwiss`, lib/open-entry-stages.ts) whose Unpair button is on offer
+   *  (`canUnpairSwiss`, stages-panel.tsx). The menu adds the round: round 1 is choosable, so it never carries the line.
+   *  Absent: no line. */
+  changeByUnpair?: boolean;
 }): SwissPairingMenu | null {
   if (args.kind !== "swiss" || args.fixtures.length === 0) return null;
   const round = nextUnseatedSwissRound(args.fixtures);
   if (round === null) return null;
   const stored = storedSwissPairing(args.config);
+  const field =
+    args.activeEntrantIds === undefined
+      ? undefined
+      : swissRoundField(args.activeEntrantIds, round, args.stageId, args.entrantFirstRounds);
+  const unseededDrawn = round === 1 && swissFieldDrawn(args.config, field, args.entrantSeeds);
   return {
     round,
     choosable: round === 1,
@@ -114,21 +168,68 @@ export function swissPairingMenuFor(args: {
     stored,
     // An unknown roster (a caller that passed none) is 0 here, and the hint
     // below goes generic rather than print numbers for a field it cannot see.
-    fieldSize: swissActiveFieldSize(args.config, args.activeEntrantIds ?? []),
-    seedsNumbered: swissFieldSeedsNumbered(args.config, args.activeEntrantIds, args.entrantSeeds),
+    fieldSize: swissActiveFieldSize(args.config, field ?? []),
+    seedsNumbered: swissFieldSeedsNumbered(args.config, field, args.entrantSeeds),
+    unseededDrawn,
+    seededAheadOfDraw: unseededDrawn && (field ?? []).some((id) => (args.entrantSeeds?.[id] ?? null) !== null),
+    changeHint: round >= 2 && args.changeByUnpair === true,
   };
 }
 
+/** X-SW-22 — the round-1 line under the options when the field is drawn: "Unseeded entrants are drawn at random."
+ *  `null` otherwise, and never in a read-only later round. */
+export function swissPairingDrawNote(
+  menu: Pick<SwissPairingMenu, "choosable" | "unseededDrawn">,
+  t: SwissPairingT,
+): string | null {
+  return menu.choosable && menu.unseededDrawn ? t("schedule.pairing.drawnAtRandom") : null;
+}
+
+/** X-SW-30 (W3 T14, SW-L12) — the line under the read-only mode line in round 2 and later: "Round pairings follow the
+ *  Swiss rules. After correcting a result or the entrants, Unpair, then Pair next." A board's seats cannot be edited
+ *  (`PATCH /fixtures/{id}` refuses them) and the rules decide the pairing, so Unpair then Pair next re-derives the SAME
+ *  pairing unless an input changed; the line says so rather than promising a different one. `null` in the choosable
+ *  round 1 and whenever the menu was not given the hint. */
+export function swissPairingChangeNote(
+  menu: Pick<SwissPairingMenu, "choosable" | "changeHint">,
+  t: SwissPairingT,
+): string | null {
+  return !menu.choosable && menu.changeHint === true ? t("schedule.pairing.changeHint") : null;
+}
+
+/** X-SW-30 (W3 T14) carried past the menu (batch-4 review m2): the same line — "Round pairings follow the Swiss rules.
+ *  After correcting a result or the entrants, Unpair, then Pair next." — said beside Unpair when there is NO Pair next
+ *  menu to carry it: every round is seated, so the round Unpair would clear is the final one. The same gate as the menu's
+ *  line (`changeByUnpair`: a running root Swiss whose Unpair is on offer) and the same round rule (a round from 2 on —
+ *  round 1's pairing is a choice, not the rules'), so the line shows in exactly one place. False whenever a round waits
+ *  to be paired: the menu says it there. */
+export function swissUnpairChangeHint(args: {
+  kind: string;
+  fixtures: Parameters<typeof nextUnseatedSwissRound>[0];
+  changeByUnpair?: boolean;
+}): boolean {
+  if (args.kind !== "swiss" || args.changeByUnpair !== true) return false;
+  if (nextUnseatedSwissRound(args.fixtures) !== null) return false;
+  const round = latestSwissRoundWithAnySeat(args.fixtures);
+  return round !== null && round >= 2;
+}
+
 /** The hint under one option: "1v6, 2v7, 3v8…" when R1 allows numbers,
- *  otherwise the generic line for that mode. */
+ *  otherwise the generic line for that mode — "by seed" only when round 1 is not drawn (review m1): a wholly unseeded
+ *  field's halves are the draw's, and a partly seeded one puts its seeds first, then the draw. */
 export function swissPairingHint(
   mode: SwissPairingMode,
-  menu: Pick<SwissPairingMenu, "fieldSize" | "seedsNumbered">,
+  menu: Pick<SwissPairingMenu, "fieldSize" | "seedsNumbered" | "unseededDrawn" | "seededAheadOfDraw">,
   t: SwissPairingT,
 ): string {
   const pairs = menu.seedsNumbered ? roundOnePairs(menu.fieldSize, mode) : [];
   if (pairs.length === 0) {
-    return t(mode === "fold" ? "schedule.pairing.hintFoldGeneric" : "schedule.pairing.hintAdjacentGeneric");
+    const fold = mode === "fold";
+    if (!menu.unseededDrawn) return t(fold ? "schedule.pairing.hintFoldGeneric" : "schedule.pairing.hintAdjacentGeneric");
+    if (menu.seededAheadOfDraw) {
+      return t(fold ? "schedule.pairing.hintFoldSeededDrawn" : "schedule.pairing.hintAdjacentSeededDrawn");
+    }
+    return t(fold ? "schedule.pairing.hintFoldDrawn" : "schedule.pairing.hintAdjacentDrawn");
   }
   const shown = pairs
     .slice(0, SWISS_PAIRING_HINT_PAIRS)

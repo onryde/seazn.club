@@ -10109,6 +10109,30 @@
                           },
                           "created_at": {
                             "type": "string"
+                          },
+                          "swiss_first_round": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "swiss_first_round_stage_id": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -10119,7 +10143,9 @@
                           "display_name",
                           "seed",
                           "status",
-                          "created_at"
+                          "created_at",
+                          "swiss_first_round",
+                          "swiss_first_round_stage_id"
                         ],
                         "additionalProperties": false
                       }
@@ -10141,7 +10167,9 @@
                       "display_name": "example",
                       "seed": -9007199254740991,
                       "status": "registered",
-                      "created_at": "example"
+                      "created_at": "example",
+                      "swiss_first_round": 1,
+                      "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -10292,7 +10320,7 @@
         ]
       },
       "post": {
-        "summary": "Register entrant(s) — object or bulk array. A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division",
+        "summary": "Register entrant(s) — object or bulk array. After Start a division whose Swiss is running takes a late player (W3, ruling 250): the reply's late_entry says whether the unstarted round was re-paired (a), the newcomer plays the round's bye holder (b), or joins the next round (c); with the last round started it is 409 SWISS_NO_ROUND_LEFT (details.canAddRound, and details.stageId — the Swiss to `POST /stages/{id}/swiss/add-round` on), and a finished Swiss is 422 SWISS_OVER. A pair or team entrant in a chess division is 422 CHESS_INDIVIDUAL_ONLY (chess takes individual players only). A multipart CSV/XLSX upload is the division-pinned import preview; its plan lists a blocking CHESS_INDIVIDUAL_ONLY issue for each row that would enter a team into a chess division",
         "tags": [
           "entrants"
         ],
@@ -10890,6 +10918,105 @@
                             },
                             "created_at": {
                               "type": "string"
+                            },
+                            "swiss_first_round": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "swiss_first_round_stage_id": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "late_entry": {
+                              "type": "object",
+                              "properties": {
+                                "entrant_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "stage_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "case": {
+                                  "type": "string",
+                                  "enum": [
+                                    "a",
+                                    "b",
+                                    "c"
+                                  ]
+                                },
+                                "round": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "repaired": {
+                                  "type": "object",
+                                  "properties": {
+                                    "changed_entrant_ids": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "changed_entrant_ids"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "new_board": {
+                                  "type": "object",
+                                  "properties": {
+                                    "fixture_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "scheduled": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "fixture_id",
+                                    "scheduled"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "bye_holder_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                }
+                              },
+                              "required": [
+                                "entrant_id",
+                                "stage_id",
+                                "case",
+                                "round"
+                              ],
+                              "additionalProperties": false
                             }
                           },
                           "required": [
@@ -10900,7 +11027,9 @@
                             "display_name",
                             "seed",
                             "status",
-                            "created_at"
+                            "created_at",
+                            "swiss_first_round",
+                            "swiss_first_round_stage_id"
                           ],
                           "additionalProperties": false
                         },
@@ -10965,6 +11094,105 @@
                               },
                               "created_at": {
                                 "type": "string"
+                              },
+                              "swiss_first_round": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "swiss_first_round_stage_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "late_entry": {
+                                "type": "object",
+                                "properties": {
+                                  "entrant_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "stage_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "case": {
+                                    "type": "string",
+                                    "enum": [
+                                      "a",
+                                      "b",
+                                      "c"
+                                    ]
+                                  },
+                                  "round": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "repaired": {
+                                    "type": "object",
+                                    "properties": {
+                                      "changed_entrant_ids": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "changed_entrant_ids"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "new_board": {
+                                    "type": "object",
+                                    "properties": {
+                                      "fixture_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "scheduled": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "fixture_id",
+                                      "scheduled"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "bye_holder_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  }
+                                },
+                                "required": [
+                                  "entrant_id",
+                                  "stage_id",
+                                  "case",
+                                  "round"
+                                ],
+                                "additionalProperties": false
                               }
                             },
                             "required": [
@@ -10975,7 +11203,9 @@
                               "display_name",
                               "seed",
                               "status",
-                              "created_at"
+                              "created_at",
+                              "swiss_first_round",
+                              "swiss_first_round_stage_id"
                             ],
                             "additionalProperties": false
                           }
@@ -10998,7 +11228,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -11095,6 +11327,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -11285,6 +11561,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -11295,7 +11595,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -11315,7 +11617,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -11465,7 +11769,7 @@
         ]
       },
       "patch": {
-        "summary": "Set status, seed, name or members (no fixture surgery — see /withdraw). A members-only patch also renames an ad-hoc entrant whose name was derived from its people (e.g. 'A & B' − B + C → 'A & C'); a custom name, a team-linked entrant or an explicit display_name in the same patch is never renamed",
+        "summary": "Set status, seed, name or members. A status change is a plain write (no fixture surgery — see /withdraw), with one exception: status disqualified on an entrant still in the field runs the withdrawal's fixture surgery (W3 T15, RB3-17: a disqualification is a withdrawal from that moment) — played results stand, her open matches are walked over (or a table's expunged) as /withdraw does them, and the reply carries that report as `cascade` (`left_to_organiser` names an abandoned board still the organiser's to settle). The rest of such a patch is written first, so a field it refuses (422 ENTRANT_ROSTER_TOO_BIG) changes nothing. A members-only patch also renames an ad-hoc entrant whose name was derived from its people (e.g. 'A & B' − B + C → 'A & C'); a custom name, a team-linked entrant or an explicit display_name in the same patch is never renamed",
         "tags": [
           "entrants"
         ],
@@ -11689,6 +11993,94 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "cascade": {
+                          "type": "object",
+                          "properties": {
+                            "entrant_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "status": {
+                              "type": "string",
+                              "enum": [
+                                "withdrawn",
+                                "disqualified"
+                              ]
+                            },
+                            "policy": {
+                              "type": "string",
+                              "enum": [
+                                "none",
+                                "walkover",
+                                "expunge"
+                              ]
+                            },
+                            "walkovers": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "voided": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "skipped_finalized": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "walked_over_held": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "left_to_organiser": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              }
+                            }
+                          },
+                          "required": [
+                            "entrant_id",
+                            "status",
+                            "policy",
+                            "walkovers",
+                            "voided",
+                            "skipped_finalized",
+                            "walked_over_held",
+                            "left_to_organiser"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -11699,7 +12091,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -11719,7 +12113,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -12552,6 +12948,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -12562,7 +12982,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -12582,7 +13004,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -16587,6 +17011,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -16597,7 +17045,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -16617,7 +17067,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -16946,6 +17398,30 @@
                         },
                         "created_at": {
                           "type": "string"
+                        },
+                        "swiss_first_round": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "swiss_first_round_stage_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -16956,7 +17432,9 @@
                         "display_name",
                         "seed",
                         "status",
-                        "created_at"
+                        "created_at",
+                        "swiss_first_round",
+                        "swiss_first_round_stage_id"
                       ],
                       "additionalProperties": false
                     },
@@ -16976,7 +17454,9 @@
                     "display_name": "example",
                     "seed": -9007199254740991,
                     "status": "registered",
-                    "created_at": "example"
+                    "created_at": "example",
+                    "swiss_first_round": 1,
+                    "swiss_first_round_stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -19035,6 +19515,16 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "forfeit_loser_status": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -19055,7 +19545,8 @@
                               "outcome",
                               "home_entrant_id",
                               "away_entrant_id",
-                              "abandon_reason"
+                              "abandon_reason",
+                              "forfeit_loser_status"
                             ],
                             "additionalProperties": false
                           }
@@ -19164,7 +19655,8 @@
                         "outcome": null,
                         "home_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                         "away_entrant_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
-                        "abandon_reason": "example"
+                        "abandon_reason": "example",
+                        "forfeit_loser_status": "example"
                       }
                     ],
                     "teams": [
@@ -21876,7 +22368,7 @@
         ]
       },
       "post": {
-        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 TIEBREAK_KEY_INVALID (`refusals`, `stage_id`, `stage_name`) for the INHERITED tie-break order (the division's) the new stage's kind refuses — a stage's own order is not part of this body (`config.tiebreakers` is an unknown key of the strict stage config: 400 VALIDATION); nothing in the batch is written. A stage's own `config.points` (the engine's PointsRule) is asked what the stage PUT asks of it, and `config.points: null` means no points for this slot (as `points: null` does on the stage PUT): nothing is asked and nothing is stored. A non-null value: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a walkover `awardScore` on a sport whose table never reads it 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a rule that does not pay an outcome the stage can end in 422 POINTS_OUTCOME_UNCOVERED (`uncovered`, `stage_name`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; a FLAT rule (one amount per win and per loss: no overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) on a stage whose sport pays one of those apart (IIHF's overtime 2/1, a 3-2 volleyball result, a table-tennis loss not played, FIH's shoot-out bonus) 422 POINTS_SPLIT_FLATTENED (`splits` naming each: `otWin`, `otLoss`, `shootoutWin`, `shootoutLoss`, `soBonus`, `unplayed`, `pointsMap`, `stage_name`, `stage_kind`) — no flat rule pays such a stage as its sport does (a retirement after play pays a flat rule's loss, never the sport's loss not played), so state the split in the rule to set it. A stage's own points ask no plan feature (bonuses and a forfeit row are free on every plan); a plan feature the body's stages need (a double-elimination or an advanced-format kind, carry-over) or the stage cap is 402 PAYMENT_REQUIRED. A decider at the config's TOP level (any whole decider a sport declares, e.g. `config.shootout`, `config.overtime`, `config.superOver`) is refused 400 VALIDATION naming the key (`field`) and where it goes (`config.rules.<key>`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size. Chess divisions take individual players only: an americano or mexicano stage (it mints pair entrants) is 422 CHESS_INDIVIDUAL_ONLY, asked before any plan gate, and the whole batch writes nothing",
+        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 TIEBREAK_KEY_INVALID (`refusals`, `stage_id`, `stage_name`) for the INHERITED tie-break order (the division's) the new stage's kind refuses — a stage's own order is not part of this body (`config.tiebreakers` is an unknown key of the strict stage config: 400 VALIDATION); nothing in the batch is written. A stage's own `config.points` (the engine's PointsRule) is asked what the stage PUT asks of it, and `config.points: null` means no points for this slot (as `points: null` does on the stage PUT): nothing is asked and nothing is stored. A non-null value: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a walkover `awardScore` on a sport whose table never reads it 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a rule that does not pay an outcome the stage can end in 422 POINTS_OUTCOME_UNCOVERED (`uncovered`, `stage_name`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; a FLAT rule (one amount per win and per loss: no overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) on a stage whose sport pays one of those apart (IIHF's overtime 2/1, a 3-2 volleyball result, a table-tennis loss not played, FIH's shoot-out bonus) 422 POINTS_SPLIT_FLATTENED (`splits` naming each: `otWin`, `otLoss`, `shootoutWin`, `shootoutLoss`, `soBonus`, `unplayed`, `pointsMap`, `stage_name`, `stage_kind`) — no flat rule pays such a stage as its sport does (a retirement after play pays a flat rule's loss, never the sport's loss not played), so state the split in the rule to set it. A stage's own points ask no plan feature (bonuses and a forfeit row are free on every plan); a plan feature the body's stages need (a double-elimination or an advanced-format kind, carry-over) or the stage cap is 402 PAYMENT_REQUIRED. A decider at the config's TOP level (any whole decider a sport declares, e.g. `config.shootout`, `config.overtime`, `config.superOver`) is refused 400 VALIDATION naming the key (`field`) and where it goes (`config.rules.<key>`). A requested half-point or zero-point bye has no path yet (RB3-7(c), deferred): `config.requestedByes`, with any value, is refused 400 SWISS_REQUESTED_BYES_DEFERRED naming the key (`field`) and the way out — record a walkover on the player's board. 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size. Chess divisions take individual players only: an americano or mexicano stage (it mints pair entrants) is 422 CHESS_INDIVIDUAL_ONLY, asked before any plan gate, and the whole batch writes nothing",
         "tags": [
           "stages"
         ],
@@ -22012,6 +22504,9 @@
                           },
                           "chess": {
                             "type": "boolean"
+                          },
+                          "requestedByes": {
+                            "not": {}
                           },
                           "pairing": {
                             "type": "string",
@@ -22438,6 +22933,9 @@
                             },
                             "chess": {
                               "type": "boolean"
+                            },
+                            "requestedByes": {
+                              "not": {}
                             },
                             "pairing": {
                               "type": "string",
@@ -23242,7 +23740,7 @@
         ]
       },
       "put": {
-        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset. A matched slot also keeps its own `points` (the stage's PointsRule) unless the body sends its own, which replaces it whole, or sends `points: null`, which drops it and stores none; a new slot, or one whose kind changed, has none. Every refusal POST can raise from the body or the carry (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 402 PAYMENT_REQUIRED for a plan feature or the stage cap, 409 for a `seq` the body names twice, 422 CONFIG_INVALID / TIEBREAK_KEY_INVALID / POINTS_OUTCOME_UNCOVERED / POINTS_SPLIT_FLATTENED / STAGE_SWISS_ROUNDS_REQUIRED — a carried `points` is asked as a sent one — and 422 CHESS_INDIVIDUAL_ONLY for an americano or mexicano stage in a chess division) refuses the whole save: a refused save leaves the existing stages untouched",
+        "summary": "Replace the stage graph (v8 Settings format; 409 FORMAT_LOCKED once fixtures exist). Each stage is written as for POST, then the body's `config.rules` over it — except that a slot whose `seq` keeps the same `kind` keeps the rules it already stored IN PLACE OF its preset (a preset key the organiser removed stays removed, and a stage set to the division's rules stays so); a new slot, or one whose kind changed, starts from its own kind's preset. A matched slot also keeps its own `points` (the stage's PointsRule) unless the body sends its own, which replaces it whole, or sends `points: null`, which drops it and stores none; a new slot, or one whose kind changed, has none. Every refusal POST can raise from the body or the carry (400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE, 400 SWISS_REQUESTED_BYES_DEFERRED for a `config.requestedByes` — a requested half-point or zero-point bye is deferred, RB3-7(c) — 402 PAYMENT_REQUIRED for a plan feature or the stage cap, 409 for a `seq` the body names twice, 422 CONFIG_INVALID / TIEBREAK_KEY_INVALID / POINTS_OUTCOME_UNCOVERED / POINTS_SPLIT_FLATTENED / STAGE_SWISS_ROUNDS_REQUIRED — a carried `points` is asked as a sent one — and 422 CHESS_INDIVIDUAL_ONLY for an americano or mexicano stage in a chess division) refuses the whole save: a refused save leaves the existing stages untouched",
         "tags": [
           "stages"
         ],
@@ -23378,6 +23876,9 @@
                           },
                           "chess": {
                             "type": "boolean"
+                          },
+                          "requestedByes": {
+                            "not": {}
                           },
                           "pairing": {
                             "type": "string",
@@ -23804,6 +24305,9 @@
                             },
                             "chess": {
                               "type": "boolean"
+                            },
+                            "requestedByes": {
+                              "not": {}
                             },
                             "pairing": {
                               "type": "string",
@@ -24531,7 +25035,7 @@
     },
     "/api/v1/stages/{id}/generate": {
       "post": {
-        "summary": "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored. An americano or mexicano stage mints pair entrants, so in a chess division it is 422 CHESS_INDIVIDUAL_ONLY.",
+        "summary": "Generate fixtures (idempotent, returns diff). Optional body `{pairing}` — Swiss only, ROUND 1 only (422 SWISS_PAIRING_ROUND_ONE_ONLY / SWISS_PAIRING_NOT_SWISS otherwise); never stored. An americano or mexicano stage mints pair entrants, so in a chess division it is 422 CHESS_INDIVIDUAL_ONLY. A Swiss whose rounds exceed the hard maximum of the field being paired (n − 1 for an even field, n for an odd one) is refused SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish}` — 422 as sent (the first Generate, or any before Start); in a running Swiss whose field shrank, only a round beyond the shrunk field's hard maximum is refused, 409 `canFinish: true`, and a round still within it is paired with `swiss_rounds` (verdict shrunk, `{rounds, field, hardMax, canFinish}` — canFinish false for round 1, where nothing is played); above the safe maximum ⌊n/2⌋ it goes through with `swiss_rounds` (verdict warn).",
         "tags": [
           "stages"
         ],
@@ -24911,6 +25415,53 @@
                             "byes_removed"
                           ],
                           "additionalProperties": false
+                        },
+                        "swiss_rounds": {
+                          "type": "object",
+                          "properties": {
+                            "verdict": {
+                              "type": "string",
+                              "enum": [
+                                "warn",
+                                "shrunk"
+                              ]
+                            },
+                            "recommended": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "safeMax": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "hardMax": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "rounds": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "field": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "canFinish": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "verdict",
+                            "recommended",
+                            "safeMax",
+                            "hardMax"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -25067,6 +25618,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -25413,6 +26008,927 @@
           },
           "422": {
             "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stages/{id}/swiss/add-round": {
+      "post": {
+        "summary": "W3 T12 (X-SW-17, ruling 250) — add one round to a Swiss stage: round N + 1, its shells minted for the field it will pair (today's active roster as that round counts it; once the stage holds shells — before its first Generate only the count is stored), and a `swiss_rounds_changed` ledger row (an undo barrier: Undo across it is 422 SWISS_ROUNDS_CHANGE_NOT_UNDOABLE). No body. Offered while the Swiss runs, after its final round is paired too. 422 STAGE_NOT_SWISS; 422 SCHEDULE_LOCKED (frozen timetable); 422 SWISS_OVER `{canAddRound: false}` once the stage is complete or a later stage is under way; 422 STAGE_NOT_READY for a field under 2; SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish}` when N + 1 exceeds the field's hard maximum (n − 1 even, n odd) — 409 when a round is complete (Finish resolves it), else 422. Every `canAddRound` the server sends (SWISS_NO_ROUND_LEFT, SWISS_ROUNDS_LOCKED) answers exactly whether this call clears SWISS_OVER, STAGE_NOT_READY and SWISS_ROUNDS_ABOVE_MAX; the freeze is checked first and outside it, so a frozen timetable still answers 422 SCHEDULE_LOCKED",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "rounds": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "shells_added": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "rounds",
+                        "shells_added"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "rounds": -9007199254740991,
+                    "shells_added": -9007199254740991
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stages/{id}/swiss/finish": {
+      "post": {
+        "summary": "W3 T13 (RB3-20, X-SW-26) — Finish the Swiss now: end a running Swiss after round k, the latest round whose seated boards are all decided and hold a board other than the bye (a round that seated only the bye was never played, so it is dropped), then complete the stage (which seeds what follows as usual: a draft seed proposal for a setup-timing knockout, or the draw of an on_complete one). No body. A paired round past k that nothing in has started is unpaired and dropped; every row past k is deleted (`shells_removed`; `slots_freed` of them held a laid-out slot); `config.rounds` becomes k, and a moved count appends `swiss_rounds_changed` (an undo barrier: Undo across it is 422 SWISS_ROUNDS_CHANGE_NOT_UNDOABLE). Every `canFinish` the server sends (SWISS_ROUNDS_LOCKED, SWISS_ROUNDS_ABOVE_MAX, SWISS_NO_ROUND_LEFT, the Generate's shrunk warning) is true only when this call goes through, and then carries `finish: {after: k, rounds: N}`; it is false once every round is decided (the call would remove nothing: it is Complete, which is the action then — it still goes through); the freeze is checked first and outside it. Refused, nothing written: 422 STAGE_NOT_SWISS; 422 SCHEDULE_LOCKED (frozen timetable); 422 SWISS_OVER `{canFinish: false}` once the stage is complete or a later stage is under way; 409 SWISS_FINISH_NOTHING_PLAYED before any round is complete; 409 SWISS_FINISH_ROUND_UNDECIDED `{boards: [{fixtureId, round, board}]}` when a board past k has started (decide the boards it names); 409 FIXTURE_HAS_OWN_FORMAT for a removed shell carrying its own format; STAGE_NOT_READY when rounds 1..k would not complete the stage",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "finished_after": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "shells_removed": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "slots_freed": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "completed": {
+                          "type": "boolean"
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {}
+                          }
+                        },
+                        "qualified": {
+                          "type": "object",
+                          "properties": {
+                            "stage_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "entrants": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              }
+                            }
+                          },
+                          "required": [
+                            "stage_id",
+                            "entrants"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "next_stage_fixtures": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "division_completed": {
+                          "type": "boolean"
+                        },
+                        "seed_proposal": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "status": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "status"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "finished_after",
+                        "shells_removed",
+                        "slots_freed",
+                        "completed",
+                        "events"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "finished_after": -9007199254740991,
+                    "shells_removed": -9007199254740991,
+                    "slots_freed": -9007199254740991,
+                    "completed": true,
+                    "events": [
+                      {}
+                    ]
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stages/{id}/swiss-cut": {
+      "get": {
+        "summary": "W3 T17 (RB3-19, X-SW-25) — who a correction moved across a completed Swiss's cut AFTER its knockout began. A corrected Swiss result never moves a bracket seat (the bracket stands); this names, for the desk's amber warning, who would qualify on today's table instead of whom. `drift: {out, in}` (entrant ids in table order) when the frozen cut — the stage after the Swiss's `config.qualified` (an on_complete one) or, for a setup-timing bracket, its seated entrants — differs from today's top q; `drift: null` when nothing moved, and for a Swiss that is not complete, a bracket not yet seated, or a knockout with no result yet (a generated bye is no start). Today's top q is read with the cut's own eligibility: a withdrawn or disqualified entrant leaves it and the next eligible entrant backfills, and q is the number of frozen qualifiers still in the field. Organiser-only (a `manage` key); 404 for a stage that is unknown or another organisation's",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "drift": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "out": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  }
+                                },
+                                "in": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "out",
+                                "in"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "drift"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "drift": {
+                      "out": [
+                        "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                      ],
+                      "in": [
+                        "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                      ]
+                    }
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -25947,7 +27463,7 @@
     },
     "/api/v1/stages/{id}/rebuild": {
       "post": {
-        "summary": "F3 Task 5 — replace a root stage's fixtures wholesale (delete + regenerate against the current active roster), instead of /generate's additive-only top-up. 409 STAGE_HAS_RESULTS if any fixture already carries a score, is in progress, or is completed (never a partial rebuild); 422 STAGE_NOT_ROOT for a stage that doesn't draw fixtures directly from the active roster (a progression source, a ladder, or an americano stage)",
+        "summary": "F3 Task 5 — replace a root stage's fixtures wholesale (delete + regenerate against the current active roster), instead of /generate's additive-only top-up. 409 STAGE_HAS_RESULTS if any fixture already carries a score, is in progress, or is completed (never a partial rebuild); 422 STAGE_NOT_ROOT for a stage that doesn't draw fixtures directly from the active roster (a progression source, a ladder, or an americano stage); a Swiss whose rounds exceed the current field's hard maximum is 422 SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish: false}` and nothing is deleted",
         "tags": [
           "stages"
         ],
@@ -26305,17 +27821,91 @@
                           ],
                           "additionalProperties": false
                         },
+                        "swiss_rounds": {
+                          "type": "object",
+                          "properties": {
+                            "verdict": {
+                              "type": "string",
+                              "enum": [
+                                "warn",
+                                "shrunk"
+                              ]
+                            },
+                            "recommended": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "safeMax": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "hardMax": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "rounds": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "field": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "canFinish": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "verdict",
+                            "recommended",
+                            "safeMax",
+                            "hardMax"
+                          ],
+                          "additionalProperties": false
+                        },
                         "removed": {
                           "type": "integer",
                           "minimum": -9007199254740991,
                           "maximum": 9007199254740991
+                        },
+                        "slots": {
+                          "type": "object",
+                          "properties": {
+                            "kept": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "freed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "unscheduled": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "kept",
+                            "freed",
+                            "unscheduled"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
                         "created",
                         "existing",
                         "fixtures",
-                        "removed"
+                        "removed",
+                        "slots"
                       ],
                       "additionalProperties": false
                     },
@@ -26370,7 +27960,12 @@
                       "byes_added": -9007199254740991,
                       "byes_removed": -9007199254740991
                     },
-                    "removed": -9007199254740991
+                    "removed": -9007199254740991,
+                    "slots": {
+                      "kept": -9007199254740991,
+                      "freed": -9007199254740991,
+                      "unscheduled": -9007199254740991
+                    }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -27978,6 +29573,412 @@
           },
           "404": {
             "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      },
+      "patch": {
+        "summary": "W3 T12 (SW-M10, #838; X-SW-17, BG-SW-1) — a Swiss stage's round count (`rounds`) and chess colours (`chess`), editable until the stage's FIRST START (a result or any recorded data, an online game, a decided board other than the bye; a bye alone and a device link are not a start). At least one key; unknown keys 400, and `requestedByes` (a requested half-point or zero-point bye, deferred — RB3-7(c)) is 400 SWISS_REQUESTED_BYES_DEFERRED with the way out: record a walkover on the player's board. Before that start: rounds above the new count lose their shells (`shells.removed`, and `slots_freed` of them held a laid-out slot), rounds added are minted for each round's own field once the stage holds shells (`shells.added`), and a moved count appends `swiss_rounds_changed` (an undo barrier: Undo across it is 422 SWISS_ROUNDS_CHANGE_NOT_UNDOABLE); the same count again writes nothing. `swiss_rounds` judges the count against the field its next Pair seats (verdict ok or warn above the safe maximum ⌊n/2⌋; null when `rounds` is not sent or there is no pairable field). Refused, nothing written: 422 STAGE_NOT_SWISS; 422 SCHEDULE_LOCKED (frozen timetable); 409 SWISS_ROUNDS_LOCKED `{canFinish, canAddRound}` after the first start when `rounds` is sent (Finish the Swiss, or `POST /stages/{id}/swiss/add-round`), and 422 SWISS_OVER `{canFinish: false, canAddRound: false}` instead once the stage is complete or a later stage is under way; 422 SWISS_CHESS_LOCKED after the first start for a body that sends `chess` alone (the colours never move once play starts); 422 SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish: false}` above the field's hard maximum (n − 1 even, n odd); 409 SWISS_ROUNDS_BELOW_SEATED below a paired round (Unpair it first); 409 FIXTURE_HAS_OWN_FORMAT for a removed shell carrying its own format",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "manage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "rounds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "chess": {
+                    "type": "boolean"
+                  },
+                  "requestedByes": {
+                    "not": {}
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "rounds": 1,
+                "chess": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "rounds": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "chess": {
+                          "type": "boolean"
+                        },
+                        "swiss_rounds": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "verdict": {
+                                  "type": "string",
+                                  "enum": [
+                                    "ok",
+                                    "warn"
+                                  ]
+                                },
+                                "recommended": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "safeMax": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "hardMax": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "verdict",
+                                "recommended",
+                                "safeMax",
+                                "hardMax"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "shells": {
+                          "type": "object",
+                          "properties": {
+                            "added": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "removed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "slots_freed": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "added",
+                            "removed",
+                            "slots_freed"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "rounds",
+                        "chess",
+                        "swiss_rounds",
+                        "shells"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "rounds": -9007199254740991,
+                    "chess": true,
+                    "swiss_rounds": {
+                      "verdict": "ok",
+                      "recommended": -9007199254740991,
+                      "safeMax": -9007199254740991,
+                      "hardMax": -9007199254740991
+                    },
+                    "shells": {
+                      "added": -9007199254740991,
+                      "removed": -9007199254740991,
+                      "slots_freed": -9007199254740991
+                    }
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
             "content": {
               "application/json": {
                 "schema": {
@@ -40644,7 +42645,7 @@
     },
     "/api/v1/divisions/{id}/start": {
       "post": {
-        "summary": "Start the tournament (quick-start generates fixtures). Publishes the schedule on the way through, validated server-side: blocking conflicts 422 SCHEDULE_BLOCKING_CONFLICTS; warnings 422 SCHEDULE_UNACKNOWLEDGED_WARNINGS until acknowledge_warnings",
+        "summary": "Start the tournament (quick-start generates fixtures). Publishes the schedule on the way through, validated server-side: blocking conflicts 422 SCHEDULE_BLOCKING_CONFLICTS; warnings 422 SCHEDULE_UNACKNOWLEDGED_WARNINGS until acknowledge_warnings. A root Swiss whose rounds exceed its field's hard maximum is 422 SWISS_ROUNDS_ABOVE_MAX `{rounds, field, hardMax, canFinish: false}`",
         "tags": [
           "scheduling"
         ],
@@ -78967,6 +80968,13 @@
                                                 "type": "null"
                                               }
                                             ]
+                                          },
+                                          "departed": {
+                                            "type": "string",
+                                            "enum": [
+                                              "withdrawn",
+                                              "disqualified"
+                                            ]
                                           }
                                         },
                                         "required": [
@@ -79008,6 +81016,13 @@
                                               {
                                                 "type": "null"
                                               }
+                                            ]
+                                          },
+                                          "departed": {
+                                            "type": "string",
+                                            "enum": [
+                                              "withdrawn",
+                                              "disqualified"
                                             ]
                                           }
                                         },
@@ -79566,6 +81581,43 @@
                                       "cutIndex",
                                       "label",
                                       "legend"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "swissRound": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "round": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "of": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "state": {
+                                        "type": "string",
+                                        "enum": [
+                                          "paired",
+                                          "in_play",
+                                          "complete",
+                                          "final"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "round",
+                                      "of",
+                                      "state"
                                     ],
                                     "additionalProperties": false
                                   },
@@ -81685,6 +83737,13 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "departed": {
+                                          "type": "string",
+                                          "enum": [
+                                            "withdrawn",
+                                            "disqualified"
+                                          ]
                                         }
                                       },
                                       "required": [
@@ -81726,6 +83785,13 @@
                                             {
                                               "type": "null"
                                             }
+                                          ]
+                                        },
+                                        "departed": {
+                                          "type": "string",
+                                          "enum": [
+                                            "withdrawn",
+                                            "disqualified"
                                           ]
                                         }
                                       },
@@ -82087,6 +84153,13 @@
                                                   {
                                                     "type": "null"
                                                   }
+                                                ]
+                                              },
+                                              "departed": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "withdrawn",
+                                                  "disqualified"
                                                 ]
                                               }
                                             },
@@ -83003,6 +85076,13 @@
                                                   {
                                                     "type": "null"
                                                   }
+                                                ]
+                                              },
+                                              "departed": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "withdrawn",
+                                                  "disqualified"
                                                 ]
                                               }
                                             },
@@ -124265,7 +126345,7 @@
     },
     "/api/v1/stages/{id}/fixtures": {
       "post": {
-        "summary": "Ad-hoc single fixture (replay / friendly / tie-breaker) on a league, group or swiss stage; the match folds into the standings. Bracket kinds 422.",
+        "summary": "Ad-hoc single fixture (replay / friendly / tie-breaker) on a league or group stage; the match folds into the standings. Bracket kinds 422. A Swiss stage 422 SWISS_ADHOC_REFUSED: the system pairs Swiss rounds, so friendlies go in another stage (W3 RB3-15)",
         "tags": [
           "stages"
         ],

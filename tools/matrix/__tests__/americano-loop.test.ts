@@ -353,7 +353,10 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(gen).not.toMatch(/\nasync function /);
     expect(gen.match(/existing\.some\(\(f\) => f\.status !== "decided"\)/g)?.length).toBe(1);
     expect(WAIT_UNLESS).toBe("decided");
-    const active = src.match(/const active = await tx<ActiveEntrant\[\]>`([\s\S]*?)`/)?.[1] ?? "";
+    // Since W3 T9 the shared active select lives in swissActiveEntrants (it adds the per-stage Swiss stamp), and
+    // generateStageFixturesTx — every kind's Generate, americano's included — reads it.
+    expect(src).toMatch(/\n {2}const active = await swissActiveEntrants\(tx, stage\.division_id, stageId\);/);
+    const active = sliceFunction(src, "swissActiveEntrants").match(/await tx<[^`]*`([\s\S]*?)`/)?.[1] ?? "";
     expect(active).toMatch(/status in \('registered', 'confirmed'\)/);
     expect(active).not.toMatch(/\bkind\b/);   // no kind filter: pair entrants are "players" (false premise 17)
     expect(FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT).toBe(true);

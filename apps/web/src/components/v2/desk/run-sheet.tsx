@@ -39,6 +39,7 @@ import type { MessageKey } from "@/lib/messages";
 import type { VenueNoun } from "@/lib/venue";
 import { RunSheetRow } from "./run-sheet-row";
 import type { HoldState } from "@/server/relay/domain/session";
+import type { ForfeitEntrantStatuses } from "@/lib/forfeit-tag";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -139,6 +140,7 @@ export function RunSheet({
   feedLabels,
   onlinePlay,
   arbiterHrefFor,
+  entrantStatuses,
   matchDayHref,
   venueNoun,
   embedded = false,
@@ -168,6 +170,9 @@ export function RunSheet({
    *  and the chip would silently disagree with the "Needs you" panel. */
   matchMinutes: number;
   entrantNames: Record<string, string>;
+  /** W3 T15 ruling 2 — entrant id → status, threaded to every row (`RunSheetRow`'s own prop): a DISQUALIFIED entrant's
+   *  cascade walkover is worded as the disqualification, never as a withdrawal. This component reads nothing off it. */
+  entrantStatuses?: ForfeitEntrantStatuses;
   courtNames?: Record<string, string>;
   /** Org venues with nested courts — threaded straight through to each row's
    *  inline editor for R35's per-fixture court picker. This component never
@@ -394,6 +399,7 @@ export function RunSheet({
                 nowMs={nowMs}
                 canEdit={canEdit}
                 entrantNames={entrantNames}
+                entrantStatuses={entrantStatuses}
                 courtNames={courtNames}
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
@@ -473,6 +479,7 @@ export function RunSheet({
                     nowMs={nowMs}
                     canEdit={canEdit}
                     entrantNames={entrantNames}
+                    entrantStatuses={entrantStatuses}
                     courtNames={courtNames}
                     venues={venues}
                     boardSlotOptions={boardSlotOptions}
@@ -516,6 +523,7 @@ export function RunSheet({
                 nowMs={nowMs}
                 canEdit={canEdit}
                 entrantNames={entrantNames}
+                entrantStatuses={entrantStatuses}
                 courtNames={courtNames}
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
@@ -561,6 +569,7 @@ export function RunSheet({
                 nowMs={nowMs}
                 canEdit={canEdit}
                 entrantNames={entrantNames}
+                entrantStatuses={entrantStatuses}
                 courtNames={courtNames}
                 venues={venues}
                 boardSlotOptions={boardSlotOptions}
@@ -675,6 +684,7 @@ export function RunSheet({
                     nowMs={nowMs}
                     canEdit={canEdit}
                     entrantNames={entrantNames}
+                    entrantStatuses={entrantStatuses}
                     courtNames={courtNames}
                     venues={venues}
                     boardSlotOptions={boardSlotOptions}
@@ -973,6 +983,8 @@ function RowWithNow({
   nowMs: number;
   canEdit: boolean;
   entrantNames: Record<string, string>;
+  /** W3 T15 ruling 2 — survives `...rest` into `RunSheetRow`, like `streamState`. */
+  entrantStatuses?: ForfeitEntrantStatuses;
   courtNames?: Record<string, string>;
   venues?: readonly Venue[];
   boardSlotOptions?: string[];

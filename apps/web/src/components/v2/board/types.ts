@@ -98,12 +98,23 @@ export interface BoardFixture {
    *  (review 4 of #857). Sent only when true (`listDivisionFixturesForBoard`);
    *  any other status already says it is not movable. */
   held?: boolean;
+  /** W3 T3 (X-SW-29, RB3-23): a Swiss stage's bye row (`sw-r{N}-bye`, seated or not — `swissByeShellSql`). A bye is
+   *  not played: it takes no court and no time, and every board write refuses to place it (SWISS_BYE_NOT_PLACEABLE).
+   *  Sent only when true (`listDivisionFixturesForBoard`). */
+  bye_shell?: boolean;
 }
 
-/** Whether the board may move or pin this card: `scheduled`, and holding no
- *  result (`held`). The server refuses the rest (schedule.ts `isMovable`). */
-export function boardMovable(f: Pick<BoardFixture, "status" | "held">): boolean {
-  return f.status === "scheduled" && f.held !== true;
+/** Whether the board may move or pin this card: `scheduled`, holding no
+ *  result (`held`), and not a Swiss bye shell (`bye_shell`). The server
+ *  refuses the rest (schedule.ts `isMovable`). */
+export function boardMovable(f: Pick<BoardFixture, "status" | "held" | "bye_shell">): boolean {
+  return f.status === "scheduled" && f.held !== true && f.bye_shell !== true;
+}
+
+/** Whether the card waits in the unscheduled tray: `scheduled` with no time — but never a Swiss bye shell, which no
+ *  one schedules (W3 T3, X-SW-29). A `held` card keeps its place there; it is shown, not offered a move. */
+export function inBoardTray(f: Pick<BoardFixture, "status" | "scheduled_at" | "bye_shell">): boolean {
+  return f.scheduled_at === null && f.status === "scheduled" && f.bye_shell !== true;
 }
 
 export interface BoardConfig {

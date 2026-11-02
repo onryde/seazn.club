@@ -49,6 +49,9 @@ export interface OverlaySideInput {
   short?: string | null;
   /** Club kit colour (`team_display.colors.home_primary`) for the slate card tiles. */
   colour?: string | null;
+  /** W3 T15 review I4: how the side's entrant left, when she has — a withdrawal cascade's walkover over a DISQUALIFIED
+   *  entrant is worded on air as a plain walkover, never "withdrew". Absent while she is in the field. */
+  departed?: "withdrawn" | "disqualified";
 }
 
 export interface OverlaySide {
@@ -692,7 +695,12 @@ export function overlayModel(input: OverlayModelInput): OverlayModel {
   const forfeit =
     input.forfeitCopy === undefined
       ? null
-      : forfeitTag(data.outcome, NO_LEDGER, { home_entrant_id: sides[0].id, away_entrant_id: sides[1].id });
+      : forfeitTag(
+          data.outcome,
+          NO_LEDGER,
+          { home_entrant_id: sides[0].id, away_entrant_id: sides[1].id },
+          { [sides[0].id]: sides[0].departed, [sides[1].id]: sides[1].departed },
+        );
   const forfeitLine = (names: Record<string, string>): string | null =>
     forfeit === null || input.forfeitCopy === undefined
       ? null

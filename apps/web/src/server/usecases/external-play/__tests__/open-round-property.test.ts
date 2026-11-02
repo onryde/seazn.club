@@ -10,7 +10,9 @@
 //   seat       seatPlayer for one current player
 //   create     T9 createGameIfReady on one board (fix round 1, review M7)
 //   held       the same, with Lichess answering "outcome unknown" (a hold)
-//   late       addFixture: a board added to the round after the fact
+//   late       a legacy ad-hoc board added to the round after the fact (W3
+//              RB3-15 A refuses addFixture on Swiss now; the row is seeded as
+//              addFixture wrote it, since such rows stay live)
 //   reschedule moveFixture: one board's start time moves (T7's reset)
 // and the seed itself is 4 or 5 players — 5 puts a BYE in the round.
 //
@@ -81,10 +83,11 @@ import { HttpError } from "@/lib/errors";
 import { openRound } from "../open-round";
 import { seatPlayer, type PreflightDeps } from "../preflight";
 import { createGameIfReady } from "../create-game";
-import { addFixture, generateStageFixtures, unpairSwissRound } from "../../stages";
+import { generateStageFixtures, unpairSwissRound } from "../../stages";
 import { patchDivision } from "../../divisions";
 import { moveFixture } from "../../schedule";
 import { seedOnlineSwiss, type SeedOnlineSwissResult } from "../../__tests__/_external-play-seed";
+import { seedLegacySwissAdhoc } from "../../__tests__/_swiss-legacy-adhoc";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const MIN = 60_000;
@@ -333,13 +336,11 @@ describe.skipIf(!HAS_DB)("openRound — interleavings property", () => {
             }
           } else if (c.t === "late") {
             if (m.late === null) {
-              // Two players already on OTHER boards: addFixture does not
+              // Two players already on OTHER boards: addFixture did not
               // police repeats, and the late board is a board like any other.
               const a = seats[0]!;
               const b = seats.find((x) => x.fixtureId !== a.fixtureId)!;
-              const { fixture_id } = await addFixture(s.owner, s.stageId, {
-                home_entrant_id: a.entrantId,
-                away_entrant_id: b.entrantId,
+              const { fixture_id } = await seedLegacySwissAdhoc(s.stageId, a.entrantId, b.entrantId, {
                 round_no: 1,
                 scheduled_at: new Date(ROUND_T).toISOString(),
               });

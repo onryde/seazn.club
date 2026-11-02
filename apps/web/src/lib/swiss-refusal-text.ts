@@ -1,0 +1,78 @@
+// W3 Task 11 (X-SW-16): a Swiss refusal (`lib/swiss-refusals.ts`) said in the reader's language, with what to do next.
+// Apart from `lib/swiss-rounds.ts` on purpose: that module is pure arithmetic with no import, because a smoke suite loads
+// it under bare `node --experimental-strip-types` (scripts/smoke/suites/swissKnockout.ts) and the scripts typecheck
+// cannot follow the dictionary types this file needs. Client-safe: stages-panel.tsx and launch-actions.tsx call it.
+import type { MessageKey } from "./messages";
+import { swissRefusalKey, type SwissRefusalCode } from "./swiss-refusals";
+import { swissRoundsGuidanceLine, type SwissRoundsPlural } from "./swiss-rounds";
+
+/** `useMsg()` satisfies it. */
+export type SwissRefusalMsg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+
+/**
+ * A Swiss refusal (`lib/swiss-refusals.ts`) in the reader's language, off its CODE — never the server's English. For
+ * `SWISS_ROUNDS_ABOVE_MAX` whose details name the field (`{ rounds, field, hardMax, canFinish }`), a second sentence
+ * says what to do: as sent (Generate, Start) the field's guidance, so the organiser reads the number to set; after the
+ * field shrank under a running Swiss (`canFinish`), what the field still pairs and that the Swiss can be finished — the
+ * count is fixed once a match has started (T12), so "recommended" would mislead there. For `SWISS_ROUNDS_LOCKED`
+ * (`{ canFinish, canAddRound }`), a second sentence names only the recoveries actually offered — Finish now, Add a round,
+ * both, or (neither) that the Swiss keeps its rounds; with neither detail sent, the sentence alone (W3 T12 Phase 2 fix).
+ * `SWISS_NO_ROUND_LEFT` (`{ canAddRound, canFinish, stageId }`) the same way: Add a round named only when it goes through,
+ * Finish now only when it does (W3 T13, THE Finish predicate), else that no more rounds fit (T12 Fix round 1, review I1).
+ * `SWISS_FINISH_ROUND_UNDECIDED` (`{ boards, inProgress }`, T13) names the boards still to decide, as the abandoned-board
+ * refusal names its boards ("round {round} board {board}"), after the round-in-progress sentence — or, with `inProgress:
+ * false`, the reopened-round one (Fix round 1, review m3).
+ */
+export function swissRefusalText(
+  code: SwissRefusalCode,
+  details: Record<string, unknown> | undefined,
+  msg: SwissRefusalMsg,
+  plural: SwissRoundsPlural,
+): string {
+  const sentence = msg(swissRefusalKey(code));
+  if (code === "SWISS_ROUNDS_LOCKED") {
+    const finish = details?.canFinish;
+    const add = details?.canAddRound;
+    if (typeof finish !== "boolean" && typeof add !== "boolean") return sentence;
+    const offered: MessageKey =
+      finish === true && add === true
+        ? "swiss.rounds.locked.finishOrAdd"
+        : finish === true
+          ? "swiss.rounds.locked.finish"
+          : add === true
+            ? "swiss.rounds.locked.add"
+            : "swiss.rounds.locked.none";
+    return `${sentence} ${msg(offered)}`;
+  }
+  if (code === "SWISS_NO_ROUND_LEFT") {
+    const add = details?.canAddRound;
+    if (typeof add !== "boolean") return sentence;
+    const finish = details?.canFinish === true;
+    const next: MessageKey = add
+      ? finish
+        ? "swiss.rounds.noRoundLeft.addOrFinish"
+        : "swiss.rounds.noRoundLeft.add"
+      : finish
+        ? "swiss.rounds.noRoundLeft.finish"
+        : "swiss.rounds.noRoundLeft.none";
+    return `${sentence} ${msg(next)}`;
+  }
+  if (code === "SWISS_FINISH_ROUND_UNDECIDED") {
+    const boards = Array.isArray(details?.boards) ? (details.boards as { round?: unknown; board?: unknown }[]) : [];
+    const named = boards
+      .filter((b) => typeof b.round === "number" && typeof b.board === "number")
+      .map((b) => msg("schedule.error.swissAbandonedRef", { round: b.round as number, board: b.board as number }));
+    // Fix round 1 (review m3): "the round in progress" only when a round past k has started; a finished round that a
+    // take-back reopened (`inProgress: false`) is said as that.
+    const lead = details?.inProgress === false ? msg("swiss.finish.reopened") : sentence;
+    return named.length === 0 ? lead : `${lead} ${msg("swiss.finish.owed", { boards: named.join(", ") })}`;
+  }
+  if (code !== "SWISS_ROUNDS_ABOVE_MAX") return sentence;
+  const field = details?.field;
+  const hardMax = details?.hardMax;
+  if (details?.canFinish === true && typeof field === "number" && typeof hardMax === "number") {
+    return `${sentence} ${plural("swiss.rounds.shrunk", hardMax, { field })}`;
+  }
+  const line = typeof field === "number" ? swissRoundsGuidanceLine(field, plural) : null;
+  return line === null ? sentence : `${sentence} ${line}`;
+}

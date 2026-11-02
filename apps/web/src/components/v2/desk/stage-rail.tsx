@@ -80,7 +80,10 @@ import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { stageActions } from "@/lib/stage-card/summaries";
 import { WithReasonTip } from "./reason-tip";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
+import { swissRefusalKey } from "@/lib/swiss-refusals";
 import {
+  swissPairingChangeNote,
+  swissPairingDrawNote,
   swissPairingForKey,
   swissPairingHint,
   swissPairingOptionLabel,
@@ -92,6 +95,13 @@ import {
 // component's bottom-sheet CSS; review finding M4 was that it cribbed ONLY the
 // CSS, so the behaviour comes from the same place the look did.
 import { FOCUSABLE_SELECTOR, nextTrapFocus } from "@/components/modal";
+import Link from "@/components/ui/console-link";
+import { swissLateEntryOffered } from "@/lib/open-entry-stages";
+// W3 T12 Phase 2: the rounds chip (with its edit dialog) and the More menu's "Add a round" — their own file, so this
+// rail only mounts them.
+import { SwissAddRoundMenuItem, SwissRoundsChip, type SwissRoundsRail } from "./swiss-rounds-dialog";
+import { SwissFinishMenuItem } from "./swiss-rounds-dialog";
+import { SwissMoreMenu } from "./swiss-rounds-dialog";
 
 interface StageRow {
   id: string;
@@ -149,6 +159,19 @@ export interface StageRailProps {
   /** Whether this stage's kind is in `ADHOC_STAGE_KINDS` — computed by the
    *  panel, not the rail, so the rail stays presentational. */
   adhoc: boolean;
+  /** W3 T10 — the facts the "More" menu's "Add late player" is gated on
+   *  (`swissLateEntryOffered`, lib/open-entry-stages.ts), held by the panel:
+   *  the division's status, whether a round of this stage has a seat, and
+   *  where the item goes (the Entrants tab's own add form — reused, never a
+   *  second form). Absent ⇒ no More menu. */
+  lateEntry?: { divisionStatus: string; roundSeated: boolean; href: string };
+  /** W3 T12 Phase 2 (X-SW-17; owner pick B) — a Swiss stage's round count as the desk reads it
+   *  (`listSwissRoundControls`), its rows and the two writes, held by the panel: the "Rounds: N · Edit" chip and the
+   *  More menu's "Add a round" (swiss-rounds-dialog.tsx). Absent ⇒ neither (any other kind of stage). */
+  swissRounds?: SwissRoundsRail;
+  /** Batch-4 m2 — T14's "Unpair, then Pair next" line, said beside Unpair when no Pair next menu carries it
+   *  (`swissUnpairChangeHint`, lib/swiss-pairing-menu.ts). Absent ⇒ no line. */
+  unpairChangeHint?: boolean;
   /** Match Day E1 item 1: the header has settings buttons to the right of this group, so the group ends in a thin divider (from `md`)
    *  - but only when it holds a control: a divider beside nothing is a stray line. */
   dividerAfter?: boolean;
@@ -178,9 +201,19 @@ export function StageRail({
   swissHasUnseated,
   canUnpairSwiss,
   swissPairingMenu,
+  lateEntry,
+  swissRounds,
+  unpairChangeHint,
 }: StageRailProps) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
+  // W3 T10 — the "More" menu (owner pick: option A). Its open state is local
+  // and per-stage, like the split button's below. T12's "Add a round" and
+  // T13's "Finish now" join this same panel.
+  const [moreOpen, setMoreOpen] = useState(false);
+  const lateEntryOffered =
+    lateEntry !== undefined &&
+    swissLateEntryOffered({ stage, divisionStatus: lateEntry.divisionStatus, roundSeated: lateEntry.roundSeated });
   // Derived, not `useId()`: `stage.id` is already unique and already a prop
   // — see this file's own header for why this component gains no hook
   // beyond `useMsg`.
@@ -243,9 +276,14 @@ export function StageRail({
   // Which controls the actions row below draws, read once here so the divider beside the group can tell an empty group from a full one (a
   // complete stage with nothing to delete draws none). Add match is not listed: `stageActions` hands an ad-hoc stage with fixtures an
   // "add_match" only beside Generate (not started) or Complete (started), so wherever Add match shows, one of those already counts.
+  // W3 (merge with Match Day #1103): the Swiss controls ride this same group. The Rounds chip draws on every Swiss stage the panel hands
+  // `swissRounds` - a FINISHED one included (a fixed "Rounds: N"), where nothing above counts - so it is listed. Both Mores are not:
+  // the fed-Swiss More needs `swissRounds` too, and the late-add More is offered only on a started stage with a seated round
+  // (`swissLateEntryOffered`), where Complete already counts.
   const hasActions =
     (stage.status !== "complete" && (showGenerate || (stage.kind === "swiss" && canUnpairSwiss) || completeButton !== undefined)) ||
-    deletable;
+    deletable ||
+    swissRounds !== undefined;
 
   // Review finding M4. Below `md` this sheet BEHAVES modally — a
   // `fixed inset-0` backdrop swallows every tap on the page behind it — but it
@@ -385,6 +423,11 @@ export function StageRail({
             wrap, `gap-2`, not text-like ragged wrapping). `min-h-11` is on every button below at every width - 768/834 have no
             sheet chrome to give them room, and a 28px button is under the tap floor. */}
         <div className="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
+          {swissRounds && (
+            // W3 T12 Phase 2: the round count, first on the row. Opening its dialog closes the phone sheet first, so the
+            // two modal layers never trap focus against each other.
+            <SwissRoundsChip stageId={stage.id} busy={busy} rail={swissRounds} onOpen={() => open && onToggleOpen(stage.id)} />
+          )}
           {stage.status !== "complete" && (
             <>
               {/* Swiss round-1 pairing — the split button (spec
@@ -513,6 +556,11 @@ export function StageRail({
                   {busy === stage.id ? msg("schedule.working") : msg("schedule.unpair")}
                 </button>
               )}
+              {stage.kind === "swiss" && canUnpairSwiss && unpairChangeHint && (
+                <p data-testid="stage-unpair-hint" className="min-w-0 text-xs leading-snug text-slate-500 md:max-w-[60ch]">
+                  {msg("schedule.pairing.changeHint")}
+                </p>
+              )}
               {completeButton &&
                 (() => {
                   const complete = (
@@ -564,7 +612,74 @@ export function StageRail({
               {msg("schedule.delete")}
             </button>
           )}
-          {stage.status !== "complete" && adhoc && fixtureCount > 0 && (
+          {lateEntry && lateEntryOffered && (
+            <>
+              {/* W3 T10 — More: an inline disclosure after the row's buttons,
+                  like the pairing menu (never a floating popover, so nothing
+                  overflows at 320). `hidden` rather than unmounted, as
+                  `desk-tools-more.tsx` does: the item stays in the DOM, so a
+                  test can tell "folded" from "never rendered". */}
+              <button
+                type="button"
+                aria-expanded={moreOpen}
+                aria-controls={`stage-more-menu-${stage.id}`}
+                onClick={() => setMoreOpen((v) => !v)}
+                data-testid="stage-more"
+                className="btn btn-ghost min-h-11 justify-between gap-1.5 px-3 py-1.5 text-xs"
+              >
+                {msg("desk.tools.more")}
+                <span aria-hidden="true">{moreOpen ? "▴" : "▾"}</span>
+              </button>
+              <div
+                id={`stage-more-menu-${stage.id}`}
+                hidden={!moreOpen}
+                data-testid="stage-more-menu"
+                className="min-w-0 md:basis-full"
+              >
+                <div className="flex flex-col overflow-hidden rounded-xl border border-purple-200 bg-white md:max-w-md">
+                  <Link
+                    href={lateEntry.href}
+                    data-testid="stage-add-late-player"
+                    className="flex min-h-11 flex-col justify-center border-b border-purple-100 px-4 py-2 last:border-b-0 hover:bg-purple-50"
+                  >
+                    <span className="text-sm font-medium text-purple-700">{msg("stage.more.addLatePlayer")}</span>
+                    <span className="text-xs text-slate-500">{msg("stage.more.addLatePlayer.hint")}</span>
+                  </Link>
+                  {swissRounds && <SwissAddRoundMenuItem stageId={stage.id} busy={busy} rail={swissRounds} />}
+                  {swissRounds && <SwissFinishMenuItem stageId={stage.id} busy={busy} rail={swissRounds} onOpen={() => open && onToggleOpen(stage.id)} />}
+                </div>
+              </div>
+            </>
+          )}
+          {/* Batch-4 ruling 3: a running Swiss with no late-add More above (a fed Swiss) still gets Add a round and Finish
+              the Swiss now — its own More, the same toggle and testids, holding just those two. */}
+          {!(lateEntry && lateEntryOffered) && swissRounds && (
+            <SwissMoreMenu
+              stageId={stage.id}
+              busy={busy}
+              rail={swissRounds}
+              open={moreOpen}
+              onToggle={() => setMoreOpen((v) => !v)}
+              onFinishOpen={() => open && onToggleOpen(stage.id)}
+            />
+          )}
+          {stage.status !== "complete" && fixtureCount > 0 && stage.kind === "swiss" && (
+            // W3 RB3-15 A (X-SW-21, ruling 252): no Add match on a Swiss stage,
+            // whatever `adhoc` says — the system pairs its rounds and the server
+            // refuses the match (SWISS_ADHOC_REFUSED). The refusal's own copy
+            // stands where the trigger would, on the same gates, so the
+            // organiser reads where friendlies go instead of finding nothing.
+            // A quiet hint line, not a control: slate-500 xs (the Add match
+            // form's own hint), wrapping freely in the phone sheet's column and
+            // capped at a readable measure in the desktop row.
+            <p
+              data-testid="stage-swiss-adhoc-note"
+              className="min-w-0 text-xs leading-snug text-slate-500 md:max-w-[60ch]"
+            >
+              {msg(swissRefusalKey("SWISS_ADHOC_REFUSED"))}
+            </p>
+          )}
+          {stage.status !== "complete" && adhoc && fixtureCount > 0 && stage.kind !== "swiss" && (
             // Task 3 — trigger only. `AddMatchForm` deliberately stays mounted in
             // stages-panel.tsx: it reads `boardSlotOptions`, which also feeds
             // `<RunSheet>`, so hoisting the form itself here would mean building
@@ -619,6 +734,12 @@ export function SwissPairingMenuPanel({
 }) {
   const msg = useMsg();
   const checkedMode = pick ?? menu.defaultPairing;
+  // X-SW-22 (W3 T8): round 1 over a field with an unseeded entrant is drawn at random — said once, under the options,
+  // in the read-only hint's own quiet style, and tied to the group so a screen reader hears it with the choice.
+  const drawNote = swissPairingDrawNote(menu, msg);
+  const drawNoteId = `pairing-draw-note-${stageId}`;
+  // X-SW-30 (W3 T14, SW-L12): round 2+ also says the Swiss rules decide the pairing and how to re-derive it (Unpair, then Pair next).
+  const changeNote = swissPairingChangeNote(menu, msg);
   return (
     // The outer box claims the desktop row's whole line (`md:basis-full`),
     // so the buttons after it wrap below; the group inside keeps a reading
@@ -631,6 +752,7 @@ export function SwissPairingMenuPanel({
         role="radiogroup"
         aria-label={msg("schedule.pairing.groupLabel", { round: menu.round })}
         aria-disabled={!menu.choosable || undefined}
+        aria-describedby={drawNote === null ? undefined : drawNoteId}
         data-testid="stage-pairing-menu"
         onKeyDown={(e) => {
           if (e.key !== "Escape") return;
@@ -642,48 +764,55 @@ export function SwissPairingMenuPanel({
         className="flex w-full min-w-0 flex-col gap-1 rounded-lg border border-slate-200 bg-white p-1.5 text-xs md:max-w-md"
       >
         {menu.choosable ? (
-          SWISS_PAIRINGS.map((mode) => {
-            const checked = checkedMode === mode;
-            return (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={checked}
-                tabIndex={checked ? 0 : -1}
-                data-testid={`stage-pairing-${mode}`}
-                data-pairing-mode={mode}
-                onClick={() => onPick(mode)}
-                onKeyDown={(e) => {
-                  const next = swissPairingForKey(e.key, checkedMode);
-                  if (!next) return;
-                  e.preventDefault();
-                  onPick(next);
-                  // Roving tab stop: DOM focus follows the selection, or the
-                  // focus ring stays on a radio that is no longer checked.
-                  e.currentTarget
-                    .closest('[role="radiogroup"]')
-                    ?.querySelector<HTMLElement>(`[data-pairing-mode="${next}"]`)
-                    ?.focus();
-                }}
-                className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
-                  checked ? "bg-purple-50" : ""
-                }`}
-              >
-                <span aria-hidden="true" className={`shrink-0 ${checked ? "text-purple-700" : "text-slate-400"}`}>
-                  {checked ? "●" : "○"}
-                </span>
-                <span className="flex min-w-0 flex-col">
-                  <span className="font-semibold text-slate-800">
-                    {swissPairingOptionLabel(mode, menu.defaultPairing, msg)}
+          <>
+            {SWISS_PAIRINGS.map((mode) => {
+              const checked = checkedMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={checked}
+                  tabIndex={checked ? 0 : -1}
+                  data-testid={`stage-pairing-${mode}`}
+                  data-pairing-mode={mode}
+                  onClick={() => onPick(mode)}
+                  onKeyDown={(e) => {
+                    const next = swissPairingForKey(e.key, checkedMode);
+                    if (!next) return;
+                    e.preventDefault();
+                    onPick(next);
+                    // Roving tab stop: DOM focus follows the selection, or the
+                    // focus ring stays on a radio that is no longer checked.
+                    e.currentTarget
+                      .closest('[role="radiogroup"]')
+                      ?.querySelector<HTMLElement>(`[data-pairing-mode="${next}"]`)
+                      ?.focus();
+                  }}
+                  className={`flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 ${
+                    checked ? "bg-purple-50" : ""
+                  }`}
+                >
+                  <span aria-hidden="true" className={`shrink-0 ${checked ? "text-purple-700" : "text-slate-400"}`}>
+                    {checked ? "●" : "○"}
                   </span>
-                  {/* slate-600, not -500: -500 on the checked row's purple-50 wash
-                      measured under 4.5:1 (axe color-contrast, serious). */}
-                  <span className="text-slate-600">{swissPairingHint(mode, menu, msg)}</span>
-                </span>
-              </button>
-            );
-          })
+                  <span className="flex min-w-0 flex-col">
+                    <span className="font-semibold text-slate-800">
+                      {swissPairingOptionLabel(mode, menu.defaultPairing, msg)}
+                    </span>
+                    {/* slate-600, not -500: -500 on the checked row's purple-50 wash
+                        measured under 4.5:1 (axe color-contrast, serious). */}
+                    <span className="text-slate-600">{swissPairingHint(mode, menu, msg)}</span>
+                  </span>
+                </button>
+              );
+            })}
+            {drawNote === null ? null : (
+              <p id={drawNoteId} className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-draw-note">
+                {drawNote}
+              </p>
+            )}
+          </>
         ) : (
           <>
             <p
@@ -703,6 +832,11 @@ export function SwissPairingMenuPanel({
             <p className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-hint">
               {msg("schedule.pairing.roundOneOnly")}
             </p>
+            {changeNote === null ? null : (
+              <p className="px-2 pb-1.5 text-slate-500" data-testid="stage-pairing-change-hint">
+                {changeNote}
+              </p>
+            )}
           </>
         )}
       </div>

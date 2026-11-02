@@ -56,6 +56,7 @@ import type { AiConsoleFixture } from "./ai-diff";
 import {
   aiConsoleReducer,
   aiErrorKey,
+  aiUndoErrorKey,
   applyErrorKey,
   canRun,
   initialAiConsoleState,
@@ -918,7 +919,7 @@ export function AiConsole({
       onApplied?.();
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : 0;
-      const key = aiErrorKey(status, aiErrorCodeOf(err));
+      const key = aiUndoErrorKey(status, aiErrorCodeOf(err));
       dispatch({ type: "APPLY_ERROR", error: { status, message: msg(key), key } });
     } finally {
       setUndoing(false);

@@ -637,20 +637,58 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
   // case above, a Pair next that put its seated ids into `fixture_ids` (the
   // Undo DELETE list) went red at the `fixture_ids: []` match before Undo ever
   // ran, so this half had never been seen to kill anything (final review M3).
-  it("Undo of Pair next deletes no fixture (shell count unchanged)", async () => {
-    const { auth, divisionId, stageId } = await newSwiss(8, { pairing: "rank_adjacent" });
-    const shellCount = async () => {
-      const [{ n }] = await sql<{ n: number }[]>`
-        select count(*)::int as n from fixtures where stage_id = ${stageId}`;
-      return n;
-    };
+  //
+  // W3 T5 (SW-M2 / #835, RB3-22): Undo of Pair next used to delete nothing AND
+  // clear nothing — the engine inverts a Pair's `fixtures_generated` to a
+  // `fixtures_cleared` over its EMPTY `fixture_ids`, so every player stayed
+  // seated. It now puts the round back onto its shells, as Unpair does: the
+  // SEATS are the assertion (brief trap 2), the shell count stays beside them.
+  // An odd field, so the round carries a bye whose frozen cfg (W3 T3) must go
+  // with its seat; the board shells carry a laid-out time, which Undo keeps.
+  it("X-SW-28 Undo of Pair next clears round 1's seats and keeps the shells", async () => {
+    const { auth, divisionId, stageId } = await newSwiss(7, { pairing: "rank_adjacent" });
+    interface ShellRow {
+      id: string;
+      ext_key: string | null;
+      round_no: number;
+      home_entrant_id: string | null;
+      away_entrant_id: string | null;
+      status: string;
+      outcome: unknown;
+      scheduled_at: Date | null;
+      court_id: string | null;
+      config_snapshot: unknown;
+      config_snapshot_at: Date | null;
+    }
+    const shells = () => sql<ShellRow[]>`
+      select id, ext_key, round_no, home_entrant_id, away_entrant_id, status, outcome, scheduled_at, court_id,
+             config_snapshot, config_snapshot_at
+      from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`;
+    const slotsOf = (rows: readonly ShellRow[]) =>
+      new Map(rows.map((f) => [f.id, [f.scheduled_at?.toISOString() ?? null, f.court_id]]));
+    const shellCount = async () => (await shells()).length;
     const shellsBefore = await shellCount();
     expect(shellsBefore, "Start minted no shells — nothing below could shrink").toBeGreaterThan(0);
+    // The organiser lays round 1's boards out ahead of Pair (a shipped feature, e2e/swiss-shell.spec.ts). A bye shell is
+    // never placed (X-SW-29), so only the boards get a time.
+    await sql`
+      update fixtures set scheduled_at = '2030-06-15T09:00:00Z'::timestamptz + make_interval(hours => seq_in_round)
+      where stage_id = ${stageId} and round_no = 1 and ext_key !~ '-bye$'`;
     await generateStageFixtures(auth, stageId, { pairing: "rank_adjacent" });
+    const paired = await shells();
+    const round1 = paired.filter((f) => f.round_no === 1);
+    const bye = round1.filter((f) => f.ext_key === "sw-r1-bye");
+    expect(bye, "premise: an odd field pairs round 1 with one bye row").toHaveLength(1);
     expect(
-      (await fixturesOfRound(stageId, 1)).every((f) => f.home_entrant_id !== null),
-      "Pair next seated nobody — an Undo that deletes the seated rows would have nothing to delete",
+      round1.every((f) => f.home_entrant_id !== null && (f.away_entrant_id !== null || f.ext_key === "sw-r1-bye")),
+      "premise: Pair next seated every round-1 row — the clear below has something to clear",
     ).toBe(true);
+    expect(bye[0]!.config_snapshot, "premise: the bye froze its cfg at award (W3 T3)").not.toBeNull();
+    expect(
+      round1.filter((f) => f.scheduled_at !== null).length,
+      "premise: every round-1 board holds its laid-out time",
+    ).toBe(round1.length - 1);
+    const slotsAfterPair = slotsOf(paired);
 
     // The positive half: this Undo inverted the Pair next (its fixtures_generated
     // is the ledger's top event), so an unchanged count is Undo deleting nothing,
@@ -658,6 +696,24 @@ describe.runIf(HAS_DB)("swiss playoff — rank-adjacent repairing off the real c
     const undone = await undoDivision(auth, divisionId);
     expect(undone.applied.type).toBe("fixtures_cleared");
     expect(await shellCount()).toBe(shellsBefore);
+
+    const after = await shells();
+    const round1After = after.filter((f) => f.round_no === 1);
+    expect(round1After.length, "anti-vacuity: round 1's rows were read back").toBe(round1.length);
+    for (const f of round1After) {
+      expect(
+        { home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, outcome: f.outcome },
+        `${f.ext_key}: Undo of Pair next puts the row back onto its shell`,
+      ).toEqual({ home: null, away: null, status: "scheduled", outcome: null });
+    }
+    const byeAfter = round1After.find((f) => f.ext_key === "sw-r1-bye")!;
+    expect(
+      { snapshot: byeAfter.config_snapshot, at: byeAfter.config_snapshot_at },
+      "the bye's frozen cfg goes with its seat",
+    ).toEqual({ snapshot: null, at: null });
+    // The shells are the same rows (ids) on the same slots: Undo clears the seats, never the layout.
+    expect(after.map((f) => f.id).sort()).toEqual(paired.map((f) => f.id).sort());
+    expect(slotsOf(after)).toEqual(slotsAfterPair);
   });
 
   it("records override=false when the body names the default", async () => {

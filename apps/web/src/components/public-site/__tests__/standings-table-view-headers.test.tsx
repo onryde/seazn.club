@@ -319,3 +319,105 @@ describe("hub table: from md up no sport's table in any locale is wider than its
     expect(over.join("; ")).toBe("");
   });
 });
+
+// ── W3 T16 (SW-L11): the Swiss table's "Round X of N" chip ───────────────────
+//
+// The chip is the table heading's second line. The verdict arrives as DATA (`view.swissRound`); the sentence is filled
+// from the org's dictionary. Every assertion on the markup anchors on `="` (AGENTS.md: React serialises an omitted prop
+// as `"$undefined"`, so a bare `data-state` probe passes in both states). The strings are the copy decided for the four
+// locales, typed here once - not read back from the component or the dictionary.
+describe("hub table: a Swiss table's Round X of N chip (W3 T16, SW-L11)", () => {
+  const CHIP = `data-testid="${TESTID}-swiss-round"`;
+  const swiss = (swissRound: TableViewT["swissRound"]): TableViewT => ({
+    ...viewWith([{ key: "played", abbr: "P", title: "Played", compact: true }], ["3"]),
+    swissRound,
+  });
+  const markupIn = (v: TableViewT, locale: keyof typeof LOCALES, extra: { preview?: number } = {}) =>
+    renderToStaticMarkup(<StandingsTableView view={v} dict={LOCALES[locale]!} testid={TESTID} {...extra} />);
+  /** The chip element's opening tag and its text. */
+  const chipOf = (markup: string) => {
+    const open = markup.match(new RegExp(`<[a-z]+ ${CHIP}[^>]*>`));
+    expect(open, "a chip is rendered").not.toBeNull();
+    const tag = open![0];
+    const text = markup.slice(open!.index! + tag.length).replace(/<[^>]*>/g, "\u0000").split("\u0000").filter((s) => s.trim() !== "")[0]!;
+    return { tag, text };
+  };
+
+  const EXPECTED: Record<string, { paired: string; in_play: string; complete: string; final: string; finalOne: string }> = {
+    en: { paired: "Round 2 of 5 · paired", in_play: "Round 2 of 5 · in play", complete: "Round 2 of 5 · complete", final: "Final standings after 3 rounds", finalOne: "Final standings after 1 round" },
+    es: { paired: "Ronda 2 de 5 · emparejada", in_play: "Ronda 2 de 5 · en juego", complete: "Ronda 2 de 5 · terminada", final: "Clasificación final tras 3 rondas", finalOne: "Clasificación final tras 1 ronda" },
+    fr: { paired: "Tour 2 sur 5 · apparié", in_play: "Tour 2 sur 5 · en cours", complete: "Tour 2 sur 5 · terminé", final: "Classement final après 3 tours", finalOne: "Classement final après 1 tour" },
+    nl: { paired: "Ronde 2 van 5 · gekoppeld", in_play: "Ronde 2 van 5 · bezig", complete: "Ronde 2 van 5 · afgerond", final: "Eindstand na 3 rondes", finalOne: "Eindstand na 1 ronde" },
+  };
+
+  it("every state in every locale prints its sentence and names its state, anchored on =\"", () => {
+    let checked = 0;
+    for (const locale of Object.keys(EXPECTED) as (keyof typeof EXPECTED)[]) {
+      const want = EXPECTED[locale]!;
+      const cases = [
+        [{ round: 2, of: 5, state: "paired" }, want.paired],
+        [{ round: 2, of: 5, state: "in_play" }, want.in_play],
+        [{ round: 2, of: 5, state: "complete" }, want.complete],
+        [{ round: 3, of: 3, state: "final" }, want.final],
+        [{ round: 1, of: 1, state: "final" }, want.finalOne],
+      ] as const;
+      for (const [swissRound, text] of cases) {
+        const { tag, text: got } = chipOf(markupIn(swiss(swissRound), locale));
+        expect(got, `${locale} ${swissRound.state}`).toBe(text);
+        expect(tag, `${locale} ${swissRound.state}`).toContain(`data-state="${swissRound.state}"`);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 4 locales x 5 chips").toBe(20);
+  });
+
+  it("the four states do not look alike: each carries its own look (the dot or tick says it before the words do)", () => {
+    const looks = (["paired", "in_play", "complete", "final"] as const).map((state) => {
+      const m = markupIn(swiss({ round: 2, of: 5, state }), "en");
+      return chipOf(m).tag.match(/class="([^"]*)"/)![1]!;
+    });
+    expect(new Set(looks).size).toBe(4);
+  });
+
+  it("a league table has no chip: absent, null and the unmodified view are the SAME markup, with no chip testid anywhere", () => {
+    const plain = markupIn(viewWith([{ key: "played", abbr: "P", title: "Played", compact: true }], ["3"]), "en");
+    expect(plain).not.toContain("swiss-round");
+    for (const none of [undefined, null]) {
+      const m = markupIn(swiss(none), "en");
+      expect(m).not.toContain("swiss-round");
+      expect(m, "no extra DOM for a table without a chip").toBe(plain);
+    }
+  });
+
+  it("a Swiss table renders its chip OUTSIDE the table's scroll region - a scrolled-away rail cannot hide the round", () => {
+    const m = markupIn(swiss({ round: 2, of: 5, state: "in_play" }), "en");
+    expect(m.indexOf(CHIP)).toBeGreaterThan(m.indexOf("<h3"));
+    expect(m.indexOf(CHIP)).toBeLessThan(m.indexOf(`data-testid="${TESTID}-scroll"`));
+  });
+
+  it("the chip survives the Overview's preview, and a table with no rows still says what round it is", () => {
+    expect(markupIn(swiss({ round: 2, of: 5, state: "paired" }), "en", { preview: 1 })).toContain(CHIP);
+    const none = { ...swiss({ round: 1, of: 3, state: "paired" }), rows: [] };
+    const m = markupIn(none, "en");
+    expect(m).toContain(CHIP);
+    expect(m).toContain(`data-testid="${TESTID}-empty"`);
+  });
+
+  it("with a chip the heading takes the row's remaining width (flex-1 basis-0), so a long stage name truncates beside Full division instead of pushing it onto its own line; without a chip the heading's class is the original string", () => {
+    const h3Class = (markup: string) => markup.match(/<h3 class="([^"]*)"/)![1]!;
+    const withChip = h3Class(markupIn({ ...swiss({ round: 2, of: 5, state: "in_play" }), caption: "Spring Championship Swiss Open" }, "en"));
+    expect(withChip.split(/\s+/)).toEqual(expect.arrayContaining(["min-w-0", "truncate", "flex-1", "basis-0"]));
+    expect(h3Class(markupIn(swiss(null), "en"))).toBe("min-w-0 truncate font-display text-lg font-semibold text-ink");
+    // the link stays in the same row as the heading, ahead of the chip's own line (source order: heading, chip, link)
+    const m = markupIn({ ...swiss({ round: 2, of: 5, state: "in_play" }), caption: "Spring Championship Swiss Open" }, "en");
+    expect(m.indexOf(`data-testid="${TESTID}-full"`)).toBeGreaterThan(m.indexOf(CHIP));
+    expect(m).toContain('class="order-last basis-full"');
+  });
+
+  it("the chip wraps instead of widening the page: a flexible, shrinkable box with no fixed width (the 320px rule)", () => {
+    const { tag } = chipOf(markupIn(swiss({ round: 2, of: 5, state: "in_play" }), "en"));
+    const classes = tag.match(/class="([^"]*)"/)![1]!.split(/\s+/);
+    for (const c of ["max-w-full", "w-fit"]) expect(classes, c).toContain(c);
+    expect(classes.some((c) => /^w-\d|^min-w-\[/.test(c)), "no fixed width").toBe(false);
+  });
+});

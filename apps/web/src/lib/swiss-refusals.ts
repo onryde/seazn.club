@@ -1,0 +1,179 @@
+// W3 Swiss app-A (spec 2026-10-31-format-matrix-w3-swiss-design.md §11: "refusal codes, i18n keys and copy for every
+// new message, all 4 locales"). Every Swiss refusal the W3 app work raises, in ONE table: the wire code, its HTTP
+// status, the server's English sentence and the `swiss.refusal.<CODE>` key the desk renders in the reader's language.
+// The server builds its error from this row (`server/usecases/swiss-refusal.ts` `swissRefusal`), so the code, the
+// status and the English cannot drift apart between the throw site and the screen.
+//
+// Status: 422 when the request can never succeed as sent (re-sending it changes nothing), 409 when it is a state of the
+// stage the organiser resolves another way (the copy says which) — the split `usecases/stages.ts` already makes:
+// `assertFormatUnlocked`'s FORMAT_LOCKED is a 409, and a refusal of the stage's KIND is a 422 (`unpairSwissRound`'s
+// "unpair only exists on swiss stages", SWISS_PAIRING_NOT_SWISS). 400 for a refusal raised at the BODY door, from a zod
+// issue, before any usecase runs (W3 T18's SWISS_REQUESTED_BYES_DEFERRED: `api-v1/http.ts` reads the key's never-schema
+// message and answers the named code) — the status every other body validation answers, and the one the same key got
+// before it had a name (a strict object's unknown-key 400).
+//
+// Client-safe AND strip-types-safe: no runtime import at all, and only `import type` for `MessageKey`, so
+// `api-v1/schemas.ts` (loaded by `scripts/openapi-gen.ts` under bare `node --experimental-strip-types`) may import it
+// by relative path. `lib/__tests__/swiss-refusals.test.ts` pins the table against the plan's code list and the four
+// dictionaries; the English here must equal `en/ui.json` for the same key.
+// `@/lib/messages`, not `./messages`: schemas.ts (W3 T18) reaches this file from the scripts program (tsconfig.scripts.json,
+// nodenext), where a bare relative specifier is TS2835 and `@/lib/messages` is redirected to the MessageKey stub.
+import type { MessageKey } from "@/lib/messages";
+
+export type SwissRefusalCode =
+  | "SWISS_ADHOC_REFUSED"
+  | "SWISS_BYE_NOT_PLACEABLE"
+  | "SWISS_UNDO_ROUND_STARTED"
+  | "SWISS_LATE_ENTRY_NOT_UNDOABLE"
+  | "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE"
+  | "SWISS_NO_ROUND_LEFT"
+  | "SWISS_OVER"
+  | "SWISS_ROUNDS_ABOVE_MAX"
+  | "SWISS_ROUNDS_LOCKED"
+  | "SWISS_CHESS_LOCKED"
+  | "SWISS_ROUNDS_BELOW_SEATED"
+  | "SWISS_FINISH_ROUND_UNDECIDED"
+  | "SWISS_FINISH_NOTHING_PLAYED"
+  | "STAGE_NOT_SWISS"
+  | "SWISS_REQUESTED_BYES_DEFERRED";
+
+/** W3 T18 (RB3-7(c), X-SW-18): the sentence a stage config naming `requestedByes` is refused with. A constant of its own
+ *  because `api-v1/schemas.ts` puts it on the key's `z.never({ error })` and `api-v1/http.ts` recognises the zod issue by
+ *  it: the schema, the reader and the table row below cannot say different sentences. */
+export const SWISS_REQUESTED_BYES_DEFERRED_MESSAGE =
+  "Requested half-point or zero-point byes aren't offered yet. If a player must miss a round, record a walkover on their board.";
+
+export interface SwissRefusalRow {
+  status: 400 | 409 | 422;
+  /** The server's English sentence (the `message` of the error body); `en/ui.json[key]` says the same. */
+  message: string;
+  key: MessageKey;
+  /** W3 T11: the status when the same refusal is resolvable another way (`swissRefusal(code, details, { resolvable })`).
+   *  Only a code whose cause can be either kind declares it; every other code has one status. */
+  resolvableStatus?: 409;
+}
+
+export const SWISS_REFUSALS: Record<SwissRefusalCode, SwissRefusalRow> = {
+  // W3 T4 (RB3-15 A, ruling 252, X-SW-21): Add match on a Swiss stage.
+  SWISS_ADHOC_REFUSED: {
+    status: 422,
+    message: "Swiss rounds are paired by the system. Add friendlies in another stage.",
+    key: "swiss.refusal.SWISS_ADHOC_REFUSED",
+  },
+  // W3 T3 (SW-M7, X-SW-29): a bye shell moved onto a court or a time.
+  SWISS_BYE_NOT_PLACEABLE: {
+    status: 422,
+    message: "A bye is not played, so it takes no court or time.",
+    key: "swiss.refusal.SWISS_BYE_NOT_PLACEABLE",
+  },
+  // W3 T5 (RB3-22, X-SW-28): Undo of Pair next over a round with a started board. 422 by the rule above (batch-1
+  // review, controller 2026-11-01): a started round never un-starts — a void keeps the start's events, which still count
+  // as a result (`fixtureEvidenceSql`), and no organiser path removes score events — so the Undo can never succeed as
+  // sent.
+  SWISS_UNDO_ROUND_STARTED: {
+    status: 422,
+    message: "A match in this round has started, so its pairing can't be undone.",
+    key: "swiss.refusal.SWISS_UNDO_ROUND_STARTED",
+  },
+  // W3 T5 (design §10.8): Undo across an organiser's "Add late player" — it points to Withdraw. 422 by the rule above
+  // (batch-1 re-review, controller 2026-11-01): a barrier is a permanent ledger row, so the same step re-sent can never
+  // succeed — Withdraw is a different request, not a state the organiser clears for this one.
+  SWISS_LATE_ENTRY_NOT_UNDOABLE: {
+    status: 422,
+    message: "Adding a late player can't be undone. Withdraw the player instead.",
+    key: "swiss.refusal.SWISS_LATE_ENTRY_NOT_UNDOABLE",
+  },
+  // W3 T5 (design §10.8): Undo across a change to the round count (edit, Add a round, Finish now). 422 by the rule
+  // above (batch-1 re-review, controller 2026-11-01): a barrier is a permanent ledger row, so the same step re-sent can
+  // never succeed.
+  SWISS_ROUNDS_CHANGE_NOT_UNDOABLE: {
+    status: 422,
+    message: "A change to the number of rounds can't be undone.",
+    key: "swiss.refusal.SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
+  },
+  // W3 T9 (ruling 250): a late player with the last round started — the desk offers "Add a round" when `canAddRound`
+  // says it goes through; the sentence names no recovery, `swissRefusalText` adds it only then (T12 Fix round 1, I1).
+  SWISS_NO_ROUND_LEFT: {
+    status: 409,
+    message: "The last round has started, so there is no round left to join.",
+    key: "swiss.refusal.SWISS_NO_ROUND_LEFT",
+  },
+  // W3 T9/T12 (ruling 250): the Swiss is finished or its knockout has started. 422 by the rule above (batch-1 review):
+  // a finished Swiss stays finished, so the request can never succeed as sent — the addFixture "stage complete"
+  // precedent is the same 422.
+  SWISS_OVER: {
+    status: 422,
+    message: "This Swiss is over.",
+    key: "swiss.refusal.SWISS_OVER",
+  },
+  // W3 T11/T12 (RB3-3): more rounds than the field's hard maximum. 422 as sent — a Generate or a Start with that round
+  // count over that field can never succeed. 409 when the field SHRANK under a Swiss that has completed a round
+  // (withdrawals before Pair next): the organiser resolves it another way — Finish the Swiss after the rounds played
+  // (`canFinish: true` in the details, T13), or a late player who grows the field back.
+  SWISS_ROUNDS_ABOVE_MAX: {
+    status: 422,
+    resolvableStatus: 409,
+    message: "That is more rounds than this field can pair.",
+    key: "swiss.refusal.SWISS_ROUNDS_ABOVE_MAX",
+  },
+  // W3 T12 (RB3-5): the round count after the first match started — only Finish now or Add a round remain, and only
+  // when the details say so (`canFinish`, `canAddRound`): the sentence names no recovery, and `swissRefusalText` adds
+  // the one(s) actually offered (Phase 2 fix, controller ruling).
+  SWISS_ROUNDS_LOCKED: {
+    status: 409,
+    message: "A match has started or been called to a court, so the number of rounds is fixed. If it was only called, use Undo call on Match Day.",
+    key: "swiss.refusal.SWISS_ROUNDS_LOCKED",
+  },
+  // W3 T12 Phase 2 (BG-SW-1; controller ruling): the chess colours switch after the first match started. Its OWN code, so
+  // the desk never says the rounds sentence — whose recoveries (Finish now, Add a round) do nothing for a colour change.
+  // 422 by the rule above: a started stage never un-starts, so the same switch re-sent can never succeed.
+  SWISS_CHESS_LOCKED: {
+    status: 422,
+    message: "Chess colours are fixed once play starts or a match is called to a court. If it was only called, use Undo call on Match Day.",
+    key: "swiss.refusal.SWISS_CHESS_LOCKED",
+  },
+  // W3 T12 (RB3-5): a round count below a round already paired. 409 by the rule above (batch-1 review): a state of the
+  // stage the organiser resolves another way — Unpair the paired round, then the lower count goes through.
+  SWISS_ROUNDS_BELOW_SEATED: {
+    status: 409,
+    message: "Rounds that are already paired can't be removed.",
+    key: "swiss.refusal.SWISS_ROUNDS_BELOW_SEATED",
+  },
+  // W3 T13 (RB3-20): Finish now while the next round has a started board.
+  SWISS_FINISH_ROUND_UNDECIDED: {
+    status: 409,
+    message: "A match in the round in progress has started or been called to a court, so that round stays. Decide its matches before finishing the Swiss, or use Undo call on Match Day if it was only called.",
+    key: "swiss.refusal.SWISS_FINISH_ROUND_UNDECIDED",
+  },
+  // W3 T13 (RB3-20): Finish now before any round is complete.
+  SWISS_FINISH_NOTHING_PLAYED: {
+    status: 409,
+    message: "No round has been completed yet, so there is nothing to finish.",
+    key: "swiss.refusal.SWISS_FINISH_NOTHING_PLAYED",
+  },
+  // W3 T12/T13: a Swiss-only action on another kind of stage.
+  STAGE_NOT_SWISS: {
+    status: 422,
+    message: "This is not a Swiss stage.",
+    key: "swiss.refusal.STAGE_NOT_SWISS",
+  },
+  // W3 T18 (RB3-7(c), signed 252; X-SW-18): a requested half-point or zero-point bye has no path — deferred, with guidance.
+  // The one door a client would reach for is a stage config naming `requestedByes` (create, replace, PATCH): the key is
+  // a never-schema on `StageConfig` and `PatchSwissStage`, so it is refused at the body, 400 (see the status note above).
+  SWISS_REQUESTED_BYES_DEFERRED: {
+    status: 400,
+    message: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE,
+    key: "swiss.refusal.SWISS_REQUESTED_BYES_DEFERRED",
+  },
+};
+
+/** W3 T5: whether a wire code is one of this table's — the client's branch to say a Swiss refusal in the reader's
+ *  language (history-panel.tsx, stages-panel.tsx `undoRefusalMessage`). Own keys only: a prototype name is no code. */
+export function isSwissRefusalCode(code: unknown): code is SwissRefusalCode {
+  return typeof code === "string" && Object.hasOwn(SWISS_REFUSALS, code);
+}
+
+/** The `ui.json` key the desk renders for `code` (`useMsg()(swissRefusalKey(code))`). */
+export function swissRefusalKey(code: SwissRefusalCode): MessageKey {
+  return SWISS_REFUSALS[code].key;
+}

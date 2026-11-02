@@ -14,8 +14,10 @@
 // League and group keep the under-50% expunge (withdrawal.test.ts pins that).
 //
 // Everything here goes through the usecases the buttons call: Start, Generate
-// / Pair next, Forfeit and the quick result (`scoreEvent`), the ad-hoc fixture
-// (`addFixture`) and Withdraw (`withdrawEntrantCascade`).
+// / Pair next, Forfeit and the quick result (`scoreEvent`) and Withdraw
+// (`withdrawEntrantCascade`). The one ad-hoc board is a LEGACY row: W3 RB3-15 A
+// refuses `addFixture` on a Swiss stage, so it is seeded as `addFixture` wrote it
+// (`seedLegacySwissAdhoc`) and this suite pins how a live legacy row withdraws.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -26,9 +28,10 @@ import { createEntrants } from "../entrants";
 import { getFixtureState } from "../fixtures";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { addFixture, createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
+import { seedLegacySwissAdhoc } from "./_swiss-legacy-adhoc";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -203,8 +206,8 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
     await generateStageFixtures(rig.auth, rig.stageId); // Pair round 2
     const r2 = round(await fixturesOf(rig.stageId), 2);
     expect(shape(rig, r2)).toEqual(["sw-r2-b1: S1 v S4", "sw-r2-b2: S2 v S3"]);
-    // An ad-hoc board puts S4 at 1 played of 3 scheduled — under half.
-    const { fixture_id: adHoc } = await addFixture(rig.auth, rig.stageId, { home_entrant_id: S4!, away_entrant_id: S3! });
+    // A (legacy) ad-hoc board puts S4 at 1 played of 3 scheduled — under half.
+    const { fixture_id: adHoc } = await seedLegacySwissAdhoc(rig.stageId, S4!, S3!);
 
     const out = await withdrawEntrantCascade(rig.auth, S4!);
     expect(out).toMatchObject({ policy: "walkover", walkovers: 2, voided: 0, skipped_finalized: 0 });

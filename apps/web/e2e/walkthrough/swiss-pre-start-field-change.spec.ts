@@ -275,6 +275,61 @@ async function pinSlotThroughTheScreen(
  */
 const runSheetLines = (page: Page) => page.locator('[data-fixture-no], [data-testid="run-sheet-bye"]');
 
+/** A Swiss bye shell in the RECORD: its key, read straight off the row. Never the product's `isUnseatedSwissByeShell`,
+ *  so a predicate that stops matching reds this file instead of agreeing with itself. */
+const isByeShellKey = (f: FixtureRow) => /^sw-r\d+-bye$/.test(f.ext_key ?? "");
+const isUnseatedByeShell = (f: FixtureRow) =>
+  isByeShellKey(f) && f.home_entrant_id === null && f.away_entrant_id === null;
+
+/**
+ * The run sheet against the record, row by row, for `rounds`.
+ *
+ * - A board is one run-sheet row: exactly one `[data-fixture-no]`.
+ * - An UNSEATED Swiss bye shell is no row at all (W3 T3, X-SW-29, `1049f390c4`). It takes no court and no time, and the
+ *   server refuses it one (SWISS_BYE_NOT_PLACEABLE). It stays in the record, which `roundKeys` reads. It must be absent
+ *   in BOTH shapes it could take:
+ *   - no `[data-fixture-no]` row: before T3 it was an unscheduled row offering "Set time" for a match nobody plays;
+ *   - no bye line either: the sheet prints `run-sheet-bye` lines only for byes Pair has SEATED, so they number exactly
+ *     the record's seated byes. This half is the one that sees `buildRunSheet` lose its `continue`. The shell would then
+ *     fall into the settled pile and print as "Round N · ? has a bye", a line with no `data-fixture-no` that the first
+ *     half cannot see.
+ *
+ * COUNTED, and an empty sweep fails:
+ * - zero boards checked is a failure;
+ * - the number of bye shells seen must be the one the field's parity owes.
+ */
+async function expectRunSheetMatchesRecord(
+  page: Page,
+  record: FixtureRow[],
+  rounds: readonly number[],
+  byeShellsOwed: number,
+): Promise<void> {
+  let boards = 0;
+  let byeShells = 0;
+  for (const round of rounds) {
+    for (const f of record.filter((x) => x.round_no === round)) {
+      const row = page.locator(`[data-fixture-no="${f.fixture_no}"]`);
+      if (isUnseatedByeShell(f)) {
+        byeShells += 1;
+        await expect(
+          row,
+          `X-SW-29: round ${round}'s ${f.ext_key} is an unseated Swiss bye shell — in the record, but no row on the run sheet`,
+        ).toHaveCount(0);
+      } else {
+        boards += 1;
+        await expect(row, `round ${round}'s ${f.ext_key} is in the record but not on the run sheet`).toHaveCount(1);
+      }
+    }
+  }
+  expect(boards, `run-sheet rows checked against the record: ${boards} boards, ${byeShells} unseated bye shells`).toBeGreaterThan(0);
+  expect(byeShells, `X-SW-29: unseated bye shells checked OFF the run sheet in rounds ${rounds.join(", ")}`).toBe(byeShellsOwed);
+  const seatedByes = record.filter((f) => isByeShellKey(f) && !isUnseatedByeShell(f)).length;
+  await expect(
+    page.getByTestId("run-sheet-bye"),
+    `X-SW-29: one bye line per SEATED bye in the record (${seatedByes}), and none for an unseated shell`,
+  ).toHaveCount(seatedByes);
+}
+
 test.describe.configure({ mode: "serial" });
 
 test("an even field grows odd before Start, and every later round is re-laid out — keeping the slot the organiser already pinned", async ({
@@ -419,14 +474,12 @@ test("an even field grows odd before Start, and every later round is re-laid out
   // ── AND WHAT THE ORGANISER SEES ───────────────────────────────────────────
   await revisit(page);
   const after = await fixturesOf();
-  for (const round of [2, 3]) {
-    for (const f of after.filter((x) => x.round_no === round)) {
-      await expect(
-        page.locator(`[data-fixture-no="${f.fixture_no}"]`),
-        `round ${round}'s ${f.ext_key} is in the record but not on the run sheet`,
-      ).toHaveCount(1);
-    }
-  }
+  // Every board of rounds 2 and 3 is a row. Each round's bye shell is in the record (`roundKeys(3)` above), but while
+  // it is unseated it is NO row (X-SW-29). The odd field owes one such shell per later round, so this sweep must meet
+  // one per round. Round 1's bye, which Pair seated, is the sheet's one bye line.
+  const laterRounds = [2, 3] as const;
+  expect(swissBoardsForField(END_FIELD).bye, "premise: the odd field of nine owes every round a bye").toBe(true);
+  await expectRunSheetMatchesRecord(page, after, laterRounds, laterRounds.length);
   // The NEW board is the point of the whole change: it is not merely present,
   // it is SCHEDULABLE — a row the organiser can put a time and a court on,
   // which is precisely what a round still minted for the old field cannot
@@ -583,14 +636,11 @@ test("an odd field shrinks even before Start, and the surplus board and its bye 
 
   await revisit(page);
   const after = await fixturesOf();
-  for (const round of [2, 3]) {
-    for (const f of after.filter((x) => x.round_no === round)) {
-      await expect(
-        page.locator(`[data-fixture-no="${f.fixture_no}"]`),
-        `round ${round}'s ${f.ext_key} is in the record but not on the run sheet`,
-      ).toHaveCount(1);
-    }
-  }
+  // The same sweep as journey A. The even field of six owes no bye. The reconcile deleted rounds 2 and 3's shells
+  // (`not.toContain("sw-r3-bye")` above), so the sweep meets none, and with round 1 paired byeless the sheet prints no
+  // bye line.
+  expect(swissBoardsForField(END_FIELD).bye, "premise: the even field of six owes no round a bye").toBe(false);
+  await expectRunSheetMatchesRecord(page, after, [2, 3], 0);
   const pinnedRow = page.locator(`[data-fixture-no="${pinnedAfter.fixture_no}"]`);
   await expect(pinnedRow, "the pinned round-3 row lost its court on screen").toContainText(court.name);
   await expect(

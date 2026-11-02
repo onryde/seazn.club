@@ -98,6 +98,9 @@ export interface MyResult {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   abandon_reason: string | null;
+  /** W3 T15 ruling 2 — the status of the entrant the outcome names as its LOSER (an award's), else null: a disqualified
+   *  opponent's cascade walkover (reason `withdrew`) is never labelled a withdrawal on /me (`forfeitLoserStatuses`). */
+  forfeit_loser_status: string | null;
 }
 
 export interface MyTeam {
@@ -176,7 +179,8 @@ export async function listMyFixtures(userId: string): Promise<{
            e.display_name as entrant_name, opp.display_name as opponent_name,
            (f.home_entrant_id = e.id) as player_home,
            f.scheduled_at, m.summary, f.outcome,
-           f.home_entrant_id, f.away_entrant_id, ${activeAbandonReasonSql(sql, "f")} as abandon_reason
+           f.home_entrant_id, f.away_entrant_id, ${activeAbandonReasonSql(sql, "f")} as abandon_reason,
+           (select le.status from entrants le where le.id::text = f.outcome ->> 'loser') as forfeit_loser_status
     from persons p
     join entrant_members em on em.person_id = p.id
     join entrants e on e.id = em.entrant_id and e.status in ${sql(ROSTERED)}

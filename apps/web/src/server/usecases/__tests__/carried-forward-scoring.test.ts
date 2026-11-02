@@ -10,7 +10,8 @@ import { sql, withTenant } from "@/lib/db";
 import { cacheEnabled } from "@/lib/cache";
 import { seedOrg } from "./_seed";
 import { decide, deviceFor, fixturesOf, pairNextSwissRound, seedStage, voidEvent } from "./_sheets-rig";
-import { addFixture, unpairSwissRound } from "../stages";
+import { unpairSwissRound } from "../stages";
+import { seedLegacySwissAdhoc } from "./_swiss-legacy-adhoc";
 import { scoreEvent } from "../scoring";
 import { carriedForwardFacts, isCarriedForward, resultCarriedForward } from "../carried-forward";
 
@@ -143,7 +144,8 @@ describe.skipIf(!HAS_DB)("device-link refusal once a result is carried forward (
     expect(r1.length, "precondition: round 1 is seated (two boards)").toBe(2);
     const device = await deviceFor(auth, r1[0]!.id);
     const own = await decide(device, r1[0]!.id); // one board only: the stage stays open
-    await addFixture(auth, stage.id, { home_entrant_id: r1[1]!.home_entrant_id!, away_entrant_id: r1[1]!.away_entrant_id! });
+    // A LEGACY row: W3 RB3-15 A refuses `addFixture` on a Swiss stage, but rows it wrote before stay live (C7 reads them).
+    await seedLegacySwissAdhoc(stage.id, r1[1]!.home_entrant_id!, r1[1]!.away_entrant_id!);
     const [adhoc] = await sql<{ round_no: number; ext_key: string }[]>`
       select round_no, ext_key from fixtures where stage_id = ${stage.id} and ext_key like 'adhoc-%'`;
     expect(adhoc, "precondition: the ad-hoc match sits at round_no + 1").toMatchObject({ round_no: 2 });

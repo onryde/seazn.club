@@ -516,6 +516,9 @@ export interface ActivityPanelProps {
    *  the scorer taps the toggle. At `md` and up the toggle is not rendered and
    *  no row is hidden — desktop markup is what it was. Omitted = today. */
   collapsible?: boolean;
+  /** W3 T15 ruling 2: the seats ("home"/"away") whose entrant is DISQUALIFIED — the withdrawal cascade's forfeit by
+   *  such a seat reads as the disqualification (`buildRibbon`). The organiser's console passes it; omitted = today. */
+  disqualifiedSides?: ReadonlySet<string>;
 }
 
 /**
@@ -597,6 +600,7 @@ export function ActivityPanel({
   authority = false,
   footer,
   collapsible = false,
+  disqualifiedSides,
 }: ActivityPanelProps): ReactNode {
   const rows = orderedActivity(events);
   const nameOf = (id: string) => personNames[id] ?? id;
@@ -666,7 +670,7 @@ export function ActivityPanel({
             const payload = (event.payload ?? {}) as Record<string, unknown>;
             const history = priorActivityEvents(rows, index);
             const detail = resolveDetail?.(event.type, payload, history);
-            const caption = buildRibbon(event.type, payload, nameOf, t, detail);
+            const caption = buildRibbon(event.type, payload, nameOf, t, detail, disqualifiedSides);
             // R8/#675 — one pure decision, three states; see `partialBadge`.
             const badge = partialBadge(event, events, ownEventIds, deviceLinkId, heldEventId, !!onAmend, isPartial);
             const stripe = TONE_STRIPE[describeEvent(event.type, payload, personNames, t).tone];

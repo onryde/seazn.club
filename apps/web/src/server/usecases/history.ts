@@ -25,7 +25,10 @@ import { sql, withTenant } from "@/lib/db";
 // below 1, where there is no window to roll (see `createCheckpoint`).
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
-import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
+import type { SwissRefusalCode } from "@/lib/swiss-refusals";
+import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
+import { UUID_RE, liveCourt, venueBack, venueOf, venueWith } from "./court-restore-sql";
+import { fixtureHasResultSql, playedFixtureIds, swissByeShellSql } from "./fixture-results-sql";
 import { refuseOwnFormatLoss } from "./fixture-override-guards";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
@@ -33,7 +36,17 @@ import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
-import { generateStageFixtures, wireCrossFeeds } from "./stages";
+import {
+  afterGenerateCommit,
+  clearSwissFixtureSeats,
+  generateStageFixtures,
+  generateStageFixturesTx,
+  lockSwissBoardAppends,
+  refoldStageTable,
+  wireCrossFeeds,
+  type GenerateWrite,
+} from "./stages";
+import { swissRefusal } from "./swiss-refusal";
 import { DEPARTED_STATUSES } from "./entrants";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
@@ -74,6 +87,90 @@ async function loadLedger(tx: Tx, divisionId: string): Promise<LedgerEvent[]> {
  *  write parked on the row's lock re-checks the row it finally gets. */
 const unplayed = (tx: Tx) => tx`not ${fixtureHasResultSql(tx, "fixtures")}`;
 
+/** W3 T5 (X-SW-29; T3 review m3): a replayed PLACEMENT never lands on a Swiss bye shell. A bye is not played, so it
+ *  holds no court and no time (`swissByeShellSql`, the SQL twin of the one bye-shell predicate), and no writer since
+ *  W3 T3 records one — but a ledger row written before T3 can name a bye shell among its moves, and V485 cleared the
+ *  slot without touching the ledger. An Undo walking back past a Pair next reaches those rows, and a Redo replays them.
+ *  On the target row itself, like `unplayed`, on every statement below that writes a slot. */
+const slotTaker = (tx: Tx) => tx`not ${swissByeShellSql(tx, "fixtures")}`;
+
+/**
+ * W3 T5 (design §10.8, X-SW-28; spec §7 "Add late player has no Undo"): the ledger events no Undo or Redo steps across.
+ * The engine skips them — they are not REVERSIBLE (`isReversible`) — so this app-side check is the only barrier.
+ * A late entry is one only when an ORGANISER added the player (ruling 252 items 8 and 11: an automatic arrival — a paid
+ * registration, a waitlist promotion, an import — does not change Undo); a change to the round count always is.
+ */
+export const UNDO_BARRIER_TYPES = {
+  swiss_late_entry: "SWISS_LATE_ENTRY_NOT_UNDOABLE",
+  swiss_rounds_changed: "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
+} as const satisfies Record<string, SwissRefusalCode>;
+
+type UndoBarrierType = keyof typeof UNDO_BARRIER_TYPES;
+
+function isUndoBarrier(e: LedgerEvent): e is LedgerEvent & { type: UndoBarrierType } {
+  if (!Object.hasOwn(UNDO_BARRIER_TYPES, e.type)) return false;
+  return e.type !== "swiss_late_entry" || e.payload.source === "organiser";
+}
+
+/** The refusal code of the NEWEST barrier past `targetSeq` — the ledger row an Undo inverts or a Redo copies — or null
+ *  when the step crosses none. Order-free: the newest is the highest seq, however the ledger arrives. */
+export function undoBarrierRefusal(ledger: readonly LedgerEvent[], targetSeq: number): SwissRefusalCode | null {
+  let newest: (LedgerEvent & { type: UndoBarrierType }) | undefined;
+  for (const e of ledger) {
+    if (e.seq <= targetSeq || !isUndoBarrier(e)) continue;
+    if (newest === undefined || e.seq > newest.seq) newest = e;
+  }
+  return newest === undefined ? null : UNDO_BARRIER_TYPES[newest.type];
+}
+
+/** The ledger row a step inverts (Undo, `__undo_of`) or copies (Redo, `__redo_of`): the engine stamps every one
+ *  (`undo`/`redo`, @seazn/engine/history). A step with no stamp is a broken contract, and refused by name — a barrier
+ *  check skipped on an absence would let the step cross one. */
+export function invertedStepSeq(direction: "undo" | "redo", payload: Record<string, unknown>): number {
+  const seq = direction === "undo" ? payload.__undo_of : payload.__redo_of;
+  if (typeof seq !== "number") {
+    throw new HttpError(500, `history step names no ledger row (${direction === "undo" ? "__undo_of" : "__redo_of"})`);
+  }
+  return seq;
+}
+
+/** The rows a Pair next seated (`seated_fixture_ids`, stages.ts `generateStageFixturesTx`): the shells it UPDATED,
+ *  which `fixture_ids` — the Undo DELETE list — never names. Empty for every other generation. */
+/** The Pair-next row whose seats a `fixtures_cleared` step takes away. An Undo clears the row it inverts; a Redo
+ *  re-does an Undo, so it clears the row THAT Undo had inverted (`__undo_of`, which a Redo copy keeps). Batch-1 I1: once
+ *  Undo can walk back through a Pair's own Undo, Redo can walk forward over it again, and that step clears seats too. */
+function pairRowClearedBy(ledger: readonly LedgerEvent[], direction: "undo" | "redo", targetSeq: number): LedgerEvent | undefined {
+  const target = ledger.find((e) => e.seq === targetSeq);
+  if (direction === "undo") return target;
+  const of = target?.payload.__undo_of;
+  return typeof of === "number" ? ledger.find((e) => e.seq === of) : undefined;
+}
+
+/** W3 T8 review P1. The Pair a re-pairing step puts back — the mirror of `pairRowClearedBy`. A Redo copies that row (the
+ *  row `__redo_of` names); an Undo walking back through a Pair's own Undo inverts that Undo (a `fixtures_cleared`), whose
+ *  `__undo_of` names the Pair. Either row may itself be an earlier step's: those record the same audit
+ *  (`ledgerPayload`), override included. */
+function pairRowRestoredBy(ledger: readonly LedgerEvent[], direction: "undo" | "redo", targetSeq: number): LedgerEvent | undefined {
+  const target = ledger.find((e) => e.seq === targetSeq);
+  if (direction === "redo") return target;
+  const of = target?.payload.__undo_of;
+  return typeof of === "number" ? ledger.find((e) => e.seq === of) : undefined;
+}
+
+/** The round-1 pairing override a Pair row recorded (`override: true` with its `pairing`), or undefined: the round's own
+ *  mode. Only a recognised mode is handed on — anything else is a row this code never wrote. */
+export function recordedPairingOverride(e: LedgerEvent | undefined): SwissPairingMode | undefined {
+  if (e?.type !== "fixtures_generated" || e.payload.override !== true) return undefined;
+  const mode = e.payload.pairing;
+  return SWISS_PAIRINGS.find((m) => m === mode);
+}
+
+function pairNextSeatedIds(e: LedgerEvent | undefined): string[] {
+  if (e?.type !== "fixtures_generated") return [];
+  const ids = e.payload.seated_fixture_ids;
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+}
+
 interface DivisionMeta {
   seq: number;
   edit_watermark: number | null;
@@ -107,8 +204,6 @@ async function appendEvent(
   return last + 1;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 // Review wave 1, finding 1 (scope cut 2026-08-18, owner-authorized: no prod
 // backfill — there is no pre-cutover prod data — so this is a defensive
 // guard for a dev/staging DB or a restored backup, not a live-data fix).
@@ -136,45 +231,6 @@ function resolveCourtWrite(value: unknown, context: Record<string, unknown>): Co
   );
   return { write: false };
 }
-
-/** The venue a court sits in: the ONE rule every fixture write derives
- *  `venue_id` by (schedule.ts `courtVenueIds`, moveFixture's "#5 fix") — a
- *  court belongs to a venue, so a fixture's venue is its court's, and no court
- *  means no venue. Every history write that sets `court_id` sets `venue_id`
- *  from it in the same statement; one that left it alone kept a cross-venue
- *  move's Undo in the venue it was moved to. */
-const venueOf = (tx: Tx, courtId: string | null) =>
-  tx`(select c.venue_id from courts c where c.id = ${courtId})`;
-
-/** The court a history write puts a fixture back on, if it still exists. A
- *  court deleted since (deleteCourt refuses only while a fixture is ON it, so
- *  a move away frees it) writes as no court — and `venueOf` then as no venue —
- *  never a dangling id: the court FK is DEFERRED, so that failed at COMMIT,
- *  and every retry replays the same court. Undo stuck for good. */
-const liveCourt = (tx: Tx, courtId: string | null) =>
-  tx`(select c.id from courts c where c.id = ${courtId})`;
-
-/** The `venue_id` a replay that writes `court_id = liveCourt(courtId)` sets:
- *  the new court's venue when the court CHANGES, the row's own otherwise — as
- *  `moveFixture` leaves the venue alone whenever the court is. A fixture can
- *  hold a venue with no court (`addFixture` takes a venue alone), and deriving
- *  it from the payload's court every time wiped that venue on the Undo of a
- *  time-only move, a pin or a shift. (`court_id` on the right of a SET is the
- *  row's value BEFORE the update.) */
-const venueWith = (tx: Tx, courtId: string | null) =>
-  tx`case when court_id is distinct from ${liveCourt(tx, courtId)} then ${venueOf(tx, courtId)} else venue_id end`;
-
-/** The `venue_id` a move replay writes. With NO court to put the fixture on, a
- *  payload side that carries the venue it stood in (`venue`, review 3 of #857,
- *  m5) puts that venue back: a venue-only fixture dragged onto a court and then
- *  undone lost its venue, because an absent court names none. A payload written
- *  before carries no `venue` key and replays exactly as before (`venueWith`).
- *  A venue deleted since writes as no venue, never a dangling id. */
-const venueBack = (tx: Tx, courtId: string | null, side: { venue?: unknown }) => {
-  if (courtId !== null || side.venue === undefined) return venueWith(tx, courtId);
-  const venue = typeof side.venue === "string" && UUID_RE.test(side.venue) ? side.venue : null;
-  return tx`(select v.id from venues v where v.id = ${venue})`;
-};
 
 const DEPARTED: string[] = [...DEPARTED_STATUSES];
 
@@ -511,10 +567,10 @@ async function execute(
         if (court.write) {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}, court_id = ${liveCourt(tx, court.value)},
                                                              venue_id = ${venueBack(tx, court.value, m.to)}
-                   where id = ${m.fixture} and ${unplayed(tx)} returning id`);
+                   where id = ${m.fixture} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${m.to.at}
-                   where id = ${m.fixture} and ${unplayed(tx)} returning id`);
+                   where id = ${m.fixture} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
         }
       }
       break;
@@ -527,12 +583,12 @@ async function execute(
           update fixtures set scheduled_at = ${to.at}, court_id = ${liveCourt(tx, court.value)},
                               venue_id = ${venueBack(tx, court.value, to)},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
+          where id = ${p.fixture as string} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
       } else {
         wrote(await tx<{ id: string }[]>`
           update fixtures set scheduled_at = ${to.at},
                               schedule_locked = coalesce(${to.locked ?? null}, schedule_locked)
-          where id = ${p.fixture as string} and ${unplayed(tx)} returning id`);
+          where id = ${p.fixture as string} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
       }
       break;
     }
@@ -551,10 +607,10 @@ async function execute(
         if (court.write) {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}, court_id = ${liveCourt(tx, court.value)},
                                                              venue_id = ${venueWith(tx, court.value)}
-                   where id = ${s.id} and ${unplayed(tx)} returning id`);
+                   where id = ${s.id} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
         } else {
           wrote(await tx<{ id: string }[]>`update fixtures set scheduled_at = ${s.at ?? null}
-                   where id = ${s.id} and ${unplayed(tx)} returning id`);
+                   where id = ${s.id} and ${unplayed(tx)} and ${slotTaker(tx)} returning id`);
         }
       }
       break;
@@ -621,6 +677,12 @@ interface StepWrite {
   competitionId: string;
   fixtureIds: string[];
   scoredFixtureRemoved: boolean;
+  /** W3 T5: the stages an Undo of Pair next put back onto their shells, refolded after the commit. */
+  unpairedStageIds: string[];
+  /** Batch-1 I1: a Swiss Pair this step re-applied inside its own transaction, for the generate's post-commit work. */
+  repaired?: { stageId: string; write: GenerateWrite };
+  /** Any other regeneration this step asks for (a league's, a Swiss shells pass): run after the commit, as before. */
+  regen?: string;
 }
 
 async function stepWrite(
@@ -686,6 +748,38 @@ async function stepWrite(
     } catch (err) {
       toEngineError(err);
     }
+    // W3 T5 (design §10.8, X-SW-28). The undo barriers first, before any read or write: an organiser's late entry or a
+    // round-count change newer than the row this step inverts (Undo) or copies (Redo) refuses the step by name.
+    const targetSeq = invertedStepSeq(direction, result.event.payload);
+    const barrier = undoBarrierRefusal(ledger, targetSeq);
+    if (barrier !== null) throw swissRefusal(barrier);
+    // Undo of Pair next (SW-M2 / #835, RB3-22). A Pair seats a Swiss round by UPDATING shells that already exist, so
+    // its `fixtures_generated` names no `fixture_ids` and the engine's inverse deletes nothing: the seats are this
+    // step's to clear, read from the Pair row the step takes away (`seated_fixture_ids`; `pairRowClearedBy`: the row an
+    // Undo inverts, or the row a Redo-of-an-Undo had inverted). The round goes back onto its shells exactly as Unpair
+    // puts it (`clearSwissFixtureSeats`: seats, outcome, the bye's frozen cfg; never a slot) — unless a row of it holds
+    // a result, when the whole step refuses by name (the bye is no result: `systemByeSql`). A step that puts a Pair BACK
+    // re-pairs in this transaction instead (batch-1 I1, below), so it re-pairs AND re-freezes the bye through
+    // `swissGen`'s own seat, under the division lock, with the cfg that stands then.
+    const unseated: string[] = [];
+    const unpairedStageIds: string[] = [];
+    const seatedIds =
+      result.event.type === "fixtures_cleared" ? pairNextSeatedIds(pairRowClearedBy(ledger, direction, targetSeq)) : [];
+    if (seatedIds.length > 0) {
+      // Review m1: every seated board's append lock (`fixture:`), sorted, after this step's `division:` lock and
+      // before the read below — a scorer's first event is either seen by it or waits and finds the seats gone.
+      await lockSwissBoardAppends(tx, seatedIds);
+      const [started] = await tx<{ id: string }[]>`
+        select f.id from fixtures f where f.id in ${tx(seatedIds)} and ${fixtureHasResultSql(tx, "f")} limit 1`;
+      if (started) throw swissRefusal("SWISS_UNDO_ROUND_STARTED", { fixtureId: started.id });
+      // Only rows that still exist: a later reshape may have deleted a shell the Pair seated.
+      const live = await tx<{ id: string; stage_id: string }[]>`
+        select id, stage_id from fixtures where id in ${tx(seatedIds)} order by id`;
+      const ids = live.map((f) => f.id);
+      await clearSwissFixtureSeats(tx, ids);
+      unseated.push(...ids);
+      unpairedStageIds.push(...new Set(live.map((f) => f.stage_id)));
+    }
     // A delete-side event records the rows it deletes AS THEY STAND NOW —
     // before the delete, so the appended event is self-contained. (A plain
     // Redo of a generation never reads them: it re-runs the generator. They
@@ -729,15 +823,39 @@ async function stepWrite(
           : ledger.findLast((e) => DELETE_SIDE_EVENTS.has(e.type) && snapshotIdKey(e.payload.fixtures) === rows);
       if (newest !== undefined) result.event.payload.fixtures = newest.payload.fixtures;
     }
+    // Batch-1 I1. A Swiss Pair this step re-applies — a Redo of it, or an Undo walking back through its own Undo (the
+    // engine's inverse of a seat clear names no rows, `fixture_ids: []`) — is re-paired HERE, in this transaction, and
+    // recorded on THIS step's row: `ledger: "step"` appends no fresh `fixtures_generated` and leaves the watermark to
+    // the engine. As a fresh edit it nulled the watermark to the head, so the next Undos cleared the seats, did nothing,
+    // then walked back through the Undo and re-paired — round and round, never past the Pair, and a Restore across it
+    // ran 500 steps into "did not converge". The seats it re-pairs are stamped on the row (`seated_fixture_ids`), so an
+    // Undo of this row clears them: the inverse the engine hands an Undo-of-an-Undo carries none of its own. Any other
+    // regeneration (a league's, a Swiss shells pass) still runs after the commit, as before.
+    const regenStageId =
+      result.event.type === "fixtures_generated" && result.event.payload.fixtures === undefined
+        ? ((result.event.payload.stage_id as string | undefined) ?? undefined)
+        : undefined;
+    let repaired: StepWrite["repaired"];
+    const namesNoRows = ((result.event.payload.fixture_ids as unknown[] | undefined) ?? []).length === 0;
+    if (regenStageId !== undefined && namesNoRows) {
+      const [stage] = await tx<{ kind: string }[]>`select kind from stages where id = ${regenStageId}`;
+      if (stage?.kind === "swiss") {
+        // P1: the Pair this step puts back is re-paired with the round-1 override its own row recorded (Neighbours is
+        // never stored on the stage); without it the round came back as the default fold.
+        const pairing = recordedPairingOverride(pairRowRestoredBy(ledger, direction, targetSeq));
+        const write = await generateStageFixturesTx(tx, auth, regenStageId, pairing === undefined ? {} : { pairing }, "step");
+        result.event.payload = { ...result.event.payload, seated_fixture_ids: [], ...write.ledgerPayload };
+        repaired = { stageId: regenStageId, write };
+      }
+    }
     const effects = { scoredFixtureRemoved: false };
     const fixtureIds = await execute(tx, divisionId, result.event, effects);
+    fixtureIds.push(...unseated);
+    if (repaired !== undefined) fixtureIds.push(...pairNextSeatedIds(result.event as LedgerEvent));
     const seq = await appendEvent(tx, divisionId, result.event, auth.userId);
     await tx`update divisions set seq = ${seq}, edit_watermark = ${result.newWatermark}
              where id = ${divisionId}`;
-    const regen =
-      result.event.type === "fixtures_generated" && result.event.payload.fixtures === undefined
-        ? ((result.event.payload.stage_id as string) ?? undefined)
-        : undefined;
+    const regen = repaired === undefined ? regenStageId : undefined;
     // A fixtures_generated with snapshots re-inserts directly — the undo of
     // an undone generation (Undo past a later edit, or a save-point restore).
     // It never routes through execute(); `restoreFixtures` is shared with
@@ -751,18 +869,32 @@ async function stepWrite(
         watermark: result.newWatermark,
         seq,
         applied: { type: result.event.type },
-        ...(regen !== undefined ? { regenerate_stage_id: regen } : {}),
+        ...(regenStageId !== undefined ? { regenerate_stage_id: regenStageId } : {}),
       },
       competitionId: meta.competition_id,
       fixtureIds,
       scoredFixtureRemoved: effects.scoredFixtureRemoved,
+      unpairedStageIds,
+      ...(repaired !== undefined ? { repaired } : {}),
+      ...(regen !== undefined ? { regen } : {}),
     };
   });
-  // generator re-run outside the history tx (it takes its own division lock).
-  // It publishes its own write; this step's transaction changed no fixture in
-  // that case (`fixtures_generated` has no executor statement).
-  if (write.out.regenerate_stage_id !== undefined) {
-    await generateStageFixtures(auth, write.out.regenerate_stage_id);
+  // A Swiss Pair re-applied in the step's transaction gets the generate's own post-commit work (table refold,
+  // revalidation); the step's publish names its seats. Any other regeneration still re-runs the generator after the
+  // commit (it takes its own division lock and publishes its own write; this step's transaction changed no fixture
+  // then — `fixtures_generated` has no executor statement).
+  if (write.repaired !== undefined) {
+    await afterGenerateCommit(auth, write.repaired.stageId, write.repaired.write);
+  } else if (write.regen !== undefined) {
+    await generateStageFixtures(auth, write.regen);
+  }
+  // A bye award (and its removal) never goes through appendEvent, so the stored table would keep the cleared bye's
+  // points until the next scored match. Refold from the cleared rows, as Unpair does — `"drop"`: a stage left seating
+  // nobody has no table, so the stored one goes and the page reads "No standings yet". Best-effort (review m3): the
+  // Undo has committed, so a refold that throws is logged (`refoldStageTable`), never a 500 the organiser would retry
+  // into undoing one step MORE.
+  for (const stageId of write.unpairedStageIds) {
+    await refoldStageTable(auth.orgId, { id: stageId, kind: "swiss" }, "drop");
   }
   return write;
 }

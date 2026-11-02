@@ -36,6 +36,9 @@ export async function publicOverlayPageFacts(fixtureId: string): Promise<Overlay
   if (!data) return null;
   const { org, competition, division, fixture, entrantNames, realtime, venueTz, matchCentre, stageName } = data;
   const mcSides = matchCentre.header.sides;
+  // W3 T15 review I4: the side's departure, as the match centre read it, when the seat is hers.
+  const departedOf = (seat: 0 | 1, id: string | null) =>
+    id !== null && mcSides[seat].entrantId === id && mcSides[seat].departed !== undefined ? { departed: mcSides[seat].departed } : {};
   return {
     org,
     competition,
@@ -47,12 +50,14 @@ export async function publicOverlayPageFacts(fixtureId: string): Promise<Overlay
         name: fixture.home_entrant_id ? (entrantNames[fixture.home_entrant_id] ?? mcSides[0].name) : "—",
         short: mcSides[0].short,
         colour: mcSides[0].colour,
+        ...departedOf(0, fixture.home_entrant_id),
       },
       {
         id: fixture.away_entrant_id ?? "away",
         name: fixture.away_entrant_id ? (entrantNames[fixture.away_entrant_id] ?? mcSides[1].name) : "—",
         short: mcSides[1].short,
         colour: mcSides[1].colour,
+        ...departedOf(1, fixture.away_entrant_id),
       },
     ],
     realtime,
@@ -78,9 +83,16 @@ interface RelayRow {
   realtime: boolean | null;
 }
 
+/** I4: a departed entrant's status, else undefined (an entrant in the field, or none read). */
+function departureOf(status: string | undefined): "withdrawn" | "disqualified" | undefined {
+  return status === "withdrawn" || status === "disqualified" ? status : undefined;
+}
+
 interface RelaySideRow {
   id: string;
   kind: string;
+  /** I4: the entrant's status, so a disqualified side's walkover is never worded "withdrew" on air. */
+  status: string;
   display_name: string;
   colors: unknown;
 }
@@ -108,7 +120,7 @@ export async function relayOverlayPageFacts(fixtureId: string): Promise<OverlayP
     ids.length === 0
       ? []
       : await sql<RelaySideRow[]>`
-          select e.id, e.kind, e.display_name, td.colors
+          select e.id, e.kind, e.status, e.display_name, td.colors
           from entrants e left join team_display_v td on td.team_id = e.team_id
           where e.id in ${sql(ids)}`;
   const masked = await maskPublicEntrantNames(sideRows, {
@@ -130,6 +142,7 @@ export async function relayOverlayPageFacts(fixtureId: string): Promise<OverlayP
       isPerson: r !== undefined && r.kind !== "team",
       seated: r !== undefined,
       colour: colors?.home_primary ?? null,
+      departed: departureOf(r?.status),
     };
   };
   const home = pre(row.home_entrant_id, "home");
@@ -146,8 +159,8 @@ export async function relayOverlayPageFacts(fixtureId: string): Promise<OverlayP
       scheduled_at: isoDateTime(row.scheduled_at),
     },
     sides: [
-      { id: home.id, name: home.name, short: homeShort, colour: home.colour },
-      { id: away.id, name: away.name, short: awayShort, colour: away.colour },
+      { id: home.id, name: home.name, short: homeShort, colour: home.colour, ...(home.departed ? { departed: home.departed } : {}) },
+      { id: away.id, name: away.name, short: awayShort, colour: away.colour, ...(away.departed ? { departed: away.departed } : {}) },
     ],
     realtime: row.realtime === true,
     venueTz: await venueTzForDivision(row.division_id),

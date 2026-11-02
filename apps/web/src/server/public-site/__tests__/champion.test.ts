@@ -405,7 +405,8 @@ describe("bracketChampion — the engine's rule, and the one authority for a bra
     // pure module, so its declaration is read as TEXT: a status added to or
     // removed from that set reds here instead of drifting silently.
     const source = readFileSync(new URL("../../usecases/stages.ts", import.meta.url), "utf8");
-    const match = /const DECIDED = new Set\(\[([^\]]*)\]\)/.exec(source);
+    // W3 T9 exported it with a type (`export const DECIDED: ReadonlySet<string> = new Set([...])`); the annotation is optional.
+    const match = /const DECIDED(?::[^=]*)? = new Set\(\[([^\]]*)\]\)/.exec(source);
     expect(match, "stages.ts still declares DECIDED").not.toBeNull();
     const declared = [...match![1]!.matchAll(/"([a-z_]+)"/g)].map(([, s]) => s!);
     expect(declared.length).toBeGreaterThan(0);

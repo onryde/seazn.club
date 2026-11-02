@@ -12,6 +12,8 @@ import type {
   AiParsePreviewResponse,
 } from "@/server/api-v1/schemas";
 import { COMMUNITY_GRANTED_FEATURES } from "@/lib/feature-copy";
+import type { MessageKey } from "@/lib/messages";
+import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import type { ApplyOutcome } from "./ai-apply";
 
 export type AiStep = "brief" | "schedule" | "officials" | "apply";
@@ -487,6 +489,16 @@ export function aiErrorKey(status: number, code?: string): AiErrorKey {
     default:
       return "board.ai.errorGeneric";
   }
+}
+
+/**
+ * W3 T5 (batch-1): the copy for a refused one-tap AI Undo, which is a checkpoint restore — a loop of division Undos that
+ * can stop on a Swiss refusal (a paired round with a started match, an undo barrier). Said in that refusal's own
+ * sentence, the same row the division's History panel shows; through `aiErrorKey` its 422 read "That instruction
+ * couldn't be used", which is about a prompt the organiser never typed. Everything else is `aiErrorKey`'s.
+ */
+export function aiUndoErrorKey(status: number, code?: string): MessageKey {
+  return isSwissRefusalCode(code) ? swissRefusalKey(code) : aiErrorKey(status, code);
 }
 
 /**

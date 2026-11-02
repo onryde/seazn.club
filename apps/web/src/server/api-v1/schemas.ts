@@ -29,6 +29,9 @@ import { PointsRule } from "@seazn/engine/competition";
 // though it resolves fine under tsc/Next.js/vitest.
 import { isValidCutoffDay, REASON_MIN, REASON_MAX } from "../../lib/registration-rules.ts";
 import { FIXTURE_STATUSES } from "../../lib/fixture-status.ts";
+// W3 T18 (RB3-7(c)): the sentence a requested half/zero bye is refused with — the table's own constant (client-safe and
+// strip-types-safe: its only import is `import type`), so this schema, `http.ts`'s reader and the table row say one thing.
+import { SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "../../lib/swiss-refusals.ts";
 // A PATCH twin whose omitted fields stay omitted (zod 4's `.partial()` fills a `.default()`); pure zod, relative + `.ts`.
 import { patchOf } from "../../lib/zod-patch.ts";
 // The entrant name limit, shared with the console's Name field (entrants-panel.tsx).
@@ -758,7 +761,48 @@ export const Entrant = z.object({
   seed: z.number().int().nullable(),
   status: EntrantStatus,
   created_at: z.string(),
+  /** W3 T9 (ruling C4): the first Swiss round a late player is in the field for, in the Swiss stage
+   *  `swiss_first_round_stage_id` names (V486/V487); null = from round 1 (everyone enrolled before Start). */
+  swiss_first_round: z.number().int().min(1).nullable(),
+  swiss_first_round_stage_id: Uuid.nullable(),
 });
+
+/** W3 T15 review m3: the withdrawal cascade's report (`withdrawEntrantCascade`) — what a disqualification through
+ *  `PATCH /entrants/{id}` walked over, voided or left to the organiser. Mirrors `WithdrawCascadeOut` (withdrawal.ts);
+ *  disqualify-cascade.test.ts parses the real report strictly against it. */
+export const WithdrawCascadeReport = z.object({
+  entrant_id: Uuid,
+  status: z.enum(["withdrawn", "disqualified"]),
+  policy: z.enum(["none", "walkover", "expunge"]),
+  walkovers: z.number().int(),
+  voided: z.number().int(),
+  skipped_finalized: z.number().int(),
+  walked_over_held: z.number().int(),
+  /** Fixtures the cascade wrote nothing to, each still the organiser's to void or settle (an abandoned Swiss board
+   *  holds the next round until it is settled, X-AB-5). */
+  left_to_organiser: z.array(Uuid),
+});
+/** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
+ *  (the withdrawal's fixture surgery ran, W3 T15). */
+export const PatchedEntrant = Entrant.extend({ cascade: WithdrawCascadeReport.optional() });
+
+/** W3 T9 (ruling 250, X-SW-12/13/14): what "Add late player" did with an entrant added to a division whose Swiss is
+ *  running. (a) re-paired the unstarted round with the newcomer (`repaired`: the players whose opponent changed; a
+ *  board the odd→even field needed is `new_board`); (b) seated the newcomer against the round's bye holder
+ *  (`bye_holder_id`, ruling C3) on a new board (`new_board`); (c) the newcomer joins round `round`'s Pair. */
+export const LateEntryResult = z.object({
+  entrant_id: Uuid,
+  stage_id: Uuid,
+  case: z.enum(["a", "b", "c"]),
+  round: z.number().int().min(1),
+  repaired: z.object({ changed_entrant_ids: z.array(Uuid) }).optional(),
+  new_board: z.object({ fixture_id: Uuid, scheduled: z.boolean() }).optional(),
+  bye_holder_id: Uuid.optional(),
+});
+export type LateEntryResult = z.infer<typeof LateEntryResult>;
+
+/** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss. */
+export const CreatedEntrant = Entrant.extend({ late_entry: LateEntryResult.optional() });
 
 // ---------------------------------------------------------------------------
 // Persons & profiles
@@ -955,6 +999,9 @@ export const MyResult = z.object({
   home_entrant_id: Uuid.nullable(),
   away_entrant_id: Uuid.nullable(),
   abandon_reason: z.string().nullable(),
+  /** W3 T15 ruling 2 — the status of the outcome's LOSER (an award's), else null: /me words a disqualified opponent's
+   *  walkover (reason `withdrew`, the withdrawal cascade's) as the plain walkover, never a withdrawal. */
+  forfeit_loser_status: z.string().nullable(),
 });
 
 export const MyTeam = z.object({
@@ -1201,6 +1248,10 @@ export const StageConfig = z
     // is this same key and is not bounded by the Swiss rounds field.
     rounds: z.number().int().min(FORMAT_BOUNDS.swissRounds.min).optional(),
     chess: z.boolean().optional(),
+    // W3 T18 (RB3-7(c), signed 252; X-SW-18): a requested half-point or zero-point bye is DEFERRED — no path, and the one
+    // key a client would reach for refuses by name (`http.ts` answers 400 SWISS_REQUESTED_BYES_DEFERRED with the guidance).
+    // Any value fails: the key accepts nothing, and the spec documents it as the never-schema it is.
+    requestedByes: z.never({ error: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE }).optional(),
     // Which pairing model the swiss generator uses. Mirrors the engine's
     // `SwissConstraints.pairing` (packages/engine/src/scheduling/swiss.ts) —
     // spelled out rather than imported because this file may not reach into
@@ -2952,11 +3003,27 @@ export const SwissReshapeResult = z.object({
   byes_removed: z.number().int(),
 });
 
+/** W3 T11 (X-SW-16; rulebook-W3-swiss.md §3.1/§3.2): a Swiss round count against the field a Generate minted or paired
+ *  for — the field's recommended count, safe maximum ⌊n/2⌋ and hard maximum (n − 1 even, n odd). On a Generate's answer
+ *  only as a warning: `warn` (above the safe maximum), or `shrunk` (fix round 1: a running Swiss's field shrank under its
+ *  count while this round still pairs — it can reach at most `hardMax` rounds; `rounds`, `field` and `canFinish` ride
+ *  with it, `canFinish` false for round 1, where nothing is played yet). Above the hard maximum otherwise the Generate is refused (SWISS_ROUNDS_ABOVE_MAX). */
+export const SwissRoundsJudgementResult = z.object({
+  verdict: z.enum(["warn", "shrunk"]),
+  recommended: z.number().int(),
+  safeMax: z.number().int(),
+  hardMax: z.number().int(),
+  rounds: z.number().int().optional(),
+  field: z.number().int().optional(),
+  canFinish: z.boolean().optional(),
+});
+
 export const GenerateResult = z.object({
   created: z.number().int(),
   existing: z.number().int(),
   fixtures: z.array(Fixture),
   reshaped: SwissReshapeResult.optional(),
+  swiss_rounds: SwissRoundsJudgementResult.optional(),
 });
 
 /** POST /stages/{id}/generate body. `pairing` = a ROUND-1-ONLY Swiss override
@@ -2965,15 +3032,84 @@ export const GenerateStageInput = z.object({ pairing: z.enum(["fold", "rank_adja
 export type GenerateStageInput = z.infer<typeof GenerateStageInput>;
 
 /** F3 Task 5 (5b) — POST /stages/{id}/rebuild's response: GenerateResult plus
- *  how many stale fixtures were deleted before regenerating. */
+ *  how many stale fixtures were deleted before regenerating, and (W3 T1, X-RB-1)
+ *  what became of the stage's slots (a time, a court, a venue or a pin): `kept`
+ *  by a rebuilt fixture at the same (pool, round, seq) — a shrinking Swiss round
+ *  keeps the boards that hold the most — `freed` because no rebuilt fixture
+ *  inherits them, and the rebuilt fixtures left `unscheduled` at a new position
+ *  (counted only when the stage had a layout). */
 export const RebuildResult = GenerateResult.extend({
   removed: z.number().int(),
+  slots: z.object({
+    kept: z.number().int(),
+    freed: z.number().int(),
+    unscheduled: z.number().int(),
+  }),
 });
 
 /** POST /stages/{id}/unpair — clears the latest seated Swiss round onto kept shells. */
 export const UnpairResult = z.object({
   cleared: z.number().int(),
   round: z.number().int(),
+});
+
+/** PATCH /stages/{id} (W3 T12, SW-M10 / #838, X-SW-17 and BG-SW-1) — a Swiss stage's round count and chess colours,
+ *  editable until the stage's first start. At least one key; an unknown key is refused (strict). */
+export const PatchSwissStage = z
+  // `requestedByes` (W3 T18, RB3-7(c)): deferred — refused by name on this door as on `StageConfig`.
+  .object({ rounds: z.number().int().min(1), chess: z.boolean(), requestedByes: z.never({ error: SWISS_REQUESTED_BYES_DEFERRED_MESSAGE }) })
+  .partial()
+  .strict()
+  .refine((p) => Object.keys(p).length > 0, "empty patch");
+export type PatchSwissStage = z.infer<typeof PatchSwissStage>;
+
+export const PatchSwissStageResult = z.object({
+  rounds: z.number().int(),
+  chess: z.boolean(),
+  /** The count against the field its next Pair seats (rulebook §3.1/§3.2); null when `rounds` was not sent or there is
+   *  no pairable field yet. Above the hard maximum the PATCH is refused instead (SWISS_ROUNDS_ABOVE_MAX). */
+  swiss_rounds: z
+    .object({
+      verdict: z.enum(["ok", "warn"]),
+      recommended: z.number().int(),
+      safeMax: z.number().int(),
+      hardMax: z.number().int(),
+    })
+    .nullable(),
+  /** Shells deleted for removed rounds (`slots_freed`: how many of them held a laid-out slot) and minted for added ones. */
+  shells: z.object({
+    added: z.number().int(),
+    removed: z.number().int(),
+    slots_freed: z.number().int(),
+  }),
+});
+
+/** POST /stages/{id}/swiss/add-round (W3 T12, X-SW-17) — the new round count and the shells minted for it. */
+export const AddSwissRoundResult = z.object({
+  rounds: z.number().int(),
+  shells_added: z.number().int(),
+});
+
+/** POST /stages/{id}/swiss/finish (W3 T13, X-SW-26) — the round whose standings became final, the rows past it deleted
+ *  (and how many held a laid-out slot), and the stage's completion (`completeStage`'s own answer). */
+export const FinishSwissResult = z.object({
+  finished_after: z.number().int(),
+  shells_removed: z.number().int(),
+  slots_freed: z.number().int(),
+  completed: z.boolean(),
+  events: z.array(z.record(z.string(), z.unknown())),
+  qualified: z.object({ stage_id: Uuid, entrants: z.array(Uuid) }).optional(),
+  next_stage_fixtures: z.number().int().optional(),
+  division_completed: z.boolean().optional(),
+  seed_proposal: z.object({ id: Uuid, status: z.string() }).optional(),
+});
+
+/** GET /stages/{id}/swiss-cut (W3 T17, RB3-19, X-SW-25) — who a correction moved across a completed Swiss's cut after its
+ *  knockout began. `drift` is null when nothing moved (or there is nothing to compare: a running Swiss, an unseated or
+ *  unbegun bracket). `out` held a seat in the bracket and would not make today's cut; `in` would and holds none — entrant
+ *  ids, in table order. The bracket itself never moves. */
+export const SwissCutDriftResult = z.object({
+  drift: z.object({ out: z.array(Uuid), in: z.array(Uuid) }).nullable(),
 });
 
 /** POST /stages/{id}/open-round (T19, D12) — the organiser opens one round

@@ -547,3 +547,49 @@ describe("the run sheet names its tag in full (audit 4.3)", () => {
     expect(html).not.toContain('role="img"');
   });
 });
+
+// W3 T15 ruling 2 (controller, 2026-11-02): a disqualification runs the withdrawal cascade, whose award over her open
+// board carries reason `withdrew` (the engine has no unplayed `disqualified` forfeit, PF-2). The run sheet never labels
+// her as having withdrawn: its result line keeps the walkover's "w/o", and where it states the reason — the tag's
+// accessible name and tooltip — it says she was DISQUALIFIED. Read from her status, which the division page already
+// holds (`entrantStatuses`, threaded as the run sheet's own prop). The withdrawal keeps today's words.
+describe("a disqualified entrant's cascade walkover: the run sheet says disqualified, never withdrew (W3 T15 ruling 2)", () => {
+  const UI = messages as Record<string, string>;
+  const award = { kind: "award" as const, winner: "e1", loser: "e2", reason: "withdrew" as const };
+  const render = (statuses?: Record<string, string>) =>
+    renderToStaticMarkup(
+      <RunSheetRow
+        fixture={fx({ status: "forfeited", outcome: award, scheduled_at: null })}
+        href="/f/1"
+        tz={TZ}
+        orgTz={TZ}
+        nowMs={NOW_MS}
+        canEdit
+        entrantNames={ENTRANTS}
+        entrantStatuses={statuses}
+      />,
+    );
+  const named = (full: string) => `role="img" aria-label="${full}" title="${full}"`;
+
+  it("disqualified: the walkover's tag, its reason in full is the disqualification, and nowhere a withdrawal", () => {
+    const full = UI["forfeit.tagFull.disqualifiedWalkover"];
+    expect(full, "en ui.json words the organiser's disqualified walkover").toBeTruthy();
+    const html = render({ e1: "registered", e2: "disqualified" });
+    expectRowRendered(html);
+    expect(textOf(html), "the result line reads the walkover").toContain(outcomeText(msg, award, ENTRANTS)!);
+    expect(html, "the tag names the disqualification").toContain(named(full!));
+    expect(html, "never the withdrawal's expansion").not.toContain(UI["forfeit.tagFull.withdrew"]!);
+    expect(html.toLowerCase(), "nowhere a withdrawal").not.toMatch(/withdr/);
+  });
+
+  it("the pair: withdrawn — and a row handed no statuses — keep today's withdrawal expansion", () => {
+    let checked = 0;
+    for (const statuses of [{ e1: "registered", e2: "withdrawn" }, undefined]) {
+      const html = render(statuses);
+      expectRowRendered(html);
+      expect(html, `${JSON.stringify(statuses)}: the withdrawal's expansion`).toContain(named(UI["forfeit.tagFull.withdrew"]!));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});

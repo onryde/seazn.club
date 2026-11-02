@@ -156,6 +156,9 @@ interface SidePreBefore {
    *  sentence and the "?" of an entrant the read cannot find are placeholders, a found entrant is seated. Without it
    *  every side read as a placeholder here while the real loader widened a colliding seated pair. */
   seated: boolean;
+  /** W3 T15 review I4 — a field the real loader gained after this copy was frozen (the side's departure, read with it
+   *  from `public_entrants_v`), mirrored by the loader's own expression so the diff stays T4's alone. */
+  departed?: "withdrawn" | "disqualified";
 }
 
 async function loadSidesBefore(
@@ -163,7 +166,7 @@ async function loadSidesBefore(
   fixture: Pick<PublicFixture, "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label">,
   division: { youth: boolean; playerNameDisplay: string | null },
   slot: (label: SlotLabel | null, seat: "home" | "away") => string,
-): Promise<[SideT, SideT]> {
+): Promise<{ sides: [SideT, SideT]; statuses: Record<string, string> }> {
   const ids = [fixture.home_entrant_id, fixture.away_entrant_id].filter((id): id is string => id !== null);
   const rows =
     ids.length > 0
@@ -171,12 +174,13 @@ async function loadSidesBefore(
           {
             id: string;
             kind: string;
+            status: string;
             display_name: string;
             badge_url: string | null;
             team_display: { logo_path: string | null; colors: unknown } | null;
           }[]
         >`
-          select id, kind, display_name, badge_url, team_display
+          select id, kind, status, display_name, badge_url, team_display
           from public_entrants_v where id in ${q(ids)}`
       : [];
   const maskedNames = rows.length > 0 ? await maskSideNamesBefore(q, rows, division) : new Map<string, string>();
@@ -197,15 +201,24 @@ async function loadSidesBefore(
       badgeUrl: resolveEntrantBadge({ badge_url: row.badge_url, team_logo_path: row.team_display?.logo_path ?? null }),
       isPerson: row.kind !== "team",
       seated: true,
+      ...(row.status === "withdrawn" || row.status === "disqualified" ? { departed: row.status } : {}),
     };
   };
   const home = sideOf(fixture.home_entrant_id, fixture.home_slot_label, "home");
   const away = sideOf(fixture.away_entrant_id, fixture.away_slot_label, "away");
   const [homeShort, awayShort] = disambiguatedShorts(home, away);
-  return [
-    { entrantId: home.entrantId, name: home.name, short: homeShort, colour: home.colour, badgeUrl: home.badgeUrl },
-    { entrantId: away.entrantId, name: away.name, short: awayShort, colour: away.colour, badgeUrl: away.badgeUrl },
-  ];
+  const wire = (x: SidePreBefore, short: string): SideT => ({
+    entrantId: x.entrantId,
+    name: x.name,
+    short,
+    colour: x.colour,
+    badgeUrl: x.badgeUrl,
+    ...(x.departed === undefined ? {} : { departed: x.departed }),
+  });
+  return {
+    sides: [wire(home, homeShort), wire(away, awayShort)],
+    statuses: Object.fromEntries(rows.map((r) => [r.id, r.status])),
+  };
 }
 
 async function loadMatchCentreBefore(q: Sql, fixture: PublicFixture, ctx: MatchCentreLoadCtx): Promise<MatchCentreDocT> {
@@ -298,7 +311,7 @@ async function loadMatchCentreBefore(q: Sql, fixture: PublicFixture, ctx: MatchC
     });
     slot = (label, seat) => namer.seat(fixture.id, seat, label);
   }
-  const sides = await loadSidesBefore(
+  const { sides, statuses } = await loadSidesBefore(
     q,
     fixture,
     { youth: ctx.division.youth, playerNameDisplay: ctx.division.playerNameDisplay },
@@ -319,6 +332,8 @@ async function loadMatchCentreBefore(q: Sql, fixture: PublicFixture, ctx: MatchC
     stage: ctx.stage,
     moduleVersion: ctx.division.moduleVersion,
     formatLabel,
+    // W3 T15 review I4 (after the freeze, mirrored): the statuses the real loader hands the builder with the sides.
+    entrantStatuses: statuses,
   };
   return buildMatchCentre(input);
 }

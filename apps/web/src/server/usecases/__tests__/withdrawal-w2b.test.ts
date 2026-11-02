@@ -679,8 +679,9 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
 
   it("R-1: a departed LOSER's seat is stamped at the decision — a void of that line revives the third-place line her dead feed voided, and the field side re-deciding it is seated in a LIVE line, never the abandoned one", async () => {
     // single-sport: badminton; the un-fill reads the feed graph and the entrant status, not the sport. Every
-    // DEPARTED_STATUSES member: a disqualification is a status change with no cascade, and a W2a-era withdrawal left
-    // the same shape (a departed entrant still seated in an unplayed line).
+    // DEPARTED_STATUSES member: a departed entrant still seated in an unplayed line is a LEGACY shape — a W2a-era
+    // withdrawal left it, and so did a disqualification until W3 T15 (RB3-17) made one cascade like a withdrawal (which
+    // walks the line over) — so it is planted as a status written without the cascade: the raw status flip.
     let checked = 0;
     for (const departed of [...DEPARTED_STATUSES]) {
       const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
@@ -695,7 +696,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       // Semi B walks over at its home's withdrawal: an award, whose loser edge is dead (X-DE-1).
       await withdrawEntrantCascade(s.auth, b.home_entrant_id!);
       // Semi A's away leaves the field with no cascade, then loses semi A: a departed loser (X-WD-5).
-      await patchEntrant(s.auth, a.away_entrant_id!, { status: departed } as never);
+      await sql`update entrants set status = ${departed} where id = ${a.away_entrant_id}`;
       await playBadminton(s.auth, a.id, true);
       const voided = await fixtureRow(thirdId);
       expect([voided.status, voided.outcome, voided.home_entrant_id, voided.away_entrant_id], `${departed}: rig — both loser feeds dead: the third-place line is void`).toEqual([
@@ -734,11 +735,12 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     // single-sport: badminton. Before R-1 a departed loser's seat was dead but unstamped, so this line was VOIDED; the
     // stamp makes both seats departures, which is X-WD-4's "every side withdrew" — and D19 writes no double walkover on
     // a line with no next match. Bracket completion ranks an unplayed third-place line by the fallback (bracketRanks).
+    // The departed losers are the LEGACY shape (R-1's note above): a disqualification written without the cascade.
     const s = await seedBracket({ ...badminton, stageKind: "knockout", entrants: 4, stageConfig: { thirdPlace: true } });
     const [a, b] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
     if (!a || !b || a.loser_to_fixture === null || a.loser_to_fixture !== b.loser_to_fixture) throw new Error("rig: two semis into one third-place line");
     for (const sf of [a, b]) {
-      await patchEntrant(s.auth, sf.away_entrant_id!, { status: "disqualified" } as never);
+      await sql`update entrants set status = 'disqualified' where id = ${sf.away_entrant_id}`;
       await playBadminton(s.auth, sf.id, true);
     }
     const third = await fixtureRow(a.loser_to_fixture);
@@ -942,7 +944,8 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     const thirdId = a.loser_to_fixture;
     const drawn = slotLabel(rows.find((r) => r.id === thirdId)!, a.loser_to_slot);
     const col = a.loser_to_slot === 1 ? sql`home_slot_label` : sql`away_slot_label`;
-    await patchEntrant(s.auth, a.away_entrant_id!, { status: "disqualified" } as never);
+    // A departed loser who played on: the legacy shape (R-1's note) — a disqualification written without the cascade.
+    await sql`update entrants set status = 'disqualified' where id = ${a.away_entrant_id}`;
     await playBadminton(s.auth, a.id, true);
     await sql`update fixtures set ${col} = ${sql.json(drawn as never)} where id = ${thirdId}`;
     expect(labelOf(await fixtureRow(thirdId), a.loser_to_slot), "rig: the legacy shape — her dead seat carries no stamp").not.toBe(BYE_KEY);
@@ -1035,8 +1038,10 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
 
   it("R-4: the way out the settle dialog names when BOTH sides of a held line have left — void back into play, then a disqualification forfeit for either side: nobody advances, and the next match walks the other semi's winner over", async () => {
     // single-sport: football, the held-line rig (a 0-0 at full time is held in a bracket). The dialog's state is a
-    // LEGACY row (PF-8a: a W2a withdrawal left the held line alone) or a disqualification (a status change, no
-    // cascade) — one side each here, the two departures the dialog counts.
+    // LEGACY row (PF-8a: a W2a withdrawal left the held line alone) and then a disqualification — one side each here, the
+    // two departures the dialog counts. Since W3 T15 (RB3-17) the disqualification runs the withdrawal cascade, which
+    // finds the other side already gone and play recorded on the line, so it writes nothing there and leaves it to the
+    // organiser (Loop R M-1's guard): the line is still held.
     const s = await seedBracket({ ...football, stageKind: "knockout", entrants: 4 });
     const [a, b] = (await rowsOf(s.stageId)).filter((r) => r.home_entrant_id && r.away_entrant_id);
     if (!a || !b || a.winner_to_fixture === null || a.winner_to_fixture !== b.winner_to_fixture) throw new Error("rig: two semis into one final");

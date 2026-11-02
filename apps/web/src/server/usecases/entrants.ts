@@ -40,6 +40,11 @@ import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { assertPersonIdsLinkedForOnlinePlay, lichessLinkStatesByPerson, type LichessLinkState } from "./external-accounts";
 import { openRosterSeatGate } from "./online-seat-gate";
+import type { LateEntryResult } from "@/server/api-v1/schemas";
+// W3 T9: an entrant added (or reinstated) while the division's Swiss is running is a late player.
+import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from "./swiss-late-entry";
+// Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
+import type { WithdrawCascadeOut } from "./withdrawal";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -159,6 +164,10 @@ export interface EntrantRow {
   created_at: string;
   /** PROMPT-60: crest/badge/flag — external URL or assets-bucket path. */
   badge_url: string | null;
+  /** W3 T9 (ruling C4): a late player's first Swiss round, in the stage `swiss_first_round_stage_id` names (V486/V487);
+   *  null = from round 1. Written only by `admitSwissLateEntrant`. */
+  swiss_first_round: number | null;
+  swiss_first_round_stage_id: string | null;
 }
 
 export interface EntrantWithMembers extends EntrantRow {
@@ -174,11 +183,13 @@ export interface EntrantWithMembers extends EntrantRow {
 export interface CreatedEntrant extends EntrantRow {
   roster_keys_dropped?: number;
   eligibility_warnings?: EligibilityIssue[];
+  /** W3 T9 (ruling 250): present only when the entrant joined a running Swiss — which case it took. */
+  late_entry?: LateEntryResult;
 }
 
 const COLS = [
   "id", "division_id", "kind", "team_id", "display_name", "seed", "status", "created_at",
-  "badge_url",
+  "badge_url", "swiss_first_round", "swiss_first_round_stage_id",
 ] as const;
 
 /** RS011: shared by every organiser roster-write path (`createEntrants`,
@@ -355,14 +366,16 @@ export async function createEntrants(
     // A started tournament's field is closed — fixtures were generated from
     // it, and a latecomer would never receive matches (or would corrupt a
     // bracket). Open-window formats are the exception: ladders and americano
-    // sessions take late joiners by design (Jul3/08 §6). Withdrawals stay
-    // available in every state.
+    // sessions take late joiners by design (Jul3/08 §6), and a running Swiss
+    // takes a late player (W3 T9, ruling 250 — `admitSwissLateEntrant` below
+    // decides how, or refuses by name when no round is left or it is over).
+    // Withdrawals stay available in every state.
     if (division.status === "active" || division.status === "completed") {
       const [openFormat] = await tx`
         select 1 from stages
         where division_id = ${divisionId} and kind in ('ladder', 'americano')
         limit 1`;
-      if (!openFormat) {
+      if (!openFormat && !(await hasRootSwissStage(tx, divisionId))) {
         throw new HttpError(
           422,
           "This tournament has started — the entrant list is locked. Withdrawing entrants still works.",
@@ -478,10 +491,17 @@ export async function createEntrants(
         actorId: auth.userId,
         context: "roster_add",
       });
+      // W3 T9 (ruling 250): an organiser's "Add late player", one entrant at a time in creation order and each before
+      // the next is inserted — a re-pair (case (a)) reads the active field, and a batch-mate not yet admitted must not
+      // be seated in it as if from round 1. Null before Start or with no running Swiss; a refusal rolls the batch back.
+      const late = await admitSwissLateEntrant(tx, auth, divisionId, row.id, "organiser");
+      // The row as stored after admission: the first round it wrote is part of the entrant (ruling C4).
+      if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${row.id}`;
       rows.push({
         ...row,
         ...(dropped > 0 ? { roster_keys_dropped: dropped } : {}),
         ...(warnings.length > 0 ? { eligibility_warnings: warnings } : {}),
+        ...(late ? { late_entry: late } : {}),
       });
     }
     return { rows, competitionId: division.competition_id };
@@ -491,6 +511,8 @@ export async function createEntrants(
     { divisionId, competitionId, fixtureIds: [] },
     { division: divisionId, created: rows.length },
   );
+  // A late player who re-paired a round or took its bye moved seats: the push and the table refold run after commit.
+  await afterSwissLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
   return rows;
 }
 
@@ -875,7 +897,47 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
   }
 }
 
+/**
+ * `PATCH /entrants/{id}`. W3 T15 (RB3-17, X-SW-23): a disqualification is "withdrawal from that moment" (rulebook §12),
+ * so `status: "disqualified"` for an entrant still in the field goes through the withdrawal cascade
+ * (`withdrawEntrantCascade(…, { as: "disqualified" })`): their owed boards are settled as a withdrawal settles them, then
+ * the status is written. Before this it was a bare flip that left the entrant's open board `scheduled`, so the round never
+ * completed. The cascade itself decides "started" (T9's `divisionHasStarted`): before Start it is the plain flip, so that
+ * fact has ONE reader. An entrant already departed (`DEPARTED_STATUSES`) is owed nothing — a second PATCH to
+ * `disqualified`, or a withdrawn entrant later disqualified — and takes the plain write (controller ruling C6: the cascade
+ * writes through `writeEntrantPatch`, which never routes back). Any other field of the same patch is written BEFORE the
+ * cascade (T15 review m4), so a refused field leaves the status, the boards and the ledger untouched. A
+ * `status: "withdrawn"` patch stays the bare flip it has always been (ruling 111's self-withdrawal); the
+ * Withdraw button is `POST /entrants/{id}/withdraw`.
+ */
 export async function patchEntrant(
+  auth: AuthCtx,
+  id: string,
+  patch: PatchEntrant,
+): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut }> {
+  if (patch.status === "disqualified") {
+    const [current] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
+    if (current !== undefined && !DEPARTED_STATUSES.has(current.status)) {
+      // A dynamic import: withdrawal.ts imports this module (scoring.ts → stages.ts's `completeStage` is the precedent).
+      const { withdrawEntrantCascade } = await import("./withdrawal");
+      const rest: PatchEntrant = { ...patch };
+      delete rest.status; // written by the cascade
+      // T15 review m4: the rest of the patch lands FIRST. A refusal there (a roster too big, a seat the online gate
+      // refuses) then answers before any fixture surgery, so a refused PATCH changes nothing; the cascade's own final
+      // write (C6) writes the status.
+      if (Object.keys(rest).length > 0) await writeEntrantPatch(auth, id, rest);
+      const cascade = await withdrawEntrantCascade(auth, id, { as: "disqualified" });
+      // T15 review m3: the cascade's report rides with the entrant — `left_to_organiser` names an abandoned board that
+      // holds the Swiss round until the organiser settles it (X-AB-5), which an API client otherwise never learns.
+      return { ...(await getEntrant(auth, id)), cascade };
+    }
+  }
+  return writeEntrantPatch(auth, id, patch);
+}
+
+/** The entrant write itself — every field of a patch, in one transaction, with no routing. `patchEntrant` is the door;
+ *  the withdrawal cascade writes its final status here (C6). */
+export async function writeEntrantPatch(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,
@@ -898,7 +960,13 @@ export async function patchEntrant(
     // in or out of the field?" is answerable below. A patch that re-asserts
     // the status it already had must NOT count as a field change — it would
     // stale and recompute a seed proposal for nothing.
-    const [prior] = await tx<{ status: string }[]>`select status from entrants where id = ${id}`;
+    const [prior] = await tx<{ status: string; division_id: string }[]>`select status, division_id from entrants where id = ${id}`;
+    // W3 T9 (Reinstate ruling): a departed entrant made active again is an ARRIVAL, admitted below under the
+    // `division:` lock — taken here, before the row's update, so this write holds the division lock before the row
+    // like every other Swiss write (the lock order `division:` → rows).
+    const reinstating =
+      prior !== undefined && DEPARTED_STATUSES.has(prior.status) && fields.status !== undefined && !DEPARTED_STATUSES.has(fields.status);
+    if (reinstating) await tx`select pg_advisory_xact_lock(hashtext(${"division:" + prior.division_id}))`;
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {
       const cols = Object.keys(fields);
@@ -915,6 +983,12 @@ export async function patchEntrant(
     // statuses, or between two active ones, is not.
     const fieldChanged =
       prior !== undefined && DEPARTED_STATUSES.has(prior.status) !== DEPARTED_STATUSES.has(row.status);
+    // An automatic arrival (case (c) only, never a refusal): the rounds they were away for are missed and score 0
+    // (ruling 251), and they rejoin at the next round's Pair. Null before Start or with no running Swiss.
+    if (reinstating && !DEPARTED_STATUSES.has(row.status)) {
+      const late = await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate");
+      if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
+    }
     if (members) {
       // Full roster replacement — recheck the count against THIS entrant's kind
       // (kind itself isn't patchable, so only the roster is being written).

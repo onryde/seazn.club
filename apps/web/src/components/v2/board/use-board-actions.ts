@@ -7,6 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
+import { isSwissRefusalCode } from "@/lib/swiss-refusals";
+import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
@@ -376,6 +378,10 @@ export function useBoardActions(
             ? msg("board.action.cantSchedule", { reasons: reasons.join(" ") })
             : msg("board.action.cantScheduleClash"),
         );
+      } else if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) {
+        // W3 T11 review I1: the board's Start (and any board action a Swiss refusal answers — SWISS_ROUNDS_ABOVE_MAX at
+        // Start) says it in the reader's language with what to do next, never the server's English sentence.
+        setError(swissRefusalText(err.code, err.extra, msg, plural));
       } else {
         // Never surface raw codes/stack text; fall back to a friendly line.
         const raw = err instanceof Error ? err.message : "";
@@ -384,7 +390,7 @@ export function useBoardActions(
       }
       return false;
     },
-    [board, entrantNames, feedLabels, msg, router],
+    [board, entrantNames, feedLabels, msg, plural, router],
   );
 
   const moveCard = useCallback(

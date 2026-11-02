@@ -1,0 +1,657 @@
+// W3 T10 (X-SW-12; controller ruling 1): "Add late player" opens the Entrants tab's EXISTING add form, so the notice
+// after the add is said HERE, from the server's own answer (`late_entry` on the created row, T9). And a refusal is
+// said in the organiser's language, by its code, never the server's English.
+//
+// Driven through the panel's real add path: the form's `onSubmit` (the same function its button calls) posts to the
+// mocked API, and the notice is read back off the re-rendered panel. Expected copy is the en dictionary's with the
+// values put in by hand here (`fill`), never `lateEntryNotice`'s own output: that is the code under test.
+import { describe, expect, it, vi } from "vitest";
+import {
+  propsOf,
+  renderIsland,
+  textOf,
+} from "@/components/__tests__/_hook-harness";
+import {
+  EntrantsPanel,
+  type EntrantsPanelEligibility,
+} from "@/components/v2/entrants-panel";
+import type { EffectiveEntrantModel } from "@seazn/engine/sport";
+import en from "@/dictionaries/en/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+}));
+// W3 T13: the house confirm, answered per case (default: cancelled).
+const confirmMock = vi.hoisted(() => vi.fn<(opts: unknown) => Promise<boolean>>(async () => false));
+vi.mock("@/components/ui/confirm-provider", () => ({
+  useConfirm: () => confirmMock,
+}));
+vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));
+// Batch-4 review I1: the recovery doors are also read in French — a non-English locale is the only way the server's
+// English and the localised sentence differ. English (the default) keeps the real hooks, so every other test reads as it
+// always did; French swaps in the fr catalog.
+const active = vi.hoisted(() => ({ locale: "en" as "en" | "fr" }));
+vi.mock("@/components/i18n/dict-provider", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/i18n/dict-provider")>();
+  return {
+    ...actual,
+    useMsg: () => {
+      const real = actual.useMsg();
+      return active.locale === "fr" ? (key: string, vars?: Record<string, string | number>) => tRuntime(fr as unknown as Dict, key, vars) : real;
+    },
+    useMsgPlural: () => {
+      const real = actual.useMsgPlural();
+      return active.locale === "fr"
+        ? (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(fr as unknown as Dict, key, count, "fr", vars)
+        : real;
+    },
+  };
+});
+
+const api = vi.hoisted(() => ({
+  next: null as null | (() => unknown),
+  personsPage: null as null | (() => unknown),
+  // W3 T12 Phase 2: the answer to "Add a round" (POST /stages/{id}/swiss/add-round), and the URLs it was sent to.
+  addRound: null as null | (() => unknown),
+  addRoundUrls: [] as string[],
+  // W3 T13: the answer to "Finish the Swiss now" (POST /stages/{id}/swiss/finish), and the URLs it was sent to.
+  finish: null as null | (() => unknown),
+  finishUrls: [] as string[],
+}));
+vi.mock("@/lib/client-v1", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/client-v1")>();
+  return {
+    ...actual, // ApiV1Error stays the REAL class.
+    apiV1: vi.fn(async (url: string, options?: { method?: string }) => {
+      if (url.endsWith("/entrants") && options?.method === "POST") {
+        const answer = api.next;
+        if (!answer) throw new Error("no POST answer queued");
+        return answer();
+      }
+      if (url.endsWith("/swiss/add-round") && options?.method === "POST") {
+        api.addRoundUrls.push(url);
+        if (!api.addRound) throw new Error("no add-round answer queued");
+        return api.addRound();
+      }
+      if (url.endsWith("/swiss/finish") && options?.method === "POST") {
+        api.finishUrls.push(url);
+        if (!api.finish) throw new Error("no finish answer queued");
+        return api.finish();
+      }
+      if (url.startsWith("/api/v1/persons?"))
+        return api.personsPage ? api.personsPage() : { items: [], nextCursor: null };
+      return [];
+    }),
+  };
+});
+const { ApiV1Error } = await import("@/lib/client-v1");
+
+const EN = en as unknown as Record<string, string>;
+const fill = (key: string, vars: Record<string, string | number>) =>
+  Object.entries(vars).reduce(
+    (s, [k, v]) => s.replaceAll(`{${k}}`, String(v)),
+    EN[key]!,
+  );
+
+const NO_ELIGIBILITY: EntrantsPanelEligibility = {
+  category: null,
+  age_min: null,
+  age_max: null,
+  eligibility_note: null,
+};
+const MODEL: EffectiveEntrantModel = {
+  kinds: ["individual"],
+  defaultKind: "individual",
+  squadNumbers: false,
+  captain: false,
+  maxTeamMembers: null,
+};
+const entrant = (id: string, display_name: string) => ({
+  id,
+  division_id: "div-1",
+  kind: "individual",
+  display_name,
+  seed: null,
+  status: "confirmed",
+  members: [],
+});
+const ROSTER = [
+  entrant("e1", "Ana"),
+  entrant("e2", "Ben"),
+  entrant("e3", "Cy"),
+];
+
+function mount(over: Record<string, unknown> = {}) {
+  const island = renderIsland(EntrantsPanel, {
+    divisionId: "div-1",
+    entrants: ROSTER,
+    canEdit: true,
+    positionGroups: [],
+    roles: [],
+    eligibility: NO_ELIGIBILITY,
+    entrantModel: MODEL,
+    viewerPlan: "community" as const,
+    divisionStatus: "active",
+    swissLateEntry: { openOnlineRounds: [] },
+    ...over,
+  } as never);
+  const submit = async (answer: () => unknown) => {
+    api.next = answer;
+    const form = island
+      .tree()
+      .find((el) => propsOf(el).importControls !== undefined);
+    if (!form) throw new Error("no add form");
+    await (
+      propsOf(form).onSubmit as (p: Record<string, unknown>) => Promise<unknown>
+    )({ kind: "individual", display_name: "Zoe" });
+  };
+  const lines = () =>
+    // `tree()` is already the walked, flat list of every element.
+    island
+      .tree()
+      .filter((el) => propsOf(el)["data-testid"] === "entrants-late-entry-line")
+      .map((el) => ({ tone: propsOf(el)["data-tone"], text: textOf([el]) }));
+  const error = () => {
+    const el = island
+      .tree()
+      .find((e) => propsOf(e)["data-testid"] === "entrants-error");
+    return el ? textOf([el]) : null;
+  };
+  return { island, submit, lines, error };
+}
+
+const created = (late_entry?: Record<string, unknown>) => () => ({
+  ...entrant("e9", "Zoe"),
+  ...(late_entry ? { late_entry } : {}),
+});
+
+describe("EntrantsPanel — the late-entry notice after an add (W3 T10)", () => {
+  it("(a) names the entrants whose match changed, asks for a reprint, and flags the unscheduled match", async () => {
+    const p = mount();
+    await p.submit(
+      created({
+        entrant_id: "e9",
+        stage_id: "s1",
+        case: "a",
+        round: 2,
+        repaired: { changed_entrant_ids: ["e2", "e1"] },
+        new_board: { fixture_id: "f9", scheduled: false },
+      }),
+    );
+    expect(p.lines()).toEqual([
+      {
+        tone: "done",
+        text: fill("swiss.lateEntry.repaired.other", {
+          round: 2,
+          name: "Zoe",
+          count: 2,
+        }),
+      },
+      {
+        tone: "todo",
+        text: fill("swiss.lateEntry.tellChanged", { names: "Ana and Ben" }),
+      },
+      {
+        tone: "todo",
+        text: fill("swiss.lateEntry.reprintSheets", { round: 2 }),
+      },
+      { tone: "todo", text: fill("swiss.lateEntry.newMatchUnscheduled", {}) },
+    ]);
+    expect(p.error()).toBeNull();
+  });
+
+  it("(b) names the bye holder; the invite line only when that round is already open online", async () => {
+    const answer = created({
+      entrant_id: "e9",
+      stage_id: "s1",
+      case: "b",
+      round: 3,
+      bye_holder_id: "e3",
+      new_board: { fixture_id: "f9", scheduled: true },
+    });
+    const offline = mount();
+    await offline.submit(answer);
+    expect(offline.lines()).toEqual([
+      {
+        tone: "done",
+        text: fill("swiss.lateEntry.tookBye", {
+          name: "Zoe",
+          holder: "Cy",
+          round: 3,
+        }),
+      },
+    ]);
+
+    const online = mount({ swissLateEntry: { openOnlineRounds: ["s1:3"] } });
+    await online.submit(answer);
+    expect(online.lines()).toEqual([
+      {
+        tone: "done",
+        text: fill("swiss.lateEntry.tookBye", {
+          name: "Zoe",
+          holder: "Cy",
+          round: 3,
+        }),
+      },
+      {
+        tone: "todo",
+        text: fill("swiss.lateEntry.inviteOwed", {
+          round: 3,
+          name: "Zoe",
+          holder: "Cy",
+        }),
+      },
+    ]);
+    // Another round open is not this one.
+    const otherRound = mount({
+      swissLateEntry: { openOnlineRounds: ["s1:2", "s2:3"] },
+    });
+    await otherRound.submit(answer);
+    expect(otherRound.lines()).toHaveLength(1);
+  });
+
+  it("(c) says the round the entrant joins from; a second add replaces the first add's notice", async () => {
+    const p = mount();
+    await p.submit(
+      created({
+        entrant_id: "e9",
+        stage_id: "s1",
+        case: "a",
+        round: 2,
+        repaired: { changed_entrant_ids: [] },
+      }),
+    );
+    expect(p.lines()).toEqual([
+      {
+        tone: "done",
+        text: fill("swiss.lateEntry.repairedNoChange", {
+          round: 2,
+          name: "Zoe",
+        }),
+      },
+    ]);
+    await p.submit(
+      created({ entrant_id: "e9", stage_id: "s1", case: "c", round: 4 }),
+    );
+    expect(p.lines()).toEqual([
+      {
+        tone: "done",
+        text: fill("swiss.lateEntry.nextRound", { name: "Zoe", round: 4 }),
+      },
+    ]);
+  });
+
+  it("an ordinary add (no late_entry on the row) says nothing, and clears an earlier notice", async () => {
+    const p = mount();
+    await p.submit(
+      created({ entrant_id: "e9", stage_id: "s1", case: "c", round: 4 }),
+    );
+    expect(p.lines(), "premise: a notice was showing").toHaveLength(1);
+    await p.submit(created());
+    expect(p.lines()).toEqual([]);
+    expect(p.error()).toBeNull();
+  });
+
+  it("says each refusal in the organiser's words, by its code, and drops the previous notice", async () => {
+    let checked = 0;
+    // T12 Fix round 1 (I1): NO_ROUND_LEFT with canAddRound true adds the recovery the button under it offers.
+    for (const [code, status, said] of [
+      ["SWISS_NO_ROUND_LEFT", 409, `${EN["swiss.refusal.SWISS_NO_ROUND_LEFT"]} ${EN["swiss.rounds.noRoundLeft.add"]}`],
+      ["SWISS_OVER", 422, EN["swiss.refusal.SWISS_OVER"]],
+    ] as const) {
+      const p = mount();
+      await p.submit(
+        created({ entrant_id: "e9", stage_id: "s1", case: "c", round: 4 }),
+      );
+      expect(p.lines(), "premise").toHaveLength(1);
+      await p.submit(() => {
+        throw new ApiV1Error("English from the server", status, code, {
+          canAddRound: true,
+        });
+      });
+      expect(p.error(), code).toBe(said);
+      expect(p.lines(), `${code}: no stale notice beside the refusal`).toEqual(
+        [],
+      );
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});
+
+describe("EntrantsPanel — the running-Swiss note above the add form (W3 T10)", () => {
+  const note = (over: Record<string, unknown>) =>
+    mount(over)
+      .island.tree()
+      .find((el) => propsOf(el)["data-testid"] === "entrants-swiss-late-note");
+
+  it("shows on a division with a running Swiss, over the open form; never without one, nor on a locked list", () => {
+    const shown = mount({});
+    expect(
+      shown.island
+        .tree()
+        .find((el) => propsOf(el).importControls !== undefined),
+      "premise: the form renders",
+    ).toBeDefined();
+    expect(textOf(shown.island.tree())).toContain(
+      EN["entrants.swissLate.note"],
+    );
+    expect(note({ swissLateEntry: null }), "no running Swiss").toBeUndefined();
+    expect(
+      note({ swissLateEntry: undefined }),
+      "every other caller",
+    ).toBeUndefined();
+    expect(
+      note({ rosterLocked: true }),
+      "a locked list has no form to explain",
+    ).toBeUndefined();
+    expect(note({ canEdit: false }), "a viewer").toBeUndefined();
+  });
+
+  it("the form carries the id the rail's link lands on", () => {
+    const anchor = mount({})
+      .island.tree()
+      .find((el) => propsOf(el).id === "add-entrant");
+    expect(anchor, "no #add-entrant on the Entrants tab").toBeDefined();
+  });
+});
+
+describe("EntrantsPanel — New player waits for Players to load (owner ruling 2026-11-01)", () => {
+  it("hands the form `personsReady` only once the directory has loaded, so the duplicate check sees everyone", async () => {
+    let release!: (page: unknown) => void;
+    const pending = new Promise((r) => (release = r));
+    api.personsPage = () => pending;
+    try {
+      const p = mount();
+      const form = () => p.island.tree().find((el) => propsOf(el).importControls !== undefined)!;
+      expect(propsOf(form()).personsReady, "still loading").toBe(false);
+      release({ items: [], nextCursor: null });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(propsOf(form()).personsReady, "loaded").toBe(true);
+    } finally {
+      api.personsPage = null;
+    }
+  });
+});
+
+describe("EntrantsPanel — Players fails to load (review m1)", () => {
+  it("says so under New player, keeps it off, and Retry loads Players and turns it on", async () => {
+    api.personsPage = () => Promise.reject(new Error("network"));
+    try {
+      const p = mount();
+      await new Promise((r) => setTimeout(r, 0));
+      const form = () => p.island.tree().find((el) => propsOf(el).importControls !== undefined)!;
+      expect(propsOf(form()).personsFailed, "the failure reaches the form").toBe(true);
+      expect(propsOf(form()).personsReady, "New player stays off: its duplicate check has no list").toBe(false);
+
+      api.personsPage = null; // the next load succeeds
+      (propsOf(form()).onRetryPersons as () => void)();
+      expect(propsOf(form()).personsFailed, "retrying clears the failure").toBe(false);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(propsOf(form()).personsReady, "loaded on retry").toBe(true);
+      expect(propsOf(form()).personsFailed).toBe(false);
+    } finally {
+      api.personsPage = null;
+    }
+  });
+});
+
+// W3 T12 Phase 2 — SWISS_NO_ROUND_LEFT's own sentence names the recovery, "Add a round"; the button stands under the
+// error only while the server says it goes through (`canAddRound`, ruling C11) and names the Swiss to add it to
+// (`stageId`). After it lands, the line says the round was added and to add the player again (the refused add wrote
+// nothing). Single-sport by nature: the panel reads a code and two details; no sport reaches it.
+describe("EntrantsPanel — Add a round on SWISS_NO_ROUND_LEFT (W3 T12 Phase 2)", () => {
+  const noRoundLeft = (extra: Record<string, unknown>) => () => {
+    throw new ApiV1Error("English from the server", 409, "SWISS_NO_ROUND_LEFT", extra);
+  };
+  const button = (p: ReturnType<typeof mount>) =>
+    p.island.tree().find((e) => propsOf(e)["data-testid"] === "entrants-add-round");
+  const added = (p: ReturnType<typeof mount>) => {
+    const el = p.island.tree().find((e) => propsOf(e)["data-testid"] === "entrants-round-added");
+    return el ? textOf([el]) : null;
+  };
+
+  it("offered when the server says Add a round goes through; it posts to the Swiss the refusal names, then says the round", async () => {
+    api.addRoundUrls = [];
+    const p = mount();
+    await p.submit(noRoundLeft({ canAddRound: true, stageId: "s1" }));
+    expect(p.error()).toBe(`${EN["swiss.refusal.SWISS_NO_ROUND_LEFT"]} ${EN["swiss.rounds.noRoundLeft.add"]}`);
+    expect(button(p), "the recovery the sentence names").toBeDefined();
+    expect(textOf([button(p)!])).toBe(EN["stage.more.addRound"]);
+    api.addRound = () => ({ rounds: 4, shells_added: 3 });
+    (propsOf(button(p)!).onClick as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(api.addRoundUrls).toEqual(["/api/v1/stages/s1/swiss/add-round"]);
+    expect(p.error(), "the refusal is answered").toBeNull();
+    expect(button(p), "and its button gone").toBeUndefined();
+    expect(added(p)).toBe(fill("entrants.lateEntry.roundAdded", { round: 4 }));
+    // The next add clears the line.
+    await p.submit(created());
+    expect(added(p)).toBeNull();
+  });
+
+  it("not offered when it would only be refused, nor without the Swiss it names, nor for another refusal", async () => {
+    let checked = 0;
+    const base = EN["swiss.refusal.SWISS_NO_ROUND_LEFT"];
+    for (const [name, answer, said] of [
+      // T12 Fix round 1 (review I1): no button, so the text names no Add a round — it says no more rounds fit.
+      ["canAddRound false", noRoundLeft({ canAddRound: false, stageId: "s1" }), `${base} ${EN["swiss.rounds.noRoundLeft.none"]}`],
+      ["no stageId", noRoundLeft({ canAddRound: true }), `${base} ${EN["swiss.rounds.noRoundLeft.add"]}`],
+      [
+        "SWISS_OVER",
+        () => {
+          throw new ApiV1Error("English", 422, "SWISS_OVER", { canAddRound: true, stageId: "s1" });
+        },
+        EN["swiss.refusal.SWISS_OVER"],
+      ],
+    ] as const) {
+      const p = mount();
+      await p.submit(answer);
+      expect(p.error(), `${name}: the refusal is said`).toBe(said);
+      expect(/add a round/i.test(p.error() ?? ""), `${name}: names Add a round only beside the Swiss it can add to`).toBe(
+        name === "no stageId",
+      );
+      expect(button(p), name).toBeUndefined();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: cases").toBe(3);
+  });
+
+  it("the button leaves with its refusal: a later add that lands clears the error, and the recovery with it", async () => {
+    const p = mount();
+    await p.submit(noRoundLeft({ canAddRound: true, stageId: "s1" }));
+    expect(button(p), "premise: offered").toBeDefined();
+    await p.submit(created());
+    expect(p.error()).toBeNull();
+    expect(button(p), "no Add a round beside no refusal").toBeUndefined();
+  });
+
+  it("a refused Add a round (the field changed meanwhile) says that refusal, and the button goes with the old one", async () => {
+    const p = mount();
+    await p.submit(noRoundLeft({ canAddRound: true, stageId: "s1" }));
+    api.addRound = () => {
+      throw new ApiV1Error("English", 422, "SWISS_ROUNDS_ABOVE_MAX", { rounds: 4, field: 4, hardMax: 3, canFinish: false });
+    };
+    (propsOf(button(p)!).onClick as () => void)();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Said as the desk says it (T12 Fix round 1): the sentence, then the field's line — rulebook §3.1 for 4 players:
+    // 2 rounds recommended (⌈log2 4⌉, within the safe max 2), at most 3 (an even field: n − 1).
+    expect(p.error()).toBe(
+      `${EN["swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"]} ${fill("swiss.rounds.guidance.other", { n: 4, count: 2, hardMax: 3 })}`,
+    );
+    expect(button(p)).toBeUndefined();
+    expect(added(p)).toBeNull();
+  });
+});
+
+describe("EntrantsPanel — Finish the Swiss now on SWISS_NO_ROUND_LEFT (W3 T13)", () => {
+  const noRoundLeft = (extra: Record<string, unknown>) => () => {
+    throw new ApiV1Error("English from the server", 409, "SWISS_NO_ROUND_LEFT", extra);
+  };
+  const finishBtn = (p: ReturnType<typeof mount>) =>
+    p.island.tree().find((e) => propsOf(e)["data-testid"] === "entrants-finish-swiss");
+  const finished = (p: ReturnType<typeof mount>) => {
+    const el = p.island.tree().find((e) => propsOf(e)["data-testid"] === "entrants-swiss-finished");
+    return el ? textOf([el]) : null;
+  };
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const PLAN = { canFinish: true, finish: { after: 3, rounds: 3 } };
+
+  it("the sentence names exactly the recoveries offered: Finish, Add a round, both, or neither", async () => {
+    const base = EN["swiss.refusal.SWISS_NO_ROUND_LEFT"];
+    const ROWS = [
+      { extra: { canAddRound: false, ...PLAN, stageId: "s1" }, said: `${base} ${EN["swiss.rounds.noRoundLeft.finish"]}`, finish: true, add: false },
+      { extra: { canAddRound: true, ...PLAN, stageId: "s1" }, said: `${base} ${EN["swiss.rounds.noRoundLeft.addOrFinish"]}`, finish: true, add: true },
+      { extra: { canAddRound: true, canFinish: false, stageId: "s1" }, said: `${base} ${EN["swiss.rounds.noRoundLeft.add"]}`, finish: false, add: true },
+      { extra: { canAddRound: false, canFinish: false, stageId: "s1" }, said: `${base} ${EN["swiss.rounds.noRoundLeft.none"]}`, finish: false, add: false },
+      // Finish offered but no Swiss named: nowhere to post, no button.
+      { extra: { canAddRound: false, ...PLAN }, said: `${base} ${EN["swiss.rounds.noRoundLeft.finish"]}`, finish: false, add: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      const p = mount();
+      await p.submit(noRoundLeft(r.extra));
+      expect(p.error(), JSON.stringify(r.extra)).toBe(r.said);
+      expect(finishBtn(p) !== undefined, `${JSON.stringify(r.extra)}: Finish`).toBe(r.finish);
+      expect(p.island.tree().some((e) => propsOf(e)["data-testid"] === "entrants-add-round"), `${JSON.stringify(r.extra)}: Add a round`).toBe(r.add);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
+
+  it("confirms first with the plan; cancelled nothing is sent; confirmed it posts to the Swiss the refusal names and says the round", async () => {
+    api.finishUrls = [];
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(false);
+    const p = mount();
+    await p.submit(noRoundLeft({ canAddRound: false, ...PLAN, stageId: "s1" }));
+    expect(textOf([finishBtn(p)!])).toBe(EN["stage.more.finishSwiss"]);
+    (propsOf(finishBtn(p)!).onClick as () => void)();
+    await flush();
+    expect(api.finishUrls, "cancelled: nothing sent").toEqual([]);
+    expect(confirmMock.mock.calls[0]![0]).toMatchObject({
+      title: EN["stage.finish.confirm.title"],
+      body: fill("stage.finish.confirm.final", { round: 3 }),
+      tone: "danger",
+    });
+    expect(finishBtn(p), "still offered").toBeDefined();
+
+    confirmMock.mockResolvedValueOnce(true);
+    api.finish = () => ({ completed: true, events: [], finished_after: 3, shells_removed: 0, slots_freed: 0 });
+    (propsOf(finishBtn(p)!).onClick as () => void)();
+    await flush();
+    expect(api.finishUrls).toEqual(["/api/v1/stages/s1/swiss/finish"]);
+    expect(p.error(), "the refusal is answered").toBeNull();
+    expect(finishBtn(p), "and its button gone").toBeUndefined();
+    expect(finished(p)).toBe(fill("schedule.notice.swissFinished", { round: 3 }));
+    // The next add clears the line.
+    await p.submit(created());
+    expect(finished(p)).toBeNull();
+  });
+
+  it("says what the answer says (Fix round 1, reviews m5, m6): the slots freed, a stage not completed, and the backstop in this language", async () => {
+    const freed = (n: number) => fill(n === 1 ? "schedule.notice.roundsSlotsFreed.one" : "schedule.notice.roundsSlotsFreed.other", { count: n });
+    const ROWS: { answer: () => unknown; notice: string | null; error: string | null }[] = [
+      {
+        answer: () => ({ completed: true, events: [], finished_after: 2, shells_removed: 4, slots_freed: 3 }),
+        notice: `${fill("schedule.notice.swissFinished", { round: 2 })} ${freed(3)}`,
+        error: null,
+      },
+      {
+        answer: () => ({ completed: false, events: [], finished_after: 3, shells_removed: 0, slots_freed: 0 }),
+        notice: fill("schedule.notice.swissFinishedOpen", { round: 3 }),
+        error: null,
+      },
+      {
+        answer: () => {
+          throw new ApiV1Error("swiss: rounds 1..2 do not complete the stage", 422, "STAGE_NOT_READY", { stageId: "s1" });
+        },
+        notice: null,
+        error: EN["stage.finish.notReady"]!,
+      },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      confirmMock.mockReset();
+      confirmMock.mockResolvedValue(true);
+      const p = mount();
+      await p.submit(noRoundLeft({ canAddRound: false, ...PLAN, stageId: "s1" }));
+      api.finish = r.answer;
+      (propsOf(finishBtn(p)!).onClick as () => void)();
+      await flush();
+      expect(finished(p), `notice ${checked}`).toBe(r.notice);
+      expect(p.error(), `error ${checked}`).toBe(r.error);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
+});
+
+describe("EntrantsPanel — the recovery doors say a frozen timetable and a match's own format in the reader's language (batch-4 review I1)", () => {
+  // The late add does not check the timetable freeze, so on a frozen division the last round's refusal offers Add a round
+  // and Finish (the freeze sits outside both predicates, by ruling), and pressing either answers 422 SCHEDULE_LOCKED; a
+  // removed shell carrying its own format answers FIXTURE_HAS_OWN_FORMAT. Said as the stage rail says the same write
+  // (`swissDoorRefusalText`, the one mapping — pinned there in stages-panel-swiss-rounds-edit.test.tsx), never the
+  // server's English. Expected copy is each catalog's own, filled by hand.
+  const DICTS: Record<"en" | "fr", Record<string, string>> = {
+    en: en as unknown as Record<string, string>,
+    fr: fr as unknown as Record<string, string>,
+  };
+  const fillIn = (text: string, vars: Record<string, string | number>) => text.replace(/\{(\w+)\}/g, (_m, k: string) => String(vars[k]));
+  const both = () => {
+    throw new ApiV1Error("English from the server", 409, "SWISS_NO_ROUND_LEFT", {
+      canAddRound: true,
+      canFinish: true,
+      finish: { after: 3, rounds: 4 },
+      stageId: "s1",
+    });
+  };
+  const door = (p: ReturnType<typeof mount>, testid: string) => p.island.tree().find((e) => propsOf(e)["data-testid"] === testid);
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("Add a round and Finish the Swiss now, each refused SCHEDULE_LOCKED or FIXTURE_HAS_OWN_FORMAT, in English and in French", async () => {
+    let checked = 0;
+    try {
+      for (const locale of ["en", "fr"] as const) {
+        active.locale = locale;
+        const D = DICTS[locale];
+        const CODES = [
+          { code: "SCHEDULE_LOCKED", status: 422, extra: {}, said: D["stage.error.scheduleFrozen"]! },
+          {
+            code: "FIXTURE_HAS_OWN_FORMAT",
+            status: 409,
+            extra: { fixture_id: "f7", fixture_no: 7 },
+            said: fillIn(D["rules.err.fixtureHasOwnFormat"]!, { match: fillIn(D["rules.err.match"]!, { n: 7 }) }),
+          },
+        ];
+        for (const c of CODES) {
+          const refuse = () => {
+            throw new ApiV1Error("server English", c.status, c.code, { ...c.extra });
+          };
+          for (const testid of ["entrants-add-round", "entrants-finish-swiss"]) {
+            confirmMock.mockReset();
+            confirmMock.mockResolvedValue(true);
+            api.addRound = refuse;
+            api.finish = refuse;
+            const p = mount();
+            await p.submit(both);
+            const button = door(p, testid);
+            expect(button, `${locale} ${c.code}: premise — ${testid} is offered`).toBeDefined();
+            (propsOf(button!).onClick as () => void)();
+            await flush();
+            expect(p.error(), `${locale} ${c.code} ${testid}`).toBe(c.said);
+            expect(c.said, "premise: not the server's words").not.toContain("server English");
+            checked++;
+          }
+        }
+      }
+    } finally {
+      active.locale = "en";
+    }
+    expect(checked, "anti-vacuity: 2 locales × 2 codes × 2 doors").toBe(8);
+    expect(DICTS.fr["stage.error.scheduleFrozen"], "premise: French differs from English").not.toBe(DICTS.en["stage.error.scheduleFrozen"]);
+  });
+});

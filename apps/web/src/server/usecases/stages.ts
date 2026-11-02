@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { SWISS_ABANDONED_BOARDS_REASON } from "@/lib/swiss-abandoned-refusal";
+import { applyRoundOneColourLot, swissColourLot, swissDrawSeed, swissDrawnFieldOrder, swissRoundOneOrder } from "@/lib/swiss-draw";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { HttpError } from "@/lib/errors";
 import { assertStageKindsAllowed, chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
@@ -20,6 +21,9 @@ import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
+import { swissRefusal } from "./swiss-refusal";
+import { judgeSwissRounds, swissRoundsNoticeOf, type SwissRoundsJudgement, type SwissRoundsNotice, type SwissRoundsShrunk } from "@/lib/swiss-rounds";
+import { isRootSwissStage } from "@/lib/open-entry-stages";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -40,6 +44,8 @@ import {
 } from "@seazn/engine/scheduling";
 import {
   carryDeltas,
+  forfeitShaped,
+  isUnplayedForfeit,
   placementTable,
   progressionSize,
   resolveProgression,
@@ -54,7 +60,7 @@ import {
 } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
-import { resolveModule } from "@/server/engine-db";
+import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 // L3/#414 pass 3 — not re-exported through the engine-db barrel (index.ts),
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
@@ -64,13 +70,16 @@ import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { forfeitPlayedFacts, playedFor } from "@/server/engine-db/forfeit-played";
 import { FIXTURE_DELETED_REASON, ROUND_VOIDED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import { writeAwardedMatchState } from "@/server/engine-db/awarded-state";
 import {
   isSwissBoardSeated,
+  isSwissByeShellExtKey,
   latestSeatedSwissRound,
   latestSwissRoundWithAnySeat,
+  mintSwissBoardExtKeys,
   nextUnseatedSwissRound,
   planSwissShells,
   swissBoardsForField,
@@ -78,6 +87,7 @@ import {
   SWISS_ROUNDS_REQUIRED_CODE,
   SWISS_ROUNDS_REQUIRED_MESSAGE,
 } from "@/lib/swiss-shell";
+import { inSwissRoundField, swissFirstRoundIn } from "@/lib/swiss-late-entry";
 import {
   type SwissPairingMode,
   storedSwissPairing,
@@ -99,6 +109,7 @@ import { log } from "@/server/logger";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { endCallsOn } from "./match-day-call";
 // #14: `courtNamesById` is the venue-qualified label map (via
 // `buildCourtDirectory`) — a bare joined `courts.name` can't tell apart two
 // venues that legally share one court name.
@@ -122,6 +133,7 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 // court/venue in this org" 404 in the product.
 import { VENUE_NOT_FOUND_CODE, COURT_NOT_FOUND_CODE } from "./venues";
 import {
+  cutEligiblePools,
   descriptorKey,
   descriptorLabel,
   destinationSlotsBySeed,
@@ -139,6 +151,7 @@ import {
   type SlotLabel,
 } from "./stage-seeding";
 import { fixtureEvidenceSql, fixtureHasResultSql } from "./fixture-results-sql";
+import { carriedSlotCounts, carrySlots, chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { firstOwnFormat, ownFormatLoss, refuseOwnFormatLoss } from "./fixture-override-guards";
 
 type Tx = postgres.TransactionSql;
@@ -228,6 +241,8 @@ export type BoardFixtureRow = Omit<
    *  a start taken back, a walkover recorded in play), which every board
    *  write refuses to move (review 4 of #857). Sent only when true. */
   held?: true;
+  /** W3 T3 (X-SW-29): a Swiss bye row (`swissByeShellSql`), which no board write places. Sent only when true. */
+  bye_shell?: true;
 };
 
 export const BOARD_FIXTURE_COLS = [
@@ -435,6 +450,9 @@ export interface StageCarry {
   points?: unknown;
   tiebreakers?: unknown;
   crossGroupTiebreakers?: unknown;
+  /** W3 T12 (T8 review m6): a Swiss slot's chess colours switch (`PATCH /stages/{id}`, BG-SW-1) — the organiser's
+   *  choice, so a re-Apply of the template (which names no `chess`) keeps it instead of re-seeding the boardgame default. */
+  chess?: boolean;
 }
 
 /** W2c Task 12 — the config each stage of a batch is inserted with: its rules validated on the stage PUT's terms and
@@ -458,7 +476,7 @@ function stageConfigsAtCreate(
     const sent = (s.config ?? {}) as Record<string, unknown>;
     // Each own table value the body does not send is the slot's carry (a body's own replaces it whole; null drops it).
     const config: Record<string, unknown> = { ...sent };
-    for (const key of ["points", "tiebreakers", "crossGroupTiebreakers"] as const) {
+    for (const key of ["points", "tiebreakers", "crossGroupTiebreakers", "chess"] as const) {
       if (carry?.[key] !== undefined && sent[key] === undefined) config[key] = carry[key];
     }
     return validatedStageConfig(
@@ -743,11 +761,15 @@ export async function replaceStages(
       // W2d Task 10: and its own orders, the same way (a slot with none carries none, and inherits).
       const tiebreakers = r.config?.tiebreakers;
       const crossGroupTiebreakers = r.config?.crossGroupTiebreakers;
+      // W3 T12 (T8 review m6): a Swiss slot's chess switch, the organiser's (the default is re-seeded only for a slot
+      // that stores none — `withSwissChessDefault`).
+      const chess = r.config?.chess;
       keep.set(`${r.seq}:${r.kind}`, {
         rules: cleared ? {} : (rules as Record<string, unknown>),
         ...(points !== undefined && points !== null ? { points } : {}),
         ...(tiebreakers !== undefined && tiebreakers !== null ? { tiebreakers } : {}),
         ...(crossGroupTiebreakers !== undefined && crossGroupTiebreakers !== null ? { crossGroupTiebreakers } : {}),
+        ...(typeof chess === "boolean" ? { chess } : {}),
       });
     }
     await tx`delete from stages where division_id = ${divisionId}`;
@@ -1035,9 +1057,14 @@ interface GenFixture {
   departedSeat?: "home" | "away";
 }
 
-interface ActiveEntrant {
+export interface ActiveEntrant {
   id: string;
   seed: number | null;
+  /** W3 T6 (spec §4, ruling 251): the first Swiss round this entrant is in the field for; null = from round 1, which is
+   *  every entrant enrolled before Start. Read only by the Swiss path (`swissFieldForRound`, `buildSwissHistory`);
+   *  written by Task 9's late entry. Every list built from something other than the active select (a qualified slate,
+   *  a preview, a slot placement) carries null: that field is fixed when the stage is drawn. */
+  swiss_first_round: number | null;
 }
 
 function bracketToGen(bracket: GeneratedBracket, laneDepth: number): GenFixture[] {
@@ -1199,7 +1226,8 @@ function walkoverDepartedQualifiers(
   };
 }
 
-const DECIDED = new Set(["decided", "finalized", "forfeited"]);
+/** A board whose result is in (W3 T9 reads it too: a late player's "current round" is the one with a board not in it). */
+export const DECIDED: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
 
 /** The slot label stamped on a bye's PHANTOM side — the seat the bracket pads
  *  out and nobody ever occupies. One authority, shared by the two generation
@@ -1218,7 +1246,7 @@ function generatedAward(winner: string, home: string | null, away: string | null
   return other === null ? byeAward(winner) : { kind: "award", winner, loser: other, reason: "withdrew" };
 }
 
-type SwissExistingFixture = {
+export type SwissExistingFixture = {
   id: string;
   ext_key: string | null;
   round_no: number;
@@ -1227,9 +1255,16 @@ type SwissExistingFixture = {
   home_entrant_id: string | null;
   away_entrant_id: string | null;
   outcome: unknown;
+  /** W3 T2 (SW-L8): the slot a shrinking pre-Start round weighs before it
+   *  deletes a board (`chooseDoomedBoards`, lib/rebuild-slots.ts — the same
+   *  order Rebuild's carry uses). postgres.js parses `timestamptz` into a Date. */
+  scheduled_at: Date | string | null;
+  court_id: string | null;
+  venue_id: string | null;
+  schedule_locked: boolean;
 };
 
-type SwissGenResult = {
+export type SwissGenResult = {
   gen: GenFixture[];
   seatedCount: number;
   reshaped: SwissReshape;
@@ -1243,14 +1278,302 @@ type SwissGenResult = {
    *  seating UPDATEs shells that already existed, so these must never reach
    *  the ledger's `fixture_ids`, which Undo deletes. */
   seatedIds: string[];
+  /** W3 T8 (X-SW-22): the stage's draw seed when this pass drew round 1 (an unseeded entrant in its field); else null. */
+  drawSeed: number | null;
+  /** W3 T9 (T8 review n1): round 1's drawn order — every entrant of its field, seeds first, then the draw — when this pass
+   *  drew round 1; else null. It rides on the round's ledger row (`draw_order`) and every later round ranks a tie by it
+   *  (`swissRoundOneDrawOrder`), so a seed edit after Start or a late player seated in round 1 never reshuffles it. */
+  drawOrder: string[] | null;
+  /** W3 T8 (BG-SW-1): the colour board 1's upper player took when this pass coloured round 1 by lot (chess on); else
+   *  null. */
+  colourLot: "white" | "black" | null;
+  /** W3 T11 (X-SW-16): the round count judged against the field this pass minted or paired for (`judgeSwissRoundsAt` at
+   *  the mint, `judgeSwissPairAt` at a Pair) — never a refusal (that throws); null when the pass had nothing to pair. A
+   *  warn, or a running Swiss's shrunk-field warning, rides on the Generate's answer. */
+  swissRounds: SwissRoundsJudgement | SwissRoundsShrunk | null;
 };
+
+/**
+ * W3 T11 (SW-H2, RB3-3; rule X-SW-16): a Swiss's round count against the field paired NOW — rulebook-W3-swiss.md §3.1
+ * ("n = active field at the time of pairing") and §3.2 ("Above the hard maximum: refused … check runs … again at Start and
+ * at every Generate (the field can shrink after creation)"). Refused with SWISS_ROUNDS_ABOVE_MAX `{ rounds, field,
+ * hardMax, canFinish }` before any write; the judgement otherwise. `canFinish`: a round is complete, so the Swiss can be
+ * finished after it (T13) — the refusal is then resolvable another way, a 409; else it can never succeed as sent, a 422.
+ */
+export function judgeSwissRoundsAt(rounds: number, fieldSize: number, canFinish: boolean): SwissRoundsJudgement {
+  const judgement = judgeSwissRounds(rounds, fieldSize);
+  if (judgement.verdict === "refuse") {
+    throw swissRefusal(
+      "SWISS_ROUNDS_ABOVE_MAX",
+      { rounds, field: fieldSize, hardMax: judgement.hardMax, canFinish },
+      { resolvable: canFinish },
+    );
+  }
+  return judgement;
+}
+
+/**
+ * W3 T11 fix round 1 — a Pair's judgement (controller ruling on review m2: never block a pairable round). Within the hard
+ * maximum it is the plain judgement (ok or warn). Above it:
+ * - before Start, the count as sent can never be played — Start refuses it too — and the organiser can still change it:
+ *   refused as sent (422, `canFinish: false`, `judgeSwissRoundsAt`);
+ * - in a running Swiss (withdrawals shrank the field), only a round this field cannot reach is refused: `target >
+ *   hardMax` (409 when the Swiss can be finished now). A round still within the shrunk field's hard maximum is paired,
+ *   and the answer carries the `shrunk` warning: the Swiss can reach at most `hardMax` rounds; finish after that one, or
+ *   now. Blocking it would strand a live event over rounds it has not reached; the engine's own no-legal-pairing outcome
+ *   (SW-H1) stays the backstop.
+ * `finish` (W3 T13, C11 applied to Finish): THE Finish predicate's answer (`swissFinishState`), read by the caller only
+ * when a running Swiss's count is above the field's hard maximum — the one case its `canFinish` is sent. Before T13 this
+ * was `target > 1` (re-review n1: a round-1 Pair has nothing played to finish with — the predicate's own k = 0 case).
+ */
+export function judgeSwissPairAt(
+  rounds: number,
+  fieldSize: number,
+  started: boolean,
+  target: number,
+  finish: { canFinish: boolean; finish?: { after: number; rounds: number } },
+): SwissRoundsJudgement | SwissRoundsShrunk {
+  const judgement = judgeSwissRounds(rounds, fieldSize);
+  if (judgement.verdict !== "refuse") return judgement;
+  if (!started) return judgeSwissRoundsAt(rounds, fieldSize, false);
+  if (target > judgement.hardMax) {
+    throw swissRefusal(
+      "SWISS_ROUNDS_ABOVE_MAX",
+      { rounds, field: fieldSize, hardMax: judgement.hardMax, ...finish },
+      { resolvable: finish.canFinish },
+    );
+  }
+  const { recommended, safeMax, hardMax } = judgement;
+  return { verdict: "shrunk", rounds, field: fieldSize, recommended, safeMax, hardMax, canFinish: finish.canFinish };
+}
+
+/**
+ * W3 T11 (X-SW-16; rulebook §3.2 "check runs … again at Start"): Start judges every ROOT Swiss of the division
+ * (`isRootSwissStage` — a Swiss fed by an earlier stage has no field until that stage ends, and its own Generate judges it)
+ * against the field its next Pair would seat: the active roster at that round (`swissFieldForRound` over the per-stage
+ * stamps), so a withdrawal after the shells were minted is caught here, before the division opens. Refused as sent (a
+ * 422, `canFinish: false`: nothing is played before Start). A field under 2 is left to the Generate's own refusal, and a
+ * Swiss with every round seated has nothing left to pair. Reads only — the caller runs it before its first write.
+ */
+export async function refuseSwissRoundsAboveMaxAtStart(tx: Tx, divisionId: string): Promise<void> {
+  const stages = await tx<{ id: string; kind: string; progression: unknown; config: Record<string, unknown> }[]>`
+    select id, kind, progression, config from stages where division_id = ${divisionId} and kind = 'swiss' order by seq`;
+  for (const stage of stages.filter(isRootSwissStage)) {
+    const rounds = stage.config.rounds;
+    if (typeof rounds !== "number" || !Number.isInteger(rounds) || rounds < 1) {
+      throw new EngineError("CONFIG_INVALID", "swiss stage requires config.rounds >= 1", { stageId: stage.id });
+    }
+    const existing = await tx<{ round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown; ext_key: string | null }[]>`
+      select round_no, home_entrant_id, away_entrant_id, outcome, ext_key from fixtures where stage_id = ${stage.id}`;
+    const target = existing.length === 0 ? 1 : nextUnseatedSwissRound(existing);
+    if (target === null) continue;
+    const field = swissFieldForRound(await swissActiveEntrants(tx, divisionId, stage.id), target);
+    if (field.length < 2) continue;
+    judgeSwissRoundsAt(rounds, field.length, false);
+  }
+}
+
+/**
+ * W3 T6 (spec §4 "Scoring for the newcomer", ruling 251; rule X-SW-12): the field of Swiss round `target` — every entrant
+ * whose first Swiss round is at or before it (null = from round 1). A latecomer given round 4 (case (c)) is not seated by
+ * a Pair of round 3, nor by its re-Pair after an Undo. The order is kept: it is the seeding order the standings rank by.
+ */
+export function swissFieldForRound(entrants: ActiveEntrant[], target: number): ActiveEntrant[] {
+  return entrants.filter((e) => inSwissRoundField(e.swiss_first_round, target));
+}
+
+/**
+ * W3 T9 (V487; carry from T6): the division's active entrants as a Swiss stage reads them — `generateStageFixturesTx`'s
+ * active select, with each first round scoped to `stageId` (`swissFirstRoundIn`: a stamp written by another Swiss stage
+ * counts as from round 1 here). Late entry (`swiss-late-entry.ts`) re-pairs a round over the same list.
+ */
+export async function swissActiveEntrants(tx: Tx, divisionId: string, stageId: string): Promise<ActiveEntrant[]> {
+  const rows = await tx<{ id: string; seed: number | null; swiss_first_round: number | null; swiss_first_round_stage_id: string | null }[]>`
+    select id, seed, swiss_first_round, swiss_first_round_stage_id from entrants
+    where division_id = ${divisionId} and status in ('registered', 'confirmed')
+    order by seed nulls last, created_at, id`;
+  return rows.map((e) => ({ id: e.id, seed: e.seed, swiss_first_round: swissFirstRoundIn(e, stageId) }));
+}
+
+/** Review m4: a Swiss round's field (`swissFieldForRound`) under 2 is refused exactly as generateStageFixturesTx refuses a
+ *  roster under 2 — the same code, message and data, so every reader of that refusal reads this one too. Nothing is
+ *  written first: both callers in `swissGen` throw before any reconcile or mint. */
+export function refuseSwissFieldUnderTwo(stageId: string, fieldSize: number): void {
+  if (fieldSize < 2) {
+    throw new EngineError("STAGE_NOT_READY", "need at least 2 active entrants to generate", { stageId, entrants: fieldSize });
+  }
+}
+
+/** The round history `pairRound` is handed (scheduling `SwissHistory`), in the shape `swissGen` builds it. */
+export interface SwissHistoryState {
+  /** Each entrant's pairing score: 1 per win or bye, ½ per draw. */
+  score: Map<string, number>;
+  /** `pairKey`s of every pair that has met. */
+  played: Set<string>;
+  /** Each player's colours in round order; a game nobody played holds none. */
+  colours: Map<string, Colour[]>;
+  /** Who may no longer take the pairing-allocated bye (P-A4). */
+  byes: Set<string>;
+}
+
+/**
+ * The history loop of `swissGen` (its award loop plus its implicit-bye loop), extracted by W3 T6 UNCHANGED except for one
+ * rule: the implicit-bye loop credits and bye-marks an entrant for round r only when r is at or after their first Swiss
+ * round. For a stage where every first round is null it is the inline loop it replaced, row for row — proven over real
+ * seeded rows against a verbatim copy of that loop (swiss-late-field.test.ts). `swissGen` calls it; Task 7 changes its
+ * `played` rule, keys the P-A4 bye bar on the same "unplayed" reading, and takes every forfeit out of colours as the
+ * engine does (a pre-W2b chess win by forfeit included); Task 9 reads it for case (b)'s colours.
+ *
+ * `existing` is the stage's rows in ANY order: the colours are a sequence, so the function sorts its own copy into round
+ * order (round_no, seq_in_round) rather than trusting its caller's ORDER BY. That precondition is enforced here, not stated
+ * (review m1; T3 found a physical-order read handing a later-updated round back after a later round).
+ * `entrants` is the field being paired (`swissFieldForRound`). `playedFacts` is fixture id → was anything played, for
+ * every two-seated forfeit-decided row (`forfeitPlayedFacts` under the division's module): W3 T7's `played` rule and the
+ * P-A4 bye bar read it, and a forfeit-decided row it does not cover is refused (`playedFor`), never guessed.
+ */
+export function buildSwissHistory(
+  existing: readonly SwissExistingFixture[],
+  entrants: readonly ActiveEntrant[],
+  playedFacts: ReadonlyMap<string, boolean>,
+): SwissHistoryState {
+  // Round order is this function's own invariant (review m1): a copy, so the caller's array is untouched.
+  const rows = [...existing].sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
+  const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
+  const played = new Set<string>();
+  const colours = new Map<string, Colour[]>();
+  const byes = new Set<string>();
+  const inRound = new Map<number, Set<string>>();
+  for (const f of rows) {
+    const o = f.outcome as { kind?: string; winner?: string } | null;
+    // Only a system bye — one seat, won by the seated side — is a bye. Every
+    // sport kernel ALSO emits `{kind: "award"}` for a real two-sided walkover
+    // or retirement, and that is a board, not a bye: it falls through, so both
+    // sides sat the round (no implicit bye for the absent loser) and the winner
+    // scores below. Case 3 of the 2026-09-24 Saturday probe: reading every
+    // award as a bye re-paired A v H in round 2 on a phantom point for H.
+    if (isOneSidedAwardBye(f) && o?.winner) {
+      const forRound = inRound.get(f.round_no) ?? new Set<string>();
+      forRound.add(o.winner);
+      inRound.set(f.round_no, forRound);
+      byes.add(o.winner);
+      score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+      continue;
+    }
+    if (!f.home_entrant_id || !f.away_entrant_id) continue;
+    // W3 T7 (X-SW-15; rulebook P-A2, FIDE C.04.2 3.5; RB3-2): a pair whose match was NOT PLAYED has not met, so the two
+    // may be paired again — a double walkover, and a forfeit the engine's one rule calls unplayed (`isUnplayedForfeit`:
+    // a walkover whatever its ledger reads, so a chess no-show after the Start too; any other reason only while nothing
+    // was played, so a retirement after play is a meeting). Everything else seated is a meeting, as before.
+    const unplayed =
+      o?.kind === "double_walkover" || (o != null && isUnplayedForfeit(o as MatchOutcome, playedFor(f, playedFacts)));
+    if (!unplayed) played.add(pairKey(f.home_entrant_id, f.away_entrant_id));
+    const forRound = inRound.get(f.round_no) ?? new Set<string>();
+    forRound.add(f.home_entrant_id).add(f.away_entrant_id);
+    inRound.set(f.round_no, forRound);
+    // A forfeit takes no colour, before or after play — as the engine reads it: boardgame's `colorOf` skips
+    // `state.forfeited`, which every `core.forfeit` sets (W2b BG-WO-1/2, a retirement after play included) and so does
+    // the pre-W2b `boardgame.result{forfeit}` (`decideResult`), whose stored row is a `win`, not an award. Loop R M-8:
+    // a double walkover is a forfeit too. Rulebook R14 ("a retirement's colour counts") disagrees for a retirement;
+    // that is the owner's call, and until then pairing colours stay the engine's, so they cannot drift from its
+    // "Games as White/Black" and its colour tie-breaks.
+    if (o?.kind !== "double_walkover" && !(o != null && forfeitShaped(o as MatchOutcome))) {
+      (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
+      (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
+    }
+    // FIDE C.04.1(d) (owner-approved 2026-09-24; rulebook P-A4): a player who has scored "a (forfeit) win due to an
+    // opponent not appearing" may not later receive the pairing-allocated bye. `byes` feeds ONLY `pairRound`'s bye
+    // pick, so this is eligibility and nothing else — no bye score (the +1 below is the win's). Keyed on the same
+    // `unplayed` as `played` above: a win WITHOUT play bars the bye (a walkover, a forfeit before play, a pre-W2b chess
+    // win by forfeit with nothing played), while a retirement, withdrawal or disqualification won after play is a
+    // played game and bars nothing.
+    if (unplayed && o?.winner) byes.add(o.winner);
+    if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
+    else if (o?.kind === "draw" || o?.kind === "tie") {
+      score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
+      score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
+    }
+  }
+  const latestSeated = latestSeatedSwissRound(rows);
+  for (let r = 1; r <= (latestSeated ?? 0); r++) {
+    const inRoundR = rows.filter((f) => f.round_no === r);
+    if (
+      !inRoundR.every((f) =>
+        isSwissBoardSeated({
+          home_entrant_id: f.home_entrant_id,
+          away_entrant_id: f.away_entrant_id,
+          outcome: f.outcome,
+        }),
+      )
+    ) {
+      continue;
+    }
+    // This round already carries an explicit bye row, so the award loop above
+    // has credited whoever sat out; inferring a second one here would
+    // double-count. (C1: this used to fire for a two-sided forfeit as well,
+    // which silently suppressed the implicit-bye inference for that round.)
+    if (inRoundR.some((f) => isOneSidedAwardBye(f))) continue;
+    const seen = inRound.get(r) ?? new Set();
+    for (const e of entrants) {
+      // W3 T6 (ruling 251; rulebook §4 late-entry row, FIDE C.04.2 2.4): a round before the entrant's first Swiss round
+      // is a MISSED round — 0 points, and not a bye, so they stay bye-eligible (P-A4) — never an implicit bye. Null is
+      // from round 1, so an entrant enrolled before Start is credited exactly as before.
+      if (!seen.has(e.id) && (e.swiss_first_round ?? 1) <= r) {
+        byes.add(e.id);
+        score.set(e.id, (score.get(e.id) ?? 0) + 1);
+      }
+    }
+  }
+  return { score, played, colours, byes };
+}
+
+/** Review m7: round 1's drawn order for a later round. Round 1's field is the entrants round 1 SEATED, not today's active
+ *  list: a withdrawal since would shrink the shuffle and reorder everyone. Null when round 1 drew nobody (every entrant
+ *  seeded) or seats no one — and (ruling, fix round 1b) when round 1 was NOT paired by the draw: a stage live at deploy
+ *  paired its round 1 in registration order, so its later rounds keep that order.
+ *
+ *  The source is round 1's newest pairing row on the ledger: its Pair (`fixtures_generated`, round 1; a Redo's step row
+ *  included) or an "Add late player" that re-paired round 1 (`swiss_late_entry`, case (a), round 1 — it re-draws the
+ *  field with the newcomer in it). W3 T9 (T8 review n1): that row records the drawn order itself (`draw_order`), which
+ *  is read as written — a seed edited after Start, or a late player the bye seated in round 1 (case (b), never drawn),
+ *  cannot reshuffle it. A row from before T9 carries only the marker `draw_seed` (never a date: every Pair of a drawn
+ *  round 1 since T8 records it, and no Pair before T8 did); for it the order is re-derived as round 1's Pair drew it —
+ *  the stage's seed over round 1's seated field, in the active select's `seed nulls last, created_at, id`. */
+async function swissRoundOneDrawOrder(
+  tx: Tx,
+  stageId: string,
+  divisionId: string,
+  existing: readonly SwissExistingFixture[],
+): Promise<string[] | null> {
+  const seated = new Set(
+    existing
+      .filter((f) => f.round_no === 1)
+      .flatMap((f) => [f.home_entrant_id, f.away_entrant_id])
+      .filter((id): id is string => id !== null),
+  );
+  if (seated.size === 0) return null;
+  const [roundOnePair] = await tx<{ drawn: boolean; order: unknown }[]>`
+    select payload ? 'draw_seed' as drawn, payload->'draw_order' as order from division_events
+     where division_id = ${divisionId} and payload->>'stage_id' = ${stageId} and payload->>'round' = '1'
+       and (type = 'fixtures_generated' or (type = 'swiss_late_entry' and payload->>'case' = 'a'))
+     order by seq desc limit 1`;
+  const stored = roundOnePair?.order;
+  if (Array.isArray(stored) && stored.length > 0 && stored.every((id) => typeof id === "string")) return stored as string[];
+  if (roundOnePair?.drawn !== true) return null;
+  const roundOne = await tx<{ id: string; seed: number | null }[]>`
+    select id, seed from entrants where id in ${tx([...seated])} order by seed nulls last, created_at, id`;
+  return roundOne.some((e) => e.seed === null) ? swissRoundOneOrder(swissDrawSeed(stageId), roundOne) : null;
+}
 
 // Swiss shell fixtures (2026-09-18 programme): first Generate mints empty rows for
 // every round the organiser declared in `config.rounds`; Pair next (a later
 // Generate when shells already exist) seats one round at a time onto those
 // shells. The organiser-set round budget is the only authority — nothing here
 // derives or persists `rounds` from field size.
-async function swissGen(
+//
+// W3 T6 (spec §4, ruling 251): `entrants` is the whole active list; each round
+// is paired, sized and scored over its own field (`swissFieldForRound`), so a
+// latecomer whose first round is later is not seated before it.
+export async function swissGen(
   tx: Tx,
   stageId: string,
   divisionId: string,
@@ -1272,8 +1595,13 @@ async function swissGen(
     if (override !== undefined) {
       throw new HttpError(422, SWISS_PAIRING_ROUND_ONE_ONLY_MESSAGE, SWISS_PAIRING_ROUND_ONE_ONLY_CODE);
     }
+    // Minted at round 1's field; every later round is resized to its own field when its Pair reaches it.
+    const mintField = swissFieldForRound(entrants, 1);
+    refuseSwissFieldUnderTwo(stageId, mintField.length);
+    // W3 T11 (X-SW-16): the mint is a Generate — nothing is played yet, so nothing can be finished.
+    const swissRounds = judgeSwissRoundsAt(rounds, mintField.length, false);
     return {
-      gen: planSwissShells(rounds, entrants.length).map((shell) => ({
+      gen: planSwissShells(rounds, mintField.length).map((shell) => ({
         extKey: shell.extKey,
         roundNo: shell.roundNo,
         seqInRound: shell.seqInRound,
@@ -1286,6 +1614,10 @@ async function swissGen(
       defaultPairing: null,
       round: null,
       seatedIds: [],
+      drawSeed: null,
+      drawOrder: null,
+      colourLot: null,
+      swissRounds,
     };
   }
 
@@ -1302,6 +1634,10 @@ async function swissGen(
       defaultPairing: null,
       round: null,
       seatedIds: [],
+      drawSeed: null,
+      drawOrder: null,
+      colourLot: null,
+      swissRounds: null,
     };
   }
 
@@ -1352,79 +1688,38 @@ async function swissGen(
   const defaultPairing = effectiveSwissPairing({ stored, round: target });
   const pairing = effectiveSwissPairing({ override, stored, round: target });
   const rankAdjacent = pairing === "rank_adjacent";
-  const score = new Map<string, number>(entrants.map((e) => [e.id, 0]));
-  const played = new Set<string>();
-  const colours = new Map<string, Colour[]>();
-  const byes = new Set<string>();
-  const inRound = new Map<number, Set<string>>();
-  for (const f of existing) {
-    const o = f.outcome as { kind?: string; winner?: string } | null;
-    // Only a system bye — one seat, won by the seated side — is a bye. Every
-    // sport kernel ALSO emits `{kind: "award"}` for a real two-sided walkover
-    // or retirement, and that is a played match: it falls through, so the pair
-    // is `played` (no rematch), both sides sat the round (no implicit bye for
-    // the absent loser) and the winner scores below. Case 3 of the 2026-09-24
-    // Saturday probe: reading every award as a bye re-paired A v H in round 2.
-    if (isOneSidedAwardBye(f) && o?.winner) {
-      const forRound = inRound.get(f.round_no) ?? new Set<string>();
-      forRound.add(o.winner);
-      inRound.set(f.round_no, forRound);
-      byes.add(o.winner);
-      score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-      continue;
-    }
-    if (!f.home_entrant_id || !f.away_entrant_id) continue;
-    played.add(pairKey(f.home_entrant_id, f.away_entrant_id));
-    const forRound = inRound.get(f.round_no) ?? new Set<string>();
-    forRound.add(f.home_entrant_id).add(f.away_entrant_id);
-    inRound.set(f.round_no, forRound);
-    // A forfeited game takes no colour — the engine's colour history skips
-    // byes and forfeits (`competition/tiebreakers.ts`, boardgame DOMAIN.md).
-    // Loop R M-8: a double walkover is a forfeit too (nobody played; boardgame's
-    // `colorOf` reads `state.forfeited`), so it holds no colour either.
-    if (o?.kind !== "award" && o?.kind !== "double_walkover") {
-      (colours.get(f.home_entrant_id) ?? colours.set(f.home_entrant_id, []).get(f.home_entrant_id)!).push("W");
-      (colours.get(f.away_entrant_id) ?? colours.set(f.away_entrant_id, []).get(f.away_entrant_id)!).push("B");
-    }
-    // FIDE C.04.1(d) (owner-approved 2026-09-24): a player who has scored a
-    // walkover win may not later receive the pairing-allocated bye. `byes`
-    // feeds ONLY `pairRound`'s bye pick, so this is eligibility and nothing
-    // else — no bye score (the +1 below is the win's), and `played`/`inRound`
-    // above treat it as any played match.
-    if (o?.kind === "award" && o.winner) byes.add(o.winner);
-    if ((o?.kind === "win" || o?.kind === "award") && o.winner) score.set(o.winner, (score.get(o.winner) ?? 0) + 1);
-    else if (o?.kind === "draw" || o?.kind === "tie") {
-      score.set(f.home_entrant_id, (score.get(f.home_entrant_id) ?? 0) + 0.5);
-      score.set(f.away_entrant_id, (score.get(f.away_entrant_id) ?? 0) + 0.5);
-    }
+  // W3 T6 (X-SW-12): this round's field — a latecomer whose first round is later is neither seated, sized for, nor
+  // scored here. Everything below that reads the field reads THIS list.
+  const field = swissFieldForRound(entrants, target);
+  // Review m4: the roster passed generateStageFixturesTx's `< 2` guard, but this round's field can be smaller (withdrawals
+  // plus latecomers whose first round is later). Refused here, before the reconcile below would size the round to 0 or 1
+  // and delete its unseated shells.
+  refuseSwissFieldUnderTwo(stageId, field.length);
+  // W3 T11 (X-SW-16): this round's field against the round count, before any write — withdrawals since the last Generate
+  // can have shrunk it under the rounds. Fix round 1 (ruling on review m2): a running Swiss refuses only a round its
+  // field cannot reach; see `judgeSwissPairAt`.
+  const started = await divisionHasStarted(tx, divisionId);
+  // W3 T13: THE Finish predicate, read only when its answer is sent (a running Swiss above the field's hard maximum).
+  // Imported lazily: swiss-rounds-admin.ts imports this module.
+  let finish: Parameters<typeof judgeSwissPairAt>[4] = { canFinish: false };
+  if (started && judgeSwissRounds(rounds, field.length).verdict === "refuse") {
+    const admin = await import("./swiss-rounds-admin");
+    finish = admin.swissFinishDetails(await admin.swissFinishStateOf(tx, stageId));
   }
-  const latestSeated = latestSeatedSwissRound(existing);
-  for (let r = 1; r <= (latestSeated ?? 0); r++) {
-    const inRoundR = existing.filter((f) => f.round_no === r);
-    if (
-      !inRoundR.every((f) =>
-        isSwissBoardSeated({
-          home_entrant_id: f.home_entrant_id,
-          away_entrant_id: f.away_entrant_id,
-          outcome: f.outcome,
-        }),
-      )
-    ) {
-      continue;
-    }
-    // This round already carries an explicit bye row, so the award loop above
-    // has credited whoever sat out; inferring a second one here would
-    // double-count. (C1: this used to fire for a two-sided forfeit as well,
-    // which silently suppressed the implicit-bye inference for that round.)
-    if (inRoundR.some((f) => isOneSidedAwardBye(f))) continue;
-    const seen = inRound.get(r) ?? new Set();
-    for (const e of entrants) {
-      if (!seen.has(e.id)) {
-        byes.add(e.id);
-        score.set(e.id, (score.get(e.id) ?? 0) + 1);
-      }
-    }
-  }
+  const swissRounds = judgeSwissPairAt(rounds, field.length, started, target, finish);
+  // The division's pinned module: the bye's frozen cfg below, and what "played" means for a forfeit (ruling 118).
+  const [division] = await tx<{ config: unknown; sport_key: string; module_version: string }[]>`
+    select config, sport_key, module_version from divisions where id = ${divisionId}`;
+  if (!division) throw new EngineError("CONFIG_INVALID", "swiss: division missing", { stageId, divisionId });
+  const sportModule = resolveModule(division.sport_key, division.module_version);
+  // W3 T7 (X-SW-15): each two-seated forfeit's "was anything played", from its ledger, read in THIS transaction (a
+  // history step's Redo runs here too) — one query for the stage, and none when no board was decided by a forfeit.
+  const playedFacts = await forfeitPlayedFacts(
+    tx,
+    existing.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null),
+    sportModule,
+  );
+  const { score, played, colours, byes } = buildSwissHistory(existing, field, playedFacts);
 
   const cascadeRank = new Map<string, number>();
   if (rankAdjacent && existing.some((f) => isSwissBoardSeated(f) && DECIDED.has(f.status))) {
@@ -1433,17 +1728,60 @@ async function swissGen(
       cascadeRank.set(row.entrantId, row.rank ?? i + 1);
     }
   }
+  // W3 T8 (X-SW-22; SW-L6, REC RB3-16): an unseeded entrant's pairing number is its place in the stage's seeded random
+  // draw, not registration order (the active select's `created_at, id`, an accident of who signed up when). Seeded
+  // entrants keep their seed order ahead of it (`seedRank`). The seed is the stage's own id, so every Pair of round 1 —
+  // Unpair then Pair, an Undo then Redo through the step path — draws the same order, and it rides on the ledger row
+  // (`draw_seed`). A field with nobody unseeded is not drawn.
+  // Review m7 (ruling: persist the drawn order): FIDE fixes pairing numbers from the initial ranking, so every LATER
+  // round ranks a tie inside a score group by round 1's draw too, re-derived each Pair from the seed and round 1's field
+  // (`swissRoundOneDrawOrder`; no column). A latecomer was never drawn and follows the drawn field in arrival order.
+  const drawOrder =
+    target === 1
+      ? field.some((e) => e.seed === null)
+        ? swissRoundOneOrder(swissDrawSeed(stageId), field)
+        : null
+      : await swissRoundOneDrawOrder(tx, stageId, divisionId, existing);
+  const drawSeed = target === 1 && drawOrder !== null ? swissDrawSeed(stageId) : null;
+  const ranked = drawOrder === null ? field : swissDrawnFieldOrder(drawOrder, field);
   const seedRank = (e: ActiveEntrant, i: number): number => e.seed ?? 1000 + i;
-  const standings: SwissStanding[] = entrants.map((e, i) => ({
+  const standings: SwissStanding[] = ranked.map((e, i) => ({
     entrantId: e.id,
     score: score.get(e.id) ?? 0,
     rank: cascadeRank.get(e.id) ?? cascadeRank.size + seedRank(e, i),
   }));
-  const round = pairRound(
+  const chess = cfg.chess === true;
+  const paired = pairRound(
     standings,
     { played, colours, byes },
-    { chess: cfg.chess === true, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
+    { chess, ...(rankAdjacent ? { pairing: "rank_adjacent" as const } : {}) },
   );
+  // W3 T8 (BG-SW-1; SW-H3, REC RB3-10): with chess colours on, round 1's colours are by lot (FIDE C.04.3 A3 5.1): board
+  // 1's upper player takes the lot's colour and the boards alternate. Swapped HERE, before the seats are written, so the
+  // stored fixtures carry it (home = White) and round 2's colour history reads it. The read stays `cfg.chess === true`:
+  // the boardgame default is stamped at creation only, so a stage stored before it keeps today's colours (ruling m5).
+  // A round 1 always holds a board: `refuseSwissFieldUnderTwo` (above) refuses THIS round's field — the T6-narrowed one,
+  // not the roster — under two (STAGE_NOT_READY) before this runs, and two or more with no history always pair.
+  const colourLot = target === 1 && chess ? swissColourLot(swissDrawSeed(stageId)) : null;
+  if (colourLot !== null) {
+    // The lot's premise: the engine hands round 1 over with the upper player at home (scheduling/swiss.ts: neutral
+    // colours put the upper board on White). If it ever does not, the lot would colour the wrong player — refuse, by
+    // name, before anything is written.
+    const place = new Map(
+      [...standings]
+        .sort((a, b) => b.score - a.score || a.rank - b.rank || (a.entrantId < b.entrantId ? -1 : 1))
+        .map((s, i) => [s.entrantId, i]),
+    );
+    const lowerHome = paired.pairings.findIndex((p) => place.get(p.home)! > place.get(p.away)!);
+    if (lowerHome !== -1) {
+      throw new EngineError(
+        "CONFIG_INVALID",
+        `swiss round 1: board ${lowerHome + 1} came back with the lower-ranked player at home, so the colour lot cannot be applied`,
+        { stageId, board: lowerHome + 1 },
+      );
+    }
+  }
+  const round = colourLot === null ? paired : { ...paired, pairings: applyRoundOneColourLot(paired.pairings, colourLot) };
 
   // The shells were minted for the field as it was; a withdrawal (or, before
   // Start, an enrolment or a deletion) since then has resized it. Bring the
@@ -1471,11 +1809,12 @@ async function swissGen(
   // of aborting the Generate and taking round 1's pairing with it. See
   // `SwissReconcileBlockedPolicy` for the full reasoning.
   //
-  // This is also what absorbs the ad-hoc case: `addFixture` puts a swiss
-  // fixture at `maxRound + 1` seated on both sides (Task 2.3), so a 3-round
-  // stage can hold a fully seated round 4. It trips the seated guard and is
-  // skipped, rather than needing a filter of its own here — one mechanism, so
-  // neither can quietly cover for the other.
+  // This is also what absorbed the ad-hoc case: `addFixture` used to put a
+  // swiss fixture at `maxRound + 1` seated on both sides (Task 2.3), so a
+  // 3-round stage could hold a fully seated round 4. W3 refuses that now
+  // (SWISS_ADHOC_REFUSED), but a LEGACY row of that shape still trips the
+  // seated guard and is skipped, rather than needing a filter of its own here
+  // — one mechanism, so neither can quietly cover for the other.
   const laterRounds = eager
     ? [...new Set(existing.map((f) => f.round_no))].filter((r) => r > target).sort((a, b) => a - b)
     : [];
@@ -1485,7 +1824,7 @@ async function swissGen(
     divisionId,
     target,
     existing,
-    entrants.length,
+    field.length,
     "refuse",
   );
   // Summed across every round this pass touched, so the organiser is told what
@@ -1500,14 +1839,15 @@ async function swissGen(
       divisionId,
       roundNo,
       existing,
-      entrants.length,
+      // Each later round to ITS field (W3 T6): a latecomer whose first round is still ahead counts there, not here.
+      swissFieldForRound(entrants, roundNo).length,
       "skip",
     );
     reshaped = addSwissReshape(reshaped, later.delta);
   }
   const roundShells = targetReconcile.shells;
-  const boardShells = roundShells.filter((f) => !f.ext_key?.endsWith("-bye"));
-  const byeShell = roundShells.find((f) => f.ext_key?.endsWith("-bye"));
+  const boardShells = roundShells.filter((f) => !isSwissByeShellExtKey(f.ext_key));
+  const byeShell = roundShells.find((f) => isSwissByeShellExtKey(f.ext_key));
 
   let seatedCount = 0;
   const seatedIds: string[] = [];
@@ -1534,6 +1874,21 @@ async function swissGen(
     if (!byeShell) {
       throw new EngineError("CONFIG_INVALID", "swiss bye shell missing for pairing", { stageId, target });
     }
+    // W3 T3 (SW-M7, X-SW-5; RB3-7(a)'s app half): the bye's value is frozen at AWARD. The cfg is exactly what
+    // append-event.ts freezes at a match's first event — `resolveFixtureCfg` over the division, this stage and the
+    // shell's own override, at the division's pinned module — the division read above (W3 T7 hoisted it to serve the
+    // played facts too), under the `division:` lock the caller holds, which every format save takes before its
+    // `division-config:` one, so no save lands between that read and this write. Like append-event, a null cfg
+    // freezes nothing. The snapshot is not PLAY: `systemByeSql` exempts it in `fixtureEvidenceSql` and `playedSql`,
+    // so Unpair, Rebuild, Undo and the format locks read the bye as before.
+    // And a bye is not played, so it takes no slot (SW-M13, X-SW-29): time, court, venue and pin go (`holdsSlot`).
+    const [shellCfg] = await tx<{ rules_override: unknown }[]>`select rules_override from fixtures where id = ${byeShell.id}`;
+    const frozen = resolveFixtureCfg(
+      { config_snapshot: null, rules_override: shellCfg?.rules_override ?? null },
+      division.config,
+      { kind: "swiss", config: cfg },
+      sportModule,
+    );
     const seated = await tx<{ id: string }[]>`
       update fixtures set
         home_entrant_id = ${round.bye},
@@ -1541,14 +1896,32 @@ async function swissGen(
         status = 'forfeited',
         outcome = ${tx.json(byeAward(round.bye) as never)},
         home_slot_label = null,
-        away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)}
+        away_slot_label = ${tx.json(BYE_SLOT_LABEL as never)},
+        config_snapshot = ${frozen == null ? null : tx.json(frozen as never)},
+        config_snapshot_at = ${frozen == null ? null : tx`now()`},
+        scheduled_at = null,
+        court_id = null,
+        venue_id = null,
+        schedule_locked = false
       where id = ${byeShell.id}
       returning id`;
     for (const row of seated) seatedIds.push(row.id);
     seatedCount++;
   }
 
-  return { gen: [], seatedCount, reshaped, pairing, defaultPairing, round: target, seatedIds };
+  return {
+    gen: [],
+    seatedCount,
+    reshaped,
+    pairing,
+    defaultPairing,
+    round: target,
+    seatedIds,
+    drawSeed,
+    drawOrder: target === 1 ? drawOrder : null,
+    colourLot,
+    swissRounds,
+  };
 }
 
 /**
@@ -1566,7 +1939,7 @@ const DIVISION_STARTED_STATUSES: ReadonlySet<string> = new Set(["active", "compl
 
 /**
  * Read INSIDE the caller's write transaction, never in a separate pre-flight:
- * `generateStageFixturesWrite` already holds
+ * `generateStageFixturesTx` (Generate's and Rebuild's shared body) already holds
  * `pg_advisory_xact_lock('division:' + division_id)` by the time `swissGen`
  * runs, so this is read under the lock and cannot go stale between the check
  * and the writes it gates (the file's stated convention; design-doc Task 2.4).
@@ -1574,7 +1947,7 @@ const DIVISION_STARTED_STATUSES: ReadonlySet<string> = new Set(["active", "compl
  * A missing row reads as STARTED — the narrower, lazier write — rather than
  * unlocking the wider one on an absence.
  */
-async function divisionHasStarted(tx: Tx, divisionId: string): Promise<boolean> {
+export async function divisionHasStarted(tx: Tx, divisionId: string): Promise<boolean> {
   const [division] = await tx<{ status: string }[]>`
     select status from divisions where id = ${divisionId}`;
   return division === undefined || DIVISION_STARTED_STATUSES.has(division.status);
@@ -1672,10 +2045,12 @@ interface SwissRoundReconcile {
  * `apps/web/e2e/swiss-shell.spec.ts` pins a TBD shell's `scheduled_at` and
  * asserts it survives Pair and re-Pair. Recreating the round would change
  * fixture ids and discard `scheduled_at` / `court_id`, silently losing an
- * organiser's advance layout. So only the DELTA moves: surplus boards go from
- * the highest `seq_in_round` down, only the shortfall is minted, and the bye
- * shell is added or removed exactly as parity requires. Surviving rows keep
- * their ids and their slots. `swissBoardsForField` is the one authority for
+ * organiser's advance layout. So only the DELTA moves: the surplus boards are
+ * the ones holding the least (`chooseDoomedBoards`, lib/rebuild-slots.ts: a
+ * board with no slot first, then an unlocked one, then the highest seq — W3
+ * T2, SW-L8), survivors are re-packed to seq 1..n, only the shortfall is
+ * minted (`mintSwissBoardExtKeys`), and the bye shell is added or removed
+ * exactly as parity requires. Surviving rows keep their ids and their slots. `swissBoardsForField` is the one authority for
  * the shape — shared with `planSwissShells`, so the mint and the reconcile can
  * never drift onto different arithmetic.
  *
@@ -1685,10 +2060,11 @@ interface SwissRoundReconcile {
  * round; after Start it is only the round being paired. Either way this
  * function reshapes exactly the round it was handed, under the same guards.
  *
- * GUARDS. The advisory lock is already held — `generateStageFixturesWrite`
- * takes `pg_advisory_xact_lock` before it reads either the entrant list or
- * `existing` — so everything below is read UNDER the lock, which is this
- * file's stated convention. Three arms on the round, none covering for another: the round
+ * GUARDS. The advisory lock is already held — `generateStageFixturesTx` (the
+ * one caller, through `swissGen`) takes `pg_advisory_xact_lock` before it reads
+ * either the entrant list or `existing`, in Generate's transaction or inside
+ * Rebuild's one transaction — so everything below is read UNDER the lock,
+ * which is this file's stated convention. Three arms on the round, none covering for another: the round
  * must be wholly unseated, must show no played status or award, and must carry
  * no recorded match data under the CANONICAL `fixtureEvidenceSql` (not a
  * subset — a subset guard on a destructive path is how C1 happened). A
@@ -1703,7 +2079,7 @@ interface SwissRoundReconcile {
  * `onBlocked` decides what a tripped guard MEANS, and it is the caller's call
  * because it depends on whose round this is — see `SwissReconcileBlockedPolicy`.
  */
-async function reconcileSwissRoundShells(
+export async function reconcileSwissRoundShells(
   tx: Tx,
   stageId: string,
   divisionId: string,
@@ -1714,7 +2090,7 @@ async function reconcileSwissRoundShells(
 ): Promise<SwissRoundReconcile> {
   const bySeq = (a: SwissExistingFixture, b: SwissExistingFixture) =>
     a.seq_in_round - b.seq_in_round;
-  const isByeShell = (f: SwissExistingFixture) => f.ext_key?.endsWith("-bye") === true;
+  const isByeShell = (f: SwissExistingFixture) => isSwissByeShellExtKey(f.ext_key);
 
   const round = existing.filter((f) => f.round_no === target).sort(bySeq);
   const boardRows = round.filter((f) => !isByeShell(f));
@@ -1762,10 +2138,13 @@ async function reconcileSwissRoundShells(
     }
   }
 
-  // Deletes first: `boardRows` is seq-ascending, so the tail IS the highest
-  // `seq_in_round` down, and dropping it frees the seats the mint below wants.
-  const survivors = boardRows.slice(0, boards);
-  const doomed = [...boardRows.slice(boards), ...(byeRow && !bye ? [byeRow] : [])];
+  // Deletes first. W3 T2 (SW-L8): the surplus is the boards that hold the
+  // least — an unscheduled board before a pinned one (`chooseDoomedBoards`) —
+  // never simply the highest seq, which deleted an organiser's advance layout
+  // while a bare board survived.
+  const chosen = chooseDoomedBoards(boardRows, boards);
+  const survivors = chosen.survivors;
+  const doomed = [...chosen.doomed, ...(byeRow && !bye ? [byeRow] : [])];
   if (doomed.length > 0) {
     // W2c Task 14 (fix round 1) — a fourth arm, read before the first write
     // like the three above: a doomed shell carrying its own format
@@ -1781,6 +2160,16 @@ async function reconcileSwissRoundShells(
     await tx`delete from fixtures where id in ${tx(doomed.map((f) => f.id))}`;
   }
 
+  // Re-pack: a survivor keeps its id, its slot and its ext_key, and moves to
+  // its place in 1..survivors.length — one update per row that moved, before
+  // the mint below takes the seats after them.
+  const priorSeq = new Map(boardRows.map((f) => [f.id, f.seq_in_round]));
+  for (const row of survivors) {
+    if (priorSeq.get(row.id) !== row.seq_in_round) {
+      await tx`update fixtures set seq_in_round = ${row.seq_in_round} where id = ${row.id}`;
+    }
+  }
+
   const kept: SwissExistingFixture[] = [...survivors];
   if (bye && byeRow) {
     // A surviving bye belongs at `boards + 1`. That seat is free either way:
@@ -1793,7 +2182,7 @@ async function reconcileSwissRoundShells(
   }
 
   // `org_id` and `fixture_no` are assigned by BEFORE INSERT triggers, exactly
-  // as they are for the shell mint in generateStageFixturesWrite.
+  // as they are for the shell mint in generateStageFixturesTx.
   const shell = (extKey: string, seqInRound: number) => ({
     id: randomUUID(),
     stage_id: stageId,
@@ -1807,9 +2196,11 @@ async function reconcileSwissRoundShells(
     outcome: null,
   });
   const minted = [] as ReturnType<typeof shell>[];
-  for (let b = survivors.length + 1; b <= boards; b++) {
-    minted.push(shell(`sw-r${target}-b${b}`, b));
-  }
+  // A minted board takes the next index past the highest the round has ever
+  // shown (`mintSwissBoardExtKeys`): after a shrink kept b4 over b3, b3 is
+  // never reissued beside it, so every key stays unique and stable.
+  const keys = mintSwissBoardExtKeys(target, round.map((f) => f.ext_key), Math.max(0, boards - survivors.length));
+  for (const [i, key] of keys.entries()) minted.push(shell(key, survivors.length + i + 1));
   if (bye && !byeRow) minted.push(shell(`sw-r${target}-bye`, boards + 1));
   if (minted.length > 0) await tx`insert into fixtures ${tx(minted)}`;
 
@@ -1823,14 +2214,18 @@ async function reconcileSwissRoundShells(
       home_entrant_id: null,
       away_entrant_id: null,
       outcome: null,
+      scheduled_at: null,
+      court_id: null,
+      venue_id: null,
+      schedule_locked: false,
     });
   }
   return {
     shells: kept.sort(bySeq),
     delta: {
-      matches_added: minted.filter((r) => !r.ext_key.endsWith("-bye")).length,
+      matches_added: minted.filter((r) => !isSwissByeShellExtKey(r.ext_key)).length,
       matches_removed: doomed.filter((f) => !isByeShell(f)).length,
-      byes_added: minted.filter((r) => r.ext_key.endsWith("-bye")).length,
+      byes_added: minted.filter((r) => isSwissByeShellExtKey(r.ext_key)).length,
       byes_removed: doomed.filter(isByeShell).length,
     },
   };
@@ -2088,6 +2483,7 @@ export function previewDivisionFixtures(
       const entrants: ActiveEntrant[] = Array.from({ length: entrantCount }, (_, i) => ({
         id: `e${i + 1}`,
         seed: i + 1,
+        swiss_first_round: null,
       }));
       gen = generate(stage.kind, stage.config, entrants, poolIds);
     } catch {
@@ -2185,6 +2581,11 @@ export interface GenerateOutcome {
    *  that changed no round's shape must stay silent rather than announce four
    *  zeroes. See `SwissReshape`. */
   reshaped?: SwissReshape;
+  /** W3 T11 (X-SW-16): Swiss only, and ABSENT unless the round count is above the safe maximum of the field this pass
+   *  minted or paired for (`verdict: "warn"`, rulebook §3.2 "allowed, with a plain warning"), or a running Swiss's field
+   *  shrank under its count while this round still pairs (`verdict: "shrunk"`, fix round 1). A count above the hard
+   *  maximum is otherwise refused (SWISS_ROUNDS_ABOVE_MAX). */
+  swiss_rounds?: SwissRoundsNotice;
 }
 
 /**
@@ -2224,12 +2625,15 @@ async function fireStageRevalidate(orgId: string, stageId: string): Promise<void
 
 /** A generate's committed write (R10e): the wire outcome, plus the division
  *  and competition its own transaction wrote into. */
-interface GenerateWrite {
+export interface GenerateWrite {
   outcome: GenerateOutcome;
   divisionId: string;
   competitionId: string;
   /** The stage's kind: whether it has a table to refold after the write (`REAL_TABLE_KINDS`). */
   kind: string;
+  /** Only with `ledger: "step"`: the `fixtures_generated` payload this pass did NOT append (`fixture_ids` and, for a
+   *  Swiss seating, its seat audit), for the history step that ran it to record on its own row. */
+  ledgerPayload?: Record<string, unknown>;
 }
 
 /** What a Generate press may ask for beyond "generate". */
@@ -2250,11 +2654,12 @@ export interface GenerateOptions {
  *  nothing.
  *
  *  Callers that publish their own write use `generateStageFixturesUnpublished`
- *  instead: `startDivision` (one publish naming every fixture of the division),
- *  `rebuildStageFixtures` (one publish naming the fixtures it deleted), and
- *  `completeStage` (R10g: it publishes the whole completion, the draw
+ *  instead: `startDivision` (one publish naming every fixture of the division)
+ *  and `completeStage` (R10g: it publishes the whole completion, the draw
  *  included, once in its own `finally`, unless scoring's auto-advance opts
- *  out because scoring's post-commit `finally` publishes). */
+ *  out because scoring's post-commit `finally` publishes).
+ *  `rebuildStageFixtures` runs `generateStageFixturesTx` inside its own
+ *  transaction and publishes once, naming the fixtures it deleted (W3 T1). */
 export async function generateStageFixtures(
   auth: AuthCtx,
   stageId: string,
@@ -2278,8 +2683,10 @@ export async function generateStageFixturesUnpublished(auth: AuthCtx, stageId: s
 /**
  * THE clear-onto-shells write — the one place a seated swiss row is put back
  * to a shell, shared by Unpair and by the pre-Start entrant delete below
- * (2026-09-22). Extracted rather than restated so the two paths cannot drift
- * into leaving different residue behind.
+ * (2026-09-22), and by Undo of Pair next (W3 T5, X-SW-28: history.ts
+ * `stepWrite`, exported for it). Extracted rather than restated so the paths
+ * cannot drift into leaving different residue behind. Every caller refuses a
+ * round with a result first, under the division lock it already holds.
  *
  * What it deliberately does NOT touch is `scheduled_at` and `court_id`. A
  * shell scheduled ahead of Pair is a shipped feature (`e2e/swiss-shell.spec.ts`
@@ -2332,8 +2739,22 @@ async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string[]): Pr
   }
 }
 
-async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<void> {
-  if (ids.length === 0) return;
+/**
+ * W3 T5 fix round 1 (review m1): the append lock of every board a Swiss clear is about to judge — the SAME
+ * `fixture:<id>` advisory lock every score append takes (append-event.ts) — in sorted id order, held to commit. Taken
+ * AFTER the caller's `division:` lock and BEFORE its "nothing recorded" read: the one lock order (`division:` →
+ * stage-seats → `fixture:`, append-event.ts). Scoring serialises on the fixture, never the division, and is not gated
+ * on the division's phase, so without it a first event committing between that read and the clear left its events on
+ * a seatless shell. With it a scorer in flight either commits first (and the read refuses the clear) or waits and then
+ * finds the seats gone (WRONG_PHASE). Sorted, so two clears over overlapping boards take them in one order. Every
+ * caller of `clearSwissFixtureSeats` takes it: the pre-Start entrant delete, Unpair and Undo of Pair next.
+ */
+export async function lockSwissBoardAppends(tx: Tx, ids: readonly string[]): Promise<void> {
+  for (const id of [...ids].sort()) await tx`select pg_advisory_xact_lock(hashtext(${"fixture:" + id}))`;
+}
+
+export async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
   // Online play (T19, controller rulings Q1 + pre-review 2026-10-10). A
   // board's bridge row records who was INVITED to it, per seat; those seats
   // are about to go, so the row goes with them — a game-less one, or one whose
@@ -2342,11 +2763,20 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
   // game stands behind refuses the whole clear (lockBoardsRefusingOnlineGames),
   // so past it every row here is one to go.
   await lockBoardsRefusingOnlineGames(tx, ids);
+  // Ruling 257 (a live Match Day call is a started board): an emptied board cannot be called, and a call left on it would
+  // keep its round "started" — the rounds lock, Finish and the next Pair would all treat it as under way. So the clear ENDS
+  // the calls of the boards it empties, the way Undo call does, before the status below is rewritten (a call's liveness reads
+  // it). The slot goes back to what it held before the call (the plan, ruling B).
+  const restored = await endCallsOn(tx, ids);
   // The void (spec §7, plan T6): the round's invites that are still queued name boards whose seats are about to go, so they end
   // `round_voided` in THIS transaction (an Unpair that is refused above ends nothing). Only after the refusal, and before the bridge
   // rows they are judged by are deleted. A row already `sending` is left to finish; a seat that was never invited has no row.
   await cancelBoardInvites(tx, ids, ROUND_VOIDED_REASON);
   await tx`delete from fixture_external_play where fixture_id in ${tx(ids)}`;
+  // W3 T3 (SW-M7): a seated bye froze its cfg at award, so its snapshot goes with its seat — the round's next Pair
+  // freezes afresh, under the format that stands then. Only a system bye can reach here holding one: every caller refuses
+  // a round with any other evidence first (`fixtureEvidenceSql`, which exempts a system bye's snapshot alone; history's
+  // Undo reads it through `fixtureHasResultSql`).
   await tx`
     update fixtures set
       home_entrant_id = null,
@@ -2354,8 +2784,12 @@ async function clearSwissFixtureSeats(tx: Tx, ids: readonly string[]): Promise<v
       status = 'scheduled',
       outcome = null,
       home_slot_label = null,
-      away_slot_label = null
+      away_slot_label = null,
+      config_snapshot = null,
+      config_snapshot_at = null
     where id in ${tx(ids)}`;
+  // The boards whose slot a call-end put back (`endCallsOn`): their cached public documents need naming after commit.
+  return restored;
 }
 
 /**
@@ -2410,7 +2844,8 @@ export async function unseatSwissRoundsSeatingEntrant(
   let cleared = 0;
   for (const { stage_id, round_no } of rounds) {
     const inRound = await tx<SwissExistingFixture[]>`
-      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
+             scheduled_at, court_id, venue_id, schedule_locked
       from fixtures where stage_id = ${stage_id} and round_no = ${round_no}`;
     if (swissRoundHasPlayedResult(inRound, round_no)) {
       throw new EngineError(
@@ -2420,6 +2855,9 @@ export async function unseatSwissRoundsSeatingEntrant(
       );
     }
     const ids = inRound.map((f) => f.id);
+    // Review m1 (W3 T5 fix round 1): the boards' append locks before the evidence read below, so a first event in
+    // flight is either seen by it or finds the seats gone.
+    await lockSwissBoardAppends(tx, ids);
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
       where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
@@ -2456,7 +2894,8 @@ export async function unpairSwissRound(
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
 
     const existing = await tx<SwissExistingFixture[]>`
-      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
+      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
+             scheduled_at, court_id, venue_id, schedule_locked
       from fixtures where stage_id = ${stageId}`;
 
     // PARTLY seated counts (2026-09-22). This used to ask for a WHOLLY seated
@@ -2489,10 +2928,15 @@ export async function unpairSwissRound(
     // forfeit or retirement was excluded from the one guard that could still
     // have caught it after the status guard above had also been fooled.
     // Nothing is exempt here: a genuine bye never goes through appendEvent,
-    // so it has no events, no state and no frozen cfg, and the exemption
-    // belongs in the STATUS test above where `forfeited` would otherwise
-    // block every odd-field round.
+    // so it has no events and no state, and the exemption belongs in the
+    // STATUS test above where `forfeited` would otherwise block every
+    // odd-field round. Its frozen cfg (W3 T3: the bye freezes at award) is
+    // the one thing it holds, and `fixtureEvidenceSql` exempts it by name
+    // (`systemByeSql`), so this guard reads the bye exactly as before.
     const ids = inRound.map((f) => f.id);
+    // Review m1 (W3 T5 fix round 1): the boards' append locks before the evidence read below, so a first event in
+    // flight is either seen by it or finds the seats gone.
+    await lockSwissBoardAppends(tx, ids);
     const [blocked] = await tx<{ id: string }[]>`
       select f.id from fixtures f
       where f.id in ${tx(ids)} and (${fixtureEvidenceSql(tx)})
@@ -2505,7 +2949,7 @@ export async function unpairSwissRound(
       );
     }
 
-    await clearSwissFixtureSeats(tx, ids);
+    const restored = await clearSwissFixtureSeats(tx, ids);
 
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
@@ -2514,6 +2958,7 @@ export async function unpairSwissRound(
       round,
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
+      restored,
     };
   });
 
@@ -2527,7 +2972,9 @@ export async function unpairSwissRound(
   await recomputeStandings(auth.orgId, stageId, undefined, { emptyFold: "drop" });
 
   await fireStageRevalidate(auth.orgId, stageId);
-  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
+  // Ruling 257: a call ended on an emptied board put the board back on its pre-call court and time - name those, so the
+  // public fixture document (`pub:v1:fixture:{id}`) does not serve the called slot for its 30s TTL.
+  afterScheduleWrite(write.divisionId, write.competitionId, "schedule", write.restored);
   return { cleared: write.cleared, round: write.round };
 }
 
@@ -2626,493 +3073,15 @@ async function generateStageFixturesWrite(
       await seedNextStage(auth, pre.prev.id);
     }
   }
-  const write = await withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<StageRow[]>`
-      select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
-    if (!stage) throw new HttpError(404, "stage not found");
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+  const write = await withTenant(auth.orgId, (tx) => generateStageFixturesTx(tx, auth, stageId, opts));
+  await afterGenerateCommit(auth, stageId, write);
+  return write;
+}
 
-    const active = await tx<ActiveEntrant[]>`
-      select id, seed from entrants
-      where division_id = ${stage.division_id} and status in ('registered', 'confirmed')
-      order by seed nulls last, created_at, id`;
-
-    // A seeded stage (qualification resolved at the previous stage's completion,
-    // stored as config.qualified) draws from that ordered list — its order IS
-    // the seeding. Otherwise: every active division entrant.
-    const qualified = Array.isArray(stage.config.qualified)
-      ? (stage.config.qualified as string[])
-      : null;
-    let entrants: ActiveEntrant[];
-    // F14 (owner ruling 2026-09-21): the qualifiers who have since departed.
-    // Empty for every path but a BRACKET drawing from `config.qualified`.
-    let departedQualifiers: ReadonlySet<string> = EMPTY_ID_SET;
-    // The ext_keys whose line has no live recipient and is therefore VOID —
-    // written as `abandoned`, see the insert below.
-    let voidedExtKeys: ReadonlySet<string> = EMPTY_ID_SET;
-    if (qualified) {
-      const activeIds = new Set(active.map((e) => e.id));
-      if (BRACKET_WALKOVER_KINDS.has(stage.kind)) {
-        // A bracket's qualification order IS the draw, so a departure must not
-        // move anybody: re-seeding the SURVIVORS 1..n (what this did until
-        // F14) slides every later qualifier up a seat, into a different half
-        // of the draw and against a different opponent — a silent promotion,
-        // and one that also robs the departed qualifier's opponent of the
-        // walkover they are owed. Keep the published positions; the pairings
-        // that hold a departed qualifier become walkovers below.
-        entrants = qualified.map((id, i) => ({ id, seed: i + 1 }));
-        const gone = qualified.filter((id) => !activeIds.has(id));
-        // Restored refusal (re-review C2). Keeping the full slate above means
-        // `entrants.length` is now the PUBLISHED draw's size, so the
-        // `entrants.length < 2` check below — which is what refused this
-        // before F14 — can no longer see a field that has emptied out.
-        // Without this, "every qualifier withdrew" generated a complete
-        // bracket of withdrawn entrants, and "only one is left" generated a
-        // bracket whose single survivor has nobody to play. Same threshold as
-        // the pre-F14 behaviour and as `SEEDING_NOTHING_TO_FILL` on the
-        // `setup` path: a stage needs two live entrants to be a competition.
-        if (qualified.length - gone.length < 2) {
-          throw new EngineError(
-            "STAGE_NOT_READY",
-            "the qualifiers for this stage have left the field — recompute or reopen it once the field is settled",
-            { stageId, qualified: qualified.length, live: qualified.length - gone.length },
-          );
-        }
-        if (gone.length > 0) departedQualifiers = new Set(gone);
-      } else {
-        // A table stage has no draw to preserve and no opponent to walk over
-        // to: nothing has been played, so spec 05 §5's policy for these kinds
-        // is EXPUNGE — the departed entrant simply is not in the field.
-        entrants = qualified.filter((id) => activeIds.has(id)).map((id, i) => ({ id, seed: i + 1 }));
-      }
-    } else {
-      entrants = active;
-    }
-    if (entrants.length < 2) {
-      throw new EngineError("STAGE_NOT_READY", "need at least 2 active entrants to generate", {
-        stageId,
-        entrants: entrants.length,
-      });
-    }
-
-    // Group stages with pools: materialise the pools rows first (idempotent),
-    // so generated fixtures can reference them.
-    const poolIds = new Map<string, string>();
-    if (stage.kind === "group" && poolCount(stage.config) > 1) {
-      const existing = await tx<{ id: string; key: string }[]>`
-        select id, key from pools where stage_id = ${stageId}`;
-      for (const pool of existing) poolIds.set(pool.key, pool.id);
-      for (let i = 0; i < poolCount(stage.config); i++) {
-        const key = POOL_KEYS[i];
-        if (poolIds.has(key)) continue;
-        const [row] = await tx<{ id: string }[]>`
-          insert into pools (stage_id, key, name)
-          values (${stageId}, ${key}, ${"Pool " + key}) returning id`;
-        poolIds.set(key, row.id);
-      }
-    }
-
-    const existing = await tx<SwissExistingFixture[]>`
-      select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome
-      from fixtures where stage_id = ${stageId}`;
-
-    let swissSeatedCount = 0;
-    let swissReshaped: SwissReshape | undefined;
-    // Rides on this pass's `fixtures_generated` row when it seated a round.
-    let swissAudit: Record<string, unknown> | undefined;
-    let gen: GenFixture[];
-    if (stage.kind === "swiss") {
-      const swiss = await swissGen(tx, stageId, stage.division_id, stage.config, entrants, existing, opts.pairing);
-      gen = swiss.gen;
-      swissSeatedCount = swiss.seatedCount;
-      if (!isEmptySwissReshape(swiss.reshaped)) swissReshaped = swiss.reshaped;
-      // `override` is true only when the body named a mode OTHER than the one
-      // this round would have used anyway — picking the default is no override.
-      swissAudit =
-        swiss.seatedIds.length > 0
-          ? {
-              round: swiss.round,
-              pairing: swiss.pairing,
-              override: opts.pairing !== undefined && opts.pairing !== swiss.defaultPairing,
-              seated_fixture_ids: swiss.seatedIds,
-            }
-          : undefined;
-    } else if (stage.kind === "americano") {
-      gen = await americanoGen(tx, stage.division_id, stageId, stage.config, entrants);
-    } else if (stage.kind === "ladder") {
-      gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
-    } else {
-      gen = generate(stage.kind, stage.config, entrants, poolIds);
-    }
-
-    // F14: the draw above was built over the FULL qualification list, so every
-    // survivor sits where the published draw put them. Settle the lines that
-    // hold a departed qualifier as walkovers, off the same engine policy the
-    // post-generation cascade uses.
-    if (departedQualifiers.size > 0) {
-      const walked = walkoverDepartedQualifiers(stageId, stage.kind, gen, departedQualifiers);
-      gen = walked.gen;
-      voidedExtKeys = walked.voided;
-    }
-
-    // Guard against the misleading "nothing new — up to date" success shape
-    // (design/fix-ui/03 §"misleading success message"): a `group` stage with
-    // enough TOTAL entrants to pass the `entrants.length < 2` check above can
-    // still produce zero pairings once those entrants are split across N
-    // configured groups (e.g. 2 entrants snake-distributed into 4 groups —
-    // every group ends up with 0 or 1 entrant, so roundRobinGen has nothing to
-    // pair). Before this guard, that returned `created: 0, existing: 0` — the
-    // exact same shape as "already generated, run again, nothing changed" —
-    // so the UI showed a green "up to date" banner while zero fixtures ever
-    // existed. Distinguish the two: this is a precondition failure, not a
-    // no-op success, so it must throw (a real reason), not return quietly.
-    if ((stage.kind === "group" || stage.kind === "league") && gen.length === 0 && existing.length === 0) {
-      const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
-      const required = Math.max(2, groups * 2);
-      throw new EngineError(
-        "STAGE_NOT_READY",
-        groups > 1
-          ? `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required})`
-          : "not enough entrants to generate any matches",
-        { stageId, reason: "group_too_few_entrants", groups, entrants: entrants.length, required },
-      );
-    }
-
-    const byKey = new Map<string, string>(); // ext_key → fixture uuid
-    for (const f of existing) if (f.ext_key) byKey.set(f.ext_key, f.id);
-
-    // Cross-stage fill unification (D4a/P5 scope item 3): when `entrants`
-    // came from `stage.config.qualified` (the OLD auto-seed-on-complete
-    // flow — see seedNextStage below), the two REAL sides of a fixture must
-    // land through the SAME slot-fill pathway as intra-bracket advancement
-    // (fillSlot), not baked into this INSERT — one pathway, not two. A bye
-    // AWARD stays a direct bake: it is an immediate, self-contained
-    // walkover decision made at generation time (same as it always was for
-    // the plain/registered-entrant path), not a "fill a slot with a
-    // qualified entrant" concern, so it is out of scope for this
-    // unification and untouched.
-    const viaFillSlot = qualified !== null;
-    const bakeDirect = (g: GenFixture) => !viaFillSlot || g.award !== undefined;
-
-    // Match-sourced slot labels (P7/F1): a slot with no baked entrant, fed by
-    // an earlier fixture in THIS generation (g.homeFrom/g.awayFrom), gets an
-    // i18n pattern ref persisted alongside the null entrant id — { key:
-    // "slot.winner_match" | "slot.loser_match", params: { round, seq } },
-    // numbers, NEVER a rendered fragment (resolveSlotLabel composes the ref
-    // text at render time via slot.match_ref, so every locale/surface can
-    // differ). This is the SAME {key,params} shape the `timing:"setup"` path
-    // (descriptorLabel, stage-seeding.ts — untouched) already writes for its
-    // own kind of TBD slot; only the descriptor differs. `refByExt` mirrors
-    // the preview helper's own map above (extKey → the SOURCE fixture's
-    // {round, seq}) — built from the FULL `gen`, not just the new rows below,
-    // so a homeFrom/awayFrom pointing at an already-existing fixture still
-    // resolves. Gated on the ACTUAL entrant id about to be inserted (not
-    // `bakeDirect(g)` alone) — `bakeDirect` is a constant `true` for every
-    // fixture on the common, non-cross-stage-fill path, so a round-2+
-    // intra-bracket slot (g.home already null there) needs its OWN nullness
-    // check, not a proxy that never fires in that path.
-    //
-    // EXCEPT a bye: `byeExtKeys` names every source whose "match" resolves to
-    // an immediate award, not a real fixture ever played. Its winner is
-    // propagated into the fed slot synchronously below (the "Third pass"),
-    // inside this SAME transaction — no user ever sees that slot render as
-    // TBD, so labelling it would only create a label this call is about to
-    // strand. The Third pass's own invariant guard (P5 review finding, right
-    // below) exists precisely to catch a stale label reaching that update
-    // path; skipping the label here for a bye source is what keeps this
-    // task's own new label-writing from being the thing that trips it.
-    const refByExt = new Map(gen.map((f) => [f.extKey, { round: f.roundNo, seq: f.seqInRound }]));
-    const byeExtKeys = new Set(gen.filter((f) => f.award !== undefined).map((f) => f.extKey));
-    const matchSlotLabel = (
-      from?: { extKey: string; side: "winner" | "loser" },
-    ): { key: string; params: { round: number; seq: number } } | null => {
-      if (!from) return null;
-      if (byeExtKeys.has(from.extKey)) return null;
-      const params = refByExt.get(from.extKey);
-      if (!params) return null;
-      const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
-      return { key, params };
-    };
-    // Review finding (defect 1): a bye is known at setup and never resolves
-    // to anyone — "TBD" tells an organiser to wait for something that is not
-    // coming (same rationale previewDivisionFixtures already applies at its
-    // own bye branch above). The engine always lands the award on `home`
-    // (buildSingleElim), so in practice this only ever fires for `away`, but
-    // both sides are guarded symmetrically rather than assuming that engine
-    // detail here. Stored at INSERT time, not derived at render time: this
-    // is the ONE place a bye's phantom side is decided, so every renderer
-    // that already goes through resolveSlotLabel (public bracket, console
-    // stages/bracket panels, …) picks it up for free, the same way every
-    // other slot label on this row already does.
-    const byeSlotLabel = (isBye: boolean): { key: string; params: Record<string, never> } | null =>
-      isBye ? BYE_SLOT_LABEL : null;
-
-    // First pass: all new fixtures in one multi-row insert. Ids are generated
-    // client-side so the feed/bye passes can reference them without relying
-    // on RETURNING order.
-    const newRows = gen
-      .filter((g) => !byKey.has(g.extKey))
-      .map((g) => {
-        const home_entrant_id = bakeDirect(g) ? g.home : null;
-        const away_entrant_id = bakeDirect(g) ? g.away : null;
-        return {
-          id: randomUUID(),
-          stage_id: stageId,
-          division_id: stage.division_id,
-          pool_id: g.poolId ?? null,
-          round_no: g.roundNo,
-          seq_in_round: g.seqInRound,
-          home_entrant_id,
-          away_entrant_id,
-          home_slot_label: home_entrant_id
-            ? null
-            : g.departedSeat === "home"
-              ? BYE_SLOT_LABEL
-              : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.homeFrom)),
-          away_slot_label: away_entrant_id
-            ? null
-            : g.departedSeat === "away"
-              ? BYE_SLOT_LABEL
-              : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.awayFrom)),
-          ext_key: g.extKey,
-          // `abandoned` is what a VOID line is in this column: the cascade
-          // reaches the same state by posting `core.abandon`
-          // (`withdrawal.ts`'s void branch -> append-event.ts:126), and
-          // `abandoned` is in the desk's own VOID_STATUSES. There is no
-          // `void` status in the fixtures table — that word is the ENGINE's
-          // vocabulary for the verdict, not the column's value.
-          status: voidedExtKeys.has(g.extKey)
-            ? "abandoned"
-            : g.award !== undefined
-              ? "forfeited"
-              : "scheduled",
-          // Every other outcome writer in this codebase uses tx.json(...), never
-          // JSON.stringify — the latter double-encodes a jsonb column (the driver
-          // then stores a JSON STRING SCALAR, not an object), so every reader
-          // doing `outcome?.kind` / `outcome?.winner` silently saw undefined for
-          // every generated bye. Found 2026-09-05, walkthrough gate 1 finding 1.
-          // W2b C-5: a bye names its reason and no loser; F14's departed-qualifier walkover (both seats filled) is a
-          // withdrawal's walkover, the same outcome the cascade records once the bracket exists.
-          outcome: g.award !== undefined ? tx.json(generatedAward(g.award, home_entrant_id, away_entrant_id) as never) : null,
-          // F1: the bracket ROLE the engine already computed (BracketFixtureGen
-          // via bracketToGen) — always present with a concrete value (never
-          // `undefined`) so every row in this batch insert shares one column
-          // set; a non-bracket/single-lane fixture keeps lane null, same as
-          // every row does today, so no existing render changes.
-          lane: g.lane ?? null,
-          is_final: g.isFinal === true,
-          third_place: g.thirdPlace === true,
-          conditional: g.conditional === true,
-        };
-      });
-    if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
-    for (const r of newRows) byKey.set(r.ext_key, r.id);
-    // Loop R M-8 (R116-2's other door): F14's departed-qualifier walkover — an award over two seated sides, which a
-    // withdrawal would record as `core.forfeit{by, "withdrew"}` once the bracket exists — shows that walkover's score
-    // too, so "withdraw then generate" reads as "generate then withdraw" does. No event records it (nobody played,
-    // X-PS-1): the award's state is written beside it, as `awardSeededByes` writes its own. A bye credits no score.
-    for (const r of newRows) {
-      if (r.status === "forfeited" && r.home_entrant_id !== null && r.away_entrant_id !== null) await writeAwardedMatchState(tx, r.id);
-    }
-    // Pair next reports seated shell rows as `created` for UI notices.
-    const created = newRows.length + swissSeatedCount;
-    const createdIds = newRows.map((r) => r.id);
-
-    // 1b pass — cross-stage fill, through fillSlot (see viaFillSlot above).
-    // Runs over the FULL `gen` (not just newRows): fillSlot's own
-    // `and *_entrant_id is null` guard makes an already-filled fixture a
-    // no-op, so a resumed/partial regeneration also fills anything a prior
-    // run left open.
-    if (viaFillSlot) {
-      for (const g of gen) {
-        if (g.award !== undefined) continue; // byes: see bakeDirect above
-        const fixtureId = byKey.get(g.extKey);
-        if (fixtureId === undefined) continue;
-        if (g.home) await fillSlot(tx, fixtureId, 1, g.home);
-        if (g.away) await fillSlot(tx, fixtureId, 2, g.away);
-      }
-    }
-
-    // Second pass: feeds, batched per side. A target's homeFrom/awayFrom
-    // becomes the SOURCE fixture's winner_to/loser_to (+slot 1=home, 2=away).
-    const feedUpdates = { winner: [], loser: [] } as Record<
-      "winner" | "loser",
-      { source: string; target: string; slot: number }[]
-    >;
-    for (const g of gen) {
-      const targetId = byKey.get(g.extKey);
-      if (!targetId) continue;
-      for (const [feed, slot] of [
-        [g.homeFrom, 1],
-        [g.awayFrom, 2],
-      ] as const) {
-        if (!feed) continue;
-        const sourceId = byKey.get(feed.extKey);
-        if (!sourceId) continue;
-        feedUpdates[feed.side].push({ source: sourceId, target: targetId, slot });
-      }
-    }
-    if (feedUpdates.winner.length > 0) {
-      const u = feedUpdates.winner;
-      await tx`
-        update fixtures f
-        set winner_to_fixture = v.target_id, winner_to_slot = v.slot
-        from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
-                     unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
-                     unnest(${u.map((x) => x.slot)}::int[])    as slot) v
-        where f.id = v.source_id and f.winner_to_fixture is null`;
-    }
-    if (feedUpdates.loser.length > 0) {
-      const u = feedUpdates.loser;
-      await tx`
-        update fixtures f
-        set loser_to_fixture = v.target_id, loser_to_slot = v.slot
-        from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
-                     unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
-                     unnest(${u.map((x) => x.slot)}::int[])    as slot) v
-        where f.id = v.source_id and f.loser_to_fixture is null`;
-    }
-
-    // Third pass: propagate bye awards into their winner feeds (one lookup
-    // for all byes, then one fill per slot side).
-    // F14: a departed qualifier can still HOLD a structural bye — the draw is
-    // preserved, so a top qualifier who withdrew keeps the bye line the
-    // bracket gave them (the cascade leaves an already-settled bye alone for
-    // the same reason). What must not happen is that bye carrying them into
-    // the next round: propagating it would seat a withdrawn entrant in round
-    // two, which is the very defect this change exists to close. The slot is
-    // left open for the organiser instead.
-    const awarded = gen.filter(
-      (g) => g.award !== undefined && byKey.has(g.extKey) && !departedQualifiers.has(g.award),
-    );
-    if (awarded.length > 0) {
-      const sources = await tx<
-        { id: string; winner_to_fixture: string | null; winner_to_slot: number | null }[]
-      >`
-        select id, winner_to_fixture, winner_to_slot from fixtures
-        where id in ${tx(awarded.map((g) => byKey.get(g.extKey)!))}`;
-      const srcOf = new Map(sources.map((s) => [s.id, s]));
-      const fills: Record<1 | 2, { fixture: string; entrant: string }[]> = { 1: [], 2: [] };
-      for (const g of awarded) {
-        const source = srcOf.get(byKey.get(g.extKey)!);
-        if (source?.winner_to_fixture && (source.winner_to_slot === 1 || source.winner_to_slot === 2)) {
-          fills[source.winner_to_slot].push({ fixture: source.winner_to_fixture, entrant: g.award! });
-        }
-      }
-      // Invariant guard (P5 review finding): this is the ONE other
-      // home/away_entrant_id writer in this file that bypasses fillSlot, so
-      // unlike every other entrant-write here it does NOT clear a matching
-      // *_slot_label. Verified harmless today only because a PLAIN
-      // (non-`timing:"setup"`) stage's fixtures never carry a label to begin
-      // with — only generateProgressionSetupFixtures' own third pass (above) stamps
-      // one, and that path never reaches this bulk UPDATE. Nothing enforces
-      // that stays true, so refuse loudly if it ever stops holding, rather
-      // than silently filling the entrant and leaving the label stale
-      // (which would make a filled slot render as if it were still TBD).
-      if (fills[1].length > 0) {
-        const stale = await tx<{ id: string }[]>`
-          select id from fixtures
-          where id in ${tx(fills[1].map((x) => x.fixture))} and home_slot_label is not null`;
-        if (stale.length > 0) {
-          throw new Error(
-            `generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) ${stale.map((f) => f.id).join(",")} instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present`,
-          );
-        }
-        await tx`
-          update fixtures f
-          set home_entrant_id = v.entrant_id
-          from (select unnest(${fills[1].map((x) => x.fixture)}::uuid[]) as fixture_id,
-                       unnest(${fills[1].map((x) => x.entrant)}::uuid[]) as entrant_id) v
-          where f.id = v.fixture_id and f.home_entrant_id is null`;
-      }
-      if (fills[2].length > 0) {
-        const stale = await tx<{ id: string }[]>`
-          select id from fixtures
-          where id in ${tx(fills[2].map((x) => x.fixture))} and away_slot_label is not null`;
-        if (stale.length > 0) {
-          throw new Error(
-            `generateStageFixtures: bye-award bulk UPDATE would strand away_slot_label on fixture(s) ${stale.map((f) => f.id).join(",")} instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present`,
-          );
-        }
-        await tx`
-          update fixtures f
-          set away_entrant_id = v.entrant_id
-          from (select unnest(${fills[2].map((x) => x.fixture)}::uuid[]) as fixture_id,
-                       unnest(${fills[2].map((x) => x.entrant)}::uuid[]) as entrant_id) v
-          where f.id = v.fixture_id and f.away_entrant_id is null`;
-      }
-    }
-
-    // The cascade (owner ruling 2026-09-21). The voids `walkoverDepartedQualifiers`
-    // wrote above are dead feeders from the instant they are inserted, so a
-    // seat they point at can already be actionable HERE — a structural bye
-    // pushed its winner into the round above two blocks up, and if that seat's
-    // other feeder is void the line is a walkover before anyone has played.
-    // Everything not yet actionable is deliberately left alone; `onDecided`
-    // picks it up at the moment the sibling feeder resolves.
-    await resolveBracketSeats(tx, stageId);
-
-    if (stage.status === "pending") {
-      await tx`update stages set status = 'active' where id = ${stageId}`;
-      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.
-      await pinStageTableRules(tx, stageId);
-    }
-
-    const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
-      select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
-             f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
-             f.scheduled_at, f.venue, f.court_label, f.court_id,
-             f.venue_id, ven.name as venue_name,
-             f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
-             f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
-      from fixtures f
-      left join venues ven on ven.id = f.venue_id
-      where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
-    // #14: venue-qualified label (a bare joined `courts.name` can't tell two
-    // same-named courts in different venues apart) — same fallback
-    // convention as FixtureRow's own doc comment: fall back to the id
-    // itself on a miss (should not happen; FK-restricted).
-    const courtNames = await courtNamesById(tx);
-    const fixtures = fixtureRows.map((f) => ({
-      ...f,
-      court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
-    }));
-    // Cross-format feeds (Jul3/08 §4): winner_to/loser_to may target another
-    // stage (CL loser → EL slot). Wire every entry whose source and target
-    // both exist; the per-decided-fixture fillSlot then follows them like any
-    // other feed.
-    await wireCrossFeeds(tx, stage.division_id);
-
-    // Undoable generation (Jul3/03 §3): the ledger records which fixtures this
-    // pass created so undo can remove exactly them (results-guarded).
-    // `fixture_ids` IS that Undo contract — undo DELETEs every id in it — so a
-    // Swiss seat's ids (UPDATEd shells that already existed) ride separately
-    // in `seated_fixture_ids`, which no undo path reads.
-    if (created > 0) {
-      const [{ seq: last }] = await tx<{ seq: number }[]>`
-        select coalesce(max(seq), 0)::int as seq from division_events
-        where division_id = ${stage.division_id}`;
-      await tx`
-        insert into division_events (division_id, seq, type, payload)
-        values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
-                ${tx.json({ stage_id: stageId, fixture_ids: createdIds, ...(swissAudit ?? {}) } as never)})`;
-      await tx`update divisions set seq = ${last + 1}, edit_watermark = null
-               where id = ${stage.division_id}`;
-    }
-    const [division] = await tx<{ competition_id: string }[]>`
-      select competition_id from divisions where id = ${stage.division_id}`;
-    return {
-      outcome: {
-        created,
-        existing: gen.length - newRows.length,
-        fixtures,
-        ...(swissReshaped ? { reshaped: swissReshaped } : {}),
-      },
-      divisionId: stage.division_id,
-      competitionId: division!.competition_id,
-      kind: stage.kind,
-    };
-  });
+/** What follows a committed generate, outside its transaction: the table refold, the public-page revalidation and the
+ *  activation event. Shared by `generateStageFixturesWrite` and `rebuildStageFixtures`, which commits its own
+ *  delete-and-regenerate in one transaction and then does exactly this (W3 T1, X-RB-1). */
+export async function afterGenerateCommit(auth: AuthCtx, stageId: string, write: GenerateWrite): Promise<void> {
   const outcome = write.outcome;
   // W2d concern 2 (spec §5.7, anti-goal 3; owner 2026-10-27): a table stage's table exists from the generate that
   // created its fixtures — LEVEL, every rank "–", no leader — so a visitor sees the table the organiser's Standings read
@@ -3130,7 +3099,538 @@ async function generateStageFixturesWrite(
       properties: { stage_id: stageId, fixtures_created: outcome.created },
     });
   }
-  return write;
+}
+
+/** A stage's fixture rows as `GenerateOutcome.fixtures` carries them: every column, plus the venue name and the
+ *  venue-qualified court name. */
+async function readStageFixtureRows(tx: Tx, stageId: string): Promise<FixtureRow[]> {
+  const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
+    select f.id, f.stage_id, f.division_id, f.pool_id, f.round_no, f.seq_in_round, f.fixture_no,
+           f.home_entrant_id, f.away_entrant_id, f.home_slot_label, f.away_slot_label,
+           f.scheduled_at, f.venue, f.court_label, f.court_id,
+           f.venue_id, ven.name as venue_name,
+           f.officials, f.status, f.outcome, f.schedule_source, f.schedule_locked, f.created_at,
+           f.ext_key, f.lane, f.is_final, f.third_place, f.conditional
+    from fixtures f
+    left join venues ven on ven.id = f.venue_id
+    where f.stage_id = ${stageId} order by f.round_no, f.seq_in_round`;
+  // #14: venue-qualified label (a bare joined `courts.name` can't tell two
+  // same-named courts in different venues apart) — same fallback
+  // convention as FixtureRow's own doc comment: fall back to the id
+  // itself on a miss (should not happen; FK-restricted).
+  const courtNames = await courtNamesById(tx);
+  return fixtureRows.map((f) => ({
+    ...f,
+    court_name: f.court_id !== null ? (courtNames.get(f.court_id) ?? f.court_id) : null,
+  }));
+}
+
+/**
+ * The main write of a Generate (doc 08 §3), in the CALLER's transaction: everything `generateStageFixtures` does
+ * between its pre-flight and its post-commit work, unchanged in behaviour. Extracted (W3 T1, X-RB-1) so
+ * `rebuildStageFixtures` can delete and regenerate in ONE transaction — a regenerate that throws then rolls the
+ * delete back instead of leaving an empty stage (FX-G13).
+ *
+ * Takes the division advisory lock itself. A caller that already holds it (Rebuild) takes it again here, which is
+ * re-entrant within one transaction. Runs NONE of the pre-flight: the frozen-division refusal, the pairing-on-a-
+ * non-Swiss refusal, and the progression branches (`timing: "setup"`, `seedNextStage`) are the caller's.
+ */
+export async function generateStageFixturesTx(
+  tx: Tx,
+  auth: AuthCtx,
+  stageId: string,
+  opts: GenerateOptions,
+  /** `"record"`: this pass is an organiser's edit — it appends its own `fixtures_generated` and puts the watermark at
+   *  the head. `"step"` (batch-1 I1): a history step re-applying a Swiss Pair runs it — the step's own row records the
+   *  work (`ledgerPayload`) and the step keeps the engine's watermark. A fresh row there made every Undo after a Redo
+   *  re-pair the round three steps later, and a Restore across it never converge. */
+  ledger: "record" | "step" = "record",
+): Promise<GenerateWrite> {
+  const [stage] = await tx<StageRow[]>`
+    select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+  if (!stage) throw new HttpError(404, "stage not found");
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+
+  const active = await swissActiveEntrants(tx, stage.division_id, stageId);
+
+  // A seeded stage (qualification resolved at the previous stage's completion,
+  // stored as config.qualified) draws from that ordered list — its order IS
+  // the seeding. Otherwise: every active division entrant.
+  const qualified = Array.isArray(stage.config.qualified)
+    ? (stage.config.qualified as string[])
+    : null;
+  let entrants: ActiveEntrant[];
+  // F14 (owner ruling 2026-09-21): the qualifiers who have since departed.
+  // Empty for every path but a BRACKET drawing from `config.qualified`.
+  let departedQualifiers: ReadonlySet<string> = EMPTY_ID_SET;
+  // The ext_keys whose line has no live recipient and is therefore VOID —
+  // written as `abandoned`, see the insert below.
+  let voidedExtKeys: ReadonlySet<string> = EMPTY_ID_SET;
+  if (qualified) {
+    const activeIds = new Set(active.map((e) => e.id));
+    if (BRACKET_WALKOVER_KINDS.has(stage.kind)) {
+      // A bracket's qualification order IS the draw, so a departure must not
+      // move anybody: re-seeding the SURVIVORS 1..n (what this did until
+      // F14) slides every later qualifier up a seat, into a different half
+      // of the draw and against a different opponent — a silent promotion,
+      // and one that also robs the departed qualifier's opponent of the
+      // walkover they are owed. Keep the published positions; the pairings
+      // that hold a departed qualifier become walkovers below.
+      entrants = qualified.map((id, i) => ({ id, seed: i + 1, swiss_first_round: null }));
+      const gone = qualified.filter((id) => !activeIds.has(id));
+      // Restored refusal (re-review C2). Keeping the full slate above means
+      // `entrants.length` is now the PUBLISHED draw's size, so the
+      // `entrants.length < 2` check below — which is what refused this
+      // before F14 — can no longer see a field that has emptied out.
+      // Without this, "every qualifier withdrew" generated a complete
+      // bracket of withdrawn entrants, and "only one is left" generated a
+      // bracket whose single survivor has nobody to play. Same threshold as
+      // the pre-F14 behaviour and as `SEEDING_NOTHING_TO_FILL` on the
+      // `setup` path: a stage needs two live entrants to be a competition.
+      if (qualified.length - gone.length < 2) {
+        throw new EngineError(
+          "STAGE_NOT_READY",
+          "the qualifiers for this stage have left the field — recompute or reopen it once the field is settled",
+          { stageId, qualified: qualified.length, live: qualified.length - gone.length },
+        );
+      }
+      if (gone.length > 0) departedQualifiers = new Set(gone);
+    } else {
+      // A table stage has no draw to preserve and no opponent to walk over
+      // to: nothing has been played, so spec 05 §5's policy for these kinds
+      // is EXPUNGE — the departed entrant simply is not in the field.
+      // W3 T6: a qualified field is fixed when the stage is drawn, so every qualifier plays from its round 1 — an
+      // entrant's `swiss_first_round` belongs to the Swiss stage that admitted them late, not to this one.
+      entrants = qualified.filter((id) => activeIds.has(id)).map((id, i) => ({ id, seed: i + 1, swiss_first_round: null }));
+    }
+  } else {
+    entrants = active;
+  }
+  if (entrants.length < 2) {
+    throw new EngineError("STAGE_NOT_READY", "need at least 2 active entrants to generate", {
+      stageId,
+      entrants: entrants.length,
+    });
+  }
+
+  // Group stages with pools: materialise the pools rows first (idempotent),
+  // so generated fixtures can reference them.
+  const poolIds = new Map<string, string>();
+  if (stage.kind === "group" && poolCount(stage.config) > 1) {
+    const existing = await tx<{ id: string; key: string }[]>`
+      select id, key from pools where stage_id = ${stageId}`;
+    for (const pool of existing) poolIds.set(pool.key, pool.id);
+    for (let i = 0; i < poolCount(stage.config); i++) {
+      const key = POOL_KEYS[i];
+      if (poolIds.has(key)) continue;
+      const [row] = await tx<{ id: string }[]>`
+        insert into pools (stage_id, key, name)
+        values (${stageId}, ${key}, ${"Pool " + key}) returning id`;
+      poolIds.set(key, row.id);
+    }
+  }
+
+  // ORDERED (W3 T3, controller ruling from the engine review): swissGen walks these rows to build each player's colour
+  // history, and the engine reads that history as a sequence. Without the ORDER BY the rows come back in whatever order
+  // the plan yields — round order through the (stage_id, round_no, seq_in_round) index, PHYSICAL order through a seq or
+  // bitmap scan, where a round written after a later one (any update makes a new tuple) reads back after it
+  // (swiss-history-round-order.test.ts). Since W3 T6 `buildSwissHistory` also sorts its own copy, so the colours no
+  // longer depend on this ORDER BY alone; it stays so every other reader of `existing` sees round order too.
+  const existing = await tx<SwissExistingFixture[]>`
+    select id, ext_key, round_no, seq_in_round, status, home_entrant_id, away_entrant_id, outcome,
+           scheduled_at, court_id, venue_id, schedule_locked
+    from fixtures where stage_id = ${stageId}
+    order by round_no, seq_in_round`;
+
+  let swissSeatedCount = 0;
+  let swissReshaped: SwissReshape | undefined;
+  let swissRoundsWarn: SwissRoundsNotice | undefined;
+  // Rides on this pass's `fixtures_generated` row when it seated a round.
+  let swissAudit: Record<string, unknown> | undefined;
+  let gen: GenFixture[];
+  if (stage.kind === "swiss") {
+    const swiss = await swissGen(tx, stageId, stage.division_id, stage.config, entrants, existing, opts.pairing);
+    gen = swiss.gen;
+    swissSeatedCount = swiss.seatedCount;
+    if (!isEmptySwissReshape(swiss.reshaped)) swissReshaped = swiss.reshaped;
+    swissRoundsWarn = swissRoundsNoticeOf(swiss.swissRounds);
+    // `override` is true only when the body named a mode OTHER than the one
+    // this round would have used anyway — picking the default is no override.
+    swissAudit =
+      swiss.seatedIds.length > 0
+        ? {
+            round: swiss.round,
+            pairing: swiss.pairing,
+            override: opts.pairing !== undefined && opts.pairing !== swiss.defaultPairing,
+            seated_fixture_ids: swiss.seatedIds,
+            // W3 T8: round 1's draw seed (X-SW-22) and colour lot (BG-SW-1), each only when this pass used one, so the
+            // round can be replayed from the ledger.
+            ...(swiss.drawSeed !== null ? { draw_seed: swiss.drawSeed } : {}),
+            // W3 T9 (T8 review n1): and its drawn order, which later rounds read instead of re-deriving it.
+            ...(swiss.drawOrder !== null ? { draw_order: swiss.drawOrder } : {}),
+            ...(swiss.colourLot !== null ? { colour_lot: swiss.colourLot } : {}),
+          }
+        : undefined;
+  } else if (stage.kind === "americano") {
+    gen = await americanoGen(tx, stage.division_id, stageId, stage.config, entrants);
+  } else if (stage.kind === "ladder") {
+    gen = []; // Jul3/08 §6: ladder fixtures come from challenges, on demand
+  } else {
+    gen = generate(stage.kind, stage.config, entrants, poolIds);
+  }
+
+  // F14: the draw above was built over the FULL qualification list, so every
+  // survivor sits where the published draw put them. Settle the lines that
+  // hold a departed qualifier as walkovers, off the same engine policy the
+  // post-generation cascade uses.
+  if (departedQualifiers.size > 0) {
+    const walked = walkoverDepartedQualifiers(stageId, stage.kind, gen, departedQualifiers);
+    gen = walked.gen;
+    voidedExtKeys = walked.voided;
+  }
+
+  // Guard against the misleading "nothing new — up to date" success shape
+  // (design/fix-ui/03 §"misleading success message"): a `group` stage with
+  // enough TOTAL entrants to pass the `entrants.length < 2` check above can
+  // still produce zero pairings once those entrants are split across N
+  // configured groups (e.g. 2 entrants snake-distributed into 4 groups —
+  // every group ends up with 0 or 1 entrant, so roundRobinGen has nothing to
+  // pair). Before this guard, that returned `created: 0, existing: 0` — the
+  // exact same shape as "already generated, run again, nothing changed" —
+  // so the UI showed a green "up to date" banner while zero fixtures ever
+  // existed. Distinguish the two: this is a precondition failure, not a
+  // no-op success, so it must throw (a real reason), not return quietly.
+  if ((stage.kind === "group" || stage.kind === "league") && gen.length === 0 && existing.length === 0) {
+    const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
+    const required = Math.max(2, groups * 2);
+    throw new EngineError(
+      "STAGE_NOT_READY",
+      groups > 1
+        ? `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required})`
+        : "not enough entrants to generate any matches",
+      { stageId, reason: "group_too_few_entrants", groups, entrants: entrants.length, required },
+    );
+  }
+
+  const byKey = new Map<string, string>(); // ext_key → fixture uuid
+  for (const f of existing) if (f.ext_key) byKey.set(f.ext_key, f.id);
+
+  // Cross-stage fill unification (D4a/P5 scope item 3): when `entrants`
+  // came from `stage.config.qualified` (the OLD auto-seed-on-complete
+  // flow — see seedNextStage below), the two REAL sides of a fixture must
+  // land through the SAME slot-fill pathway as intra-bracket advancement
+  // (fillSlot), not baked into this INSERT — one pathway, not two. A bye
+  // AWARD stays a direct bake: it is an immediate, self-contained
+  // walkover decision made at generation time (same as it always was for
+  // the plain/registered-entrant path), not a "fill a slot with a
+  // qualified entrant" concern, so it is out of scope for this
+  // unification and untouched.
+  const viaFillSlot = qualified !== null;
+  const bakeDirect = (g: GenFixture) => !viaFillSlot || g.award !== undefined;
+
+  // Match-sourced slot labels (P7/F1): a slot with no baked entrant, fed by
+  // an earlier fixture in THIS generation (g.homeFrom/g.awayFrom), gets an
+  // i18n pattern ref persisted alongside the null entrant id — { key:
+  // "slot.winner_match" | "slot.loser_match", params: { round, seq } },
+  // numbers, NEVER a rendered fragment (resolveSlotLabel composes the ref
+  // text at render time via slot.match_ref, so every locale/surface can
+  // differ). This is the SAME {key,params} shape the `timing:"setup"` path
+  // (descriptorLabel, stage-seeding.ts — untouched) already writes for its
+  // own kind of TBD slot; only the descriptor differs. `refByExt` mirrors
+  // the preview helper's own map above (extKey → the SOURCE fixture's
+  // {round, seq}) — built from the FULL `gen`, not just the new rows below,
+  // so a homeFrom/awayFrom pointing at an already-existing fixture still
+  // resolves. Gated on the ACTUAL entrant id about to be inserted (not
+  // `bakeDirect(g)` alone) — `bakeDirect` is a constant `true` for every
+  // fixture on the common, non-cross-stage-fill path, so a round-2+
+  // intra-bracket slot (g.home already null there) needs its OWN nullness
+  // check, not a proxy that never fires in that path.
+  //
+  // EXCEPT a bye: `byeExtKeys` names every source whose "match" resolves to
+  // an immediate award, not a real fixture ever played. Its winner is
+  // propagated into the fed slot synchronously below (the "Third pass"),
+  // inside this SAME transaction — no user ever sees that slot render as
+  // TBD, so labelling it would only create a label this call is about to
+  // strand. The Third pass's own invariant guard (P5 review finding, right
+  // below) exists precisely to catch a stale label reaching that update
+  // path; skipping the label here for a bye source is what keeps this
+  // task's own new label-writing from being the thing that trips it.
+  const refByExt = new Map(gen.map((f) => [f.extKey, { round: f.roundNo, seq: f.seqInRound }]));
+  const byeExtKeys = new Set(gen.filter((f) => f.award !== undefined).map((f) => f.extKey));
+  const matchSlotLabel = (
+    from?: { extKey: string; side: "winner" | "loser" },
+  ): { key: string; params: { round: number; seq: number } } | null => {
+    if (!from) return null;
+    if (byeExtKeys.has(from.extKey)) return null;
+    const params = refByExt.get(from.extKey);
+    if (!params) return null;
+    const key = from.side === "loser" ? "slot.loser_match" : "slot.winner_match";
+    return { key, params };
+  };
+  // Review finding (defect 1): a bye is known at setup and never resolves
+  // to anyone — "TBD" tells an organiser to wait for something that is not
+  // coming (same rationale previewDivisionFixtures already applies at its
+  // own bye branch above). The engine always lands the award on `home`
+  // (buildSingleElim), so in practice this only ever fires for `away`, but
+  // both sides are guarded symmetrically rather than assuming that engine
+  // detail here. Stored at INSERT time, not derived at render time: this
+  // is the ONE place a bye's phantom side is decided, so every renderer
+  // that already goes through resolveSlotLabel (public bracket, console
+  // stages/bracket panels, …) picks it up for free, the same way every
+  // other slot label on this row already does.
+  const byeSlotLabel = (isBye: boolean): { key: string; params: Record<string, never> } | null =>
+    isBye ? BYE_SLOT_LABEL : null;
+
+  // First pass: all new fixtures in one multi-row insert. Ids are generated
+  // client-side so the feed/bye passes can reference them without relying
+  // on RETURNING order.
+  const newRows = gen
+    .filter((g) => !byKey.has(g.extKey))
+    .map((g) => {
+      const home_entrant_id = bakeDirect(g) ? g.home : null;
+      const away_entrant_id = bakeDirect(g) ? g.away : null;
+      return {
+        id: randomUUID(),
+        stage_id: stageId,
+        division_id: stage.division_id,
+        pool_id: g.poolId ?? null,
+        round_no: g.roundNo,
+        seq_in_round: g.seqInRound,
+        home_entrant_id,
+        away_entrant_id,
+        home_slot_label: home_entrant_id
+          ? null
+          : g.departedSeat === "home"
+            ? BYE_SLOT_LABEL
+            : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.homeFrom)),
+        away_slot_label: away_entrant_id
+          ? null
+          : g.departedSeat === "away"
+            ? BYE_SLOT_LABEL
+            : (byeSlotLabel(g.award !== undefined) ?? matchSlotLabel(g.awayFrom)),
+        ext_key: g.extKey,
+        // `abandoned` is what a VOID line is in this column: the cascade
+        // reaches the same state by posting `core.abandon`
+        // (`withdrawal.ts`'s void branch -> append-event.ts:126), and
+        // `abandoned` is in the desk's own VOID_STATUSES. There is no
+        // `void` status in the fixtures table — that word is the ENGINE's
+        // vocabulary for the verdict, not the column's value.
+        status: voidedExtKeys.has(g.extKey)
+          ? "abandoned"
+          : g.award !== undefined
+            ? "forfeited"
+            : "scheduled",
+        // Every other outcome writer in this codebase uses tx.json(...), never
+        // JSON.stringify — the latter double-encodes a jsonb column (the driver
+        // then stores a JSON STRING SCALAR, not an object), so every reader
+        // doing `outcome?.kind` / `outcome?.winner` silently saw undefined for
+        // every generated bye. Found 2026-09-05, walkthrough gate 1 finding 1.
+        // W2b C-5: a bye names its reason and no loser; F14's departed-qualifier walkover (both seats filled) is a
+        // withdrawal's walkover, the same outcome the cascade records once the bracket exists.
+        outcome: g.award !== undefined ? tx.json(generatedAward(g.award, home_entrant_id, away_entrant_id) as never) : null,
+        // F1: the bracket ROLE the engine already computed (BracketFixtureGen
+        // via bracketToGen) — always present with a concrete value (never
+        // `undefined`) so every row in this batch insert shares one column
+        // set; a non-bracket/single-lane fixture keeps lane null, same as
+        // every row does today, so no existing render changes.
+        lane: g.lane ?? null,
+        is_final: g.isFinal === true,
+        third_place: g.thirdPlace === true,
+        conditional: g.conditional === true,
+      };
+    });
+  if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
+  for (const r of newRows) byKey.set(r.ext_key, r.id);
+  // Loop R M-8 (R116-2's other door): F14's departed-qualifier walkover — an award over two seated sides, which a
+  // withdrawal would record as `core.forfeit{by, "withdrew"}` once the bracket exists — shows that walkover's score
+  // too, so "withdraw then generate" reads as "generate then withdraw" does. No event records it (nobody played,
+  // X-PS-1): the award's state is written beside it, as `awardSeededByes` writes its own. A bye credits no score.
+  for (const r of newRows) {
+    if (r.status === "forfeited" && r.home_entrant_id !== null && r.away_entrant_id !== null) await writeAwardedMatchState(tx, r.id);
+  }
+  // Pair next reports seated shell rows as `created` for UI notices.
+  const created = newRows.length + swissSeatedCount;
+  const createdIds = newRows.map((r) => r.id);
+
+  // 1b pass — cross-stage fill, through fillSlot (see viaFillSlot above).
+  // Runs over the FULL `gen` (not just newRows): fillSlot's own
+  // `and *_entrant_id is null` guard makes an already-filled fixture a
+  // no-op, so a resumed/partial regeneration also fills anything a prior
+  // run left open.
+  if (viaFillSlot) {
+    for (const g of gen) {
+      if (g.award !== undefined) continue; // byes: see bakeDirect above
+      const fixtureId = byKey.get(g.extKey);
+      if (fixtureId === undefined) continue;
+      if (g.home) await fillSlot(tx, fixtureId, 1, g.home);
+      if (g.away) await fillSlot(tx, fixtureId, 2, g.away);
+    }
+  }
+
+  // Second pass: feeds, batched per side. A target's homeFrom/awayFrom
+  // becomes the SOURCE fixture's winner_to/loser_to (+slot 1=home, 2=away).
+  const feedUpdates = { winner: [], loser: [] } as Record<
+    "winner" | "loser",
+    { source: string; target: string; slot: number }[]
+  >;
+  for (const g of gen) {
+    const targetId = byKey.get(g.extKey);
+    if (!targetId) continue;
+    for (const [feed, slot] of [
+      [g.homeFrom, 1],
+      [g.awayFrom, 2],
+    ] as const) {
+      if (!feed) continue;
+      const sourceId = byKey.get(feed.extKey);
+      if (!sourceId) continue;
+      feedUpdates[feed.side].push({ source: sourceId, target: targetId, slot });
+    }
+  }
+  if (feedUpdates.winner.length > 0) {
+    const u = feedUpdates.winner;
+    await tx`
+      update fixtures f
+      set winner_to_fixture = v.target_id, winner_to_slot = v.slot
+      from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
+                   unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
+                   unnest(${u.map((x) => x.slot)}::int[])    as slot) v
+      where f.id = v.source_id and f.winner_to_fixture is null`;
+  }
+  if (feedUpdates.loser.length > 0) {
+    const u = feedUpdates.loser;
+    await tx`
+      update fixtures f
+      set loser_to_fixture = v.target_id, loser_to_slot = v.slot
+      from (select unnest(${u.map((x) => x.source)}::uuid[]) as source_id,
+                   unnest(${u.map((x) => x.target)}::uuid[]) as target_id,
+                   unnest(${u.map((x) => x.slot)}::int[])    as slot) v
+      where f.id = v.source_id and f.loser_to_fixture is null`;
+  }
+
+  // Third pass: propagate bye awards into their winner feeds (one lookup
+  // for all byes, then one fill per slot side).
+  // F14: a departed qualifier can still HOLD a structural bye — the draw is
+  // preserved, so a top qualifier who withdrew keeps the bye line the
+  // bracket gave them (the cascade leaves an already-settled bye alone for
+  // the same reason). What must not happen is that bye carrying them into
+  // the next round: propagating it would seat a withdrawn entrant in round
+  // two, which is the very defect this change exists to close. The slot is
+  // left open for the organiser instead.
+  const awarded = gen.filter(
+    (g) => g.award !== undefined && byKey.has(g.extKey) && !departedQualifiers.has(g.award),
+  );
+  if (awarded.length > 0) {
+    const sources = await tx<
+      { id: string; winner_to_fixture: string | null; winner_to_slot: number | null }[]
+    >`
+      select id, winner_to_fixture, winner_to_slot from fixtures
+      where id in ${tx(awarded.map((g) => byKey.get(g.extKey)!))}`;
+    const srcOf = new Map(sources.map((s) => [s.id, s]));
+    const fills: Record<1 | 2, { fixture: string; entrant: string }[]> = { 1: [], 2: [] };
+    for (const g of awarded) {
+      const source = srcOf.get(byKey.get(g.extKey)!);
+      if (source?.winner_to_fixture && (source.winner_to_slot === 1 || source.winner_to_slot === 2)) {
+        fills[source.winner_to_slot].push({ fixture: source.winner_to_fixture, entrant: g.award! });
+      }
+    }
+    // Invariant guard (P5 review finding): this is the ONE other
+    // home/away_entrant_id writer in this file that bypasses fillSlot, so
+    // unlike every other entrant-write here it does NOT clear a matching
+    // *_slot_label. Verified harmless today only because a PLAIN
+    // (non-`timing:"setup"`) stage's fixtures never carry a label to begin
+    // with — only generateProgressionSetupFixtures' own third pass (above) stamps
+    // one, and that path never reaches this bulk UPDATE. Nothing enforces
+    // that stays true, so refuse loudly if it ever stops holding, rather
+    // than silently filling the entrant and leaving the label stale
+    // (which would make a filled slot render as if it were still TBD).
+    if (fills[1].length > 0) {
+      const stale = await tx<{ id: string }[]>`
+        select id from fixtures
+        where id in ${tx(fills[1].map((x) => x.fixture))} and home_slot_label is not null`;
+      if (stale.length > 0) {
+        throw new Error(
+          `generateStageFixtures: bye-award bulk UPDATE would strand home_slot_label on fixture(s) ${stale.map((f) => f.id).join(",")} instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present`,
+        );
+      }
+      await tx`
+        update fixtures f
+        set home_entrant_id = v.entrant_id
+        from (select unnest(${fills[1].map((x) => x.fixture)}::uuid[]) as fixture_id,
+                     unnest(${fills[1].map((x) => x.entrant)}::uuid[]) as entrant_id) v
+        where f.id = v.fixture_id and f.home_entrant_id is null`;
+    }
+    if (fills[2].length > 0) {
+      const stale = await tx<{ id: string }[]>`
+        select id from fixtures
+        where id in ${tx(fills[2].map((x) => x.fixture))} and away_slot_label is not null`;
+      if (stale.length > 0) {
+        throw new Error(
+          `generateStageFixtures: bye-award bulk UPDATE would strand away_slot_label on fixture(s) ${stale.map((f) => f.id).join(",")} instead of clearing it (fillSlot's job) — this path is not supposed to be reachable with a label present`,
+        );
+      }
+      await tx`
+        update fixtures f
+        set away_entrant_id = v.entrant_id
+        from (select unnest(${fills[2].map((x) => x.fixture)}::uuid[]) as fixture_id,
+                     unnest(${fills[2].map((x) => x.entrant)}::uuid[]) as entrant_id) v
+        where f.id = v.fixture_id and f.away_entrant_id is null`;
+    }
+  }
+
+  // The cascade (owner ruling 2026-09-21). The voids `walkoverDepartedQualifiers`
+  // wrote above are dead feeders from the instant they are inserted, so a
+  // seat they point at can already be actionable HERE — a structural bye
+  // pushed its winner into the round above two blocks up, and if that seat's
+  // other feeder is void the line is a walkover before anyone has played.
+  // Everything not yet actionable is deliberately left alone; `onDecided`
+  // picks it up at the moment the sibling feeder resolves.
+  await resolveBracketSeats(tx, stageId);
+
+  if (stage.status === "pending") {
+    await tx`update stages set status = 'active' where id = ${stageId}`;
+    // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.
+    await pinStageTableRules(tx, stageId);
+  }
+
+  const fixtures = await readStageFixtureRows(tx, stageId);
+  // Cross-format feeds (Jul3/08 §4): winner_to/loser_to may target another
+  // stage (CL loser → EL slot). Wire every entry whose source and target
+  // both exist; the per-decided-fixture fillSlot then follows them like any
+  // other feed.
+  await wireCrossFeeds(tx, stage.division_id);
+
+  // Undoable generation (Jul3/03 §3): the ledger records which fixtures this
+  // pass created so undo can remove exactly them (results-guarded).
+  // `fixture_ids` IS that Undo contract — undo DELETEs every id in it — so a
+  // Swiss seat's ids (UPDATEd shells that already existed) ride separately
+  // in `seated_fixture_ids`, which Undo of Pair next reads to put exactly
+  // those rows back onto their shells (W3 T5, history.ts `stepWrite`).
+  if (created > 0 && ledger === "record") {
+    const [{ seq: last }] = await tx<{ seq: number }[]>`
+      select coalesce(max(seq), 0)::int as seq from division_events
+      where division_id = ${stage.division_id}`;
+    await tx`
+      insert into division_events (division_id, seq, type, payload)
+      values (${stage.division_id}, ${last + 1}, 'fixtures_generated',
+              ${tx.json({ stage_id: stageId, fixture_ids: createdIds, ...(swissAudit ?? {}) } as never)})`;
+    await tx`update divisions set seq = ${last + 1}, edit_watermark = null
+             where id = ${stage.division_id}`;
+  }
+  const [division] = await tx<{ competition_id: string }[]>`
+    select competition_id from divisions where id = ${stage.division_id}`;
+  return {
+    outcome: {
+      created,
+      existing: gen.length - newRows.length,
+      fixtures,
+      ...(swissReshaped ? { reshaped: swissReshaped } : {}),
+      ...(swissRoundsWarn ? { swiss_rounds: swissRoundsWarn } : {}),
+    },
+    divisionId: stage.division_id,
+    competitionId: division!.competition_id,
+    kind: stage.kind,
+    ...(ledger === "step" ? { ledgerPayload: { fixture_ids: createdIds, ...(swissAudit ?? {}) } } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -3307,6 +3807,11 @@ export async function getStageRosterDrift(auth: AuthCtx, stageId: string): Promi
 export interface RebuildOutcome extends GenerateOutcome {
   /** Fixtures deleted before regenerating (0 only when the stage had none). */
   removed: number;
+  /** W3 T1 (X-RB-1): what became of the stage's slots (`carrySlots`; a slot is a time, a court, a venue or a pin —
+   *  `holdsSlot`). `kept` — slots a rebuilt fixture inherited at its old position (a shrinking Swiss round keeps the
+   *  boards `chooseDoomedBoards` keeps); `freed` — slots no rebuilt fixture inherits; `unscheduled` — rebuilt fixtures
+   *  at a new position with nothing to inherit, counted only when the stage had a layout. */
+  slots: { kept: number; freed: number; unscheduled: number };
 }
 
 /**
@@ -3314,33 +3819,45 @@ export interface RebuildOutcome extends GenerateOutcome {
  * roster-drift signal surfaces: `generateStageFixtures` is additive only
  * (idempotent via `fixtures.ext_key`, doc comment above), so a withdrawn
  * entrant's name never comes off the board on its own (F3 Task 5 plan,
- * "The defect this uncovers"). Two transactions, same pattern as
- * `replaceStages` above (delete, then re-`createStages`): the delete commits
- * under its own advisory lock, then `generateStageFixtures` — completely
- * unmodified, so every invariant it already holds (ext_key stability, feed
- * rewiring, slot labels, the division-events ledger, analytics) applies to
- * the rebuild for free — runs as an ordinary regenerate against the
- * now-empty stage.
+ * "The defect this uncovers").
+ *
+ * ONE transaction (W3 T1, X-RB-1; #840, FX-G13). The delete and the regenerate
+ * (`generateStageFixturesTx`, the very body `generateStageFixtures` runs, so
+ * every invariant it holds — ext_key stability, feed rewiring, slot labels,
+ * the division-events ledger — applies to the rebuild for free) commit or roll
+ * back together. This used to be two transactions, the delete committing
+ * first, so a regenerate that threw left the organiser an EMPTY stage; now the
+ * old board survives any refusal with its times and courts. And the rebuilt
+ * fixtures inherit those times and courts by POSITION — `(pool, round, seq)`,
+ * `carrySlots`; a shrinking Swiss round keeps the boards `chooseDoomedBoards`
+ * keeps, the pre-Start reshape's own order — instead of every one of them
+ * being wiped (#840). Only the
+ * work that has always followed a commit (the publish, the table refold, the
+ * revalidation, analytics) runs after it.
  *
  * Refuses outright — never a partial rebuild (owner ruling, plan 5b) — the
  * moment ANY fixture in the stage carries a real result: a partial rebuild
  * would silently change who plays whom in a stage that's already half
  * played, which is unrecoverable once the organiser has acted on it.
+ *
+ * Generate's pre-flight is NOT run here, and need not be: its pairing refusal
+ * has nothing to refuse (Rebuild sends no pairing), its progression branches
+ * (`timing: "setup"`, `seedNextStage`) are unreachable past `STAGE_NOT_ROOT`
+ * below, and its frozen-division refusal is restated below on the same
+ * predicate, under the lock.
  */
 export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Promise<RebuildOutcome> {
-  const removed = await withTenant(auth.orgId, async (tx) => {
+  const write = await withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<
-      {
-        id: string;
-        division_id: string;
-        kind: string;
-        progression: Record<string, unknown> | null;
-        competition_id: string;
-      }[]
-    >`select s.id, s.division_id, s.kind, s.progression, d.competition_id
-      from stages s join divisions d on d.id = s.division_id
-      where s.id = ${stageId}`;
+      { division_id: string; kind: string; progression: Record<string, unknown> | null }[]
+    >`select division_id, kind, progression from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
+    // A root stage that carries `config.qualified` is NOT refused here: for a
+    // stage with no progression, Generate's pre-flight returns before it ever
+    // reads that list, so Generate and this regenerate draw from it alike —
+    // and the generator's own voids on such a board are what
+    // dead-feeder-cascade.test.ts and departed-qualifier-walkover.test.ts
+    // rebuild on purpose.
     if (stage.progression !== null || ROSTER_DRIFT_INELIGIBLE_KINDS.has(stage.kind)) {
       throw new HttpError(
         422,
@@ -3349,21 +3866,14 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       );
     }
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
-    // A frozen division refuses the rebuild. Strictly wider than the
+    // A frozen division refuses the rebuild — the same predicate as generate's
+    // pre-flight, read here under the lock. Strictly wider than the
     // `clearScheduleScoped` the freeze already refuses: this HARD-DELETES
     // every fixture on the stage, cascading into score_events, match_states,
     // match_reports, lineups, official_marks, fixture_officials and
-    // device_links (see the guard's own comment below).
-    //
-    // AND IT HAS TO BE HERE, not merely on `generateStageFixtures`. This
-    // delete commits in its OWN transaction, and the regenerate runs after it
-    // returns — so a rebuild that relied on the generator's guard would let
-    // the delete land and only then refuse, handing the organiser an EMPTY
-    // frozen board. That is the case
-    // `stages-schedule-lock.test.ts`'s `fixtureCount` assertion pins, and it
-    // is what separates this guard from the generator's: remove this one and
-    // the refusal still arrives with the right status and code, from the
-    // wrong side of the delete.
+    // device_links (see the guard's own comment below). Refused before the
+    // delete, so `stages-schedule-lock.test.ts`'s `fixtureCount` assertion
+    // reads an untouched board.
     const lockState = await divisionLockState(tx, stage.division_id);
     if (lockState.frozen) {
       throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
@@ -3478,34 +3988,87 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     // Phase 3 wave 1 (G-1): the boards go, and their queued invites with them - after every refusal above, before the delete. The
     // rebuilt boards are new fixtures with new ids, so an invite left queued would mail a board that no longer exists.
     await cancelBoardInvites(tx, stageFixtureIds, FIXTURE_DELETED_REASON);
+    // X-RB-1: the slots the delete is about to take, read before it.
+    const before = await tx<
+      {
+        pool_id: string | null;
+        round_no: number;
+        seq_in_round: number;
+        ext_key: string | null;
+        scheduled_at: Date | null;
+        court_id: string | null;
+        venue_id: string | null;
+        schedule_locked: boolean;
+      }[]
+    >`
+      select pool_id, round_no, seq_in_round, ext_key, scheduled_at, court_id, venue_id, schedule_locked
+      from fixtures where stage_id = ${stageId}
+      order by pool_id nulls first, round_no, seq_in_round, created_at, id`;
     const deleted = await tx<{ id: string }[]>`
       delete from fixtures where stage_id = ${stageId} returning id`;
+
+    const generated = await generateStageFixturesTx(tx, auth, stageId, {});
+
+    const carry = carrySlots(
+      before.map((r) => ({ ...r, scheduled_at: r.scheduled_at === null ? null : r.scheduled_at.toISOString() })),
+      generated.outcome.fixtures.map((f) => ({
+        id: f.id,
+        pool_id: f.pool_id,
+        round_no: f.round_no,
+        seq_in_round: f.seq_in_round,
+        ext_key: f.ext_key ?? null,
+      })),
+    );
+    const carried = [...carry.assign];
+    if (carried.length > 0) {
+      // ONE update for every carried slot, batched the way this file batches
+      // its feed writes: a row of parallel arrays per column. The pins travel as
+      // `text[]` and are cast per element: postgres.js sends a JS boolean
+      // array typed as a scalar `bool` (refused as `boolean[]`), and a string
+      // array cast to `boolean[]` is serialised with the bool serializer,
+      // which reads every "true" as false.
+      await tx`
+        update fixtures f set
+          scheduled_at = v.scheduled_at,
+          court_id = v.court_id,
+          venue_id = v.venue_id,
+          schedule_locked = v.schedule_locked
+        from (select unnest(${carried.map(([id]) => id)}::uuid[])                        as id,
+                     unnest(${carried.map(([, s]) => s.scheduled_at)}::timestamptz[])    as scheduled_at,
+                     unnest(${carried.map(([, s]) => s.court_id)}::uuid[])               as court_id,
+                     unnest(${carried.map(([, s]) => s.venue_id)}::uuid[])               as venue_id,
+                     unnest(${carried.map(([, s]) => String(s.schedule_locked))}::text[])::boolean as schedule_locked) v
+        where f.id = v.id and f.stage_id = ${stageId}`;
+    }
+    const fixtures = carried.length > 0 ? await readStageFixtureRows(tx, stageId) : generated.outcome.fixtures;
+
     return {
-      fixtureIds: deleted.map((row) => row.id),
-      divisionId: stage.division_id,
-      competitionId: stage.competition_id,
+      generated: { ...generated, outcome: { ...generated.outcome, fixtures } },
+      removedIds: deleted.map((row) => row.id),
+      slots: carriedSlotCounts(carry),
     };
   });
 
-  // R10e (review-r10d m1): ONE publish for the rebuild, naming the fixtures its
-  // delete removed (their match centres refetch and find them gone) and never
-  // the ids the regenerate created. In `finally`, because the delete has
-  // already committed: a regenerate that throws must not leave the hub showing
-  // the deleted board.
-  let created = 0;
+  // After the commit, and only after it. A refusal anywhere above rolled the
+  // whole rebuild back, so the board everyone sees has not changed and there
+  // is nothing to publish (R10e, review-r10d m1: ONE publish, naming the
+  // fixtures the delete removed — their match centres refetch and find them
+  // gone — and never the ids the regenerate created).
+  // In `finally`, as before: the rebuild has committed, so even a failed
+  // refold must not leave the hub showing the deleted board.
+  const outcome = write.generated.outcome;
   try {
-    const outcome = await generateStageFixturesUnpublished(auth, stageId);
-    created = outcome.created;
+    await afterGenerateCommit(auth, stageId, write.generated);
     log.info(
-      { event: "stage_fixtures_rebuilt", stageId, removed: removed.fixtureIds.length, created: outcome.created },
+      { event: "stage_fixtures_rebuilt", stageId, removed: write.removedIds.length, created: outcome.created, slots: write.slots },
       "stage_fixtures_rebuilt",
     );
-    return { ...outcome, removed: removed.fixtureIds.length };
   } finally {
-    if (removed.fixtureIds.length > 0 || created > 0) {
-      afterScheduleWrite(removed.divisionId, removed.competitionId, "schedule", removed.fixtureIds);
+    if (write.removedIds.length > 0 || outcome.created > 0) {
+      afterScheduleWrite(write.generated.divisionId, write.generated.competitionId, "schedule", write.removedIds);
     }
   }
+  return { ...outcome, removed: write.removedIds.length, slots: write.slots };
 }
 
 interface CrossFeed {
@@ -3624,7 +4187,7 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
     const entrants: ActiveEntrant[] = placed.map((slot, i) => {
       const id = `slot:${i + 1}`;
       slotOf.set(id, slot.descriptor);
-      return { id, seed: i + 1 };
+      return { id, seed: i + 1, swiss_first_round: null };
     });
 
     // Group-kind target (e.g. a "Super 8" round robin fed by group-stage
@@ -5082,6 +5645,11 @@ async function tablesForCompletedStage(
       rows: s.rows,
     }));
   }
+  // W3 T15 Carry A (controller ruling 2026-11-02): a Swiss source's departed entrants leave its cut and the next eligible
+  // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`). Every
+  // other kind is returned as it was: `config.qualified` keeps a departed group/league qualifier, and generation's
+  // `walkoverDepartedQualifiers` walks her opponent over.
+  pools = cutEligiblePools(stage.kind, pools, await departedEntrantIds(tx, divisionId));
   // roundLosers (a bracket-kind source's take rule) reads the completed
   // bracket's OWN fixtures, never the standings_snapshot (final ranks only,
   // not per-round results) — only a bracket-kind source has any, so this is
@@ -5384,7 +5952,7 @@ function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
  *  public board. Every membership taken from the STANDINGS therefore
  *  inherits withdrawn entrants and must intersect back against the field;
  *  membership taken from the field query already has. */
-async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Set<string>> {
+export async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Set<string>> {
   const rows = await tx<{ id: string }[]>`
     select id from entrants
     where division_id = ${divisionId} and status in ('withdrawn','disqualified')`;
@@ -5532,8 +6100,11 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // (see departedEntrantIds) — so without this an organiser is shown, and
     // pre-ticked into, a bracket seat for someone who has withdrawn.
     //
-    // Her SEAT is left empty rather than closed up: nobody is promoted into
-    // the vacancy (owner decision pending), so every surviving qualifier
+    // Except from a SWISS source (W3 T15 Carry A, controller ruling 2026-11-02): `sourcesToTables` has already taken her
+    // out of its tables, so the cut above was read without her and the next eligible entrant holds her place — a tie
+    // at the new boundary is flagged like any other. From any other source:
+    // her SEAT is left empty rather than closed up: nobody is promoted into
+    // the vacancy (owner decision pending for a group or league cut — W4/W5), so every surviving qualifier
     // keeps the seed and destination slot the engine gave her and the
     // bracket simply gets smaller. This is the offer only — the binding
     // refusal is confirmSeedProposal's, which also covers the `edits[]` and
@@ -6308,11 +6879,17 @@ export async function issueChallenge(
 // ---------------------------------------------------------------------------
 // Ad-hoc single fixture (PROMPT-66): a replay, a friendly, a manual
 // tie-breaker or a missing match, added to an already-running stage. League /
-// group / swiss standings fold every fixture, so the added match is a real
-// result; bracket kinds have no slot for a loose fixture and reject it.
+// group standings fold every fixture, so the added match is a real result;
+// bracket kinds have no slot for a loose fixture and reject it.
+//
+// W3 RB3-15 A (spec §8 Q1, ruling 252; #846 SW-M3/M4/M5): Swiss is refused by
+// name. Its rounds are paired by the system, and a loose board made phantom
+// byes and broke the round shells. Legacy `adhoc-N` rows already on a Swiss
+// stage stay live (carried-forward.ts C7, swiss-shell.ts read them).
+// `stages-panel.tsx` keeps the same set for the desk's Add match trigger.
 // ---------------------------------------------------------------------------
 
-const ADHOC_STAGE_KINDS = new Set(["league", "group", "swiss"]);
+const ADHOC_STAGE_KINDS = new Set(["league", "group"]);
 
 export async function addFixture(
   auth: AuthCtx,
@@ -6341,6 +6918,9 @@ export async function addFixture(
     if (stage.kind === "americano") {
       throw new HttpError(422, "americano matches are generated round by round — generate another round instead");
     }
+    // X-SW-21: before the generic bracket refusal, so the organiser reads why
+    // and where friendlies go instead of "no slot in the tree".
+    if (stage.kind === "swiss") throw swissRefusal("SWISS_ADHOC_REFUSED");
     if (!ADHOC_STAGE_KINDS.has(stage.kind)) {
       throw new HttpError(422, "can't add a loose fixture to a bracket — it has no slot in the tree");
     }

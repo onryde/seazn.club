@@ -467,20 +467,21 @@ export interface SchedulePack {
    *  `Assignment.stageId` unconditionally, the same way `schedulable` below
    *  and the board path's `toAssignment` already do. See `calendar.ts`'s
    *  round-order pair scan, which groups by `(divisionId, stageId, poolId)`
-   *  — omitting `stageId` from that key would let two round-robin-kind
+   *  — omitting `stageId` from that key would let two round-sequence
    *  stages in one division collide (Finding 2 of the round-order design). */
   stageIds: Record<string, string>;
   /** C1 gap B. Movable fixture id → `fixtures.round_no`, ONLY for fixtures
-   *  whose stage is round-robin-kind — the SAME `roundRobin` set that gates
+   *  whose stage is a round sequence (league, group, swiss — W3 T3b;
+   *  `roundRobinStageIds`) — the SAME `roundRobin` set that gates
    *  `schedulable`'s own `roundNo` below. `fixtures.round_no` is shared
-   *  display numbering for EVERY stage kind (bracket rounds, swiss rounds,
-   *  stepladder legs all reuse the column — F1's roundRole()/
+   *  display numbering for EVERY stage kind (bracket rounds, stepladder legs
+   *  and swiss rounds all reuse the column — F1's roundRole()/
    *  roundRoleLabel() names every one of them by position, never derived
-   *  from this column alone), so forwarding it ungated would recreate the
-   *  cross-sequence collision the whole round-order feature exists to
-   *  prevent (the design doc's own motivating symptom). Absent key means
-   *  "not round-robin, or not
-   *  movable" — never round 0.
+   *  from this column alone), so forwarding a bracket's or a stepladder's
+   *  ungated would recreate the cross-sequence collision the whole
+   *  round-order feature exists to prevent (the design doc's own motivating
+   *  symptom). Absent key means "not a round sequence, or not movable" —
+   *  never round 0.
    *
    *  SERVER-SIDE ONLY, like `poolIds`/`stageIds`: `toModelPayload` omits it.
    *  `PackFixture.round` stays the UNGATED display value the model reads;
@@ -925,8 +926,9 @@ export async function buildSchedulePack(
     // rounds, swiss rounds, stepladder legs all reuse the column — F1's
     // roundRole()/roundRoleLabel() names every one of them by position,
     // never derived from this column alone), so `roundRobin.has(f.stage_id)`
-    // is the gate that keeps a non-round-robin stage's round_no from being read as
-    // round-robin order — the design doc's own motivating symptom. Computed
+    // is the gate that keeps a bracket's or a stepladder's round_no from being
+    // read as round order — the design doc's own motivating symptom. The set is
+    // the round-sequence stages (league, group, swiss — W3 T3b). Computed
     // ONCE here, ahead of every mode branch, same reasoning as `lockedIds`
     // just above.
     const roundRobin = await roundRobinStageIds(tx, divisionId);

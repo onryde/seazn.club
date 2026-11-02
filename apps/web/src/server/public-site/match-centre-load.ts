@@ -193,11 +193,15 @@ interface SidePre {
   /** The seat holds an entrant the read returned; a slot sentence or the lost entrant's "?" is a placeholder, which
    *  `disambiguatedShorts` never widens (#987 review I1). */
   seated: boolean;
+  /** I4: the entrant's departure, when she has left (`Side.departed`). */
+  departed?: "withdrawn" | "disqualified";
 }
 
 interface SideRow {
   id: string;
   kind: string;
+  /** W3 T15 review I4: the entrant's status, so a walkover over a disqualified entrant is never worded "withdrew". */
+  status: string;
   display_name: string;
   badge_url: string | null;
   team_display: { logo_path: string | null; colors: unknown } | null;
@@ -217,7 +221,7 @@ async function readSides(
   const rows =
     ids.length > 0
       ? await sql<SideRow[]>`
-          select id, kind, display_name, badge_url, team_display
+          select id, kind, status, display_name, badge_url, team_display
           from public_entrants_v where id in ${sql(ids)}`
       : [];
   const maskedNames = rows.length > 0 ? await maskSideNames(sql, rows, division) : new Map<string, string>();
@@ -315,6 +319,7 @@ function buildSides(
       badgeUrl: resolveEntrantBadge({ badge_url: row.badge_url, team_logo_path: row.team_display?.logo_path ?? null }),
       isPerson: row.kind !== "team",
       seated: true,
+      ...(row.status === "withdrawn" || row.status === "disqualified" ? { departed: row.status } : {}),
     };
   };
 
@@ -324,10 +329,15 @@ function buildSides(
   // can only be seen — and broken — by comparing both sides at once.
   const [homeShort, awayShort] = disambiguatedShorts(home, away);
 
-  return [
-    { entrantId: home.entrantId, name: home.name, short: homeShort, colour: home.colour, badgeUrl: home.badgeUrl },
-    { entrantId: away.entrantId, name: away.name, short: awayShort, colour: away.colour, badgeUrl: away.badgeUrl },
-  ];
+  const wire = (s: SidePre, short: string): SideT => ({
+    entrantId: s.entrantId,
+    name: s.name,
+    short,
+    colour: s.colour,
+    badgeUrl: s.badgeUrl,
+    ...(s.departed === undefined ? {} : { departed: s.departed }),
+  });
+  return [wire(home, homeShort), wire(away, awayShort)];
 }
 
 /** The fixture's config snapshot and match override (W2c, V469) beside its
@@ -602,6 +612,8 @@ export async function loadMatchCentre(
     resolveMsg: publicDict === null ? undefined : (msg) => t(publicDict, msg.key, msg.params),
     doubleWalkoverNext,
     unseatedForfeitLoser: unseated,
+    // I4: every entrant this page read — the seated sides and an unseated forfeit loser — with her status.
+    entrantStatuses: Object.fromEntries([...sideRead.rows, ...(unseated?.read.rows ?? [])].map((r) => [r.id, r.status])),
     onlineGameInPlay: onlineHeader.onlineGameInPlay,
     // T17 fix round 4, I1: Starting only while the division plays online — the reader the Fixtures list and the
     // fixture page's board gate on, so the three never disagree. An opened round switched to over-the-board keeps its

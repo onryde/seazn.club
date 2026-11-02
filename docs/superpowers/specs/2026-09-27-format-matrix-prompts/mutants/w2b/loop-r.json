@@ -919,8 +919,8 @@
  {
   "id": "lr-m8-dw-takes-colour",
   "file": "apps/web/src/server/usecases/stages.ts",
-  "find": "    if (o?.kind !== \"award\" && o?.kind !== \"double_walkover\") {\n",
-  "replace": "    if (o?.kind !== \"award\") {\n",
+  "find": "    if (o?.kind !== \"double_walkover\" && !(o != null && forfeitShaped(o as MatchOutcome))) {\n",
+  "replace": "    if (!(o != null && forfeitShaped(o as MatchOutcome))) {\n",
   "killers": [
    {
     "cwd": "apps/web",

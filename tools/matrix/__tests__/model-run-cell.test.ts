@@ -888,7 +888,12 @@ function runModelCell(o: { row: RowKey; sport: string; variant?: string; runs: n
 const legacyCommands = (fences: boolean) => COMMAND_KINDS.map((kind) => fc.tuple(fc.nat({ max: 63 }), fc.nat({ max: 1 })).map(([k, w]) => commandOf(kind, k, w, fences)));
 const drawn = (arbs: ReturnType<typeof modelCommands>, seed: number, maxCommands: number): string[][] =>
   fc.sample(fc.commands(arbs, { maxCommands, size: "max" }), { seed, numRuns: 25 }).map((it) => [...it].map(String));
-const SWISS_SEED = -1180181307;
+/** A seed where the uniform swiss|badminton cell reads vacuous and the biased one does not. It was W1b's recorded vacuous
+ *  seed, -1180181307, until W3 ruling 250 (T9) opened a running root Swiss to late entrants: the model's AddEntrant after
+ *  Start became an accepted add instead of an expected refusal, every run's trajectory moved, and that seed's uniform run
+ *  now reaches Correct. Re-picked as the first hit of `fc.sample(fc.integer(), { seed: 1000 + i })` that satisfies this
+ *  test's own conditions (the sweep below still judges the bias over 60 seeds). */
+const SWISS_SEED = 1559648029;
 /** model.ts runs every cell at four entrants (its newDriverState); W1b's vacuous live run was at four. */
 const CLI_ENTRANTS = 4;
 

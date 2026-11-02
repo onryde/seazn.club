@@ -8,7 +8,7 @@
 // English row did not have. So the whole set moves together.
 //
 // This file covers the controls a customer meets on the COLLAPSED row —
-// Withdraw / Reinstate / Delete and the seed field's accessible name.
+// Withdraw / Disqualify (ruling 258) / Reinstate / Delete and the seed field's accessible name.
 // `entrants-panel-row-expanded-i18n.test.tsx` covers the two behind the
 // disclosure, which `renderToStaticMarkup` cannot press.
 //
@@ -56,6 +56,7 @@ const DICTS: Record<Locale, Dict> = { en, fr, es, nl };
 const TESTID = {
   delete: "entrant-row-delete",
   withdraw: "entrant-row-withdraw",
+  disqualify: "entrant-row-disqualify",
   reinstate: "entrant-row-reinstate",
   seed: "entrant-row-seed",
 } as const;
@@ -89,6 +90,10 @@ const ENTRANT = {
 };
 
 const WITHDRAWN = { ...ENTRANT, status: "withdrawn" };
+const DISQUALIFIED = { ...ENTRANT, status: "disqualified" };
+
+/** A started division - the only state in which the row offers Disqualify (ruling 261). */
+const STARTED = { divisionStatus: "active" };
 
 function panelHtml(locale: Locale, over: Record<string, unknown> = {}): string {
   return renderToStaticMarkup(
@@ -174,13 +179,23 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
     );
   });
 
+  // Ruling 261: Disqualify is offered only once the division has started, so its label is read from a started division.
+  it.each(LOCALES)("%s paints the locale's own Disqualify label", (locale) => {
+    expect(control(panelHtml(locale, STARTED), TESTID.disqualify).label).toBe(
+      value(DICTS[locale], "entrants.row.disqualify"),
+    );
+  });
+
   it.each(LOCALES)("%s paints the locale's own Reinstate label on a withdrawn entrant", (locale) => {
-    const html = panelHtml(locale, { entrants: [WITHDRAWN] });
+    const html = panelHtml(locale, { entrants: [WITHDRAWN], ...STARTED });
     // Positive pair: the withdrawn row rendered, and it swapped the control —
     // without this an absent Withdraw would satisfy nothing and prove nothing.
     expect(html).toContain(WITHDRAWN.display_name);
     expect(html, "a withdrawn entrant is still being offered Withdraw").not.toContain(
       `data-testid="${TESTID.withdraw}"`,
+    );
+    expect(html, "a withdrawn entrant is still being offered Disqualify").not.toContain(
+      `data-testid="${TESTID.disqualify}"`,
     );
     expect(control(html, TESTID.reinstate).label).toBe(value(DICTS[locale], "entrants.row.reinstate"));
   });
@@ -210,6 +225,20 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
     expect(new Set(seen).size, `rendered ${JSON.stringify(seen)}`).toBe(LOCALES.length);
   });
 
+  it("entrants.row.disqualify renders four different strings across the four locales (on a started division)", () => {
+    const seen = LOCALES.map((l) => control(panelHtml(l, STARTED), TESTID.disqualify).label);
+    expect(new Set(seen).size, `rendered ${JSON.stringify(seen)}`).toBe(LOCALES.length);
+  });
+
+  // A disqualified entrant is departed like a withdrawn one: the way back, nothing to disqualify again (ruling 258).
+  it("a disqualified entrant is offered Reinstate and neither Withdraw nor Disqualify", () => {
+    const html = panelHtml("en", { entrants: [DISQUALIFIED], ...STARTED });
+    expect(html, "the roster row did not render at all").toContain(DISQUALIFIED.display_name);
+    expect(control(html, TESTID.reinstate).label).toBe(value(DICTS.en, "entrants.row.reinstate"));
+    expect(html).not.toContain(`data-testid="${TESTID.disqualify}"`);
+    expect(html).not.toContain(`data-testid="${TESTID.withdraw}"`);
+  });
+
   it("Reinstate renders four different strings across the four locales", () => {
     const seen = LOCALES.map((l) => control(panelHtml(l, { entrants: [WITHDRAWN] }), TESTID.reinstate).label);
     expect(new Set(seen).size, `rendered ${JSON.stringify(seen)}`).toBe(LOCALES.length);
@@ -228,9 +257,20 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
       "entrants.row.delete",
       "entrants.row.deleteHint",
       "entrants.row.withdraw",
+      "entrants.row.disqualify",
       "entrants.row.reinstate",
     ]) {
       expectFourDistinct(key);
+    }
+    // The confirm that guards Disqualify (ruling 258): its title interpolates the entrant, its lead and label do not. Its
+    // body is the lead THEN Withdraw's own body (ruling 260), so there is no second long paragraph to translate: the old
+    // `confirm.disqualifyEntrant.body` is gone from every catalogue.
+    expectFourDistinct("confirm.disqualifyEntrant.title", { name: ENTRANT.display_name });
+    expectFourDistinct("confirm.disqualifyEntrant.lead");
+    expectFourDistinct("confirm.disqualifyEntrant.label");
+    for (const l of LOCALES) {
+      expect(value(DICTS[l], "confirm.disqualifyEntrant.body"), `${l}: the duplicated body paragraph is gone`).toBeUndefined();
+      expect(value(DICTS[l], "confirm.withdrawEntrant.body"), `${l}: Withdraw's body, which Disqualify's confirm reuses, is there`).toBeTruthy();
     }
     expectFourDistinct("entrants.row.seedLabel", { name: ENTRANT.display_name });
   });
@@ -245,13 +285,31 @@ describe("the entrants row's controls read from the dictionary, not hardcoded wo
     // and a test that only checked Delete's absence would pass on a row that
     // had lost both.
     expect(started).toContain(`data-testid="${TESTID.withdraw}"`);
+    // Disqualify sits beside Withdraw on a started division too - the cascade it sends is the point of it.
+    expect(started).toContain(`data-testid="${TESTID.disqualify}"`);
+  });
+
+  // Ruling 261: the SAME flag. Before the start a disqualification is a bare flip that Delete and Withdraw already cover,
+  // and the third button pushed Delete under the scroll fade at 768.
+  it("offers Withdraw and Delete but NOT Disqualify while the division is in setup", () => {
+    const setup = panelHtml("en", { divisionStatus: "setup" });
+    expect(setup, "the roster row did not render at all").toContain(ENTRANT.display_name);
+    expect(setup).toContain(`data-testid="${TESTID.delete}"`);
+    expect(setup).toContain(`data-testid="${TESTID.withdraw}"`);
+    expect(setup, "Disqualify is offered before the division has started").not.toContain(`data-testid="${TESTID.disqualify}"`);
   });
 
   it("offers no row controls to a viewer who cannot edit", () => {
-    const spectator = panelHtml("en", { canEdit: false });
-    expect(spectator, "the roster row did not render at all").toContain(ENTRANT.display_name);
-    for (const id of Object.values(TESTID)) {
-      expect(spectator, `${id} is offered to a spectator`).not.toContain(`data-testid="${id}"`);
+    // Setup AND started: Disqualify only exists on a started division, so a setup-only loop would not witness it.
+    let checked = 0;
+    for (const over of [{ divisionStatus: "setup" }, STARTED]) {
+      const spectator = panelHtml("en", { canEdit: false, ...over });
+      expect(spectator, "the roster row did not render at all").toContain(ENTRANT.display_name);
+      for (const id of Object.values(TESTID)) {
+        expect(spectator, `${id} is offered to a spectator`).not.toContain(`data-testid="${id}"`);
+        checked++;
+      }
     }
+    expect(checked, `controls checked: ${checked}`).toBe(2 * Object.values(TESTID).length);
   });
 });

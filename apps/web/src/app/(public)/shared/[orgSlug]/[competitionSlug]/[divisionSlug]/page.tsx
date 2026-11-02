@@ -293,6 +293,7 @@ export default async function DivisionHomePage({ params }: Props) {
                 kind={stage.kind as "knockout" | "double_elim" | "stepladder" | "page_playoff"}
                 fixtures={stageFixtures}
                 entrantNames={entrantNames}
+                entrantStatuses={entrantStatuses}
                 entrantLogos={entrantLogos}
                 fixtureHref={(id) => `${basePath}/fixtures/${id}`}
                 lookup={lookup}
@@ -357,6 +358,7 @@ export default async function DivisionHomePage({ params }: Props) {
                         <ResultsMatrix
                           entrantIds={ranked.map((r) => r.entrantId)}
                           entrantNames={entrantNames}
+                          entrantStatuses={entrantStatuses}
                           entrantLogos={entrantLogos}
                           fixtures={poolFixtures}
                           fixtureHref={(id) => `${basePath}/fixtures/${id}`}
@@ -555,6 +557,7 @@ export default async function DivisionHomePage({ params }: Props) {
               key="schedule"
               fixtures={fixtures}
               entrantNames={entrantNames}
+              entrantStatuses={entrantStatuses}
               divisionPath={basePath}
               tz={tz}
               slotLabels={slotLabels}

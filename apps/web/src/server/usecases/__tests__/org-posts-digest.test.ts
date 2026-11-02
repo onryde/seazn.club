@@ -140,6 +140,56 @@ async function decideWithRally(ctx: Ctx, div: DivCtx, winner: string, loser: str
   return fx;
 }
 
+const DAY_MS = 86_400_000;
+
+/**
+ * The earliest instant `freeSweepAnchor` will return. Far past any wall clock
+ * a suite runs at, so a fresh database always lands here.
+ */
+const SWEEP_ANCHOR_FLOOR_MS = Date.UTC(2099, 5, 10, 12);
+
+/**
+ * A `sweepWeeklyDigests(nowMs)` instant that NO other row in the database can
+ * reach, so the sweep's candidate set is exactly the rows this test writes.
+ *
+ * Why this exists: the sweep pre-filters to orgs with decided activity in
+ * `[now - 8d, now + 1d)` or an upcoming fixture in `[now, now + 8d)`, then does
+ * an entitlement round-trip and a tenant transaction PER candidate. At the real
+ * `Date.now()` that set is every org any suite in the shard decided a match for
+ * minutes ago — the W3 Swiss suites alone take it from 7 to ~625 on a
+ * 29-file load — so the test's runtime scaled with other suites' rows and a
+ * three-sweep test blew its 30s budget (CI "Smoke — usecases [i-z]", twice).
+ *
+ * The anchor is the later of the fixed floor and 30 days past the latest
+ * `match_states.updated_at` / `fixtures.scheduled_at` in the database: 30 days
+ * clears the sweep's 8-day reach in both directions with room to spare. A fixed
+ * instant alone would be wrong on a REUSED database — the previous run's org
+ * still sits at it, so the candidate set would grow by one per run.
+ */
+async function freeSweepAnchor(): Promise<number> {
+  const [row] = await sql<{ latest: Date | null }[]>`
+    select greatest(
+      (select max(updated_at) from match_states),
+      (select max(scheduled_at) from fixtures)) as latest`;
+  const anchor = Math.max(SWEEP_ANCHOR_FLOOR_MS, (row?.latest?.getTime() ?? 0) + 30 * DAY_MS);
+  // "Cannot happen" as a guard, not a comment: a runaway row would push the
+  // anchor past what an ISO string / timestamptz round-trips.
+  expect(new Date(anchor).getUTCFullYear()).toBeLessThan(9000);
+  return anchor;
+}
+
+/**
+ * Re-date the fold timestamp of the (single) decided fixture `decideWithRally`
+ * left in `orgId`. `match_states.updated_at` is the one column both the sweep's
+ * candidate filter and `digestForOrg`'s window read for a decided fixture, so
+ * moving it puts the org's activity inside the anchor's week and nowhere else.
+ */
+async function moveDecidedActivityTo(orgId: string, atMs: number): Promise<void> {
+  const moved = await sql`
+    update match_states set updated_at = ${new Date(atMs)} where org_id = ${orgId} returning fixture_id`;
+  expect(moved).toHaveLength(1);
+}
+
 describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
   it("generateWeeklyDigest creates a weekly_digest draft with standings, leaders, and upcoming sections", async () => {
     const ctx = await seedOrg("pro");
@@ -358,11 +408,21 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     const community = await seedOrg("community");
     const idleActivePro = await seedOrg("pro"); // Pro, but zero activity this week
 
-    const result = await sweepWeeklyDigests();
+    // Swept at an instant of its own (see freeSweepAnchor): at the real "now"
+    // the candidate set is every org any other suite decided a match for, and
+    // this call walks them all.
+    const anchor = await freeSweepAnchor();
+    await moveDecidedActivityTo(active.orgId, anchor - DAY_MS);
+
+    const result = await sweepWeeklyDigests(anchor);
     // Loose on the totals — this file is not the only one creating orgs in the
     // shared test DB, so only lower bounds are safe on the aggregates.
     expect(result.orgsTotal).toBeGreaterThanOrEqual(3);
-    expect(result.digestsCreated).toBeGreaterThanOrEqual(1);
+    // Anti-vacuity: at the anchor the candidate set is exactly `active`, and
+    // it yielded its one digest — so the sweep checked something, and that
+    // something is this test's org (only a candidate is ever digested).
+    expect(result.orgsChecked).toBe(1);
+    expect(result.digestsCreated).toBe(1);
 
     // Regression guard against the sweep going back to scanning every org.
     // It used to `select id from organizations` and do an entitlement
@@ -391,7 +451,12 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     const org = await seedOrg("pro");
     const div = await seedDivision(org);
     await decideWithRally(org, div, div.entrantA, div.entrantB);
-    const now = Date.now();
+    // Every sweep below runs at an instant of this test's own (see
+    // freeSweepAnchor), with this org's one decided fixture dated a day before
+    // it. At the real "now" the sweep walks every org any other suite decided a
+    // match for — three walks over a shard-loaded database blew the 30s budget.
+    const now = await freeSweepAnchor();
+    await moveDecidedActivityTo(org.orgId, now - DAY_MS);
     const digests = async () => (await listPosts(org.auth, org.orgId)).filter((p) => p.kind === "weekly_digest");
 
     // 1. First cron firing drafts one, stamped with this ISO week. The expected
@@ -399,7 +464,14 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     // rule 3). That is accepted here because iso-week.test.ts pins it to
     // ISO-8601 facts, and pre-flight checked it against an independent oracle
     // (7/7 cases; a 52,598-point sweep over 1999-2040 with 0 differences).
-    await sweepWeeklyDigests(now);
+    //
+    // Anti-vacuity: the sweep digests only a candidate, so this org's draft
+    // existing proves it was among the orgs checked; `orgsChecked` of exactly 1
+    // proves it was the ONLY one — the candidate set no longer depends on what
+    // any other suite wrote. Without this, a sweep that checked nothing (or a
+    // whole shard's worth) would read the same as a pass.
+    const firstSweep = await sweepWeeklyDigests(now);
+    expect(firstSweep).toMatchObject({ orgsChecked: 1, digestsCreated: 1 });
     const first = await digests();
     expect(first).toHaveLength(1);
     expect(first[0]!.autoSource).toMatchObject({ trigger: "weekly_digest", origin: "cron", cron_week: isoWeekKeyUtc(now) });
@@ -409,7 +481,10 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     // per-org catch would hide a throw behind the same count of 1).
     const warn = vi.spyOn(log, "warn");
     try {
-      await sweepWeeklyDigests(now);
+      // Still checked (orgsChecked 1: this org IS a candidate again) and still
+      // quiet (digestsCreated 0), so the no-op is the once-per-week guard
+      // answering, not the org dropping out of the candidate set.
+      expect(await sweepWeeklyDigests(now)).toMatchObject({ orgsChecked: 1, digestsCreated: 0 });
       expect(await digests()).toHaveLength(1);
       expect(warn.mock.calls.filter(([o]) => (o as { orgId?: string } | undefined)?.orgId === org.orgId)).toEqual([]);
     } finally {
@@ -425,7 +500,7 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     await sql`
       update org_posts set auto_source = jsonb_set(auto_source, '{cron_week}', '"2000-W01"')
       where org_id = ${org.orgId} and auto_source ? 'cron_week'`;
-    await sweepWeeklyDigests(now);
+    expect(await sweepWeeklyDigests(now)).toMatchObject({ orgsChecked: 1, digestsCreated: 1 });
     expect(await digests()).toHaveLength(3);
   });
 

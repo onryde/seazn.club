@@ -88,6 +88,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { JOINT_UNDO_SUPERSEDED_CODE } from "@/lib/joint-undo";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
+import { SWISS_REFUSALS, swissRefusalKey, type SwissRefusalCode } from "@/lib/swiss-refusals";
 import type { AiParsePreviewResponse } from "@/server/api-v1/schemas";
 import { AiCompetitionConsole, JointReviewStep, type JointDivision } from "../ai-competition-console";
 import { AiInstructionPreview } from "../ai-instruction-preview";
@@ -708,6 +709,37 @@ describe("the review step is wired to the console's own state", () => {
     expect(html, "the division is still named").toContain("Under 14s");
     expect(html, "the refusal is not said in the reader's language").toContain(esc(LOCAL));
     expect(html, "the engine's English leaked into a translated card").not.toContain(ENGINE_CLAUSE);
+  });
+
+  // W3 T5 review m2: a joint rewind is a loop of division Undos, so it can reach a Swiss refusal — a paired round a
+  // board has started, an organiser's late entry, a round-count change (history.ts `swissRefusal`, an HttpError whose
+  // code `failed[]` carries). Swept over EVERY Swiss code, not the three Undo raises today: a code is a code. The
+  // server's sentence is a sentinel here because the en copy and the server's English are the same words, and a
+  // negative assertion on identical text cannot tell the dictionary from the leak.
+  it("says every Swiss refusal in the reader's own copy, never the server's sentence", async () => {
+    const codes = Object.keys(SWISS_REFUSALS) as SwissRefusalCode[];
+    let checked = 0;
+    for (const code of codes) {
+      const LOCAL = enText[swissRefusalKey(code)];
+      expect(typeof LOCAL, `${swissRefusalKey(code)} is missing from en/ui.json`).toBe("string");
+      const SERVER = `server sentence for ${code}`;
+      const ctx = await applied(() => ({
+        restored: [{ division_id: "d1", watermark: 3, steps: 1 }],
+        failed: [{ division_id: "d2", reason: SERVER, code }],
+        ok: false,
+      }));
+      ctx.undo();
+      await flush();
+      const html = renderToStaticMarkup(typed(ctx.island.tree(), JointReviewStep));
+      expect(html, `${code}: the division is still named`).toContain("Under 14s");
+      expect(html, `${code}: the refusal is not said in the reader's language`).toContain(esc(LOCAL!));
+      expect(html, `${code}: the server's sentence leaked into a translated card`).not.toContain(SERVER);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every Swiss code was rendered").toBe(codes.length);
+    expect(codes, "anti-vacuity: the three Undo refusals are among them").toEqual(
+      expect.arrayContaining(["SWISS_UNDO_ROUND_STARTED", "SWISS_LATE_ENTRY_NOT_UNDOABLE", "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE"]),
+    );
   });
 
   it("still shows an unrecognised refusal's own message, rather than swallowing it", async () => {

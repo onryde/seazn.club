@@ -3175,3 +3175,155 @@ describe("loadCompetitionHub — W2d T9: a table's derived columns follow the st
     expect(await columnsWith(live)).not.toContain("point_ratio");
   });
 });
+
+// W3 Task 16 (SW-L11): a SWISS stage's table carries `swissRound` ("Round X of N"). Read through `loadCompetitionHub` with
+// hand-built stages and rows - the verdicts below are the rule's (`swissRoundState`'s header), never read back from it.
+// One sport (football): the verdict reads statuses and seats only, no sport data; `lib/__tests__/swiss-round-state.test.ts`
+// sweeps the whole status vocabulary.
+describe("loadCompetitionHub — W3 T16: a Swiss table says Round X of N", () => {
+  const swissStage = (over: Partial<PublicStage> = {}): PublicStage => ({
+    ...STAGE,
+    id: "sw1",
+    kind: "swiss",
+    name: "Swiss",
+    swiss_rounds: 5,
+    table_rules: unpinnedRulesDoc({ module: resolveLatestModule("football"), kind: "swiss", divisionConfig: DIV.config }),
+    ...over,
+  });
+  /** A seated board of stage `sw1`. */
+  const sb = (id: string, round: number, status: string, home = "e1", away = "e2", ext_key: string | null = null) =>
+    F({ id, stage_id: "sw1", round_no: round, status, home_entrant_id: home, away_entrant_id: away, ext_key });
+  /** An unpaired shell. */
+  const shell = (id: string, round: number) =>
+    F({ id, stage_id: "sw1", round_no: round, status: "scheduled", home_entrant_id: null, away_entrant_id: null, ext_key: `sw-r${round}-b1` });
+
+  const tablesFor = async (stages: PublicStage[], fixtures: PublicFixture[], standings?: PublicStandings[]) => {
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ stages, fixtures, standings: standings ?? stages.map((s) => ({ ...SNAPSHOT, stage_id: s.id })) }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(CompetitionHubDoc.safeParse(doc).success, "the document still parses").toBe(true);
+    return doc;
+  };
+  const roundOf = (doc: Awaited<ReturnType<typeof tablesFor>>, stageId: string) => {
+    const table = doc.tables.find((t) => t.id.includes(`-${stageId}-`));
+    expect(table, `a table for stage ${stageId}`).toBeDefined();
+    return table!.swissRound;
+  };
+
+  it("empty case first: a Swiss with nothing paired states nothing (null, not absent)", async () => {
+    const doc = await tablesFor([swissStage()], [shell("s1", 1), shell("s2", 2)]);
+    expect(doc.tables).toHaveLength(1);
+    expect(roundOf(doc, "sw1")).toBeNull();
+  });
+
+  it("round 2 paired after a decided round 1 states round 2 of the stage's declared 5 - paired", async () => {
+    const doc = await tablesFor(
+      [swissStage()],
+      [sb("a", 1, "decided"), sb("b", 1, "decided", "e3", "e4"), sb("c", 2, "scheduled"), sb("d", 2, "scheduled", "e3", "e4"), shell("e", 3)],
+    );
+    expect(roundOf(doc, "sw1")).toEqual({ round: 2, of: 5, state: "paired" });
+  });
+
+  it("a round with a board under way is in play; every board decided is complete", async () => {
+    expect(roundOf(await tablesFor([swissStage()], [sb("a", 1, "in_play"), sb("b", 1, "scheduled", "e3", "e4")]), "sw1")).toEqual({ round: 1, of: 5, state: "in_play" });
+    expect(roundOf(await tablesFor([swissStage()], [sb("a", 1, "decided"), sb("b", 1, "finalized", "e3", "e4")]), "sw1")).toEqual({ round: 1, of: 5, state: "complete" });
+  });
+
+  it("the Swiss bye is not a board: a round-3 bye with no pairing leaves the chip on the decided round 2", async () => {
+    const doc = await tablesFor(
+      [swissStage()],
+      [sb("a", 2, "decided"), F({ id: "bye3", stage_id: "sw1", round_no: 3, status: "decided", home_entrant_id: "e3", away_entrant_id: null, ext_key: "sw-r3-bye" }), shell("s", 3)],
+    );
+    expect(roundOf(doc, "sw1")).toEqual({ round: 2, of: 5, state: "complete" });
+  });
+
+  it("a board is seated as isSwissBoardSeated says, from the row's own outcome: a one-seat WALKOVER (an award) is a board, a one-seat STUB (no award) is not", async () => {
+    const decided = [sb("a", 1, "decided"), sb("b", 1, "decided", "e3", "e4")];
+    const walked = F({ id: "w", stage_id: "sw1", round_no: 2, status: "forfeited", home_entrant_id: "e1", away_entrant_id: null, outcome: { kind: "award", winner: "e1", loser: "e9", method: "walkover" } });
+    const half = F({ id: "t", stage_id: "sw1", round_no: 2, status: "scheduled", home_entrant_id: "e1", away_entrant_id: null, outcome: null });
+    // The walkover's round is the latest seated round: the loader passes the row's outcome through.
+    expect(roundOf(await tablesFor([swissStage()], [...decided, walked]), "sw1")).toEqual({ round: 2, of: 5, state: "complete" });
+    // The stub seats nobody the way Finish and Add a round count it: the chip stays on the decided round 1.
+    expect(roundOf(await tablesFor([swissStage()], [...decided, half]), "sw1")).toEqual({ round: 1, of: 5, state: "complete" });
+  });
+
+  it("a completed Swiss is final after the CURRENT rounds (3 once finished early), and a running one on the same rows is not", async () => {
+    const rows = [sb("a", 1, "decided"), sb("b", 2, "decided"), sb("c", 3, "decided")];
+    expect(roundOf(await tablesFor([swissStage({ swiss_rounds: 3, status: "complete" })], rows), "sw1")).toEqual({ round: 3, of: 3, state: "final" });
+    // The differential: the same rows on a stage that is not complete read complete, never final.
+    expect(roundOf(await tablesFor([swissStage({ swiss_rounds: 3, status: "active" })], rows), "sw1")).toEqual({ round: 3, of: 3, state: "complete" });
+  });
+
+  it("a stage with no usable round count (null; 0, which the view's int cast allows) states nothing and does not throw", async () => {
+    let checked = 0;
+    for (const bad of [null, 0]) {
+      const doc = await tablesFor([swissStage({ swiss_rounds: bad })], [sb("a", 1, "scheduled")]);
+      expect(roundOf(doc, "sw1"), String(bad)).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("only a stage of kind swiss states a round: a league row that somehow carries a round count still states none", async () => {
+    // The view only fills `swiss_rounds` for a Swiss, so the kind guard and the null count cover for each other on real
+    // rows; a hand-built league row carrying a count is what makes the kind guard answer for itself.
+    const doc = await tablesFor([{ ...STAGE, swiss_rounds: 3 }], [F({ id: "l1", status: "decided" })]);
+    expect(doc.tables).toHaveLength(1);
+    expect(roundOf(doc, "st1")).toBeNull();
+  });
+
+  it("two Swiss stages each read their OWN rows", async () => {
+    const second = swissStage({ id: "sw2", seq: 2, name: "Second Swiss", swiss_rounds: 4 });
+    const doc = await tablesFor(
+      [swissStage(), second],
+      [sb("a", 2, "decided"), F({ id: "x", stage_id: "sw2", round_no: 1, status: "scheduled", home_entrant_id: "e1", away_entrant_id: "e2" })],
+    );
+    expect(roundOf(doc, "sw1")).toEqual({ round: 2, of: 5, state: "complete" });
+    expect(roundOf(doc, "sw2")).toEqual({ round: 1, of: 4, state: "paired" });
+  });
+
+  it("a league table has no chip - even beside a Swiss in the same division", async () => {
+    const doc = await tablesFor([STAGE, swissStage({ seq: 2 })], [F({ id: "l1", status: "decided" }), sb("a", 1, "scheduled")]);
+    expect(doc.tables).toHaveLength(2);
+    expect(roundOf(doc, "st1")).toBeNull();
+    expect(roundOf(doc, "sw1")).toEqual({ round: 1, of: 5, state: "paired" });
+  });
+
+  it("a group table has no chip (every pool of it)", async () => {
+    const group: PublicStage = { ...STAGE, id: "g1", kind: "group", name: "Groups" };
+    const pools = [
+      { id: "pa", stage_id: "g1", key: "A", name: "Pool A" },
+      { id: "pb", stage_id: "g1", key: "B", name: "Pool B" },
+    ];
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({
+        stages: [group],
+        pools,
+        fixtures: [F({ id: "g-1", stage_id: "g1", pool_id: "pa", status: "decided" })],
+        standings: pools.map((p) => ({ ...SNAPSHOT, stage_id: "g1", pool_id: p.id })),
+      }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.tables).toHaveLength(2);
+    expect(doc.tables.map((t) => t.swissRound)).toEqual([null, null]);
+  });
+
+  it("the knockout tail has no chip: a Swiss then a knockout publishes ONE chipped table and a bracket that carries no Swiss state", async () => {
+    const ko: PublicStage = { ...STAGE, id: "ko1", seq: 2, kind: "knockout", name: "Knockout" };
+    const doc = await tablesFor(
+      [swissStage({ swiss_rounds: 3, status: "complete" }), ko],
+      [
+        sb("a", 3, "decided"),
+        F({ id: "k1", stage_id: "ko1", round_no: 1, status: "scheduled", home_entrant_id: "e1", away_entrant_id: "e2", ext_key: "ko-r1-1" }),
+      ],
+      [{ ...SNAPSHOT, stage_id: "sw1" }],
+    );
+    expect(doc.tables).toHaveLength(1);
+    expect(roundOf(doc, "sw1")).toEqual({ round: 3, of: 3, state: "final" });
+    expect(doc.knockouts).toHaveLength(1);
+    expect(JSON.stringify(doc.knockouts)).not.toContain("swissRound");
+    // And the knockout's own fixture never moved the Swiss verdict (it is another stage's row).
+    expect(doc.matches.filter((m) => m.stageName === "Knockout")).toHaveLength(1);
+  });
+});

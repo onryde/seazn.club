@@ -40,6 +40,9 @@ export type { LiveFixtureData };
 interface LiveScoreBodyProps {
   data: LiveFixtureData;
   entrantNames: Record<string, string>;
+  /** W3 T15 review I4: entrant id → status (the match centre's `Side.departed`) — a withdrawal cascade's walkover over a
+   *  DISQUALIFIED entrant reads as a plain walkover, never "withdrew". Absent, the words follow the outcome alone. */
+  entrantStatuses?: Readonly<Record<string, string>>;
   sportKey: string;
   decidedTemplates: DecidedOutcomeTemplates;
   /**
@@ -109,6 +112,7 @@ function statusText(dict: Dict, status: string, inPlay: boolean, decided: boolea
 export function LiveScoreBody({
   data,
   entrantNames,
+  entrantStatuses,
   sportKey,
   decidedTemplates,
   dict,
@@ -154,6 +158,7 @@ export function LiveScoreBody({
     data.outcome,
     NO_LEDGER,
     sideIds.length === 2 ? { home_entrant_id: sideIds[0]!, away_entrant_id: sideIds[1]! } : undefined,
+    entrantStatuses,
   );
   const forfeitLine = forfeit
     ? forfeitWords(forfeit, (key, vars) => t(activeDict, key, vars), (id) => entrantNames[id] ?? "?").sentence

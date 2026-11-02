@@ -38,6 +38,12 @@ type TopPerformerT = CricketViewT["topPerformers"][number];
 /** Reshaping the document's OWN two sides into the `Record<id,name>` shape
  *  `LiveScoreBody` expects — not a re-derivation, since `header.sides[].name`
  *  is already the consent-resolved display name the document carries. */
+/** W3 T15 review I4: each side's departure, as the document carries it (`Side.departed`), for `LiveScoreBody`'s forfeit
+ *  words — a disqualified entrant's walkover is never worded as a withdrawal. */
+function entrantStatusesFromDoc(doc: MatchCentreDocT): Record<string, string> {
+  return Object.fromEntries(doc.header.sides.flatMap((s) => (s.departed === undefined ? [] : [[s.entrantId, s.departed]])));
+}
+
 function entrantNamesFromDoc(doc: MatchCentreDocT): Record<string, string> {
   const [home, away] = doc.header.sides;
   return { [home.entrantId]: home.name, [away.entrantId]: away.name };
@@ -58,6 +64,7 @@ export function SummaryTab({ doc, dict, data, subscribed }: SummaryTabProps) {
       <LiveScoreBody
         data={data}
         entrantNames={entrantNamesFromDoc(doc)}
+        entrantStatuses={entrantStatusesFromDoc(doc)}
         sportKey={doc.sportKey}
         decidedTemplates={EMPTY_DECIDED_TEMPLATES}
         dict={dict}

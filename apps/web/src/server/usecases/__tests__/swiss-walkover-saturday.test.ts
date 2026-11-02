@@ -51,7 +51,9 @@
 //      A's score group. FIXED 2026-09-24 (swissGen now counts only
 //      `isOneSidedAwardBye` rows as byes; focused regression in
 //      `swiss-two-sided-walkover-pairing.test.ts`): R2 is S1 v S2, A v S4,
-//      S5 v H, and the knockout matches S1's.
+//      S5 v H, and the knockout matches S1's. (W3 T7, X-SW-15 / P-A2: the
+//      walkover is no longer counted as a meeting — A and H MAY meet again —
+//      but the scores keep the 0-point H apart from A, so R2 is unchanged.)
 //   S4 pre-start pair → withdraw → unpair → pair: works. Both rounds reshape to
 //      2 boards + bye; surviving boards keep id, time and court; the removed
 //      board's slot is gone and the new bye rows carry no time or court.
@@ -543,16 +545,17 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     expect(pairNext.reshaped, "six active entrants — no reshape").toBeUndefined();
     const r2 = await fixturesOf(rig.swissId);
     o.afterPairNext = record(rig, r2);
-    // Fixed 2026-09-24 — this probe first recorded `A v H` here, a rematch:
-    // swissGen read every `award` as a bye, so the pair never reached `played`
-    // and the implicit-bye pass credited the absent H a pairing point. A
-    // two-sided walkover is now a played match: S1, S2 and A are on 1, S4, S5
-    // and H on 0, and H meets S5.
+    // Fixed 2026-09-24 — this probe first recorded `A v H` here: swissGen read
+    // every `award` as a bye, and the implicit-bye pass credited the absent H a
+    // pairing point. A two-sided walkover is now a board, not a bye: S1, S2 and
+    // A are on 1, S4, S5 and H on 0, and H meets S5. (Since W3 T7 the walkover
+    // is not a meeting either — P-A2 — so A v H is legal; the score groups,
+    // not `played`, are what keep them apart here.)
     // W2b X-WO-1 + BD-WO-1 (loop D): a badminton walkover is credited 2-0 in games, each 21-0, and the same
     // credited score breaks ties — so A (+42) ranks above the played 21-10, 21-10 winners (+22), and H (-42) last.
     expect(roundShape(rig, r2, 2)).toEqual(["sw-r2-b1: A v S1", "sw-r2-b2: S2 v S4", "sw-r2-b3: S5 v H"]);
     const hBoard = inRound(r2, 2).find((f) => f.home_entrant_id === H || f.away_entrant_id === H)!;
-    expect([hBoard.home_entrant_id, hBoard.away_entrant_id], "A meets H once only").not.toContain(A);
+    expect([hBoard.home_entrant_id, hBoard.away_entrant_id], "the 0-point H is not paired up with A").not.toContain(A);
     const hOpponent = hBoard.home_entrant_id === H ? hBoard.away_entrant_id : hBoard.home_entrant_id;
     expect(["S4", "S5"], "H is not in the winners' score group").toContain(rig.who(hOpponent));
 

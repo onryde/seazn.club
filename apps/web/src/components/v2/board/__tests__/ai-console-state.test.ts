@@ -5,11 +5,13 @@ import type { AiPlanResponse, AiOfficialsPlanResponse } from "@/server/api-v1/sc
 import {
   aiConsoleReducer,
   aiErrorKey,
+  aiUndoErrorKey,
   applyErrorKey,
   initialAiConsoleState,
   type AiConsoleState,
 } from "../ai-console-state";
 import type { ApplyOutcome } from "../ai-apply";
+import { SWISS_REFUSALS, swissRefusalKey, type SwissRefusalCode } from "@/lib/swiss-refusals";
 
 // Minimal valid plans — the reducer never inspects their internals, only moves
 // them between slots, so empty arrays are enough.
@@ -292,6 +294,32 @@ describe("aiErrorKey (status → localized copy key)", () => {
   it("falls back to the generic key for anything unmapped", () => {
     expect(aiErrorKey(500)).toBe("board.ai.errorGeneric");
     expect(aiErrorKey(0)).toBe("board.ai.errorGeneric");
+  });
+});
+
+describe("aiUndoErrorKey (a refused one-tap AI Undo → localized copy key)", () => {
+  // W3 T5 batch-1: the AI Undo is a checkpoint restore, so it can stop on a Swiss refusal. Swept over EVERY code of the
+  // table at the status the server answers with: SWISS_UNDO_ROUND_STARTED is a 422, which `aiErrorKey` reads as "that
+  // instruction couldn't be used" — the wrong sentence for an Undo.
+  it("says every Swiss refusal in its own sentence, at its own status", () => {
+    const codes = Object.keys(SWISS_REFUSALS) as SwissRefusalCode[];
+    let checked = 0;
+    for (const code of codes) {
+      expect(aiUndoErrorKey(SWISS_REFUSALS[code].status, code), code).toBe(swissRefusalKey(code));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every code checked").toBe(codes.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+  it("leaves every other refusal to aiErrorKey (positive pair)", () => {
+    for (const [status, code] of [
+      [422, "SCHEDULE_LOCKED"],
+      [409, "SEQ_CONFLICT"],
+      [402, "ai.credits"],
+      [500, undefined],
+    ] as const) {
+      expect(aiUndoErrorKey(status, code), `${status} ${code}`).toBe(aiErrorKey(status, code));
+    }
   });
 });
 

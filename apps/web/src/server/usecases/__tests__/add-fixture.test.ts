@@ -1,7 +1,8 @@
-// PROMPT-66 — ad-hoc single fixture (`addFixture`): league/group/swiss accept a
+// PROMPT-66 — ad-hoc single fixture (`addFixture`): league/group accept a
 // manual match (it folds into standings like any other result); bracket kinds
 // reject it (no slot in the tree); ladder/americano point at their own
-// mechanisms. Real Postgres required; skipped without DATABASE_URL.
+// mechanisms; Swiss refuses it by name (W3 RB3-15 A: the system pairs Swiss
+// rounds). Real Postgres required; skipped without DATABASE_URL.
 import { describe, expect, it, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
@@ -12,6 +13,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { addFixture, createStages, generateStageFixtures } from "../stages";
 import { appendEvent, recomputeStandings } from "@/server/engine-db";
+import { SWISS_REFUSALS } from "@/lib/swiss-refusals";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -243,6 +245,82 @@ describe.skipIf(!HAS_DB)("addFixture (PROMPT-66)", () => {
         away_entrant_id: other.entrants[1]!,
       }),
     ).rejects.toMatchObject({ status: 422 }); // complete stage refuses
+  });
+
+  // W3 RB3-15 A (spec §8 Q1, ruling 252; #846 SW-M3/M4/M5): Swiss rounds are paired by the system, and an ad-hoc board
+  // on a Swiss stage made phantom byes and broke the shells. It is refused by name, before every other check, in every
+  // state of the stage. Generic sport only: the guard reads the stage KIND and runs before any sport or entrant read.
+  it("X-SW-21 Add match on a Swiss stage refuses SWISS_ADHOC_REFUSED and writes nothing", async () => {
+    const { auth } = await seedOrg();
+    const { division, entrants } = await seedDivision(auth, 4);
+    const [swiss] = await createStages(auth, division.id, {
+      seq: 1,
+      kind: "swiss",
+      name: "Swiss",
+      config: { rounds: 3 },
+      progression: null,
+    });
+    const count = async () =>
+      (await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${swiss!.id}`)[0]!.n;
+    const adhocRows = async () =>
+      (await sql<{ n: number }[]>`
+        select count(*)::int as n from fixtures where stage_id = ${swiss!.id} and ext_key like 'adhoc-%'`)[0]!.n;
+    const refused = { status: 422, code: "SWISS_ADHOC_REFUSED", message: SWISS_REFUSALS.SWISS_ADHOC_REFUSED.message };
+    let states = 0;
+    const refuses = async (label: string, home: string, away: string) => {
+      const before = await count();
+      await expect(addFixture(auth, swiss!.id, { home_entrant_id: home, away_entrant_id: away }), label).rejects.toMatchObject(refused);
+      expect(await count(), `${label}: nothing written`).toBe(before);
+      expect(await adhocRows(), `${label}: no ad-hoc row`).toBe(0);
+      states++;
+    };
+
+    // The empty case first: a Swiss stage nobody has generated.
+    expect(await count(), "premise: no fixtures yet").toBe(0);
+    await refuses("before Generate", entrants[0]!, entrants[1]!);
+    // Shells minted and round 1 paired: the state the desk offered the button in.
+    await generateStageFixtures(auth, swiss!.id);
+    expect(await count(), "premise: Generate minted the rounds").toBeGreaterThan(0);
+    await refuses("round 1 paired", entrants[0]!, entrants[1]!);
+    // A second press is refused the same way (no first-call-only latch).
+    await refuses("a second press", entrants[2]!, entrants[3]!);
+    // A request the generic checks would also refuse still gets the Swiss answer: it is checked first.
+    await refuses("self-play on a Swiss stage", entrants[0]!, entrants[0]!);
+    // A completed Swiss stage: still the Swiss refusal, not the "complete" one.
+    await sql`update stages set status = 'complete' where id = ${swiss!.id}`;
+    await refuses("a completed Swiss stage", entrants[0]!, entrants[1]!);
+    expect(states, "anti-vacuity: every Swiss state was tried").toBe(5);
+
+    // The refusal is Swiss-only, not a catch-all: a knockout keeps its own bracket refusal.
+    const [ko] = await createStages(auth, division.id, { seq: 2, kind: "knockout", name: "KO", config: {}, progression: null });
+    const koErr = await addFixture(auth, ko!.id, { home_entrant_id: entrants[0]!, away_entrant_id: entrants[1]! }).catch((e: unknown) => e);
+    expect(koErr).toMatchObject({ status: 422 });
+    expect((koErr as { code?: string }).code).not.toBe("SWISS_ADHOC_REFUSED");
+  });
+
+  // The positive pair of X-SW-21: the two table kinds that keep Add match still take one, in a stage that has run.
+  it("league and group still accept an ad-hoc fixture", async () => {
+    const { auth } = await seedOrg();
+    const { division } = await seedDivision(auth, 8);
+    const stages = await createStages(auth, division.id, [
+      { seq: 1, kind: "league", name: "League", config: {}, progression: null },
+      { seq: 2, kind: "group", name: "Groups", config: { pools: { count: 2 } }, progression: null },
+    ]);
+    let accepted = 0;
+    for (const stage of stages) {
+      await generateStageFixtures(auth, stage.id);
+      const [pair] = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+        select home_entrant_id, away_entrant_id from fixtures where stage_id = ${stage.id}
+          and home_entrant_id is not null and away_entrant_id is not null limit 1`;
+      const n = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${stage.id}`)[0]!.n;
+      const before = await n();
+      const { fixture_id } = await addFixture(auth, stage.id, { home_entrant_id: pair!.home_entrant_id, away_entrant_id: pair!.away_entrant_id });
+      expect(await n(), stage.kind).toBe(before + 1);
+      const [fx] = await sql<{ ext_key: string }[]>`select ext_key from fixtures where id = ${fixture_id}`;
+      expect(fx!.ext_key.startsWith("adhoc-"), stage.kind).toBe(true);
+      accepted++;
+    }
+    expect(accepted, "anti-vacuity: league and group").toBe(2);
   });
 
   // #8 sibling fix: court_id/venue_id are FK-restricted, but the FK is

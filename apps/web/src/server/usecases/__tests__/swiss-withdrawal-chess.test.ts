@@ -9,13 +9,14 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { applyRoundOneColourLot, swissColourLot, swissDrawSeed } from "@/lib/swiss-draw";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
@@ -53,8 +54,10 @@ interface Rig {
   name: (id: string | null) => string;
 }
 
-/** Four individuals S1..S4 in a 2-round CLASSICAL chess swiss, started, round 1 paired: S1 v S3, S2 v S4. */
-async function pairedRoundOne(): Promise<Rig> {
+/** Four individuals S1..S4 in a 2-round CLASSICAL chess swiss, started, round 1 paired: S1 v S3, S2 v S4. A new boardgame
+ *  Swiss stores `chess: true` (W3 T8, BG-SW-1), so round 1 is coloured by the stage's lot: board 1's upper player takes
+ *  the lot's colour, board 2's the other (home is White). */
+async function pairedRoundOne(lot: "white" | "black"): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, {
     ends_on: "2030-12-31",
@@ -79,13 +82,16 @@ async function pairedRoundOne(): Promise<Rig> {
       members: [],
     })),
   );
-  const [stage] = await createStages(auth, division.id, {
-    seq: 1,
-    kind: "swiss",
-    name: "Swiss",
-    config: { rounds: 2 },
-    progression: null,
-  });
+  // Review m2: the stage is re-minted until its own colour lot is `lot`, so both lot branches run on every CI run (each
+  // try is a fair coin).
+  const input = { seq: 1, kind: "swiss" as const, name: "Swiss", config: { rounds: 2 }, progression: null };
+  let [stage] = await createStages(auth, division.id, input);
+  let tries = 1;
+  while (swissColourLot(swissDrawSeed(stage!.id)) !== lot && tries < 40) {
+    [stage] = await replaceStages(auth, division.id, [input]); // before Start: a new stage, a new id, a new lot
+    tries++;
+  }
+  expect(swissColourLot(swissDrawSeed(stage!.id)), `rig: a stage drawing ${lot} (${tries} tries)`).toBe(lot);
   await startDivision(auth, division.id); // mints the shells
   await generateStageFixtures(auth, stage!.id); // Pair round 1
   const byName = new Map(entrants.map((e) => [e.display_name, e.id]));
@@ -96,7 +102,11 @@ async function pairedRoundOne(): Promise<Rig> {
     id: (n) => byName.get(n)!,
     name: (i) => (i === null ? "-" : (byId.get(i) ?? i)),
   };
-  expect(shape(rig, round(await fixturesOf(rig.stageId), 1))).toEqual(["sw-r1-b1: S1 v S3", "sw-r1-b2: S2 v S4"]);
+  const fold = applyRoundOneColourLot(
+    [{ home: "S1", away: "S3" }, { home: "S2", away: "S4" }],
+    swissColourLot(swissDrawSeed(rig.stageId)),
+  );
+  expect(shape(rig, round(await fixturesOf(rig.stageId), 1))).toEqual(fold.map((p, i) => `sw-r1-b${i + 1}: ${p.home} v ${p.away}`));
   return rig;
 }
 
@@ -115,15 +125,16 @@ const boardOf = (rows: FixtureRow[], r: number, a: string, b: string) =>
       [f.home_entrant_id, f.away_entrant_id].includes(b),
   )!;
 
-/** The scorer's quick result: the HOME side wins by resignation. */
-async function homeWins(auth: AuthCtx, fixtureId: string, home: string): Promise<void> {
+/** The scorer's quick result: `winner` wins by resignation, whichever side they sit. */
+async function quickWin(auth: AuthCtx, fixtureId: string, winner: string): Promise<void> {
   await scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
-  await scoreEvent(auth, fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner: home, method: "resign" } });
+  await scoreEvent(auth, fixtureId, { expected_seq: 1, type: "boardgame.result", payload: { winner, method: "resign" } });
 }
 
 describe.runIf(HAS_DB)("CD-T13-SW: a chess swiss withdrawal walks the paired board over", () => {
-  it("CD-T13-SW: nothing played yet — the paired board walks over with reason withdrew, later rounds are untouched, and Pair next goes on without them", async () => {
-    const rig = await pairedRoundOne();
+  // Review m2: both colour lots, every run — the round-2 colours below branch on the lot.
+  it.each(["white", "black"] as const)("CD-T13-SW (lot %s): nothing played yet — the paired board walks over with reason withdrew, later rounds are untouched, and Pair next goes on without them", async (lot) => {
+    const rig = await pairedRoundOne(lot);
     const S2 = rig.id("S2");
     const S4 = rig.id("S4");
     const r1 = round(await fixturesOf(rig.stageId), 1);
@@ -157,12 +168,16 @@ describe.runIf(HAS_DB)("CD-T13-SW: a chess swiss withdrawal walks the paired boa
       [null, null, "scheduled"],
     ]);
 
-    await homeWins(rig.auth, other.id, other.home_entrant_id!);
-    // Not stranded: the two 1-point winners pair, S3 takes the bye, S4 is left out.
+    const S1 = rig.id("S1");
+    await quickWin(rig.auth, other.id, S1);
+    // Not stranded: the two 1-point winners pair, S3 takes the bye, S4 is left out. Chess colours (P-A5): S1 alternates
+    // from its round-1 colour, and S2's walkover gave S2 none, so S1 is White in round 2 exactly when it was Black in round 1.
     const next = await generateStageFixtures(rig.auth, rig.stageId);
     expect(next.reshaped).toEqual({ matches_added: 0, matches_removed: 1, byes_added: 1, byes_removed: 0 });
     const r2 = round(await fixturesOf(rig.stageId), 2);
-    expect(shape(rig, r2)).toEqual(["sw-r2-b1: S1 v S2", "sw-r2-bye: S3 bye"]);
+    const s1WasWhite = other.home_entrant_id === S1;
+    expect(s1WasWhite, "the lot decides S1's round-1 colour (S1 is board 1's upper seat)").toBe(lot === "white");
+    expect(shape(rig, r2)).toEqual([s1WasWhite ? "sw-r2-b1: S2 v S1" : "sw-r2-b1: S1 v S2", "sw-r2-bye: S3 bye"]);
     expect(r2.flatMap((f) => [f.home_entrant_id, f.away_entrant_id])).not.toContain(S4);
   });
 });

@@ -2,7 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 import { StagesPanel } from "@/components/v2/stages-panel";
-import { StageRail } from "@/components/v2/desk/stage-rail";
+import { StageRail, SwissPairingMenuPanel } from "@/components/v2/desk/stage-rail";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import es from "@/dictionaries/es/ui.json";
+import enDict from "@/dictionaries/en/ui.json";
 import { ApiV1Error } from "@/lib/client-v1";
 import { SWISS_PAIRING_ROUND_ONE_ONLY_CODE } from "@/lib/swiss-pairing";
 
@@ -147,6 +150,213 @@ describe("StagesPanel — hands the Pair next split button its menu", () => {
   });
 });
 
+// W3 T8 (X-SW-22): an unseeded round 1 is the stage's seeded random draw, and the round-1 menu says so. The seam is the
+// panel's: it reads the page's real seeds (null for an unseeded entrant) into the menu it hands the rail. A menu
+// derivation that is right but never fed the seeds would leave the line dark — so this drives the PANEL's own menu
+// through the rail's real panel component.
+describe("StagesPanel — the round-1 menu says an unseeded field is drawn at random (X-SW-22)", () => {
+  const menuOf = (entrantSeeds: Record<string, number | null>, seated: number[] = []) => {
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation(() => Promise.resolve({}));
+    const island = renderIsland(StagesPanel, { ...props, entrantSeeds, stages: [swissStage()], fixtures: fixtures(seated) });
+    const rails = island.tree().filter((el) => el.type === StageRail);
+    expect(rails).toHaveLength(1);
+    return propsOf(rails[0]!).swissPairingMenu as Parameters<typeof SwissPairingMenuPanel>[0]["menu"];
+  };
+  const NOTE = 'data-testid="stage-pairing-draw-note"';
+  const panelHtml = (menu: Parameters<typeof SwissPairingMenuPanel>[0]["menu"]) =>
+    renderToStaticMarkup(<SwissPairingMenuPanel stageId="s1" menu={menu} pick={null} onPick={() => {}} onClose={() => {}} />);
+
+  it("a wholly seeded field: no draw, no line (the empty case first)", () => {
+    const menu = menuOf(props.entrantSeeds);
+    expect(menu).toMatchObject({ round: 1, choosable: true, unseededDrawn: false });
+    const html = panelHtml(menu);
+    expect(html, "positive control: the round-1 options rendered").toContain('data-testid="stage-pairing-fold"');
+    expect(html).not.toContain(NOTE);
+    expect(html).not.toContain("aria-describedby=");
+  });
+
+  it("one unseeded entrant: the line, under the options, described by the group", () => {
+    const menu = menuOf({ ...props.entrantSeeds, e5: null });
+    expect(menu).toMatchObject({ round: 1, choosable: true, unseededDrawn: true });
+    const html = panelHtml(menu);
+    expect(html).toContain(`${NOTE}>Unseeded entrants are drawn at random.</p>`);
+    // Review m1: the option hints above it no longer say "by seed" alone — seeds first, then the draw (e5 unseeded).
+    expect(html).not.toContain(">top half v bottom half by seed<");
+    expect(html).toContain("top half v bottom half by seed, then the draw");
+    expect(html).toContain('aria-describedby="pairing-draw-note-s1"');
+    expect(html).toContain('id="pairing-draw-note-s1"');
+    expect(html.indexOf(NOTE), "under both options").toBeGreaterThan(html.indexOf('data-testid="stage-pairing-rank_adjacent"'));
+  });
+
+  it("in Spanish, the line is the Spanish catalog's", () => {
+    const menu = menuOf({ ...props.entrantSeeds, e5: null });
+    const html = renderToStaticMarkup(
+      <DictProvider dict={es} locale="es">
+        <SwissPairingMenuPanel stageId="s1" menu={menu} pick={null} onPick={() => {}} onClose={() => {}} />
+      </DictProvider>,
+    );
+    expect(html).toContain(`>${es["schedule.pairing.drawnAtRandom"]}</p>`);
+  });
+
+  it("round 2 waiting: the draw is round 1's alone — no line in the read-only menu", () => {
+    const menu = menuOf({ ...props.entrantSeeds, e5: null }, [1]);
+    expect(menu).toMatchObject({ round: 2, choosable: false, unseededDrawn: false });
+    const html = panelHtml(menu);
+    expect(html, "positive control: the read-only menu rendered").toContain('data-testid="stage-pairing-readonly"');
+    expect(html).not.toContain(NOTE);
+  });
+});
+
+// W3 T14 (X-SW-30, SW-L12, RB3-25): from round 2 on, the read-only mode line also says the Swiss rules decide the pairing and
+// how to re-derive it — Unpair, then Pair next, after a corrected result or roster — because a board's seats cannot be edited (PATCH /fixtures/{id} refuses them: fixtures/[id]/__tests__/
+// route.test.ts). The verdict is the PANEL's: a running root Swiss (isRunningRootSwiss) whose Unpair button is on offer
+// (canUnpairSwiss), so the line never points at a button the rail is not showing. Driven through the panel's own menu
+// and the rail's real panel component, as the X-SW-22 block above does.
+describe("StagesPanel — rounds >= 2 explain how to change a pairing (X-SW-30)", () => {
+  type Stage = Omit<ReturnType<typeof swissStage>, "progression"> & { progression: Record<string, unknown> | null };
+  const menuFor = (stage: Stage, rows: ReturnType<typeof fixtures>) => {
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation(() => Promise.resolve({}));
+    const island = renderIsland(StagesPanel, { ...props, stages: [stage], fixtures: rows });
+    const rails = island.tree().filter((el) => el.type === StageRail);
+    expect(rails).toHaveLength(1);
+    return propsOf(rails[0]!).swissPairingMenu as Parameters<typeof SwissPairingMenuPanel>[0]["menu"];
+  };
+  const panelHtml = (menu: Parameters<typeof SwissPairingMenuPanel>[0]["menu"], dict?: { dict: typeof es; locale: "es" }) => {
+    const panel = <SwissPairingMenuPanel stageId="s1" menu={menu} pick={null} onPick={() => {}} onClose={() => {}} />;
+    return renderToStaticMarkup(dict ? <DictProvider {...dict}>{panel}</DictProvider> : panel);
+  };
+  const HINT = 'data-testid="stage-pairing-change-hint"';
+  const COPY = "Round pairings follow the Swiss rules. After correcting a result or the entrants, Unpair, then Pair next.";
+  /** Round 1 seated and PLAYED: a decided row, which `swissRoundHasPlayedResult` reads as a result. */
+  const playedRound1 = () => fixtures([1]).map((f) => (f.round_no === 1 ? { ...f, status: "decided" } : f));
+
+  it("X-SW-30 the round-2 menu shows the Unpair-then-Pair guidance; round 1 does not", () => {
+    // Round 2 waiting (round 1 seated, unplayed): the read-only line, the guidance under it, and the Unpair button the
+    // guidance names is really on the rail beside it (the sentence is only true while the button is).
+    const r2 = menuFor(swissStage(), fixtures([1]));
+    expect(r2).toMatchObject({ round: 2, choosable: false });
+    const html2 = panelHtml(r2);
+    expect(html2, "positive control: the read-only line rendered").toContain('data-testid="stage-pairing-readonly"');
+    expect(html2).toContain(`${HINT}>${COPY}</p>`);
+    expect(html2.indexOf(HINT), "under the read-only line").toBeGreaterThan(html2.indexOf('data-testid="stage-pairing-hint"'));
+    const rail = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1])} />);
+    expect(rail, "the button the line names is on the rail").toContain('data-testid="stage-unpair"');
+    expect(enDict["schedule.pairing.changeHint"]).toBe(COPY);
+
+    // Round 1 waiting: the choosable round. Its options rendered (positive control), and no guidance.
+    const r1 = menuFor(swissStage(), fixtures());
+    expect(r1).toMatchObject({ round: 1, choosable: true });
+    const html1 = panelHtml(r1);
+    expect(html1, "positive control: the round-1 options rendered").toContain('data-testid="stage-pairing-fold"');
+    expect(html1).not.toContain(HINT);
+    expect(html1).not.toContain(COPY);
+  });
+
+  it("round 3 waiting says it too (every read-only round, not only round 2)", () => {
+    const round3 = fixtures()
+      .slice(0, 4)
+      .map((f, i) => ({ ...f, id: `g${i}`, round_no: 3, fixture_no: 9 + i, ext_key: `sw-r3-b${i + 1}` }));
+    const menu = menuFor(swissStage({ rounds: 3 }), [...fixtures([1, 2]), ...round3]);
+    expect(menu).toMatchObject({ round: 3, choosable: false });
+    expect(panelHtml(menu)).toContain(`${HINT}>${COPY}</p>`);
+  });
+
+  it("round 2 waiting but round 1 is played: Unpair is not offered, so the line is not either", () => {
+    const rail = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={playedRound1()} />);
+    expect(rail, "positive control: the rail rendered its Pair next").toContain('data-testid="stage-generate"');
+    expect(rail).not.toContain('data-testid="stage-unpair"');
+    const menu = menuFor(swissStage(), playedRound1());
+    expect(menu).toMatchObject({ round: 2, choosable: false });
+    const html = panelHtml(menu);
+    expect(html, "positive control: the read-only line rendered").toContain('data-testid="stage-pairing-readonly"');
+    expect(html).not.toContain(HINT);
+  });
+
+  it.each([
+    ["a finished Swiss", swissStage({ rounds: 2 }, "complete")],
+    ["a Swiss fed by an earlier stage (config.qualified)", swissStage({ rounds: 2, qualified: ["e1", "e2", "e3", "e4"] })],
+    ["a Swiss with a progression source", { ...swissStage(), progression: { from: "s0" } }],
+  ])("%s: not a running root Swiss, so no line even in round 2", (_label, stage) => {
+    const menu = menuFor(stage, fixtures([1]));
+    expect(menu).toMatchObject({ round: 2, choosable: false });
+    const html = panelHtml(menu);
+    expect(html, "positive control: the read-only line rendered").toContain('data-testid="stage-pairing-readonly"');
+    expect(html).not.toContain(HINT);
+  });
+
+  // Batch-4 m2: with every round seated there is no Pair next menu to carry the line, yet Unpair is on the rail for the
+  // final round — the line goes beside it, on the SAME gate (a running root Swiss whose Unpair is offered), for a round
+  // from 2 on, and in exactly one place.
+  it("batch-4 m2: the FINAL round paired says the line beside Unpair; one place only, on the same gate", () => {
+    const UNPAIR_HINT = /data-testid="stage-unpair-hint"[^>]*>([^<]*)<\/p>/;
+    const html = (stage: Stage, rows: ReturnType<typeof fixtures>) => renderToStaticMarkup(<StagesPanel {...props} stages={[stage]} fixtures={rows} />);
+    const lastPaired = fixtures([1, 2]).map((f) => (f.round_no === 1 ? { ...f, status: "decided" } : f));
+    const roundOneOnly = fixtures([1]).filter((f) => f.round_no === 1);
+    // Round 3 waiting behind a paired round 2: the round Unpair clears is from 2 on, yet the menu carries the line.
+    const round3Waiting = [
+      ...lastPaired,
+      ...fixtures()
+        .slice(0, 4)
+        .map((f, i) => ({ ...f, id: `g${i}`, round_no: 3, fixture_no: 9 + i, ext_key: `sw-r3-b${i + 1}` })),
+    ];
+    type Row = { name: string; stage: Stage; rows: ReturnType<typeof fixtures>; unpair: boolean; line: boolean; menu: boolean };
+    const ROWS: Row[] = [
+      { name: "round 2 of 2 paired, unplayed: no menu, the line beside Unpair", stage: swissStage(), rows: lastPaired, unpair: true, line: true, menu: false },
+      { name: "round 2 waiting: the menu carries the line, not Unpair too", stage: swissStage(), rows: fixtures([1]), unpair: true, line: false, menu: true },
+      { name: "round 3 waiting, round 2 paired: the menu carries it, not Unpair too", stage: swissStage({ rounds: 3 }), rows: round3Waiting, unpair: true, line: false, menu: true },
+      { name: "a fed Swiss, its final round paired: not a running root Swiss", stage: { ...swissStage(), progression: { from: "s0" } }, rows: lastPaired, unpair: true, line: false, menu: false },
+      { name: "a one-round Swiss paired: round 1's pairing is a choice, not the rules'", stage: swissStage({ rounds: 1 }), rows: roundOneOnly, unpair: true, line: false, menu: false },
+      { name: "the final round played: no Unpair, no line", stage: swissStage(), rows: lastPaired.map((f) => (f.round_no === 2 ? { ...f, status: "decided" } : f)), unpair: false, line: false, menu: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      const out = html(r.stage, r.rows);
+      expect(out, `${r.name}: positive control, the rail rendered`).toContain('data-testid="stage-complete"');
+      expect(out.includes('data-testid="stage-unpair"'), `${r.name}: Unpair`).toBe(r.unpair);
+      expect(menuFor(r.stage, r.rows) !== null, `${r.name}: a Pair next menu`).toBe(r.menu);
+      const said = UNPAIR_HINT.exec(out);
+      expect(said?.[1] ?? null, `${r.name}: the line beside Unpair`).toBe(r.line ? COPY : null);
+      if (r.line) expect(out.indexOf("stage-unpair-hint"), `${r.name}: after Unpair`).toBeGreaterThan(out.indexOf('data-testid="stage-unpair"'));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+    expect(ROWS.filter((r) => r.line).length, "both answers reached").toBeGreaterThan(0);
+  });
+
+  it("in Spanish, the line is the Spanish catalog's", () => {
+    const html = panelHtml(menuFor(swissStage(), fixtures([1])), { dict: es, locale: "es" });
+    expect(html).toContain(`${HINT}>${es["schedule.pairing.changeHint"]}</p>`);
+    expect(es["schedule.pairing.changeHint"]).not.toBe(COPY);
+  });
+});
+
+// W3 RB3-15 A (X-SW-21, ruling 252): the panel's half of "no Add match on a Swiss stage". The rail refuses on the kind
+// whatever it is handed (stage-rail.test.tsx); this pins that the PANEL no longer calls Swiss an ad-hoc kind either,
+// so the two guards are each killable on their own.
+describe("StagesPanel — no Add match on a Swiss stage (X-SW-21)", () => {
+  const railOf = (stage: ReturnType<typeof swissStage>) => {
+    // The island runs the panel's mount effects, which read the network: answer them empty.
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation(() => Promise.resolve({}));
+    const island = renderIsland(StagesPanel, { ...props, stages: [stage], fixtures: fixtures([1]) });
+    const rails = island.tree().filter((el) => el.type === StageRail);
+    expect(rails).toHaveLength(1);
+    return propsOf(rails[0]!);
+  };
+
+  it("hands the rail adhoc=false for Swiss and adhoc=true for a league, and the page shows the note, not the trigger", () => {
+    expect(railOf(swissStage()).adhoc, "swiss").toBe(false);
+    expect(railOf({ ...swissStage(), kind: "league", name: "League" }).adhoc, "league").toBe(true);
+
+    const html = renderToStaticMarkup(<StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1])} />);
+    expect(html).toContain('data-testid="stage-generate"');
+    expect(html).not.toContain('data-testid="stage-add-match"');
+    expect(html).toContain('data-testid="stage-swiss-adhoc-note"');
+  });
+});
+
 // Review M2 (Task 4): the rail clears the organiser's round-1 pick only when a
 // press LANDS, and it learns that from what `onAct` resolves to. This pins the
 // panel's half of that contract through the real `act()`: the StageRail
@@ -191,5 +401,89 @@ describe("StagesPanel — tells the rail whether a press landed (review M2)", ()
     generateAnswers(() => Promise.reject(failure()));
     await expect(railOnAct()("s1", "generate", { pairing: "rank_adjacent" })).resolves.toBe(false);
     expect(generateBodies()).toEqual([{ pairing: "rank_adjacent" }]);
+  });
+});
+
+// W3 T10 (X-SW-12, X-SW-14 UI half): the seam between the panel and the rail's More menu, and the pending-latecomer
+// line. `stage-rail.test` pins the rail's gate given its facts; this pins that the panel really hands it the facts
+// (the division's status, whether a round is seated, the Entrants tab's add form) and that the count line is in the
+// CARD HEADER under the legend (coordinator ruling: a count that changes what the organiser does next must not hide
+// behind the phone's Stage tools fold). Expected copy is the en dictionary's, with the count put in.
+describe("StagesPanel — Add late player and the pending-latecomer line (W3 T10)", () => {
+  const EN = enDict as unknown as Record<string, string>;
+  const line = (key: string, count: number) => EN[key]!.replace("{count}", String(count));
+  const HREF = "/o/org/c/comp/d/div?tab=entrants#add-entrant";
+  const render = (over: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([1])} {...over} />,
+    );
+
+  it("a started division with round 1 paired: the item goes to the Entrants tab's add form", () => {
+    const html = render({ divisionStatus: "active" });
+    expect(html).toContain('data-testid="stage-add-late-player"');
+    expect(html).toContain(`href="${HREF}"`);
+  });
+
+  it("before Start, or with no status passed, there is no More menu", () => {
+    for (const over of [{ divisionStatus: "scheduled" }, { divisionStatus: "setup" }, {}]) {
+      const html = render(over);
+      expect(html, JSON.stringify(over)).toContain('data-testid="stage-generate"');
+      expect(html, JSON.stringify(over)).not.toContain('data-testid="stage-more"');
+    }
+    // Started, but nothing seated yet: the ordinary add seats them in round 1.
+    const unpaired = renderToStaticMarkup(
+      <StagesPanel {...props} stages={[swissStage()]} fixtures={fixtures([])} divisionStatus="active" />,
+    );
+    expect(unpaired).toContain('data-testid="stage-generate"');
+    expect(unpaired).not.toContain('data-testid="stage-more"');
+  });
+
+  it("counts the latecomers waiting for the next Pair and those after the last round, in the card header under the legend", () => {
+    // e9 was stamped for round 2 (the round the next Pair seats); e10 arrived after round 2, the last, had started.
+    const html = render({
+      divisionStatus: "active",
+      activeEntrantIds: [...ids, "e9", "e10"],
+      entrantSwissFirstRounds: {
+        e9: { swiss_first_round: 2, swiss_first_round_stage_id: "s1" },
+        e10: { swiss_first_round: 3, swiss_first_round_stage_id: "s1" },
+      },
+    });
+    const lines = [...html.matchAll(/<p[^>]*data-testid="stage-swiss-latecomer"[^>]*>([^<]*)<\/p>/g)].map((m) => m[1]);
+    expect(lines).toEqual([line("swiss.lateEntry.joinNextRound.one", 1), line("swiss.lateEntry.joinedAfterLast.one", 1)]);
+    const legendAt = html.indexOf('data-testid="stage-swiss-legend"');
+    const lineAt = html.indexOf('data-testid="stage-swiss-latecomer"');
+    // Match Day #1103 (E1 item 1) moved the rail INTO the header, ahead of the legend, so "not inside the rail's fold" is no longer
+    // "before the rail": it is "outside the rail's element". The rail wrapper is a <div>; its end is where its <div> depth returns to 0.
+    const railAt = html.indexOf('data-testid="stage-rail"');
+    const railOpen = html.lastIndexOf("<div", railAt);
+    let depth = 0;
+    let railEnd = -1;
+    for (const m of html.slice(railOpen).matchAll(/<div\b|<\/div>/g)) {
+      depth += m[0] === "</div>" ? -1 : 1;
+      if (depth === 0) {
+        railEnd = railOpen + m.index! + m[0].length;
+        break;
+      }
+    }
+    expect(railAt, "premise: the rail renders").toBeGreaterThan(-1);
+    expect(railEnd, "premise: the rail's element closes").toBeGreaterThan(railAt);
+    expect(html.slice(railOpen, railEnd), "premise: the fold (the rail's sheet) is inside that element").toContain('data-testid="stage-rail-sheet"');
+    expect(legendAt, "premise: the legend renders").toBeGreaterThan(-1);
+    expect(lineAt, "under the legend").toBeGreaterThan(legendAt);
+    expect(lineAt < railOpen || lineAt > railEnd, "in the header, not inside the rail's fold").toBe(true);
+    expect(html.slice(lineAt, html.indexOf("</header>", lineAt)).length, "before the header closes").toBeGreaterThan(0);
+    expect(html.indexOf("</header>", legendAt)).toBeGreaterThan(lineAt);
+  });
+
+  it("says nothing with no latecomer, or to a viewer who cannot edit", () => {
+    expect(render({ divisionStatus: "active" })).not.toContain("stage-swiss-latecomer");
+    const viewer = render({
+      canEdit: false,
+      divisionStatus: "active",
+      activeEntrantIds: [...ids, "e9"],
+      entrantSwissFirstRounds: { e9: { swiss_first_round: 2, swiss_first_round_stage_id: "s1" } },
+    });
+    expect(viewer, "premise: the viewer's card renders the legend").toContain('data-testid="stage-swiss-legend"');
+    expect(viewer).not.toContain("stage-swiss-latecomer");
   });
 });

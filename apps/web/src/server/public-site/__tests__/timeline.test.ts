@@ -220,6 +220,7 @@ function args(over: Partial<TimelineArgs> & { sportKey?: string }): TimelineArgs
     lineups: over.lineups ?? defaultLineupPair(resolvePositions(mod, cfg)),
     sides: over.sides ?? SIDES,
     personOf: over.personOf ?? personOf,
+    ...(over.sideStatuses === undefined ? {} : { sideStatuses: over.sideStatuses }),
   };
 }
 
@@ -1018,9 +1019,20 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
         if (TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
       }
     }
+    // W3 T15 I4: the cascade's withdrawal forfeit and expunge over a DISQUALIFIED side take the plain lines.
+    const dqLedgers = [
+      [env(0, "core.forfeit", { by: "H", reason: "withdrew" })],
+      [env(0, "core.abandon", { reason: "withdrew", expunge: true })],
+    ];
+    for (const events of dqLedgers) {
+      for (const line of linesOf(args({ sportKey: "boardgame", events, sideStatuses: ["disqualified", undefined] }))) {
+        emitted.add(line.text.key);
+        if (TIMELINE_OVERRIDE_KEYS.includes(line.text.key)) overridden++;
+      }
+    }
     // The gate says what it saw: both no-side branches, both goal flags, every
-    // settle method and every forfeit kind fired — each override key exactly once.
-    expect(overridden).toBe(4 + SETTLE_METHODS.length + FORFEIT_REASONS.length + 2);
+    // settle method, every forfeit kind and both plain (disqualified) lines fired — each override key exactly once.
+    expect(overridden).toBe(4 + SETTLE_METHODS.length + FORFEIT_REASONS.length + 2 + dqLedgers.length);
     expect(overridden).toBe(TIMELINE_OVERRIDE_KEYS.length);
     const overrides = [...emitted].filter((k) => !Object.values(TIMELINE_KEY_FOR).includes(k));
     expect(overrides.sort()).toEqual([...TIMELINE_OVERRIDE_KEYS].sort());
@@ -1074,6 +1086,60 @@ describe("timeline dictionary coverage (derived from the engine's own golden cor
     expect(keys.get("legacy")).toBe(TIMELINE_KEY_FOR["core.forfeit"]);
     expect(keys.get("abandon")).toBe(TIMELINE_KEY_FOR["core.abandon"]);
     expect(read, `keys read: ${read}`).toBe(cases.length * LOCALES.length);
+  });
+
+  // W3 T15 review I4 (controller ruling 2026-11-02, ruling 116's scope): a disqualification runs the withdrawal cascade
+  // since T15, which writes `core.forfeit{reason: "withdrew"}` against her open board, or expunges a league line. A
+  // DISQUALIFIED side is never shown publicly as having withdrawn; ruling 116 prescribes no DQ copy, so its lines are the
+  // plain ones: a walkover naming her, a removal from the table. The side's status comes from `public_entrants_v`.
+  it("W3 T15 I4: the cascade's lines over a DISQUALIFIED side say a plain walkover and a plain removal — never a withdrawal; a withdrawn side's say she withdrew; all four locales", () => {
+    // single-sport: KEY_OVERRIDE is keyed by event TYPE (kernel events every sport folds the same way) — boardgame stands for all.
+    const forfeit = [env(0, "core.forfeit", { by: "H", reason: "withdrew" })];
+    const expunge = [env(0, "core.abandon", { reason: "withdrew", expunge: true })];
+    const lineOf = (events: EventEnvelope[], sideStatuses?: readonly [string | undefined, string | undefined]) =>
+      linesOf(args({ sportKey: "boardgame", events, ...(sideStatuses === undefined ? {} : { sideStatuses }) })).find((l) => l.seq === 0)!;
+    const CASES: [name: string, events: EventEnvelope[], statuses: readonly [string | undefined, string | undefined] | undefined, key: string][] = [
+      ["forfeit, withdrawn", forfeit, ["withdrawn", undefined], "timeline.core.forfeit.withdrew"],
+      ["forfeit, no statuses held", forfeit, undefined, "timeline.core.forfeit.withdrew"],
+      ["forfeit, disqualified", forfeit, ["disqualified", undefined], "timeline.core.forfeit.walkoverPlain"],
+      ["forfeit, the OTHER side disqualified", forfeit, [undefined, "disqualified"], "timeline.core.forfeit.withdrew"],
+      ["expunge, withdrawn", expunge, ["withdrawn", undefined], "timeline.core.abandon.expunge"],
+      ["expunge, no statuses held", expunge, undefined, "timeline.core.abandon.expunge"],
+      ["expunge, home disqualified", expunge, ["disqualified", undefined], "timeline.core.abandon.expungePlain"],
+      ["expunge, away disqualified", expunge, [undefined, "disqualified"], "timeline.core.abandon.expungePlain"],
+    ];
+    let checked = 0;
+    for (const [name, events, statuses, key] of CASES) {
+      const line = lineOf(events, statuses);
+      expect(line, name).toBeDefined();
+      expect(line.text.key, name).toBe(key);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+    // The words, per locale: the plain lines name the disqualified side (a forfeit) and carry no withdrawal — the
+    // locale's own word for one being the withdrawal timeline line's lead word ("Withdrew — …", "Baja — …").
+    let read = 0;
+    for (const locale of LOCALES) {
+      const dict = DICTS[locale] as Dict;
+      const withdrewLine = DICTS[locale]["timeline.core.forfeit.withdrew"] as string;
+      const word = withdrewLine.split(/\s+[—–-]\s+/u)[0]!.trim().toLowerCase();
+      expect(word.length, `${locale}: premise, a lead word`).toBeGreaterThan(0);
+      const render = (events: EventEnvelope[], statuses: readonly [string | undefined, string | undefined]) => {
+        const l = lineOf(events, statuses);
+        return t(dict, l.text.key, localiseParams(dict, l.text.params));
+      };
+      const dqForfeit = render(forfeit, ["disqualified", undefined]);
+      const wdForfeit = render(forfeit, ["withdrawn", undefined]);
+      expect(dqForfeit, `${locale}: names her`).toContain(SIDES[0].name);
+      expect(dqForfeit.toLowerCase(), `${locale}: "${dqForfeit}" says no "${word}"`).not.toContain(word);
+      expect(wdForfeit.toLowerCase(), `${locale}: positive pair, "${wdForfeit}" says "${word}"`).toContain(word);
+      for (const text of [dqForfeit, render(expunge, ["disqualified", undefined])]) {
+        expect(text, `${locale}: no placeholder left`).not.toMatch(/[{}]/);
+        expect(text).not.toBe(wdForfeit);
+      }
+      read++;
+    }
+    expect(read).toBe(LOCALES.length);
   });
 
   it("X-ST-1: a settle line names the side that advances and the engine's settle method, in all four locales", () => {

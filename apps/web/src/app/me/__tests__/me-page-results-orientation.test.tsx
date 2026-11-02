@@ -31,7 +31,7 @@ const result = (id: string, entrant: string, opponent: string, playerHome: boole
   entrant_name: entrant, opponent_name: opponent, player_home: playerHome, scheduled_at: null,
   // `MyResult.summary` is typed `string | null`, but the jsonb column arrives as the object the page reads.
   summary: { headline } as unknown as MyResult["summary"], outcome,
-  home_entrant_id: null, away_entrant_id: null, abandon_reason: null,
+  home_entrant_id: null, away_entrant_id: null, abandon_reason: null, forfeit_loser_status: null,
 });
 const WIN = (w: string) => ({ kind: "win", winner: w });
 const WO = (w: string, l: string) => ({ kind: "award", winner: w, loser: l, reason: "walkover" });

@@ -490,18 +490,15 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     //    entrant through, so no held fixture is left to settle;
     //  - D-R9: the settle dialog never OFFERS a departed side (`DEPARTED_STATUSES`, read when the page renders).
     // So the product route to this refusal is the one the server guard exists for: a STALE console. The page renders
-    // with both sides in the field, the dialog offers both, and only then is the away entrant disqualified — through API
-    // v1's entrant patch (`status: "disqualified"`, the one route that sets it; no cascade, no withdrawal), so the
+    // with both sides in the field, the dialog offers both, and only then is the away entrant disqualified, so the
     // fixture stays held. Nothing refreshes the page's entrant props until a write succeeds (fixture-console `post`),
     // so the dialog still offers the departed side, and the server refuses it.
     //
-    // KNOWN DEPENDENCY: this route depends on a gap. A bare status write (the PATCH below) does NOT run the departure
-    // cascade that `/withdraw` runs; only that is why the fixture is still held. The gap is owned outside W2b — W5
-    // (RB2A-16, the DQ cascade) and W9 (the atomic cascade). The server twin depends on the same gap:
-    // `src/server/engine-db/__tests__/settle-seating.test.ts:269` ("C17 over the ONE departed vocabulary"). When either
-    // wave makes the PATCH cascade, the "still held" assertion below goes red, loudly. Then swap the PATCH for a raw
-    // status flip through `withDb` (`update entrants set status = 'disqualified' where id = …`, as the legacy-row
-    // twin `settle-seating.test.ts:248` does). That flip survives the fix; do not weaken the refusal assertions.
+    // W3 T15 (RB3-17) closed the gap this used to ride: a `PATCH /entrants/{id}` `{status: "disqualified"}` now runs the
+    // departure cascade, which walks this held line over (as `/withdraw` does). The swap this comment promised is done:
+    // the departure is the raw status flip the legacy-row twin writes (`settle-seating.test.ts`, "C17 over the ONE
+    // departed vocabulary") — a departure the page and the cascade never saw — so the line is still held and the
+    // refusal assertions below are unchanged.
     const { sf } = await knockout(request, "generic", "score");
     await post(request, sf.id, "core.start");
     await post(request, sf.id, "core.abandon", { reason: "rain" });
@@ -509,8 +506,9 @@ test.describe("W2a — the console settles a held bracket fixture (Task 11)", ()
     await page.getByTestId("settle-open").click();
     await page.getByTestId(`settle-winner-${sf.away_entrant_id}`).click();
     await page.getByTestId("settle-method-lot").check();
-    const left = await apiJson<{ status: string }>(request, `/api/v1/entrants/${sf.away_entrant_id}`, "PATCH", { status: "disqualified" });
-    expect(left.status, JSON.stringify(left.error)).toBeLessThan(300);
+    await withDb((sql) => sql`update entrants set status = 'disqualified' where id = ${sf.away_entrant_id}`);
+    const left = await apiJson<{ status: string }>(request, `/api/v1/entrants/${sf.away_entrant_id}`);
+    expect(left.status, JSON.stringify(left.error)).toBe(200);
     expect(left.data?.status, "the named winner is out of the field").toBe("disqualified");
     expect((await read(request, sf.id)).status, "and the fixture is still held — nothing walked it over").toBe("abandoned");
     await page.getByTestId("settle-confirm").click();

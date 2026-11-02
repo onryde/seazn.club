@@ -5,8 +5,8 @@
 // walkover — `{kind: "double_walkover"}`, nobody played — as a game: White for home, Black for away. So the next round
 // paired colours against games that never happened.
 //
-// The witness: four players, round 1 S1 v S3 and S2 v S4 (each home White by the fold), and BOTH boards recorded as
-// double walkovers by the console. Nobody holds a colour, so every round-2 board is neutral and its upper board (the
+// The witness: four players, round 1 S1 v S3 and S2 v S4 (coloured by the stage's lot since W3 T8, BG-SW-1: board 1's
+// upper player takes the lot's colour, board 2's the other), and BOTH boards recorded as double walkovers by the console. Nobody holds a colour, so every round-2 board is neutral and its upper board (the
 // better seed — fold pairing ranks by seed) takes White, i.e. sits home. The positive pair plays round 1 to two draws
 // instead: the real colours are exactly the history the defect invented, and at least one round-2 board then puts its
 // lower board home — so the first case's assertion is not met by a pairing that ignores colours altogether.
@@ -15,6 +15,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
+import { applyRoundOneColourLot, swissColourLot, swissDrawSeed } from "@/lib/swiss-draw";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -94,7 +95,12 @@ describe.runIf(HAS_DB)("Loop R M-8 (a): a double walkover holds no colour in the
   it("both round-1 boards double walkovers: nobody holds a colour, so every round-2 board's upper board takes White", async () => {
     const rig = await pairedRoundOne();
     const r1 = await boardsOf(rig.stageId, 1);
-    expect(r1.map((b) => `${rig.name.get(b.home_entrant_id!)} v ${rig.name.get(b.away_entrant_id!)}`), "rig: the fold").toEqual(["S1 v S3", "S2 v S4"]);
+    // The fold (S1-S3, S2-S4, upper at home), coloured by the stage's own lot (W3 T8, BG-SW-1).
+    const fold = applyRoundOneColourLot(
+      [{ home: "S1", away: "S3" }, { home: "S2", away: "S4" }],
+      swissColourLot(swissDrawSeed(rig.stageId)),
+    ).map((p) => `${p.home} v ${p.away}`);
+    expect(r1.map((b) => `${rig.name.get(b.home_entrant_id!)} v ${rig.name.get(b.away_entrant_id!)}`), "rig: the fold, by lot").toEqual(fold);
     for (const b of r1) {
       const res = await scoreEvent(rig.auth, b.id, { expected_seq: 0, type: "core.forfeit", payload: { by: "both", reason: "walkover" } });
       expect([res.status, res.outcome], "rig: a recorded double walkover").toEqual(["forfeited", { kind: "double_walkover" }]);

@@ -301,3 +301,45 @@ describe("match centre — an abandon with a result (X-AB-2)", () => {
     expect(words(doc.header.statusLine)).not.toContain(t(EN, "matchCentre.result.no_result"));
   });
 });
+
+// W3 T15 review I4 (controller ruling 2026-11-02, ruling 116's scope): since T15 a disqualification runs the withdrawal
+// cascade, whose `core.forfeit{reason: "withdrew"}` decides her open board. A DISQUALIFIED entrant is never shown
+// publicly as having withdrawn: the court card's line and the timeline read the plain walkover (ruling 116 prescribes no
+// DQ copy). The statuses are what the loader reads with the sides (`public_entrants_v`). Both reasons, every locale.
+describe("match centre — a disqualified entrant's cascade walkover is a plain walkover (W3 T15 I4)", () => {
+  const scene = { m: GENERIC, cfg: GENERIC_CFG, status: "forfeited", ledger: forfeit("withdrew") } as const;
+  const docFor = (status: "withdrawn" | "disqualified" | undefined) => {
+    const l = defaultLineupPair(GENERIC.positions);
+    return centre(scene, status === undefined ? {} : { entrantStatuses: { [l.away.entrantId]: status } }).doc;
+  };
+  const CASES = [
+    ["no statuses read", undefined, "forfeit.sentence.withdrew", "timeline.core.forfeit.withdrew"],
+    ["withdrawn", "withdrawn", "forfeit.sentence.withdrew", "timeline.core.forfeit.withdrew"],
+    ["disqualified", "disqualified", "forfeit.sentence.walkoverPlain", "timeline.core.forfeit.walkoverPlain"],
+  ] as const;
+
+  it("the status line and the timeline's forfeit line, by the loser's status", () => {
+    let checked = 0;
+    for (const [name, status, lineKey, timelineKey] of CASES) {
+      const doc = docFor(status);
+      expect(doc.header.statusLine, name).toEqual({ key: lineKey, params: { loser: "Harbour United" } });
+      const forfeitLines = (doc.timeline ?? []).filter((l) => l.text.key.startsWith("timeline.core.forfeit."));
+      expect(forfeitLines.map((l) => l.text.key), name).toEqual([timelineKey]);
+      checked++;
+    }
+    expect(checked).toBe(CASES.length);
+  });
+
+  it("every locale: the disqualified reading names her and differs from the withdrawal's", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(DICTS)) {
+      const dq = words(docFor("disqualified").header.statusLine, dict)!;
+      const wd = words(docFor("withdrawn").header.statusLine, dict)!;
+      expect(dq, locale).toContain("Harbour United");
+      expect(dq, locale).not.toBe(wd);
+      expect(dq, locale).not.toMatch(/\{|forfeit\./);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+});

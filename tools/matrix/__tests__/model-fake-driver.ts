@@ -46,6 +46,7 @@ import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
+import { isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { stageCfg } from "../lib/sport-cfg.ts";
 import { RefusedCall, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantRow, type GenerateOut, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
@@ -225,7 +226,11 @@ export class ModelFakeDriver extends FakeLeagueDriver {
   override addEntrants(divisionId: string, es: readonly EntrantInput[]): Promise<EntrantRow[]> {
     return Promise.resolve().then(() => {
       this.log("addEntrants");
-      const locked = LOCK.statuses.includes(this.#divisionStatus) && !LOCK.openKinds.includes(this.stage?.kind ?? "");
+      // entrants.ts: an open-window kind, or (ruling 250) a root Swiss — the fake's one stage has no progression — that
+      // swiss-late-entry.ts admits into only while it runs.
+      const runningSwiss = LOCK.rootSwiss && this.stage !== null &&
+        isRunningRootSwiss({ kind: this.stage.kind, progression: null, config: this.stage.config, status: this.completed ? "complete" : this.stage.status });
+      const locked = LOCK.statuses.includes(this.#divisionStatus) && !LOCK.openKinds.includes(this.stage?.kind ?? "") && !runningSwiss;
       if (locked && this.opts.rosterLock !== "open") {
         const code = this.opts.rosterLock === "named" ? "ROSTER_LOCKED" : LOCK.wireCode;
         throw new RefusedCall("POST", `/api/v1/divisions/${divisionId}/entrants`, LOCK.status, code, LOCK.message);

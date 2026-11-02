@@ -41,8 +41,9 @@ const BUSY_BACKOFF_MS = 4_000;
  *  3 rounds of 2) on a two-court grid — the same shape
  *  auto-schedule.spec.ts's own seedBoard uses, trimmed to just what this
  *  file needs. `createStageAndGenerate`'s default `kind: "league"` is what
- *  makes this board's rounds ROUND-ROBIN ones at all — `roundRobinStageIds`
- *  (schedule.ts) is `kind in ('league', 'group')` only. */
+ *  makes this board's rounds a round SEQUENCE at all — `roundRobinStageIds`
+ *  (schedule.ts) is `ROUND_SEQUENCE_STAGE_KINDS`: league, group and (W3 T3b)
+ *  swiss. */
 async function seedRoundRobinBoard(
   request: Parameters<typeof apiJson>[0],
 ): Promise<{ divisionId: string; fixtureIds: string[] }> {

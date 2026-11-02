@@ -31,8 +31,8 @@ import { isBye, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-
 import { queueRowAnchor } from "@/components/v2/external-play-held-copy";
 import type { HoldState } from "@/server/relay/domain/session";
 import { fixtureStatusLabel, VOID_STATUSES } from "@/components/v2/stages-panel";
-import { outcomeTagWords, outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
-import { forfeitLedgerOfReason, unseatedForfeitLoser, unseatedWithdrew } from "@/lib/forfeit-tag";
+import { ORGANISER_TAG_FULL_KEY, outcomeTagWords, outcomeText, outcomeTextParts, splitResultTail } from "@/lib/outcome-text";
+import { forfeitLedgerOfReason, unseatedForfeitLoser, unseatedWithdrew, type ForfeitEntrantStatuses } from "@/lib/forfeit-tag";
 import { OutcomeTagText } from "@/components/v2/outcome-tag-text";
 import { formatChangedTag } from "./run-sheet-tags";
 import type { PatchFixture } from "@/server/api-v1/schemas";
@@ -158,6 +158,7 @@ export function RunSheetRow({
   feedLabels,
   onlinePlay,
   arbiterHref,
+  entrantStatuses,
   matchDayHref,
   venueNoun = "court",
   inRound = false,
@@ -213,6 +214,10 @@ export function RunSheetRow({
   onlinePlay?: RunSheetOnlinePlay;
   /** T16 — the arbiter panel opened on this board: where a flag chip leads. */
   arbiterHref?: string;
+  /** W3 T15 ruling 2 — entrant id → status (the division page's roster read): a DISQUALIFIED entrant's cascade walkover
+   *  is worded as the disqualification where the row states the reason (its tag's expansion), never as a withdrawal.
+   *  Absent, a walkover is worded by its reason alone, as before. */
+  entrantStatuses?: ForfeitEntrantStatuses;
   /** Match Day E1 item 1: the row sits under its round's header bar (a stage card's sheet), so the bar says the round and the row
    *  does not: no "Round N" in its meta line, and an open match with no time says so in words ("No time yet") where the
    *  "Not yet scheduled" group used to say it for it. Absent = the row names its own round, as every other mount reads it. */
@@ -384,7 +389,14 @@ export function RunSheetRow({
   // the phone line below keeps whole ("won (w/o)" never truncates; the name does).
   const decidedParts = outcomeTextParts(msg, fixture.outcome, entrantNames, forfeitLedgerOfReason(fixture.abandon_reason), fixture);
   // Design audit 4.3: the tag in that result, with its expansion — both copies below render it as a named symbol.
-  const decidedTag = outcomeTagWords(msg, fixture.outcome, forfeitLedgerOfReason(fixture.abandon_reason), fixture);
+  const decidedTag = outcomeTagWords(
+    msg,
+    fixture.outcome,
+    forfeitLedgerOfReason(fixture.abandon_reason),
+    fixture,
+    entrantStatuses,
+    ORGANISER_TAG_FULL_KEY,
+  );
   const decided = decidedParts === null ? null : decidedParts.lead + decidedParts.tail;
   const courtLabel = courtDisplayName(fixture, courtNames) ?? fixture.venue_name;
   // R35: the inline editor's court options. `courtLabel` is the resolved,

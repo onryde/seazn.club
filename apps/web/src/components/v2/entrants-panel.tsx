@@ -2,7 +2,7 @@
 
 // Entrant & roster management (PROMPT-15 task 1): persons picker, CSV import,
 // position/role assignment from the module catalog, withdraw/seed.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { entrantKindCap } from "@seazn/engine/sport";
 import type { EffectiveEntrantModel, EntrantKind } from "@seazn/engine/sport";
@@ -10,6 +10,7 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { ENTRANT_NAME_MAX, rosterDerivedName } from "@/lib/entrant-roster-name";
 import { nameFieldCommit, nameFieldEnterCommits } from "@/lib/inline-name-edit";
+import { cleanPersonName, findPersonByName, PERSON_NAME_MAX } from "@/lib/person-name";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
@@ -34,6 +35,17 @@ import {
 // violation shape.
 import { requiresDob, requiresGender, type EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
+import { swissDoorRefusalText } from "@/lib/swiss-door-refusal";
+import {
+  swissFinishConfirm,
+  swissFinishedNotice,
+  swissFinishNotReadyText,
+  swissFinishPlanOf,
+  type SwissFinishAnswer,
+  type SwissFinishPlan,
+} from "@/lib/swiss-finish-plan";
+import { lateEntryNotice, lateEntryNoticeText, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
+import type { LateEntryResult } from "@/server/api-v1/schemas";
 
 /** RS007/V380 — the division columns this panel badges above the roster.
  *  Replaces the retired jsonb `eligibility` array (a `Record<string,
@@ -169,6 +181,28 @@ interface Props {
    *  hard-delete action, which the server only allows pre-`setup` exit
    *  (entrants.ts's `deleteEntrant`). Withdraw remains available always. */
   divisionStatus: string;
+  /** W3 T10 — set when the division has started and holds a running ROOT Swiss (`divisionTakesSwissLateEntry`): an
+   *  entrant added here joins it late, so the form says so, and the add's answer (`late_entry`, T9) is read back
+   *  as the late-entry notice. `openOnlineRounds` are the (stage, round) keys already opened for online play
+   *  (`roundKey`, `${stageId}:${round}`): a bye taken in one owes the pair an invite. Absent ⇒ an ordinary add. */
+  swissLateEntry?: { openOnlineRounds: readonly string[] } | null;
+}
+
+/** The late-entry answers on a create's response: the POST answers one row for an object body, an array for a batch. */
+function lateEntryResultsOf(created: unknown): { results: LateEntryResult[]; names: Record<string, string> } {
+  const rows = (Array.isArray(created) ? created : [created]) as {
+    id?: unknown;
+    display_name?: unknown;
+    late_entry?: LateEntryResult;
+  }[];
+  const results: LateEntryResult[] = [];
+  const names: Record<string, string> = {};
+  for (const row of rows) {
+    if (row === null || typeof row !== "object") continue;
+    if (typeof row.id === "string" && typeof row.display_name === "string") names[row.id] = row.display_name;
+    if (row.late_entry) results.push(row.late_entry);
+  }
+  return { results, names };
 }
 
 // Load the whole org persons directory once (cursor-paged) — org rosters are
@@ -201,6 +235,7 @@ export function EntrantsPanel({
   rosterLocked = false,
   viewerPlan,
   divisionStatus,
+  swissLateEntry,
 }: Props) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -211,6 +246,17 @@ export function EntrantsPanel({
   const [error, setError] = useState<string | null>(null);
   const [paywallFeature, setPaywallFeature] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // W3 T10 — the late-entry notice for the LAST add (replaced by the next one, cleared by a refusal).
+  const [lateNotice, setLateNotice] = useState<LateEntryNoticeLine[]>([]);
+  // W3 T12 Phase 2 — the recovery on a SWISS_NO_ROUND_LEFT refusal: the Swiss its details name, while the server says
+  // "Add a round" goes through there (`canAddRound`, ruling C11); and the round it added, said until the next add.
+  const [addRoundFor, setAddRoundFor] = useState<string | null>(null);
+  const [roundAdded, setRoundAdded] = useState<number | null>(null);
+  // W3 T13 — and "Finish the Swiss now", the other recovery it offers while the server says Finish goes through there
+  // (`canFinish`, THE Finish predicate, with its plan); the round it finished after, said until the next add.
+  const [finishFor, setFinishFor] = useState<{ stageId: string; plan: SwissFinishPlan } | null>(null);
+  // W3 T13: what the Finish answered, said (Fix round 1, reviews m5, m6: whether the stage completed, and the slots freed).
+  const [swissFinished, setSwissFinished] = useState<string | null>(null);
   // Club facet (Jul3/01 §8): filter entrants by parent club. Hidden when the
   // org has no clubs (or the clubs list is not readable on this plan).
   const [clubs, setClubs] = useState<{ id: string; name: string }[]>([]);
@@ -227,15 +273,34 @@ export function EntrantsPanel({
   // Bumped after every mutation to force a roster-map refetch.
   const [rosterBump, setRosterBump] = useState(0);
 
+  // New player's duplicate check is only as good as the list it checks: it stays off until Players has loaded. A
+  // failed load says so under New player, with a Retry (review m1), instead of leaving it silently off.
+  const [personsLoad, setPersonsLoad] = useState<"loading" | "ready" | "failed">("loading");
+  const fetchPersons = useCallback(() => {
+    loadAllPersons()
+      .then((all) => {
+        setPersons(all);
+        setPersonsLoad("ready");
+      })
+      .catch(() => {
+        setPersons([]);
+        setPersonsLoad("failed");
+      });
+  }, []);
+  const retryPersons = useCallback(() => {
+    setPersonsLoad("loading");
+    fetchPersons();
+  }, [fetchPersons]);
+
   useEffect(() => {
-    loadAllPersons().then(setPersons).catch(() => setPersons([]));
+    fetchPersons();
     apiV1<{ id: string; name: string }[]>("/api/v1/clubs")
       .then(setClubs)
       .catch(() => setClubs([]));
     apiV1<TeamOption[]>("/api/v1/teams")
       .then(setTeams)
       .catch(() => setTeams([]));
-  }, []);
+  }, [fetchPersons]);
 
   const enteredTeamIds = useMemo(
     () => new Set(entrants.map((e) => e.team_id).filter((id): id is string => id != null)),
@@ -273,8 +338,29 @@ export function EntrantsPanel({
 
   const fail = useCallback(
     (err: unknown) => {
+      // W3 T12 Phase 2: every refusal decides the recovery afresh, so a later, different one never keeps a stale button.
+      setAddRoundFor(
+        err instanceof ApiV1Error &&
+          err.code === "SWISS_NO_ROUND_LEFT" &&
+          err.extra.canAddRound === true &&
+          typeof err.extra.stageId === "string"
+          ? err.extra.stageId
+          : null,
+      );
+      const plan = err instanceof ApiV1Error && err.code === "SWISS_NO_ROUND_LEFT" ? swissFinishPlanOf(err.extra) : null;
+      setFinishFor(plan && err instanceof ApiV1Error && typeof err.extra.stageId === "string" ? { stageId: err.extra.stageId, plan } : null);
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         setPaywallFeature(String(err.extra.feature_key ?? ""));
+        return;
+      }
+      // W3 T10 — a late add refused (no round left, the Swiss is over): said by its code in the organiser's language.
+      // SWISS_NO_ROUND_LEFT names "Add a round" only when `canAddRound` says it goes through — the button under the
+      // error (T12 Phase 2) — and otherwise says no more rounds fit (T12 Fix round 1, review I1). Batch-4 review I1: the
+      // recovery doors below (Add a round, Finish the Swiss now) can also meet a frozen timetable or a removed match's
+      // own format — said through the stage rail's ONE mapping for those writes, never the server's English.
+      const door = err instanceof ApiV1Error ? swissDoorRefusalText(err.code, err.extra, msg, msgPlural) : null;
+      if (door !== null) {
+        setError(door);
         return;
       }
       // An online-play division refuses a player without a Lichess link that can play: the server's words are English
@@ -389,6 +475,33 @@ export function EntrantsPanel({
     return attempt(undefined);
   }
 
+  /** W3 T10 — an add (one entrant or a CSV batch): any earlier late-entry notice goes first, and the answer's own
+   *  `late_entry` results become the new one. Every add, late or not: an ordinary add simply answers none. */
+  async function addEntrants<T>(fn: (override?: { reason: string }) => Promise<T>): Promise<T | undefined> {
+    setLateNotice([]);
+    setRoundAdded(null);
+    setSwissFinished(null);
+    const res = await runGated(fn);
+    if (res === undefined) return res;
+    const { results, names } = lateEntryResultsOf(res);
+    if (results.length === 0) return res;
+    const openRounds = new Set(swissLateEntry?.openOnlineRounds ?? []);
+    const known = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
+    try {
+      setLateNotice(
+        lateEntryNotice(results, { ...known, ...names }, {
+          locale,
+          onlineRoundOpen: (stageId, round) => openRounds.has(`${stageId}:${round}`),
+        }),
+      );
+    } catch (err) {
+      // The notice's own refusals (an (a) without its changed entrants, a (b) without its bye holder): the add landed,
+      // but what it did cannot be said truthfully — say that, rather than a notice nobody checked.
+      fail(err);
+    }
+    return res;
+  }
+
   const eligibilityBadgeList = eligibilityBadges(eligibility, msg);
 
   return (
@@ -411,119 +524,213 @@ export function EntrantsPanel({
         </p>
       )}
       {canEdit && !rosterLocked && (
-        <AddEntrantForm
-          persons={persons}
-          teams={teams}
-          enteredTeamIds={enteredTeamIds}
-          entrantModel={entrantModel}
-          busy={busy}
-          onSubmit={(payload) =>
-            runGated((override) =>
-              apiV1<{ roster_keys_dropped?: number }>(
-                `/api/v1/divisions/${divisionId}/entrants`,
-                { method: "POST", json: withOverride(payload, override) },
-              ),
-            )
-          }
-          importControls={
-            <CsvImport
-              busy={busy}
-              onImport={async (rows) => {
-                // RS011 review fix 5: this bulk path used to call plain
-                // `run(...)`, not the `runGated(...)` wrapper its 3 sibling
-                // roster-write call sites in this file use — the server gate
-                // still fired, but a violation surfaced only as a generic red
-                // error banner with no path to override except falling back
-                // to one-at-a-time adds. `withOverride` is applied to EVERY
-                // entrant in the batch on a confirmed retry — `eligibility_
-                // override` is per-entrant (CreateEntrant's own shape,
-                // bulk-create can override some rows and not others), but a
-                // 422 from this array body only names the FIRST offending
-                // entrant (createEntrants throws inside its per-input loop),
-                // so there's no way to know from here which of the batch it
-                // was; applying the confirmed override to the whole retried
-                // batch is the safe interpretation of "the organiser just
-                // confirmed this batch is fine."
-                //
-                // RS011 round-2 review fix: person resolution (which CREATES
-                // rows via POST /persons for any name not already in the
-                // directory) must happen exactly ONCE, before `runGated`, not
-                // inside the retried closure. `runGated` re-invokes the same
-                // closure verbatim on an override-confirm retry; the original
-                // shape ran `ensurePerson` again on retry against `persons`
-                // (a state snapshot captured when this closure was created,
-                // stale by the time of a second call), silently minting a
-                // SECOND, orphaned person row per CSV name on every override
-                // confirm. Resolving persons up front makes the retried
-                // closure a pure resubmit of an already-built payload — no
-                // side effects on retry, matching the other 3 `runGated`
-                // call sites in this file.
-                const byName = new Map(persons.map((p) => [p.full_name.toLowerCase(), p]));
-                const ensurePerson = async (row: CsvRow): Promise<string> => {
-                  const existing = byName.get(row.name.toLowerCase());
-                  if (existing) return existing.id;
-                  const created = await apiV1<Person>("/api/v1/persons", {
-                    method: "POST",
-                    json: {
-                      full_name: row.name,
-                      dob: row.dob || null,
-                      gender: row.gender || null,
-                    },
-                  });
-                  byName.set(created.full_name.toLowerCase(), created);
-                  setPersons((prev) => [...prev, created]);
-                  return created.id;
-                };
+        // W3 T10 — `#add-entrant` is where the Swiss stage rail's "Add late player" lands (the form itself, reused).
+        <section id="add-entrant" className="min-w-0 scroll-mt-20 space-y-3">
+          {swissLateEntry && (
+            <p
+              data-testid="entrants-swiss-late-note"
+              className="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-800"
+            >
+              {msg("entrants.swissLate.note")}
+            </p>
+          )}
+          <AddEntrantForm
+            persons={persons}
+            personsReady={personsLoad === "ready"}
+            personsFailed={personsLoad === "failed"}
+            onRetryPersons={retryPersons}
+            onPersonCreated={(person) =>
+              setPersons((prev) => (prev.some((p) => p.id === person.id) ? prev : [...prev, person]))
+            }
+            teams={teams}
+            enteredTeamIds={enteredTeamIds}
+            entrantModel={entrantModel}
+            busy={busy}
+            onSubmit={(payload) =>
+              addEntrants((override) =>
+                apiV1<{ roster_keys_dropped?: number }>(
+                  `/api/v1/divisions/${divisionId}/entrants`,
+                  { method: "POST", json: withOverride(payload, override) },
+                ),
+              )
+            }
+            importControls={
+              <CsvImport
+                busy={busy}
+                onImport={async (rows) => {
+                  // RS011 review fix 5: this bulk path used to call plain
+                  // `run(...)`, not the `runGated(...)` wrapper its 3 sibling
+                  // roster-write call sites in this file use — the server gate
+                  // still fired, but a violation surfaced only as a generic red
+                  // error banner with no path to override except falling back
+                  // to one-at-a-time adds. `withOverride` is applied to EVERY
+                  // entrant in the batch on a confirmed retry — `eligibility_
+                  // override` is per-entrant (CreateEntrant's own shape,
+                  // bulk-create can override some rows and not others), but a
+                  // 422 from this array body only names the FIRST offending
+                  // entrant (createEntrants throws inside its per-input loop),
+                  // so there's no way to know from here which of the batch it
+                  // was; applying the confirmed override to the whole retried
+                  // batch is the safe interpretation of "the organiser just
+                  // confirmed this batch is fine."
+                  //
+                  // RS011 round-2 review fix: person resolution (which CREATES
+                  // rows via POST /persons for any name not already in the
+                  // directory) must happen exactly ONCE, before `runGated`, not
+                  // inside the retried closure. `runGated` re-invokes the same
+                  // closure verbatim on an override-confirm retry; the original
+                  // shape ran `ensurePerson` again on retry against `persons`
+                  // (a state snapshot captured when this closure was created,
+                  // stale by the time of a second call), silently minting a
+                  // SECOND, orphaned person row per CSV name on every override
+                  // confirm. Resolving persons up front makes the retried
+                  // closure a pure resubmit of an already-built payload — no
+                  // side effects on retry, matching the other 3 `runGated`
+                  // call sites in this file.
+                  const byName = new Map(persons.map((p) => [p.full_name.toLowerCase(), p]));
+                  const ensurePerson = async (row: CsvRow): Promise<string> => {
+                    const existing = byName.get(row.name.toLowerCase());
+                    if (existing) return existing.id;
+                    const created = await apiV1<Person>("/api/v1/persons", {
+                      method: "POST",
+                      json: {
+                        full_name: row.name,
+                        dob: row.dob || null,
+                        gender: row.gender || null,
+                      },
+                    });
+                    byName.set(created.full_name.toLowerCase(), created);
+                    setPersons((prev) => [...prev, created]);
+                    return created.id;
+                  };
 
-                const teamMode = rows.some((r) => r.team);
-                let entrantsPayload: Record<string, unknown>[];
-                if (teamMode) {
-                  const teams = new Map<string, CsvRow[]>();
-                  for (const row of rows) {
-                    const key = row.team || row.name;
-                    if (!teams.has(key)) teams.set(key, []);
-                    teams.get(key)!.push(row);
-                  }
-                  entrantsPayload = [];
-                  for (const [team, teamRows] of teams) {
-                    const members = [];
-                    for (const row of teamRows) {
-                      members.push({
-                        person_id: await ensurePerson(row),
-                        squad_number: row.squad_number ?? null,
-                        is_captain: false,
-                        roles: [],
+                  const teamMode = rows.some((r) => r.team);
+                  let entrantsPayload: Record<string, unknown>[];
+                  if (teamMode) {
+                    const teams = new Map<string, CsvRow[]>();
+                    for (const row of rows) {
+                      const key = row.team || row.name;
+                      if (!teams.has(key)) teams.set(key, []);
+                      teams.get(key)!.push(row);
+                    }
+                    entrantsPayload = [];
+                    for (const [team, teamRows] of teams) {
+                      const members = [];
+                      for (const row of teamRows) {
+                        members.push({
+                          person_id: await ensurePerson(row),
+                          squad_number: row.squad_number ?? null,
+                          is_captain: false,
+                          roles: [],
+                        });
+                      }
+                      entrantsPayload.push({ kind: "team", display_name: team, members });
+                    }
+                  } else {
+                    entrantsPayload = [];
+                    for (const row of rows) {
+                      entrantsPayload.push({
+                        kind: "individual",
+                        display_name: row.name,
+                        seed: row.seed ?? null,
+                        members: [{ person_id: await ensurePerson(row), is_captain: false, roles: [] }],
                       });
                     }
-                    entrantsPayload.push({ kind: "team", display_name: team, members });
                   }
-                } else {
-                  entrantsPayload = [];
-                  for (const row of rows) {
-                    entrantsPayload.push({
-                      kind: "individual",
-                      display_name: row.name,
-                      seed: row.seed ?? null,
-                      members: [{ person_id: await ensurePerson(row), is_captain: false, roles: [] }],
-                    });
-                  }
-                }
 
-                await runGated((override) =>
-                  apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
-                    method: "POST",
-                    json: entrantsPayload.map((e) => withOverride(e, override)),
-                  }),
-                );
-              }}
-            />
-          }
-        />
+                  await addEntrants((override) =>
+                    apiV1(`/api/v1/divisions/${divisionId}/entrants`, {
+                      method: "POST",
+                      json: entrantsPayload.map((e) => withOverride(e, override)),
+                    }),
+                  );
+                }}
+              />
+            }
+          />
+          {/* W3 T10 — what the last add did to the running Swiss. A live region that is always mounted, so the lines
+              are announced when they arrive; emerald for what is done, amber for what the organiser still owes. */}
+          <div role="status" data-testid="entrants-late-entry-notice" className="space-y-1.5 empty:hidden">
+            {lateNotice.map((line, i) => (
+              <p
+                key={i}
+                data-testid="entrants-late-entry-line"
+                data-tone={line.tone}
+                className={`rounded-md px-3 py-2 text-sm ${
+                  line.tone === "todo" ? "bg-amber-50 text-amber-900" : "bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {lateEntryNoticeText(line, { t: msg, plural: msgPlural })}
+              </p>
+            ))}
+          </div>
+        </section>
       )}
 
       {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+        <p data-testid="entrants-error" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">
+          {error}
+        </p>
+      )}
+      {/* W3 T12 Phase 2 — "Add a round", the recovery SWISS_NO_ROUND_LEFT's own sentence names, offered only while the
+          server says it goes through. After it lands the organiser adds the player again (the refused add wrote
+          nothing), and the line says so. */}
+      {error && addRoundFor && (
+        <button
+          type="button"
+          data-testid="entrants-add-round"
+          disabled={busy}
+          onClick={() =>
+            void run(() =>
+              apiV1<{ rounds: number }>(`/api/v1/stages/${addRoundFor}/swiss/add-round`, { method: "POST", json: {} }),
+            ).then((out) => {
+              if (!out) return;
+              setAddRoundFor(null);
+              setRoundAdded(out.rounds);
+            })
+          }
+          className="btn btn-ghost min-h-11 px-3 py-1.5 text-sm"
+        >
+          {msg("stage.more.addRound")}
+        </button>
+      )}
+      {error && finishFor && (
+        <button
+          type="button"
+          data-testid="entrants-finish-swiss"
+          disabled={busy}
+          onClick={async () => {
+            const offer = finishFor;
+            if (!(await confirmDialog(swissFinishConfirm(offer.plan, msg)))) return;
+            const out = await run(() =>
+              apiV1<SwissFinishAnswer>(`/api/v1/stages/${offer.stageId}/swiss/finish`, { method: "POST", json: {} }).catch(
+                (err: unknown) => {
+                  // Fix round 1 (review I2): the R3 backstop's STAGE_NOT_READY is English on the wire — said here instead.
+                  const text = err instanceof ApiV1Error ? swissFinishNotReadyText(err.code, msg) : null;
+                  throw text === null ? err : new Error(text);
+                },
+              ),
+            );
+            if (!out) return;
+            setFinishFor(null);
+            setAddRoundFor(null);
+            setSwissFinished(swissFinishedNotice(out, msg, msgPlural));
+          }}
+          className="btn btn-ghost min-h-11 px-3 py-1.5 text-sm"
+        >
+          {msg("stage.more.finishSwiss")}
+        </button>
+      )}
+      {swissFinished !== null && (
+        <p role="status" data-testid="entrants-swiss-finished" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {swissFinished}
+        </p>
+      )}
+      {roundAdded !== null && (
+        <p role="status" data-testid="entrants-round-added" className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {msg("entrants.lateEntry.roundAdded", { round: roundAdded })}
+        </p>
       )}
 
       {clubs.length > 0 && (
@@ -610,6 +817,25 @@ export function EntrantsPanel({
                   if (!ok) return;
                   await run(() =>
                     apiV1(`/api/v1/entrants/${e.id}/withdraw`, { method: "POST", json: {} }),
+                  );
+                }}
+                onDisqualify={async () => {
+                  // Ruling 258 (RB3-17 / X-SW-23): a disqualification cascades like a withdrawal, but it is a
+                  // DIFFERENT door - `PATCH /entrants/{id}` with `status: "disqualified"` (`patchEntrant`), not
+                  // `POST .../withdraw`. Ruling 259: no reason or notes field. Before Start the server does the bare
+                  // status flip, so there is no started-ness branch here.
+                  const ok = await confirmDialog({
+                    title: msg("confirm.disqualifyEntrant.title", { name: e.display_name }),
+                    // Ruling 260: a disqualification runs the SAME cascade as a withdrawal, so its confirm is as truthful as
+                    // Withdraw's - one lead sentence, then Withdraw's own body (one authority per fact: the per-format policy
+                    // is spelled out once, in `confirm.withdrawEntrant.body`).
+                    body: `${msg("confirm.disqualifyEntrant.lead")} ${msg("confirm.withdrawEntrant.body")}`,
+                    confirmLabel: msg("confirm.disqualifyEntrant.label"),
+                    tone: "danger",
+                  });
+                  if (!ok) return;
+                  await run(() =>
+                    apiV1(`/api/v1/entrants/${e.id}`, { method: "PATCH", json: { status: "disqualified" } }),
                   );
                 }}
                 onBadge={(file) => void run(() => badgeRequest(e.id, file))}
@@ -700,6 +926,10 @@ const STORAGE_BASE = `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/storage/v1/o
 
 function AddEntrantForm({
   persons,
+  personsReady,
+  personsFailed,
+  onRetryPersons,
+  onPersonCreated,
   teams,
   enteredTeamIds,
   entrantModel,
@@ -708,6 +938,13 @@ function AddEntrantForm({
   importControls,
 }: {
   persons: Person[];
+  /** Players has finished loading, so New player's duplicate check sees the whole directory. */
+  personsReady?: boolean;
+  /** Players failed to load: New player says so and offers Retry. */
+  personsFailed?: boolean;
+  onRetryPersons?: () => void;
+  /** A New player was created in Players (owner ruling 2026-11-01): the panel's list learns them. */
+  onPersonCreated?: (person: Person) => void;
   teams: TeamOption[];
   enteredTeamIds: Set<string>;
   entrantModel: EffectiveEntrantModel;
@@ -728,11 +965,12 @@ function AddEntrantForm({
   // default follows `canExisting` in the same render, never one effect late.
   const [picked, setPicked] = useState<"existing" | "new" | null>(null);
   const mode = picked ?? (canExisting ? "existing" : "new");
+  const msg = useMsg();
 
   return (
     <form className="card space-y-3 p-4">
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-slate-700">Add entrant</h3>
+        <h3 className="text-sm font-semibold text-slate-700">{msg("entrants.add.title")}</h3>
         {canExisting && (
           <div className="inline-flex rounded-lg border border-slate-200 p-0.5 text-xs">
             {(["existing", "new"] as const).map((m) => (
@@ -747,7 +985,7 @@ function AddEntrantForm({
                   mode === m ? "bg-purple-600 text-white" : "text-slate-500 hover:text-slate-800"
                 }`}
               >
-                {m === "existing" ? "Existing team" : "New entrant"}
+                {msg(m === "existing" ? "entrants.add.mode.existing" : "entrants.add.mode.new")}
               </button>
             ))}
           </div>
@@ -764,6 +1002,10 @@ function AddEntrantForm({
       ) : (
         <NewEntrantFields
           persons={persons}
+          personsReady={personsReady}
+          personsFailed={personsFailed}
+          onRetryPersons={onRetryPersons}
+          onPersonCreated={onPersonCreated}
           entrantModel={entrantModel}
           busy={busy}
           onSubmit={onSubmit}
@@ -831,11 +1073,7 @@ export function ExistingTeamFields({
     setSelectedId(null);
     setFilter("");
     if (res.roster_keys_dropped)
-      setNote(
-        `Enrolled. ${res.roster_keys_dropped} position/role setting${
-          res.roster_keys_dropped > 1 ? "s" : ""
-        } didn't carry over to this sport.`,
-      );
+      setNote(msgPlural("entrants.add.enrolledDropped", res.roster_keys_dropped));
   }
 
   return (
@@ -844,12 +1082,12 @@ export function ExistingTeamFields({
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
         className="input"
-        placeholder="Search teams…"
-        aria-label="Search teams"
+        placeholder={msg("entrants.add.searchTeams")}
+        aria-label={msg("entrants.add.searchTeams.label")}
       />
       <div className="flex flex-wrap gap-1.5">
         {teams.length === 0 && (
-          <span className="text-xs text-slate-400">No teams yet — import some first.</span>
+          <span className="text-xs text-slate-400">{msg("entrants.add.noTeams")}</span>
         )}
         {filtered.map((t) => {
           const entered = enteredTeamIds.has(t.id);
@@ -882,7 +1120,7 @@ export function ExistingTeamFields({
               {t.club_short_name && (
                 <span className="text-[10px] text-slate-400">{t.club_short_name}</span>
               )}
-              {entered && <span className="text-[10px] text-slate-400">· Already entered</span>}
+              {entered && <span className="text-[10px] text-slate-400">· {msg("entrants.add.alreadyEntered")}</span>}
             </button>
           );
         })}
@@ -895,8 +1133,8 @@ export function ExistingTeamFields({
           disabled={!canCopy}
           onChange={(e) => setCopyRoster(e.target.checked)}
         />
-        Copy roster from this team&apos;s most recent entrant
-        {!canCopy && selected && <span className="text-slate-400">(no earlier roster)</span>}
+        {msg("entrants.add.copyRoster")}
+        {!canCopy && selected && <span className="text-slate-400">{msg("entrants.add.noEarlierRoster")}</span>}
       </label>
 
       {/* Roster preview: enrollment seeds from the squad exactly once, so an
@@ -940,7 +1178,7 @@ export function ExistingTeamFields({
         disabled={busy || !selected}
         className="btn btn-primary"
       >
-        {busy ? "Enrolling…" : "Enroll team"}
+        {busy ? msg("entrants.add.enrolling") : msg("entrants.add.enroll")}
       </button>
     </div>
   );
@@ -952,23 +1190,47 @@ export function ExistingTeamFields({
  *  kinds, and individual/pair entrants derive their display name from the
  *  picked people instead of a free-text box. Exported for the markup test. */
 export function NewEntrantFields({
-  persons,
+  persons: directory,
+  personsReady = true,
+  personsFailed = false,
+  onRetryPersons,
+  onPersonCreated,
   entrantModel,
   busy,
   onSubmit,
 }: {
   persons: Person[];
+  /** False while Players is still loading: New player waits, or its duplicate check would miss people. */
+  personsReady?: boolean;
+  /** Players failed to load: say so, offer Retry, and keep New player off. */
+  personsFailed?: boolean;
+  onRetryPersons?: () => void;
+  onPersonCreated?: (person: Person) => void;
   entrantModel: EffectiveEntrantModel;
   busy: boolean;
   onSubmit: (payload: Record<string, unknown>) => Promise<unknown>;
 }) {
   const msg = useMsg();
+  const msgPlural = useMsgPlural();
   const [kind, setKind] = useState<string>(entrantModel.defaultKind);
   const [name, setName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
   const [seed, setSeed] = useState("");
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [filter, setFilter] = useState("");
+  // New player (owner ruling 2026-11-01): people created from this form. Kept here as well as handed up, so the pick
+  // and the derived name see them in the same render the create lands in, whatever the parent does with the callback.
+  const [created, setCreated] = useState<Person[]>([]);
+  const persons = useMemo(
+    () => [...directory, ...created.filter((c) => !directory.some((p) => p.id === c.id))],
+    [directory, created],
+  );
+  const [newName, setNewName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newNote, setNewNote] = useState<{ tone: "done" | "error"; text: string } | null>(null);
+  // Single flight: a fast second tap reaches the SAME handler before `creating` re-renders it disabled.
+  const createInFlight = useRef(false);
+  const newPlayerId = useId();
 
   const isIndividual = kind === "individual";
   const isTeam = kind === "team";
@@ -981,6 +1243,14 @@ export function NewEntrantFields({
     if (!q) return persons.slice(0, 8);
     return persons.filter((p) => p.full_name.toLowerCase().includes(q)).slice(0, 8);
   }, [persons, filter]);
+  // A picked person always has a chip, even past the first eight (a New player lands at the end of Players).
+  const shown = useMemo(() => {
+    const extra = memberIds
+      .map((id) => persons.find((p) => p.id === id))
+      .filter((p): p is Person => p !== undefined && !filtered.some((f) => f.id === p.id));
+    return [...filtered, ...extra];
+  }, [filtered, memberIds, persons]);
+  const seatsFull = atCap && !isIndividual;
 
   // Derived name from the picked people: individual → that person, pair →
   // "A & B". Teams always name themselves manually.
@@ -1018,6 +1288,38 @@ export function NewEntrantFields({
     });
   }
 
+  async function createNewPlayer() {
+    if (createInFlight.current || seatsFull || !personsReady) return;
+    const fullName = cleanPersonName(newName);
+    if (!fullName) {
+      setNewNote({ tone: "error", text: msg("entrants.add.newPlayer.empty") });
+      return;
+    }
+    const existing = findPersonByName(persons, fullName);
+    if (existing) {
+      if (!memberIds.includes(existing.id)) togglePick(existing.id);
+      setNewName("");
+      setNewNote({ tone: "done", text: msg("entrants.add.newPlayer.existing") });
+      return;
+    }
+    createInFlight.current = true;
+    setCreating(true);
+    setNewNote(null);
+    try {
+      const person = await apiV1<Person>("/api/v1/persons", { method: "POST", json: { full_name: fullName } });
+      setCreated((prev) => [...prev, person]);
+      onPersonCreated?.(person);
+      togglePick(person.id);
+      setNewName("");
+      setNewNote({ tone: "done", text: msg("entrants.add.newPlayer.created", { name: person.full_name }) });
+    } catch {
+      setNewNote({ tone: "error", text: msg("entrants.add.newPlayer.failed") });
+    } finally {
+      createInFlight.current = false;
+      setCreating(false);
+    }
+  }
+
   async function submit() {
     await onSubmit({
       kind,
@@ -1029,6 +1331,7 @@ export function NewEntrantFields({
     setNameTouched(false);
     setSeed("");
     setMemberIds([]);
+    setNewNote(null);
   }
 
   return (
@@ -1072,7 +1375,7 @@ export function NewEntrantFields({
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="block min-w-0">
-          <span className="label">Name</span>
+          <span className="label">{msg("entrants.add.name")}</span>
           <input
             value={nameValue}
             onChange={(e) => {
@@ -1080,11 +1383,17 @@ export function NewEntrantFields({
               setNameTouched(true);
             }}
             className="input w-full"
-            placeholder={isTeam ? "Riverside CC" : isIndividual ? "Alex Doe" : "Alice & Bob"}
+            placeholder={msg(
+              isTeam
+                ? "entrants.add.namePlaceholder.team"
+                : isIndividual
+                  ? "entrants.add.namePlaceholder.individual"
+                  : "entrants.add.namePlaceholder.pair",
+            )}
           />
         </label>
         <label className="block min-w-0">
-          <span className="label">Seed</span>
+          <span className="label">{msg("entrants.add.seed")}</span>
           <input
             type="number"
             min={1}
@@ -1101,16 +1410,16 @@ export function NewEntrantFields({
             ? msg("entrants.add.player")
             : kind === "pair"
               ? msg("entrants.add.pairPlayers")
-              : "Members (persons directory)"}
+              : msg("entrants.add.members")}
         </span>
         <input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           className="input w-full"
-          placeholder="Search players…"
+          placeholder={msg("entrants.add.searchPlayers")}
         />
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {filtered.map((p) => {
+          {shown.map((p) => {
             const selected = memberIds.includes(p.id);
             // Pair/team seats are finite: once full, unpicked people are
             // disabled. Individual always allows a replacing pick.
@@ -1134,15 +1443,72 @@ export function NewEntrantFields({
               </button>
             );
           })}
-          {persons.length === 0 && (
-            <span className="text-xs text-slate-400">
-              No players yet — add them under Players, or import a CSV.
-            </span>
+          {persons.length === 0 && !personsFailed && (
+            <span className="text-xs text-slate-400">{msg("entrants.add.noPlayers")}</span>
           )}
         </div>
         {memberIds.length > 0 && (
-          <p className="mt-1 text-xs text-slate-400">{memberIds.length} selected</p>
+          <p className="mt-1 text-xs text-slate-400">{msgPlural("entrants.add.selected", memberIds.length)}</p>
         )}
+        <div className="mt-3 min-w-0 border-t border-slate-100 pt-3" data-testid="new-player">
+          <label htmlFor={newPlayerId} className="label">
+            {msg("entrants.add.newPlayer.label")}
+          </label>
+          {/* Wraps on a phone: the field takes the row and the button sits under it, so the hint is never cut. */}
+          <div className="flex min-w-0 flex-wrap gap-2">
+            <input
+              id={newPlayerId}
+              data-testid="new-player-name"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return undefined;
+                e.preventDefault();
+                return createNewPlayer();
+              }}
+              maxLength={PERSON_NAME_MAX}
+              disabled={seatsFull}
+              className="input min-w-0 flex-[1_1_14rem]"
+              placeholder={msg("entrants.add.newPlayer.placeholder")}
+            />
+            <button
+              type="button"
+              data-testid="new-player-add"
+              onClick={createNewPlayer}
+              disabled={creating || seatsFull || !personsReady || !cleanPersonName(newName)}
+              className="btn btn-ghost shrink-0"
+            >
+              {creating ? msg("entrants.add.newPlayer.creating") : msg("entrants.add.newPlayer.create")}
+            </button>
+          </div>
+          {personsFailed && (
+            <div
+              role="alert"
+              data-testid="new-player-load-failed"
+              className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-red-600"
+            >
+              <span className="min-w-0">{msg("entrants.add.newPlayer.loadFailed")}</span>
+              {onRetryPersons && (
+                <button
+                  type="button"
+                  data-testid="new-player-retry"
+                  onClick={onRetryPersons}
+                  className="btn btn-ghost min-h-11 px-3 py-1 text-xs"
+                >
+                  {msg("entrants.add.newPlayer.retry")}
+                </button>
+              )}
+            </div>
+          )}
+          <p
+            role="status"
+            data-testid="new-player-note"
+            data-tone={newNote?.tone}
+            className={`mt-1 text-xs empty:hidden ${newNote?.tone === "error" ? "text-red-600" : "text-emerald-600"}`}
+          >
+            {newNote?.text}
+          </p>
+        </div>
       </div>
 
       <button
@@ -1151,7 +1517,7 @@ export function NewEntrantFields({
         disabled={busy || !submitName.trim()}
         className="btn btn-primary w-full sm:w-auto"
       >
-        {busy ? "Saving…" : "Add entrant"}
+        {busy ? msg("entrants.add.saving") : msg("entrants.add.submit")}
       </button>
     </div>
   );
@@ -1213,6 +1579,7 @@ function CsvImport({
   busy: boolean;
   onImport: (rows: CsvRow[]) => void;
 }) {
+  const msg = useMsg();
   const fileRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -1222,7 +1589,7 @@ function CsvImport({
     if (!file) return;
     const rows = parseCsv(await file.text());
     if (rows.length === 0) {
-      setError("No entrants found in that file — check it matches the sample format.");
+      setError(msg("entrants.import.noRows"));
       return;
     }
     setError(null);
@@ -1244,14 +1611,14 @@ function CsvImport({
         onClick={() => fileRef.current?.click()}
         className="btn btn-ghost"
       >
-        {busy ? "Importing…" : "Import CSV"}
+        {busy ? msg("entrants.import.importing") : msg("entrants.import.button")}
       </button>
       <a
         href="/entrants-sample.csv"
         download
         className="text-xs text-purple-600 underline hover:text-purple-800"
       >
-        Sample CSV
+        {msg("entrants.import.sample")}
       </a>
       {error && <span className="text-xs text-red-600">{error}</span>}
     </div>
@@ -1434,6 +1801,7 @@ export function EntrantTableRow({
   onRename,
   onPatch,
   onWithdraw,
+  onDisqualify,
   onBadge,
   onSyncSquad,
   onDelete,
@@ -1459,6 +1827,8 @@ export function EntrantTableRow({
   onPatch: (patch: Record<string, unknown>) => void;
   /** Withdraw with fixture surgery (spec 05 §5) — confirm handled upstream. */
   onWithdraw: () => void;
+  /** Disqualify (ruling 258) - confirm handled upstream; sends `PATCH /entrants/{id}` `{ status: "disqualified" }`. */
+  onDisqualify: () => void;
   onBadge: (file: File | null) => void;
   /** Replace the roster with the team's current squad (team entrants only —
    *  confirm handled upstream; returns the fresh members on success). */
@@ -1575,18 +1945,36 @@ export function EntrantTableRow({
                   {msg("entrants.row.reinstate")}
                 </button>
               ) : (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={onWithdraw}
-                  // `withdrawn-entrant-organiser.spec.ts` used to find this by
-                  // the English word, and said so in a comment. On the testid
-                  // now — see the Delete sibling below.
-                  data-testid="entrant-row-withdraw"
-                  className="btn btn-danger px-2 py-1 text-xs"
-                >
-                  {msg("entrants.row.withdraw")}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={onWithdraw}
+                    // `withdrawn-entrant-organiser.spec.ts` used to find this by
+                    // the English word, and said so in a comment. On the testid
+                    // now — see the Delete sibling below.
+                    data-testid="entrant-row-withdraw"
+                    className="btn btn-danger px-2 py-1 text-xs"
+                  >
+                    {msg("entrants.row.withdraw")}
+                  </button>
+                  {/* Ruling 261: offered only once the division has started - the SAME flag that hides Delete (`deletable`:
+                      the division is still in setup). Before the start a disqualification is a bare status flip, which
+                      Delete and Withdraw already cover, and a third button pushed Delete under the scroll fade at 768. */}
+                  {!deletable && (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={onDisqualify}
+                      // Ruling 258: the cascade existed server-side (T15) with no control that sent it; the match
+                      // forfeit dialog's "disqualified" reason decides ONE match only.
+                      data-testid="entrant-row-disqualify"
+                      className="btn btn-danger px-2 py-1 text-xs"
+                    >
+                      {msg("entrants.row.disqualify")}
+                    </button>
+                  )}
+                </>
               )}
               {deletable && (
                 <button

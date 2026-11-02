@@ -4,6 +4,7 @@
 // PRINTS — names, the board's match ref, the org clock — before it gets here;
 // this module only decides membership, order and pages.
 import type { SlotLabel, SlotLabelLookup } from "@/lib/slot-label";
+import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
 
 /** The statuses a sheet prints. An allow-list: every other status the V214
  *  check permits (decided, finalized, forfeited — which is how a bye settles
@@ -67,12 +68,14 @@ export interface SheetCandidate {
   /** The STORED slot labels — read for the bye check only. */
   home_slot_label: SlotLabel | null;
   away_slot_label: SlotLabel | null;
+  /** The generator's key — read for the Swiss bye-shell check only (`isSwissByeShellExtKey`). */
+  ext_key: string | null;
 }
 
 /** What `isPrintable` and `sheetDays` read. */
 export type SheetDayRow = Pick<
   SheetCandidate,
-  "status" | "scheduled_at" | "tz" | "home" | "away" | "home_slot_label" | "away_slot_label"
+  "status" | "scheduled_at" | "tz" | "home" | "away" | "home_slot_label" | "away_slot_label" | "ext_key"
 >;
 
 export interface SheetPage {
@@ -99,9 +102,11 @@ function isBye(f: SheetDayRow): boolean {
 }
 
 /** Could this fixture go on a sheet at all: a printable status, a time, and
- *  not a bye. The loader and every function below share this one test. */
+ *  not a bye — a labelled empty seat, or a Swiss bye shell, which carries no
+ *  label until Pair seats it (W3 T3, X-SW-29: a bye shell is never printed).
+ *  The loader and every function below share this one test. */
 export function isPrintable(f: SheetDayRow): f is SheetDayRow & { scheduled_at: string } {
-  return PRINTABLE_STATUSES.has(f.status) && f.scheduled_at !== null && !isBye(f);
+  return PRINTABLE_STATUSES.has(f.status) && f.scheduled_at !== null && !isBye(f) && !isSwissByeShellExtKey(f.ext_key);
 }
 const printable = isPrintable;
 

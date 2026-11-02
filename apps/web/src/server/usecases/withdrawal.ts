@@ -47,9 +47,9 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { BOARD_SETTLED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
-import { DEPARTED_STATUSES, getEntrant, listEntrants, patchEntrant } from "./entrants";
+import { DEPARTED_STATUSES, getEntrant, listEntrants, writeEntrantPatch } from "./entrants";
 import { getDivision } from "./divisions";
-import { BRACKET_WALKOVER_KINDS, listStages, writeDepartedSeat } from "./stages";
+import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, writeDepartedSeat } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
 import { invalidatePublicCache, scoreEvent } from "./scoring";
 
@@ -144,7 +144,9 @@ function activeAbandons(events: readonly EventOut[]): EventOut[] {
 
 export interface WithdrawCascadeOut {
   entrant_id: string;
-  status: "withdrawn";
+  /** The status the cascade wrote: `withdrawn`, or `disqualified` when a disqualification routed here (W3 T15, RB3-17:
+   *  "disqualification = withdrawal from that moment"). The settling is the same for both. */
+  status: "withdrawn" | "disqualified";
   /** Which policy the engine picked per spec 05 §5. */
   policy: "none" | "walkover" | "expunge";
   walkovers: number;
@@ -283,18 +285,25 @@ async function cancelSettledBoardInvites(auth: AuthCtx, fixtureIds: readonly str
   }
 }
 
+/** W3 T15 (RB3-17, X-SW-23): `as: "disqualified"` is a disqualification — "withdrawal from that moment; annulment
+ *  separate" (rulebook §12) — so every board is settled exactly as a withdrawal settles it (the same `withdrew` walkover;
+ *  ruling 115 still decides credit) and only the final status differs. `patchEntrant` routes a `status: "disqualified"`
+ *  patch of an entrant still in the field here; this function writes its status through `writeEntrantPatch`, which never
+ *  routes back (controller ruling C6). Asked for the status the entrant already holds, it refuses 409: nothing is owed. */
 export async function withdrawEntrantCascade(
   auth: AuthCtx,
   entrantId: string,
+  opts: { as?: "withdrawn" | "disqualified" } = {},
 ): Promise<WithdrawCascadeOut> {
+  const as = opts.as ?? "withdrawn";
   const entrant = await getEntrant(auth, entrantId);
-  if (entrant.status === "withdrawn") {
-    throw new HttpError(409, "entrant is already withdrawn");
+  if (entrant.status === as) {
+    throw new HttpError(409, `entrant is already ${as}`);
   }
   const division = await getDivision(auth, entrant.division_id);
   const out: WithdrawCascadeOut = {
     entrant_id: entrantId,
-    status: "withdrawn",
+    status: as,
     policy: "none",
     walkovers: 0,
     voided: 0,
@@ -305,7 +314,8 @@ export async function withdrawEntrantCascade(
 
   // Before the tournament starts there is nothing to settle: fixtures (if
   // generated) are regenerated from the field anyway — plain status flip.
-  if (division.status === "active" || division.status === "completed") {
+  // W3 T15: "started" is T9's one predicate (`divisionHasStarted`, controller ruling C17), read here rather than restated.
+  if (await withTenant(auth.orgId, (tx) => divisionHasStarted(tx, division.id))) {
     const [stages, fixtures] = await Promise.all([
       listStages(auth, division.id),
       listDivisionFixtures(auth, division.id),
@@ -475,6 +485,8 @@ export async function withdrawEntrantCascade(
     }
   }
 
-  await patchEntrant(auth, entrantId, { status: "withdrawn" });
+  // The internal writer, never `patchEntrant`: a `disqualified` patch routes to this cascade, so writing through it would
+  // route straight back (C6).
+  await writeEntrantPatch(auth, entrantId, { status: as });
   return out;
 }

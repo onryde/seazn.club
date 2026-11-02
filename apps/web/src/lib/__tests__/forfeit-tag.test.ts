@@ -33,6 +33,7 @@ import {
   unseatedForfeitLoserName,
   unseatedWithdrew,
 } from "../forfeit-tag";
+import { outcomeTagWords } from "../outcome-text";
 import { t } from "../i18n-runtime";
 import type { Dict } from "../i18n-constants";
 import pubEn from "@/dictionaries/en/public.json";
@@ -356,7 +357,8 @@ describe("every tag and sentence key, in all four locales", () => {
 
   it("public.json: each key exists, is translated (not the English), and names the English placeholders", () => {
     const keys = [...FORFEIT_TAG_KEYS, ...FORFEIT_SENTENCE_KEYS];
-    expect(keys.length).toBe(7 + 8);
+    // 7 tags; 9 sentences — W3 T15 I4 added the plain walkover a disqualified entrant's cascade walkover reads as.
+    expect(keys.length).toBe(7 + 9);
     let read = 0;
     let translated = 0;
     let listed = 0;
@@ -406,7 +408,7 @@ describe("every tag and sentence key, in all four locales", () => {
         checked++;
       }
     }
-    expect(checked).toBe(4 * 15);
+    expect(checked).toBe(4 * 16);
   });
 });
 
@@ -538,6 +540,93 @@ describe("creditsNobody — the one predicate every score-line host reads (audit
       expect(creditsNobody(outcome), name).toBe(want);
       // The same reading the hub and the schedule make inline — one rule, never a fourth copy that can drift.
       expect(creditsNobody(outcome), `${name}: agrees with forfeitTag`).toBe(forfeitTag(outcome, NO_LEDGER)?.kind === "double_walkover");
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+  });
+});
+
+// W3 T15 review I4 (controller ruling 2026-11-02, under ruling 116's scope note at stages.ts `awardSeededByes`): since T15
+// a disqualification runs the withdrawal cascade (RB3-17), whose award over her open board carries reason `withdrew`.
+// A DISQUALIFIED entrant is never shown publicly as having withdrawn. Ruling 116 words only a withdrawal and prescribes
+// no copy for a disqualification, so the ruling's fallback applies: the plain walkover wording — the walkover's tag, a
+// sentence naming her with no reason. The reader decides it from the LOSER's status, which every public surface holds
+// (`public_entrants_v` publishes departed entrants with their status, V412). Both reasons, every locale.
+describe("a disqualified entrant's cascade walkover reads as a plain walkover, never as a withdrawal (W3 T15 I4)", () => {
+  const PUB: Record<string, Dict> = { en: pubEn, es: pubEs, fr: pubFr, nl: pubNl } as never;
+  const UI: Record<string, Dict> = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as never;
+  // The cascade's award, as the engine folds it from `core.forfeit{reason: "withdrew"}` against her side.
+  const generic = mod("generic");
+  const folded = fold(generic, firstCfg(generic), (l) => [ev(1, "core.forfeit", { by: l.away.entrantId, reason: "withdrew" })]);
+  const award = folded.outcome as { kind: string; winner: string; loser: string; reason: string };
+  const her = award.loser;
+  const NAMES: Record<string, string> = { [award.winner]: "Harbour United", [her]: "Bay Rovers" };
+  const nameOf = (id: string) => NAMES[id] ?? "?";
+  /** The locale's own word for a withdrawal: its "withdrew" expansion less the walkover's (ui.json, e.g. "withdrew"). */
+  const withdrawalWord = (ui: Dict) =>
+    (ui["forfeit.tagFull.withdrew"] as string).replace(ui["forfeit.tagFull.walkover"] as string, "").replace(/[—–-]/gu, "").trim();
+
+  it("premise: the cascade's award names her the loser, reason withdrew", () => {
+    expect([award.kind, award.reason, typeof her]).toEqual(["award", "withdrew", "string"]);
+    expect(her).not.toBe(award.winner);
+  });
+
+  it("both reasons, every locale: withdrawn says she withdrew; disqualified says a plain walkover naming her, and no withdrawal", () => {
+    let checked = 0;
+    for (const [locale, d] of Object.entries(PUB)) {
+      const ui = UI[locale]!;
+      const word = withdrawalWord(ui);
+      expect(word.length, `${locale}: premise, the locale words a withdrawal`).toBeGreaterThan(0);
+      const words = (status: string | undefined) => {
+        const tag = forfeitTag(award, NO_LEDGER, undefined, status === undefined ? undefined : { [her]: status });
+        if (tag === null) throw new Error(`${locale}: the cascade's award read no tag`);
+        const w = forfeitWords(tag, (k, v) => t(d, k, v), nameOf);
+        return { kind: tag.kind, tag: w.tag, sentence: w.sentence, full: outcomeTagWords((k, v) => t(ui, k, v), award, NO_LEDGER, undefined, status === undefined ? undefined : { [her]: status })!.full };
+      };
+      const withdrawn = words("withdrawn");
+      const bare = words(undefined);
+      const dq = words("disqualified");
+      // Withdrawn — and a surface holding no statuses — read today's withdrawal walkover, unchanged.
+      expect(withdrawn, `${locale}: withdrawn`).toEqual({
+        kind: "withdrew",
+        tag: t(d, "forfeit.tag.walkover"),
+        sentence: t(d, "forfeit.sentence.withdrew", { loser: "Bay Rovers" }),
+        full: t(ui, "forfeit.tagFull.withdrew"),
+      });
+      expect(bare, `${locale}: no statuses held`).toEqual(withdrawn);
+      // Disqualified — the plain walkover: the walkover's tag and expansion, a sentence that names her and gives no reason.
+      expect(dq, `${locale}: disqualified`).toEqual({
+        kind: "walkover_plain",
+        tag: t(d, "forfeit.tag.walkover"),
+        sentence: t(d, "forfeit.sentence.walkoverPlain", { loser: "Bay Rovers" }),
+        full: t(ui, "forfeit.tagFull.walkover"),
+      });
+      expect(dq.sentence, `${locale}: names her`).toContain("Bay Rovers");
+      expect(dq.sentence, `${locale}: differs from the withdrawal sentence`).not.toBe(withdrawn.sentence);
+      for (const text of [dq.sentence, dq.full]) {
+        expect(text.toLowerCase(), `${locale}: "${text}" says no "${word}"`).not.toContain(word.toLowerCase());
+      }
+      expect(withdrawn.full.toLowerCase(), `${locale}: positive pair, the withdrawal expansion says "${word}"`).toContain(word.toLowerCase());
+      checked++;
+    }
+    expect(checked, `locales checked: ${checked}`).toBe(4);
+  });
+
+  it("only the LOSER's status moves it: a disqualified winner, another entrant's status, and every other reason read as before", () => {
+    const tagOfWith = (outcome: unknown, statuses: Record<string, string>) => forfeitTag(outcome, NO_LEDGER, undefined, statuses)?.kind;
+    const ROWS: [name: string, outcome: unknown, statuses: Record<string, string>, want: string | null | undefined][] = [
+      ["a disqualified winner", award, { [award.winner]: "disqualified" }, "withdrew"],
+      ["a disqualified third party", award, { other: "disqualified" }, "withdrew"],
+      ["her status withdrawn", award, { [her]: "withdrawn" }, "withdrew"],
+      ["her status active", award, { [her]: "active" }, "withdrew"],
+      ["a walkover over a disqualified loser", { ...award, reason: "walkover" }, { [her]: "disqualified" }, "walkover"],
+      ["a disqualification award (played)", { ...award, reason: "disqualified" }, { [her]: "disqualified" }, "disqualified"],
+      ["a retirement over a disqualified loser", { ...award, reason: "retired" }, { [her]: "disqualified" }, "retired"],
+      ["a bye", { kind: "award", winner: award.winner, loser: null, reason: "bye" }, { [her]: "disqualified" }, undefined],
+    ];
+    let checked = 0;
+    for (const [name, outcome, statuses, want] of ROWS) {
+      expect(tagOfWith(outcome, statuses), name).toBe(want);
       checked++;
     }
     expect(checked).toBe(ROWS.length);

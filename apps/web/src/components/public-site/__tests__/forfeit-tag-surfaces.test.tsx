@@ -610,3 +610,96 @@ describe("Loop R I-1: a forfeit STORED before W2b reads w/o on every surface tha
     expect(live).toContain(html(sentence));
   });
 });
+
+// W3 T15 review I4 (controller ruling 2026-11-02, ruling 116's scope): a disqualification runs the withdrawal cascade
+// (RB3-17), whose award over her open board carries reason `withdrew`. A DISQUALIFIED entrant is never shown publicly
+// as having withdrawn; ruling 116 prescribes no DQ copy, so every consumer words it as the plain walkover, from the
+// entrant statuses its page already holds (`public_entrants_v`, V412). Both reasons on each consumer; the bare call
+// (no statuses handed) keeps today's withdrawal copy.
+describe("W3 T15 I4: a disqualified entrant's cascade walkover, on every public consumer that words it", () => {
+  const withdrew = award("withdrew");
+  const SENTENCE = {
+    withdrawn: tr("forfeit.sentence.withdrew", { loser: "Harbour United" }),
+    disqualified: tr("forfeit.sentence.walkoverPlain", { loser: "Harbour United" }),
+  } as const;
+  const REASONS = ["withdrawn", "disqualified"] as const;
+  it("premise: the two sentences differ, both name her, and the plain one says no \"withdrew\"", () => {
+    expect(SENTENCE.disqualified).not.toBe(SENTENCE.withdrawn);
+    for (const s of Object.values(SENTENCE)) expect(s).toContain("Harbour United");
+    expect(SENTENCE.withdrawn).toMatch(/withdr/i);
+    expect(SENTENCE.disqualified).not.toMatch(/withdr/i);
+  });
+
+  it("hub card (hubForfeit): withdrawn reads withdrew, disqualified the plain walkover", () => {
+    let checked = 0;
+    for (const status of REASONS) {
+      const w = hubForfeit(fixture({ outcome: withdrew as never }), { ...ctx(), statuses: { a: status } })!;
+      expect([w.tag, w.sentence], status).toEqual([TAG.withdrew, SENTENCE[status]]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    expect(hubForfeit(fixture({ outcome: withdrew as never }), ctx())!.sentence, "no statuses: as before").toBe(SENTENCE.withdrawn);
+  });
+
+  it("Bracket and Schedule (the division and embed pages' `entrantStatuses`): the tile's and the row's sentence", async () => {
+    const dict = await getDictionary("en", "public");
+    const copy = { ...publicScheduleCopy(dict, msg), forfeit: forfeitCopyOf((k) => t(dict, k)) };
+    const boardText = (_stageId: string, label: never) => resolveSlotLabel(label, msg, "schedule.tbd");
+    const fx = [fixture({ outcome: withdrew as never, scheduled_at: "2026-09-25T09:00:00.000Z" })];
+    let checked = 0;
+    for (const status of REASONS) {
+      const statuses = { a: status };
+      const bracket = renderToStaticMarkup(
+        createElement(Bracket, {
+          kind: "knockout", fixtures: fx, entrantNames: NAMES, entrantStatuses: statuses, fixtureHref: (id: string) => `/f/${id}`,
+          lookup: msg, slotText: boardText, copy, tz: "UTC", locale: "en",
+        }),
+      );
+      const schedule = renderToStaticMarkup(
+        createElement(Schedule, {
+          fixtures: fx, entrantNames: NAMES, entrantStatuses: statuses, divisionPath: "/d", tz: "UTC", slotLabels: {},
+          roundLabels: {}, stageOrder: {}, stageNames: {}, copy, locale: "en",
+        }),
+      );
+      const other = status === "withdrawn" ? SENTENCE.disqualified : SENTENCE.withdrawn;
+      for (const [where, h] of [["bracket", bracket], ["schedule", schedule]] as const) {
+        expect(h, `${where}/${status}`).toContain(`aria-label="${html(SENTENCE[status])}"`);
+        expect(h, `${where}/${status}: never the other reason's sentence`).not.toContain(html(other));
+        checked++;
+      }
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("ResultsMatrix: the cell's sentence", () => {
+    let checked = 0;
+    for (const status of REASONS) {
+      const h = renderToStaticMarkup(
+        createElement(ResultsMatrix, {
+          entrantIds: ["h", "a"], entrantNames: NAMES, entrantStatuses: { a: status }, fixtures: [fixture({ outcome: withdrew as never })],
+          fixtureHref: (id: string) => `/f/${id}`, dict: DICT,
+        }),
+      );
+      expect(h, status).toContain(`aria-label="${html(SENTENCE[status])}"`);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("LiveScoreBody (the match centre's live fallback, fed `Side.departed`): the decided line", () => {
+    const templates = { tie: "", plain: "{winner} won", shootoutPlain: "", byMethod: {} };
+    let checked = 0;
+    for (const status of REASONS) {
+      const h = renderToStaticMarkup(
+        createElement(LiveScoreBody, {
+          data: { status: "forfeited", summary: { headline: "3 – 0" }, outcome: withdrew },
+          entrantNames: NAMES, entrantStatuses: { a: status }, sportKey: "tennis", decidedTemplates: templates, dict: DICT,
+        }),
+      );
+      expect(h, status).toContain(html(SENTENCE[status]));
+      expect(h, `${status}: never the other reason's`).not.toContain(html(status === "withdrawn" ? SENTENCE.disqualified : SENTENCE.withdrawn));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+});

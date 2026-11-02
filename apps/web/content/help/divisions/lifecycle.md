@@ -12,7 +12,7 @@ Everything is editable — entrants, seeds, format, schedule. Generate fixtures,
 
 ## Started
 
-Pressing **Start** locks entrants. The stage structure locked earlier, the moment fixtures were generated, and a match rule locks once a stage that plays by it has started ([division settings](/help/divisions/settings)). From here the *results* are what change: score, finalize, progress through stages. Schedules stay editable ([with undo](/help/scheduling/undo)) — it's the draw that's fixed, not the timetable. Someone dropping out goes through [withdrawal](/help/entrants/withdrawals), which repairs fixtures honestly instead of pretending they were never there.
+Pressing **Start** locks entrants, with two exceptions: a ladder or americano stage keeps taking joiners, and a Swiss that draws from the whole field takes late players until it finishes (they are added on the Entrants tab, or from **More** on the Swiss stage). The stage structure locked earlier, the moment fixtures were generated, and a match rule locks once a stage that plays by it has started ([division settings](/help/divisions/settings)). From here the *results* are what change: score, finalize, progress through stages. Schedules stay editable ([with undo](/help/scheduling/undo)) — it's the draw that's fixed, not the timetable. Someone dropping out goes through [withdrawal](/help/entrants/withdrawals), which repairs fixtures honestly instead of pretending they were never there.
 
 ## Completed
 

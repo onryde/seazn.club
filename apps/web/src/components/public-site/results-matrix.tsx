@@ -15,6 +15,9 @@ interface Props {
   /** Row/column order — pass the standings rank order. */
   entrantIds: string[];
   entrantNames: Record<string, string>;
+  /** W3 T15 review I4: entrant id → status (the page's `entrantStatuses`) — a withdrawal cascade's walkover over a
+   *  DISQUALIFIED entrant reads as a plain walkover, never "withdrew". Absent, the words follow the outcome alone. */
+  entrantStatuses?: Readonly<Record<string, string>>;
   entrantLogos?: Record<string, string | null>;
   /** Fixtures of ONE pool/stage scope; pairings outside entrantIds are ignored. */
   fixtures: PublicFixture[];
@@ -30,6 +33,7 @@ const DONE = new Set(["decided", "finalized", "forfeited", "abandoned"]);
 export function ResultsMatrix({
   entrantIds,
   entrantNames,
+  entrantStatuses,
   entrantLogos,
   fixtures,
   fixtureHref,
@@ -50,7 +54,7 @@ export function ResultsMatrix({
   // feeds no next match, so a double walkover's sentence has no next-round clause here.
   const nameOf = (id: string) => entrantNames[id] ?? "?";
   const forfeitOf = (f: PublicFixture): ForfeitWords | null => {
-    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+    const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f, entrantStatuses);
     return tag === null ? null : forfeitWords(tag, (key, vars) => t(dict, key, vars), nameOf);
   };
   const initials = (id: string) =>

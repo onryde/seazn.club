@@ -211,6 +211,53 @@ describe("StageRail", () => {
     expect(nonAdhocHtml).not.toContain('data-testid="stage-add-match"');
   });
 
+  // W3 RB3-15 A (X-SW-21, ruling 252): Swiss rounds are paired by the system, so a Swiss stage offers no Add match; the
+  // rail says why in its place. `adhoc` is passed TRUE for the Swiss stage on purpose: the rail refuses on the KIND,
+  // whatever the panel hands it (the panel's own set is pinned in stages-panel-swiss-pairing.test.tsx).
+  it("a Swiss stage renders no stage-add-match trigger; a league stage does", () => {
+    const row = (kind: string, status = "active") => ({ id: "s1", name: kind, kind, seq: 1, status }) as never;
+    const render = (kind: string, extra: Partial<StageRailProps> = {}) =>
+      renderToStaticMarkup(
+        <StageRail stage={row(kind)} canEdit busy={null} fixtureCount={4} deletable
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          adhoc {...NEUTRAL} {...extra} />,
+      );
+    const NOTE = 'data-testid="stage-swiss-adhoc-note"';
+    const copy = en["swiss.refusal.SWISS_ADHOC_REFUSED"];
+    expect(copy, "premise: the guidance copy exists").toBeTruthy();
+
+    // Positive pair first: the league row renders the trigger and no Swiss note.
+    const league = render("league");
+    expect(league).toContain('data-testid="stage-add-match"');
+    expect(league).not.toContain(NOTE);
+
+    let checked = 0;
+    for (const [label, html] of [
+      ["Swiss, desktop row", render("swiss")],
+      ["Swiss, phone sheet open", render("swiss", { open: true })],
+      ["Swiss, Add match form state says open", render("swiss", { addingTo: "s1" })],
+    ] as const) {
+      // The rail still renders its controls, so the absence below is not a rail that rendered nothing. Match Day C3: a started
+      // stage offers no Generate (`stageActions`), so the control that stands here is Complete (present, waiting on 4 open matches).
+      expect(html, `${label}: rail controls`).toContain('data-testid="stage-complete"');
+      expect(html, `${label}: no Add match`).not.toContain('data-testid="stage-add-match"');
+      expect(html, `${label}: the guidance line takes its place`).toContain(NOTE);
+      expect(html, `${label}: in the reader's words`).toContain(copy);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: Swiss states rendered").toBe(3);
+
+    // The note stands where the button would: a complete stage, or one with nothing generated, shows neither.
+    // Each with its positive pair: the rail is still rendering.
+    const complete = render("swiss", { stage: row("swiss", "complete") });
+    expect(complete).toContain('data-testid="stage-delete"');
+    expect(complete).not.toContain(NOTE);
+    // Nothing generated yet is a stage that has not started (Match Day C3: a started stage offers no Generate).
+    const empty = render("swiss", { fixtureCount: 0, stage: row("swiss", "pending") });
+    expect(empty).toContain('data-testid="stage-generate"');
+    expect(empty).not.toContain(NOTE);
+  });
+
   it("Swiss with zero fixtures labels Generate; with unseated shells labels Pair next", () => {
     const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active" } as never;
     const pendingSwiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "pending" } as never;
@@ -349,7 +396,7 @@ describe("StageRail — which action holds the filled primary", () => {
 describe("StageRail — the Pair next split button", () => {
   const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", config: {} } as never;
   const ROUND_ONE: SwissPairingMenu = {
-    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false,
   };
   const rail = (over: Record<string, unknown>) =>
     renderToStaticMarkup(
@@ -413,7 +460,7 @@ describe("StageRail — the Pair next split button", () => {
 
 describe("SwissPairingMenuPanel — the open menu", () => {
   const ROUND_ONE: SwissPairingMenu = {
-    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false,
   };
   const panel = (menu: SwissPairingMenu, pick: "fold" | "rank_adjacent" | null = null) =>
     renderToStaticMarkup(
@@ -472,7 +519,7 @@ describe("SwissPairingMenuPanel — the open menu", () => {
 
   describe("round 2+ opens read-only (spec ruling 3)", () => {
     const LATER: SwissPairingMenu = {
-      round: 2, choosable: false, defaultPairing: "rank_adjacent", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+      round: 2, choosable: false, defaultPairing: "rank_adjacent", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false,
     };
 
     it("the group is aria-disabled and named for the round", () => {
@@ -523,7 +570,7 @@ describe("SwissPairingMenuPanel — the open menu", () => {
 describe("StageRail — a press that does not land keeps the pick (review M2)", () => {
   const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", config: {} } as never;
   const ROUND_ONE: SwissPairingMenu = {
-    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true,
+    round: 1, choosable: true, defaultPairing: "fold", stored: "rank_adjacent", fieldSize: 10, seedsNumbered: true, unseededDrawn: false, seededAheadOfDraw: false,
   };
   const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -596,5 +643,276 @@ describe("StageRail — a press that does not land keeps the pick (review M2)", 
     rail.click("stage-generate");
     expect(rail.menu(), "the click closed the menu before the press settled").toBeDefined();
     expect(propsOf(rail.menu()!).pick).toBe("rank_adjacent");
+  });
+});
+
+// W3 T10 (X-SW-12; owner pick: option A, the rail's "More" menu). "Add late player" is offered on a ROOT Swiss stage
+// once round 1 is paired, in a started division, until the stage is finished (controller ruling 2). It stays at the last
+// round: the add is refused there by name (SWISS_NO_ROUND_LEFT), which is the organiser's answer, not a missing button.
+// Before Start the ordinary add applies, so it is hidden there. The gate is the rail's own (`swissLateEntryOffered`),
+// fed the facts the panel holds; the expected answers are the ruling's, typed here, never read back from the gate.
+describe("StageRail — Add late player in the More menu (W3 T10)", () => {
+  const HREF = "/o/acme/c/champs/d/open?tab=entrants#add-entrant";
+  type Row = {
+    name: string;
+    stage: Record<string, unknown>;
+    divisionStatus: string;
+    roundSeated: boolean;
+    offered: boolean;
+  };
+  const swiss = (over: Record<string, unknown> = {}) => ({
+    id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", progression: null, config: { rounds: 5 }, ...over,
+  });
+  const ROWS: Row[] = [
+    { name: "a started Swiss stage, round 1 paired", stage: swiss(), divisionStatus: "active", roundSeated: true, offered: true },
+    { name: "a started Swiss at its last round (the add is refused there by name)", stage: swiss({ config: { rounds: 1 } }), divisionStatus: "active", roundSeated: true, offered: true },
+    { name: "a setup Swiss stage, nothing paired", stage: swiss({ status: "pending" }), divisionStatus: "setup", roundSeated: false, offered: false },
+    { name: "a Swiss paired before Start (the ordinary add applies)", stage: swiss({ status: "pending" }), divisionStatus: "scheduled", roundSeated: true, offered: false },
+    { name: "a started Swiss with round 1 not yet paired", stage: swiss(), divisionStatus: "active", roundSeated: false, offered: false },
+    { name: "a finished Swiss stage", stage: swiss({ status: "complete" }), divisionStatus: "active", roundSeated: true, offered: false },
+    { name: "a Swiss fed by an earlier stage", stage: swiss({ progression: { from: "s0", top: 8 } }), divisionStatus: "active", roundSeated: true, offered: false },
+    { name: "a league stage", stage: swiss({ kind: "league", name: "League" }), divisionStatus: "active", roundSeated: true, offered: false },
+  ];
+  const render = (r: Row) =>
+    renderToStaticMarkup(
+      <StageRail stage={r.stage as never} canEdit busy={null} fixtureCount={10} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} {...NEUTRAL}
+        lateEntry={{ divisionStatus: r.divisionStatus, roundSeated: r.roundSeated, href: HREF }} />,
+    );
+
+  it("a started Swiss stage renders add-late-player; a setup stage and a league stage do not", () => {
+    let checked = 0;
+    for (const r of ROWS) {
+      const html = render(r);
+      // Positive pair first: the rail rendered at all (its phone trigger renders in every state, a finished stage too),
+      // so an absence below is the gate's, not an empty rail.
+      expect(html, `${r.name}: the rail rendered nothing`).toContain('data-testid="stage-rail-trigger"');
+      if (r.offered) {
+        expect(html, r.name).toContain('data-testid="stage-more"');
+        expect(html, r.name).toContain('data-testid="stage-more-menu"');
+        expect(html, r.name).toContain('data-testid="stage-add-late-player"');
+        expect(html, `${r.name}: it goes to the Entrants tab's add form`).toContain(`href="${HREF}"`);
+        expect(html, r.name).toContain(en["stage.more.addLatePlayer"]);
+      } else {
+        expect(html, r.name).not.toContain('data-testid="stage-more"');
+        expect(html, r.name).not.toContain("stage-add-late-player");
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row rendered").toBe(ROWS.length);
+    expect(ROWS.filter((r) => r.offered).length, "both answers are in the table").toBeGreaterThan(0);
+    expect(ROWS.filter((r) => !r.offered).length).toBeGreaterThan(0);
+  });
+
+  it("is absent with no lateEntry facts at all (every other caller of the rail)", () => {
+    const html = renderToStaticMarkup(
+      <StageRail stage={swiss() as never} canEdit busy={null} fixtureCount={10} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} {...NEUTRAL} />,
+    );
+    // Positive pair: the rail rendered its controls (Match Day C3: a started stage's is Complete, not Generate).
+    expect(html).toContain('data-testid="stage-complete"');
+    expect(html).not.toContain('data-testid="stage-more"');
+  });
+
+  it("opens folded: the menu is in the DOM but hidden, and More says it is collapsed; one press opens it, a second closes it", () => {
+    const html = render(ROWS[0]!);
+    expect(html).toMatch(/data-testid="stage-more"[^>]*aria-expanded="false"|aria-expanded="false"[^>]*data-testid="stage-more"/);
+    expect(html).toMatch(/<div[^>]*data-testid="stage-more-menu"[^>]*hidden=""|<div[^>]*hidden=""[^>]*data-testid="stage-more-menu"/);
+
+    const island = renderIsland(StageRail, {
+      stage: swiss() as never, canEdit: true, busy: null, fixtureCount: 10, deletable: false,
+      onAct: async () => true, onDelete: () => {}, addingTo: null, onToggleAddMatch: () => {}, adhoc: false,
+      ...NEUTRAL, lateEntry: { divisionStatus: "active", roundSeated: true, href: HREF },
+    });
+    const byTestid = (testid: string) => {
+      const el = island.tree().find((e) => propsOf(e)["data-testid"] === testid);
+      if (!el) throw new Error(`no ${testid} in the rail`);
+      return el;
+    };
+    expect(propsOf(byTestid("stage-more")).hidden ?? false).toBe(false);
+    expect(propsOf(byTestid("stage-more-menu")).hidden).toBe(true);
+    (propsOf(byTestid("stage-more")).onClick as () => void)();
+    expect(propsOf(byTestid("stage-more"))["aria-expanded"]).toBe(true);
+    expect(propsOf(byTestid("stage-more-menu")).hidden).toBe(false);
+    (propsOf(byTestid("stage-more")).onClick as () => void)();
+    expect(propsOf(byTestid("stage-more-menu")).hidden).toBe(true);
+  });
+});
+
+// W3 T12 Phase 2 (X-SW-17; owner pick B) — where the rail MOUNTS the rounds chip and "Add a round" (their own behaviour is
+// pinned in swiss-rounds-dialog.test.tsx): the chip first on the action row, before Pair next; "Add a round" inside the
+// More menu, after Add late player; neither without the panel's `swissRounds` (every other kind of stage).
+describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () => {
+  const HREF = "/o/acme/c/champs/d/open?tab=entrants#add-entrant";
+  const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", progression: null, config: { rounds: 3 } };
+  const rounds = (started: boolean) => ({
+    control: {
+      started,
+      rounds: 3,
+      chess: false,
+      field: 6,
+      addRound: { canAddRound: true, refusal: null, field: 6, hardMax: 5 },
+      // W3 T13: round 2 complete once started (the Finish predicate's k), nothing before.
+      finish: started
+        ? { canFinish: true, refusal: null, finishedAfter: 2, inProgress: false, completeInstead: false }
+        : { canFinish: false, refusal: "nothing_played" as const, finishedAfter: 0, inProgress: false, completeInstead: false },
+    },
+    fixtures: [],
+    onSave: async () => null,
+    onAddRound: async () => null,
+    onFinish: async () => null,
+  });
+  const render = (swissRounds: ReturnType<typeof rounds> | undefined) =>
+    renderToStaticMarkup(
+      <StageRail stage={swiss as never} canEdit busy={null} fixtureCount={9} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} {...NEUTRAL} swissHasUnseated
+        lateEntry={{ divisionStatus: "active", roundSeated: true, href: HREF }}
+        {...(swissRounds ? { swissRounds } : {})} />,
+    );
+
+  it("the chip opens the action row, before Pair next; absent without the panel's swissRounds", () => {
+    const html = render(rounds(false));
+    const chip = html.indexOf('data-testid="stage-rounds"');
+    const generate = html.indexOf('data-testid="stage-generate"');
+    expect(chip, "the chip rendered").toBeGreaterThan(-1);
+    expect(generate, "Pair next rendered").toBeGreaterThan(-1);
+    expect(chip, "first on the row").toBeLessThan(generate);
+    expect(html).toContain(en["stage.rounds.chip"].replace("{n}", "3"));
+    expect(render(undefined), "no swissRounds, no chip").not.toContain('data-testid="stage-rounds"');
+    expect(render(undefined)).toContain('data-testid="stage-generate"');
+  });
+
+  it("Add a round sits in the More menu after Add late player once the stage has started; not before", () => {
+    const html = render(rounds(true));
+    const menu = html.indexOf('data-testid="stage-more-menu"');
+    const late = html.indexOf('data-testid="stage-add-late-player"');
+    const add = html.indexOf('data-testid="stage-add-round"');
+    expect(menu).toBeGreaterThan(-1);
+    expect(late, "Add late player is in the menu").toBeGreaterThan(menu);
+    expect(add, "Add a round follows it").toBeGreaterThan(late);
+    expect(html).toContain(en["stage.more.addRound"]);
+    expect(render(rounds(false)), "before the first start the dialog edits the count").not.toContain("stage-add-round");
+    expect(render(rounds(false))).toContain('data-testid="stage-add-late-player"');
+  });
+
+  it("W3 T13: Finish the Swiss now sits in the same More menu, after Add a round, once the stage has started; not before", () => {
+    const html = render(rounds(true));
+    const add = html.indexOf('data-testid="stage-add-round"');
+    const finish = html.indexOf('data-testid="stage-finish-swiss"');
+    const menuEnd = html.indexOf("</div></div>", html.indexOf('data-testid="stage-more-menu"'));
+    expect(add, "premise: Add a round rendered").toBeGreaterThan(-1);
+    expect(finish, "Finish follows Add a round").toBeGreaterThan(add);
+    expect(finish, "inside the More menu").toBeLessThan(menuEnd);
+    expect(html).toContain(en["stage.more.finishSwiss"]);
+    expect(render(rounds(false)), "before the first start nothing is played").not.toContain("stage-finish-swiss");
+    expect(render(undefined), "no swissRounds, no Finish").not.toContain("stage-finish-swiss");
+  });
+
+  // Batch-4 ruling 3: the premise behind "a fed Swiss reaches Add a round only through the LOCKED recovery" was false
+  // (after the first start the rounds chip is a fixed span, nothing opens LOCKED), so Add a round and Finish the Swiss
+  // now are offered in More on ANY running Swiss — root or fed. "Add late player" stays root-only.
+  it("batch-4 ruling 3: a running FED Swiss gets More with Add a round and Finish (no Add late player); a root Swiss keeps ONE More; none with nothing to show", () => {
+    const fed = { ...swiss, progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 6 }] }] } };
+    const renderStage = (stage: typeof swiss | typeof fed, swissRounds: NonNullable<Parameters<typeof StageRail>[0]["swissRounds"]>) =>
+      renderToStaticMarkup(
+        <StageRail stage={stage as never} canEdit busy={null} fixtureCount={9} deletable={false}
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          adhoc={false} {...NEUTRAL} swissHasUnseated
+          lateEntry={{ divisionStatus: "active", roundSeated: true, href: HREF }}
+          swissRounds={swissRounds} />,
+      );
+    const toggles = (html: string) => html.split('data-testid="stage-more"').length - 1;
+    const over = (r: ReturnType<typeof rounds>) => ({
+      ...r,
+      control: {
+        ...r.control,
+        addRound: { canAddRound: false, refusal: "over" as const, field: null, hardMax: null },
+        finish: { canFinish: false, refusal: "over" as const, finishedAfter: 3, inProgress: false, completeInstead: false },
+      },
+    });
+    const nothingToShow = (r: ReturnType<typeof rounds>) => ({
+      ...r,
+      control: {
+        ...r.control,
+        addRound: { canAddRound: false, refusal: "field" as const, field: 1, hardMax: null },
+        finish: { canFinish: false, refusal: null, finishedAfter: 3, inProgress: false, completeInstead: true },
+      },
+    });
+    type Row = { name: string; html: string; more: number; late: boolean; add: boolean; finish: boolean };
+    const ROWS: Row[] = [
+      { name: "fed, started", html: renderStage(fed, rounds(true)), more: 1, late: false, add: true, finish: true },
+      { name: "root, started (the late-add More, not a second one)", html: renderStage(swiss, rounds(true)), more: 1, late: true, add: true, finish: true },
+      { name: "fed, before the first start", html: renderStage(fed, rounds(false)), more: 0, late: false, add: false, finish: false },
+      { name: "fed, over", html: renderStage(fed, over(rounds(true))), more: 0, late: false, add: false, finish: false },
+      { name: "fed, neither item applies (no pairable field; Complete instead)", html: renderStage(fed, nothingToShow(rounds(true))), more: 0, late: false, add: false, finish: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      expect(r.html, `${r.name}: positive control, the rail rendered`).toContain('data-testid="stage-generate"');
+      expect(toggles(r.html), `${r.name}: More toggles`).toBe(r.more);
+      expect(r.html.includes('data-testid="stage-add-late-player"'), `${r.name}: Add late player`).toBe(r.late);
+      expect(r.html.includes('data-testid="stage-add-round"'), `${r.name}: Add a round`).toBe(r.add);
+      expect(r.html.includes('data-testid="stage-finish-swiss"'), `${r.name}: Finish`).toBe(r.finish);
+      if (r.more === 1) {
+        const menu = r.html.indexOf('data-testid="stage-more-menu"');
+        expect(r.html.indexOf('data-testid="stage-add-round"'), `${r.name}: inside More`).toBeGreaterThan(menu);
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(ROWS.length);
+  });
+
+  // Batch-4 m2: T14's line, beside Unpair, when no Pair next menu carries it (the panel decides when, through
+  // `swissUnpairChangeHint`; stages-panel-swiss-pairing.test.tsx pins that seam).
+  it("batch-4 m2: unpairChangeHint puts T14's line after Unpair; never without Unpair, never unasked", () => {
+    const at = (props: { canUnpairSwiss: boolean; unpairChangeHint?: boolean }) =>
+      renderToStaticMarkup(
+        <StageRail stage={swiss as never} canEdit busy={null} fixtureCount={9} deletable={false}
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          adhoc={false} {...NEUTRAL} {...props} />,
+      );
+    const HINT = 'data-testid="stage-unpair-hint"';
+    const on = at({ canUnpairSwiss: true, unpairChangeHint: true });
+    expect(on, "positive control: Unpair rendered").toContain('data-testid="stage-unpair"');
+    expect(on).toContain(HINT);
+    expect(on).toContain(en["schedule.pairing.changeHint"]);
+    expect(on.indexOf(HINT), "after Unpair").toBeGreaterThan(on.indexOf('data-testid="stage-unpair"'));
+    expect(at({ canUnpairSwiss: true }), "unasked").not.toContain(HINT);
+    expect(at({ canUnpairSwiss: false, unpairChangeHint: true }), "no Unpair, no line naming it").not.toContain(HINT);
+  });
+
+  // Merge with Match Day #1103 (E1 item 1): the rail is now the header's ACTIONS group, and a thin divider stands between it and the
+  // settings buttons only when the group draws a control. W3's chip and More ride the same group, so they count: a FINISHED Swiss
+  // (no Generate, no Complete) that cannot be deleted still draws its fixed "Rounds: N" chip, and the divider must stand beside it.
+  it("Match Day merge: a W3 control alone in the actions group still earns the divider; an empty group still has none", () => {
+    const done = { ...swiss, status: "complete" };
+    const SETTLED = { played: 9, inPlay: 0, unplayed: 0 };
+    const at = (props: Partial<StageRailProps>) =>
+      renderToStaticMarkup(
+        <StageRail stage={done as never} canEdit busy={null} fixtureCount={9} deletable={false}
+          onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+          adhoc={false} {...NEUTRAL} counts={SETTLED} dividerAfter {...props} />,
+      );
+    const DIVIDER = 'data-testid="stage-controls-divider"';
+    const rows = [
+      // The finished Swiss: its round count is the one control in the group.
+      { name: "finished Swiss, the chip alone", html: at({ swissRounds: rounds(true) }), chip: true, divider: true },
+      // Positive pair: the same stage without the chip has nothing to divide (Match Day's own empty case, unchanged).
+      { name: "finished stage, no W3 control", html: at({}), chip: false, divider: false },
+    ];
+    let checked = 0;
+    for (const r of rows) {
+      expect(r.html, `${r.name}: the rail rendered`).toContain('data-testid="stage-rail-sheet"');
+      expect(r.html, `${r.name}: no Generate on a finished stage`).not.toContain('data-testid="stage-generate"');
+      expect(r.html, `${r.name}: no Complete on a finished stage`).not.toContain('data-testid="stage-complete"');
+      expect(r.html.includes('data-testid="stage-rounds"'), `${r.name}: chip`).toBe(r.chip);
+      expect(r.html.includes(DIVIDER), `${r.name}: divider`).toBe(r.divider);
+      if (r.chip) expect(r.html.indexOf(DIVIDER), `${r.name}: the divider follows the chip`).toBeGreaterThan(r.html.indexOf('data-testid="stage-rounds"'));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows").toBe(rows.length);
   });
 });

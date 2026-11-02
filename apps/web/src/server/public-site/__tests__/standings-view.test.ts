@@ -122,6 +122,18 @@ describe("buildTableView", () => {
     });
   });
 
+  it("W3 T16: swissRound is carried as given, and a table given none says null (the key is always there, the document parses)", () => {
+    const given = { round: 2, of: 5, state: "in_play" } as const;
+    const swiss = buildTableView({ ...base, rows: [row("a")], swissRound: given });
+    expect(swiss.swissRound).toEqual(given);
+    expect(TableView.parse(swiss)).toEqual(swiss);
+    for (const none of [{}, { swissRound: null }]) {
+      const v = buildTableView({ ...base, rows: [row("a")], ...none });
+      expect(Object.hasOwn(v, "swissRound"), JSON.stringify(none)).toBe(true);
+      expect(v.swissRound, JSON.stringify(none)).toBeNull();
+    }
+  });
+
   it("D appears only when some row has a draw — and it is long-tail, not compact (positive pair for the empty case)", () => {
     const v = buildTableView({ ...base, rows: [row("a", { played: 1, drawn: 1, points: 1 })] });
     expect(v.columns.map((c) => c.key)).toEqual(["played", "won", "drawn", "lost", "points"]);
@@ -505,7 +517,7 @@ describe("qualification (spec 2026-09-22)", () => {
     expect(onlyB.rows.map((r) => r.qual)).toEqual([null, qualification.rows.b]);
   });
 
-  it("regression: a no-cut table (qualification null) is the table it was — two new nulls, every other field as pinned", () => {
+  it("regression: a no-cut table (qualification null) is the table it was — three new nulls, every other field as pinned", () => {
     // Every field spelled out, never read back off the builder: this is what
     // the view said before Task 6, plus `qual: null` and `qualification: null`.
     const expected = {
@@ -554,6 +566,8 @@ describe("qualification (spec 2026-09-22)", () => {
         },
       ],
       qualification: null,
+      // W3 T16 (SW-L11): one more null - a table given no Swiss verdict says so, and nothing else moved.
+      swissRound: null,
     };
     expect(buildTableView({ ...input, qualification: null })).toEqual(expected);
     // …and an absent input is the same table as an explicit null.

@@ -31,7 +31,7 @@ import { LogoutButton } from "@/components/logout-button";
 import { RunYourOwnCta } from "@/components/run-your-own-cta";
 import { Zoned, ViewerTzProvider } from "@/components/client-time";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
+import { creditsNobody, forfeitLedgerOfReason, forfeitLoserStatuses } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import type { Dict } from "@/lib/i18n-constants";
 import type { ReactNode } from "react";
@@ -521,7 +521,15 @@ function headline(r: MyResult): string | null {
  *  seats, in the page's locale; nothing for a played result. Muted, a symbol named by the full words, its case kept on
  *  its own span (`.app-display` uppercases and is unlayered, re-review N-1). */
 function resultTag(r: MyResult, ui: Dict): ReactNode {
-  const tag = outcomeTagWords((key, vars) => t(ui, key, vars), r.outcome, forfeitLedgerOfReason(r.abandon_reason), r);
+  // W3 T15 ruling 2: with the loser's status — a disqualified opponent's cascade walkover (reason `withdrew`) is named
+  // the plain walkover, never a withdrawal. A player's page is no organiser surface: it reads as the public ones (I4).
+  const tag = outcomeTagWords(
+    (key, vars) => t(ui, key, vars),
+    r.outcome,
+    forfeitLedgerOfReason(r.abandon_reason),
+    r,
+    forfeitLoserStatuses(r),
+  );
   if (tag === null) return null;
   return (
     <span role="img" aria-label={tag.full} title={tag.full} className="ml-1.5 normal-case text-slate-500">

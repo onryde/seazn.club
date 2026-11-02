@@ -141,10 +141,22 @@ export const FORFEIT_RIBBON_KEY: Readonly<Record<ForfeitCopyKind, MessageKey>> =
 };
 
 /** The `core.*` line, read from the payload where the payload changes what was recorded (a forfeit's kind, an
- *  expunge abandon — W2b D5), else `CORE_RIBBON_KEY`'s per-type line. */
-function coreRibbonKey(eventType: string, payload: Record<string, unknown>): MessageKey | undefined {
+ *  expunge abandon — W2b D5), else `CORE_RIBBON_KEY`'s per-type line.
+ *
+ *  W3 T15 ruling 2 (controller, 2026-11-02): a disqualification runs the withdrawal cascade, which records
+ *  `core.forfeit{by: <her seat>, reason: "withdrew"}` (the engine has no unplayed `disqualified` forfeit, PF-2). A
+ *  withdrawal forfeit BY a seat the caller names in `disqualifiedSides` reads as the disqualification, never as a
+ *  withdrawal. No seats named — every caller but the organiser's console — reads by the payload alone, as before. */
+function coreRibbonKey(
+  eventType: string,
+  payload: Record<string, unknown>,
+  disqualifiedSides?: ReadonlySet<string>,
+): MessageKey | undefined {
   if (eventType === "core.forfeit") {
     const kind = forfeitCopyKind(payload);
+    if (kind === "withdrew" && typeof payload.by === "string" && disqualifiedSides?.has(payload.by) === true) {
+      return FORFEIT_RIBBON_KEY.disqualified;
+    }
     if (kind !== null) return FORFEIT_RIBBON_KEY[kind];
   }
   if (eventType === "core.abandon" && isExpungeAbandon(payload)) return "pad.ribbon.core.abandon.expunge";
@@ -191,8 +203,10 @@ export function buildRibbon(
   names: (personId: string) => string,
   t: MsgFn,
   detail?: string,
+  /** W3 T15 ruling 2: the seats ("home"/"away") whose entrant is DISQUALIFIED (`coreRibbonKey`). */
+  disqualifiedSides?: ReadonlySet<string>,
 ): Ribbon {
-  const coreKey = coreRibbonKey(eventType, payload);
+  const coreKey = coreRibbonKey(eventType, payload, disqualifiedSides);
   let base: string;
   if (coreKey) {
     base = t(coreKey);

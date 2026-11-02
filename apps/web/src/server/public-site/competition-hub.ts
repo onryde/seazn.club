@@ -42,7 +42,15 @@ import { renderProse } from "@/lib/prose";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
-import { doubleWalkoverNextWinner, forfeitLedgerOfReason, forfeitTag, forfeitWords, unseatedForfeitLoser, type ForfeitWords } from "@/lib/forfeit-tag";
+import {
+  doubleWalkoverNextWinner,
+  forfeitLedgerOfReason,
+  forfeitTag,
+  forfeitWords,
+  unseatedForfeitLoser,
+  type ForfeitEntrantStatuses,
+  type ForfeitWords,
+} from "@/lib/forfeit-tag";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import {
   bucketFixture,
@@ -77,6 +85,8 @@ import {
 import { statusOf } from "./match-centre";
 import { byPoolOrder } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
+import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
+import { swissRoundState, type SwissRoundState } from "@/lib/swiss-round-state";
 import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
@@ -178,6 +188,9 @@ export function hubForfeit(
   ctx: {
     byId: ReadonlyMap<string, PublicFixture>;
     names: Readonly<Record<string, string>>;
+    /** W3 T15 review I4: entrant id → status (the division's `entrants`, departed included since V412) — a withdrawal
+     *  cascade's walkover over a DISQUALIFIED entrant reads as a plain walkover, never "withdrew". */
+    statuses?: ForfeitEntrantStatuses;
     msg: (key: TKey, vars?: Record<string, string | number>) => string;
     resultSentence: () => string | null;
     /** Loop R M-10: fixture id → was anything played before its forfeit (`forfeitPlayedById`, which asks of forfeit
@@ -185,7 +198,7 @@ export function hubForfeit(
     played?: ReadonlyMap<string, boolean>;
   },
 ): (ForfeitWords & { played?: boolean }) | null {
-  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f);
+  const tag = forfeitTag(f.outcome, forfeitLedgerOfReason(f.abandon_reason), f, ctx.statuses);
   if (tag === null) return null;
   const played = ctx.played?.get(f.id);
   const nameOf = (id: string) => ctx.names[id] ?? "?";
@@ -345,6 +358,38 @@ export function hubByeSides(
     bye(fixture.home_entrant_id, fixture.home_slot_label, "home"),
     bye(fixture.away_entrant_id, fixture.away_slot_label, "away"),
   ];
+}
+
+// ------------------------------------------------------------ swiss round
+
+/**
+ * W3 T16 (SW-L11) - a Swiss stage's "Round X of N", from the rows the hub already holds for it, or null.
+ *
+ * Only a stage of kind `swiss` states one (a league, a group and a knockout never do), and only with a declared round
+ * count: `stage.swiss_rounds` is `config.rounds` read live (V475's `stage_qualification_meta`), so after "Finish the
+ * Swiss now" it is the round the Swiss finished after. A stage row without a usable count is a broken stage, and a
+ * public page does not throw for one - it states nothing (`swissRoundState` itself refuses a count below 1).
+ *
+ * The bye is read off the row's `ext_key` (`isSwissByeShellExtKey`, the one predicate T13's Finish and Rebuild read), and
+ * the stage is complete on its own status - the verdict the standings were finalised on.
+ */
+export function hubSwissRound(stage: PublicStage, fixtures: readonly PublicFixture[]): SwissRoundState | null {
+  const rounds = stage.swiss_rounds;
+  if (stage.kind !== "swiss" || rounds === null || rounds === undefined || !Number.isInteger(rounds) || rounds < 1) return null;
+  return swissRoundState(
+    rounds,
+    fixtures
+      .filter((f) => f.stage_id === stage.id)
+      .map((f) => ({
+        round_no: f.round_no,
+        home: f.home_entrant_id,
+        away: f.away_entrant_id,
+        status: f.status,
+        outcome: f.outcome,
+        isBye: isSwissByeShellExtKey(f.ext_key),
+      })),
+    stage.status === "complete",
+  );
 }
 
 // ------------------------------------------------------------------ header
@@ -756,6 +801,7 @@ export async function loadCompetitionHub(
     modules.set(d.id, module_);
 
     const names: Record<string, string> = {};
+    const statuses: Record<string, string> = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
     const kinds: Record<string, string> = {};
     const badges: Record<string, string | null> = {};
     const colours: Record<string, string | null> = {};
@@ -882,6 +928,7 @@ export async function loadCompetitionHub(
         forfeit: hubForfeit(f, {
           byId: fixtureById,
           names,
+          statuses,
           msg,
           played: forfeitPlayed,
           resultSentence: () =>
@@ -925,6 +972,8 @@ export async function loadCompetitionHub(
     });
     for (const stage of orderedStages) {
       if (BRACKET_KINDS.has(stage.kind)) continue;
+      // W3 T16: once per stage, from its own rows - the same verdict on every snapshot of it.
+      const swissRound = hubSwissRound(stage, fixtures);
       const snapshots = standings
         .filter((s) => s.stage_id === stage.id)
         // Pool A above Pool B — the pool's own order, never its random id.
@@ -952,6 +1001,7 @@ export async function loadCompetitionHub(
             // W2d T17: the stage's column layout (OTW/OTL, half-points) and the lots note's date, in the org's locale
             rules: stage.table_rules ?? null,
             dateOf: (iso) => formatPublicInstant(locale, tz, iso, { dateStyle: "medium" }),
+            swissRound,
           }),
         );
       }
