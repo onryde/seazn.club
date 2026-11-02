@@ -141,3 +141,26 @@ describe("the organiser pages hand the entrants' statuses to the readers that wo
     expect(side![0]).toContain("status: entrant.status,");
   });
 });
+
+// W3 T17 (RB3-19, X-SW-25): the cut-drift warning is computed on the division page and rendered by StagesPanel. The only
+// behaviour witness is the e2e describe "X-SW-25 the desk warns after a cut-changing correction"; this scan exists so a
+// rebase that drops the prop (the StagesPanel mount moved under Match Day #1103) reds on a pull request, not after merge.
+describe("the division page feeds the Swiss cut-drift warning to the stages panel (W3 T17)", () => {
+  const page = read("app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx");
+  const panel = read("components/v2/stages-panel.tsx");
+
+  it("derives the drift from getSwissCutDrift for every completed Swiss and passes it to StagesPanel", () => {
+    const derivation = page.match(/const swissCutDrift = [\s\S]{0,600}?getSwissCutDrift\(auth, s\.id\)/);
+    expect(derivation, "swissCutDrift is no longer derived from getSwissCutDrift on this page").not.toBeNull();
+    expect(derivation![0]).toMatch(/s\.kind === "swiss" && s\.status === "complete"/);
+    expect(page).toMatch(/swissCutDrift=\{swissCutDrift\}/);
+    // The negative pair: never a literal map, which would type-check and render nothing.
+    expect(page).not.toMatch(/swissCutDrift=\{\{/);
+  });
+
+  it("renders the warning from that prop, keyed by the stage", () => {
+    expect(panel).toMatch(/swissCutDrift\?\.\[stage\.id\]/);
+    expect(panel).toContain('data-testid="swiss-cut-drift-warning"');
+    expect(panel).toMatch(/swissCutDriftText\(\s*swissCutDrift\[stage\.id\]!/);
+  });
+});
