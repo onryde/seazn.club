@@ -7,7 +7,10 @@
 // storage stays portable. Preview renders through the SAME pipeline +
 // component the public page uses — preview is truth.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { EditorContent, useEditor, type Editor } from "@tiptap/react";
+import { EditorContent, Extension, useEditor, type Editor } from "@tiptap/react";
+import type { Node as PMNode } from "@tiptap/pm/model";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import { Markdown } from "tiptap-markdown";
@@ -42,6 +45,42 @@ interface Props {
    *  (`min-h-40`). The New competition form puts the description in its own
    *  column beside the other fields. */
   fill?: boolean;
+  /** Opt-in: draw `placeholder` as grey text in the empty editor (it vanishes on
+   *  the first keystroke). Off by default because `placeholder` has only ever
+   *  been the textbox's accessible name here, and four other editors pass one
+   *  (org about, payment instructions, news, competition settings) that has
+   *  never been drawn. When on, the accessible name becomes "Description" and the
+   *  sentence is exposed as `aria-placeholder`, as a native placeholder is. */
+  showPlaceholder?: boolean;
+}
+
+/**
+ * The grey hint in an empty editor: the same trick as TipTap's own Placeholder
+ * extension (not a dependency of this app), a node decoration on the document's
+ * only paragraph while it holds nothing. The text rides in `data-placeholder`
+ * and `.competition-prose p.is-editor-empty::before` (globals.css) paints it, so
+ * it is never part of the document or of the Markdown that is saved.
+ */
+export function placeholderDecorations(doc: PMNode, text: string): DecorationSet | null {
+  const only = doc.firstChild;
+  if (doc.childCount !== 1 || !only || only.type.name !== "paragraph" || only.content.size !== 0) return null;
+  return DecorationSet.create(doc, [
+    Decoration.node(0, only.nodeSize, { class: "is-editor-empty", "data-placeholder": text }),
+  ]);
+}
+
+function emptyPlaceholder(text: string) {
+  return Extension.create({
+    name: "emptyPlaceholder",
+    addProseMirrorPlugins() {
+      return [
+        new Plugin({
+          key: new PluginKey("emptyPlaceholder"),
+          props: { decorations: ({ doc }) => placeholderDecorations(doc, text) },
+        }),
+      ];
+    },
+  });
 }
 
 export function ToolbarButton({
@@ -118,7 +157,16 @@ function EditorDialog({
   );
 }
 
-export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle, touch = false, fill = false }: Props) {
+export function ProseEditor({
+  value,
+  onChange,
+  orgId,
+  placeholder,
+  previewStyle,
+  touch = false,
+  fill = false,
+  showPlaceholder = false,
+}: Props) {
   const msg = useMsg();
   const [tab, setTab] = useState<"write" | "preview">("write");
   const [previewHtml, setPreviewHtml] = useState("");
@@ -139,6 +187,7 @@ export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle,
       }),
       Image.configure({ inline: false }),
       Markdown.configure({ html: false, linkify: true, transformPastedText: true }),
+      ...(showPlaceholder && placeholder ? [emptyPlaceholder(placeholder)] : []),
     ],
     // tiptap-markdown parses string content as Markdown when its extension
     // is present — value in, getMarkdown() out.
@@ -152,7 +201,8 @@ export function ProseEditor({ value, onChange, orgId, placeholder, previewStyle,
         // prohibited (axe: aria-prohibited-attr). Declare what it really is.
         role: "textbox",
         "aria-multiline": "true",
-        "aria-label": placeholder ?? msg("editor.description"),
+        "aria-label": showPlaceholder ? msg("editor.description") : (placeholder ?? msg("editor.description")),
+        ...(showPlaceholder && placeholder ? { "aria-placeholder": placeholder } : {}),
       },
     },
     onUpdate: ({ editor: e }) => {

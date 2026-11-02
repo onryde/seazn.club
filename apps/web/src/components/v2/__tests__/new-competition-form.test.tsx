@@ -1,5 +1,7 @@
-// Match Day C8 — the New competition form: one column, "Who will find it", and
-// the "Add your first division" screen after Create.
+// Match Day C8 — the New competition form (one column below lg, two from lg),
+// "Who will find it", and the "Add your first division" screen after Create.
+// Layout itself is measured in a browser (the walkthrough); this file holds the
+// state, wiring and copy.
 //
 // vitest is `environment: "node"` with no jsdom, so the stateful island runs
 // through the shared hook harness (the JOIN between form state and what the
@@ -545,7 +547,15 @@ describe("the description is the competition-settings editor", () => {
   it("mounts ProseEditor for this org, with the phone tap floor, and posts its Markdown", async () => {
     const island = mount();
     const editor = find(island, ProseEditor);
-    expect(propsOf(editor)).toMatchObject({ value: "", orgId: "org-1", touch: true });
+    expect(propsOf(editor)).toMatchObject({
+      value: "",
+      orgId: "org-1",
+      touch: true,
+      // The editor stretches in its own column from lg, and DRAWS the hint: both opt-in.
+      fill: true,
+      showPlaceholder: true,
+      placeholder: msg("comp.wizard.description.placeholder"),
+    });
     call(editor, "onChange", "Two days of **singles** and doubles.");
     expect(propsOf(find(island, ProseEditor)).value).toBe("Two days of **singles** and doubles.");
     typeName(island, "Autumn Open");

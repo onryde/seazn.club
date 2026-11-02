@@ -55,7 +55,7 @@ export function FirstDivisionPrompt({
       : day(locale, created.endsOn);
 
   return (
-    <div className="space-y-5" data-testid="first-division-prompt">
+    <div className="space-y-5" data-testid="first-division-prompt" data-wide-page>
       <p
         role="status"
         className="inline-flex items-center gap-2 rounded-full border border-purple-100 bg-white px-3.5 py-2 text-sm text-slate-800 shadow-sm"

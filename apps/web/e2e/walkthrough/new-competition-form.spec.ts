@@ -1,6 +1,9 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import { TAG, activeOrg, apiJson, expectNoHorizontalScroll } from "../helpers";
 import { uiEn, fill } from "../match-room-kit";
+import { uiString, type W2Locale } from "../spectator-w2-kit";
+import { LOCALES } from "../../src/lib/i18n-constants";
 
 /**
  * Match Day C8 — an organiser makes a competition through the New competition
@@ -120,6 +123,21 @@ async function expectTapTarget(control: Locator, label: string) {
   expect(got.hits, `${label}: the 44px extent on both axes must hit-test to it`).toEqual([true, true, true, true, true]);
 }
 
+/**
+ * axe (WCAG 2 A/AA), serious and critical only, scoped to one screen. The phone
+ * widths get the same pass in mobile.spec; this is the one that runs at `lg`
+ * and up, where the form is two columns and the editor is a different size.
+ */
+async function expectNoAxeBlockers(page: Page, selector: string, label: string) {
+  const results = await new AxeBuilder({ page }).include(selector).withTags(["wcag2a", "wcag2aa"]).analyze();
+  expect(results.passes.length, `axe ran its rules over ${label}`).toBeGreaterThan(0);
+  const blocking = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
+  expect(
+    blocking.map((v) => `${v.id}: ${v.nodes[0]?.html}`),
+    `axe serious/critical on ${label}`,
+  ).toEqual([]);
+}
+
 /** The breakpoint the editor's `touch` floor and this form's two columns both use (Tailwind `lg`). */
 const LG = 1024;
 
@@ -202,9 +220,31 @@ async function openBlankForm(page: Page, orgSlug: string): Promise<Locator> {
 async function typeDescription(page: Page, form: Locator): Promise<{ plain: string; bold: string }> {
   const plain = `Season opener at the club ${TAG}. `;
   const bold = "Bring your own racket";
-  const editor = form.getByRole("textbox", { name: uiEn["comp.wizard.description.placeholder"]! });
+  // The textbox's accessible name is "Description"; the sentence is its aria-placeholder.
+  const editor = form.getByRole("textbox", { name: uiEn["editor.description"]!, exact: true });
+  await expect(editor).toHaveAttribute("aria-placeholder", uiEn["comp.wizard.description.placeholder"]!);
+  // While it is empty the editor SHOWS the hint, in the house placeholder grey
+  // (read off the Name input's own ::placeholder, not a colour typed here)...
+  const hint = form.getByTestId("new-competition-description").locator("p.is-editor-empty");
+  await expect(hint, "an empty description editor draws its placeholder").toHaveCount(1);
+  const drawn = await hint.evaluate((el) => {
+    const b = getComputedStyle(el, "::before");
+    return { content: b.content, color: b.color };
+  });
+  const houseGrey = await form
+    .getByPlaceholder(uiEn["comp.wizard.name.placeholder"]!)
+    .evaluate((el) => getComputedStyle(el, "::placeholder").color);
+  expect(drawn.content, "the hint is the description placeholder sentence").toBe(`"${uiEn["comp.wizard.description.placeholder"]}"`);
+  expect(drawn.color, "the hint is the house placeholder grey").toBe(houseGrey);
+  expect(houseGrey, "anti-vacuity: a real colour, not transparent").not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
   await editor.click();
   await page.keyboard.type(plain);
+  // ...and it is gone with the first keystroke.
+  await expect(hint, "typing removes the placeholder").toHaveCount(0);
+  expect(
+    await form.getByTestId("new-competition-description").evaluate((el) => el.textContent ?? ""),
+    "the placeholder is never document text",
+  ).not.toContain(uiEn["comp.wizard.description.placeholder"]!);
   await form.getByRole("button", { name: uiEn["editor.bold"]!, exact: true }).click();
   await page.keyboard.type(bold);
   await expect(editor).toContainText(`${plain}${bold}`.trim());
@@ -320,6 +360,9 @@ for (const width of WIDTHS) {
         }
         const description = await typeDescription(page, form);
         await expectNoHorizontalScroll(page);
+        // The form at its fullest (every field set, the consent open, the editor typed
+        // into), at this width — 1280 and 1024 are the two-column composition.
+        await expectNoAxeBlockers(page, '[data-testid="new-competition-form"]', `the New competition form at ${width}px`);
 
         // 7. Create. The wire body is the third witness to what the screen holds.
         const isCreate = (r: { method(): string; url(): string }) =>
@@ -336,6 +379,10 @@ for (const width of WIDTHS) {
         expect(body.starts_on).toBe(startC);
         expect(body.ends_on).toBe(longEnd);
         expect(String(body.description)).toContain(`**${description.bold}**`);
+        // The hint is a drawing, never content: it is not on the wire either.
+        expect(String(body.description), "the placeholder sentence is not sent as the description").not.toContain(
+          uiEn["comp.wizard.description.placeholder"]!,
+        );
 
         // 8. "Add your first division" — read it, tap it, land in the builder.
         const prompt = page.getByTestId("first-division-prompt");
@@ -375,6 +422,10 @@ for (const width of WIDTHS) {
           ends_on: longEnd,
         });
         expect(row.data!.description).toContain(`**${description.bold}**`);
+        // ...and not stored: the saved description is what was typed, and the hint sentence is nowhere in it.
+        expect(row.data!.description, "the placeholder sentence is not in the saved description").not.toContain(
+          uiEn["comp.wizard.description.placeholder"]!,
+        );
       } finally {
         // A showcased competition must not outlive the test on a shared org.
         if (createdId) {
@@ -419,6 +470,9 @@ for (const width of WIDTHS) {
         const main = page.getByRole("main");
         await expect(main).toContainText(description.plain.trim());
         await expect(main.locator("strong", { hasText: description.bold })).toBeVisible();
+        await expect(main, "the public page never shows the hint sentence").not.toContainText(
+          uiEn["comp.wizard.description.placeholder"]!,
+        );
         await expectNoHorizontalScroll(page);
       } finally {
         // This one opens on Public (the default) and is a draft on a shared org:
@@ -431,3 +485,95 @@ for (const width of WIDTHS) {
     });
   });
 }
+
+// The visibility segments are the narrowest labelled control on the form, and
+// the longest word in any of them is French ("uniquement", ~72px at 13px). The
+// widths: the four narrow phones (320/360/375/390, where a segment is
+// narrowest) and the two lg widths (1024/1280, the fixed 26.5rem column).
+const SEGMENT_WIDTHS = [320, 360, 375, 390, 1024, 1280] as const;
+
+/**
+ * Every whitespace-delimited word of each element's text, with how many LINES
+ * a DOM Range over exactly that word occupies: `getClientRects().length` is one
+ * rect per line box the word touches, so 1 means the word sits whole on one
+ * line. A clip check (`scrollWidth - clientWidth`) cannot see this: with
+ * `overflow-wrap: break-word` a word too long for its box is split mid-word,
+ * never overflowed, so `scrollWidth` equals `clientWidth` while the reader sees
+ * "uniquemen / t".
+ */
+async function wordLines(els: Locator) {
+  return els.evaluateAll((nodes) =>
+    nodes.map((el) => {
+      const out: { word: string; lines: number }[] = [];
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let t = walker.nextNode() as Text | null; t; t = walker.nextNode() as Text | null) {
+        for (const m of t.data.matchAll(/\S+/g)) {
+          const range = document.createRange();
+          const at = m.index ?? 0;
+          range.setStart(t, at);
+          range.setEnd(t, at + m[0].length);
+          out.push({ word: m[0], lines: range.getClientRects().length });
+        }
+      }
+      return out;
+    }),
+  );
+}
+
+test.describe("New competition form: the visibility segments", () => {
+  test("no word of a segment label is broken across lines, in any language, at any width", async ({ page }) => {
+    // One navigation pair per language (the form page, then Start blank), then a resize and a few reads per width.
+    test.setTimeout(budget(LOCALES.length * 2, LOCALES.length * SEGMENT_WIDTHS.length * 6));
+    const org = await activeOrg(page);
+    const origin = new URL((test.info().project.use.baseURL as string | undefined) ?? process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000").origin;
+    let checked = 0;
+    let owed = 0;
+    for (const locale of LOCALES as readonly W2Locale[]) {
+      // `seazn_locale` is the explicit switcher pick and outranks everything else.
+      await page.context().addCookies([{ name: "seazn_locale", value: locale, url: origin }]);
+      await page.setViewportSize({ width: SEGMENT_WIDTHS[0], height: 640 });
+      await page.goto(`/o/${org.slug}/c/new`);
+      await expect(page.getByTestId("template-gallery")).toBeVisible({ timeout: 20_000 });
+      await page.getByTestId("template-start-blank").click();
+      const form = page.getByTestId("new-competition-form");
+      await expect(form).toBeVisible({ timeout: 10_000 });
+      // The word of each segment is its label's last span (icon and radio come first).
+      const words = form.locator("fieldset label > span:last-of-type");
+      await expect(words, `${locale}: three visibility segments`).toHaveCount(3);
+      // The words that MUST be found are the dictionary's, not the DOM's: a probe that finds fewer is vacuous.
+      const dictionary = (["private", "unlisted", "public"] as const).map((v) => uiString(locale, `visibility.${v}.label`));
+      expect(await words.allInnerTexts(), `${locale}: the segments read the ${locale} dictionary`).toEqual(dictionary);
+      const expectedWords = dictionary.map((label) => label.split(/\s+/).filter(Boolean));
+      // A one-word-per-segment probe could never see a wrap: each language must own a multi-word label.
+      expect(expectedWords.flat().length, `${locale}: a segment label has more than one word`).toBeGreaterThan(expectedWords.length);
+      await page.evaluate(() => document.fonts.ready);
+      for (const width of SEGMENT_WIDTHS) {
+        await page.setViewportSize({ width, height: width <= 390 ? 640 : 800 });
+        const perSegment = await wordLines(words);
+        expect(
+          perSegment.map((segment) => segment.map((w) => w.word)),
+          `${locale} at ${width}px: every word of every segment was measured`,
+        ).toEqual(expectedWords);
+        for (const [i, segment] of perSegment.entries()) {
+          for (const w of segment) {
+            expect(w.lines, `${locale} segment ${i + 1} "${dictionary[i]}" at ${width}px: the word "${w.word}" is broken across ${w.lines} lines`).toBe(1);
+            checked += 1;
+          }
+        }
+        owed += expectedWords.flat().length;
+        // Wrapping at a space is the fallback, not a way to lose the 44px target or to clip a line.
+        const clipped = await words.evaluateAll((els) => els.map((el) => ({ word: el.textContent ?? "", over: el.scrollWidth - el.clientWidth })));
+        for (const c of clipped) {
+          expect(c.over, `${locale} "${c.word}" at ${width}px: ${c.over}px of it is hidden`).toBeLessThanOrEqual(0);
+        }
+        for (const segment of await form.locator("fieldset label").all()) {
+          await expectTapTarget(segment, `${locale} segment at ${width}px`);
+        }
+        await expectNoHorizontalScroll(page);
+      }
+    }
+    // Anti-vacuity: every language x every width x every dictionary word was measured, and there were words to measure.
+    expect(owed).toBeGreaterThan(0);
+    expect(checked).toBe(owed);
+  });
+});

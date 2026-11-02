@@ -1,8 +1,14 @@
 "use client";
 
-// Competition wizard (PROMPT-15 task 1; reshaped by Match Day C8): one column —
-// Name, Dates, Visibility, Who will find it, Showcase, Description, Create.
+// Competition wizard (PROMPT-15 task 1; reshaped by Match Day C8): Name, Dates,
+// Visibility, Who will find it, Showcase, Description, Create — in that DOM and
+// tab order. One column below `lg`; from `lg` two (the decisions left, the
+// description right, one footer across both).
 // POSTs /api/v1/competitions, then shows "Add your first division".
+//
+// Three roots carry `data-wide-page` (this form, the degraded-create card, and
+// FirstDivisionPrompt): `o/[orgSlug]/c/new/page.tsx` widens its <main> from `lg`
+// while any of them is mounted. The template gallery's own degrade card does not.
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
@@ -183,7 +189,7 @@ export function CompetitionWizard({
     // "Pro hosts 10" as an offer.
     const gain = publicDashboardGain(degraded.limit, publicDashboardUpgrade);
     return (
-      <div className="card space-y-4 p-6" data-testid="public-quota-degraded">
+      <div className="card space-y-4 p-6 lg:max-w-2xl" data-testid="public-quota-degraded" data-wide-page>
         <h2 className="text-lg font-semibold text-slate-800">
           {msg("comp.wizard.publicDegraded.title")}
         </h2>
@@ -228,7 +234,7 @@ export function CompetitionWizard({
   if (created) return <FirstDivisionPrompt orgSlug={orgSlug} created={created} />;
 
   return (
-    <div className="max-w-2xl lg:max-w-none">
+    <div className="max-w-2xl lg:max-w-none" data-wide-page>
       {/* One DOM, two compositions. Below `lg` this is the single column it has
           always been (`max-lg:space-y-5` between the two groups). From `lg` it is
           a grid: the decisions on the left (name, dates, who can see it, who will
@@ -318,6 +324,7 @@ export function CompetitionWizard({
             placeholder={msg("comp.wizard.description.placeholder")}
             touch
             fill
+            showPlaceholder
           />
         </div>
 
