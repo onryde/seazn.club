@@ -324,26 +324,89 @@ describe("PB1 item 3: the tap, and the card that completes", () => {
     expect([isOpen(i, 0), isOpen(i, 1)]).toEqual([true, true]);
   });
 
-  it("the choice is kept across the re-render a router refresh brings (same page visit), and the card's default follows new props otherwise", () => {
+  it("the choice is kept across the re-render a router refresh brings (same page visit), opened and folded alike", () => {
     const i = island();
     tapToggle(i); // open it by hand
     i.rerender(panelProps() as unknown as PanelProps);
     expect(isOpen(i), "still open: the person's choice").toBe(true);
     tapToggle(i); // fold it
-    i.rerender(panelProps({ attentionStageIds: [A] }) as unknown as PanelProps);
-    expect(isOpen(i), "still folded: attention is the default, not a command").toBe(false);
+    i.rerender(panelProps() as unknown as PanelProps);
+    expect(isOpen(i), "still folded: the person's choice").toBe(false);
   });
 
-  it("a stage that COMPLETES is folded on the next render; the card it was before had no toggle", () => {
+  // Controller ruling 2, applied to the card (review m1): the card's default is decided the FIRST time it is seen. A stage that completes
+  // during the visit - or a completed card whose reason to stay open goes away - stays open until a reload or a tap.
+  it("ruling 2: a stage that COMPLETES during the visit gains its toggle but stays open; a fresh load of the same data is folded", () => {
     const running = panelProps({ stages: [stageRow({ status: "active" })], fixtures: [...playedFixtures(A).slice(0, 2), fixture(A, 3, { status: "in_play", outcome: null })] });
     const i = renderIsland(StagesPanel, running as unknown as PanelProps);
     expect(toggleEls(i), "running: no toggle").toHaveLength(0);
     expect(propsOf(bodyOf(i, A)).hidden).toBe(false);
     i.rerender(panelProps() as unknown as PanelProps); // the server says: complete, every match settled
     expect(toggleEls(i), "completed: a toggle").toHaveLength(1);
-    expect(isOpen(i), "and it starts folded").toBe(false);
-    expect(propsOf(bodyOf(i, A)).hidden).toBe(true);
-    expect(controlsShown(i)).toBe(0);
+    expect(isOpen(i), "but it stays open under the person").toBe(true);
+    expect(propsOf(bodyOf(i, A)).hidden).toBe(false);
+    expect(controlsShown(i), "with its controls").toBe(1);
+    i.rerender(panelProps() as unknown as PanelProps);
+    expect(isOpen(i), "a second refresh: still open").toBe(true);
+    tapToggle(i);
+    expect(isOpen(i), "the person can fold it").toBe(false);
+    // The reload (the positive pair): a fresh mount of the completed stage starts folded.
+    const fresh = island();
+    expect(isOpen(fresh), "reload: folded").toBe(false);
+    expect(propsOf(bodyOf(fresh, A)).hidden).toBe(true);
+  });
+
+  it("ruling 2: a completed card held open by a reason that then goes away stays open - the match settles, the warning clears, the panel closes", () => {
+    let checked = 0;
+    const cases: [string, Record<string, unknown>, Record<string, unknown>][] = [
+      ["an open match settles", { fixtures: [...playedFixtures(A), fixture(A, 4, { status: "in_play", outcome: null })] }, { fixtures: [...playedFixtures(A), fixture(A, 4)] }],
+      ["the warning clears", { attentionStageIds: [A] }, { attentionStageIds: [] }],
+    ];
+    for (const [name, before, after] of cases) {
+      const i = island(before);
+      expect(isOpen(i), `${name}: premise, open at load`).toBe(true);
+      i.rerender(panelProps(after) as unknown as PanelProps);
+      expect(isOpen(i), `${name}: still open`).toBe(true);
+      expect(propsOf(bodyOf(i, A)).hidden, name).toBe(false);
+      checked++;
+    }
+    // The settings panel a deep link opened: closing it (its own button) leaves the card open.
+    const i = island({ initialOpenPanels: ["format"] });
+    expect(isOpen(i), "panel: premise, open at load").toBe(true);
+    (propsOf(ofId(i, "stage-tool-format")[0]!).onClick as () => void)();
+    expect(ofId(i, "stage-tool-format").map((el) => propsOf(el)["aria-expanded"]), "premise: the panel closed").toEqual([false]);
+    expect(isOpen(i), "the panel closes: the card stays open").toBe(true);
+    checked++;
+    expect(checked, "anti-vacuity: every reason to stay open").toBe(3);
+  });
+
+  // Review m3: attention is a default, so a card the person folded used to stay folded when a warning (W3's Swiss cut drift) arrived
+  // afterwards, and the folded line carries no marker. A warning that ARRIVES re-opens the card; the person may fold it again.
+  it("a warning that arrives after the person folded the card re-opens it; folded again, it stays folded while that warning stays", () => {
+    const i = island();
+    tapToggle(i);
+    tapToggle(i); // folded by hand
+    expect(isOpen(i)).toBe(false);
+    i.rerender(panelProps({ attentionStageIds: [A] }) as unknown as PanelProps);
+    expect(isOpen(i), "the warning arrives: open").toBe(true);
+    expect(propsOf(bodyOf(i, A)).hidden).toBe(false);
+    tapToggle(i); // read it, fold it
+    i.rerender(panelProps({ attentionStageIds: [A] }) as unknown as PanelProps);
+    expect(isOpen(i), "the same warning on the next refresh: the person's fold holds").toBe(false);
+    i.rerender(panelProps({ attentionStageIds: [] }) as unknown as PanelProps);
+    expect(isOpen(i), "the warning clears: still folded").toBe(false);
+    i.rerender(panelProps({ attentionStageIds: [A] }) as unknown as PanelProps);
+    expect(isOpen(i), "a new warning arrives: open again").toBe(true);
+  });
+
+  it("a warning on another stage leaves a folded card alone", () => {
+    const i = island({
+      stages: [stageRow(), stageRow({ id: B, seq: 2, name: "Playoffs", status: "complete" })],
+      fixtures: [...playedFixtures(A), ...playedFixtures(B)],
+    });
+    expect([isOpen(i, 0), isOpen(i, 1)], "premise: both folded").toEqual([false, false]);
+    i.rerender(panelProps({ stages: [stageRow(), stageRow({ id: B, seq: 2, name: "Playoffs", status: "complete" })], fixtures: [...playedFixtures(A), ...playedFixtures(B)], attentionStageIds: [B] }) as unknown as PanelProps);
+    expect([isOpen(i, 0), isOpen(i, 1)], "only B opens").toEqual([false, true]);
   });
 
   it("a card the person opened, whose stage then stops being complete, shows its body and loses the toggle (nothing stays folded behind a toggle it no longer has)", () => {

@@ -118,7 +118,7 @@ import { swissPairingMenuFor } from "@/lib/swiss-pairing-menu";
 // `BRACKET_STAGE_KINDS`) are the SINGLE authorities now (R2a/R10,
 // docs/superpowers/specs/2026-09-02-competition-desk-prompts/_INDEX.md) —
 // this file's own former copies are deleted below.
-import { buildRunSheet, isBye, roundDone, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
+import { buildRunSheet, isBye, latchedOpen, roundDone, type RunSheetFixture, type RunSheetOnlinePlay } from "@/lib/run-sheet-groups";
 import { RUN_SHEET_FILTER_LABEL, RunSheet, RunSheetFilterBar, runSheetHasRows, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { isOnlineGameExists } from "@/lib/open-round";
@@ -659,6 +659,11 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // Match Day PB1: which completed cards the person has folded / opened by hand, by stage id - their tap over the card's default
   // (`stageCardCollapse`). Kept for the page visit and nothing longer: no storage, a reload starts every card from its default again.
   const [stageToggled, setStageToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  // Controller ruling 2: the card's default is decided the FIRST time it is seen and then held (`latchedOpen`): a stage that completes
+  // during the visit stays open. And the stages with a warning on them at the last render (review m3): a warning that ARRIVES clears a
+  // person's fold, so it is never hidden behind a choice made before it existed. Both are written during render, never in an effect.
+  const [stageLatch, setStageLatch] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const [attentionWas, setAttentionWas] = useState<ReadonlySet<string>>(() => new Set(attentionStageIds ?? []));
   const togglePanel = (stageId: string, panel: StagePanelKey) =>
     setOpenPanels((prev) => {
       const next = new Set(prev);
@@ -1108,16 +1113,37 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // Match Day PB1 (owner 2026-11-02): a completed stage is one line - number and name, the Completed pill and "N of M done" - until
         // someone opens it. Its settings buttons and actions fold away with the body (their panels render in the body, so a button that
         // opened an unseen panel would be a lie); they come back on open. Open by default when something on the card wants a person.
+        const attention = attentionStageIds?.includes(stage.id) === true;
         const collapse = stageCardCollapse({
           status: stage.status,
           realMatches: stageNonByeCount,
           openMatches: counts.inPlay + counts.unplayed,
-          attention: attentionStageIds?.includes(stage.id) === true,
+          attention,
           panelOpen: [...openPanels].some((key) => key.startsWith(`${stage.id}:`)),
         });
+        // Ruling 2: the default as first seen, moving only toward open (a non-complete stage is open, so one that completes stays so).
+        const latchWas = stageLatch.get(stage.id);
+        const latched = latchedOpen(latchWas, collapse.startsOpen);
+        if (latched !== latchWas) setStageLatch((prev) => new Map(prev).set(stage.id, latched));
+        // m3: a warning that arrives since the last render drops the person's fold (the latch above already reads it as open).
+        if (attention !== attentionWas.has(stage.id)) {
+          setAttentionWas((prev) => {
+            const next = new Set(prev);
+            if (attention) next.add(stage.id);
+            else next.delete(stage.id);
+            return next;
+          });
+          if (attention && stageToggled.has(stage.id)) {
+            setStageToggled((prev) => {
+              const next = new Map(prev);
+              next.delete(stage.id);
+              return next;
+            });
+          }
+        }
         // The person's tap over the default - and only while the card has a toggle: a stage that stops being complete is never folded
         // behind a choice made when it was (`folded` asks `collapsible` first).
-        const cardOpen = stageToggled.get(stage.id) ?? collapse.startsOpen;
+        const cardOpen = stageToggled.get(stage.id) ?? latched;
         const folded = collapse.collapsible && !cardOpen;
         const stageBodyId = `stage-body-${stage.id}`;
         // Match Day E1 item 1: the card's old footer row ("To schedule in this stage N ->", a link to the Schedule page) is gone - the
