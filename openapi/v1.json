@@ -43465,7 +43465,7 @@
             }
           },
           "404": {
-            "description": "Not found",
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {

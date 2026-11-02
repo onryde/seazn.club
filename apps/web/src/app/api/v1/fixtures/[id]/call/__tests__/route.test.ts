@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { FixtureCallPreview, FixtureCallUndone, FixtureCalled } from "@/server/api-v1/schemas";
+import { ROUTES } from "@/server/api-v1/openapi";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { at, between, callRows, person, place, seedCompetition, slotOf, type Day, seedDay } from "@/server/usecases/__tests__/_match-day-seed";
 import { msgFor } from "@/lib/messages-i18n";
@@ -103,6 +104,27 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/call", () => {
     expect(again.body.error).toEqual({ code: "NOT_CALLED", message: expect.any(String) });
   });
 
+  it("G4: an unknown fixture id is a 404 on all three doors - and the OpenAPI table lists the status each door really answers", async () => {
+    const id = "00000000-0000-4000-8000-000000000404";
+    const doors: Array<[string, string, () => Promise<Response>]> = [
+      ["post", "/fixtures/{id}/call", () => callRoute(req("POST", `/fixtures/${id}/call`, { court_id: day.courts.c1 }), ctx(id))],
+      ["delete", "/fixtures/{id}/call", () => undoRoute(req("DELETE", `/fixtures/${id}/call`), ctx(id))],
+      ["post", "/fixtures/{id}/call/preview", () => previewRoute(req("POST", `/fixtures/${id}/call/preview`, { court_id: day.courts.c1 }), ctx(id))],
+    ];
+    let checked = 0;
+    for (const [method, path, run] of doors) {
+      const res = await read(await run());
+      expect(res.status, `${method} ${path}`).toBe(404);
+      expect(res.body.ok, `${method} ${path}`).toBe(false);
+      const route = ROUTES.find((r) => r.method === method && r.path === path);
+      expect(route, `${method} ${path} is in the OpenAPI table`).toBeDefined();
+      // The wire's own answer is what the table has to list (not a number typed here).
+      expect(route!.errors, `${method} ${path}`).toContain(res.status);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
   it("the preview's pushed matches carry the round in the reader's language: the seazn_locale cookie reaches the answer (E2 item 7)", async () => {
     const [p1, p2, p3, p4] = day.comp.pairs;
     const called = between(day.comp, p1!, p2!);
@@ -194,5 +216,26 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/call", () => {
     }
     expect(await slotOf(f.id)).toEqual(before);
     expect(await callRows(f.id)).toEqual([]);
+  });
+});
+
+// G4: the same table check with no database, so it runs on every machine. The three doors share one set of refusals, and a
+// door that forgets one documents less than it raises. 402 = the competition is read-only (F1), 404 = no such fixture (the auth
+// wrapper), 409 = the hard stops and NOT_CALLED. Typed from the three doors' behaviour above, not read from the table.
+describe("OpenAPI: the three call doors list the same refusals", () => {
+  it("POST call, DELETE call and POST preview each list 402, 404 and 409 (count reported)", () => {
+    const doors = [
+      ["post", "/fixtures/{id}/call"],
+      ["delete", "/fixtures/{id}/call"],
+      ["post", "/fixtures/{id}/call/preview"],
+    ] as const;
+    let checked = 0;
+    for (const [method, path] of doors) {
+      const route = ROUTES.find((r) => r.method === method && r.path === path);
+      expect(route, `${method} ${path} is in the OpenAPI table`).toBeDefined();
+      expect([...(route!.errors ?? [])].sort(), `${method} ${path}`).toEqual([402, 404, 409]);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });
