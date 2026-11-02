@@ -314,6 +314,40 @@ test("E1: a started Swiss stage groups its rows under a bar per round, with the 
   await expectNoHorizontalScroll(page);
 });
 
+// Match Day E1 fix round 1 (m2): a group stage's rounds are played per POOL, so its card has one bar per pool per round, "Group A . Round 1".
+test("E1 fix 1: a group stage with two pools has a bar per pool per round, Group A first, each counting its own matches", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `E1 pool bars ${TAG}`, visibility: "private" });
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Groups",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divisionId = div.data!.id;
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } });
+  await addEntrantsViaApi(request, divisionId, ["G1", "G2", "G3", "G4", "G5", "G6"].map((n) => `${n} ${TAG}`));
+  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+  expect(started.status, `division start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+
+  const card = await openCard(page, request, divisionId, stage.data!.id);
+  await page.getByTestId("run-sheet-filter").locator('[data-filter="all"]').click();
+  const bars = card.getByTestId("run-sheet-round-bar");
+  // Two pools of three: each pool plays three rounds of one match (and a bye).
+  const count = await bars.count();
+  expect(count, "a bar per pool per round: two pools, at least two rounds each").toBeGreaterThanOrEqual(4);
+  expect(count % 2, "both pools have the same number of rounds").toBe(0);
+  const half = count / 2;
+  const titles = await bars.evaluateAll((els) => els.map((el) => el.querySelector("span")?.textContent ?? ""));
+  for (let i = 0; i < half; i++) {
+    expect(titles[i], `Group A's round ${i + 1} comes first`).toBe(`Group A \u00b7 Round ${i + 1}`);
+    expect(titles[half + i], `then Group B's round ${i + 1}`).toBe(`Group B \u00b7 Round ${i + 1}`);
+  }
+  await expect(bars.first(), "each bar counts its own pool's matches").toContainText("0 of 1 done");
+  await expect(card.locator("[data-run-sheet-pool]"), "a section per bar").toHaveCount(count);
+  await expectNoHorizontalScroll(page);
+});
+
 // Match Day E1 item 3 (owner 2026-11-01): the bracket tree opens INSIDE its knockout stage's card from a "Bracket" header button (closed by
 // default), not above the cards. Double elimination keeps its page view and gets no button. Driven through the real page: the page-level
 // mount, the card's button, the phone sheet's row and the card's own scroller all have to agree.

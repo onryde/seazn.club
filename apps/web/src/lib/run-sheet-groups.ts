@@ -71,7 +71,11 @@ export type RunSheetFixture = Pick<
   | "abandon_reason"
   // W2c Task 19 (S4): the match plays a format of its own - the "Format changed" chip (`desk/run-sheet-tags.ts`).
   | "format_changed"
->;
+> &
+  // Match Day E1 fix round 1 (m2): a group stage's rounds are per POOL, so a stage card's round bars need the pool a row belongs to. OPTIONAL
+  // on purpose: the wire row always carries it (`toRunSheetFixture` spreads the whole row), but a hand-built fixture that predates it is a
+  // row with no pool, which is what absent means - the same posture `ext_key`/`lane` take on `FixtureRow` itself.
+  Partial<Pick<FixtureRow, "pool_id">>;
 
 export type RunSheetStage = { id: string; seq: number; kind: string };
 
@@ -352,36 +356,53 @@ export function buildRunSheet(input: RunSheetInput): RunSheetBlock[] {
 // these pure functions regroup ONE non-bracket stage's rows from those same blocks.
 // ---------------------------------------------------------------------------
 
-/** One round of a non-bracket stage as the card shows it: its rows in the order they are read. */
-export type StageRoundSection = { round: number; fixtures: RunSheetFixture[] };
+/** One round of a non-bracket stage as the card shows it: its rows in the order they are read. `poolId` is the pool the round belongs to
+ *  (a group stage plays each pool's rounds on its own), or null for a stage with no pools. */
+export type StageRoundSection = { poolId: string | null; round: number; fixtures: RunSheetFixture[] };
 
 /**
- * One NON-BRACKET stage's rows from the division's blocks, as round sections in the order the rounds are played. Within a round the rows run in time
- * order and the ones with no time sit last, in the order the draw gave them: the rows a person plays first are read first, and
- * "No time yet" never interrupts a timed run. Bracket blocks are skipped (a knockout keeps its own named rounds); a bye the
- * grouping kept (a Swiss sit-out) rides in its round as an untimed row.
+ * One NON-BRACKET stage's rows from the division's blocks, as round sections: one per ROUND, and per POOL within a group stage
+ * (Group A's Round 1 and Group B's Round 1 are two sections). Pools read in `poolOrder` (the display order the page owns, pool id ->
+ * position) with rows of no pool first and a pool `poolOrder` does not list after every listed one; within a pool the rounds read in the
+ * order they are played. Within a round the rows run in time order and the ones with no time sit last, in the order the draw gave them:
+ * the rows a person plays first are read first, and "No time yet" never interrupts a timed run. Bracket blocks are skipped (a knockout
+ * keeps its own named rounds); a bye the grouping kept (a Swiss sit-out) rides in its round as an untimed row.
  *
  * Reads the blocks, never the raw fixture list, so a row `buildRunSheet` leaves off (an untimed league bye, R7c) is absent here too.
  */
-export function stageRoundSections(blocks: readonly RunSheetBlock[], stageId: string): StageRoundSection[] {
-  const byRound = new Map<number, RunSheetFixture[]>();
+export function stageRoundSections(
+  blocks: readonly RunSheetBlock[],
+  stageId: string,
+  poolOrder: ReadonlyMap<string, number> = NO_POOL_ORDER,
+): StageRoundSection[] {
+  const sections = new Map<string, StageRoundSection>();
   for (const f of stageRowsOutsideBrackets(blocks, stageId)) {
-    const list = byRound.get(f.round_no) ?? [];
-    list.push(f);
-    byRound.set(f.round_no, list);
+    const poolId = f.pool_id ?? null;
+    const key = `${poolId ?? ""}\u0000${f.round_no}`;
+    const section = sections.get(key) ?? { poolId, round: f.round_no, fixtures: [] };
+    section.fixtures.push(f);
+    sections.set(key, section);
   }
-  const sorted = [...byRound.entries()].map(([round, fixtures]) => ({ round, fixtures: [...fixtures].sort(inReadingOrder) }));
+  const sorted = [...sections.values()].map((s) => ({ ...s, fixtures: [...s.fixtures].sort(inReadingOrder) }));
   // Rounds read in the order they are PLAYED (design/fix-ui/03: a Tour 3 that kicked off a day before Tour 1 is not "last"): by the
   // earliest kickoff in the round, the rounds with no time at all after them, and round number to break every tie - which is
   // also the whole order while nothing is timed yet.
   const earliest = (r: StageRoundSection): number => (r.fixtures[0]?.scheduled_at != null ? Date.parse(r.fixtures[0].scheduled_at) : Number.POSITIVE_INFINITY);
+  const poolRank = (poolId: string | null): number => (poolId === null ? -1 : (poolOrder.get(poolId) ?? Number.POSITIVE_INFINITY));
   return sorted.sort((a, b) => {
+    const pa = poolRank(a.poolId);
+    const pb = poolRank(b.poolId);
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    // Two pools the order does not list: id, only so the order is stable.
+    if (a.poolId !== b.poolId) return (a.poolId ?? "") < (b.poolId ?? "") ? -1 : 1;
     const ea = earliest(a);
     const eb = earliest(b);
     if (ea !== eb) return ea < eb ? -1 : 1;
     return a.round - b.round;
   });
 }
+
+const NO_POOL_ORDER: ReadonlyMap<string, number> = new Map();
 
 /**
  * One NON-BRACKET stage's rows as a single list - for a kind whose rounds are not worth a bar (the ladder, which stores each challenge
@@ -391,7 +412,7 @@ export function stageRoundSections(blocks: readonly RunSheetBlock[], stageId: st
  */
 export function stageFlatSection(blocks: readonly RunSheetBlock[], stageId: string): StageRoundSection[] {
   const fixtures = [...stageRowsOutsideBrackets(blocks, stageId)].sort(inReadingOrder);
-  return fixtures.length === 0 ? [] : [{ round: 0, fixtures }];
+  return fixtures.length === 0 ? [] : [{ poolId: null, round: 0, fixtures }];
 }
 
 /** A stage's rows out of the division's non-bracket blocks, in no particular order. */

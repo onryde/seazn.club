@@ -48,7 +48,7 @@ import { findCourtHref } from "@/lib/match-day/view";
 import { needsYouHome } from "@/components/v2/desk/needs-you";
 import { DeskOpenMenu, type DeskOpenItem } from "@/components/v2/desk/desk-open-menu";
 import { comparePools } from "@/lib/pool-order";
-import { poolLabel } from "@/lib/pool-label";
+import { poolLabel, poolLabelsInOrder } from "@/lib/pool-label";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -516,6 +516,21 @@ export default async function DivisionPage({
   // It asks no plan question: scoring is free on every plan (owner, 2026-10-19), and the server's own gate stays.
   const pointsDict = fixturesPublicDict === undefined ? undefined : pointsLineDict(fixturesPublicDict);
 
+  // The fixtures tab's group-stage cards name the pool on each round's bar ("Group A - Round 1"): the division's pools in display order,
+  // each labelled from its key in this viewer's words (`poolLabelsInOrder` = the pool-order and pool-label authorities). Only a group
+  // stage has pools, so a division without one reads nothing.
+  const groupStageIds = stages.filter((s) => s.kind === "group").map((s) => s.id);
+  const fixturePools =
+    tab === "fixtures" && fixturesPublicDict !== undefined && groupStageIds.length > 0
+      ? poolLabelsInOrder(
+          fixturesPublicDict,
+          await withTenant(auth.orgId, (tx) =>
+            tx<{ id: string; key: string; name: string }[]>`
+              select id, key, name from pools where stage_id in ${tx(groupStageIds)}`,
+          ),
+        )
+      : undefined;
+
   // Standings per table stage (+ per pool), with pool labels.
   const tableStages = stages.filter((s) => TABLE_KINDS.has(s.kind));
   const standings =
@@ -982,6 +997,7 @@ export default async function DivisionPage({
               // page-level tree was handed before it moved into the card).
               entrantBadges={entrantLogos}
               headlines={headlines}
+              pools={fixturePools}
               activeEntrantIds={activeEntrantIds}
               entrantSeeds={entrantSeeds}
               venues={panelVenues}

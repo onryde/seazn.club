@@ -12,6 +12,11 @@ import { RunSheet, type RunSheetFilter } from "@/components/v2/desk/run-sheet";
 import { BRACKET_STAGE_KINDS, ROUND_SEQUENCE_STAGE_KINDS, buildRunSheet, isBye, type RunSheetFixture } from "@/lib/run-sheet-groups";
 import { dayLabel } from "@/lib/day-label";
 import { LOCALES, type Dict, type Locale } from "@/lib/i18n-constants";
+import { poolLabelsInOrder } from "@/lib/pool-label";
+import enPublic from "@/dictionaries/en/public.json";
+import esPublic from "@/dictionaries/es/public.json";
+import frPublic from "@/dictionaries/fr/public.json";
+import nlPublic from "@/dictionaries/nl/public.json";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
@@ -62,7 +67,7 @@ const stage = (kind: string): Stage[] => [{ id: "s1", seq: 1, kind, name: "Stage
 function sheet(
   fixtures: RunSheetFixture[],
   stages: Stage[],
-  o: { embedded?: boolean; locale?: Locale; filter?: RunSheetFilter; nowMs?: number; awaitingSettle?: string[] } = {},
+  o: { embedded?: boolean; locale?: Locale; filter?: RunSheetFilter; nowMs?: number; awaitingSettle?: string[]; pools?: { id: string; label: string }[] } = {},
 ): string {
   const locale = o.locale ?? "en";
   const nowMs = o.nowMs ?? NOW_MS;
@@ -83,6 +88,7 @@ function sheet(
         stageId={(o.embedded ?? true) ? "s1" : null}
         embedded={o.embedded ?? true}
         awaitingSettle={o.awaitingSettle}
+        pools={o.pools}
       />
     </DictProvider>,
   );
@@ -244,6 +250,64 @@ describe("E1 item 1: a table stage's card groups its rows under a bar per round"
     expect(bars(html)[0]).toMatch(/^Final · /);
     expect(html).toContain(UI["runsheet.noTimeYet"]!);
     expect(text(html)).not.toContain("Round 1");
+  });
+
+  // Match Day E1 fix round 1 (m2): a group stage's card has one bar per pool per round - "Group A - Round 1" - each counting its own matches.
+  describe("a group stage: one bar per pool per round", () => {
+    const PUBLIC: Record<Locale, Record<string, string>> = { en: enPublic, es: esPublic, fr: frPublic, nl: nlPublic };
+    const poolRows = [{ id: "pB", key: "B", name: "Pool B" }, { id: "pA", key: "A", name: "Pool A" }];
+    const WIN = { kind: "win", winner: "e1" };
+    // Group A: round 1 has a played and an open match, round 2 one open. Group B: round 1 one played match, round 2 one open.
+    const rows = (): RunSheetFixture[] => [
+      fx(1, { pool_id: "pA", round_no: 1, status: "decided", outcome: WIN, scheduled_at: `${DAY}T10:00:00.000Z` }),
+      fx(2, { pool_id: "pA", round_no: 1, scheduled_at: `${DAY}T10:40:00.000Z` }),
+      fx(3, { pool_id: "pA", round_no: 2, scheduled_at: `${DAY}T14:00:00.000Z` }),
+      fx(4, { pool_id: "pB", round_no: 1, status: "decided", outcome: WIN, scheduled_at: `${DAY}T10:00:00.000Z` }),
+      fx(5, { pool_id: "pB", round_no: 2, scheduled_at: `${DAY}T14:40:00.000Z` }),
+    ];
+
+    it("every locale: four bars, 'Group A - Round 1' in the locale's own words, Group A's rounds first (the order the page hands over)", () => {
+      let checked = 0;
+      for (const locale of LOCALES) {
+        const pub = PUBLIC[locale];
+        const ui = DICTS[locale] as Record<string, string>;
+        const pools = poolLabelsInOrder(pub as never, poolRows);
+        const html = sheet(rows(), stage("group"), { locale, pools });
+        const label = (key: string) => pub["table.poolLabel"]!.replace("{key}", key);
+        const round = (n: number) => ui["schedule.round"]!.replace("{n}", String(n));
+        const heads = bars(html).map((line) => line.split(" · ").slice(0, 2).join(" · "));
+        expect(heads, `${locale}: bars, pool then round`).toEqual([
+          `${label("A")} · ${round(1)}`,
+          `${label("A")} · ${round(2)}`,
+          `${label("B")} · ${round(1)}`,
+          `${label("B")} · ${round(2)}`,
+        ]);
+        // Each bar counts ITS pool's matches only: A1 1 of 2 done, A2 0 of 1, B1 1 of 1, B2 0 of 1.
+        const facts = bars(html).map((line) => line.split(" · ")[2]);
+        expect(facts, `${locale}: each pool's own count`).toEqual([done(1, 2, ui), done(0, 1, ui), done(1, 1, ui), done(0, 1, ui)]);
+        expect(rowNos(html), `${locale}: rows under their own bar`).toEqual([1, 2, 3, 4, 5]);
+        checked++;
+      }
+      expect(checked).toBe(LOCALES.length);
+    });
+
+    it("the bars of every pool add up to the stage's counts, and the NOW rule still appears once", () => {
+      const pools = poolLabelsInOrder(enPublic as never, poolRows);
+      const html = sheet(rows(), stage("group"), { pools });
+      const sum = bars(html).map((line) => /(\d+) of (\d+) done/.exec(line)!).reduce((a, m) => ({ done: a.done + Number(m[1]), total: a.total + Number(m[2]) }), { done: 0, total: 0 });
+      expect(sum).toEqual({ done: stageCounts(rows()).played, total: rows().length });
+      expect(html.split('data-testid="run-sheet-now"').length - 1, "one NOW rule for the card").toBe(1);
+    });
+
+    it("a pool the panel was not told about is still its own bar, plainly 'Round N' - never merged into another pool's", () => {
+      const html = sheet(rows(), stage("group"), { pools: poolLabelsInOrder(enPublic as never, [poolRows[1]!]) });
+      expect(bars(html).map((line) => /^(.*?) · \d+ of \d+ done/.exec(line)?.[1])).toEqual(["Group A · Round 1", "Group A · Round 2", "Round 1", "Round 2"]);
+    });
+
+    it("a league (no pools) is unchanged: 'Round N' bars with no pool word, whether or not pools are handed over", () => {
+      const html = sheet([fx(1), fx(2, { round_no: 2 })], stage("league"), { pools: poolLabelsInOrder(enPublic as never, poolRows) });
+      expect(bars(html).map((line) => line.split(" · ")[0])).toEqual(["Round 1", "Round 2"]);
+    });
   });
 
   // Match Day E1 fix round 1 (I1): the bars add up to the stage card's own counts. The card's Complete button reads `stageCounts` over the

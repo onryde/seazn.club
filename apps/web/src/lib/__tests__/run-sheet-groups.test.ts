@@ -611,6 +611,46 @@ describe("stageRoundSections - one non-bracket stage's rows by round", () => {
   });
 });
 
+// Match Day E1 fix round 1 (m2): a group stage's rounds are PER POOL - Group A's Round 1 and Group B's Round 1 are two sections, not one.
+describe("stageRoundSections - pools: one section per pool per round", () => {
+  const GROUP = { id: "g1", seq: 1, kind: "group" };
+  const pooled = (fixtures: ReturnType<typeof fx>[], order?: ReadonlyMap<string, number>) =>
+    stageRoundSections(buildRunSheet(input({ stages: [GROUP], fixtures })), "g1", order);
+  const row = (id: string, pool: string | null, round: number, extra: Partial<ReturnType<typeof fx>> = {}) =>
+    fx({ id, stage_id: "g1", pool_id: pool, round_no: round, fixture_no: Number(id.replace(/\D/g, "")) || 1, scheduled_at: null, ...extra } as never);
+  const ORDER = new Map([["pA", 0], ["pB", 1]]);
+
+  it("the empty case: no rows is no section", () => {
+    expect(pooled([], ORDER)).toEqual([]);
+  });
+
+  it("pool by pool in the order given, each pool's rounds in play order; a section holds only its own pool's rows", () => {
+    const out = pooled(
+      [row("b1", "pB", 1), row("a2", "pA", 2), row("b2", "pB", 2), row("a1", "pA", 1), row("a1b", "pA", 1, { seq_in_round: 2, fixture_no: 7 })],
+      ORDER,
+    );
+    expect(out.map((s) => [s.poolId, s.round])).toEqual([["pA", 1], ["pA", 2], ["pB", 1], ["pB", 2]]);
+    expect(out.map((s) => s.fixtures.map((f) => f.id))).toEqual([["a1", "a1b"], ["a2"], ["b1"], ["b2"]]);
+    expect(out.length, "anti-vacuity: four sections").toBe(4);
+  });
+
+  it("the order is the caller's, not the id's: B first when B is listed first", () => {
+    const out = pooled([row("a1", "pA", 1), row("b1", "pB", 1)], new Map([["pB", 0], ["pA", 1]]));
+    expect(out.map((s) => s.poolId)).toEqual(["pB", "pA"]);
+  });
+
+  it("a pool the order does not list reads after every listed one; rows with no pool at all read first and are one section per round", () => {
+    const out = pooled([row("x1", "pX", 1), row("a1", "pA", 1), row("n1", null, 1), row("n2", null, 1, { fixture_no: 9 })], ORDER);
+    expect(out.map((s) => s.poolId)).toEqual([null, "pA", "pX"]);
+    expect(out[0]!.fixtures.map((f) => f.id)).toEqual(["n1", "n2"]);
+  });
+
+  it("a stage with no pools at all is sectioned by round exactly as before (the league path)", () => {
+    const out = pooled([row("r2", null, 2), row("r1", null, 1)]);
+    expect(out.map((s) => [s.poolId, s.round])).toEqual([[null, 1], [null, 2]]);
+  });
+});
+
 // Match Day E1 fix round 1 (I1): the bar's number is the SHARED count. The stage card's Complete button reads `stageCounts`; a bar that
 // counts "played" differently can say "1 of 2 played" on a stage that can already be completed (a walkover, an abandonment and a cancellation
 // are settled to the stage). So the bar asks `stageCounts` itself, over the round's real matches.

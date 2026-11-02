@@ -366,6 +366,9 @@ interface Props {
   entrantBadges?: Record<string, string | null>;
   /** Match Day E1 item 3: fixture id -> its scoreline headline, for the same tree (`listFixtureHeadlines`, the page's own map). */
   headlines?: Record<string, string>;
+  /** Match Day E1 fix round 1 (m2): the division's pools in display order with their labels (`poolLabelsInOrder`, built by the page), so a
+   *  group stage's card names the pool on each round's bar. Optional: absent, the bars are the plain round. */
+  pools?: readonly { id: string; label: string }[];
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
   /** The GOVERNING venue clock (`settings.orgTz`, #448), resolved server-side.
@@ -540,7 +543,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -892,6 +895,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
        board renders these very fixtures with. Derived from the WHOLE division fixture list (never `blocks`, which is grouped and
        filtered), and never a second query. */
     feedLabels: runSheetFeedLabels,
+    pools,
   };
   // Does the filter leave ANY row in ANY stage? When none does, the panel says so once (with the way back) and the stage sheets stay
   // quiet instead of each repeating it.
