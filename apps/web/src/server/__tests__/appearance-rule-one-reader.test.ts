@@ -71,6 +71,14 @@ const EXEMPT: readonly Exemption[] = [
       "/me's upcoming duties (scheduled/in_play) and 'Recent results' — a TEAM's results feed (entrant v opponent, the team a coach follows too), not a count of matches the person played",
   },
   { file: "src/server/usecases/me.ts", fn: "myPersonOnFixture", sites: 1, reason: "authorises a claimed person's availability write on their entrant's fixture; credits nothing" },
+  // Timing a person against their neighbours on the schedule, not crediting them a match.
+  {
+    file: "src/server/usecases/match-day-call.ts",
+    fn: "restGaps",
+    sites: 1,
+    reason:
+      "Match Day's rest warning (spec 7.2): the gap between the called slot and the person's last finish / next planned start, over the scheduler's own roster notion of who is on a side (peopleByEntrant + peopleOf, the PLAYER_BUSY hold in the same file). It times people and counts or credits no match; the next-start half is a planned match with no played appearance to ask, so putting only the last-finish half on appearanceSide would split one warning across two notions of 'this person's match'. If rest should follow who actually played, that is a decision to take for both halves at once",
+  },
   // Scores credited per pair member — the rule's own answer for a pair side.
   { file: "src/server/usecases/americano.ts", fn: "personalPointsLeaderboard", sites: 1, reason: "americano/mexicano personal points over PAIR entrants, where the rule's roster stands in for every member anyway" },
   { file: "src/server/usecases/stages.ts", fn: "americanoGen", sites: 1, reason: "mexicano's next-round pairing by per-person points over PAIR entrants (the rule's own roster answer); credits nothing" },
