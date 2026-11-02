@@ -1,18 +1,34 @@
 export const dynamic = "force-dynamic";
-// Org home — competitions as match-day cards (v3/03 §2). Nav comes from the
-// /o layout; auth comes from the URL (PROMPT-30).
+// Org home — the organisation's Competitions (Match Day C7, owner rulings 2026-11-01: concept C, the "today deck", with B's
+// "nothing scheduled" stub on the quiet cards). Nav comes from the /o layout; auth comes from the URL (PROMPT-30).
+//
+//  - Titled "Competitions". The "Matchday console" eyebrow is gone everywhere, and so is this page's Directory button (the
+//    top nav keeps Directory).
+//  - Competitions with a match TODAY sit in the night deck at the top and carry Open Match Day, a Draft one included. "Today"
+//    is Match Day's own count (`competitionsFixturesToday` = `countFixturesToday` for the whole list, in one bounded read), and
+//    the deck is the competition page's own question of it (`homeGroupOf` → `needsYouHome`).
+//  - Everything else is a quiet card, grouped Under way / Not started; one with nothing upcoming ends in B's stub.
+//  - Finished competitions (completed or archived) are hidden by default; "Show finished" (`?finished=1`) shows them, last.
 import Link from "@/components/ui/console-link";
 import { Trophy } from "lucide-react";
 import { BillingBanner } from "@/components/billing-banner";
 import { requireOrgPage } from "@/server/page-auth";
 import { listCompetitions } from "@/server/usecases/competitions";
 import { listCompetitionCardStats, nextLine } from "@/server/usecases/card-stats";
-import { EntityCard } from "@/components/ui/entity-card";
-import { sportEmoji } from "@/components/discovery-cards";
-import { sportTint } from "@/lib/sport-tints";
+import { competitionsFixturesToday } from "@/server/usecases/match-day";
 import { CardMenu } from "@/components/ui/card-menu";
-import { ViewToggleContainer } from "@/components/ui/view-toggle";
 import { StatusChip, competitionChipState, CHIP_SORT } from "@/components/ui/status-chip";
+import { SwitchLink } from "@/components/v2/desk/switch-link";
+import { homeGroupOf, sportsLine, stubOf, type HomeGroup } from "@/components/v2/org-home/home-rules";
+import {
+  HomeGroupSection,
+  QuietCard,
+  TodayDeck,
+  TodayEmpty,
+  type HomeCardBase,
+  type QuietCardData,
+  type TodayRowData,
+} from "@/components/v2/org-home/home-cards";
 import { sql } from "@/lib/db";
 import { isPaidPlan, isPassLocked, orgPlanKey, passLockReason } from "@/lib/entitlements";
 import { formatMinor, isPassKey } from "@/lib/currency";
@@ -22,13 +38,26 @@ import { preferredCurrency } from "@/lib/currency-server";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, plural } from "@/lib/i18n";
+import { msgFor } from "@/lib/messages-i18n";
+import { sportLabel } from "@/lib/scoring-vocab";
+
+/** The roster's groups below the deck, in page order, and their headings. */
+const ROSTER: { group: Exclude<HomeGroup, "today">; title: "org.home.group.underWay" | "org.home.group.notStarted" | "org.home.group.finished" }[] = [
+  { group: "underWay", title: "org.home.group.underWay" },
+  { group: "notStarted", title: "org.home.group.notStarted" },
+  { group: "finished", title: "org.home.group.finished" },
+];
 
 export default async function OrgHomePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ orgSlug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { orgSlug } = await params;
+  // The switch's state is the URL (as the competition page's ledger does it): a reload or the back button keeps it.
+  const showFinished = (await searchParams).finished === "1";
   const { auth, org, canEdit } = await requireOrgPage(orgSlug);
 
   // Reaching the dashboard is the end of first-run: mark onboarding done so a
@@ -43,7 +72,14 @@ export default async function OrgHomePage({
   const dict = await getDictionary(locale, "ui");
 
   const { items: competitions } = await listCompetitions(auth, { cursor: null, limit: 100 });
-  const stats = await listCompetitionCardStats(auth);
+  const [stats, today] = await Promise.all([
+    listCompetitionCardStats(auth),
+    // One bounded read for the whole list (three statements, however many cards), never a query per card.
+    competitionsFixturesToday(
+      auth,
+      competitions.map((c) => c.id),
+    ),
+  ]);
 
   // Event Pass state for the list (task 19, entry point 4 of 4).
   //
@@ -112,31 +148,137 @@ export default async function OrgHomePage({
     .map((c) => ({ c, chip: competitionChipState(c.status) }))
     .sort((a, b) => CHIP_SORT[a.chip] - CHIP_SORT[b.chip]);
 
+  const sportName = (k: string) => sportLabel(k, (key) => msgFor(locale, key));
+  const sportsCount = (n: number) => plural(dict, "org.home.sports", n, locale);
+
+  type Entry = (typeof sorted)[number];
+  const base = ({ c, chip }: Entry, tone: "night" | "light"): HomeCardBase => {
+    const s = stats.get(c.id);
+    const heldRung = passed.get(c.id) ?? null;
+    return {
+      slug: c.slug,
+      name: c.name,
+      href: routes.competition(orgSlug, c.slug),
+      chip: (
+        <span className="flex shrink-0 items-center gap-1.5">
+          <StatusChip state={c.frozen ? "frozen" : chip} locale={locale} />
+          {/* A seal, not a second word: the status chip owns the card's word; this says the pass is on and carries its label
+              on the element itself. v17 gap #301: the whole decision (lime vs ended) lives in <PassSeal>, which renders in a
+              test. */}
+          {heldRung && <PassSeal dict={dict} rung={heldRung} lockReason={passLock.get(c.id) ?? null} />}
+        </span>
+      ),
+      sports: sportsLine(s?.sports ?? [], locale, { name: sportName, count: sportsCount }),
+      meta: s
+        ? `${plural(dict, "org.home.meta.divisions", s.divisions, locale)}, ${plural(dict, "org.home.meta.entrants", s.entrants, locale)}`
+        : null,
+      progress: { played: s?.played ?? 0, total: s?.total ?? 0 },
+      menu: (
+        <CardMenu
+          name={c.name}
+          tone={tone}
+          tap
+          items={[
+            { label: t(dict, "org.home.menu.schedule"), href: routes.competitionSchedule(orgSlug, c.slug) },
+            { label: t(dict, "org.home.menu.settings"), href: routes.competitionSettings(orgSlug, c.slug) },
+            { label: t(dict, "org.home.menu.slideshow"), href: routes.slideshowCompetition(c.id), external: true },
+            // The pass, where every other per-competition action lives. Absent once held (the chip says so) and absent on a
+            // paid plan (`passed` is empty and `paidPlan` suppresses the offer) — never re-sold, never a downgrade. Editors
+            // only: the buy itself is owner-only.
+            //
+            // ...and absent once the COMPETITION is over (v17 gap #353): money for a pass that would apply to nothing, and on
+            // the terminal arm unrecoverable (#248 Q4: one pass per competition, forever). `isPassLocked` is the same predicate
+            // the seal uses, from the row's own columns — `listCompetitions` already selects `status` and `ends_on` (COLS).
+            ...(!paidPlan && !heldRung && canEdit && !isPassLocked(c.status, c.ends_on)
+              ? [{ label: t(dict, "pass.menu.buy", { price: passLabel }), href: routes.competitionUpgrade(orgSlug, c.slug) }]
+              : []),
+          ]}
+        />
+      ),
+    };
+  };
+
+  const banded = sorted.map((e) => {
+    const s = stats.get(e.c.id);
+    return {
+      e,
+      group: homeGroupOf({ status: e.c.status, played: s?.played ?? 0, fixturesToday: today.counts.get(e.c.id) ?? 0 }),
+    };
+  });
+  const finishedCount = banded.filter((b) => b.group === "finished").length;
+  const todayRows: TodayRowData[] = banded
+    .filter((b) => b.group === "today")
+    .map(({ e }) => ({
+      ...base(e, "night"),
+      next: stats.get(e.c.id)?.next ?? null,
+      matchesToday: today.counts.get(e.c.id) ?? 0,
+      matchDayHref: routes.competitionMatchDay(orgSlug, e.c.slug),
+    }));
+  const quiet = (e: Entry): QuietCardData => {
+    const s = stats.get(e.c.id);
+    const kind = stubOf({ total: s?.total ?? 0, next: s?.next ?? null });
+    // The stub's action is an editor's: a viewer is shown the state, never a button for work the landing page will not let
+    // them do (the desk ledger's rule).
+    const action =
+      !kind || !canEdit
+        ? null
+        : kind === "no_fixtures"
+          ? {
+              href: routes.competition(orgSlug, e.c.slug),
+              label: t(dict, "org.home.stub.setUp"),
+              aria: t(dict, "org.home.stub.setUpFor", { name: e.c.name }),
+            }
+          : {
+              href: routes.competitionSchedule(orgSlug, e.c.slug),
+              label: t(dict, "org.home.stub.schedule"),
+              aria: t(dict, "org.home.stub.scheduleFor", { name: e.c.name }),
+            };
+    return { ...base(e, "light"), next: nextLine(s?.next ?? null, locale), stub: kind ? { kind, action } : null };
+  };
+  const roster = ROSTER.filter((r) => r.group !== "finished" || showFinished)
+    .map((r) => ({ ...r, cards: banded.filter((b) => b.group === r.group).map((b) => quiet(b.e)) }))
+    .filter((r) => r.cards.length > 0);
+  const visible = todayRows.length + roster.reduce((n, r) => n + r.cards.length, 0);
+
   return (
     <>
       <BillingBanner orgId={org.id} />
       <main className="mx-auto max-w-6xl px-4 py-8">
-        <div className="mb-8 flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-6">
+        <div className="mb-6 flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
           <div className="min-w-0">
-            <p className="app-eyebrow mb-1">{t(dict, "org.home.eyebrow")}</p>
             <div className="flex items-center gap-3">
-              <h1 className="page-title">
-                {t(dict, "org.home.title")}
-              </h1>
+              <h1 className="page-title">{t(dict, "org.home.title")}</h1>
               <span className={`badge ${roleBadge(org.role)}`}>{org.role}</span>
             </div>
             <p className="mt-1 text-sm text-slate-500">
-              {canEdit
-                ? t(dict, "org.home.subtitle.editor")
-                : t(dict, "org.home.subtitle.viewer")}
+              {canEdit ? t(dict, "org.home.subtitle.editor") : t(dict, "org.home.subtitle.viewer")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Link href="/directory" className="btn btn-ghost">
-              {t(dict, "org.home.directory")}
-            </Link>
+            {/* Nothing to toggle - no finished competition - prints nothing at all. A link wearing role="switch" with the
+                state in aria-checked, as the competition page's ledger does it (`SwitchLink`: Space toggles as Enter does). */}
+            {finishedCount > 0 && (
+              <SwitchLink
+                href={showFinished ? routes.orgHome(orgSlug) : `${routes.orgHome(orgSlug)}?finished=1`}
+                role="switch"
+                aria-checked={showFinished}
+                data-testid="org-home-finished-toggle"
+                className="btn btn-ghost min-h-11 gap-2 border-transparent bg-transparent px-2 text-sm text-slate-700 hover:bg-purple-50"
+              >
+                <span
+                  aria-hidden="true"
+                  className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors motion-reduce:transition-none ${showFinished ? "bg-purple-600" : "bg-slate-300"}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-4 w-4 rounded-full bg-white shadow-sm transition-transform motion-reduce:transition-none ${showFinished ? "translate-x-4" : ""}`}
+                  />
+                </span>
+                {t(dict, "org.home.showFinished", { n: finishedCount })}
+              </SwitchLink>
+            )}
             {canEdit && (
-              <Link href={routes.competitionNew(orgSlug)} data-tour="new-competition" className="btn btn-primary">
+              <Link href={routes.competitionNew(orgSlug)} data-tour="new-competition" className="btn btn-primary min-h-11">
                 {t(dict, "org.home.newCompetition")}
               </Link>
             )}
@@ -151,9 +293,7 @@ export default async function OrgHomePage({
                 <Trophy className="h-8 w-8" strokeWidth={1.5} />
               </div>
               <div>
-                <h2 className="text-xl font-semibold text-slate-800">
-                  {t(dict, "card.empty.competitions")}
-                </h2>
+                <h2 className="text-xl font-semibold text-slate-800">{t(dict, "card.empty.competitions")}</h2>
               </div>
               <Link href={routes.competitionNew(orgSlug)} className="btn btn-primary">
                 {t(dict, "card.empty.competitions.cta")}
@@ -162,91 +302,27 @@ export default async function OrgHomePage({
           ) : (
             <p className="text-sm text-slate-500">{t(dict, "org.home.empty.viewer")}</p>
           )
+        ) : visible === 0 ? (
+          // Every competition is finished and hidden: the page says so and the switch above is the way out - never an empty
+          // page, which would read as "this organisation has no competitions" (the desk ledger's own rule).
+          <p data-testid="org-home-all-finished" className="card p-6 text-center text-sm text-slate-500">
+            {t(dict, "org.home.allFinished")}
+          </p>
         ) : (
-          <ViewToggleContainer storageKey="seazn.view.competitions" toggle={competitions.length > 20}>
-            {sorted.map(({ c, chip }) => {
-              const s = stats.get(c.id);
-              const heldRung = passed.get(c.id) ?? null;
-              return (
-                <EntityCard
-                  key={c.id}
-                  href={routes.competition(orgSlug, c.slug)}
-                  name={c.name}
-                  media={{
-                    kind: "banner",
-                    emoji: sportEmoji(s?.top_sport),
-                    tint: sportTint(s?.top_sport),
-                  }}
-                  locale={locale}
-                  chip={
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      <StatusChip state={c.frozen ? "frozen" : chip} locale={locale} />
-                      {/* A seal, not a second word. The card's one wide slot is
-                          the competition's NAME, and a text badge here took
-                          enough of it to truncate "Spring Social" to
-                          "Spring S…". The status chip already owns the card's
-                          word; this says the pass is on and gets out of the
-                          way, carrying its label on the element itself. */}
-                      {/* v17 gap #301. Lime means "this is on" across the
-                          console, so a locked pass wearing it is the page
-                          telling an organiser their limits are lifted when they
-                          are not. The whole decision lives in <PassSeal>, which
-                          RENDERS in a test — inline here it was three green
-                          mutations (task 6 review, I-1). */}
-                      {heldRung && (
-                        <PassSeal
-                          dict={dict}
-                          rung={heldRung}
-                          lockReason={passLock.get(c.id) ?? null}
-                        />
-                      )}
-                    </span>
-                  }
-                  meta={
-                    s
-                      ? `${plural(dict, "org.home.meta.divisions", s.divisions, locale)} · ${plural(dict, "org.home.meta.entrants", s.entrants, locale)}`
-                      : null
-                  }
-                  next={s ? nextLine(s.next, locale) : null}
-                  progress={s ? { played: s.played, total: s.total } : null}
-                  menu={
-                    <CardMenu
-                      name={c.name}
-                      items={[
-                        { label: t(dict, "org.home.menu.schedule"), href: routes.competitionSchedule(orgSlug, c.slug) },
-                        { label: t(dict, "org.home.menu.settings"), href: routes.competitionSettings(orgSlug, c.slug) },
-                        { label: t(dict, "org.home.menu.slideshow"), href: routes.slideshowCompetition(c.id), external: true },
-                        // The pass, where every other per-competition action
-                        // lives. Absent once held (the chip says so) and absent
-                        // on a paid plan (`passed` is empty and `paidPlan`
-                        // suppresses the offer) — never re-sold, never a
-                        // downgrade. Editors only: the buy itself is owner-only.
-                        //
-                        // ...and absent once the COMPETITION is over (v17 gap
-                        // #353). The menu offered a purchase for a competition
-                        // that had finished or run a week past its end date —
-                        // money for a pass that would apply to nothing, and on
-                        // the terminal arm unrecoverable (#248 Q4: one pass per
-                        // competition, forever). `isPassLocked` is the same
-                        // predicate the seal above uses, from the row's own
-                        // columns — `listCompetitions` already selects `status`
-                        // and `ends_on` (COLS), so nothing here is undefined and
-                        // silently answering "not locked" for everything.
-                        ...(!paidPlan && !heldRung && canEdit && !isPassLocked(c.status, c.ends_on)
-                          ? [
-                              {
-                                label: t(dict, "pass.menu.buy", { price: passLabel }),
-                                href: routes.competitionUpgrade(orgSlug, c.slug),
-                              },
-                            ]
-                          : []),
-                      ]}
-                    />
-                  }
-                />
-              );
-            })}
-          </ViewToggleContainer>
+          <>
+            {todayRows.length > 0 ? (
+              <TodayDeck rows={todayRows} dict={dict} locale={locale} tz={today.tz} day={today.day} />
+            ) : (
+              <TodayEmpty dict={dict} locale={locale} day={today.day} />
+            )}
+            {roster.map((r) => (
+              <HomeGroupSection key={r.group} group={r.group} title={t(dict, r.title)} count={r.cards.length}>
+                {r.cards.map((card) => (
+                  <QuietCard key={card.slug} card={card} dict={dict} />
+                ))}
+              </HomeGroupSection>
+            ))}
+          </>
         )}
       </main>
     </>

@@ -22,8 +22,10 @@ describe("msgFor (server ui catalog)", () => {
 
   it("carries the org-home keys the localized dashboard renders", () => {
     for (const k of [
-      "org.home.eyebrow",
+      // Match Day C7: "Matchday console" (org.home.eyebrow) is gone everywhere; the page is titled "Competitions" and its
+      // today deck carries the day.
       "org.home.title",
+      "org.home.today.title",
       "org.home.newCompetition",
       "org.home.meta.divisions.one",
       "org.home.meta.entrants.other",

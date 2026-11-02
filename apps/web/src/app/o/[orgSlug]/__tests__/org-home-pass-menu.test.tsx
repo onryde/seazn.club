@@ -52,6 +52,10 @@ vi.mock("@/server/usecases/card-stats", () => ({
   listCompetitionCardStats: async () => new Map(),
   nextLine: () => null,
 }));
+// Match Day C7: the page reads today's counts for its deck. None today — every card here is a quiet one.
+vi.mock("@/server/usecases/match-day", () => ({
+  competitionsFixturesToday: async () => ({ day: "2026-11-08", tz: "UTC", counts: new Map() }),
+}));
 
 // The only query the page issues itself is the held-pass read. Nothing here
 // holds a pass — a held pass suppresses the offer on its own and would make
@@ -74,15 +78,11 @@ vi.mock("@/lib/currency-server", () => ({ preferredCurrency: async () => "usd" }
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/components/billing-banner", () => ({ BillingBanner: () => null }));
 
-// The card chrome, stubbed down to the one thing under test. <CardMenu> renders
+// The card menu, stubbed down to the one thing under test. <CardMenu> renders
 // its items only once OPENED (it is a client popover), so against the real
 // component every assertion below would read "absent" forever — a green suite
-// pinning nothing at all.
-vi.mock("@/components/ui/entity-card", () => ({
-  EntityCard: (p: { name: string; menu?: React.ReactNode }) => (
-    <div data-card={p.name}>{p.menu}</div>
-  ),
-}));
+// pinning nothing at all. (Match Day C7: the cards themselves are real now —
+// `components/v2/org-home/home-cards.tsx` renders on the server as-is.)
 vi.mock("@/components/ui/card-menu", () => ({
   CardMenu: (p: { items: Array<{ label: string; href: string }> }) => (
     <ul data-card-menu>
@@ -93,9 +93,6 @@ vi.mock("@/components/ui/card-menu", () => ({
       ))}
     </ul>
   ),
-}));
-vi.mock("@/components/ui/view-toggle", () => ({
-  ViewToggleContainer: (p: { children?: React.ReactNode }) => <div>{p.children}</div>,
 }));
 
 import Page from "../page";
@@ -120,8 +117,14 @@ const comp = (over: Partial<(typeof h.competitions)[number]> = {}) => ({
   ...over,
 });
 
-const render = async (): Promise<string> =>
-  renderToStaticMarkup(await Page({ params: Promise.resolve({ orgSlug: "riverside" }) }));
+// Match Day C7: a finished competition (completed or archived) is hidden until "Show finished" is on. The cases about a
+// finished one render with the switch on (`?finished=1`), so the card whose menu is under test is on the page at all — and
+// `onPage` below fails any case whose card is missing, so an absent offer can never be an absent card.
+const render = async (query: Record<string, string> = {}): Promise<string> =>
+  renderToStaticMarkup(
+    await Page({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve(query) }),
+  );
+const onPage = (html: string) => html.includes('data-menu-href="/o/riverside/c/summer-league/settings"');
 
 /** Does the card menu invite a pass purchase? Keyed on the HREF rather than on
  *  the price string: the label is derived from the ladder floor and moves with
@@ -145,7 +148,8 @@ describe("the dashboard card menu offers the pass only while it could apply", ()
 
   it("drops it on a COMPLETED competition", async () => {
     h.competitions = [comp({ status: "completed" })];
-    const html = await render();
+    const html = await render({ finished: "1" });
+    expect(onPage(html), "the finished card is shown with the switch on").toBe(true);
     expect(offersPass(html)).toBe(false);
     // The rest of the menu is untouched — this suppresses one item, not the card.
     expect(html).toContain('data-menu-href="/o/riverside/c/summer-league/schedule"');
@@ -153,14 +157,18 @@ describe("the dashboard card menu offers the pass only while it could apply", ()
 
   it("drops it on an ARCHIVED competition", async () => {
     h.competitions = [comp({ status: "archived" })];
-    expect(offersPass(await render())).toBe(false);
+    const html = await render({ finished: "1" });
+    expect(onPage(html), "the archived card is shown with the switch on").toBe(true);
+    expect(offersPass(html)).toBe(false);
   });
 
   it("drops it on a still-LIVE competition whose end date is past the grace week", async () => {
     // The arm a status filter alone misses entirely, and the common one: nobody
     // goes back to mark last season 'completed'.
     h.competitions = [comp({ ends_on: utcDay(-(PASS_END_GRACE_DAYS + 1)) })];
-    expect(offersPass(await render())).toBe(false);
+    const html = await render();
+    expect(onPage(html), "a live competition is never hidden").toBe(true);
+    expect(offersPass(html)).toBe(false);
   });
 
   it("KEEPS it for a competition sitting exactly on the grace boundary", async () => {
