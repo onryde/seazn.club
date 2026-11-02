@@ -1,4 +1,4 @@
-// W3 Task 14 (SW-L12, RB3-25, X-SW-30) — a Swiss pairing is changed by Unpair then Pair next, never by editing a board.
+// W3 Task 14 (SW-L12, RB3-25, X-SW-30) — a Swiss pairing is re-derived by Unpair then Pair next, never edited board by board.
 // The "blocked" half of the rule already held: `PATCH /fixtures/{id}` takes `PatchFixture`, a `.strict()` schema of
 // schedule, court, officials, lock and `expected_seq`, so a body that names a seat (`home_entrant_id`,
 // `away_entrant_id`) is a 400 before the handler reaches the usecase. Only the guidance was missing (the Pair next
@@ -61,7 +61,7 @@ describe("PATCH /api/v1/fixtures/{id} — a Swiss pairing is not edited board by
     ],
   ];
 
-  it("X-SW-30 PATCH a round-2 Swiss fixture with home_entrant_id is refused (400) and the seat is unchanged", async () => {
+  it("X-SW-30 PATCH a round-2 Swiss fixture with home_entrant_id is refused (400) and nothing reaches patchFixture", async () => {
     // Positive control first: the same handler, same fixture, takes a legitimate edit — so the refusals below are the
     // seat keys' doing, not a broken harness or a handler that refuses everything.
     const ok = await PATCH(patch({ scheduled_at: null }), ctx);
@@ -82,7 +82,7 @@ describe("PATCH /api/v1/fixtures/{id} — a Swiss pairing is not edited board by
       expect(refused.sort(), `${label}: the keys it names`).toEqual([...named].sort());
       checked++;
     }
-    // The seat is unchanged: no refusal reached the usecase that writes a fixture.
+    // Nothing was written: no refusal reached the usecase that writes a fixture (the row read-back is smoke check 19).
     expect(patchMock, "no refused body reached patchFixture").not.toHaveBeenCalled();
     expect(checked, "anti-vacuity: every seat body was driven").toBe(SEAT_BODIES.length);
     expect(checked).toBeGreaterThan(0);

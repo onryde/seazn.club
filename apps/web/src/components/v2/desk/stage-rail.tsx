@@ -783,7 +783,7 @@ export function SwissPairingMenuPanel({
   // in the read-only hint's own quiet style, and tied to the group so a screen reader hears it with the choice.
   const drawNote = swissPairingDrawNote(menu, msg);
   const drawNoteId = `pairing-draw-note-${stageId}`;
-  // X-SW-30 (W3 T14, SW-L12): round 2+ also says how to change a pairing — Unpair, then Pair next.
+  // X-SW-30 (W3 T14, SW-L12): round 2+ also says the Swiss rules decide the pairing and how to re-derive it (Unpair, then Pair next).
   const changeNote = swissPairingChangeNote(menu, msg);
   return (
     // The outer box claims the desktop row's whole line (`md:basis-full`),

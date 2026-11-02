@@ -1291,14 +1291,18 @@ for (const sport of LATE_SPORTS) {
     });
 
     // X-SW-30 (W3 T14, SW-L12, RB3-25): a board's seats cannot be edited in round 2 or later (PATCH /fixtures/{id} refuses
-    // them: fixtures/[id]/__tests__/route.test.ts, smoke check 19), so the Pair next menu's read-only line says what does
-    // work — Unpair, then Pair next — and the organiser can follow it. Round 1 paired and unplayed, so round 2 is the one
+    // them: fixtures/[id]/__tests__/route.test.ts, smoke check 19) and the Swiss rules decide the pairing, so the Pair next
+    // menu's read-only line says so and names the way to re-derive it after a correction — Unpair, then Pair next — and the
+    // organiser can follow it (with nothing corrected the same pairing comes back, which is what the wording says). Round 1 paired and unplayed, so round 2 is the one
     // waiting and Unpair is on the rail; the line is read off the real menu, the way the organiser reads it. Following it
     // brings round 1 back as the choosable round, which carries no such line; Pair next seats round 1 again and round 2
     // waits with the line.
     test(`X-SW-30 round 2 waiting: the Pair next menu says Unpair then Pair next, and following it works (${sport.key})`, async ({ page, request }) => {
       test.setTimeout(180_000);
       const r = await startedSwiss(request, sport, 6, 3, "Hint30");
+      const pairsOf = async () => (await r.boards(1)).map((f) => [f.home_entrant_id, f.away_entrant_id].sort().join("|")).sort();
+      const paired = await pairsOf();
+      expect(paired.length, "premise: round 1 is paired, three boards for six").toBe(3);
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
       const menu = page.getByTestId("stage-pairing-menu");
@@ -1326,6 +1330,8 @@ for (const sport of LATE_SPORTS) {
       // Then Pair next: round 1 is seated again (three boards for six), and round 2 waits with the line.
       await page.getByTestId("stage-generate").click();
       await expect.poll(async () => (await r.boards(1)).length, { timeout: 30_000 }).toBe(3);
+      // The rules decide the pairing and nothing was corrected, so the same pairing comes back — which is what the line says.
+      expect(await pairsOf(), "Unpair then Pair next with no change re-derives the same pairing").toEqual(paired);
       await openMenu();
       await expect(hint).toHaveText(uiEn["schedule.pairing.changeHint"]!);
     });

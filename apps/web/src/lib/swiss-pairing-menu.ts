@@ -185,9 +185,11 @@ export function swissPairingDrawNote(
   return menu.choosable && menu.unseededDrawn ? t("schedule.pairing.drawnAtRandom") : null;
 }
 
-/** X-SW-30 (W3 T14, SW-L12) — the line under the read-only mode line in round 2 and later: "To change who plays whom:
- *  Unpair, then Pair next." A board's seats cannot be edited (`PATCH /fixtures/{id}` refuses them), so the rail says the
- *  way that works. `null` in the choosable round 1 and whenever the menu was not given the hint. */
+/** X-SW-30 (W3 T14, SW-L12) — the line under the read-only mode line in round 2 and later: "Round pairings follow the
+ *  Swiss rules. After correcting a result or the entrants, Unpair, then Pair next." A board's seats cannot be edited
+ *  (`PATCH /fixtures/{id}` refuses them) and the rules decide the pairing, so Unpair then Pair next re-derives the SAME
+ *  pairing unless an input changed; the line says so rather than promising a different one. `null` in the choosable
+ *  round 1 and whenever the menu was not given the hint. */
 export function swissPairingChangeNote(
   menu: Pick<SwissPairingMenu, "choosable" | "changeHint">,
   t: SwissPairingT,

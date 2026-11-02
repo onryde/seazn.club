@@ -194,8 +194,8 @@ describe("StagesPanel — the round-1 menu says an unseeded field is drawn at ra
   });
 });
 
-// W3 T14 (X-SW-30, SW-L12, RB3-25): from round 2 on, the read-only mode line also says how to change a pairing — Unpair,
-// then Pair next — because a board's seats cannot be edited (PATCH /fixtures/{id} refuses them: fixtures/[id]/__tests__/
+// W3 T14 (X-SW-30, SW-L12, RB3-25): from round 2 on, the read-only mode line also says the Swiss rules decide the pairing and
+// how to re-derive it — Unpair, then Pair next, after a corrected result or roster — because a board's seats cannot be edited (PATCH /fixtures/{id} refuses them: fixtures/[id]/__tests__/
 // route.test.ts). The verdict is the PANEL's: a running root Swiss (isRunningRootSwiss) whose Unpair button is on offer
 // (canUnpairSwiss), so the line never points at a button the rail is not showing. Driven through the panel's own menu
 // and the rail's real panel component, as the X-SW-22 block above does.
@@ -214,7 +214,7 @@ describe("StagesPanel — rounds >= 2 explain how to change a pairing (X-SW-30)"
     return renderToStaticMarkup(dict ? <DictProvider {...dict}>{panel}</DictProvider> : panel);
   };
   const HINT = 'data-testid="stage-pairing-change-hint"';
-  const COPY = "To change who plays whom: Unpair, then Pair next.";
+  const COPY = "Round pairings follow the Swiss rules. After correcting a result or the entrants, Unpair, then Pair next.";
   /** Round 1 seated and PLAYED: a decided row, which `swissRoundHasPlayedResult` reads as a result. */
   const playedRound1 = () => fixtures([1]).map((f) => (f.round_no === 1 ? { ...f, status: "decided" } : f));
 

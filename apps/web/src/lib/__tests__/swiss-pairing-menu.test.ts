@@ -401,9 +401,11 @@ describe("swissPairingChangeNote — the read-only line's guidance in round 2+ (
     expect(swissPairingChangeNote({ choosable: true, changeHint: true }, t)).toBeNull();
   });
 
-  it("a read-only round with the hint ⇒ the catalog's own line, as the brief wrote it", () => {
+  it("a read-only round with the hint ⇒ the catalog's own line, as the coordinator's ruling wrote it", () => {
     expect(swissPairingChangeNote(readOnly, t)).toBe(en["schedule.pairing.changeHint"]);
-    expect(en["schedule.pairing.changeHint"]).toBe("To change who plays whom: Unpair, then Pair next.");
+    expect(en["schedule.pairing.changeHint"]).toBe(
+      "Round pairings follow the Swiss rules. After correcting a result or the entrants, Unpair, then Pair next.",
+    );
   });
 
   it("every locale says it in its own words, never the English fallback", () => {

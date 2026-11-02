@@ -24,7 +24,8 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * barrier; a second Finish is 422 SWISS_OVER.
  * T14 (X-SW-30; SW-L12, RB3-25): a board's seats cannot be edited in round 2 or later — `PATCH /fixtures/{id}` naming
  * `home_entrant_id` / `away_entrant_id` (alone, swapped, or beside a good schedule edit) is a 400 and the row reads back
- * unchanged, which is what lets the Pair next menu say "Unpair, then Pair next" as the way to change a pairing.
+ * unchanged, which is why the Pair next menu says the rules decide a round's pairing and names Unpair, then Pair next, only as the
+ * way to re-derive it after a correction.
  * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
