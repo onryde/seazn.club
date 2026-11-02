@@ -15,8 +15,9 @@ import "server-only";
 //
 // THE predicates this file owns, each read by every caller of its fact (one authority per fact):
 //   `swissBoardStartedSql`  "a board has started" (T9's, moved here whole): any result or evidence
-//                           (`fixtureHasResultSql`), an online game's bridge row, or a decided board that is not the bye.
-//                           A bye alone is not a start (Task 3); a device link is not one (T9 re-ruling I1).
+//                           (`fixtureHasResultSql`), an online game's bridge row, a Match Day call that still holds
+//                           (`liveCallSql`, ruling 257), or a decided board that is not the bye. A bye alone is not a
+//                           start (Task 3); a device link is not one (T9 re-ruling I1).
 //   `swissAddRoundState`    whether "Add a round" goes through (controller ruling C11): every emitter of `canAddRound` —
 //                           the late-entry refusal (`swiss-late-entry.ts`), SWISS_ROUNDS_LOCKED here — and
 //                           `addSwissRound` itself read it, so the button the desk offers never leads to SWISS_OVER,
@@ -55,6 +56,7 @@ import type { PatchSwissStage } from "@/server/api-v1/schemas";
 import { tableStageCompletable } from "@/server/engine-db/competition";
 import { firstOwnFormat, ownFormatLoss } from "./fixture-override-guards";
 import { fixtureHasResultSql, swissByeShellSql } from "./fixture-results-sql";
+import { liveCallSql } from "./match-day-call";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { swissRefusal } from "./swiss-refusal";
 import {
@@ -90,6 +92,12 @@ export interface SwissStageRow {
  *  - a result or any recorded evidence: `fixtureHasResultSql` (in play, decided, an outcome-bearing abandonment, a score
  *    event, a frozen cfg, a report, a mark, a suspension);
  *  - an online game stands behind it: any `fixture_external_play` row (T9 Review Focus 1), scored or not;
+ *  - a Match Day call that still holds (owner ruling 257, 2026-11-02): a `fixture_calls` row read through `liveCallSql`
+ *    (match-day-call.ts), Match Day's one liveness test — the match unstarted and still on the court and at the time the
+ *    call put it. The call writes a court and a time and no status or event, yet the match is on a court with its
+ *    players standing at it; case (a) keeps every fixture id and slot, so a re-pair would seat two other players at a
+ *    board somebody was called to. A call that Undo call deleted, or that a board edit has moved, holds nothing and is no
+ *    start (a match that has since begun is one, through the arms above);
  *  - decided, other than the bye: a two-sided walkover an import or a pre-W2b generator wrote holds no event, yet its board
  *    is settled.
  * NOT a start: a bye alone (Task 3 — awarded at Pair, nobody played it: `swissByeShellSql` exempts it from the decided
@@ -97,10 +105,17 @@ export interface SwissStageRow {
  * marker, and printing a day's sheets mints one per board; a link that was used has written a score event).
  */
 export function swissBoardStartedSql(tx: Tx, on = "f") {
+  // `liveCallSql` owns the aliases `fc` and `g` inside its subquery; the outer row under either name would be shadowed by
+  // them and the arm would read "any live call in the organisation". A guard, not a comment (TEST-STRATEGY rule 4).
+  if (on === "g" || on === "fc") throw new Error(`swissBoardStartedSql: "${on}" is an alias liveCallSql owns`);
   const f = tx(on);
   return tx`(
     ${fixtureHasResultSql(tx, on)}
     or exists (select 1 from fixture_external_play x where x.fixture_id = ${f}.id)
+    or exists (
+      select 1 from fixture_calls fc join fixtures g on g.id = fc.fixture_id
+      where fc.fixture_id = ${f}.id and ${liveCallSql(tx)}
+    )
     or (${f}.status in ${tx([...DECIDED])} and not ${swissByeShellSql(tx, on)})
   )`;
 }

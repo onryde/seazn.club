@@ -94,8 +94,9 @@ async function stageRows(tx: Tx, stageId: string): Promise<SwissExistingFixture[
 
 /** Spec §4 "started", read on each row through THE predicate (`swissBoardStartedSql`, swiss-rounds-admin.ts — W3 T12
  *  moved it there whole so the rounds lock reads the same one): a score event, live, or decided (`fixtureHasResultSql`);
- *  (Review Focus 1) a board an online game stands behind (any `fixture_external_play` row); and decided other than the
- *  bye. A device link is NOT a start (ruling C5 re-ruled after the T9 review, I1): a link carries no opened or claimed
+ *  (Review Focus 1) a board an online game stands behind (any `fixture_external_play` row); (ruling 257, 2026-11-02) a
+ *  board a Match Day call still holds (`liveCallSql`) — case (a) keeps the slot, so it would seat two other players at the
+ *  court somebody was called to; and decided other than the bye. A device link is NOT a start (ruling C5 re-ruled after the T9 review, I1): a link carries no opened or claimed
  *  marker, and printing a day's scorer sheets mints a never-expiring link for every printable board — counting one would
  *  switch case (a) off for the whole printed day. A link that was used has written a score event, which is a start
  *  already. */

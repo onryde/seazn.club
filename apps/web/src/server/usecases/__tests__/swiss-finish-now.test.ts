@@ -31,10 +31,12 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { undoDivision } from "../history";
+import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures, type SwissExistingFixture } from "../stages";
 import { addSwissRound, finishSwissNow, judgeSwissFinish, listSwissRoundControls, patchSwissStage } from "../swiss-rounds-admin";
+import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
@@ -825,6 +827,37 @@ describe.runIf(HAS_DB)("finishSwissNow guards", () => {
     await sql`
       insert into device_links (org_id, fixture_id, token_hash, label, issued_by, expires_at)
       values (${rig.auth.orgId}, ${r2.id}, ${"t13-" + randomUUID()}, null, ${rig.auth.userId}, null)`;
+    expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 1, completed: true });
+    expect(roundsIn(await rowsOf(rig.stageId))).toEqual([1]);
+  });
+
+  it("a Match Day call on a paired round IS a start (ruling 257): that round stays — Finish refuses naming its boards; Undo call and the round is unpaired and dropped", async () => {
+    // The sibling of the device-link case above, and its opposite: a link carries no mark, but a call writes the court and
+    // the time Match Day shows as "Called". Finish reads the one predicate (`swissBoardStartedSql`), so the called round
+    // cannot be unpaired — nobody's court is taken from under them.
+    const rig = await finishRig(BADMINTON, 4, 3);
+    await playThrough(rig, 1);
+    await pair(rig);
+    const venue = await createVenue(rig.auth, { name: "Hall " + randomUUID().slice(0, 4), sort: 0 });
+    const court = await createCourt(rig.auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+    const r2 = boardsOf(await rowsOf(rig.stageId), 2);
+    expect(r2.length, "premise: round 2 is paired with two boards").toBe(2);
+    await callFixtureToCourt(rig.auth, r2[0]!.id, court.id);
+    const rows = await rowsOf(rig.stageId);
+    expect(rows.find((f) => f.id === r2[0]!.id)!.status, "premise: the call wrote no status").toBe("scheduled");
+    expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.finish, "the desk agrees").toMatchObject({
+      canFinish: false,
+      refusal: "round_undecided",
+      finishedAfter: 1,
+      inProgress: true,
+    });
+    await expect(finishSwissNow(rig.auth, rig.stageId)).rejects.toMatchObject({
+      ...refusal("SWISS_FINISH_ROUND_UNDECIDED"),
+      extra: { inProgress: true, boards: r2.map((f) => ({ fixtureId: f.id, round: 2, board: f.seq_in_round })) },
+    });
+    expect(await rowsOf(rig.stageId), "nothing written").toEqual(rows);
+    // The positive pair: the call undone, the round is unstarted again and Finish unpairs it.
+    await undoCall(rig.auth, r2[0]!.id);
     expect(await finishSwissNow(rig.auth, rig.stageId)).toMatchObject({ finished_after: 1, completed: true });
     expect(roundsIn(await rowsOf(rig.stageId))).toEqual([1]);
   });

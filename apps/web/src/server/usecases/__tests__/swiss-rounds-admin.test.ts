@@ -5,8 +5,8 @@
 // Swiss is over" after) and rulebook-W3-swiss.md §3.1/§3.2 for the bounds.
 //
 // "Started" is T9's ONE predicate (`swissBoardStartedSql`): a result or any evidence (`fixtureHasResultSql`), an online
-// game's bridge row, or a decided board that is not the bye. A bye alone is not a start (Task 3), and a device link is
-// not one (T9 re-ruling I1). Expected values are the rulebook's numbers typed here — hard max n − 1 for an even field, n
+// game's bridge row, a Match Day call that still holds (ruling 257), or a decided board that is not the bye. A bye alone
+// is not a start (Task 3), and a device link is not one (T9 re-ruling I1). Expected values are the rulebook's numbers typed here — hard max n − 1 for an even field, n
 // for an odd one; safe max ⌊n/2⌋ (§3.2's table) — and the shell counts are ⌊n/2⌋ boards plus a bye for an odd n, never
 // read off the code under test. Every refused write is checked against the rows and the ledger as they stood before it.
 //
@@ -25,11 +25,13 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { undoDivision } from "../history";
+import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { confirmRegistration } from "../registrations";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { completeStage, createStages, generateStageFixtures, replaceStages } from "../stages";
-import { addSwissRound, listSwissRoundControls, patchSwissStage } from "../swiss-rounds-admin";
+import { addSwissRound, listSwissRoundControls, patchSwissStage, swissBoardStartedSql } from "../swiss-rounds-admin";
+import { createCourt, createVenue } from "../venues";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedRegistration } from "./_registration-fixtures";
 import { seedOrg } from "./_seed";
@@ -382,6 +384,35 @@ describe.runIf(HAS_DB)("X-SW-17 the round count is editable until the first fixt
         insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, challenge_id)
         values (${board.id}, ${rig.auth.orgId}, now(), 'ready', ${"gm-" + randomUUID().slice(0, 8)})`;
       await expect(patchSwissStage(rig.auth, rig.stageId, { rounds: 2 })).rejects.toMatchObject(refusal("SWISS_ROUNDS_LOCKED"));
+    });
+
+    it(`ruling 257 a Match Day call on a board locks rounds; Undo call unlocks them (${s.sport})`, async () => {
+      // Owner ruling 257 (2026-11-02): a call is a start, read through THE predicate — so the rounds lock, which reads it
+      // too, holds the count the moment a board is called, though nothing was scored. Only a LIVE call (liveCallSql): the
+      // positive pair is the same stage after Undo call.
+      const rig = await swissRig(s, 4, 3);
+      await startDivision(rig.auth, rig.divisionId);
+      await pair(rig);
+      const venue = await createVenue(rig.auth, { name: "Hall " + randomUUID().slice(0, 4), sort: 0 });
+      const court = await createCourt(rig.auth, venue.id, { name: "Court 1", sort: 0, tags: [] });
+      const board = boardsOf(await rowsOf(rig.stageId), 1)[0]!;
+      expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "premise: nothing started yet").toBe(false);
+
+      await callFixtureToCourt(rig.auth, board.id, court.id);
+      const rows = await rowsOf(rig.stageId);
+      expect(rows.find((f) => f.id === board.id)!.status, "premise: the call wrote no status").toBe("scheduled");
+      const ledger = await ledgerState(rig.divisionId);
+      const config = await storedConfig(rig.stageId);
+      expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "the desk reads the call as a start").toBe(true);
+      await expect(patchSwissStage(rig.auth, rig.stageId, { rounds: 2 })).rejects.toMatchObject(refusal("SWISS_ROUNDS_LOCKED"));
+      await expect(patchSwissStage(rig.auth, rig.stageId, { chess: true })).rejects.toMatchObject(refusal("SWISS_CHESS_LOCKED"));
+      expect(await rowsOf(rig.stageId), "nothing written").toEqual(rows);
+      expect(await ledgerState(rig.divisionId)).toEqual(ledger);
+      expect(await storedConfig(rig.stageId)).toEqual(config);
+
+      await undoCall(rig.auth, board.id);
+      expect((await listSwissRoundControls(rig.auth, rig.divisionId))[rig.stageId]!.started, "a cleared call is no start").toBe(false);
+      expect(await patchSwissStage(rig.auth, rig.stageId, { rounds: 2 })).toMatchObject({ rounds: 2 });
     });
 
     it(`X-SW-17 a decided board with no event behind it locks rounds (${s.sport})`, async () => {
@@ -976,5 +1007,25 @@ describe.runIf(HAS_DB)("listSwissRoundControls (the desk's view of the rounds lo
     const rig = await swissRig(SPORTS[0], 4, 3);
     const other = await seedOrg("pro");
     expect(await listSwissRoundControls(other.auth, rig.divisionId)).toEqual({});
+  });
+});
+
+// Ruling 257: the predicate's call arm runs `liveCallSql` (match-day-call.ts), whose own aliases are `fc` and `g`. A caller
+// aliasing the fixtures row `g` or `fc` would collide with them and silently read "any live call in the organisation" — so
+// the predicate refuses those two aliases by name (an assumption made a guard, with the test that reaches it). Sport-free.
+describe.runIf(HAS_DB)("swissBoardStartedSql refuses the aliases liveCallSql owns", () => {
+  it("`g` and `fc` throw; the aliases the callers use (`f`, default) build", () => {
+    const refused = ["g", "fc"].map((alias) => {
+      try {
+        swissBoardStartedSql(sql as never, alias);
+        return null;
+      } catch (e) {
+        return (e as Error).message;
+      }
+    });
+    expect(refused.length, "anti-vacuity: both aliases tried").toBe(2);
+    for (const m of refused) expect(m, "refused by name").toEqual(expect.stringMatching(/liveCallSql/));
+    expect(() => swissBoardStartedSql(sql as never, "f")).not.toThrow();
+    expect(() => swissBoardStartedSql(sql as never)).not.toThrow();
   });
 });

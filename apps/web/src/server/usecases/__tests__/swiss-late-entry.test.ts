@@ -27,7 +27,8 @@ import { ensureDeviceLinks } from "../device-links";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { undoDivision } from "../history";
-import { startDivision } from "../schedule";
+import { callFixtureToCourt, undoCall } from "../match-day-call";
+import { moveFixture, startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import {
   buildSwissHistory,
@@ -553,6 +554,94 @@ for (const s of SPORTS) {
       const second = await addLate(rig, "Late 2");
       // Five players: round 1's bye is the first newcomer's; the round has started, so the second plays them — (b).
       expect(second.late_entry).toMatchObject({ case: "b", round: 1, bye_holder_id: first.id });
+    });
+
+    // Ruling 257 (owner, 2026-11-02): a Match Day call counts as a start. Case (a) keeps every fixture id and slot, so it
+    // would put two other players on the board a court was called for, and the call row would still read "Called". The
+    // two field sizes are the two places the round goes instead: a bye still free → (b), none → (c). Each size also runs
+    // with NO call, the positive pair that proves the rig can tell a called round from an untouched one.
+    for (const field of [
+      { n: 5, called: { case: "b", round: 1 } as const, note: "an odd field: the bye is free" },
+      { n: 4, called: { case: "c", round: 2 } as const, note: "an even field: no bye" },
+    ]) {
+      it(`ruling 257 a called board is a started board: ${field.note} → case ${field.called.case}; the called board keeps its players and slot; with no call, (a) re-pairs (${s.sport})`, async () => {
+        // The positive pair first: an untouched, court-placed round — the same rig, no call — is re-paired.
+        const control = await swissRig(s, field.n, 3);
+        await pair(control);
+        await placeRound(control, 1, 3, 3);
+        const untouched = await addLate(control, "Late");
+        expect(untouched.late_entry, "no call: nothing started").toMatchObject({ case: "a", round: 1 });
+
+        const rig = await swissRig(s, field.n, 3);
+        await pair(rig);
+        const { courts } = await placeRound(rig, 1, 3, 3); // the two boards on courts 0 and 1; court 2 is free
+        const board = boardsOf(await rowsOf(rig.stageId), 1)[0]!;
+        // The real call usecase (match-day-call.ts), not a row: it moves the board onto the free court and writes the call.
+        await callFixtureToCourt(rig.auth, board.id, courts[2]!);
+        const before = await rowsOf(rig.stageId);
+        const called = before.find((f) => f.id === board.id)!;
+        expect(called.court_id, "premise: the call put the board on the free court").toBe(courts[2]);
+        expect(called.status, "premise: a call writes no status — it starts nothing by itself").toBe("scheduled");
+        const [{ n: callRows }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${board.id}`;
+        expect(callRows, "premise: the call row exists").toBe(1);
+        const calledPlace = { home: called.home_entrant_id, away: called.away_entrant_id, court: called.court_id, at: called.scheduled_at?.toISOString() };
+        expect(calledPlace.home && calledPlace.away && calledPlace.at, "premise: a seated board with a time").toBeTruthy();
+
+        const late = await addLate(rig, "Late");
+        expect(late.late_entry, "a called board is started: not (a)").toMatchObject(field.called);
+        const after = await rowsOf(rig.stageId);
+        const now = after.find((f) => f.id === board.id)!;
+        expect({ home: now.home_entrant_id, away: now.away_entrant_id, court: now.court_id, at: now.scheduled_at?.toISOString() }).toEqual(calledPlace);
+        expect(now.status).toBe("scheduled");
+        // Every board that existed is as it was — only the bye (b) or the next round's seats (c) moved.
+        expect(after.filter((f) => !isBye(f) && before.some((b) => b.id === f.id))).toEqual(before.filter((f) => !isBye(f)));
+        expect(seatedIn(roundOf(after, 1)), "the newcomer sits in no board of the called round unless (b) put them on the bye").toEqual(
+          field.called.case === "b" ? expect.arrayContaining([late.id]) : expect.not.arrayContaining([late.id]),
+        );
+        // The call is untouched: still one row, still where it put the board.
+        const [call] = await sql<{ court_id: string }[]>`select court_id from fixture_calls where fixture_id = ${board.id}`;
+        expect(call?.court_id).toBe(courts[2]);
+      });
+    }
+
+    it(`ruling 257 only a live call counts: Undo call, or a board edit that moves the called board, and (a) re-pairs again (${s.sport})`, async () => {
+      // Undo call deletes the row and puts the board back where it was planned.
+      const undone = await swissRig(s, 5, 3);
+      await pair(undone);
+      const u = await placeRound(undone, 1, 3, 3);
+      const uBoard = boardsOf(await rowsOf(undone.stageId), 1)[0]!;
+      await callFixtureToCourt(undone.auth, uBoard.id, u.courts[2]!);
+      await undoCall(undone.auth, uBoard.id);
+      const restored = (await rowsOf(undone.stageId)).find((f) => f.id === uBoard.id)!;
+      expect({ court: restored.court_id, at: restored.scheduled_at?.toISOString() }, "premise: Undo put the board back").toEqual({
+        court: uBoard.court_id,
+        at: uBoard.scheduled_at?.toISOString(),
+      });
+      const afterUndo = await addLate(undone, "Late");
+      expect(afterUndo.late_entry, "a cleared call is no start").toMatchObject({ case: "a", round: 1 });
+
+      // A board edit that moves the called board ends the call (liveCallSql: the row stays, and holds nothing).
+      const moved = await swissRig(s, 5, 3);
+      await pair(moved);
+      const m = await placeRound(moved, 1, 3, 3);
+      const mBoard = boardsOf(await rowsOf(moved.stageId), 1)[0]!;
+      await callFixtureToCourt(moved.auth, mBoard.id, m.courts[2]!);
+      await moveFixture(moved.auth, mBoard.id, { scheduled_at: "2030-06-01T14:00:00.000Z", court_id: m.courts[0]! });
+      const [stale] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_calls where fixture_id = ${mBoard.id}`;
+      expect(stale?.n, "premise: the call row survives the board edit").toBe(1);
+      const afterMove = await addLate(moved, "Late");
+      expect(afterMove.late_entry, "a call the board has moved holds nothing: no start").toMatchObject({ case: "a", round: 1 });
+    });
+
+    it(`ruling 257 sequence: a second late player in a called round — (b) then (c) (${s.sport})`, async () => {
+      const rig = await swissRig(s, 5, 3);
+      await pair(rig);
+      const { courts } = await placeRound(rig, 1, 3, 3);
+      await callFixtureToCourt(rig.auth, boardsOf(await rowsOf(rig.stageId), 1)[0]!.id, courts[2]!);
+      const first = await addLate(rig, "Late 1");
+      expect(first.late_entry).toMatchObject({ case: "b", round: 1 });
+      const second = await addLate(rig, "Late 2");
+      expect(second.late_entry, "the bye is used; the round is still called").toMatchObject({ case: "c", round: 2 });
     });
 
     it(`X-SW-12 sequence: a second late player in the same round — (a) then (a); (b) then (c) (${s.sport})`, async () => {
