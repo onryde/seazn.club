@@ -505,7 +505,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // played. League/group: the unsettled fixtures seating the entrant.
   //
   // A DEPARTED entrant is not frozen (final review I1): a status-only
-  // departure (a DQ by PATCH with no cascade, a registrant's self-cancel)
+  // departure (a `withdrawn` status PATCH, a registrant's self-cancel, a disqualification from before W3 T15 made one cascade)
   // leaves its fixtures scheduled, and a later forfeit pays it the loser's
   // points — above 0 where a loss pays, below 0 under `forfeit.loserPoints`.
   // So its remaining is its unplayed fixtures here, which the engine bounds

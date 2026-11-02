@@ -997,7 +997,7 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     }
     // W2b X-WD-5: a departed entrant (`DEPARTED_STATUSES`: withdrawn or disqualified) is never seated on a loser
     // edge. A decision that names her as its loser — a settle on a LEGACY held line (plan PF-8a), or a line she lost
-    // after a disqualification (a status change, no cascade) — leaves her seat empty, and the cascade below reads it
+    // after a status written without the cascade (a legacy DQ; W3 T15) — leaves her seat empty, and the cascade below reads it
     // dead (`loserFeederIsDead`) and walks her opponent over it. Loop-F R-1: the seat is STAMPED dead as well, as a
     // departed winner's is (I-1), so a void of this line finds the stamp and revives whatever the dead seat settled — a
     // third-place line voided because both its loser feeds were dead stays void otherwise, and the side re-deciding

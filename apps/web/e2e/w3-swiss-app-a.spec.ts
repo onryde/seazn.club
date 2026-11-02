@@ -1587,3 +1587,64 @@ test.describe("X-SW-26 finish a 5-round Swiss after round 3 into the knockout", 
     });
   }
 });
+
+// X-SW-23 (W3 T15, RB3-17; rulebook §12 "disqualification = withdrawal from that moment"): a disqualification runs the
+// withdrawal cascade. There is no Disqualify button on a Swiss desk — the roster editor's status patch is the one route —
+// so the departure is driven through the API (`PATCH /entrants/{id}`), and the desk is read: the open board shows the
+// walkover, the played result stands, and the next round pairs without her.
+test.describe("X-SW-23 a disqualification cascades like a withdrawal", () => {
+  for (const sport of LATE_SPORTS) {
+    test(`PATCH status disqualified mid-Swiss walks her open board over, the run sheet shows the walkover, round 1 stands, and round 3 pairs without her (${sport.key})`, async ({
+      page,
+      request,
+    }) => {
+      test.setTimeout(240_000);
+      const r = await startedSwiss(request, sport, 4, 3, "Dq");
+      const read = async (id: string) => {
+        const got = await apiJson<Seated & { status: string; outcome: unknown }>(request, `/api/v1/fixtures/${id}`);
+        expect(got.status, JSON.stringify(got.error)).toBe(200);
+        return got.data!;
+      };
+      for (const f of await r.boards(1)) await sport.win(request, f, f.home_entrant_id!);
+      const paired = await apiJson(request, `/api/v1/stages/${r.stageId}/generate`, "POST");
+      expect(paired.status, `pair round 2 → ${JSON.stringify(paired.error)}`).toBe(200);
+      const [open, other] = await r.boards(2);
+      expect([open, other].every(Boolean), "premise: round 2 is paired, two boards").toBe(true);
+      const dq = open!.home_entrant_id!;
+      const opponent = open!.away_entrant_id!;
+      const played = (await r.boards(1)).find((f) => f.home_entrant_id === dq || f.away_entrant_id === dq)!;
+      const playedBefore = await read(played.id);
+      expect(playedBefore.status, "premise: her round-1 board was played").toBe("decided");
+
+      const out = await apiJson<{ status: string }>(request, `/api/v1/entrants/${dq}`, "PATCH", { status: "disqualified" });
+      expect(out.status, JSON.stringify(out.error)).toBe(200);
+      expect(out.data!.status).toBe("disqualified");
+      // The walkover the withdrawal cascade writes: to the opponent, reason unchanged ("withdrew"; ruling 115 decides credit).
+      const walked = await read(open!.id);
+      expect([walked.status, walked.outcome]).toEqual(["forfeited", { kind: "award", winner: opponent, loser: dq, reason: "withdrew" }]);
+      const stands = await read(played.id);
+      expect([stands.status, stands.outcome], "the played result stands").toEqual([playedBefore.status, playedBefore.outcome]);
+
+      // A second PATCH is idempotent: 200, the same status, nothing rewritten.
+      const again = await apiJson<{ status: string }>(request, `/api/v1/entrants/${dq}`, "PATCH", { status: "disqualified" });
+      expect([again.status, again.data?.status], JSON.stringify(again.error)).toEqual([200, "disqualified"]);
+      expect([(await read(open!.id)).status, (await read(open!.id)).outcome]).toEqual([walked.status, walked.outcome]);
+
+      // The desk: the run sheet's line names the opponent, tagged as a walkover.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+      await showAllFixtures(page);
+      const line = fill("schedule.outcome.wonTagged", { name: r.nameOf.get(opponent)!, tag: uiEn["forfeit.tag.walkover"]! });
+      await expect(page.locator(`li[data-fixture-no="${open!.fixture_no}"]`)).toContainText(line, { timeout: 20_000 });
+
+      // She is not paired again: round 3 seats the three still in the field, never her.
+      await sport.win(request, other!, other!.home_entrant_id!);
+      const third = await apiJson(request, `/api/v1/stages/${r.stageId}/generate`, "POST");
+      expect(third.status, `pair round 3 → ${JSON.stringify(third.error)}`).toBe(200);
+      const seated = (await r.round(3)).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((id): id is string => id !== null);
+      // Three left: one board and a bye (the bye row seats its holder), each of the three once.
+      expect(seated).not.toContain(dq);
+      expect([...seated].sort()).toEqual([...r.nameOf.keys()].filter((id) => id !== dq).sort());
+    });
+  }
+});

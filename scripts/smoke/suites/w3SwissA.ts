@@ -26,6 +26,8 @@ import { swissDrawSeed, swissRoundOneOrder } from "../../../apps/web/src/lib/swi
  * `home_entrant_id` / `away_entrant_id` (alone, swapped, or beside a good schedule edit) is a 400 and the row reads back
  * unchanged, which is why the Pair next menu says the rules decide a round's pairing and names Unpair, then Pair next, only as the
  * way to re-derive it after a correction.
+ * T15 (X-SW-23; RB3-17): a disqualification through the roster editor's `PATCH /entrants/{id}` cascades like a
+ * withdrawal — her open board walks over, played results stand, a second PATCH is idempotent.
  * T9 (X-SW-12, X-SW-13; ruling 250): "Add late player" after Start —
  * through the entrants POST, an unstarted round re-pairs with the newcomer (a), a started round with a bye seats the
  * newcomer against its holder (b), any other started round leaves the newcomer to the next round (c); and a public
@@ -46,8 +48,9 @@ export async function w3SwissASuite(): Promise<void> {
   // before play, an undo barrier; after the first start the count and the chess colours are locked by their own codes,
   // and Add a round mints the next round within the hard maximum) + T13: 1 (Finish the Swiss now: refused until a round is
   // decided, then ends the Swiss after the last decided round, completes the stage, an undo barrier) + T14: 1 (a PATCH
-  // naming a seat on a round-2 board is refused 400 and the row reads back unchanged).
-  const EXPECTED_CHECKS = 19;
+  // naming a seat on a round-2 board is refused 400 and the row reads back unchanged) + T15: 1 (a PATCH to disqualified
+  // mid-Swiss walks her open board over, round 1 stands, and a second PATCH rewrites nothing).
+  const EXPECTED_CHECKS = 20;
   let checked = 0;
   const w3Check = (label: string, cond: boolean) => {
     checked++;
@@ -884,6 +887,43 @@ export async function w3SwissASuite(): Promise<void> {
       w3Check(
         "w3a X-SW-30: a PATCH naming home_entrant_id / away_entrant_id (alone, swapped, or beside a good edit) on a round-2 board is 400 and the row reads back unchanged; a plain schedule edit still lands" +
           (ok ? "" : ` — board ${board ? `${board.id} ${board.home} v ${board.away}` : "none (check 13 left no round-2 board)"}, before ${JSON.stringify(before)}, refusals ${refusals.map((r) => `${r.status} ${r.json.error?.code ?? ""}`).join(" | ")}, after refusals ${JSON.stringify(afterRefusals)}, good ${good.status} ${JSON.stringify(good.json).slice(0, 160)}, after good ${JSON.stringify(afterGood)}`),
+        ok,
+      );
+    }
+
+    // Check 20 (T15, X-SW-23; RB3-17, rulebook §12 "disqualification = withdrawal from that moment"): the roster editor's
+    // `PATCH /entrants/{id}` `{status: "disqualified"}` runs the withdrawal cascade. Four players, round 1 decided, round 2
+    // paired; one round-2 player is disqualified. Her round-2 board walks over to its other side (the cascade's walkover,
+    // reason "withdrew"), round 1 reads back as it was, and a second identical PATCH is a 200 that rewrites nothing.
+    {
+      const sw = await startedSwiss("D", 4, 3);
+      const r1 = (await sw.rows()).filter((f) => f.round_no === 1 && !isBye(f));
+      const forfeits: number[] = [];
+      for (const b of r1) forfeits.push((await appendScoreEvent(owner, b.id, "core.forfeit", { by: b.away_entrant_id, reason: "walkover" })).status);
+      const pair2 = await v1(owner, `/api/v1/stages/${sw.stageId}/generate`, "POST");
+      const before = await sw.rows();
+      const board = before.find((f) => f.round_no === 2 && !isBye(f) && f.home_entrant_id !== null && f.away_entrant_id !== null);
+      const dq = board?.home_entrant_id ?? "";
+      const opponent = board?.away_entrant_id ?? "";
+      type Outcome = { kind?: string; winner?: string | null; loser?: string | null; reason?: string };
+      const outcomeOf = async (id: string | undefined) =>
+        v1data<{ status: string; outcome: Outcome | null } | undefined>(await v1(owner, `/api/v1/fixtures/${id}`));
+      const first = await v1(owner, `/api/v1/entrants/${dq}`, "PATCH", { status: "disqualified" });
+      const walked = await outcomeOf(board?.id);
+      const afterFirst = await sw.rows();
+      const second = await v1(owner, `/api/v1/entrants/${dq}`, "PATCH", { status: "disqualified" });
+      const afterSecond = await sw.rows();
+      const r1Kept = before.filter((f) => f.round_no === 1).every((f) => sameRow(f, afterFirst.find((x) => x.id === f.id)));
+      const unchanged = afterFirst.length === afterSecond.length && afterFirst.every((f) => sameRow(f, afterSecond.find((x) => x.id === f.id)));
+      const ok =
+        sw.ready && r1.length === 2 && forfeits.every((st) => st < 300) && pair2.status === 200 && board !== undefined &&
+        first.status === 200 && v1data<{ status?: string } | undefined>(first)?.status === "disqualified" &&
+        walked?.status === "forfeited" && walked.outcome?.kind === "award" && walked.outcome.winner === opponent &&
+        walked.outcome.loser === dq && walked.outcome.reason === "withdrew" &&
+        r1Kept && second.status === 200 && v1data<{ status?: string } | undefined>(second)?.status === "disqualified" && unchanged;
+      w3Check(
+        "w3a X-SW-23: PATCH status disqualified mid-Swiss walks her round-2 board over to its other side (reason withdrew), round 1 stands, and a second PATCH is a 200 that rewrites nothing" +
+          (ok ? "" : ` — ${sw.setup}, forfeits ${forfeits.join(",")}, pair2 ${pair2.status}, board ${board ? `${board.id} ${dq} v ${opponent}` : "none"}, first ${first.status} ${JSON.stringify(first.json).slice(0, 160)}, walked ${JSON.stringify(walked).slice(0, 200)}, round 1 kept ${r1Kept}, second ${second.status} ${JSON.stringify(second.json).slice(0, 160)}, unchanged ${unchanged}`),
         ok,
       );
     }

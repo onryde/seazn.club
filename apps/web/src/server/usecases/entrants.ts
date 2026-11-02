@@ -895,7 +895,40 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
   }
 }
 
+/**
+ * `PATCH /entrants/{id}`. W3 T15 (RB3-17, X-SW-23): a disqualification is "withdrawal from that moment" (rulebook §12),
+ * so `status: "disqualified"` for an entrant still in the field goes through the withdrawal cascade
+ * (`withdrawEntrantCascade(…, { as: "disqualified" })`): their owed boards are settled as a withdrawal settles them, then
+ * the status is written. Before this it was a bare flip that left the entrant's open board `scheduled`, so the round never
+ * completed. The cascade itself decides "started" (T9's `divisionHasStarted`): before Start it is the plain flip, so that
+ * fact has ONE reader. An entrant already departed (`DEPARTED_STATUSES`) is owed nothing — a second PATCH to
+ * `disqualified`, or a withdrawn entrant later disqualified — and takes the plain write (controller ruling C6: the cascade
+ * writes through `writeEntrantPatch`, which never routes back). Any other field of the same patch is written after the
+ * cascade. A `status: "withdrawn"` patch stays the bare flip it has always been (ruling 111's self-withdrawal); the
+ * Withdraw button is `POST /entrants/{id}/withdraw`.
+ */
 export async function patchEntrant(
+  auth: AuthCtx,
+  id: string,
+  patch: PatchEntrant,
+): Promise<EntrantWithMembers> {
+  if (patch.status === "disqualified") {
+    const [current] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
+    if (current !== undefined && !DEPARTED_STATUSES.has(current.status)) {
+      // A dynamic import: withdrawal.ts imports this module (scoring.ts → stages.ts's `completeStage` is the precedent).
+      const { withdrawEntrantCascade } = await import("./withdrawal");
+      await withdrawEntrantCascade(auth, id, { as: "disqualified" });
+      const rest: PatchEntrant = { ...patch };
+      delete rest.status; // written by the cascade
+      return writeEntrantPatch(auth, id, rest);
+    }
+  }
+  return writeEntrantPatch(auth, id, patch);
+}
+
+/** The entrant write itself — every field of a patch, in one transaction, with no routing. `patchEntrant` is the door;
+ *  the withdrawal cascade writes its final status here (C6). */
+export async function writeEntrantPatch(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,

@@ -855,7 +855,7 @@ describe("statuses equal the engine's on the derived input", () => {
 });
 
 // Final review I1 (controller ruling): a departed row is NOT frozen. A
-// status-only departure — a DQ by PATCH with no cascade (usecases/entrants.ts),
+// status-only departure — a `withdrawn` status PATCH (usecases/entrants.ts; a DQ by PATCH cascades since W3 T15),
 // a registrant's self-cancel — leaves its fixtures scheduled, and when the
 // organiser later forfeits them the departed side takes the LOSER's walkover
 // points: above 0 where a loss pays, below 0 under `forfeit.loserPoints`. Its

@@ -9,7 +9,7 @@ import { completeStageIfReady } from "@/server/engine-db/competition";
 import { scoreEvent, onDecided } from "@/server/usecases/scoring";
 import { loadBracketFixtures } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
-import { DEPARTED_STATUSES, patchEntrant } from "@/server/usecases/entrants";
+import { DEPARTED_STATUSES } from "@/server/usecases/entrants";
 import { assertNoLevelSeat, SEATING_STATUSES } from "../level-seat";
 import { declaredVariant, seedBracket } from "./helpers/seed-bracket";
 
@@ -266,13 +266,16 @@ describe.skipIf(!HAS_DB)("X-BR-2 / X-ST-1: held, never seated; the settle seats 
     expect(await seated(t.final)).toEqual([t.home]);
   });
 
-  it("C17 over the ONE departed vocabulary (loop-F tidy): a DISQUALIFIED winner is refused like a withdrawn one — a disqualification is a status change with no cascade, so her held line stays held", async () => {
+  it("C17 over the ONE departed vocabulary (loop-F tidy) on a LEGACY row: a DISQUALIFIED winner whose held line was never cascaded is refused like a withdrawn one", async () => {
     // single-sport: chess, the held-line rig above; the guard reads the entrant's status, not the sport. Every
     // DEPARTED_STATUSES member, so a narrowed set reds here.
+    // W3 T15 (RB3-17): a disqualification through `patchEntrant` now cascades like a withdrawal and walks this line over
+    // (the X-WD-1 case above), so a departed winner on a HELD line is a legacy shape — a status written without the
+    // cascade — planted as the X-ST-1 legacy twin plants it: the raw status flip.
     let checked = 0;
     for (const departed of [...DEPARTED_STATUSES]) {
       const t = await heldChess();
-      await patchEntrant(t.auth, t.away, { status: departed } as never);
+      await sql`update entrants set status = ${departed} where id = ${t.away}`;
       expect([(await row(t.sf)).status, (await row(t.sf)).outcome], `${departed}: rig — her line is still held`).toEqual(["needs_decision", { kind: "draw" }]);
       const before = await seq(t.sf);
       await expect(post(t.auth, t.sf, "core.settle", { winner: t.away, method: "organiser" }), departed).rejects.toMatchObject({

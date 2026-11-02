@@ -550,7 +550,7 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
     const oddSheets = (await scoresheets(odd.divisionId, odd.auth)).filter((x) => x.includes(BYE));
     expect(oddSheets.length, "R116-4: each bye's scoresheet keeps the bye").toBeGreaterThanOrEqual(2);
 
-    // A DQ'd winner's dead seat (a bare status write, as PATCH /entrants writes one): the arriving side walks over by
+    // A DQ'd winner's dead seat (a bare status write — a legacy DQ; since W3 T15 a PATCH DQ cascades): the arriving side walks over by
     // bye, naming nobody — so the exports keep the bye and never print her.
     const dq = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
     const sib = siblingsInto(await rowsOf(dq.stageId));
