@@ -3590,6 +3590,7 @@ test("draw list: the sibling-fed final reads 'Winner of R1·1 vs Winner of R1·2
 // so its confirm()/regenerate() can't be raced by another project's.
 const P6B_EMAIL = () => `delivered+p6b-${TAG}-${projectTag()}@resend.dev`;
 let p6bDivisionId = "";
+let p6bKoStageId = "";
 const P6B_COURT = "Center Court E2E";
 const P6B_ENTRANTS = ["Nova Q", "Orion Q", "Piper Q", "Reeve Q"];
 
@@ -3641,6 +3642,7 @@ test("P6 task B setup: a 4-way-tied league decides, KO panel has a real tie to r
   expect(stages.status).toBeLessThan(300);
   const leagueId = stages.data!.find((s) => s.kind === "league")!.id;
   const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
+  p6bKoStageId = koId;
 
   // TBD KO fixture up front (owner ruling), then pinned — proving later that
   // confirm fills it without disturbing the pin (the non-destructive
@@ -3759,10 +3761,13 @@ test("P6 task B: panel resolves the tie, confirms, bracket shows real entrants, 
 
   // The bracket/fixture line now shows the CHOSEN entrants, never a raw TBD
   // or slot.* key — the panel's edit-in-place actually reached the fixture.
-  // `visible=true`: the league above is COMPLETE, so its card is folded to one line (PB1, owner 2026-11-02) and the same names sit,
-  // hidden, in its rows - the first DOM match. What this proves is the names a person can SEE.
-  await expect(page.getByText(pick0.label, { exact: false }).locator("visible=true").first()).toBeVisible();
-  await expect(page.getByText(pick1.label, { exact: false }).locator("visible=true").first()).toBeVisible();
+  // Scoped to the KNOCKOUT card's rows (PB1 review m4): the league above is COMPLETE, so its card is folded to one line (PB1, owner
+  // 2026-11-02) with the same names hidden in its rows, and the tie panel's own options carry them too - a page-wide read was
+  // satisfied by either. `visible=true` inside the card: a row's one-DOM twin copy (desktop / phone line) may be the hidden one.
+  const koRows = stageCardOf(page, p6bKoStageId).locator("li[data-fixture-no]");
+  await expect(koRows, "premise: the knockout card's one fixture row").toHaveCount(1);
+  await expect(koRows.getByText(pick0.label, { exact: false }).locator("visible=true").first()).toBeVisible();
+  await expect(koRows.getByText(pick1.label, { exact: false }).locator("visible=true").first()).toBeVisible();
   await expect(page.getByText(/^TBD$/)).toHaveCount(0);
 
   // Non-destructive guarantee, on screen: the court pinned before anyone
