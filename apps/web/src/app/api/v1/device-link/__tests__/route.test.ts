@@ -6,7 +6,20 @@ import { randomBytes, randomUUID } from "node:crypto";
 
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
 
+const seam = vi.hoisted(() => ({ resolves: 0 }));
+vi.mock("@/server/usecases/device-links", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/device-links")>();
+  return {
+    ...actual,
+    resolveDeviceLinkToken: (token: string) => {
+      seam.resolves++;
+      return actual.resolveDeviceLinkToken(token);
+    },
+  };
+});
+
 import { sql } from "@/lib/db";
+import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
@@ -24,7 +37,10 @@ import { GET as listCompetitions } from "../../competitions/route";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 afterAll(() => vi.unstubAllEnvs());
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  __setRateLimitCounterForTests(null);
+});
 
 type Roster = { display_name: string; members: string[] };
 
@@ -66,11 +82,12 @@ async function seedBadminton(
   return { competition, division, entrants, fixture: fixture!, secret: link.secret, linkId: link.id };
 }
 
-async function call(secret: string | null, scheme = "Bearer") {
+async function call(secret: string | null, scheme = "Bearer", ip?: string) {
   const headers: Record<string, string> = secret === null ? {} : { authorization: `${scheme} ${secret}` };
+  if (ip) headers["x-forwarded-for"] = ip;
   const res = await GET(new Request("https://test.local/api/v1/device-link", { headers }));
   const body = (await res.json()) as { ok: boolean; data?: DeviceLinkBootstrap; error?: { code?: string }; requestId?: string };
-  return { status: res.status, body, cacheControl: res.headers.get("cache-control") };
+  return { status: res.status, body, cacheControl: res.headers.get("cache-control"), retryAfter: res.headers.get("retry-after") };
 }
 
 describe.skipIf(!HAS_DB)("GET /api/v1/device-link", () => {
@@ -223,5 +240,80 @@ describe.skipIf(!HAS_DB)("GET /api/v1/device-link", () => {
       new Request("https://test.local/api/v1/competitions", { headers: { authorization: `Bearer ${s.secret}` } }),
     );
     expect(res.status).toBe(403);
+  });
+
+  it("names nothing from another org's fixture: a link for A answers A's literals only", async () => {
+    const one = await seedOrg();
+    const a = await seedBadminton(one.auth, "individual", [
+      { display_name: "Alpha One", members: ["Alpha One"] },
+      { display_name: "Alpha Two", members: ["Alpha Two"] },
+    ]);
+    const two = await seedOrg();
+    const b = await seedBadminton(two.auth, "pair", [
+      { display_name: "Bravo One / Bravo Two", members: ["Bravo One", "Bravo Two"] },
+      { display_name: "Bravo Three / Bravo Four", members: ["Bravo Three", "Bravo Four"] },
+    ]);
+    const d = (await call(a.secret)).body.data!;
+    expect(d.fixture_id).toBe(a.fixture.id);
+    expect(d.fixture_id).not.toBe(b.fixture.id);
+    expect(d.names.division).toBe("Singles");
+    const text = JSON.stringify(d);
+    expect(text).not.toContain("Bravo");
+    expect(text).not.toContain(b.fixture.id);
+    expect(text).not.toContain(b.linkId);
+    expect(["Alpha One", "Alpha Two"]).toContain(d.sides.home!.name);
+    // and B's link names only B
+    const e = (await call(b.secret)).body.data!;
+    expect(e.fixture_id).toBe(b.fixture.id);
+    expect(JSON.stringify(e)).not.toContain("Alpha");
+  });
+});
+
+/** A fixed-window counter the limiter reads instead of Redis (the suite's own seam): count per key, a 1 s TTL. */
+function counterSeam() {
+  const counts = new Map<string, number>();
+  __setRateLimitCounterForTests(async (key) => {
+    const n = (counts.get(key) ?? 0) + 1;
+    counts.set(key, n);
+    return { count: n, ttlMs: 1000 };
+  });
+  return counts;
+}
+
+describe.skipIf(!HAS_DB)("GET /api/v1/device-link is metered", () => {
+  it("the 11th read in a second by one link is 429 RATE_LIMITED with Retry-After; the 10th is not", async () => {
+    const { auth } = await seedOrg();
+    const s = await seedBadminton(auth, "individual", [
+      { display_name: "Asha Rao", members: ["Asha Rao"] },
+      { display_name: "Bo Lin", members: ["Bo Lin"] },
+    ]);
+    counterSeam();
+    for (let i = 1; i <= 10; i++) expect((await call(s.secret, "Bearer", "198.51.100.7")).status, `read ${i}`).toBe(200);
+    const eleventh = await call(s.secret, "Bearer", "198.51.100.7");
+    expect(eleventh.status).toBe(429);
+    expect(eleventh.body.error?.code).toBe("RATE_LIMITED");
+    expect(eleventh.retryAfter).toBe("1");
+    // another link is not spent by this one
+    const other = await seedBadminton(auth, "individual", [
+      { display_name: "Cy Dunn", members: ["Cy Dunn"] },
+      { display_name: "Di Park", members: ["Di Park"] },
+    ]);
+    expect((await call(other.secret, "Bearer", "198.51.100.7")).status).toBe(200);
+  });
+
+  it("a flood of unknown tokens from one IP is 429 before the link is looked up (no database read)", async () => {
+    counterSeam();
+    seam.resolves = 0;
+    for (let i = 1; i <= 300; i++) {
+      const r = await call("dl_" + randomBytes(16).toString("base64url"), "Bearer", "203.0.113.9");
+      expect(r.status, `guess ${i}`).toBe(401);
+    }
+    expect(seam.resolves).toBe(300);
+    const over = await call("dl_" + randomBytes(16).toString("base64url"), "Bearer", "203.0.113.9");
+    expect(over.status).toBe(429);
+    expect(over.body.error?.code).toBe("RATE_LIMITED");
+    expect(seam.resolves, "the refused guess never reached the resolver").toBe(300);
+    // a different address is untouched
+    expect((await call("dl_" + randomBytes(16).toString("base64url"), "Bearer", "203.0.113.10")).status).toBe(401);
   });
 });

@@ -71,5 +71,7 @@ describe.skipIf(!HAS_DB)("realtime-token answers url and apikey beside token and
     expect(r.status).toBe(200);
     expect(r.body.data.token).toBe(`token:${f!.id}`);
     expect(r.body.data.channel).toBe(`fixture:${f!.id}`);
+    expect(r.body.data.url).toBeNull();
+    expect(r.body.data.apikey).toBeNull();
   });
 });
