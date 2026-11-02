@@ -164,6 +164,16 @@ export const APPROVED_PLANS_PASS: ApprovedParagraph[] = [
  * `server/usecases/device-links.ts`, whose ensure, Revoke & reissue and print
  * paths all resolve `requireFeature(…, "scoring.device_links", competition)`,
  * so a pass on THAT competition lifts it. No figure, price or window moved.
+ *
+ * RE-PINNED 2026-11-02 — that bullet is REMOVED again, one surface gone, none
+ * changed or moved (every later surface shifts up one position, digests intact).
+ * Owner ruling 2026-11-02 ("make it free"): remote scoring (device links, the
+ * scoring QR) and the printed scorer sheets that carry its links are free on
+ * every plan, so a pass no longer lifts anything there and the bullet would
+ * have sold a Community org what it already has. Read against: `V490`
+ * (`scoring.device_links` true on every plan in `plans`); `lib/pass-features.ts`
+ * (the key left PASS_FEATURES); `server/usecases/device-links.ts` (no gate call
+ * remains). The removed digest was 00924962c38ce30e.
  */
 export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "7af62a47607d7223",
@@ -187,7 +197,6 @@ export const APPROVED_EVENT_PASS_INVENTORY: string[] = [
   "fcd1bcb9b15230dd",
   "9cdc77f8e4467e2c",
   "f8a66461cb7b0535",
-  "00924962c38ce30e",
   "adede976a539f9fa",
   "219ccaea5a3878ae",
   "6feca5577c55cf2b",

@@ -28,7 +28,6 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import en from "@/dictionaries/en/ui.json";
-import { PASS_FEATURES } from "@/lib/pass-features";
 
 const ARTICLE = readFileSync(join(process.cwd(), "content/help/scoring/device-links.md"), "utf8");
 
@@ -168,49 +167,28 @@ describe("the device's undo window ends when the result moves the competition on
 //    in the stage (usecases/stages.ts rebuildStageFixtures), `device_links`
 //    cascades off `fixtures` (V222), so every QR on that stage stops working —
 //    the rebuild dialog itself says so (progression.rosterDrift.sheetsStop).
-//  - scorer-role.md said device links are for mass scoring "on any plan".
-//    The Event Pass lifts `scoring.device_links` (PASS_FEATURES), which is by
-//    that set's own definition a key the Community row does NOT grant.
+//  - scorer-role.md said device links are for mass scoring "on any plan" while
+//    the Community row denied the key. V490 (2026-11-02) made remote scoring
+//    free on every plan, so that sentence is true now and the tests that held
+//    the page to the paid wording are gone with the gate.
 //  - conflicts.md told a reader to "give each court its own device link". A
 //    link belongs to one MATCH (scorer sheets D1: no per-court link), and
 //    since Task 2 asking again re-shows the same one — there is no second
 //    link to hand a second court.
-const SCORER_ROLE = readFileSync(join(process.cwd(), "content/help/scoring/scorer-role.md"), "utf8");
 const CONFLICTS = readFileSync(join(process.cwd(), "content/help/scoring/conflicts.md"), "utf8");
 const REBUILD = en["progression.rosterDrift.rebuildCta"];
 /** "stops working" / "stop working" / "no longer works" — how these pages say a link is dead. */
 const DIES = /\bstops? working\b|\bno longer works?\b/i;
 
 describe("every way a device link ends is on the page, and no plan it lacks is claimed", () => {
-  it("reads the Rebuild label, and the pass still lifts device links (the premises below)", () => {
+  it("reads the Rebuild label (the premise below)", () => {
     expect(REBUILD).toMatch(/\w/);
-    expect(PASS_FEATURES.has("scoring.device_links")).toBe(true);
   });
 
   it("device-links.md: Rebuild fixtures is named as a way the link stops working", () => {
     const hits = SENTENCES.filter((s) => s.includes(REBUILD));
     expect(hits, `device-links.md never names ${REBUILD}`).not.toHaveLength(0);
     expect(hits.some((s) => DIES.test(s)), hits.join(" | ")).toBe(true);
-  });
-
-  it("scorer-role.md: the device-link sentence names Pro and the Event Pass, and claims no plan-free reach", () => {
-    const device = sentencesOf(SCORER_ROLE).filter((s) => /device links?\b/i.test(s));
-    expect(device, "scorer-role.md no longer mentions device links").not.toHaveLength(0);
-    const everyPlan = /\b(?:on|for|with)\s+(?:any|every|all)\s+plans?\b|\bwhatever (?:your|the) plan\b|\bno matter (?:your|which) plan\b/i;
-    expect(device.filter((s) => everyPlan.test(s))).toEqual([]);
-    expect(device.some((s) => /\bPro\b/.test(s) && /\bEvent Pass\b/i.test(s)), device.join(" | ")).toBe(true);
-  });
-
-  it("event-pass.md: the pass's feature list names device links, since the pass lifts them", () => {
-    // Owner-approved 2026-09-24 (relayed by the scorer-sheets controller): the
-    // pass page's "What the pass includes" list left out a key PASS_FEATURES
-    // holds, so an organiser deciding between Community and the pass could
-    // not see that match-day phones and printed sheets come with it.
-    const md = readFileSync(join(process.cwd(), "content/help/billing/event-pass.md"), "utf8");
-    const section = md.split(/^## /m).find((s) => s.startsWith("What the pass includes")) ?? "";
-    expect(section, "event-pass.md has no 'What the pass includes' section").not.toBe("");
-    const bullets = section.split("\n").filter((l) => l.startsWith("- "));
-    expect(bullets.some((b) => b.includes("](/help/scoring/device-links)")), bullets.join("\n")).toBe(true);
   });
 
   it("conflicts.md: no sentence gives a court its own device link", () => {

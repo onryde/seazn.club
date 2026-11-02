@@ -914,12 +914,12 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   {
     file: "marketing",
     key: "pricing.pro.f5",
-    why: "four boolean Pro grants in one line: officials rows, exports, api.access and scoring.device_links. A list rather than four bullets because none of them is the reason anyone buys Pro; each is pinned individually by CARD_SURFACES so the compression cannot hide one going false.",
+    why: "three boolean Pro grants in one line: officials rows, exports and api.access. A list rather than three bullets because none of them is the reason anyone buys Pro; each is pinned individually by CARD_SURFACES so the compression cannot hide one going false. It named device links as a fourth until V490 (owner ruling 2026-11-02): remote scoring is free on every plan now, so the Pro card no longer sells it.",
     text: {
-      en: "Officials, exports, API keys, device links",
-      es: "Árbitros, exportaciones, claves de API y vinculación de dispositivos",
-      fr: "Officiels, exports, clés API et liaison d’appareils",
-      nl: "Officials, exports, API-sleutels en apparaatkoppelingen",
+      en: "Officials, exports, API keys",
+      es: "Árbitros, exportaciones y claves de API",
+      fr: "Officiels, exports et clés API",
+      nl: "Officials, exports en API-sleutels",
     },
   },
   {
