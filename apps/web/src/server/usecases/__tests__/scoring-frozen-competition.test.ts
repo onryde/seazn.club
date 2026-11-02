@@ -167,7 +167,7 @@ describe.skipIf(!HAS_DB)("a billing-frozen competition scores (PB2, option A)", 
 
   // Review C1, fixed (owner 2026-11-02, option A: "lock in the frozen set when the org goes over its limit"). In a REAL freeze —
   // community's own limit, newer competitions in the active slots — the set is CHOSEN ONCE and stored (`competitions.frozen_at`,
-  // V489): scoring a frozen competition, once or again, makes it the most recently active and still moves nothing. Room moves
+  // the competition_frozen_at migration): scoring a frozen competition, once or again, makes it the most recently active and still moves nothing. Room moves
   // it: archiving one running competition thaws exactly one frozen one, the most recently active (the one being scored), and
   // the idle one stays frozen. Every other test here pins the limit at 0, where nothing could ever rotate.
   it("C1: in a real community freeze the frozen set is chosen once — scoring it (twice) moves nothing, its schedule edit stays 402; archiving one running competition thaws exactly one, the most recently active", async () => {

@@ -44,7 +44,7 @@ import { dismissConsent, freshOrg } from "../directory-kit";
  * At 1280 and at 320, with no sideways scroll at any step.
  *
  * The freeze is a REAL limit the competition can rotate under (review C1, fixed: the frozen set is chosen once and stored,
- * V489): the organisation keeps Pro (the scorer QR is Pro's — on Community it is the plan's paywall) with its
+ * the competition_frozen_at migration): the organisation keeps Pro (the scorer QR is Pro's — on Community it is the plan's paywall) with its
  * `competitions.max_active` set to 1, and a second, newer competition holds the one running place. Before C1's fix the pad's
  * first point made this competition the most recently active, thawed it and froze the other; so after every point and after
  * the finish, Match Day still says frozen and the stored set is still this competition alone.

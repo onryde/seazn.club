@@ -4,7 +4,7 @@ import "server-only";
 // Which N stay active is decided in exactly one place — the selector below:
 // most recently active first (last score event, else creation time).
 // Competitions: that choice is made ONCE and stored (`competitions.frozen_at`,
-// V489; Match Day PB2 review C1, owner 2026-11-02 option A) — see
+// the competition_frozen_at migration; Match Day PB2 review C1, owner 2026-11-02 option A) — see
 // `frozenCompetitionIds`. Members are still chosen on every read.
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
@@ -255,7 +255,7 @@ export function selectFrozen(
   return new Set(sorted.slice(Math.max(limit, 0)).map((c) => c.id));
 }
 
-/** Most recently active first; ties on id, so the same inputs always rank the same way. V489's backfill restates it in SQL
+/** Most recently active first; ties on id, so the same inputs always rank the same way. The competition_frozen_at migration's backfill restates it in SQL
  *  (milliseconds, uuid order), and `competition-freeze-backfill.test.ts` holds the two together. */
 function byActivity(a: FreezeCandidate, b: FreezeCandidate): number {
   const ta = new Date(a.lastActiveAt).getTime();
@@ -321,7 +321,7 @@ export function reconcileFrozen(candidates: readonly HeldCandidate[], limit: num
 // "a pass row exists", so the exemption never ended (#347): a `live`
 // competition past its ends_on + grace was immune to freezing for ever.
 // V343's pass_applies is the same predicate the resolver uses.
-// `frozen` is the stored mark (V489): read beside the activity, so the reconcile sees both in one statement.
+// `frozen` is the stored mark (`competitions.frozen_at`): read beside the activity, so the reconcile sees both in one statement.
 async function loadCandidates(tx: Tx, orgId: string): Promise<HeldCandidate[]> {
   const rows = await tx<{ id: string; last_active: string; frozen: boolean }[]>`
     select c.id,
@@ -340,7 +340,7 @@ async function loadCandidates(tx: Tx, orgId: string): Promise<HeldCandidate[]> {
  * The org's frozen competition ids (empty for in-quota orgs — the common case
  * costs one count query). Chosen ONCE, at the first read that finds the org
  * running more competitions than its limit, and stored in
- * `competitions.frozen_at` (V489, which also stored the set frozen on the day it
+ * `competitions.frozen_at` (its migration also stored the set frozen on the day it
  * shipped); every later read moves the set only when room appears or the
  * overflow grows (`reconcileFrozen`). Scoring never moves it (review C1).
  *

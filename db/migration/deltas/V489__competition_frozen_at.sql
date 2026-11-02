@@ -1,6 +1,7 @@
--- V489 — the billing freeze is CHOSEN ONCE and kept (Match Day PB2 review C1; owner ruling 2026-11-02, option A: "lock in the
--- frozen set when the org goes over its limit"). Number reserved for this change by the Match Day controller (main at V484,
--- W3 V485–V487, R4 V488).
+-- competition_frozen_at — the billing freeze is CHOSEN ONCE and kept (Match Day PB2 review C1; owner ruling 2026-11-02,
+-- option A: "lock in the frozen set when the org goes over its limit"). Flyway runs with outOfOrder=false, so the version
+-- number must rise in MERGE order: it is assigned at merge (main's max + 1 if needed), and nothing else in the repo names it —
+-- tests and code find this file by `V*__competition_frozen_at.sql`.
 --
 -- ── Why ──
 -- An organisation over its plan's `competitions.max_active` keeps its newest-active competitions running and freezes the rest
@@ -36,10 +37,18 @@
 -- The candidates are `liveUnpassedCompetition`'s (draft, published or live, no Event Pass applying), ranked as
 -- `loadCandidates` + `selectFrozen` rank them: last activity (latest score event, else creation) newest first, id ascending.
 -- Runs as the migrating role, which bypasses RLS (V432, V438, V481).
+--
+-- ── NOT SAFE TO RE-RUN BY HAND ──
+-- Flyway runs this once. Re-running the whole file aborts at `add column` (no `if not exists`) and changes nothing, but the
+-- `do` block run ALONE is not: it re-stamps `frozen_at` on competitions already marked and can mark competitions the app has
+-- since chosen to keep running (more than the overflow). Never paste the block into a console. If marks are ever wrong, the
+-- app's next read for that organisation trims them back to the overflow (`reconcileFrozen` thaws the excess).
 
 alter table competitions add column frozen_at timestamptz null;
 
--- The app's common-case check ("does this organisation hold any frozen competition?") reads this index alone.
+-- Serves the reads of the marks: an UNLIMITED organisation's one-statement check ("is anything of it still marked?", no
+-- transaction) and the reconcile's. The limited common case does NOT read this index alone — `frozenCompetitionIds` counts
+-- every competition of the organisation in the same statement, so there the index is not the whole read.
 create index competitions_frozen_idx on competitions (org_id) where frozen_at is not null;
 
 do $$
@@ -123,5 +132,5 @@ begin
     returning c.id, c.org_id
   )
   select count(*)::int, count(distinct org_id)::int into frozen_count, org_count from stamped;
-  raise notice 'V489 competitions frozen today, stored: competitions=% organisations=%', frozen_count, org_count;
+  raise notice 'competition_frozen_at: competitions frozen today, stored: competitions=% organisations=%', frozen_count, org_count;
 end $$;

@@ -1,4 +1,6 @@
-// Match Day PB2, review C1 (owner 2026-11-02, option A): V489 stores the competitions frozen TODAY before the deploy, so the
+// Match Day PB2, review C1 (owner 2026-11-02, option A): the competition_frozen_at migration (`V*__competition_frozen_at.sql`;
+// its number is assigned at merge, so it is found by glob and never named here) stores the competitions frozen TODAY before
+// the deploy, so the
 // app's first read after it finds the set already chosen. The migration restates the app's limit for `competitions.max_active`
 // in SQL (lib/entitlements.ts's `getLimit` has no SQL twin), so this suite holds the two together: the migration's OWN block,
 // read from the file by glob, runs against seeded organisations in each billing state the resolver distinguishes, inside a
@@ -25,7 +27,7 @@ const NAME = /^V\d+__competition_frozen_at\.sql$/;
 const files = readdirSync(DELTAS).filter((f) => NAME.test(f));
 const text = files.length === 1 ? readFileSync(resolve(DELTAS, files[0]!), "utf8") : "";
 const BLOCK = /do \$\$[\s\S]*?end \$\$;/.exec(text.replace(/--.*$/gm, ""))?.[0];
-const NOTICE = /^V489 competitions frozen today, stored: competitions=(\d+) organisations=(\d+)$/;
+const NOTICE = /^competition_frozen_at: competitions frozen today, stored: competitions=(\d+) organisations=(\d+)$/;
 
 afterAll(async () => {
   if (!HAS_DB) return;
@@ -233,9 +235,40 @@ const CASES: Case[] = [
       return s.auth.orgId;
     },
   },
+  // PB2 re-review 1, m12: the ranking's tie-break direction — five competitions created at one instant, no score: id order
+  // alone decides which two freeze.
+  {
+    name: "community, every competition created at the same instant (the tie breaks on id)",
+    build: async () => {
+      const org = await bareOrg("tie");
+      await setOrgPlan(org, "community");
+      const ids = await competitions(org, 5);
+      await sql`update competitions set created_at = '2026-01-01T00:00:00Z' where id in ${sql(ids)}`;
+      return org;
+    },
+  },
+  // ...and four `orgPlanKey` arms the cases above leave unwitnessed, each resolving pro to community, plus the 14-day boundary's
+  // other side (3 days into dunning is still pro: nothing freezes).
+  ...(
+    [
+      ["a lapsed comp", "comped_until = now() - interval '1 day'"],
+      ["15 days into dunning", "status = 'past_due', status_changed_at = now() - interval '15 days'"],
+      ["3 days into dunning (still pro)", "status = 'past_due', status_changed_at = now() - interval '3 days'"],
+      ["a trial two days past its end", "status = 'trialing', trial_end = now() - interval '2 days'"],
+      ["an incomplete first payment", "status = 'incomplete'"],
+    ] as const
+  ).map(([label, set]): Case => ({
+    name: `pro, ${label}`,
+    build: async () => {
+      const org = await bareOrg("sub");
+      await sql.unsafe(`update subscriptions set ${set} where id = $1`, [await setOrgPlan(org, "pro")]);
+      await competitions(org, 5);
+      return org;
+    },
+  })),
 ];
 
-describe.skipIf(!HAS_DB)("V489's backfill stores the competitions frozen today, as the app chooses them", () => {
+describe.skipIf(!HAS_DB)("the competition_frozen_at migration's backfill stores the competitions frozen today, as the app chooses them", () => {
   it("the migration is one file with one block that announces what it stored", () => {
     expect(files, "exactly one V*__competition_frozen_at.sql").toHaveLength(1);
     expect(BLOCK, "a do block").toBeDefined();
@@ -258,7 +291,7 @@ describe.skipIf(!HAS_DB)("V489's backfill stores the competitions frozen today, 
       else empty++;
     }
     expect(checked, "every case ran").toBe(CASES.length);
-    expect(nonEmpty, "cases where something freezes").toBeGreaterThanOrEqual(7);
-    expect(empty, "cases where nothing freezes").toBeGreaterThanOrEqual(3);
+    expect(nonEmpty, "cases where something freezes").toBeGreaterThanOrEqual(12);
+    expect(empty, "cases where nothing freezes").toBeGreaterThanOrEqual(4);
   }, 240_000);
 });
